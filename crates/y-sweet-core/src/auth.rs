@@ -1030,6 +1030,32 @@ impl Authenticator {
         self.gen_cwt_token_with_channel(permission, Some(expiration_time), channel)
     }
 
+    /// Generate a document token using the appropriate format based on key type.
+    /// This auto-detects whether to use legacy or CWT format based on the signing key.
+    pub fn gen_doc_token_auto(
+        &self,
+        doc_id: &str,
+        authorization: Authorization,
+        expiration_time: ExpirationTimeEpochMillis,
+        user: Option<&str>,
+    ) -> Result<String, AuthError> {
+        let signing_key = self.get_signing_key()?;
+
+        match &signing_key.key_material {
+            AuthKeyMaterial::Legacy(_) => {
+                self.gen_doc_token(doc_id, authorization, expiration_time, user)
+            }
+            AuthKeyMaterial::Hmac256(_)
+            | AuthKeyMaterial::EcdsaP256Private(_)
+            | AuthKeyMaterial::Ed25519Private(_) => {
+                self.gen_doc_token_cwt(doc_id, authorization, expiration_time, user, None)
+            }
+            AuthKeyMaterial::EcdsaP256Public(_) | AuthKeyMaterial::Ed25519Public(_) => {
+                Err(AuthError::CannotSignWithPublicKey)
+            }
+        }
+    }
+
     /// Generate a CWT file token
     pub fn gen_file_token_cwt(
         &self,

@@ -1395,7 +1395,7 @@ async fn auth_doc(
 
     let token = if let Some(auth) = &server_state.authenticator {
         let token = auth
-            .gen_doc_token(&doc_id, authorization, expiration_time, None)
+            .gen_doc_token_auto(&doc_id, authorization, expiration_time, None)
             .map_err(|e| {
                 AppError(
                     StatusCode::INTERNAL_SERVER_ERROR,
