@@ -1,6 +1,7 @@
 /target
 alpine_wheels/
 data
+data-local-*
 node_modules
 .vscode
 .venv

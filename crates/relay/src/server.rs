@@ -1631,12 +1631,31 @@ async fn handle_file_download_url(
                             &host.to_string(),
                         )
                         .await?;
-                        // Add token to the URL
+                        // Add file token to the URL (not the server token)
                         let mut download_url = download_response.download_url;
                         if !download_url.starts_with("http") || download_url.contains("/f/") {
-                            // This is our local endpoint, add token
+                            // This is our local endpoint, generate a proper file token
+                            let expiration_time = ExpirationTimeEpochMillis(
+                                current_time_epoch_millis() + DEFAULT_EXPIRATION_SECONDS * 1000,
+                            );
+                            let file_token = authenticator
+                                .gen_file_token_auto(
+                                    &hash,
+                                    &doc_id,
+                                    Authorization::Full,
+                                    expiration_time,
+                                    None,
+                                    None,
+                                    None,
+                                )
+                                .map_err(|e| {
+                                    AppError(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        anyhow!("Failed to generate file token: {}", e),
+                                    )
+                                })?;
                             let separator = if download_url.contains('?') { "&" } else { "?" };
-                            download_url = format!("{}{}token={}", download_url, separator, token);
+                            download_url = format!("{}{}token={}", download_url, separator, file_token);
                         }
                         return Ok(Json(FileDownloadUrlResponse { download_url }));
                     } else {
@@ -1690,12 +1709,31 @@ async fn handle_file_download_url(
                             &host.to_string(),
                         )
                         .await?;
-                        // Add token to the URL
+                        // Add file token to the URL (not the prefix token)
                         let mut download_url = download_response.download_url;
                         if !download_url.starts_with("http") || download_url.contains("/f/") {
-                            // This is our local endpoint, add token
+                            // This is our local endpoint, generate a proper file token
+                            let expiration_time = ExpirationTimeEpochMillis(
+                                current_time_epoch_millis() + DEFAULT_EXPIRATION_SECONDS * 1000,
+                            );
+                            let file_token = authenticator
+                                .gen_file_token_auto(
+                                    &hash,
+                                    &doc_id,
+                                    prefix_perm.authorization,
+                                    expiration_time,
+                                    None,
+                                    None,
+                                    None,
+                                )
+                                .map_err(|e| {
+                                    AppError(
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        anyhow!("Failed to generate file token: {}", e),
+                                    )
+                                })?;
                             let separator = if download_url.contains('?') { "&" } else { "?" };
-                            download_url = format!("{}{}token={}", download_url, separator, token);
+                            download_url = format!("{}{}token={}", download_url, separator, file_token);
                         }
                         return Ok(Json(FileDownloadUrlResponse { download_url }));
                     } else {
