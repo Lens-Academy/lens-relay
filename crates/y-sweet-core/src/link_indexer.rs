@@ -1,6 +1,12 @@
+use crate::doc_sync::DocWithSyncKv;
+use crate::folder_index::FolderIndex;
 use crate::link_parser::extract_wikilinks;
+use dashmap::DashMap;
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio::time::{Duration, Instant};
 use yrs::{Any, Doc, GetString, Map, MapRef, Out, ReadTxn, Transact, WriteTxn};
 
 // ---------------------------------------------------------------------------
@@ -107,7 +113,6 @@ fn resolve_links_to_uuids(
         }
 
         // Try case-insensitive match by iterating all entries
-        let mut found = false;
         for (entry_path, entry_value) in filemeta.iter(txn) {
             let entry_name = entry_path
                 .strip_prefix('/')
@@ -118,14 +123,12 @@ fn resolve_links_to_uuids(
                 if let Out::YMap(meta_map) = entry_value {
                     if let Some(Out::Any(Any::String(ref id))) = meta_map.get(txn, "id") {
                         uuids.push(id.to_string());
-                        found = true;
                         break;
                     }
                 }
             }
         }
         // If not found, the link is unresolvable — silently skip
-        let _ = found;
     }
 
     uuids
@@ -210,6 +213,135 @@ pub fn index_content_into_folder(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// LinkIndexer — async server-side struct with debounced worker
+// ---------------------------------------------------------------------------
+
+const DEBOUNCE_DURATION: Duration = Duration::from_secs(2);
+
+pub struct LinkIndexer {
+    folder_index: FolderIndex,
+    pending: Arc<DashMap<String, Instant>>,
+    index_tx: mpsc::Sender<String>,
+}
+
+impl LinkIndexer {
+    pub fn new(folder_index: FolderIndex) -> (Self, mpsc::Receiver<String>) {
+        let (index_tx, index_rx) = mpsc::channel(1000);
+        (
+            Self {
+                folder_index,
+                pending: Arc::new(DashMap::new()),
+                index_tx,
+            },
+            index_rx,
+        )
+    }
+
+    pub fn folder_index(&self) -> &FolderIndex {
+        &self.folder_index
+    }
+
+    pub async fn on_document_update(&self, doc_id: &str) {
+        self.pending.insert(doc_id.to_string(), Instant::now());
+        let _ = self.index_tx.send(doc_id.to_string()).await;
+    }
+
+    fn is_ready(&self, doc_id: &str) -> bool {
+        if let Some(entry) = self.pending.get(doc_id) {
+            entry.elapsed() >= DEBOUNCE_DURATION
+        } else {
+            false
+        }
+    }
+
+    fn mark_indexed(&self, doc_id: &str) {
+        self.pending.remove(doc_id);
+    }
+
+    /// Background worker that processes the indexing queue.
+    pub async fn run_worker(
+        self: Arc<Self>,
+        mut rx: mpsc::Receiver<String>,
+        docs: Arc<DashMap<String, DocWithSyncKv>>,
+    ) {
+        loop {
+            match rx.recv().await {
+                Some(doc_id) => {
+                    tokio::time::sleep(DEBOUNCE_DURATION).await;
+
+                    if self.is_ready(&doc_id) {
+                        if let Err(e) = self.index_document(&doc_id, &docs) {
+                            tracing::error!("Failed to index {}: {:?}", doc_id, e);
+                        }
+                        self.mark_indexed(&doc_id);
+                    }
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Server glue: unwraps DocWithSyncKv, delegates to core function.
+    fn index_document(
+        &self,
+        doc_id: &str,
+        docs: &DashMap<String, DocWithSyncKv>,
+    ) -> anyhow::Result<()> {
+        let (_relay_id, doc_uuid) = parse_doc_id(doc_id)
+            .ok_or_else(|| anyhow::anyhow!("Invalid doc_id format: {}", doc_id))?;
+
+        let folder_id = self
+            .folder_index
+            .get_folder(doc_uuid)
+            .ok_or_else(|| anyhow::anyhow!("No folder found for doc: {}", doc_uuid))?;
+
+        // Build the full folder doc key
+        let relay_id = &doc_id[..36];
+        let folder_doc_id = format!("{}-{}", relay_id, folder_id);
+
+        let content_ref = docs
+            .get(doc_id)
+            .ok_or_else(|| anyhow::anyhow!("Content doc not found: {}", doc_id))?;
+        let folder_ref = docs
+            .get(&folder_doc_id)
+            .ok_or_else(|| anyhow::anyhow!("Folder doc not found: {}", folder_doc_id))?;
+
+        // Get Y.Docs from DocWithSyncKv via awareness
+        let content_awareness = content_ref.awareness();
+        let content_guard = content_awareness.read().unwrap();
+        let folder_awareness = folder_ref.awareness();
+        let folder_guard = folder_awareness.read().unwrap();
+
+        index_content_into_folder(doc_uuid, &content_guard.doc, &folder_guard.doc)
+    }
+
+    /// Rebuild the entire backlinks index on startup.
+    pub fn rebuild_all(
+        &self,
+        docs: &DashMap<String, DocWithSyncKv>,
+    ) -> anyhow::Result<()> {
+        tracing::info!("Rebuilding backlinks index...");
+        let mut indexed = 0;
+        let mut skipped = 0;
+
+        for entry in docs.iter() {
+            let doc_id = entry.key();
+            match self.index_document(doc_id, docs) {
+                Ok(()) => indexed += 1,
+                Err(_) => skipped += 1, // Not all docs are content docs
+            }
+        }
+
+        tracing::info!(
+            "Backlinks index rebuild complete: {} indexed, {} skipped",
+            indexed,
+            skipped
+        );
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

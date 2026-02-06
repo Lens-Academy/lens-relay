@@ -47,12 +47,15 @@ use y_sweet_core::{
         DebouncedSyncProtocolEventSender, DocumentUpdatedEvent, EventDispatcher, EventEnvelope,
         EventSender, SyncProtocolEventSender, UnifiedEventDispatcher, WebhookSender,
     },
+    folder_index::FolderIndex,
+    link_indexer::LinkIndexer,
     metrics::RelayMetrics,
     store::Store,
     sync::awareness::Awareness,
     sync_kv::SyncKv,
     webhook::WebhookConfig,
 };
+use yrs::{Map, ReadTxn, Transact};
 
 const RELAY_SERVER_VERSION: &str = env!("GIT_VERSION");
 
@@ -176,6 +179,9 @@ pub struct Server {
     event_dispatcher: Option<Arc<dyn EventDispatcher>>,
     sync_protocol_event_sender: Arc<SyncProtocolEventSender>,
     metrics: Arc<RelayMetrics>,
+    #[allow(dead_code)] // Used indirectly via link_indexer; will be used for API queries
+    folder_index: FolderIndex,
+    link_indexer: Option<Arc<LinkIndexer>>,
 }
 
 impl Server {
@@ -227,8 +233,22 @@ impl Server {
 
         tracing::info!("Event dispatcher created successfully");
 
+        let docs = Arc::new(DashMap::new());
+        let folder_index = FolderIndex::new();
+        let (link_indexer, index_rx) = LinkIndexer::new(folder_index.clone());
+        let link_indexer = Arc::new(link_indexer);
+
+        // Spawn background worker for link indexing
+        let docs_for_indexer = docs.clone();
+        let indexer_for_worker = link_indexer.clone();
+        tokio::spawn(async move {
+            indexer_for_worker
+                .run_worker(index_rx, docs_for_indexer)
+                .await;
+        });
+
         Ok(Self {
-            docs: Arc::new(DashMap::new()),
+            docs,
             doc_worker_tracker: TaskTracker::new(),
             store: store.map(Arc::new),
             checkpoint_freq,
@@ -240,6 +260,8 @@ impl Server {
             event_dispatcher,
             sync_protocol_event_sender,
             metrics,
+            folder_index,
+            link_indexer: Some(link_indexer),
         })
     }
 
@@ -310,6 +332,8 @@ impl Server {
             let event_dispatcher = self.event_dispatcher.clone();
             let routing_channel_for_callback = routing_channel_name.clone();
             let user_for_callback = user.clone();
+            let link_indexer_for_callback = self.link_indexer.clone();
+            let doc_key_for_indexer = doc_id.to_string();
 
             if let Some(dispatcher) = event_dispatcher {
                 Some(Arc::new(move |mut event: DocumentUpdatedEvent| {
@@ -336,9 +360,35 @@ impl Server {
 
                     // Step 2: Send via dispatcher
                     dispatcher.send_event(envelope);
+
+                    // Notify link indexer (if this update is not from the indexer itself)
+                    if let Some(ref indexer) = link_indexer_for_callback {
+                        if y_sweet_core::link_indexer::should_index() {
+                            let indexer = indexer.clone();
+                            let doc_key = doc_key_for_indexer.clone();
+                            tokio::spawn(async move {
+                                indexer.on_document_update(&doc_key).await;
+                            });
+                        }
+                    }
                 }) as y_sweet_core::webhook::WebhookCallback)
             } else {
-                None
+                // Even without event dispatcher, we still want indexing
+                if let Some(ref link_indexer) = link_indexer_for_callback {
+                    let indexer = link_indexer.clone();
+                    let doc_key = doc_key_for_indexer.clone();
+                    Some(Arc::new(move |_event: DocumentUpdatedEvent| {
+                        if y_sweet_core::link_indexer::should_index() {
+                            let indexer = indexer.clone();
+                            let doc_key = doc_key.clone();
+                            tokio::spawn(async move {
+                                indexer.on_document_update(&doc_key).await;
+                            });
+                        }
+                    }) as y_sweet_core::webhook::WebhookCallback)
+                } else {
+                    None
+                }
             }
         };
 
@@ -395,6 +445,56 @@ impl Server {
         }
 
         self.docs.insert(doc_id.to_string(), dwskv);
+
+        // After inserting doc, check if it's a folder doc and populate FolderIndex
+        if let Some(ref link_indexer) = self.link_indexer {
+            if let Some(dwskv) = self.docs.get(doc_id) {
+                let awareness_arc = dwskv.awareness();
+                let awareness_guard = awareness_arc.read().unwrap();
+                let txn = awareness_guard.doc.transact();
+
+                if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                    // This is a folder doc - extract folder_id from doc_id
+                    if let Some((_relay_id, folder_uuid)) =
+                        y_sweet_core::link_indexer::parse_doc_id(doc_id)
+                    {
+                        let mut registered = 0;
+                        for (_path, value) in filemeta.iter(&txn) {
+                            if let yrs::Out::YMap(meta_map) = value {
+                                if let Some(yrs::Out::Any(yrs::Any::String(ref doc_uuid))) =
+                                    meta_map.get(&txn, "id")
+                                {
+                                    link_indexer.folder_index().register(doc_uuid, folder_uuid);
+                                    registered += 1;
+                                }
+                            }
+                        }
+                        if registered > 0 {
+                            tracing::info!(
+                                doc_id = ?doc_id,
+                                registered = registered,
+                                "Populated FolderIndex from filemeta_v0"
+                            );
+                        }
+                    }
+                } else {
+                    // Not a folder doc — check if it's a content doc we can index
+                    if let Some((_relay_id, doc_uuid)) =
+                        y_sweet_core::link_indexer::parse_doc_id(doc_id)
+                    {
+                        if link_indexer.folder_index().get_folder(doc_uuid).is_some() {
+                            // Content doc is in a known folder — trigger indexing on load
+                            let indexer = link_indexer.clone();
+                            let doc_key = doc_id.to_string();
+                            tokio::spawn(async move {
+                                indexer.on_document_update(&doc_key).await;
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
