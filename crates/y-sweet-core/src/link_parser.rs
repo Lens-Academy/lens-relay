@@ -58,10 +58,55 @@ mod tests {
     }
 }
 
+use regex::Regex;
+use std::sync::LazyLock;
+
+// Compile regex once, reuse across calls
+static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[\[([^\]]+)\]\]").unwrap()
+});
+
+static FENCED_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)```[^\n]*\n.*?```|~~~[^\n]*\n.*?~~~").unwrap()
+});
+
+static INLINE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"`[^`]*`").unwrap()
+});
+
 /// Extract wikilink targets from markdown text.
 /// Returns page names only (strips anchors and aliases).
 /// Ignores links inside code blocks and inline code.
 pub fn extract_wikilinks(markdown: &str) -> Vec<String> {
-    // TODO: Implement
-    vec![]
+    // Strip code blocks first
+    let without_fenced = FENCED_CODE_RE.replace_all(markdown, "");
+    let without_code = INLINE_CODE_RE.replace_all(&without_fenced, "");
+
+    let mut links = Vec::new();
+
+    for cap in WIKILINK_RE.captures_iter(&without_code) {
+        let mut content = cap[1].to_string();
+
+        // Skip empty
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        // Strip alias (|) - take only the part before |
+        if let Some(pipe_idx) = content.find('|') {
+            content = content[..pipe_idx].to_string();
+        }
+
+        // Strip anchor (#) - take only the part before #
+        if let Some(hash_idx) = content.find('#') {
+            content = content[..hash_idx].to_string();
+        }
+
+        let trimmed = content.trim().to_string();
+        if !trimmed.is_empty() {
+            links.push(trimmed);
+        }
+    }
+
+    links
 }
