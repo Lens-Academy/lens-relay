@@ -1,0 +1,691 @@
+{
+  "/DM followup message after signup.md": {
+    "id": "f7c85d0f-8bb4-4a03-80b5-408498d77c52",
+    "type": "markdown",
+    "version": 0
+  },
+  "/How to organize things in Obsidian.md": {
+    "version": 0,
+    "type": "markdown",
+    "id": "ce4dfd48-b89f-43c8-870f-ca09bbc40b95"
+  },
+  "/attachments/DM followup message after signup-1769598853372.webp": {
+    "mimetype": "image/webp",
+    "id": "05b21233-6f07-4ed7-b7ea-0f235c95389c",
+    "type": "image",
+    "synctime": 1769598853483,
+    "hash": "5f909e3b94dafdf5164793872c3b6d6cc0434d8ab78268ecf416f8908762823a",
+    "version": 0
+  },
+  "/attachments/USPs and MVP List-1769678111402.webp": {
+    "id": "8eb87799-33f9-41ea-ae58-253f0f666b41",
+    "type": "image",
+    "version": 0,
+    "mimetype": "image/webp",
+    "synctime": 1769678111440,
+    "hash": "303379538579fff9f0b680278a0b28bdea98f5e9bc4325bf2e32fad78c3f5a79"
+  },
+  "/temp please delete.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "54b0e317-fe5d-4378-a6e0-4bd7e54a438b"
+  },
+  "/Deprecated modules": {
+    "type": "folder",
+    "id": "b55e5aa5-41d3-4d9f-99c7-a5501f592164",
+    "version": 0
+  },
+  "/attachments": {
+    "type": "folder",
+    "id": "07452ed9-03ea-4762-bf61-b5d99aa6d1e8",
+    "version": 0
+  },
+  "/Writing a learning outcome on 'Feedback loops are accelerating civilization towards a wild future'.md": {
+    "id": "3653e0e7-5a85-4614-bdaa-d3f693b0c6bf",
+    "type": "markdown",
+    "version": 0
+  },
+  "/USPs and MVP List.md": {
+    "version": 0,
+    "type": "markdown",
+    "id": "2d35c038-3994-4567-9505-02207acdff95"
+  },
+  "/attachments/Other Education Platforms-1768575723376.webp": {
+    "synctime": 1769507647095,
+    "version": 0,
+    "mimetype": "image/webp",
+    "hash": "38d9945997023280c0f5b71bebfc564ea20f9dec3db73296fe210dab9d09d443",
+    "type": "image",
+    "id": "6e8af138-7daf-417e-a862-ef64e4eb23e2"
+  },
+  "/attachments/USPs and MVP List-1769092237977.webp": {
+    "version": 0,
+    "synctime": 1769507647095,
+    "mimetype": "image/webp",
+    "type": "image",
+    "id": "a74a1193-726f-404d-b620-52434b7305ae",
+    "hash": "7bab15e161243a5a33512fdad5ecf9db65d44a2883aa5c6e7bae0aee52c485ec"
+  },
+  "/attachments/Other Education Platforms-1768574756109.webp": {
+    "version": 0,
+    "hash": "8357c41ce2f8ef64de6de4fb1be5d7a587453c3a4c0de632e2b4aa94b5273f7e",
+    "type": "image",
+    "synctime": 1769507647088,
+    "mimetype": "image/webp",
+    "id": "ef814cc1-fa6f-44ce-b3ba-d3d37685cf27"
+  },
+  "/attachments/Learning Outcomes (and Objectives)-1769172845631.webp": {
+    "mimetype": "image/webp",
+    "synctime": 1769507647084,
+    "id": "ac0f8e8c-c533-4bec-8632-a9b4b6d0e5da",
+    "version": 0,
+    "hash": "1ba62200f27bbe2d5d3bc47d5849580f80cfdf240216cc91c4073da63527c010",
+    "type": "image"
+  },
+  "/attachments/USPs and MVP List-1769259198054.webp": {
+    "mimetype": "image/webp",
+    "type": "image",
+    "version": 0,
+    "id": "a5898081-10e0-4978-852f-9a7a3643b5b6",
+    "hash": "6bc14b0fb9a3731deea238acfcbe38e3fb723e1fdfa1ef28f8a0ff9990e6dc06",
+    "synctime": 1769507647095
+  },
+  "/attachments/Other Education Platforms-1768569077644.webp": {
+    "mimetype": "image/webp",
+    "id": "03c1fd7a-5077-4de5-97f0-6a9ba67dae3e",
+    "hash": "aa82285cac590e14f515ac84d9e88230f17d4af7819a1cfb9fcbdd0d3f72ff21",
+    "type": "image",
+    "version": 0,
+    "synctime": 1769507647088
+  },
+  "/attachments/Other Education Platforms-1768575666233.webp": {
+    "mimetype": "image/webp",
+    "type": "image",
+    "synctime": 1769507647088,
+    "id": "23b5c41b-eaa2-4940-ac96-3507eccdce3c",
+    "version": 0,
+    "hash": "e0364bf51ba5a867045fbfe56fbd0c94cc3a07de421f5bbd0600278864f313c4"
+  },
+  "/attachments/Recommended Obsidian Setup-1768572307010.webp": {
+    "synctime": 1769507647095,
+    "hash": "2be720976a535f97aac33927bc8842a29f5b641bf58c32c9ba7b253fa514ba79",
+    "version": 0,
+    "mimetype": "image/webp",
+    "type": "image",
+    "id": "58446cf1-d2fd-4f9b-bdd2-40487bcf00d4"
+  },
+  "/attachments/Interactive Lesson UX Design-1768581405462.webp": {
+    "mimetype": "image/webp",
+    "id": "303d9805-8e68-492d-afae-d77ac151d152",
+    "hash": "2b99b8225144c66fbfb86bcdb9fca5d0ad97c41eb90207a82d2b41ed93fdcbcb",
+    "synctime": 1769507647084,
+    "type": "image",
+    "version": 0
+  },
+  "/attachments/Other Education Platforms-1768574209354.webp": {
+    "hash": "4b93bce05e84726471fcbaff005686899298f6a824d5fbc2763cd5f9e9e7337a",
+    "type": "image",
+    "version": 0,
+    "synctime": 1769507647088,
+    "id": "b4423862-a9bc-4ab3-a908-b25a1f9eb84b",
+    "mimetype": "image/webp"
+  },
+  "/Trial, Sample, Introduction Course.md": {
+    "version": 0,
+    "type": "markdown",
+    "id": "ffd559c8-8872-4225-af82-fdb12197c585"
+  },
+  "/attachments/Other Education Platforms-1768576271653.webp": {
+    "version": 0,
+    "id": "4b902ca8-efb2-426c-9449-befd85eab7d6",
+    "mimetype": "image/webp",
+    "synctime": 1769507647095,
+    "hash": "3dc9ca17c7d7901c9d85751478892b7f9b1815b3c9f40c399491779008ae9a13",
+    "type": "image"
+  },
+  "/attachments/Other Education Platforms-1768568829087.webp": {
+    "id": "2c693952-2c5f-41b7-8d0a-b7d2a73fa50d",
+    "mimetype": "image/webp",
+    "synctime": 1769507647088,
+    "version": 0,
+    "hash": "220ebb5fe963e6b4db0fe81906e9c1e11b85975d4a9b15f85b856bdd15048da4",
+    "type": "image"
+  },
+  "/Deprecated modules/introduction-to-ai-safety.md": {
+    "id": "4b2956a4-36fb-4ec4-bfc9-d832a9241be8",
+    "type": "markdown",
+    "version": 0
+  },
+  "/attachments/Other Education Platforms-1768575029840.webp": {
+    "version": 0,
+    "mimetype": "image/webp",
+    "synctime": 1769507647088,
+    "type": "image",
+    "hash": "146356170251247b287ddd0f9e971e10e239b8497b292d245d64bca9ea3ad613",
+    "id": "600ccf57-fed9-4e9b-9123-d8af9e2ace8f"
+  },
+  "/attachments/Other Education Platforms-1768572428456.webp": {
+    "mimetype": "image/webp",
+    "version": 0,
+    "type": "image",
+    "id": "693ba277-c75e-4890-a4c2-547d4b5ca4cc",
+    "synctime": 1769507647088,
+    "hash": "406b665d6e6de9776c67d410ae2d3b1576a53b0d3d91c7e11e648bd02ebaf1ec"
+  },
+  "/attachments/Recommended Obsidian Setup-1768572374976.webp": {
+    "hash": "d3cffa816a82cf55f0bead19d57d5b76d4102a13f0524a330022d9d55920a3b5",
+    "id": "aea0259a-3d7d-435f-a337-c76084c3d675",
+    "mimetype": "image/webp",
+    "type": "image",
+    "synctime": 1769507647095,
+    "version": 0
+  },
+  "/attachments/Other Education Platforms-1768574646718.webp": {
+    "mimetype": "image/webp",
+    "id": "3ad97dc7-882c-48ff-9cbf-1d05588a4e0a",
+    "version": 0,
+    "type": "image",
+    "synctime": 1769507647088,
+    "hash": "0cb0c9d58a986945196b1edcdda114e3d63547ef2c9c012c9e586b176d665911"
+  },
+  "/attachments/Other Education Platforms-1768575226581.webp": {
+    "version": 0,
+    "hash": "7063abe40027e2ed705d29073d40bb00911eca42d97dccbb912e11d0a89ddd1d",
+    "mimetype": "image/webp",
+    "id": "ffd03859-d243-4294-befc-ee62b3e8fcca",
+    "type": "image",
+    "synctime": 1769507647088
+  },
+  "/attachments/Learning Outcomes (and Objectives)-1769173638412.webp": {
+    "mimetype": "image/webp",
+    "synctime": 1769507647084,
+    "type": "image",
+    "version": 0,
+    "id": "385fef8d-21c6-4bec-8831-f1971bce2b0e",
+    "hash": "908aedd19aebb93a4d9640084c546ec3510aed5d213b2286c4674ce3cd975ae7"
+  },
+  "/attachments/Recommended Obsidian Setup-1768916828002.webp": {
+    "version": 0,
+    "hash": "da22a9b77893f804e0fdbe308c1b5d87a3e16957bad5eaaca26cc2d2fddd3ab4",
+    "type": "image",
+    "synctime": 1769507647095,
+    "id": "25757af4-a9e4-403c-b7a3-c6c6ea967ee9",
+    "mimetype": "image/webp"
+  },
+  "/attachments/Interactive Lesson UX Design-1768581342162.webp": {
+    "synctime": 1769507647084,
+    "id": "ce7805eb-8330-42fd-b756-321ca99f7dcd",
+    "hash": "e50a353f8120f644fece767ff100087f8f574f394c0507c49bb9c9ab8e989c65",
+    "type": "image",
+    "mimetype": "image/webp",
+    "version": 0
+  },
+  "/attachments/Coursey (AI Safety Course)-1764409315750.webp": {
+    "type": "image",
+    "id": "90db1b01-f757-42bf-bc53-b897ac1176c9",
+    "synctime": 1769507647076,
+    "version": 0,
+    "hash": "eca222ec001ab007ec8ef66ae01107947db8b40ba8144ac078943b467a3b3953",
+    "mimetype": "image/webp"
+  },
+  "/(open source) Software License.md": {
+    "id": "67e81ee9-c493-4e63-aaef-c8d4fa4180db",
+    "version": 0,
+    "type": "markdown"
+  },
+  "/attachments/Coursey (AI Safety Course)-1765304881437.webp": {
+    "type": "image",
+    "id": "48db5149-2d62-4406-b41d-f10bb08b4d65",
+    "hash": "102e10736e2d9da635464b67c98515c80d9900d2d03e7b24dbcbdfa5e074e0ad",
+    "version": 0,
+    "mimetype": "image/webp",
+    "synctime": 1769507647080
+  },
+  "/attachments/Other Education Platforms-1768575555277.webp": {
+    "type": "image",
+    "version": 0,
+    "synctime": 1769507647088,
+    "hash": "27236049d835ef9e1e789fa2434d084c8d844ede555941efdff3eaef70e585c9",
+    "mimetype": "image/webp",
+    "id": "ceb4c7a4-0bbf-4715-92f5-b3a5f576b440"
+  },
+  "/attachments/Availability schedule selector-1768727707963.webp": {
+    "id": "0c95356e-7361-4ae9-b8b3-0c46527f2a76",
+    "type": "image",
+    "version": 0,
+    "synctime": 1769507647076,
+    "hash": "76c5cce2c8b302b6b0b4e495dce9ccaff8930e2b8cb0e3695265c9fccde7a0cf",
+    "mimetype": "image/webp"
+  },
+  "/attachments/Interactive Lesson UX Design-1768581757009.webp": {
+    "mimetype": "image/webp",
+    "id": "539290de-7f14-41c4-99ee-9a085721114c",
+    "version": 0,
+    "hash": "61cdd75bb60ae36a0948411e2abdce24c977289565f0c9f74907d8e40a970e73",
+    "synctime": 1769507647084,
+    "type": "image"
+  },
+  "/attachments/Interactive Lesson UX Design-1768585670269.webp": {
+    "hash": "1ca7b6470a660b6e8092a4c9092f2e2e2bfe854d1a257c871b37a838d497c714",
+    "version": 0,
+    "synctime": 1769507647084,
+    "id": "215c1df0-b828-423d-9a8e-5633eea11d12",
+    "mimetype": "image/webp",
+    "type": "image"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764425214788.webp": {
+    "type": "image",
+    "version": 0,
+    "id": "8c611117-fe77-442f-84e6-a0a9c07b1690",
+    "synctime": 1769507647076,
+    "hash": "bb9cf5bf51c5934fa099edca51105b2ff6e0bedd6abadd8293f6ae9504a5985f",
+    "mimetype": "image/webp"
+  },
+  "/attachments/Coursey (AI Safety Course)-1765362697775.webp": {
+    "version": 0,
+    "hash": "6e4540b1b8b67a9f68129b2e074bb2eecc05d64d072af6e0d9fccfa57d53ad94",
+    "mimetype": "image/webp",
+    "synctime": 1769507647080,
+    "id": "cedfc64b-b9aa-4551-b36b-9ef783426fc5",
+    "type": "image"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764429730561.webp": {
+    "version": 0,
+    "type": "image",
+    "id": "0a7ced30-4547-4937-9d9e-b9c1b09e3366",
+    "synctime": 1769507647076,
+    "mimetype": "image/webp",
+    "hash": "a75416d6f679114be2da248ac1c5378b61e2ad482d3d21e210b5f8bcd7a1ca4b"
+  },
+  "/AI Chat Panel.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "76c3e654-0e77-4538-962f-1b419647206e"
+  },
+  "/attachments/Interactive Lesson UX Design-1768580121738.webp": {
+    "type": "image",
+    "hash": "c6a69f8142ad0265416f72ffeff22c7eb08d5ae62c5e91542179645afb2f55f9",
+    "version": 0,
+    "id": "4d1f8932-6298-4fcc-9f44-cdd36d9d428b",
+    "synctime": 1769507647084,
+    "mimetype": "image/webp"
+  },
+  "/attachments/Coursey (AI Safety Course)-1765212794061.webp": {
+    "hash": "6078ea4c717b86e1bd55c1e160a59501fd23c8481608ce05a62ca38414f7ceeb",
+    "id": "710c92ef-26cd-4395-81ff-b432073bc681",
+    "synctime": 1769507647080,
+    "version": 0,
+    "mimetype": "image/webp",
+    "type": "image"
+  },
+  "/Article Web Scraper.md": {
+    "version": 0,
+    "id": "ec3fbb01-1572-429a-ad7e-421094ddefce",
+    "type": "markdown"
+  },
+  "/attachments/Coursey (AI Safety Course)-1765213940737.webp": {
+    "mimetype": "image/webp",
+    "synctime": 1769507647080,
+    "hash": "95e72cae57248fdaf383d825c48f5e12e6d32ae028b8b0b74a3d8fda780c5163",
+    "type": "image",
+    "id": "a2dc4d32-9672-4fe0-9aca-6fcd70e9cfd7",
+    "version": 0
+  },
+  "/attachments/Interactive Lesson UX Design-1768580145246.webp": {
+    "version": 0,
+    "hash": "746e7e6f794980c10a936d2e0ddad7dadedccfd8f7bcf12205849d240ed92930",
+    "type": "image",
+    "synctime": 1769507647084,
+    "id": "1b42d494-a28c-4160-ba07-40e8865790b6",
+    "mimetype": "image/webp"
+  },
+  "/attachments/Learning Outcomes (and Objectives)-1769172706147.webp": {
+    "version": 0,
+    "id": "69deb2fa-37e3-4f75-9313-e877c9846e9e",
+    "type": "image",
+    "mimetype": "image/webp",
+    "synctime": 1769507647084,
+    "hash": "b9192e2d09120a0d5e8d5edba1544da50f88876805ee24dc758d22deacf96ce3"
+  },
+  "/attachments/Interactive Lesson UX Design-1768581774237.webp": {
+    "type": "image",
+    "hash": "43ef0583afddf438db8b52240b410ac2e6fe0efbcba11d1e57bcd88e8906cf95",
+    "synctime": 1769507647084,
+    "id": "151ee59c-2a4e-4bdc-aea7-35aa1821aa74",
+    "mimetype": "image/webp",
+    "version": 0
+  },
+  "/attachments/Coursey (AI Safety Course)-1765222697258.webp": {
+    "type": "image",
+    "synctime": 1769507647080,
+    "version": 0,
+    "hash": "f4e6c3da0108e04e85101576ece73c5316ec670dd805c92019cace2619d4594d",
+    "mimetype": "image/webp",
+    "id": "aca9a682-bff8-48c1-8261-03c2f149253a"
+  },
+  "/attachments/Coursey (AI Safety Course)-1765220840325.webp": {
+    "id": "56c1df7f-7897-4571-8b7d-3f4035407eb5",
+    "synctime": 1769507647080,
+    "hash": "ee1f47c6f57bdc3f0da8bf3132f008b9b46b7c0b9d35b4070cb21946e767f207",
+    "version": 0,
+    "type": "image",
+    "mimetype": "image/webp"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764452625927.webp": {
+    "synctime": 1769507647076,
+    "version": 0,
+    "id": "ba322ac0-5f8d-480c-a794-d899f9a5fe48",
+    "mimetype": "image/webp",
+    "type": "image",
+    "hash": "8133767226f5e923537c5d1ae10332084702c25b7ca1582048e1d51501faf119"
+  },
+  "/attachments/Coursey (AI Safety Course)-1765305215014.webp": {
+    "type": "image",
+    "synctime": 1769507647080,
+    "version": 0,
+    "mimetype": "image/webp",
+    "id": "7e446762-3e1e-46ba-9391-88d735507abd",
+    "hash": "6f76c58056a94de34fa084fc2ff656e8bc98af12a9e1b4dcf77b8c85dfa869ac"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764452598260.webp": {
+    "version": 0,
+    "type": "image",
+    "id": "15857ca4-5e5d-4050-98e2-f0ac5d40278b",
+    "mimetype": "image/webp",
+    "synctime": 1769507647076,
+    "hash": "a7e21e0a1747984bf7e18d943e6bc5de5d0a180be354f216f6e8f2624fb6f153"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764452656667.webp": {
+    "id": "d56a3db6-407a-4dd1-810e-e7c4ed0febb7",
+    "synctime": 1769507647080,
+    "type": "image",
+    "mimetype": "image/webp",
+    "hash": "2736962c1f0338244d3ee62905521d25a1d9c662fea97352793f85c57da7f74f",
+    "version": 0
+  },
+  "/Availability schedule selector.md": {
+    "id": "0cf52b0c-7517-4634-888b-f2fa10ad91da",
+    "type": "markdown",
+    "version": 0
+  },
+  "/attachments/Coursey (AI Safety Course)-1765212785456.webp": {
+    "id": "d7991f06-28bb-4150-a0e6-bf63333a0859",
+    "mimetype": "image/webp",
+    "version": 0,
+    "type": "image",
+    "hash": "be3dc2b858743db1f379b370e86e9a00c806f7eb4f1c215a32677c2c1e7a5dfc",
+    "synctime": 1769507647080
+  },
+  "/attachments/Coursey (AI Safety Course)-1764422792437.webp": {
+    "type": "image",
+    "version": 0,
+    "hash": "49b36e0704dd791876dc3260cdf3a0746d840125c43472dd1c65efd5ee8bca65",
+    "mimetype": "image/webp",
+    "synctime": 1769507647076,
+    "id": "cb180446-7b88-4090-bd63-917ee7e3fd8e"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764430321054.webp": {
+    "hash": "01ed211a55bb0f7b3c48d4b4192e23cfe517615b1d1b76073782221a85287500",
+    "synctime": 1769507647076,
+    "version": 0,
+    "type": "image",
+    "id": "0ee8afbb-4c80-43ba-a898-8df92d4bf902",
+    "mimetype": "image/webp"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764407622410.webp": {
+    "version": 0,
+    "type": "image",
+    "mimetype": "image/webp",
+    "id": "b88050c8-31dc-4302-b9cc-a1b0fb223b64",
+    "synctime": 1769507647076,
+    "hash": "8116e9a303f0ccd612b5448fa4f0322e58b780c9e95f161ed8a6e8f0842b4c51"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764452744441.webp": {
+    "id": "7bda1147-4ce0-41fd-8c15-cfdacd40f5b0",
+    "synctime": 1769507647080,
+    "version": 0,
+    "type": "image",
+    "mimetype": "image/webp",
+    "hash": "1012a4f5c212b2f376713fbbc4104e3fccb82f3c09537d8165923444128dfe12"
+  },
+  "/Branding, Logo.md": {
+    "id": "c3cfded7-ae18-4af9-9e51-dc35fb59ee83",
+    "version": 0,
+    "type": "markdown"
+  },
+  "/Chris's log.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "c91ee530-1521-4bf7-b23d-f572b485eecb"
+  },
+  "/Claude vs Gemini as AI Tutor.md": {
+    "version": 0,
+    "id": "a881e100-c54c-4caa-b22b-f7d225e8221b",
+    "type": "markdown"
+  },
+  "/attachments/Coursey (AI Safety Course)-1764407684385.webp": {
+    "hash": "a35287277c30bc39d3a6a127d2317b6590fea6c17d17c839514d8bc208273657",
+    "version": 0,
+    "id": "17d8f67b-b801-4ca6-9a20-a7241ab75e75",
+    "mimetype": "image/webp",
+    "type": "image",
+    "synctime": 1769507647076
+  },
+  "/Collaborative Editing (Obsidian with Relay).md": {
+    "type": "markdown",
+    "id": "5b7e1489-3d64-461d-af9d-e443e0623d73",
+    "version": 0
+  },
+  "/Course Content.md": {
+    "type": "markdown",
+    "id": "8ae8ba4a-facc-449f-930a-d12b8852149c",
+    "version": 0
+  },
+  "/Course Developer Experience.md": {
+    "id": "c0a9d3b2-2ecc-4915-8b11-f77daff0dd94",
+    "type": "markdown",
+    "version": 0
+  },
+  "/Course material discussion.md": {
+    "type": "markdown",
+    "id": "d1333efb-a4b0-46df-bfda-02b00b66add7",
+    "version": 0
+  },
+  "/Course YAML examples.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "076d2f81-9e15-4b1e-9a18-d3646dd3510e"
+  },
+  "/CRM notification system.md": {
+    "id": "eba3f73c-3fa8-4157-8256-7ed6889fa19b",
+    "version": 0,
+    "type": "markdown"
+  },
+  "/Dev grouping architecture.md": {
+    "id": "6f23787b-319e-4550-a8af-493a153d1f7f",
+    "type": "markdown",
+    "version": 0
+  },
+  "/Dev, Staging, and Production environments.md": {
+    "version": 0,
+    "id": "3474a480-dab5-439b-b1cd-f9a9915ea9bc",
+    "type": "markdown"
+  },
+  "/Interactive Lesson UX Design.md": {
+    "version": 0,
+    "id": "c42acecb-77a2-4553-b4ec-c9ab381de1b4",
+    "type": "markdown"
+  },
+  "/Issue monitoring with Sentry.md": {
+    "id": "245ef7b2-f001-44f6-ac97-3cf9dfb1484b",
+    "type": "markdown",
+    "version": 0
+  },
+  "/Learning Outcomes (and Objectives).md": {
+    "version": 0,
+    "type": "markdown",
+    "id": "a4ebd14c-fe1b-4c22-b58a-31ac1c6ba23b"
+  },
+  "/Lens Elevator Pitch.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "8b20ca82-f510-4a14-b936-96f8203b92a2"
+  },
+  "/Lens Landing Page.md": {
+    "id": "394fb57c-f2b2-43c0-85d6-b4ee4e1505f1",
+    "version": 0,
+    "type": "markdown"
+  },
+  "/Lens Marginal Cost Estimate.md": {
+    "version": 0,
+    "id": "9e7cad8e-89aa-4145-8092-da094a2f0bd5",
+    "type": "markdown"
+  },
+  "/Lens.md": {
+    "id": "c0f75b3c-a342-45d3-8774-38c77ea8c278",
+    "type": "markdown",
+    "version": 0
+  },
+  "/LLM API Pricing.md": {
+    "version": 0,
+    "id": "5eb85454-8237-4732-810e-11f573647537",
+    "type": "markdown"
+  },
+  "/Luc's Main Note.md": {
+    "version": 0,
+    "type": "markdown",
+    "id": "751e35e4-c124-40b7-8552-af0958430ef7"
+  },
+  "/Meetings, agendas, and facilitation - start here.md": {
+    "id": "1b4646b6-80c7-4a66-ba80-b1944b2c4b90",
+    "type": "markdown",
+    "version": 0
+  },
+  "/Other Education Platforms.md": {
+    "id": "71946473-48f2-48f6-a7ba-2efaaa759c30",
+    "version": 0,
+    "type": "markdown"
+  },
+  "/Pitchdeck Website.md": {
+    "version": 0,
+    "id": "3065d478-5c84-4b9c-b340-c36307401440",
+    "type": "markdown"
+  },
+  "/Relay Secret Key.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "ca1c4173-67aa-40eb-9863-5b78c57e7061"
+  },
+  "/Single Service vs Split Service.md": {
+    "type": "markdown",
+    "id": "05ab63dd-66b6-4286-a9df-303d1ac5c861",
+    "version": 0
+  },
+  "/test yaml file.md": {
+    "id": "5b5e9dd4-df39-4f42-a011-b876b75a2da8",
+    "type": "markdown",
+    "version": 0
+  },
+  "/Hierarchy of concepts.md": {
+    "version": 0,
+    "id": "1bce8735-6e14-41b2-91be-5d0763298c66",
+    "type": "markdown"
+  },
+  "/templates": {
+    "id": "d198c2f3-89b6-43a9-95d1-a6dbba221e91",
+    "type": "folder",
+    "version": 0
+  },
+  "/templates/template - learning outcome.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "e37d59a5-6c9b-4f10-85da-cc853a431388"
+  },
+  "/templates/template - lens.md": {
+    "id": "157ea71c-3997-470a-8418-e8019f9d79bd",
+    "type": "markdown",
+    "version": 0
+  },
+  "/templates/template - module.md": {
+    "id": "0ba59469-b0a7-4250-a7e2-b67f42e77d8b",
+    "type": "markdown",
+    "version": 0
+  },
+  "/templates/template - page.md": {
+    "type": "markdown",
+    "id": "f2e9b63f-dda5-4cba-83fb-bc64b28c414e",
+    "version": 0
+  },
+  "/testAa.md": {
+    "version": 0,
+    "id": "2a631aaa-3c56-4201-803f-09bcc0254e4d",
+    "type": "markdown"
+  },
+  "/TestE.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "73701359-8f38-4bf6-8ed3-ffcfacb93329"
+  },
+  "/TestH.md": {
+    "id": "8ef1ad8c-cea1-409f-bfa1-b68c37732c34",
+    "version": 0,
+    "type": "markdown"
+  },
+  "/testing yaml in Obsidian.md": {
+    "id": "2dd1070f-b95a-4e09-b9c1-ccb05fef30a1",
+    "type": "markdown",
+    "version": 0
+  },
+  "/Testing custom markdown format for course content.md": {
+    "version": 0,
+    "type": "markdown",
+    "id": "6393db36-41ea-460f-9e49-1c3a111be18d"
+  },
+  "/Tracking Metrics and AB testing for Coursey.md": {
+    "id": "e1a55a97-e517-4267-ae3c-e351734e942f",
+    "version": 0,
+    "type": "markdown"
+  },
+  "/Lens Editor.md": {
+    "version": 0,
+    "id": "289cb18d-5e9d-4293-adf7-bb3f83c1a173",
+    "type": "markdown"
+  },
+  "/Discord roles and permissions.md": {
+    "type": "markdown",
+    "version": 0,
+    "id": "23ade7f2-d77d-4624-bcdf-9ed637857651"
+  },
+  "/attachments/USPs and MVP List-1769782126211.webp": {
+    "id": "79be6d02-9914-4bb4-8785-1642bd8e7b78",
+    "version": 0,
+    "type": "image",
+    "mimetype": "image/webp",
+    "synctime": 1769782126454,
+    "hash": "655672150436625147d03cd3395e4219c050cbb9bcd121d315144128d2cf1912"
+  },
+  "/attachments/USPs and MVP List-1769791929550.webp": {
+    "version": 0,
+    "type": "image",
+    "hash": "ad0c874046fa58ea2aaec48bedd37d77ba99da59319afb18a055144872b9c746",
+    "id": "e2bec994-7c4c-462b-8f4e-5487bdd0695d",
+    "mimetype": "image/webp",
+    "synctime": 1769791929801
+  },
+  "/attachments/USPs and MVP List-1769792909920.webp": {
+    "mimetype": "image/webp",
+    "hash": "26cb25b42d757d3c834497caf3f09ddf754fa45098123612ec02b4c0cd0ab6d8",
+    "id": "02b524aa-5ad7-434f-b262-1169ffaedd37",
+    "version": 0,
+    "type": "image",
+    "synctime": 1769792910006
+  },
+  "/attachments/USPs and MVP List-1769799192860.webp": {
+    "hash": "cca045dea6da1d08cd57083dbfb3a7669ca7032b9d494528510407e6da88115e",
+    "id": "1fe9e146-8026-419c-a244-b0539d1625cb",
+    "type": "image",
+    "version": 0,
+    "mimetype": "image/webp",
+    "synctime": 1769799192969
+  }
+}

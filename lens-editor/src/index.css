@@ -1,0 +1,256 @@
+@import "tailwindcss";
+
+/* Live Preview Styles for CodeMirror */
+
+/* Hidden syntax markers - using font-size: 0 preserves cursor positions better than display: none */
+.cm-hidden-syntax {
+  font-size: 0;
+}
+
+/* Heading styles - progressively smaller sizes matching Obsidian */
+/* Remove any underlines from headings (from defaultHighlightStyle or other sources) */
+.cm-heading-1,
+.cm-heading-2,
+.cm-heading-3,
+.cm-heading-4,
+.cm-heading-5,
+.cm-heading-6,
+.tok-heading,
+.cm-line .tok-heading,
+[class*="heading"],
+/* Target spans inside heading classes (CodeMirror's generated ͼ classes) */
+.cm-heading-1 span,
+.cm-heading-2 span,
+.cm-heading-3 span,
+.cm-heading-4 span,
+.cm-heading-5 span,
+.cm-heading-6 span,
+[class*="cm-heading"] span {
+  text-decoration: none !important;
+  border-bottom: none !important;
+}
+
+.cm-heading-1 {
+  font-size: 2em;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.cm-heading-2 {
+  font-size: 1.5em;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.cm-heading-3 {
+  font-size: 1.25em;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.cm-heading-4 {
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.cm-heading-5 {
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.cm-heading-6 {
+  font-size: 0.9em;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+/* Emphasis styles */
+.cm-emphasis {
+  font-style: italic;
+}
+
+.cm-strong {
+  font-weight: 700;
+}
+
+/* Link widget */
+.cm-link-widget {
+  color: #2563eb;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.cm-link-widget:hover {
+  color: #1d4ed8;
+}
+.cm-link-icon::after {
+  content: ' ';
+  display: inline-block;
+  width: 0.75em;
+  height: 0.75em;
+  margin-left: 0.15em;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%232563eb'%3E%3Cpath fill-rule='evenodd' d='M4.25 5.5a.75.75 0 00-.75.75v8.5c0 .414.336.75.75.75h8.5a.75.75 0 00.75-.75v-4a.75.75 0 011.5 0v4A2.25 2.25 0 0112.75 17h-8.5A2.25 2.25 0 012 14.75v-8.5A2.25 2.25 0 014.25 4h5a.75.75 0 010 1.5h-5z' clip-rule='evenodd'/%3E%3Cpath fill-rule='evenodd' d='M6.194 12.753a.75.75 0 001.06.053L16.5 4.44v2.81a.75.75 0 001.5 0v-4.5a.75.75 0 00-.75-.75h-4.5a.75.75 0 000 1.5h2.553l-9.056 8.194a.75.75 0 00-.053 1.06z' clip-rule='evenodd'/%3E%3C/svg%3E");
+  background-size: contain;
+  background-repeat: no-repeat;
+  vertical-align: baseline;
+}
+
+/* Wikilink widget - internal links with distinct styling */
+.cm-wikilink-widget {
+  color: #6366f1; /* Indigo - distinct from blue external links */
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+  cursor: pointer;
+}
+.cm-wikilink-widget:hover {
+  color: #4f46e5;
+  border-bottom-style: solid;
+}
+
+/* Unresolved wikilink (future use) */
+.cm-wikilink-widget.unresolved {
+  color: #9ca3af;
+  border-bottom-color: #9ca3af;
+}
+
+/* Wikilink autocomplete popup */
+.cm-tooltip-autocomplete {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  overflow: hidden;
+}
+
+.cm-tooltip-autocomplete ul {
+  font-family: inherit;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.cm-tooltip-autocomplete li {
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.cm-tooltip-autocomplete li[aria-selected="true"] {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.cm-tooltip-autocomplete .cm-completionLabel {
+  font-size: 14px;
+}
+
+/* Icon for document suggestions (optional enhancement) */
+.cm-tooltip-autocomplete .cm-completionIcon-wikilink::after {
+  content: "📄";
+  margin-right: 6px;
+}
+
+/* Inline code */
+.cm-inline-code {
+  background-color: #f3f4f6;
+  border-radius: 3px;
+  padding: 0.125em 0.25em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+/* Table of Contents panel */
+.toc-panel {
+  font-size: 0.875rem;
+}
+
+.toc-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc-panel li {
+  border-left: 2px solid transparent;
+  transition: border-color 0.15s ease;
+}
+
+.toc-panel li:hover {
+  border-left-color: #6366f1;
+}
+
+/* CriticMarkup styles */
+.cm-addition {
+  background-color: rgba(34, 197, 94, 0.2); /* green-500 with opacity */
+  color: #15803d; /* green-700 */
+}
+
+.cm-deletion {
+  background-color: rgba(239, 68, 68, 0.2); /* red-500 with opacity */
+  color: #b91c1c; /* red-700 */
+  text-decoration: line-through;
+}
+
+.cm-substitution {
+  background-color: rgba(234, 179, 8, 0.2); /* yellow-500 with opacity */
+}
+
+.cm-comment {
+  background-color: rgba(59, 130, 246, 0.2); /* blue-500 with opacity */
+  color: #1d4ed8; /* blue-700 */
+}
+
+.cm-highlight {
+  background-color: rgba(250, 204, 21, 0.4); /* yellow-400 with opacity */
+}
+
+/* CriticMarkup Accept/Reject Buttons */
+.cm-criticmarkup-buttons {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.cm-criticmarkup-accept,
+.cm-criticmarkup-reject {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.cm-criticmarkup-accept {
+  background-color: rgba(34, 197, 94, 0.3);
+  color: #15803d;
+}
+
+.cm-criticmarkup-accept:hover {
+  background-color: rgba(34, 197, 94, 0.5);
+}
+
+.cm-criticmarkup-reject {
+  background-color: rgba(239, 68, 68, 0.3);
+  color: #b91c1c;
+}
+
+.cm-criticmarkup-reject:hover {
+  background-color: rgba(239, 68, 68, 0.5);
+}
+
+/* Focus states for accessibility */
+.cm-criticmarkup-accept:focus,
+.cm-criticmarkup-reject:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.cm-criticmarkup-accept:focus-visible,
+.cm-criticmarkup-reject:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}

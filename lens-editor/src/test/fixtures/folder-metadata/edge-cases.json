@@ -1,0 +1,63 @@
+{
+  "/Special Characters !@#$.md": {
+    "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "type": "markdown",
+    "version": 0
+  },
+  "/Deep": {
+    "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "type": "folder",
+    "version": 0
+  },
+  "/Deep/Nested": {
+    "id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    "type": "folder",
+    "version": 0
+  },
+  "/Deep/Nested/Path": {
+    "id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    "type": "folder",
+    "version": 0
+  },
+  "/Deep/Nested/Path/File.md": {
+    "id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    "type": "markdown",
+    "version": 0
+  },
+  "/Empty Folder": {
+    "id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    "type": "folder",
+    "version": 0
+  },
+  "/attachments": {
+    "id": "12345678-1234-4123-8123-123456789abc",
+    "type": "folder",
+    "version": 0
+  },
+  "/attachments/screenshot-1234567890.webp": {
+    "id": "abcdef12-3456-4789-8abc-def123456789",
+    "type": "image",
+    "version": 0,
+    "mimetype": "image/webp",
+    "synctime": 1769598853483,
+    "hash": "5f909e3b94dafdf5164793872c3b6d6cc0434d8ab78268ecf416f8908762823a"
+  },
+  "/attachments/document-9876543210.pdf": {
+    "id": "fedcba98-7654-4321-8fed-cba987654321",
+    "type": "pdf",
+    "version": 0,
+    "mimetype": "application/pdf",
+    "synctime": 1769598860000,
+    "hash": "8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b"
+  },
+  "/UPPERCASE.md": {
+    "id": "11223344-5566-4778-8899-aabbccddeeff",
+    "type": "markdown",
+    "version": 0
+  },
+  "/lowercase.md": {
+    "id": "ffeeddcc-bbaa-4998-8877-665544332211",
+    "type": "markdown",
+    "version": 0
+  }
+}
