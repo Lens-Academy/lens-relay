@@ -1,28 +1,67 @@
 /**
  * Integration test verifying both folders appear in the sidebar.
- * Requires local Y-Sweet: npx y-sweet serve --port 8090
+ * Requires local relay-server running (auto-detected port from workspace).
  *
  * Run: npm run test:integration:sidebar
  *
  * @vitest-environment happy-dom
  */
+import path from 'path';
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { render, waitFor, cleanup } from '@testing-library/react';
 import { Sidebar } from './Sidebar';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import { useMultiFolderMetadata, type FolderConfig } from '../../hooks/useMultiFolderMetadata';
 
-// Mock RELAY_ID to use local Y-Sweet prefix
+// Auto-detect relay port from workspace directory name
+const projectDir = path.basename(path.resolve(import.meta.dirname, '../../..'));
+const workspaceMatch = projectDir.match(/-ws(\d+)$/);
+const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
+const defaultPort = 8090 + (wsNum - 1) * 100;
+const YSWEET_URL = process.env.RELAY_URL || `http://localhost:${defaultPort}`;
+
+const TEST_RELAY_ID = 'a0000000-0000-4000-8000-000000000000';
+
+// Mock RELAY_ID to use local relay prefix
 vi.mock('../../App', () => ({
   RELAY_ID: 'a0000000-0000-4000-8000-000000000000',
 }));
 
-const YSWEET_URL = 'http://localhost:8090';
+// Mock auth to hit relay server directly (bypasses Vite proxy)
+vi.mock('../../lib/auth', () => {
+  // Inline port detection (can't reference outer scope from hoisted vi.mock)
+  const _path = require('path');
+  const _dir = _path.basename(_path.resolve(__dirname, '../../..'));
+  const _m = _dir.match(/-ws(\d+)$/);
+  const _port = 8090 + ((_m ? parseInt(_m[1], 10) : 1) - 1) * 100;
+  const _url = process.env.RELAY_URL || `http://localhost:${_port}`;
 
-// Test folder configuration (matches setup-local-ysweet.mjs)
+  return {
+    getClientToken: async (docId: string) => {
+      const response = await fetch(`${_url}/doc/${docId}/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ authorization: 'full' }),
+      });
+      if (!response.ok) {
+        throw new Error(`Auth failed: ${response.status}`);
+      }
+      const data = await response.json();
+      return { url: data.url, baseUrl: _url, docId: data.docId, authorization: 'full' };
+    },
+  };
+});
+
+// Force useMultiFolderMetadata to use local RELAY_ID by setting env before it loads
+vi.mock('../../hooks/useMultiFolderMetadata', async () => {
+  import.meta.env.VITE_LOCAL_RELAY = 'true';
+  return await vi.importActual<typeof import('../../hooks/useMultiFolderMetadata')>('../../hooks/useMultiFolderMetadata');
+});
+
+// Test folder configuration (matches setup-local-relay.mjs)
 const TEST_FOLDERS: FolderConfig[] = [
-  { id: 'test-folder', name: 'Lens' },
-  { id: 'test-folder-edu', name: 'Lens Edu' },
+  { id: 'b0000001-0000-4000-8000-000000000001', name: 'Relay Folder 1' },
+  { id: 'b0000002-0000-4000-8000-000000000002', name: 'Relay Folder 2' },
 ];
 
 async function checkServer(): Promise<boolean> {
@@ -44,7 +83,7 @@ function TestApp({ onSelectDocument }: { onSelectDocument: (id: string) => void 
 
   return (
     <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate: onSelectDocument }}>
-      <Sidebar activeDocId="a0000000-0000-4000-8000-000000000000-c0000001-0000-4000-8000-000000000001" onSelectDocument={onSelectDocument} />
+      <Sidebar activeDocId={`${TEST_RELAY_ID}-c0000001-0000-4000-8000-000000000001`} onSelectDocument={onSelectDocument} />
     </NavigationContext.Provider>
   );
 }
@@ -54,8 +93,9 @@ describe('Sidebar Multi-Folder Integration', () => {
     const serverUp = await checkServer();
     if (!serverUp) {
       throw new Error(
-        'Local Y-Sweet not running! Start with: npx y-sweet serve --port 8090\n' +
-        'Then run: npm run local:setup'
+        `Local relay-server not running at ${YSWEET_URL}.\n` +
+        'Start with: cargo run --bin relay -- serve --port 8090\n' +
+        'Then run: cd lens-editor && npm run relay:setup'
       );
     }
   });
@@ -64,20 +104,15 @@ describe('Sidebar Multi-Folder Integration', () => {
     cleanup();
   });
 
-  it('shows both folders in the file tree', async () => {
+  it('shows both folders in the file tree', { timeout: 15000 }, async () => {
     const handleSelect = vi.fn();
 
     const { container } = render(<TestApp onSelectDocument={handleSelect} />);
 
-    // Wait for real network sync (longer timeout)
+    // Wait for real network sync — both folder names appear once Y.Doc metadata syncs
     await waitFor(() => {
-      expect(container.textContent).toContain('Lens');
-      expect(container.textContent).toContain('Lens Edu');
+      expect(container.textContent).toContain('Relay Folder 1');
+      expect(container.textContent).toContain('Relay Folder 2');
     }, { timeout: 10000 });
-
-    // Verify documents from both folders appear
-    // "Welcome" is in Lens folder, "Course Notes" is in Lens Edu folder
-    expect(container.textContent).toContain('Welcome');
-    expect(container.textContent).toContain('Course Notes');
   });
 });

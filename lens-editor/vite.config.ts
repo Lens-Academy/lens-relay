@@ -28,6 +28,7 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
+      allowedHosts: ['dev.vps'],
       proxy: {
         // Proxy auth requests to relay-server to avoid CORS
         '/api/relay': {

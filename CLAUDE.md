@@ -73,18 +73,24 @@ docker run -d \
 ### With Cargo (local dev)
 
 ```bash
-cargo run --manifest-path=crates/Cargo.toml -- serve relay.toml
+cargo run --manifest-path=crates/Cargo.toml --bin relay -- serve --port 8090
 ```
 
-Requires a `relay.toml` config file. See `crates/relay.toml.example` for format.
+This auto-detects `crates/relay.toml` if present. For local dev, omit the config file to skip auth (the relay.toml has production public keys that require a server URL). Use `-c crates/relay.toml` only when testing with auth enabled (also requires `--url`).
+
+**After starting the server, always run the setup script** to populate test documents:
+
+```bash
+cd lens-editor && npm run relay:setup
+```
 
 ## Running lens-editor
 
 ```bash
-cd lens-editor && npm install && npm run dev
+cd lens-editor && npm install && npm run dev:local
 ```
 
-The editor connects to the relay server at the URL configured in its settings. During development, point it at `https://relay.lensacademy.org` or a local relay-server instance.
+`dev:local` sets `VITE_LOCAL_RELAY=true` to point the editor at the local relay server.
 
 See `lens-editor/CLAUDE.md` for Y.Doc structure documentation and editor-specific development guidance.
 
