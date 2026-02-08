@@ -1,12 +1,12 @@
 use crate::doc_sync::DocWithSyncKv;
-use crate::link_parser::extract_wikilinks;
+use crate::link_parser::{compute_wikilink_rename_edits, extract_wikilinks};
 use dashmap::DashMap;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
-use yrs::{Any, Doc, GetString, Map, MapRef, Out, ReadTxn, Transact, WriteTxn};
+use yrs::{Any, Doc, GetString, Map, MapRef, Out, ReadTxn, Text, Transact, WriteTxn};
 
 // ---------------------------------------------------------------------------
 // parse_doc_id
@@ -345,14 +345,75 @@ pub fn index_content_into_folders(
 }
 
 // ---------------------------------------------------------------------------
+// Wikilink rename — apply rename edits to Y.Text
+// ---------------------------------------------------------------------------
+
+/// Read Y.Text("contents"), compute wikilink rename edits, and apply them.
+///
+/// This is a free function (not a method on LinkIndexer). It:
+/// 1. Reads the plain text from Y.Text("contents")
+/// 2. Calls `compute_wikilink_rename_edits()` to find matching wikilinks
+/// 3. Applies edits in reverse order using `remove_range` / `insert`
+/// 4. Wraps the transaction in an `IndexingGuard` to prevent infinite loops
+/// 5. Returns the number of edits applied
+///
+/// Note: yrs defaults to `OffsetKind::Bytes` (UTF-8 byte offsets), which matches
+/// the byte offsets from `compute_wikilink_rename_edits()` directly — no conversion needed.
+pub fn update_wikilinks_in_doc(
+    content_doc: &Doc,
+    old_name: &str,
+    new_name: &str,
+) -> anyhow::Result<usize> {
+    // 1. Read plain text
+    let plain_text = {
+        let txn = content_doc.transact();
+        match txn.get_text("contents") {
+            Some(text) => text.get_string(&txn),
+            None => return Ok(0),
+        }
+    };
+
+    // 2. Compute edits (already in reverse offset order)
+    let edits = compute_wikilink_rename_edits(&plain_text, old_name, new_name);
+    if edits.is_empty() {
+        return Ok(0);
+    }
+
+    // 3-4. Apply edits inside an IndexingGuard
+    // Edits are in reverse offset order, so applying them back-to-front
+    // keeps earlier byte offsets valid.
+    let _guard = IndexingGuard::new();
+    let mut txn = content_doc.transact_mut_with("link-indexer");
+    let text = txn.get_or_insert_text("contents");
+
+    for edit in &edits {
+        text.remove_range(&mut txn, edit.offset as u32, edit.remove_len as u32);
+        text.insert(&mut txn, edit.offset as u32, &edit.insert_text);
+    }
+
+    // 5. Return count
+    Ok(edits.len())
+}
+
+// ---------------------------------------------------------------------------
 // LinkIndexer — async server-side struct with debounced worker
 // ---------------------------------------------------------------------------
 
 const DEBOUNCE_DURATION: Duration = Duration::from_secs(2);
 
+/// A rename event detected by diffing filemeta snapshots.
+///
+/// Emitted when the same UUID maps to a different basename across two snapshots.
+pub(crate) struct RenameEvent {
+    pub uuid: String,
+    pub old_name: String,
+    pub new_name: String,
+}
+
 pub struct LinkIndexer {
     pending: Arc<DashMap<String, Instant>>,
     index_tx: mpsc::Sender<String>,
+    filemeta_cache: Arc<DashMap<String, HashMap<String, String>>>, // folder_doc_id -> (uuid -> basename)
 }
 
 impl LinkIndexer {
@@ -362,6 +423,7 @@ impl LinkIndexer {
             Self {
                 pending: Arc::new(DashMap::new()),
                 index_tx,
+                filemeta_cache: Arc::new(DashMap::new()),
             },
             index_rx,
         )
@@ -389,7 +451,165 @@ impl LinkIndexer {
         self.pending.remove(doc_id);
     }
 
+    /// Diff current filemeta_v0 state against cache, emit RenameEvent for UUIDs
+    /// whose basename has changed. Updates the cache after diffing.
+    /// First call (no cache entry) seeds the cache and returns empty.
+    pub(crate) fn detect_renames(&self, folder_doc_id: &str, folder_doc: &Doc) -> Vec<RenameEvent> {
+        // 1. Read filemeta_v0 and build uuid -> basename map
+        let current: HashMap<String, String> = {
+            let txn = folder_doc.transact();
+            let Some(filemeta) = txn.get_map("filemeta_v0") else {
+                return Vec::new();
+            };
+
+            let mut map = HashMap::new();
+            for (path, value) in filemeta.iter(&txn) {
+                if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
+                    // Extract basename: strip leading "/", strip trailing ".md", take last component
+                    let basename = path
+                        .strip_prefix('/')
+                        .unwrap_or(&path)
+                        .strip_suffix(".md")
+                        .unwrap_or(&path)
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&path)
+                        .to_string();
+                    map.insert(uuid, basename);
+                }
+            }
+            map
+        };
+
+        // 2. Get old snapshot from cache
+        let old_opt = self.filemeta_cache.get(folder_doc_id).map(|r| r.clone());
+
+        // 3. Update cache with current snapshot
+        self.filemeta_cache
+            .insert(folder_doc_id.to_string(), current.clone());
+
+        // 4. If no old snapshot, this is the seed call — return empty
+        let Some(old) = old_opt else {
+            return Vec::new();
+        };
+
+        // 5. Compare: for each uuid in BOTH old and new, if basename changed, emit RenameEvent
+        let mut renames = Vec::new();
+        for (uuid, new_basename) in &current {
+            if let Some(old_basename) = old.get(uuid) {
+                if old_basename != new_basename {
+                    renames.push(RenameEvent {
+                        uuid: uuid.clone(),
+                        old_name: old_basename.clone(),
+                        new_name: new_basename.clone(),
+                    });
+                }
+            }
+            // UUID not in old = new file, skip
+        }
+        // UUIDs in old but not in current = deleted, skip (we only iterate current)
+
+        renames
+    }
+
+    /// Detect renames in a folder doc and update wikilinks in all backlinkers.
+    ///
+    /// This is the server-level glue that:
+    /// 1. Calls `detect_renames()` to diff filemeta against the cache
+    /// 2. For each rename, reads backlinks to find source docs
+    /// 3. Looks up each source doc in the DashMap and calls `update_wikilinks_in_doc()`
+    fn apply_rename_updates(&self, folder_doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) {
+        // 1. Get the folder doc and detect renames
+        let renames = {
+            let Some(doc_ref) = docs.get(folder_doc_id) else {
+                return;
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap();
+            self.detect_renames(folder_doc_id, &guard.doc)
+        };
+
+        if renames.is_empty() {
+            return;
+        }
+
+        let Some((relay_id, _)) = parse_doc_id(folder_doc_id) else {
+            tracing::error!("Invalid folder_doc_id format: {}", folder_doc_id);
+            return;
+        };
+
+        tracing::info!(
+            "Detected {} rename(s) in folder doc {}",
+            renames.len(),
+            folder_doc_id
+        );
+
+        // 2. For each rename, read backlinks and update content docs
+        for rename in &renames {
+            // Read backlinks for the renamed UUID from the folder doc
+            let source_uuids = {
+                let Some(doc_ref) = docs.get(folder_doc_id) else {
+                    continue;
+                };
+                let awareness = doc_ref.awareness();
+                let guard = awareness.read().unwrap();
+                let txn = guard.doc.transact();
+                if let Some(backlinks) = txn.get_map("backlinks_v0") {
+                    read_backlinks_array(&backlinks, &txn, &rename.uuid)
+                } else {
+                    Vec::new()
+                }
+            };
+
+            if source_uuids.is_empty() {
+                tracing::info!(
+                    "Rename {} -> {}: no backlinkers for uuid {}",
+                    rename.old_name, rename.new_name, rename.uuid
+                );
+                continue;
+            }
+
+            tracing::info!(
+                "Rename {} -> {}: updating {} backlinker(s)",
+                rename.old_name, rename.new_name, source_uuids.len()
+            );
+
+            // 3. Update wikilinks in each source doc
+            for source_uuid in &source_uuids {
+                let content_doc_id = format!("{}-{}", relay_id, source_uuid);
+                let Some(content_ref) = docs.get(&content_doc_id) else {
+                    tracing::warn!(
+                        "Backlinker doc {} not loaded, skipping rename update",
+                        content_doc_id
+                    );
+                    continue;
+                };
+
+                let awareness = content_ref.awareness();
+                let guard = awareness.read().unwrap();
+                match update_wikilinks_in_doc(&guard.doc, &rename.old_name, &rename.new_name) {
+                    Ok(count) => {
+                        tracing::info!(
+                            "Updated {} wikilink(s) in {} ({} -> {})",
+                            count, content_doc_id, rename.old_name, rename.new_name
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to update wikilinks in {}: {:?}",
+                            content_doc_id, e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Background worker that processes the indexing queue.
+    ///
+    /// Folder docs skip debounce (metadata changes are discrete events, not typing)
+    /// and trigger rename detection before re-queuing content docs.
+    /// Content docs debounce as before (typing produces rapid updates).
     pub async fn run_worker(
         self: Arc<Self>,
         mut rx: mpsc::Receiver<String>,
@@ -399,30 +619,46 @@ impl LinkIndexer {
         loop {
             match rx.recv().await {
                 Some(doc_id) => {
-                    // Wait until no updates have arrived for DEBOUNCE_DURATION.
-                    // on_document_update resets the timestamp on each call,
-                    // so we loop until elapsed >= DEBOUNCE_DURATION.
-                    loop {
-                        tokio::time::sleep(DEBOUNCE_DURATION).await;
-                        if self.is_ready(&doc_id) {
-                            break;
+                    let folder_content = is_folder_doc(&doc_id, &docs);
+
+                    if folder_content.is_none() {
+                        // Content doc — debounce as before.
+                        // Wait until no updates have arrived for DEBOUNCE_DURATION.
+                        // on_document_update resets the timestamp on each call,
+                        // so we loop until elapsed >= DEBOUNCE_DURATION.
+                        loop {
+                            tokio::time::sleep(DEBOUNCE_DURATION).await;
+                            if self.is_ready(&doc_id) {
+                                break;
+                            }
+                            if !self.pending.contains_key(&doc_id) {
+                                break; // Entry removed externally, bail out
+                            }
                         }
+
                         if !self.pending.contains_key(&doc_id) {
-                            break; // Entry removed externally, bail out
+                            continue; // Was removed, skip processing
                         }
                     }
 
-                    if !self.pending.contains_key(&doc_id) {
-                        continue; // Was removed, skip processing
-                    }
+                    // Re-check folder status after debounce (content doc could have
+                    // been removed, or we need the content UUIDs fresh).
+                    if let Some(content_uuids) =
+                        folder_content.or_else(|| is_folder_doc(&doc_id, &docs))
+                    {
+                        // Folder doc — process immediately (no debounce)
 
-                    if let Some(content_uuids) = is_folder_doc(&doc_id, &docs) {
-                        // Folder doc updated — re-queue loaded content docs
+                        // 1. Detect renames BEFORE re-queuing content docs
+                        self.apply_rename_updates(&doc_id, &docs);
+
+                        // 2. Re-queue loaded content docs (existing logic)
                         tracing::info!(
                             "Folder doc {} has {} content docs, re-queuing loaded ones",
                             doc_id, content_uuids.len()
                         );
-                        let relay_id = &doc_id[..36];
+                        let relay_id = parse_doc_id(&doc_id)
+                            .map(|(r, _)| r)
+                            .unwrap_or(&doc_id[..36.min(doc_id.len())]);
                         for uuid in content_uuids {
                             let content_id = format!("{}-{}", relay_id, uuid);
                             if docs.contains_key(&content_id) {
@@ -518,6 +754,20 @@ impl LinkIndexer {
             indexed,
             skipped
         );
+
+        // Seed filemeta cache for all folder docs.
+        // This prevents false renames on the first folder doc update after startup
+        // (without a cached snapshot, detect_renames would have no baseline to diff against).
+        let folder_doc_ids = find_all_folder_docs(docs);
+        for folder_doc_id in &folder_doc_ids {
+            if let Some(doc_ref) = docs.get(folder_doc_id) {
+                let awareness = doc_ref.awareness();
+                let guard = awareness.read().unwrap();
+                self.detect_renames(folder_doc_id, &guard.doc);
+            }
+        }
+        tracing::info!("Seeded filemeta cache for {} folder docs", folder_doc_ids.len());
+
         Ok(())
     }
 }
@@ -919,5 +1169,386 @@ mod tests {
 
         assert_eq!(read_backlinks(&folder_b, "uuid-syllabus"), vec!["uuid-welcome"]);
         assert_eq!(read_backlinks(&folder_a, "uuid-resources"), vec!["uuid-welcome"]);
+    }
+
+    // === update_wikilinks_in_doc tests ===
+
+    /// Helper: read Y.Text("contents") from a doc as a String.
+    fn read_contents(doc: &Doc) -> String {
+        let txn = doc.transact();
+        txn.get_text("contents").unwrap().get_string(&txn)
+    }
+
+    #[test]
+    fn replaces_simple_wikilink_in_ydoc() {
+        let doc = create_content_doc("See [[Foo]] here");
+        let count = update_wikilinks_in_doc(&doc, "Foo", "Bar").unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(read_contents(&doc), "See [[Bar]] here");
+    }
+
+    #[test]
+    fn replaces_wikilink_with_anchor_in_ydoc() {
+        let doc = create_content_doc("[[Foo#Section]]");
+        let count = update_wikilinks_in_doc(&doc, "Foo", "Bar").unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(read_contents(&doc), "[[Bar#Section]]");
+    }
+
+    #[test]
+    fn replaces_wikilink_with_alias_in_ydoc() {
+        let doc = create_content_doc("[[Foo|Display]]");
+        let count = update_wikilinks_in_doc(&doc, "Foo", "Bar").unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(read_contents(&doc), "[[Bar|Display]]");
+    }
+
+    #[test]
+    fn replaces_multiple_wikilinks_in_ydoc() {
+        let doc = create_content_doc("[[Foo]] and [[Foo#Sec]]");
+        let count = update_wikilinks_in_doc(&doc, "Foo", "Bar").unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(read_contents(&doc), "[[Bar]] and [[Bar#Sec]]");
+    }
+
+    #[test]
+    fn returns_zero_for_no_matches() {
+        let doc = create_content_doc("[[Other]]");
+        let count = update_wikilinks_in_doc(&doc, "Foo", "Bar").unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(read_contents(&doc), "[[Other]]");
+    }
+
+    #[test]
+    fn skips_code_blocks_in_ydoc() {
+        let doc = create_content_doc("```\n[[Foo]]\n```\n[[Foo]]");
+        let count = update_wikilinks_in_doc(&doc, "Foo", "Bar").unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(read_contents(&doc), "```\n[[Foo]]\n```\n[[Bar]]");
+    }
+
+    #[test]
+    fn handles_multibyte_chars_before_wikilink() {
+        // U+00E9 (é) is 2 bytes in UTF-8 but 1 char in UTF-32
+        let doc = create_content_doc("caf\u{00e9} [[Foo]] end");
+        let count = update_wikilinks_in_doc(&doc, "Foo", "Bar").unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(read_contents(&doc), "caf\u{00e9} [[Bar]] end");
+    }
+
+    // === detect_renames tests ===
+
+    #[test]
+    fn first_call_seeds_cache_returns_empty() {
+        let (indexer, _rx) = LinkIndexer::new();
+        let folder_doc = create_folder_doc(&[
+            ("/Foo.md", "uuid-1"),
+            ("/Bar.md", "uuid-2"),
+        ]);
+
+        let renames = indexer.detect_renames("folder-1", &folder_doc);
+        assert!(renames.is_empty(), "first call should seed cache and return empty");
+    }
+
+    #[test]
+    fn detects_basename_rename() {
+        let (indexer, _rx) = LinkIndexer::new();
+
+        // Seed cache with initial state
+        let folder_v1 = create_folder_doc(&[("/Foo.md", "uuid-1")]);
+        let renames = indexer.detect_renames("folder-1", &folder_v1);
+        assert!(renames.is_empty(), "seed call should return empty");
+
+        // Now rename: /Foo.md -> /Bar.md (same uuid)
+        let folder_v2 = create_folder_doc(&[("/Bar.md", "uuid-1")]);
+        let renames = indexer.detect_renames("folder-1", &folder_v2);
+        assert_eq!(renames.len(), 1);
+        assert_eq!(renames[0].uuid, "uuid-1");
+        assert_eq!(renames[0].old_name, "Foo");
+        assert_eq!(renames[0].new_name, "Bar");
+    }
+
+    #[test]
+    fn ignores_folder_move_same_basename() {
+        let (indexer, _rx) = LinkIndexer::new();
+
+        // Seed: file in /Notes/Foo.md
+        let folder_v1 = create_folder_doc(&[("/Notes/Foo.md", "uuid-1")]);
+        indexer.detect_renames("folder-1", &folder_v1);
+
+        // Move to /Archive/Foo.md — same basename "Foo"
+        let folder_v2 = create_folder_doc(&[("/Archive/Foo.md", "uuid-1")]);
+        let renames = indexer.detect_renames("folder-1", &folder_v2);
+        assert!(renames.is_empty(), "folder move with same basename should not be a rename");
+    }
+
+    #[test]
+    fn detects_multiple_renames() {
+        let (indexer, _rx) = LinkIndexer::new();
+
+        // Seed
+        let folder_v1 = create_folder_doc(&[
+            ("/Foo.md", "uuid-1"),
+            ("/Bar.md", "uuid-2"),
+        ]);
+        indexer.detect_renames("folder-1", &folder_v1);
+
+        // Rename both
+        let folder_v2 = create_folder_doc(&[
+            ("/Baz.md", "uuid-1"),
+            ("/Qux.md", "uuid-2"),
+        ]);
+        let mut renames = indexer.detect_renames("folder-1", &folder_v2);
+        renames.sort_by(|a, b| a.uuid.cmp(&b.uuid));
+        assert_eq!(renames.len(), 2);
+        assert_eq!(renames[0].uuid, "uuid-1");
+        assert_eq!(renames[0].old_name, "Foo");
+        assert_eq!(renames[0].new_name, "Baz");
+        assert_eq!(renames[1].uuid, "uuid-2");
+        assert_eq!(renames[1].old_name, "Bar");
+        assert_eq!(renames[1].new_name, "Qux");
+    }
+
+    #[test]
+    fn ignores_new_files() {
+        let (indexer, _rx) = LinkIndexer::new();
+
+        // Seed with one file
+        let folder_v1 = create_folder_doc(&[("/Foo.md", "uuid-1")]);
+        indexer.detect_renames("folder-1", &folder_v1);
+
+        // Add a new file (new UUID)
+        let folder_v2 = create_folder_doc(&[
+            ("/Foo.md", "uuid-1"),
+            ("/NewFile.md", "uuid-2"),
+        ]);
+        let renames = indexer.detect_renames("folder-1", &folder_v2);
+        assert!(renames.is_empty(), "new files should not produce rename events");
+    }
+
+    #[test]
+    fn ignores_deleted_files() {
+        let (indexer, _rx) = LinkIndexer::new();
+
+        // Seed with two files
+        let folder_v1 = create_folder_doc(&[
+            ("/Foo.md", "uuid-1"),
+            ("/Bar.md", "uuid-2"),
+        ]);
+        indexer.detect_renames("folder-1", &folder_v1);
+
+        // Remove uuid-2
+        let folder_v2 = create_folder_doc(&[("/Foo.md", "uuid-1")]);
+        let renames = indexer.detect_renames("folder-1", &folder_v2);
+        assert!(renames.is_empty(), "deleted files should not produce rename events");
+    }
+
+    // === Rename pipeline integration tests ===
+    // These test the full pipeline: detect_renames + read backlinks + update_wikilinks_in_doc
+
+    #[test]
+    fn rename_updates_wikilinks_in_backlinkers() {
+        // 1. Create folder with Foo.md (uuid-foo) and Notes.md (uuid-notes)
+        let folder_doc = create_folder_doc(&[
+            ("/Foo.md", "uuid-foo"),
+            ("/Notes.md", "uuid-notes"),
+        ]);
+
+        // 2. Create content doc for Notes with a link to Foo
+        let notes_doc = create_content_doc("See [[Foo]] for details");
+
+        // 3. Index Notes -> backlinks_v0[uuid-foo] = [uuid-notes]
+        index_content_into_folder("uuid-notes", &notes_doc, &folder_doc).unwrap();
+        assert_eq!(read_backlinks(&folder_doc, "uuid-foo"), vec!["uuid-notes"]);
+
+        // 4. Seed the indexer's filemeta cache
+        let (indexer, _rx) = LinkIndexer::new();
+        let renames = indexer.detect_renames("folder-1", &folder_doc);
+        assert!(renames.is_empty(), "seed call should return empty");
+
+        // 5. Rename Foo -> Bar in filemeta (delete /Foo.md, add /Bar.md with same uuid)
+        {
+            let mut txn = folder_doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            filemeta.remove(&mut txn, "/Foo.md");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String("uuid-foo".into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/Bar.md", Any::Map(map.into()));
+        }
+
+        // 6. Detect renames
+        let renames = indexer.detect_renames("folder-1", &folder_doc);
+        assert_eq!(renames.len(), 1);
+        assert_eq!(renames[0].uuid, "uuid-foo");
+        assert_eq!(renames[0].old_name, "Foo");
+        assert_eq!(renames[0].new_name, "Bar");
+
+        // 7. For each rename, read backlinks and update wikilinks
+        for rename in &renames {
+            let txn = folder_doc.transact();
+            let backlinks = txn.get_map("backlinks_v0").unwrap();
+            let source_uuids = read_backlinks_array(&backlinks, &txn, &rename.uuid);
+            drop(txn);
+
+            // In a real scenario we'd look up the content doc by doc_id;
+            // here we just match uuid-notes to notes_doc directly
+            for source_uuid in &source_uuids {
+                if source_uuid == "uuid-notes" {
+                    update_wikilinks_in_doc(&notes_doc, &rename.old_name, &rename.new_name)
+                        .unwrap();
+                }
+            }
+        }
+
+        // 8. Assert: Notes content now has [[Bar]] instead of [[Foo]]
+        assert_eq!(read_contents(&notes_doc), "See [[Bar]] for details");
+    }
+
+    #[test]
+    fn rename_preserves_anchors_and_aliases_in_backlinkers() {
+        let folder_doc = create_folder_doc(&[
+            ("/Foo.md", "uuid-foo"),
+            ("/Notes.md", "uuid-notes"),
+        ]);
+
+        // Notes has both anchor and alias links to Foo
+        let notes_doc = create_content_doc("See [[Foo#Section]] and [[Foo|Display]]");
+        index_content_into_folder("uuid-notes", &notes_doc, &folder_doc).unwrap();
+
+        // Seed cache
+        let (indexer, _rx) = LinkIndexer::new();
+        indexer.detect_renames("folder-1", &folder_doc);
+
+        // Rename Foo -> Bar
+        {
+            let mut txn = folder_doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            filemeta.remove(&mut txn, "/Foo.md");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String("uuid-foo".into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/Bar.md", Any::Map(map.into()));
+        }
+
+        let renames = indexer.detect_renames("folder-1", &folder_doc);
+        assert_eq!(renames.len(), 1);
+
+        for rename in &renames {
+            let txn = folder_doc.transact();
+            let backlinks = txn.get_map("backlinks_v0").unwrap();
+            let source_uuids = read_backlinks_array(&backlinks, &txn, &rename.uuid);
+            drop(txn);
+
+            for source_uuid in &source_uuids {
+                if source_uuid == "uuid-notes" {
+                    update_wikilinks_in_doc(&notes_doc, &rename.old_name, &rename.new_name)
+                        .unwrap();
+                }
+            }
+        }
+
+        // Assert anchors and aliases preserved
+        assert_eq!(
+            read_contents(&notes_doc),
+            "See [[Bar#Section]] and [[Bar|Display]]"
+        );
+    }
+
+    #[test]
+    fn rename_with_no_backlinkers_is_noop() {
+        let folder_doc = create_folder_doc(&[
+            ("/Foo.md", "uuid-foo"),
+            ("/Notes.md", "uuid-notes"),
+        ]);
+
+        // Notes has NO link to Foo, so Foo has no backlinks
+        let notes_doc = create_content_doc("Just some text");
+        index_content_into_folder("uuid-notes", &notes_doc, &folder_doc).unwrap();
+        assert!(read_backlinks(&folder_doc, "uuid-foo").is_empty());
+
+        // Seed cache and rename Foo -> Bar
+        let (indexer, _rx) = LinkIndexer::new();
+        indexer.detect_renames("folder-1", &folder_doc);
+
+        {
+            let mut txn = folder_doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            filemeta.remove(&mut txn, "/Foo.md");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String("uuid-foo".into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/Bar.md", Any::Map(map.into()));
+        }
+
+        let renames = indexer.detect_renames("folder-1", &folder_doc);
+        assert_eq!(renames.len(), 1);
+
+        // Read backlinks for the renamed UUID — empty, so no content docs to update
+        let txn = folder_doc.transact();
+        let backlinks = txn.get_map("backlinks_v0");
+        let source_uuids = if let Some(bl) = backlinks {
+            read_backlinks_array(&bl, &txn, &renames[0].uuid)
+        } else {
+            vec![]
+        };
+        drop(txn);
+
+        assert!(source_uuids.is_empty(), "no backlinkers means nothing to update");
+        // Notes content unchanged
+        assert_eq!(read_contents(&notes_doc), "Just some text");
+    }
+
+    #[test]
+    fn rename_leaves_unrelated_links_untouched() {
+        let folder_doc = create_folder_doc(&[
+            ("/Foo.md", "uuid-foo"),
+            ("/Other.md", "uuid-other"),
+            ("/Notes.md", "uuid-notes"),
+        ]);
+
+        // Notes links to both Foo and Other
+        let notes_doc = create_content_doc("See [[Foo]] and [[Other]]");
+        index_content_into_folder("uuid-notes", &notes_doc, &folder_doc).unwrap();
+        assert_eq!(read_backlinks(&folder_doc, "uuid-foo"), vec!["uuid-notes"]);
+        assert_eq!(read_backlinks(&folder_doc, "uuid-other"), vec!["uuid-notes"]);
+
+        // Seed cache and rename only Foo -> Bar
+        let (indexer, _rx) = LinkIndexer::new();
+        indexer.detect_renames("folder-1", &folder_doc);
+
+        {
+            let mut txn = folder_doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            filemeta.remove(&mut txn, "/Foo.md");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String("uuid-foo".into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/Bar.md", Any::Map(map.into()));
+        }
+
+        let renames = indexer.detect_renames("folder-1", &folder_doc);
+        assert_eq!(renames.len(), 1);
+
+        for rename in &renames {
+            let txn = folder_doc.transact();
+            let backlinks = txn.get_map("backlinks_v0").unwrap();
+            let source_uuids = read_backlinks_array(&backlinks, &txn, &rename.uuid);
+            drop(txn);
+
+            for source_uuid in &source_uuids {
+                if source_uuid == "uuid-notes" {
+                    update_wikilinks_in_doc(&notes_doc, &rename.old_name, &rename.new_name)
+                        .unwrap();
+                }
+            }
+        }
+
+        // Assert: [[Foo]] became [[Bar]], but [[Other]] is untouched
+        assert_eq!(read_contents(&notes_doc), "See [[Bar]] and [[Other]]");
     }
 }
