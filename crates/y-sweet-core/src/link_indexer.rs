@@ -518,11 +518,12 @@ impl LinkIndexer {
     /// 1. Calls `detect_renames()` to diff filemeta against the cache
     /// 2. For each rename, reads backlinks to find source docs
     /// 3. Looks up each source doc in the DashMap and calls `update_wikilinks_in_doc()`
-    fn apply_rename_updates(&self, folder_doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) {
+    /// Returns `true` if renames were detected and processed.
+    fn apply_rename_updates(&self, folder_doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) -> bool {
         // 1. Get the folder doc and detect renames
         let renames = {
             let Some(doc_ref) = docs.get(folder_doc_id) else {
-                return;
+                return false;
             };
             let awareness = doc_ref.awareness();
             let guard = awareness.read().unwrap();
@@ -530,12 +531,12 @@ impl LinkIndexer {
         };
 
         if renames.is_empty() {
-            return;
+            return false;
         }
 
         let Some((relay_id, _)) = parse_doc_id(folder_doc_id) else {
             tracing::error!("Invalid folder_doc_id format: {}", folder_doc_id);
-            return;
+            return false;
         };
 
         tracing::info!(
@@ -603,6 +604,7 @@ impl LinkIndexer {
                 }
             }
         }
+        true
     }
 
     /// Background worker that processes the indexing queue.
@@ -649,22 +651,36 @@ impl LinkIndexer {
                         // Folder doc — process immediately (no debounce)
 
                         // 1. Detect renames BEFORE re-queuing content docs
-                        self.apply_rename_updates(&doc_id, &docs);
+                        let had_renames = self.apply_rename_updates(&doc_id, &docs);
 
-                        // 2. Re-queue loaded content docs (existing logic)
-                        tracing::info!(
-                            "Folder doc {} has {} content docs, re-queuing loaded ones",
-                            doc_id, content_uuids.len()
-                        );
-                        let relay_id = parse_doc_id(&doc_id)
-                            .map(|(r, _)| r)
-                            .unwrap_or(&doc_id[..36.min(doc_id.len())]);
-                        for uuid in content_uuids {
-                            let content_id = format!("{}-{}", relay_id, uuid);
-                            if docs.contains_key(&content_id) {
-                                tracing::info!("Re-queuing content doc: {}", content_id);
-                                self.on_document_update(&content_id).await;
+                        // 2. Re-queue loaded content docs — but SKIP when renames were
+                        //    processed.  The rename system already updated wikilinks in
+                        //    backlinker content docs.  Re-queuing them for re-indexing
+                        //    would race with the next rename: the debounced re-indexer
+                        //    would try to resolve the OLD name against the NEW metadata,
+                        //    fail, and clear the backlinks.  The next non-rename folder
+                        //    doc update (add/delete/backlinks write-back) will still
+                        //    trigger re-queuing normally.
+                        if !had_renames {
+                            tracing::info!(
+                                "Folder doc {} has {} content docs, re-queuing loaded ones",
+                                doc_id, content_uuids.len()
+                            );
+                            let relay_id = parse_doc_id(&doc_id)
+                                .map(|(r, _)| r)
+                                .unwrap_or(&doc_id[..36.min(doc_id.len())]);
+                            for uuid in content_uuids {
+                                let content_id = format!("{}-{}", relay_id, uuid);
+                                if docs.contains_key(&content_id) {
+                                    tracing::info!("Re-queuing content doc: {}", content_id);
+                                    self.on_document_update(&content_id).await;
+                                }
                             }
+                        } else {
+                            tracing::info!(
+                                "Folder doc {}: skipping content re-queue after rename (avoids stale backlink race)",
+                                doc_id
+                            );
                         }
                     } else {
                         // Content doc — index it

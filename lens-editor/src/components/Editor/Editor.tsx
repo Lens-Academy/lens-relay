@@ -229,6 +229,10 @@ export function Editor({ onEditorReady, onDocChange, onNavigate, metadata }: Edi
           '&': {
             height: '100%',
             fontSize: '14px',
+            outline: 'none',
+          },
+          '&.cm-focused': {
+            outline: 'none',
           },
           '.cm-scroller': {
             fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
@@ -283,7 +287,7 @@ export function Editor({ onEditorReady, onDocChange, onNavigate, metadata }: Edi
       {!synced && <LoadingOverlay />}
       <div
         ref={containerRef}
-        className="h-full w-full bg-white border border-gray-200 rounded-lg overflow-hidden"
+        className="h-full w-full"
         onContextMenu={handleContextMenu}
       />
       {contextMenu && (

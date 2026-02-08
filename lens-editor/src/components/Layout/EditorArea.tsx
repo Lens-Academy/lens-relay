@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { EditorView } from '@codemirror/view';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
+import { DocumentTitle } from '../DocumentTitle';
 import { SourceModeToggle } from '../SourceModeToggle/SourceModeToggle';
 import { SuggestionModeToggle } from '../SuggestionModeToggle/SuggestionModeToggle';
 import { PresencePanel } from '../PresencePanel/PresencePanel';
@@ -49,13 +50,18 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       {/* Editor + Sidebars container */}
       <div className="flex-1 flex min-h-0">
         {/* Editor */}
-        <div className="flex-1 px-4 py-6 min-w-0 overflow-auto">
-          <Editor
-            onEditorReady={handleEditorReady}
-            onDocChange={handleDocChange}
-            onNavigate={onNavigate}
-            metadata={metadata}
-          />
+        <div className="flex-1 flex flex-col min-w-0 bg-white">
+          <div className="px-6 pt-5 pb-1">
+            <DocumentTitle currentDocId={currentDocId} />
+          </div>
+          <div className="flex-1 min-h-0">
+            <Editor
+              onEditorReady={handleEditorReady}
+              onDocChange={handleDocChange}
+              onNavigate={onNavigate}
+              metadata={metadata}
+            />
+          </div>
         </div>
         {/* Right Sidebars */}
         <aside className="w-64 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col">
