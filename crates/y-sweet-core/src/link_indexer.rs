@@ -69,7 +69,7 @@ impl Drop for IndexingGuard {
 /// filemeta_v0 entries can be stored as either:
 /// - `Out::YMap(MapRef)` — from Rust/Yrs code using MapPrelim (unit tests, server-side writes)
 /// - `Out::Any(Any::Map(HashMap))` — from JavaScript Y.js clients setting plain objects
-fn extract_id_from_filemeta_entry(value: &Out, txn: &impl ReadTxn) -> Option<String> {
+pub fn extract_id_from_filemeta_entry(value: &Out, txn: &impl ReadTxn) -> Option<String> {
     match value {
         Out::YMap(meta_map) => {
             if let Some(Out::Any(Any::String(ref id))) = meta_map.get(txn, "id") {
@@ -184,7 +184,7 @@ fn resolve_links_to_uuids(
 
 /// Find all loaded folder docs (docs with non-empty filemeta_v0).
 /// Returns doc_ids of all folder docs.
-fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String> {
+pub fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String> {
     docs.iter()
         .filter_map(|entry| {
             let awareness = entry.value().awareness();
@@ -202,7 +202,7 @@ fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String> {
 
 /// Check if a doc is a folder doc (has non-empty filemeta_v0).
 /// Returns the list of content doc UUIDs listed in filemeta_v0, or None.
-fn is_folder_doc(doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) -> Option<Vec<String>> {
+pub fn is_folder_doc(doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) -> Option<Vec<String>> {
     let doc_ref = docs.get(doc_id)?;
     let awareness = doc_ref.awareness();
     let guard = awareness.read().unwrap();
