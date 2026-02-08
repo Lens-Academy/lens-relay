@@ -64,36 +64,36 @@
 | Discord bot integration | Requires separate codebase, defer to future milestone |
 | Custom AuthZ / OAuth | Being handled separately |
 | rmcp / external MCP SDK | Custom implementation is simpler for 5 tools + gives control over session state |
-| Axum 0.7 → 0.8 upgrade | Not needed without rmcp; avoids touching all existing handler signatures |
+| Axum 0.7 -> 0.8 upgrade | Not needed without rmcp; avoids touching all existing handler signatures |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SRCH-01 | TBD | Pending |
-| SRCH-02 | TBD | Pending |
-| SRCH-03 | TBD | Pending |
-| SRCH-04 | TBD | Pending |
-| SRCH-05 | TBD | Pending |
-| SRCH-06 | TBD | Pending |
-| MCP-01 | TBD | Pending |
-| MCP-02 | TBD | Pending |
-| MCP-03 | TBD | Pending |
-| MCP-04 | TBD | Pending |
-| MCP-05 | TBD | Pending |
-| MCP-06 | TBD | Pending |
-| MCP-07 | TBD | Pending |
-| MCP-08 | TBD | Pending |
-| MCP-09 | TBD | Pending |
-| UI-01 | TBD | Pending |
-| UI-02 | TBD | Pending |
-| UI-03 | TBD | Pending |
+| SRCH-01 | Phase 1 | Pending |
+| SRCH-02 | Phase 1 | Pending |
+| SRCH-03 | Phase 1 | Pending |
+| SRCH-04 | Phase 1 | Pending |
+| SRCH-05 | Phase 1 | Pending |
+| SRCH-06 | Phase 1 | Pending |
+| MCP-01 | Phase 2 | Pending |
+| MCP-02 | Phase 2 | Pending |
+| MCP-03 | Phase 2 | Pending |
+| MCP-04 | Phase 4 | Pending |
+| MCP-05 | Phase 3 | Pending |
+| MCP-06 | Phase 3 | Pending |
+| MCP-07 | Phase 4 | Pending |
+| MCP-08 | Phase 3 | Pending |
+| MCP-09 | Phase 4 | Pending |
+| UI-01 | Phase 5 | Pending |
+| UI-02 | Phase 5 | Pending |
+| UI-03 | Phase 5 | Pending |
 
 **Coverage:**
 - v1 requirements: 18 total
-- Mapped to phases: 0
-- Unmapped: 18 ⚠️
+- Mapped to phases: 18
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-08*
-*Last updated: 2026-02-08 after discussion on MCP architecture*
+*Last updated: 2026-02-08 -- phase mappings added after roadmap creation*
