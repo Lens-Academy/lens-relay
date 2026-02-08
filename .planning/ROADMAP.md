@@ -12,7 +12,7 @@ This roadmap delivers full-text keyword search and MCP-based AI assistant integr
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Search Index** - Full-text search with tantivy embedded in relay server
+- [x] **Phase 1: Search Index** - Full-text search with tantivy embedded in relay server
 - [ ] **Phase 2: MCP Transport** - Custom Streamable HTTP endpoint with session management
 - [ ] **Phase 3: MCP Read-Only Tools** - List, read, and link navigation tools
 - [ ] **Phase 4: MCP Search & Edit Tools** - Search queries and CriticMarkup editing via MCP
@@ -34,8 +34,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- SearchIndex core module (TDD: schema, indexing, search, snippets)
-- [ ] 01-02-PLAN.md -- Server integration + HTTP search endpoint
+- [x] 01-01-PLAN.md -- SearchIndex core module (TDD: schema, indexing, search, snippets)
+- [x] 01-02-PLAN.md -- Server integration + HTTP search endpoint
 
 ### Phase 2: MCP Transport
 **Goal**: AI assistants can connect to the relay server's /mcp endpoint and exchange JSON-RPC messages over Streamable HTTP with proper session tracking
@@ -101,7 +101,7 @@ Phases 1 and 2 can proceed in parallel. Then 3 -> 4. Phase 5 can proceed after P
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Search Index | 0/2 | Not started | - |
+| 1. Search Index | 2/2 | Complete | 2026-02-08 |
 | 2. MCP Transport | 0/2 | Not started | - |
 | 3. MCP Read-Only Tools | 0/2 | Not started | - |
 | 4. MCP Search & Edit Tools | 0/2 | Not started | - |
