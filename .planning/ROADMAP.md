@@ -31,12 +31,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. Search results include text snippets showing where the query matched in each document
   3. Editing a document in Obsidian or lens-editor causes the search index to reflect the change within a few seconds
   4. The relay server starts up, indexes all existing documents, and serves search queries without exceeding reasonable memory on the 4GB VPS
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 01-01: TBD
-- [ ] 01-02: TBD
-- [ ] 01-03: TBD
+- [ ] 01-01-PLAN.md -- SearchIndex core module (TDD: schema, indexing, search, snippets)
+- [ ] 01-02-PLAN.md -- Server integration + HTTP search endpoint
 
 ### Phase 2: MCP Transport
 **Goal**: AI assistants can connect to the relay server's /mcp endpoint and exchange JSON-RPC messages over Streamable HTTP with proper session tracking
@@ -102,7 +101,7 @@ Phases 1 and 2 can proceed in parallel. Then 3 -> 4. Phase 5 can proceed after P
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Search Index | 0/3 | Not started | - |
+| 1. Search Index | 0/2 | Not started | - |
 | 2. MCP Transport | 0/2 | Not started | - |
 | 3. MCP Read-Only Tools | 0/2 | Not started | - |
 | 4. MCP Search & Edit Tools | 0/2 | Not started | - |
