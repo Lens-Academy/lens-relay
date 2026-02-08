@@ -501,6 +501,80 @@ impl Store for S3Store {
         Ok(files)
     }
 
+    async fn list_doc_ids(&self) -> Result<Vec<String>> {
+        use rusty_s3::actions::list_objects_v2::ListObjectsV2;
+        use std::collections::HashSet;
+
+        self.init().await?;
+
+        let prefix = if let Some(path_prefix) = &self.prefix {
+            if path_prefix.is_empty() {
+                None
+            } else if path_prefix.ends_with('/') {
+                Some(path_prefix.clone())
+            } else {
+                Some(format!("{}/", path_prefix))
+            }
+        } else {
+            None
+        };
+
+        let mut doc_ids = HashSet::new();
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let mut action = self.bucket.list_objects_v2(Some(&self.credentials));
+            if let Some(ref p) = prefix {
+                action.with_prefix(p.as_str());
+            }
+            if let Some(ref token) = continuation_token {
+                action.with_continuation_token(token.as_str());
+            }
+
+            let url = action.sign(Duration::from_secs(60));
+            let response = self.client
+                .request(Method::GET, url.to_string())
+                .send()
+                .await
+                .map_err(|e| StoreError::ConnectionError(e.to_string()))?;
+
+            if !response.status().is_success() {
+                return Err(StoreError::ConnectionError(format!(
+                    "Failed to list objects: HTTP {}",
+                    response.status()
+                )));
+            }
+
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| StoreError::ConnectionError(e.to_string()))?;
+
+            let parsed = ListObjectsV2::parse_response(&bytes)
+                .map_err(|e| StoreError::ConnectionError(format!(
+                    "Error parsing S3 list response: {}", e
+                )))?;
+
+            let prefix_str = prefix.as_deref().unwrap_or("");
+            for item in &parsed.contents {
+                // Keys may be URL-encoded (encoding-type=url is set by default)
+                let decoded_key = urlencoding::decode(&item.key)
+                    .unwrap_or(std::borrow::Cow::Borrowed(&item.key));
+                let unprefixed = decoded_key.strip_prefix(prefix_str).unwrap_or(&decoded_key);
+                if let Some(doc_id) = unprefixed.strip_suffix("/data.ysweet") {
+                    doc_ids.insert(doc_id.to_string());
+                }
+            }
+
+            match parsed.next_continuation_token {
+                Some(token) => continuation_token = Some(token),
+                None => break,
+            }
+        }
+
+        Ok(doc_ids.into_iter().collect())
+    }
+
     async fn list_versions(&self, key: &str) -> Result<Vec<VersionInfo>> {
         self.init().await?;
 
@@ -1041,6 +1115,80 @@ impl Store for S3Store {
 
         tracing::debug!("Found {} files with prefix {}", files.len(), prefixed);
         Ok(files)
+    }
+
+    async fn list_doc_ids(&self) -> Result<Vec<String>> {
+        use rusty_s3::actions::list_objects_v2::ListObjectsV2;
+        use std::collections::HashSet;
+
+        self.init().await?;
+
+        let prefix = if let Some(path_prefix) = &self.prefix {
+            if path_prefix.is_empty() {
+                None
+            } else if path_prefix.ends_with('/') {
+                Some(path_prefix.clone())
+            } else {
+                Some(format!("{}/", path_prefix))
+            }
+        } else {
+            None
+        };
+
+        let mut doc_ids = HashSet::new();
+        let mut continuation_token: Option<String> = None;
+
+        loop {
+            let mut action = self.bucket.list_objects_v2(Some(&self.credentials));
+            if let Some(ref p) = prefix {
+                action.with_prefix(p.as_str());
+            }
+            if let Some(ref token) = continuation_token {
+                action.with_continuation_token(token.as_str());
+            }
+
+            let url = action.sign(Duration::from_secs(60));
+            let response = self.client
+                .request(Method::GET, url.to_string())
+                .send()
+                .await
+                .map_err(|e| StoreError::ConnectionError(e.to_string()))?;
+
+            if !response.status().is_success() {
+                return Err(StoreError::ConnectionError(format!(
+                    "Failed to list objects: HTTP {}",
+                    response.status()
+                )));
+            }
+
+            let bytes = response
+                .bytes()
+                .await
+                .map_err(|e| StoreError::ConnectionError(e.to_string()))?;
+
+            let parsed = ListObjectsV2::parse_response(&bytes)
+                .map_err(|e| StoreError::ConnectionError(format!(
+                    "Error parsing S3 list response: {}", e
+                )))?;
+
+            let prefix_str = prefix.as_deref().unwrap_or("");
+            for item in &parsed.contents {
+                // Keys may be URL-encoded (encoding-type=url is set by default)
+                let decoded_key = urlencoding::decode(&item.key)
+                    .unwrap_or(std::borrow::Cow::Borrowed(&item.key));
+                let unprefixed = decoded_key.strip_prefix(prefix_str).unwrap_or(&decoded_key);
+                if let Some(doc_id) = unprefixed.strip_suffix("/data.ysweet") {
+                    doc_ids.insert(doc_id.to_string());
+                }
+            }
+
+            match parsed.next_continuation_token {
+                Some(token) => continuation_token = Some(token),
+                None => break,
+            }
+        }
+
+        Ok(doc_ids.into_iter().collect())
     }
 
     async fn generate_upload_url(

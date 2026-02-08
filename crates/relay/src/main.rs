@@ -588,6 +588,11 @@ async fn main() -> Result<()> {
             let redact_errors = config.server.redact_errors;
             let server = Arc::new(server);
 
+            // Reindex backlinks for all stored documents before accepting connections
+            if let Err(e) = server.startup_reindex().await {
+                tracing::warn!("Startup reindex failed: {:?}", e);
+            }
+
             let main_handle = tokio::spawn({
                 let server = server.clone();
                 let token = token.clone();

@@ -138,6 +138,34 @@ impl Store for FileSystemStore {
         Ok(files)
     }
 
+    async fn list_doc_ids(&self) -> Result<Vec<String>> {
+        let dir_entries = match read_dir(&self.base_path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                return Err(StoreError::ConnectionError(format!(
+                    "Failed to read store directory: {}",
+                    e
+                )))
+            }
+        };
+
+        let mut doc_ids = Vec::new();
+        for entry in dir_entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path.join("data.ysweet").exists() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            doc_ids.push(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(doc_ids)
+    }
+
     async fn generate_upload_url(
         &self,
         key: &str,

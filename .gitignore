@@ -8,3 +8,5 @@ node_modules
 .auth*
 CLAUDE.local.md
 *.local
+*.local-r2.toml
+auth.local.env

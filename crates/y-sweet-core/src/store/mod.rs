@@ -75,6 +75,15 @@ pub trait Store: 'static {
         ))
     }
 
+    /// List all document IDs in storage.
+    ///
+    /// Returns doc_ids extracted from storage keys of the form `{doc_id}/data.ysweet`.
+    async fn list_doc_ids(&self) -> Result<Vec<String>> {
+        Err(StoreError::UnsupportedOperation(
+            "This store does not support listing document IDs".to_string(),
+        ))
+    }
+
     // Whether this store supports direct uploads through the server
     // (as opposed to presigned URLs that bypass the server)
     fn supports_direct_uploads(&self) -> bool {
@@ -120,6 +129,15 @@ pub trait Store: Send + Sync {
     async fn list_versions(&self, _key: &str) -> Result<Vec<VersionInfo>> {
         Err(StoreError::UnsupportedOperation(
             "This store does not support listing versions".to_string(),
+        ))
+    }
+
+    /// List all document IDs in storage.
+    ///
+    /// Returns doc_ids extracted from storage keys of the form `{doc_id}/data.ysweet`.
+    async fn list_doc_ids(&self) -> Result<Vec<String>> {
+        Err(StoreError::UnsupportedOperation(
+            "This store does not support listing document IDs".to_string(),
         ))
     }
 

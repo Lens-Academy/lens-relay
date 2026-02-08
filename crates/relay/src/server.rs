@@ -443,6 +443,70 @@ impl Server {
         Ok(())
     }
 
+    /// Load all documents from storage into memory.
+    ///
+    /// Enumerates all doc IDs in the store and calls `load_doc()` for each.
+    /// Used on startup to populate the in-memory doc map before reindexing backlinks.
+    pub async fn load_all_docs(&self) -> Result<usize> {
+        let store = self.store.as_ref()
+            .ok_or_else(|| anyhow!("No store configured — cannot load docs from storage"))?;
+
+        let doc_ids = store.list_doc_ids().await
+            .map_err(|e| anyhow!("Failed to list doc IDs from storage: {:?}", e))?;
+
+        let total = doc_ids.len();
+        tracing::info!("Loading {} documents from storage...", total);
+
+        let mut loaded = 0;
+        let mut failed = 0;
+
+        for (i, doc_id) in doc_ids.iter().enumerate() {
+            if self.docs.contains_key(doc_id) {
+                loaded += 1;
+                continue;
+            }
+
+            match self.load_doc(doc_id, None).await {
+                Ok(()) => {
+                    loaded += 1;
+                    if (i + 1) % 50 == 0 || i + 1 == total {
+                        tracing::info!("  Loaded {}/{} documents", i + 1, total);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("  Failed to load doc {}: {:?}", doc_id, e);
+                    failed += 1;
+                }
+            }
+        }
+
+        tracing::info!(
+            "Document loading complete: {} loaded, {} failed, {} total in storage",
+            loaded, failed, total
+        );
+        Ok(loaded)
+    }
+
+    /// Load all documents from storage and reindex all backlinks.
+    ///
+    /// Called once on startup, before accepting connections.
+    /// No-op if no store is configured (in-memory mode).
+    pub async fn startup_reindex(&self) -> Result<()> {
+        if self.store.is_none() {
+            tracing::info!("No store configured, skipping startup reindex");
+            return Ok(());
+        }
+
+        let loaded = self.load_all_docs().await?;
+        tracing::info!("Loaded {} documents, now reindexing backlinks...", loaded);
+
+        if let Some(ref indexer) = self.link_indexer {
+            indexer.reindex_all_backlinks(&self.docs)?;
+        }
+
+        Ok(())
+    }
+
     async fn doc_gc_worker(
         docs: Arc<DashMap<String, DocWithSyncKv>>,
         doc_id: String,

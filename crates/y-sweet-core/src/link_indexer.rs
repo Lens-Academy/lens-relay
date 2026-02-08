@@ -492,12 +492,16 @@ impl LinkIndexer {
         index_content_into_folders(doc_uuid, &content_guard.doc, &folder_doc_refs)
     }
 
-    /// Rebuild the entire backlinks index on startup.
-    pub fn rebuild_all(
+    /// Reindex all backlinks by scanning every loaded document.
+    ///
+    /// Iterates all docs in the DashMap, indexes each content doc's wikilinks,
+    /// and updates backlinks_v0 in the corresponding folder doc(s).
+    /// Call after loading docs from storage on startup.
+    pub fn reindex_all_backlinks(
         &self,
         docs: &DashMap<String, DocWithSyncKv>,
     ) -> anyhow::Result<()> {
-        tracing::info!("Rebuilding backlinks index...");
+        tracing::info!("Reindexing all backlinks...");
         let mut indexed = 0;
         let mut skipped = 0;
 
@@ -510,7 +514,7 @@ impl LinkIndexer {
         }
 
         tracing::info!(
-            "Backlinks index rebuild complete: {} indexed, {} skipped",
+            "Backlink reindexing complete: {} content docs indexed, {} skipped",
             indexed,
             skipped
         );
