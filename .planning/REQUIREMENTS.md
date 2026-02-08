@@ -76,31 +76,35 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CHAN-01 | — | Pending |
-| CHAN-02 | — | Pending |
-| MSG-01 | — | Pending |
-| MSG-02 | — | Pending |
-| MSG-03 | — | Pending |
-| MSG-04 | — | Pending |
-| MSG-05 | — | Pending |
-| MSG-06 | — | Pending |
-| MSG-07 | — | Pending |
-| POST-01 | — | Pending |
-| POST-02 | — | Pending |
-| POST-03 | — | Pending |
-| UX-01 | — | Pending |
-| UX-02 | — | Pending |
-| UX-03 | — | Pending |
-| INFRA-01 | — | Pending |
-| INFRA-02 | — | Pending |
-| INFRA-03 | — | Pending |
-| INFRA-04 | — | Pending |
+| CHAN-01 | 1 | Pending |
+| CHAN-02 | 1 | Pending |
+| MSG-01 | 1 | Pending |
+| MSG-02 | 2 | Pending |
+| MSG-03 | 1 | Pending |
+| MSG-04 | 1 | Pending |
+| MSG-05 | 2 | Pending |
+| MSG-06 | 2 | Pending |
+| MSG-07 | 2 | Pending |
+| POST-01 | 3 | Pending |
+| POST-02 | 3 | Pending |
+| POST-03 | 3 | Pending |
+| UX-01 | 1 | Pending |
+| UX-02 | 4 | Pending |
+| UX-03 | 4 | Pending |
+| INFRA-01 | 1 | Pending |
+| INFRA-02 | 2 | Pending |
+| INFRA-03 | 3 | Pending |
+| INFRA-04 | 1 | Pending |
 
 **Coverage:**
 - v1 requirements: 19 total
-- Mapped to phases: 0
-- Unmapped: 19 ⚠️
+- Mapped to phases: 19
+- Unmapped: 0
+- Phase 1: 8 requirements (CHAN-01, CHAN-02, MSG-01, MSG-03, MSG-04, UX-01, INFRA-01, INFRA-04)
+- Phase 2: 5 requirements (MSG-02, MSG-05, MSG-06, MSG-07, INFRA-02)
+- Phase 3: 4 requirements (POST-01, POST-02, POST-03, INFRA-03)
+- Phase 4: 2 requirements (UX-02, UX-03)
 
 ---
 *Requirements defined: 2026-02-08*
-*Last updated: 2026-02-08 after initial definition*
+*Last updated: 2026-02-08 after roadmap creation (phase mapping added)*
