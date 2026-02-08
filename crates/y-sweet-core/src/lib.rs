@@ -11,4 +11,5 @@ pub mod sync;
 pub mod sync_kv;
 pub mod link_indexer;
 pub mod link_parser;
+pub mod search_index;
 pub mod webhook;
