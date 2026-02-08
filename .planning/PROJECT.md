@@ -52,7 +52,7 @@ The backlinks system (feature #1 in the original roadmap) is being built separat
 
 The search index is a shared service: lens-editor users get a search UI, and the MCP server queries the same index. This means the index needs its own API layer.
 
-Transport between MCP server and relay server is TBD — could be WebSocket (yjs sync protocol) or HTTP if the relay server has suitable endpoints. Research will determine the right approach.
+The MCP server is embedded in the relay server as an endpoint (`/mcp`), using Streamable HTTP transport. Collaborators connect by adding the URL to their MCP client config — no local installation needed.
 
 Two shared folders to index:
 - **Lens** — main knowledge base
@@ -65,7 +65,7 @@ Infrastructure: Hetzner VPS, Docker containers, Cloudflare R2 storage, Cloudflar
 - **Runtime environment**: Hetzner VPS (4GB RAM) — search index must be memory-conscious
 - **Existing stack**: Rust (relay server) + TypeScript/React (lens-editor) — new components should align
 - **Auth**: No custom AuthZ yet — MCP edits use CriticMarkup as safety mechanism
-- **Transport**: Must work with existing relay server; may need to use yjs sync protocol
+- **No external MCP SDK**: Custom JSON-RPC handlers (5 tools, not worth a framework dependency)
 - **Deployment**: Docker containers on same VPS as relay server
 
 ## Key Decisions
@@ -75,7 +75,9 @@ Infrastructure: Hetzner VPS, Docker containers, Cloudflare R2 storage, Cloudflar
 | CriticMarkup for MCP edits | No custom AuthZ yet; suggestions are safe without permission checks | — Pending |
 | Keyword search only (no semantic) | Keeps scope tight; semantic search deferred to future milestone | — Pending |
 | Search index as shared service | Both lens-editor and MCP need search; avoids duplication | — Pending |
-| MCP server on VPS | Alongside relay server for low-latency local access | — Pending |
+| MCP embedded in relay (`/mcp` endpoint) | URL-based setup for collaborators, direct access to Y.Docs and search index | — Pending |
+| Custom MCP transport (no rmcp) | 5 tools doesn't justify a framework; avoids Axum 0.7→0.8 upgrade; gives control over session state | — Pending |
+| Read-before-edit enforcement | Session tracks read docs, rejects edits on unread docs; mirrors Claude Code's Edit tool pattern | — Pending |
 
 ---
-*Last updated: 2026-02-08 after initialization*
+*Last updated: 2026-02-08 after architecture discussion*
