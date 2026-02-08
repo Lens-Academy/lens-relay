@@ -67,9 +67,9 @@ if (!folder) {
 }
 
 const payload: ShareTokenPayload = {
-  r: role,
-  f: folder,
-  x: parseExpiry(expires),
+  role,
+  folder,
+  expiry: parseExpiry(expires),
 };
 
 const token = signShareToken(payload);
@@ -79,5 +79,6 @@ console.log(`\nShare Link Generated`);
 console.log(`${'─'.repeat(50)}`);
 console.log(`Role:    ${role}`);
 console.log(`Folder:  ${folder}`);
-console.log(`Expires: ${new Date(payload.x * 1000).toISOString()}`);
+console.log(`Expires: ${new Date(payload.expiry * 1000).toISOString()}`);
+console.log(`Token:   ${token} (${token.length} chars)`);
 console.log(`\nURL:\n${url}\n`);

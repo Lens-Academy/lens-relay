@@ -29,7 +29,7 @@ export function createAuthHandler(config: AuthHandlerConfig) {
 
     // 2. Determine relay authorization level
     // view -> read-only (server-enforced), suggest/edit -> full (frontend-enforced role distinction)
-    const relayAuth = payload.r === 'view' ? 'read-only' : 'full';
+    const relayAuth = payload.role === 'view' ? 'read-only' : 'full';
 
     // 3. Mint relay doc token by proxying to relay server
     const headers: Record<string, string> = {
@@ -59,7 +59,7 @@ export function createAuthHandler(config: AuthHandlerConfig) {
       authorization: relayAuth,
     };
 
-    return { clientToken, role: payload.r };
+    return { clientToken, role: payload.role };
   };
 }
 

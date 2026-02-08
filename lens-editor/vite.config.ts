@@ -76,11 +76,26 @@ export default defineConfig(() => {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       allowedHosts: ['dev.vps'],
       proxy: {
-        // Proxy auth requests to relay-server to avoid CORS
+        // Proxy API requests to relay-server (adds server token server-side)
         '/api/relay': {
           target: relayTarget,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api\/relay/, ''),
+          secure: !useLocalRelay,
+          configure: (proxy) => {
+            if (relayServerToken) {
+              proxy.on('proxyReq', (proxyReq) => {
+                proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);
+              });
+            }
+          },
+        },
+        // Proxy WebSocket connections to relay-server
+        '/ws/relay': {
+          target: relayTarget,
+          changeOrigin: true,
+          ws: true,
+          rewrite: (path) => path.replace(/^\/ws\/relay/, ''),
           secure: !useLocalRelay,
         },
       },

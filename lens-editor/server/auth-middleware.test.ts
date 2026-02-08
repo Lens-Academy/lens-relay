@@ -15,10 +15,11 @@ describe('auth-middleware', () => {
 
   const handler = createAuthHandler(config);
 
+  // Must use a valid UUID for binary packing
   const validPayload: ShareTokenPayload = {
-    r: 'edit',
-    f: 'folder-id',
-    x: Math.floor(Date.now() / 1000) + 3600,
+    role: 'edit',
+    folder: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e',
+    expiry: Math.floor(Date.now() / 1000) + 3600,
   };
 
   beforeEach(() => {
@@ -45,7 +46,7 @@ describe('auth-middleware', () => {
   });
 
   it('should request read-only relay token for view role', async () => {
-    const viewPayload: ShareTokenPayload = { ...validPayload, r: 'view' };
+    const viewPayload: ShareTokenPayload = { ...validPayload, role: 'view' };
     const token = signShareToken(viewPayload);
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -71,7 +72,7 @@ describe('auth-middleware', () => {
   });
 
   it('should request full relay token for suggest role', async () => {
-    const suggestPayload: ShareTokenPayload = { ...validPayload, r: 'suggest' };
+    const suggestPayload: ShareTokenPayload = { ...validPayload, role: 'suggest' };
     const token = signShareToken(suggestPayload);
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -89,9 +90,9 @@ describe('auth-middleware', () => {
   });
 
   it('should throw AuthError 401 for invalid token', async () => {
-    await expect(handler({ token: 'invalid.token', docId: 'doc123' }))
+    await expect(handler({ token: 'invalid-token', docId: 'doc123' }))
       .rejects.toThrow(AuthError);
-    await expect(handler({ token: 'invalid.token', docId: 'doc123' }))
+    await expect(handler({ token: 'invalid-token', docId: 'doc123' }))
       .rejects.toThrow('Invalid or expired share token');
   });
 

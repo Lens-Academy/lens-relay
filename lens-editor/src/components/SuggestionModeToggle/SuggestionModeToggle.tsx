@@ -16,7 +16,7 @@ interface SuggestionModeToggleProps {
  *
  * - For 'edit' role: Full toggle between Editing and Suggesting modes
  * - For 'suggest' role: Locked into Suggesting mode (shows badge instead of toggle)
- * - For 'view' role: Hidden (no editing capabilities)
+ * - For 'view' role: Locked "Viewing" badge (no editing capabilities)
  */
 export function SuggestionModeToggle({ view }: SuggestionModeToggleProps) {
   const { role, canEdit } = useAuth();
@@ -40,8 +40,14 @@ export function SuggestionModeToggle({ view }: SuggestionModeToggleProps) {
     }
   }, [view, role]);
 
-  // View-only users: hide the toggle entirely
-  if (role === 'view') return null;
+  // View-only users: show locked badge
+  if (role === 'view') {
+    return (
+      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-100 text-red-800">
+        Viewing
+      </span>
+    );
+  }
 
   // Suggest-only users: show locked badge
   if (role === 'suggest') {

@@ -3,17 +3,10 @@ import { YSweetProvider } from '@y-sweet/client';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 import { getClientToken } from './auth';
 
-// Relay server configuration (same as in auth.ts)
-const SERVER_TOKEN = '2D3RhEOhAQSgWEGkAWxyZWxheS1zZXJ2ZXIDeB1odHRwczovL3JlbGF5LmxlbnNhY2FkZW15Lm9yZwYaaWdOJToAATlIZnNlcnZlckhUsS3xaA3zBw';
-const RELAY_URL = 'https://relay.lensacademy.org';
-
 const USE_LOCAL_RELAY = import.meta.env?.VITE_LOCAL_RELAY === 'true';
 const RELAY_ID = USE_LOCAL_RELAY
   ? 'a0000000-0000-4000-8000-000000000000'
   : 'cb696037-0f72-4e93-8717-4e433129d789';
-
-// In development, use Vite proxy to avoid CORS
-const API_BASE = import.meta.env?.DEV ? '/api/relay' : RELAY_URL;
 
 // Transaction origin identifier - Obsidian uses this pattern to identify
 // the source of Y.js changes and avoid processing its own updates
@@ -26,22 +19,14 @@ function debug(operation: string, ...args: unknown[]) {
 
 /**
  * Create a document on the Relay server.
+ * Routes through the Vite middleware which adds the server token server-side.
  * This must be called BEFORE adding to filemeta, otherwise the document
  * won't be accessible (auth endpoint returns 404 for non-existent docs).
  */
 async function createDocumentOnServer(docId: string): Promise<void> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-
-  // Only add auth header for production Relay (local relay-server has no auth)
-  if (!USE_LOCAL_RELAY) {
-    headers['Authorization'] = `Bearer ${SERVER_TOKEN}`;
-  }
-
-  const response = await fetch(`${API_BASE}/doc/new`, {
+  const response = await fetch('/api/relay/doc/new', {
     method: 'POST',
-    headers,
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ docId }),
   });
 
