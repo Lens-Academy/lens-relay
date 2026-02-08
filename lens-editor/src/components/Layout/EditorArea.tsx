@@ -10,6 +10,7 @@ import { BacklinksPanel } from '../BacklinksPanel';
 import { CommentsPanel } from '../CommentsPanel';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useAuth } from '../../contexts/AuthContext';
 
 /**
  * Editor area component that lives INSIDE the RelayProvider key boundary.
@@ -20,6 +21,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate } = useNavigation();
+  const { canWrite } = useAuth();
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -51,6 +53,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         {/* Editor */}
         <div className="flex-1 px-4 py-6 min-w-0 overflow-auto">
           <Editor
+            readOnly={!canWrite}
             onEditorReady={handleEditorReady}
             onDocChange={handleDocChange}
             onNavigate={onNavigate}

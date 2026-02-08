@@ -40,6 +40,7 @@ const listIndentKeymap = keymap.of([
 ]);
 
 interface EditorProps {
+  readOnly?: boolean;
   onEditorReady?: (view: EditorView) => void;
   onDocChange?: () => void;
   onNavigate?: (docId: string) => void;
@@ -84,7 +85,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ onEditorReady, onDocChange, onNavigate, metadata }: EditorProps) {
+export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metadata }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -191,6 +192,8 @@ export function Editor({ onEditorReady, onDocChange, onNavigate, metadata }: Edi
     // Custom setup based on basicSetup but without line numbers and active line highlighting
     const state = EditorState.create({
       extensions: [
+        // Read-only mode for view-only users
+        ...(readOnly ? [EditorView.editable.of(false), EditorState.readOnly.of(true)] : []),
         // Core editing
         highlightSpecialChars(),
         history(),
@@ -276,7 +279,7 @@ export function Editor({ onEditorReady, onDocChange, onNavigate, metadata }: Edi
     };
   // Note: wikilinkContext is NOT a dependency - we update it via updateWikilinkContext()
   // to avoid recreating the editor (which would lose Y.Text sync state)
-  }, [ydoc, provider, onEditorReady, onDocChange]);
+  }, [ydoc, provider, onEditorReady, onDocChange, readOnly]);
 
   return (
     <div className="relative h-full w-full">

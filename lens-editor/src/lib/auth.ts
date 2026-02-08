@@ -16,7 +16,37 @@ const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 // In development, use Vite proxy to avoid CORS
 const AUTH_BASE = import.meta.env.DEV ? '/api/relay' : RELAY_URL;
 
-export async function getClientToken(docId: string): Promise<ClientToken> {
+/**
+ * Get a client token for connecting to a relay document.
+ * When shareToken is provided, routes through the share token middleware.
+ * Otherwise uses direct relay auth with the server token.
+ */
+export async function getClientToken(docId: string, shareToken?: string | null): Promise<ClientToken> {
+  if (shareToken) {
+    return getClientTokenViaShareToken(docId, shareToken);
+  }
+  return getClientTokenDirect(docId);
+}
+
+/** Route through share token middleware */
+async function getClientTokenViaShareToken(docId: string, shareToken: string): Promise<ClientToken> {
+  const response = await fetch('/api/auth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: shareToken, docId }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Share token auth failed: ${response.status} ${text}`);
+  }
+
+  const data = await response.json();
+  return data.clientToken;
+}
+
+/** Direct relay auth with server token (original behavior) */
+async function getClientTokenDirect(docId: string): Promise<ClientToken> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
