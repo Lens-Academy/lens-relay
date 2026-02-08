@@ -164,6 +164,17 @@ struct FileDownloadParams {
     hash: String,
 }
 
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+    #[serde(default = "default_search_limit")]
+    limit: usize,
+}
+
+fn default_search_limit() -> usize {
+    20
+}
+
 // ---------------------------------------------------------------------------
 // Search index background worker
 // ---------------------------------------------------------------------------
@@ -1108,7 +1119,8 @@ impl Server {
                 "/d/:doc_id/ws/:doc_id2",
                 get(handle_socket_upgrade_full_path),
             )
-            .route("/webhook/reload", post(reload_webhook_config_endpoint));
+            .route("/webhook/reload", post(reload_webhook_config_endpoint))
+            .route("/search", get(handle_search));
 
         // Only add file endpoints if a store is configured
         if let Some(store) = &self.store {
@@ -1691,6 +1703,53 @@ async fn check_store_deprecated(
 /// Always returns a 200 OK response, as long as we are listening.
 async fn ready() -> Result<Json<Value>, AppError> {
     Ok(Json(json!({"ok": true})))
+}
+
+async fn handle_search(
+    State(server_state): State<Arc<Server>>,
+    Query(params): Query<SearchQuery>,
+) -> Result<Json<Value>, AppError> {
+    // Check if search is ready (503 during initial indexing)
+    if !server_state
+        .search_ready
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return Err(AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            anyhow!("Search index is being built, please try again shortly"),
+        ));
+    }
+
+    let limit = params.limit.min(100); // Cap at 100
+    let q = params.q.trim().to_string();
+
+    if q.is_empty() {
+        return Ok(Json(json!({
+            "results": [],
+            "total_hits": 0,
+            "query": ""
+        })));
+    }
+
+    let search_index = server_state.search_index.clone().ok_or_else(|| {
+        AppError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            anyhow!("Search index not available"),
+        )
+    })?;
+
+    // Run search in blocking context (tantivy is sync)
+    let results = tokio::task::spawn_blocking(move || search_index.search(&q, limit))
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let total_hits = results.len();
+    Ok(Json(json!({
+        "results": results,
+        "total_hits": total_hits,
+        "query": params.q
+    })))
 }
 
 async fn new_doc(
