@@ -1,5 +1,6 @@
 import { getAvatarUrl } from '../../lib/discord-avatar';
 import { formatTimestamp } from '../../lib/format-timestamp';
+import { DiscordMarkdown } from './DiscordMarkdown';
 import type { DiscordMessage } from './useMessages';
 
 interface MessageItemProps {
@@ -41,18 +42,18 @@ export function MessageItem({ message, showHeader }: MessageItemProps) {
               </span>
             </div>
             {content && (
-              <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
-                {content}
-              </p>
+              <div className="text-sm text-gray-700 break-words">
+                <DiscordMarkdown content={content} />
+              </div>
             )}
           </div>
         </div>
       ) : (
         <div className="pl-10">
           {content && (
-            <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
-              {content}
-            </p>
+            <div className="text-sm text-gray-700 break-words">
+              <DiscordMarkdown content={content} />
+            </div>
           )}
         </div>
       )}
