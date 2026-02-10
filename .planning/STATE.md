@@ -5,21 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-08)
 
 **Core value:** Users can participate in the Discord discussion about a document without leaving the editor.
-**Current focus:** Phase 1 complete, ready for Phase 2
+**Current focus:** Phase 2 - Live Streaming (Discord markdown rendering complete)
 
 ## Position
 
-- **Current phase:** 1 of 4 (Bridge + History Display) - COMPLETE
-- **Plan:** 3 of 3 in phase complete
-- **Status:** Phase 1 verification pending
-- **Last activity:** 2026-02-10 - All plans complete, checkpoint approved
+- **Current phase:** 2 of 4 (Live Streaming)
+- **Plan:** 2 of 3 in phase complete
+- **Status:** In progress
+- **Last activity:** 2026-02-10 - Completed 02-02-PLAN.md (Discord markdown rendering)
 
-Progress: `[####....] 3/8 plans (38%)`
+Progress: `[#####...] 4/6 plans (67%)`
 
 ## Recent Decisions
 
 | Decision | Made In | Rationale |
 |----------|---------|-----------|
+| AST-to-React rendering for Discord markdown | 02-02 | Safe XSS-free rendering without dangerouslySetInnerHTML |
+| Graceful fallback for unresolved Discord mentions | 02-02 | Mentions need API calls to resolve; show styled placeholder badges |
+| div wrapper instead of p for message content | 02-02 | DiscordMarkdown renders block-level elements (pre, blockquote) invalid inside p |
 | ConnectedDiscussionPanel wrapper pattern | 01-03 | Separates YDocProvider context from testable component |
 | APP badge for bot messages | 01-03 | Matches Discord native UI, user-requested enhancement |
 | host: true in vite.config.ts | 01-03 | Required for dev.vps tunnel access |
@@ -35,8 +38,8 @@ Progress: `[####....] 3/8 plans (38%)`
 ## Session Continuity
 
 - **Last session:** 2026-02-10
-- **Stopped at:** Phase 1 all plans complete, awaiting verification
-- **Resume file:** .planning/ROADMAP.md (Phase 2 planning)
+- **Stopped at:** Completed 02-02-PLAN.md (Discord markdown rendering)
+- **Resume file:** .planning/phases/02-live-streaming/02-03-PLAN.md
 
 ---
-*Last updated: 2026-02-10 after completing plan 01-03*
+*Last updated: 2026-02-10 after completing plan 02-02*
