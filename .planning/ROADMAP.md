@@ -56,14 +56,14 @@ Plans:
 **Depends on**: Phase 2
 **Requirements**: MCP-05, MCP-06, MCP-08
 **Success Criteria** (what must be TRUE):
-  1. An AI assistant can call list_documents and receive all documents with name, folder, and last-modified metadata
-  2. An AI assistant can call read_document with a document identifier and receive the full markdown content
+  1. An AI assistant can call glob and receive all documents with path and folder metadata
+  2. An AI assistant can call read with a document path and receive the full markdown content in cat -n format
   3. An AI assistant can call get_links for a document and receive both its backlinks and forward links
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md -- DocumentResolver: bidirectional path-UUID cache (TDD)
+- [ ] 03-02-PLAN.md -- Tool implementations (read, glob, get_links) + router wiring + server integration
 
 ### Phase 4: MCP Search & Edit Tools
 **Goal**: AI assistants can find documents by keyword search and propose edits as reviewable CriticMarkup suggestions
@@ -103,6 +103,6 @@ Phases 1 and 2 can proceed in parallel. Then 3 -> 4. Phase 5 can proceed after P
 |-------|----------------|--------|-----------|
 | 1. Search Index | 2/2 | Complete | 2026-02-08 |
 | 2. MCP Transport | 2/2 | Complete | 2026-02-08 |
-| 3. MCP Read-Only Tools | 0/2 | Not started | - |
+| 3. MCP Read-Only Tools | 0/2 | Planned | - |
 | 4. MCP Search & Edit Tools | 0/2 | Not started | - |
 | 5. Search UI | 0/2 | Not started | - |
