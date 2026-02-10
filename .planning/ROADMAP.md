@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Search Index** - Full-text search with tantivy embedded in relay server
 - [x] **Phase 2: MCP Transport** - Custom Streamable HTTP endpoint with session management
-- [ ] **Phase 3: MCP Read-Only Tools** - List, read, and link navigation tools
+- [x] **Phase 3: MCP Read-Only Tools** - List, read, and link navigation tools
 - [ ] **Phase 4: MCP Search & Edit Tools** - Search queries and CriticMarkup editing via MCP
 - [ ] **Phase 5: Search UI** - Search bar and results in lens-editor
 
@@ -62,8 +62,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md -- DocumentResolver: bidirectional path-UUID cache (TDD)
-- [ ] 03-02-PLAN.md -- Tool implementations (read, glob, get_links) + router wiring + server integration
+- [x] 03-01-PLAN.md -- DocumentResolver: bidirectional path-UUID cache (TDD)
+- [x] 03-02-PLAN.md -- Tool implementations (read, glob, get_links) + router wiring + server integration
 
 ### Phase 4: MCP Search & Edit Tools
 **Goal**: AI assistants can find documents by keyword search and propose edits as reviewable CriticMarkup suggestions
@@ -103,6 +103,6 @@ Phases 1 and 2 can proceed in parallel. Then 3 -> 4. Phase 5 can proceed after P
 |-------|----------------|--------|-----------|
 | 1. Search Index | 2/2 | Complete | 2026-02-08 |
 | 2. MCP Transport | 2/2 | Complete | 2026-02-08 |
-| 3. MCP Read-Only Tools | 0/2 | Planned | - |
+| 3. MCP Read-Only Tools | 2/2 | Complete | 2026-02-10 |
 | 4. MCP Search & Edit Tools | 0/2 | Not started | - |
 | 5. Search UI | 0/2 | Not started | - |

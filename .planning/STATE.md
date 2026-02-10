@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-08)
 
 **Core value:** AI assistants can find and work with the right documents across the knowledge base
-**Current focus:** Phase 3 - MCP Read-Only Tools -- IN PROGRESS
+**Current focus:** Phase 3 - MCP Read-Only Tools -- COMPLETE
 
 ## Current Position
 
-Phase: 3 of 5 (MCP Read-Only Tools)
-Plan: 1 of 2 in current phase (done)
-Status: In progress
-Last activity: 2026-02-10 -- Completed 03-01-PLAN.md (DocumentResolver)
+Phase: 3 of 5 (MCP Read-Only Tools) -- COMPLETE
+Plan: 2 of 2 in current phase (done)
+Status: Complete
+Last activity: 2026-02-10 -- Completed Phase 3 (all MCP read-only tools verified live)
 
-Progress: [#####.....] 50%
+Progress: [######....] 60%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: 11m
-- Total execution time: 0.9 hours
+- Total execution time: 1.1 hours
 
 **By Phase:**
 
@@ -29,11 +29,11 @@ Progress: [#####.....] 50%
 |-------|-------|-------|----------|
 | 01-search-index | 2/2 | 36m | 18m |
 | 02-mcp-transport | 2/2 | 12m | 6m |
-| 03-mcp-read-only-tools | 1/2 | 6m | 6m |
+| 03-mcp-read-only-tools | 2/2 | 21m | 10.5m |
 
 **Recent Trend:**
-- Last 5 plans: 6m, 5m, 7m, 6m, 6m
-- Trend: consistent ~6m for focused plans
+- Last 5 plans: 5m, 7m, 6m, 6m, 15m
+- Trend: consistent ~6m for focused plans, 15m for integration plans
 
 *Updated after each plan completion*
 
@@ -55,6 +55,9 @@ Recent decisions affecting current work:
 - Test DocumentResolver against bare Y.Docs to avoid DocWithSyncKv async dependency
 - Dual update API: update_folder (server) + update_folder_from_doc (testable)
 - derive_folder_name centralizes folder naming convention
+- Lazy resolver rebuild on first tool call for in-memory mode
+- Router dispatch_request takes &Arc<Server> for tool access to docs/resolver
+- Forward links resolved via case-insensitive basename matching
 
 ### Pending Todos
 
@@ -66,6 +69,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-10 11:13 UTC
-Stopped at: Completed 03-01-PLAN.md (DocumentResolver)
+Last session: 2026-02-10 13:00 UTC
+Stopped at: Completed Phase 3 (MCP Read-Only Tools) - all tools verified live via MCP Inspector
 Resume file: None
