@@ -38,9 +38,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 02-01-PLAN.md -- Gateway connection manager + SSE endpoint (bridge-side)
-- [ ] 02-02-PLAN.md -- Discord markdown rendering (DiscordMarkdown component)
-- [ ] 02-03-PLAN.md -- SSE client, auto-scroll, new messages indicator (frontend)
+- [x] 02-01-PLAN.md -- Gateway connection manager + SSE endpoint (bridge-side)
+- [x] 02-02-PLAN.md -- Discord markdown rendering (DiscordMarkdown component)
+- [x] 02-03-PLAN.md -- SSE client, auto-scroll, new messages indicator (frontend)
 
 **Success Criteria:**
 1. A message posted in Discord appears in the panel within 2 seconds

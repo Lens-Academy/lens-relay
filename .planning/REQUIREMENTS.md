@@ -76,25 +76,25 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CHAN-01 | 1 | Pending |
-| CHAN-02 | 1 | Pending |
-| MSG-01 | 1 | Pending |
-| MSG-02 | 2 | Pending |
-| MSG-03 | 1 | Pending |
-| MSG-04 | 1 | Pending |
-| MSG-05 | 2 | Pending |
-| MSG-06 | 2 | Pending |
-| MSG-07 | 2 | Pending |
+| CHAN-01 | 1 | Complete |
+| CHAN-02 | 1 | Complete |
+| MSG-01 | 1 | Complete |
+| MSG-02 | 2 | Complete |
+| MSG-03 | 1 | Complete |
+| MSG-04 | 1 | Complete |
+| MSG-05 | 2 | Complete |
+| MSG-06 | 2 | Complete |
+| MSG-07 | 2 | Complete |
 | POST-01 | 3 | Pending |
 | POST-02 | 3 | Pending |
 | POST-03 | 3 | Pending |
-| UX-01 | 1 | Pending |
+| UX-01 | 1 | Complete |
 | UX-02 | 4 | Pending |
 | UX-03 | 4 | Pending |
-| INFRA-01 | 1 | Pending |
-| INFRA-02 | 2 | Pending |
+| INFRA-01 | 1 | Complete |
+| INFRA-02 | 2 | Complete |
 | INFRA-03 | 3 | Pending |
-| INFRA-04 | 1 | Pending |
+| INFRA-04 | 1 | Complete |
 
 **Coverage:**
 - v1 requirements: 19 total
