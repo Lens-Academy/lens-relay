@@ -2120,6 +2120,7 @@ dependencies = [
  "nanoid",
  "p256",
  "prometheus",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

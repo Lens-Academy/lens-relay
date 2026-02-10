@@ -30,8 +30,9 @@ pub fn dispatch_request(
             if let Err(err_resp) = validate_session(sessions, session_id, &request.id) {
                 return (err_resp, None);
             }
+            // session_id is Some(&str) here since validate_session passed
             (
-                handle_tools_call(server, request.id.clone(), request.params.as_ref()),
+                handle_tools_call(server, session_id.unwrap(), request.id.clone(), request.params.as_ref()),
                 None,
             )
         }
@@ -123,6 +124,7 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
 
 fn handle_tools_call(
     server: &Arc<Server>,
+    session_id: &str,
     id: Value,
     params: Option<&Value>,
 ) -> JsonRpcResponse {
@@ -141,12 +143,12 @@ fn handle_tools_call(
         None => {
             return success_response(
                 id,
-                tools::dispatch_tool(server, "", &json!({})),
+                tools::dispatch_tool(server, session_id, "", &json!({})),
             );
         }
     };
 
-    let result = tools::dispatch_tool(server, &name, &arguments);
+    let result = tools::dispatch_tool(server, session_id, &name, &arguments);
     success_response(id, result)
 }
 
@@ -256,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_three_tools() {
+    fn tools_list_returns_four_tools() {
         let server = test_server();
         let req = make_request(json!(3), "tools/list", None);
 
@@ -273,7 +275,7 @@ mod tests {
         let result = resp.result.unwrap();
         assert!(result["tools"].is_array());
         let tools_arr = result["tools"].as_array().unwrap();
-        assert_eq!(tools_arr.len(), 3);
+        assert_eq!(tools_arr.len(), 4);
 
         // Verify tool names
         let names: Vec<&str> = tools_arr
@@ -283,6 +285,7 @@ mod tests {
         assert!(names.contains(&"read"));
         assert!(names.contains(&"glob"));
         assert!(names.contains(&"get_links"));
+        assert!(names.contains(&"grep"));
     }
 
     #[test]

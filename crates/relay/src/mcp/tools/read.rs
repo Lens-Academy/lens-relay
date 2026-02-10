@@ -4,7 +4,7 @@ use std::sync::Arc;
 use yrs::{GetString, ReadTxn, Transact};
 
 /// Execute the `read` tool: read document content in cat -n format.
-pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+pub fn execute(server: &Arc<Server>, session_id: &str, arguments: &Value) -> Result<String, String> {
     let file_path = arguments
         .get("file_path")
         .and_then(|v| v.as_str())

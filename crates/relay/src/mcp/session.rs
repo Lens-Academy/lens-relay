@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::time::Instant;
 
 pub struct McpSession {
@@ -9,6 +10,7 @@ pub struct McpSession {
     pub initialized: bool,
     pub created_at: Instant,
     pub last_activity: Instant,
+    pub read_docs: HashSet<String>,
 }
 
 pub struct SessionManager {
@@ -37,6 +39,7 @@ impl SessionManager {
             initialized: false,
             created_at: now,
             last_activity: now,
+            read_docs: HashSet::new(),
         };
         self.sessions.insert(session_id.clone(), session);
         session_id
@@ -141,5 +144,30 @@ mod tests {
     fn remove_nonexistent_session_returns_false() {
         let mgr = SessionManager::new();
         assert!(!mgr.remove_session("nonexistent"));
+    }
+
+    #[test]
+    fn read_docs_starts_empty() {
+        let mgr = SessionManager::new();
+        let id = mgr.create_session("2025-03-26".into(), None);
+        let session = mgr.get_session(&id).unwrap();
+        assert!(session.read_docs.is_empty());
+    }
+
+    #[test]
+    fn read_docs_can_be_modified() {
+        let mgr = SessionManager::new();
+        let id = mgr.create_session("2025-03-26".into(), None);
+
+        // Insert a doc_id via get_session_mut
+        {
+            let mut session = mgr.get_session_mut(&id).unwrap();
+            session.read_docs.insert("doc-123".to_string());
+        }
+
+        // Verify it's there
+        let session = mgr.get_session(&id).unwrap();
+        assert!(session.read_docs.contains("doc-123"));
+        assert_eq!(session.read_docs.len(), 1);
     }
 }

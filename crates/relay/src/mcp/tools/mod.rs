@@ -1,5 +1,6 @@
 pub mod get_links;
 pub mod glob;
+pub mod grep;
 pub mod read;
 
 use crate::server::Server;
@@ -66,11 +67,55 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "grep",
+            "description": "Search document contents using regex patterns. Returns matching lines with context. Mirrors ripgrep output format.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["pattern"],
+                "additionalProperties": false,
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "The regular expression pattern to search for in document contents"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Folder to scope the search to (e.g. 'Lens', 'Lens Edu'). If not specified, searches all folders."
+                    },
+                    "output_mode": {
+                        "type": "string",
+                        "enum": ["content", "files_with_matches", "count"],
+                        "description": "Output mode: 'content' shows matching lines, 'files_with_matches' shows file paths (default), 'count' shows match counts."
+                    },
+                    "-i": {
+                        "type": "boolean",
+                        "description": "Case insensitive search"
+                    },
+                    "-C": {
+                        "type": "number",
+                        "description": "Number of lines to show before and after each match"
+                    },
+                    "-A": {
+                        "type": "number",
+                        "description": "Number of lines to show after each match"
+                    },
+                    "-B": {
+                        "type": "number",
+                        "description": "Number of lines to show before each match"
+                    },
+                    "head_limit": {
+                        "type": "number",
+                        "description": "Limit output to first N entries. In files_with_matches/count mode limits files, in content mode limits output lines."
+                    }
+                }
+            }
+        }),
     ]
 }
 
 /// Dispatch a tool call to the correct handler and wrap result in MCP CallToolResult format.
-pub fn dispatch_tool(server: &Arc<Server>, name: &str, arguments: &Value) -> Value {
+pub fn dispatch_tool(server: &Arc<Server>, session_id: &str, name: &str, arguments: &Value) -> Value {
     // Lazy rebuild: if the resolver has no entries but docs exist, trigger a rebuild.
     // This handles the case where docs were created after server startup (e.g. local dev).
     if server.doc_resolver().all_paths().is_empty() {
@@ -78,7 +123,7 @@ pub fn dispatch_tool(server: &Arc<Server>, name: &str, arguments: &Value) -> Val
     }
 
     match name {
-        "read" => match read::execute(server, arguments) {
+        "read" => match read::execute(server, session_id, arguments) {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
@@ -87,6 +132,10 @@ pub fn dispatch_tool(server: &Arc<Server>, name: &str, arguments: &Value) -> Val
             Err(msg) => tool_error(&msg),
         },
         "get_links" => match get_links::execute(server, arguments) {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "grep" => match grep::execute(server, arguments) {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
