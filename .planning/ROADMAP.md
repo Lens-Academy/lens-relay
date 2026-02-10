@@ -21,9 +21,9 @@
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- TDD utility functions (frontmatter, Discord URL, avatar, timestamp)
-- [ ] 01-02-PLAN.md -- Discord bridge sidecar proxy + Vite proxy config
-- [ ] 01-03-PLAN.md -- DiscussionPanel UI + EditorArea integration
+- [x] 01-01-PLAN.md -- TDD utility functions (frontmatter, Discord URL, avatar, timestamp)
+- [x] 01-02-PLAN.md -- Discord bridge sidecar proxy + Vite proxy config
+- [x] 01-03-PLAN.md -- DiscussionPanel UI + EditorArea integration
 
 **Success Criteria:**
 1. User opens a document containing `discussion: https://discord.com/channels/.../...` and a chat panel appears in the sidebar
