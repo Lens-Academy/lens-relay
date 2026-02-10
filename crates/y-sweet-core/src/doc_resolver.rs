@@ -102,7 +102,16 @@ impl DocumentResolver {
 
     /// Resolve a user-facing path to a DocInfo.
     pub fn resolve_path(&self, path: &str) -> Option<DocInfo> {
-        self.path_to_doc.get(path).map(|r| r.value().clone())
+        if let Some(info) = self.path_to_doc.get(path) {
+            return Some(info.value().clone());
+        }
+        // Try appending .md if path doesn't already have an extension
+        if !path.ends_with(".md") {
+            if let Some(info) = self.path_to_doc.get(&format!("{}.md", path)) {
+                return Some(info.value().clone());
+            }
+        }
+        None
     }
 
     /// Get the user-facing path for a UUID.
