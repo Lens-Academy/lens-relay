@@ -1,5 +1,7 @@
 import { useRef, useEffect } from 'react';
 import { MessageItem } from './MessageItem';
+import { useAutoScroll } from './useAutoScroll';
+import { NewMessagesBar } from './NewMessagesBar';
 import type { DiscordMessage } from './useMessages';
 
 interface MessageListProps {
@@ -22,16 +24,25 @@ function shouldShowHeader(current: DiscordMessage, previous: DiscordMessage | nu
 }
 
 /**
- * Scrollable message list with grouping logic.
+ * Scrollable message list with grouping logic and auto-scroll.
  * Consecutive messages from the same author within 5 minutes are visually grouped.
+ * Auto-scrolls to new messages when at bottom; shows indicator when scrolled up.
  */
 export function MessageList({ messages }: MessageListProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const { sentinelRef, containerRef, scrollToBottom, unseenCount } =
+    useAutoScroll(messages.length);
+  const initialScrollDone = useRef(false);
 
-  // Scroll to bottom on initial render and when messages change
+  // Scroll to bottom on initial load (when messages go from 0 to >0)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'instant' });
-  }, [messages]);
+    if (messages.length > 0 && !initialScrollDone.current) {
+      sentinelRef.current?.scrollIntoView({ behavior: 'instant' });
+      initialScrollDone.current = true;
+    }
+    if (messages.length === 0) {
+      initialScrollDone.current = false;
+    }
+  }, [messages.length, sentinelRef]);
 
   if (messages.length === 0) {
     return (
@@ -42,7 +53,7 @@ export function MessageList({ messages }: MessageListProps) {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div ref={containerRef} className="flex-1 overflow-y-auto relative">
       {messages.map((msg, i) => (
         <MessageItem
           key={msg.id}
@@ -50,7 +61,8 @@ export function MessageList({ messages }: MessageListProps) {
           showHeader={shouldShowHeader(msg, i > 0 ? messages[i - 1] : null)}
         />
       ))}
-      <div ref={bottomRef} />
+      <div ref={sentinelRef} className="h-1" />
+      <NewMessagesBar count={unseenCount} onClick={scrollToBottom} />
     </div>
   );
 }

@@ -18,7 +18,7 @@ interface DiscussionPanelProps {
  */
 export function DiscussionPanel({ doc }: DiscussionPanelProps) {
   const { channelId } = useDiscussion(doc);
-  const { messages, channelName, loading, error, refetch } = useMessages(channelId);
+  const { messages, channelName, loading, error, refetch, gatewayStatus } = useMessages(channelId);
 
   // Don't render anything if no discussion URL in frontmatter
   if (!channelId) return null;
@@ -30,10 +30,22 @@ export function DiscussionPanel({ doc }: DiscussionPanelProps) {
       aria-label="Discussion"
     >
       {/* Header */}
-      <div className="px-3 py-2 border-b border-gray-200">
+      <div className="px-3 py-2 border-b border-gray-200 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-700">
           {channelName ? `#${channelName}` : 'Discussion'}
         </h3>
+        {gatewayStatus === 'connected' && (
+          <span className="w-2 h-2 rounded-full bg-green-500" title="Live" />
+        )}
+        {gatewayStatus === 'connecting' && (
+          <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" title="Connecting..." />
+        )}
+        {gatewayStatus === 'reconnecting' && (
+          <span className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" title="Reconnecting..." />
+        )}
+        {gatewayStatus === 'disconnected' && (
+          <span className="w-2 h-2 rounded-full bg-gray-400" title="Disconnected" />
+        )}
       </div>
 
       {/* Content area */}

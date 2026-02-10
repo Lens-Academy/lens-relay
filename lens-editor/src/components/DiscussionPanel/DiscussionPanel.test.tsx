@@ -8,6 +8,46 @@ import { DiscussionPanel } from './DiscussionPanel';
 import messagesFixture from './__fixtures__/discord-messages.json';
 import channelFixture from './__fixtures__/discord-channel.json';
 
+// ---- EventSource mock (not available in happy-dom) ----
+
+class MockEventSource {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 2;
+
+  readyState = MockEventSource.CONNECTING;
+  onopen: ((ev: Event) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+
+  private listeners: Record<string, ((ev: Event | MessageEvent) => void)[]> = {};
+
+  constructor(public url: string) {
+    // Simulate async open
+    setTimeout(() => {
+      this.readyState = MockEventSource.OPEN;
+      this.onopen?.(new Event('open'));
+    }, 0);
+  }
+
+  addEventListener(type: string, listener: (ev: Event | MessageEvent) => void) {
+    if (!this.listeners[type]) this.listeners[type] = [];
+    this.listeners[type].push(listener);
+  }
+
+  removeEventListener(type: string, listener: (ev: Event | MessageEvent) => void) {
+    if (this.listeners[type]) {
+      this.listeners[type] = this.listeners[type].filter((l) => l !== listener);
+    }
+  }
+
+  close() {
+    this.readyState = MockEventSource.CLOSED;
+  }
+}
+
+vi.stubGlobal('EventSource', MockEventSource);
+
 // ---- Y.Doc test helpers ----
 
 function createTestDoc(markdownContent: string): Y.Doc {
