@@ -88,11 +88,11 @@ Plans:
   1. A search bar is visible in lens-editor where the user can type a query
   2. Search results appear as a list showing document names and text snippets with matching content
   3. Clicking a search result opens that document in the editor
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [ ] 05-01-PLAN.md -- Search API client, useSearch hook (TDD), SearchPanel component
+- [ ] 05-02-PLAN.md -- Sidebar integration, SearchInput ref forwarding, Ctrl+K shortcut, visual verification
 
 ## Progress
 
