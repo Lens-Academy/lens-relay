@@ -1,0 +1,376 @@
+use crate::server::Server;
+use serde_json::Value;
+use std::sync::Arc;
+use yrs::{GetString, ReadTxn, Transact, WriteTxn};
+
+/// Execute the `edit` tool: replace old_string with CriticMarkup-wrapped suggestion.
+pub fn execute(
+    _server: &Arc<Server>,
+    _session_id: &str,
+    _arguments: &Value,
+) -> Result<String, String> {
+    Err("Not implemented yet".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use y_sweet_core::doc_resolver::DocumentResolver;
+    use yrs::{Any, Doc, Map, Text, Transact, WriteTxn};
+
+    // === Test Helpers ===
+
+    const RELAY_ID: &str = "cb696037-0f72-4e93-8717-4e433129d789";
+    const FOLDER0_UUID: &str = "aaaa0000-0000-0000-0000-000000000000";
+
+    fn folder0_id() -> String {
+        format!("{}-{}", RELAY_ID, FOLDER0_UUID)
+    }
+
+    /// Create a folder Y.Doc with filemeta_v0 populated.
+    fn create_folder_doc(entries: &[(&str, &str)]) -> Doc {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            for (path, uuid) in entries {
+                let mut map = HashMap::new();
+                map.insert("id".to_string(), Any::String((*uuid).into()));
+                map.insert("type".to_string(), Any::String("markdown".into()));
+                map.insert("version".to_string(), Any::Number(0.0));
+                filemeta.insert(&mut txn, *path, Any::Map(map.into()));
+            }
+        }
+        doc
+    }
+
+    /// Create a test server with docs and a session with the doc marked as read.
+    fn build_test_server(entries: &[(&str, &str, &str)]) -> Arc<Server> {
+        let server = Server::new_for_test();
+
+        let filemeta_entries: Vec<(&str, &str)> =
+            entries.iter().map(|(path, uuid, _)| (*path, *uuid)).collect();
+        let folder_doc = create_folder_doc(&filemeta_entries);
+
+        let resolver = server.doc_resolver();
+        resolver.update_folder_from_doc(&folder0_id(), 0, &folder_doc);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        for (_, uuid, content) in entries {
+            let doc_id = format!("{}-{}", RELAY_ID, uuid);
+            let content_owned = content.to_string();
+            let dwskv = rt.block_on(async {
+                y_sweet_core::doc_sync::DocWithSyncKv::new(&doc_id, None, || (), None)
+                    .await
+                    .expect("Failed to create test DocWithSyncKv")
+            });
+
+            {
+                let awareness = dwskv.awareness();
+                let mut guard = awareness.write().unwrap();
+                let mut txn = guard.doc.transact_mut();
+                let text = txn.get_or_insert_text("contents");
+                text.insert(&mut txn, 0, &content_owned);
+            }
+
+            server.docs().insert(doc_id, dwskv);
+        }
+
+        server
+    }
+
+    /// Create a session with a doc marked as already read.
+    fn setup_session_with_read(server: &Arc<Server>, doc_id: &str) -> String {
+        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        server.mcp_sessions.mark_initialized(&sid);
+        if let Some(mut session) = server.mcp_sessions.get_session_mut(&sid) {
+            session.read_docs.insert(doc_id.to_string());
+        }
+        sid
+    }
+
+    /// Create a session WITHOUT any docs marked as read.
+    fn setup_session_no_reads(server: &Arc<Server>) -> String {
+        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        server.mcp_sessions.mark_initialized(&sid);
+        sid
+    }
+
+    /// Read the Y.Doc content back for verification.
+    fn read_doc_content(server: &Arc<Server>, doc_id: &str) -> String {
+        let doc_ref = server.docs().get(doc_id).expect("doc should exist");
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        txn.get_text("contents")
+            .map(|text| text.get_string(&txn))
+            .unwrap_or_default()
+    }
+
+    // === Edit Tests ===
+
+    #[test]
+    fn edit_basic_replacement() {
+        let server = build_test_server(&[
+            ("/Hello.md", "uuid-hello", "say hello to all"),
+        ]);
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-hello");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Hello.md", "old_string": "hello", "new_string": "world"}),
+        );
+
+        assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
+
+        // Verify the Y.Doc content was actually modified with CriticMarkup
+        let content = read_doc_content(&server, &doc_id);
+        assert_eq!(
+            content,
+            "say {--hello--}{++world++} to all",
+            "Document should contain CriticMarkup wrapping"
+        );
+    }
+
+    #[test]
+    fn edit_read_before_edit_enforced() {
+        let server = build_test_server(&[
+            ("/Doc.md", "uuid-doc", "some content"),
+        ]);
+        // Session WITHOUT the doc in read_docs
+        let sid = setup_session_no_reads(&server);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "some", "new_string": "any"}),
+        );
+
+        assert!(result.is_err(), "should reject edit on unread doc");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_lowercase().contains("must read") || err.to_lowercase().contains("read"),
+            "Error should mention reading first: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn edit_old_string_not_found() {
+        let server = build_test_server(&[
+            ("/Doc.md", "uuid-doc", "actual content here"),
+        ]);
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-doc");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "nonexistent", "new_string": "replacement"}),
+        );
+
+        assert!(result.is_err(), "should reject when old_string not found");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_lowercase().contains("not found"),
+            "Error should mention 'not found': {}",
+            err
+        );
+    }
+
+    #[test]
+    fn edit_old_string_not_unique() {
+        let server = build_test_server(&[
+            ("/Cats.md", "uuid-cats", "the cat sat on the cat"),
+        ]);
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-cats");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Cats.md", "old_string": "the cat", "new_string": "a dog"}),
+        );
+
+        assert!(result.is_err(), "should reject when old_string is not unique");
+        let err = result.unwrap_err();
+        assert!(
+            err.to_lowercase().contains("not unique") || err.contains("2"),
+            "Error should mention not unique or count 2: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn edit_document_not_found() {
+        let server = build_test_server(&[]);
+        let sid = setup_session_no_reads(&server);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Nonexistent/Doc.md", "old_string": "hello", "new_string": "world"}),
+        );
+
+        assert!(result.is_err(), "should reject when document not found");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("not found") || err.contains("Not found"),
+            "Error should mention document not found: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn edit_missing_parameters() {
+        let server = build_test_server(&[
+            ("/Doc.md", "uuid-doc", "content"),
+        ]);
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-doc");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        // Missing old_string
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "new_string": "world"}),
+        );
+        assert!(result.is_err(), "missing old_string should error");
+        assert!(
+            result.unwrap_err().contains("old_string"),
+            "Error should mention old_string"
+        );
+
+        // Missing new_string
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "content"}),
+        );
+        assert!(result.is_err(), "missing new_string should error");
+        assert!(
+            result.unwrap_err().contains("new_string"),
+            "Error should mention new_string"
+        );
+
+        // Missing file_path
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"old_string": "content", "new_string": "replacement"}),
+        );
+        assert!(result.is_err(), "missing file_path should error");
+        assert!(
+            result.unwrap_err().contains("file_path"),
+            "Error should mention file_path"
+        );
+    }
+
+    #[test]
+    fn edit_preserves_surrounding_content() {
+        let server = build_test_server(&[
+            ("/Lines.md", "uuid-lines", "line 1\nline 2\nline 3"),
+        ]);
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-lines");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Lines.md", "old_string": "line 2", "new_string": "modified line 2"}),
+        );
+
+        assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
+
+        let content = read_doc_content(&server, &doc_id);
+        assert_eq!(
+            content,
+            "line 1\n{--line 2--}{++modified line 2++}\nline 3",
+            "Surrounding content should be preserved"
+        );
+    }
+
+    #[test]
+    fn edit_multiline_old_string() {
+        let server = build_test_server(&[
+            ("/Multi.md", "uuid-multi", "line 1\nline 2\nline 3\nline 4"),
+        ]);
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-multi");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Multi.md", "old_string": "line 2\nline 3", "new_string": "replaced lines"}),
+        );
+
+        assert!(result.is_ok(), "multiline edit should succeed, got: {:?}", result);
+
+        let content = read_doc_content(&server, &doc_id);
+        assert_eq!(
+            content,
+            "line 1\n{--line 2\nline 3--}{++replaced lines++}\nline 4",
+            "Multiline CriticMarkup should wrap the entire string"
+        );
+    }
+
+    #[test]
+    fn edit_empty_new_string() {
+        let server = build_test_server(&[
+            ("/Del.md", "uuid-del", "keep delete me keep"),
+        ]);
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-del");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Del.md", "old_string": "delete me", "new_string": ""}),
+        );
+
+        assert!(result.is_ok(), "deletion edit should succeed, got: {:?}", result);
+
+        let content = read_doc_content(&server, &doc_id);
+        assert_eq!(
+            content,
+            "keep {--delete me--}{++++} keep",
+            "Empty new_string should produce valid CriticMarkup"
+        );
+    }
+
+    #[test]
+    fn edit_success_message() {
+        let server = build_test_server(&[
+            ("/Msg.md", "uuid-msg", "hello world"),
+        ]);
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-msg");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Msg.md", "old_string": "hello", "new_string": "goodbye"}),
+        );
+
+        assert!(result.is_ok(), "edit should succeed");
+        let msg = result.unwrap();
+        assert!(
+            msg.contains("Lens/Msg.md"),
+            "Success message should mention file_path: {}",
+            msg
+        );
+        assert!(
+            msg.to_lowercase().contains("criticmarkup") || msg.to_lowercase().contains("critic"),
+            "Success message should mention CriticMarkup: {}",
+            msg
+        );
+    }
+}

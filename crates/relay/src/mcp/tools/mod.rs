@@ -1,3 +1,4 @@
+pub mod edit;
 pub mod get_links;
 pub mod glob;
 pub mod grep;
@@ -111,6 +112,29 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "edit",
+            "description": "Edit a document by replacing old_string with new_string. The change is wrapped in CriticMarkup ({--old--}{++new++}) for human review. You must read the document first.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["file_path", "old_string", "new_string"],
+                "additionalProperties": false,
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the document (e.g. 'Lens/Photosynthesis.md')"
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "The exact text to find and replace. Must match exactly and be unique in the document."
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "The replacement text. Empty string for deletion."
+                    }
+                }
+            }
+        }),
     ]
 }
 
@@ -136,6 +160,10 @@ pub fn dispatch_tool(server: &Arc<Server>, session_id: &str, name: &str, argumen
             Err(msg) => tool_error(&msg),
         },
         "grep" => match grep::execute(server, arguments) {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "edit" => match edit::execute(server, session_id, arguments) {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },

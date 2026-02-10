@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_four_tools() {
+    fn tools_list_returns_five_tools() {
         let server = test_server();
         let req = make_request(json!(3), "tools/list", None);
 
@@ -275,7 +275,7 @@ mod tests {
         let result = resp.result.unwrap();
         assert!(result["tools"].is_array());
         let tools_arr = result["tools"].as_array().unwrap();
-        assert_eq!(tools_arr.len(), 4);
+        assert_eq!(tools_arr.len(), 5);
 
         // Verify tool names
         let names: Vec<&str> = tools_arr
@@ -286,6 +286,7 @@ mod tests {
         assert!(names.contains(&"glob"));
         assert!(names.contains(&"get_links"));
         assert!(names.contains(&"grep"));
+        assert!(names.contains(&"edit"));
     }
 
     #[test]
