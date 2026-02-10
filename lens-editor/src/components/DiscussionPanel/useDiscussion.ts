@@ -8,6 +8,8 @@ interface DiscussionInfo {
   guildId: string | null;
 }
 
+const NO_DISCUSSION: DiscussionInfo = { channelId: null, guildId: null };
+
 /**
  * Hook: extracts discussion channel ID from Y.Doc text.
  * Observes the Y.Text 'contents' for frontmatter changes.
@@ -15,11 +17,11 @@ interface DiscussionInfo {
  * @param doc - Y.Doc to observe (null = no doc loaded)
  */
 export function useDiscussion(doc: Y.Doc | null): DiscussionInfo {
-  const [info, setInfo] = useState<DiscussionInfo>({ channelId: null, guildId: null });
+  const [info, setInfo] = useState<DiscussionInfo>(NO_DISCUSSION);
 
   useEffect(() => {
     if (!doc) {
-      setInfo({ channelId: null, guildId: null });
+      setInfo(NO_DISCUSSION);
       return;
     }
 
@@ -29,30 +31,25 @@ export function useDiscussion(doc: Y.Doc | null): DiscussionInfo {
       const text = ytext.toString();
       const fm = extractFrontmatter(text);
       if (!fm?.discussion || typeof fm.discussion !== 'string') {
-        setInfo({ channelId: null, guildId: null });
+        setInfo(NO_DISCUSSION);
         return;
       }
 
       const parsed = parseDiscordUrl(fm.discussion);
       if (!parsed) {
-        setInfo({ channelId: null, guildId: null });
+        setInfo(NO_DISCUSSION);
         return;
       }
 
       setInfo({ channelId: parsed.channelId, guildId: parsed.guildId });
     }
 
-    // Parse immediately
+    // Parse immediately, then observe for changes
     parse();
-
-    // Observe changes to re-parse frontmatter
-    const observer = () => {
-      parse();
-    };
-    ytext.observe(observer);
+    ytext.observe(parse);
 
     return () => {
-      ytext.unobserve(observer);
+      ytext.unobserve(parse);
     };
   }, [doc]);
 
