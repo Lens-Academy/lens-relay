@@ -390,4 +390,87 @@ mod tests {
             err.message
         );
     }
+
+    #[test]
+    fn read_records_doc_in_session() {
+        use std::collections::HashMap;
+        use yrs::{Any, Doc, Map, Text, Transact, WriteTxn};
+
+        let server = test_server();
+
+        // Set up a doc with content
+        let relay_id = "cb696037-0f72-4e93-8717-4e433129d789";
+        let folder_uuid = "aaaa0000-0000-0000-0000-000000000000";
+        let content_uuid = "uuid-test-read";
+        let folder_doc_id = format!("{}-{}", relay_id, folder_uuid);
+        let content_doc_id = format!("{}-{}", relay_id, content_uuid);
+
+        // Create folder doc with filemeta
+        let folder_doc = Doc::new();
+        {
+            let mut txn = folder_doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String(content_uuid.into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/TestDoc.md", Any::Map(map.into()));
+        }
+
+        // Register in resolver
+        server
+            .doc_resolver()
+            .update_folder_from_doc(&folder_doc_id, 0, &folder_doc);
+
+        // Create content DocWithSyncKv
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dwskv = rt.block_on(async {
+            y_sweet_core::doc_sync::DocWithSyncKv::new(&content_doc_id, None, || (), None)
+                .await
+                .unwrap()
+        });
+        {
+            let awareness = dwskv.awareness();
+            let mut guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, "test content");
+        }
+        server.docs().insert(content_doc_id.clone(), dwskv);
+
+        // Create and initialize a session
+        let sid = server
+            .mcp_sessions
+            .create_session("2025-03-26".into(), None);
+        server.mcp_sessions.mark_initialized(&sid);
+
+        // Verify read_docs is empty before read
+        {
+            let session = server.mcp_sessions.get_session(&sid).unwrap();
+            assert!(session.read_docs.is_empty(), "read_docs should start empty");
+        }
+
+        // Call read tool via dispatch
+        let req = make_request(
+            json!(10),
+            "tools/call",
+            Some(json!({"name": "read", "arguments": {"file_path": "Lens/TestDoc.md"}})),
+        );
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req);
+        assert!(resp.error.is_none(), "read should succeed");
+
+        // Verify read_docs now contains the doc_id
+        {
+            let session = server.mcp_sessions.get_session(&sid).unwrap();
+            assert!(
+                session.read_docs.contains(&content_doc_id),
+                "read_docs should contain {} after read, got: {:?}",
+                content_doc_id,
+                session.read_docs
+            );
+        }
+    }
 }

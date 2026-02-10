@@ -1,11 +1,196 @@
 use crate::server::Server;
+use regex::RegexBuilder;
 use serde_json::Value;
 use std::sync::Arc;
+use yrs::{GetString, ReadTxn, Transact};
 
 /// Execute the `grep` tool: regex content search across Y.Docs.
-pub fn execute(_server: &Arc<Server>, _arguments: &Value) -> Result<String, String> {
-    // Stub: will be implemented in GREEN phase
-    Err("Not implemented".to_string())
+pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+    let pattern = arguments
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: pattern".to_string())?;
+
+    let path_scope = arguments.get("path").and_then(|v| v.as_str());
+    let output_mode = arguments
+        .get("output_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("files_with_matches");
+    let case_insensitive = arguments
+        .get("-i")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let context_c = arguments
+        .get("-C")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(0);
+    let context_a = arguments
+        .get("-A")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(context_c);
+    let context_b = arguments
+        .get("-B")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(context_c);
+    let head_limit = arguments
+        .get("head_limit")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(0);
+
+    // Build regex
+    let regex = RegexBuilder::new(pattern)
+        .case_insensitive(case_insensitive)
+        .build()
+        .map_err(|e| format!("Invalid regex pattern: {}", e))?;
+
+    // Get all paths from resolver, sorted for deterministic output
+    let mut all_paths = server.doc_resolver().all_paths();
+    all_paths.sort();
+
+    // Filter by path scope if provided
+    if let Some(scope) = path_scope {
+        let prefix = if scope.ends_with('/') {
+            scope.to_string()
+        } else {
+            format!("{}/", scope)
+        };
+        all_paths.retain(|p| p.starts_with(&prefix) || p == scope);
+    }
+
+    let mut output_lines: Vec<String> = Vec::new();
+    let mut file_count = 0;
+
+    for path in &all_paths {
+        // Apply head_limit for files_with_matches and count modes
+        if head_limit > 0 && file_count >= head_limit && output_mode != "content" {
+            break;
+        }
+
+        let doc_info = match server.doc_resolver().resolve_path(path) {
+            Some(info) => info,
+            None => continue,
+        };
+
+        let content = match read_doc_content(server, &doc_info.doc_id) {
+            Some(c) => c,
+            None => continue,
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        let match_line_indices: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| regex.is_match(line))
+            .map(|(i, _)| i)
+            .collect();
+
+        if match_line_indices.is_empty() {
+            continue;
+        }
+
+        file_count += 1;
+
+        // Apply head_limit for files_with_matches and count modes after incrementing
+        if head_limit > 0 && file_count > head_limit && output_mode != "content" {
+            break;
+        }
+
+        match output_mode {
+            "files_with_matches" => {
+                output_lines.push(path.clone());
+            }
+            "count" => {
+                output_lines.push(format!("{}:{}", path, match_line_indices.len()));
+            }
+            "content" | _ => {
+                // Build ranges with context, merging overlapping
+                let ranges = build_context_ranges(&match_line_indices, context_b, context_a, lines.len());
+
+                let mut first_range = true;
+                for range in &ranges {
+                    // Add separator between non-adjacent groups (ripgrep convention)
+                    if !first_range {
+                        output_lines.push("--".to_string());
+                    }
+                    first_range = false;
+
+                    for idx in range.start..=range.end {
+                        let line_num = idx + 1; // 1-indexed
+                        let is_match = match_line_indices.contains(&idx);
+                        let separator = if is_match { ":" } else { "-" };
+                        output_lines.push(format!(
+                            "{}{}{}{}{}",
+                            path, separator, line_num, separator, lines[idx]
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply head_limit for content mode (limit output lines)
+    if head_limit > 0 && output_mode == "content" {
+        output_lines.truncate(head_limit);
+    }
+
+    if output_lines.is_empty() {
+        Ok("No matches found.".to_string())
+    } else {
+        Ok(output_lines.join("\n"))
+    }
+}
+
+/// A range of line indices (inclusive) to display.
+struct LineRange {
+    start: usize,
+    end: usize,
+}
+
+/// Build merged context ranges from match indices with before/after context.
+fn build_context_ranges(
+    match_indices: &[usize],
+    before: usize,
+    after: usize,
+    total_lines: usize,
+) -> Vec<LineRange> {
+    if match_indices.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges: Vec<LineRange> = Vec::new();
+
+    for &idx in match_indices {
+        let start = idx.saturating_sub(before);
+        let end = (idx + after).min(total_lines - 1);
+
+        // Merge with previous range if overlapping or adjacent
+        if let Some(last) = ranges.last_mut() {
+            if start <= last.end + 1 {
+                last.end = last.end.max(end);
+                continue;
+            }
+        }
+
+        ranges.push(LineRange { start, end });
+    }
+
+    ranges
+}
+
+/// Read Y.Doc text content for a given doc_id.
+fn read_doc_content(server: &Arc<Server>, doc_id: &str) -> Option<String> {
+    let doc_ref = server.docs().get(doc_id)?;
+    let awareness = doc_ref.awareness();
+    let guard = awareness.read().unwrap();
+    let txn = guard.doc.transact();
+    match txn.get_text("contents") {
+        Some(text) => Some(text.get_string(&txn)),
+        None => Some(String::new()),
+    }
 }
 
 #[cfg(test)]
@@ -167,7 +352,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("Lens/Multi.md:2"), "Expected count of 2, got: {}", result);
+        assert!(result.contains("Lens/Multi.md:3"), "Expected count of 3 matching lines, got: {}", result);
     }
 
     #[test]

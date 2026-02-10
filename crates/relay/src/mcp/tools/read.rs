@@ -43,6 +43,11 @@ pub fn execute(server: &Arc<Server>, session_id: &str, arguments: &Value) -> Res
         // guard, awareness, doc_ref all dropped here
     };
 
+    // Record this doc as read in the session (for read-before-edit enforcement)
+    if let Some(mut session) = server.mcp_sessions.get_session_mut(session_id) {
+        session.read_docs.insert(doc_info.doc_id.clone());
+    }
+
     Ok(format_cat_n(&content, offset, limit))
 }
 
