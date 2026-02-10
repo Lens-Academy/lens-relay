@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-08)
 
 **Core value:** AI assistants can find and work with the right documents across the knowledge base
-**Current focus:** Phase 3 - MCP Read-Only Tools -- COMPLETE
+**Current focus:** Phase 4 - MCP Search & Edit Tools
 
 ## Current Position
 
-Phase: 3 of 5 (MCP Read-Only Tools) -- COMPLETE
-Plan: 2 of 2 in current phase (done)
-Status: Complete
-Last activity: 2026-02-10 -- Completed Phase 3 (all MCP read-only tools verified live)
+Phase: 4 of 5 (MCP Search & Edit Tools)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-10 -- Completed 04-01-PLAN.md (grep tool + session infrastructure)
 
-Progress: [######....] 60%
+Progress: [#######...] 70%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
+- Total plans completed: 7
 - Average duration: 11m
-- Total execution time: 1.1 hours
+- Total execution time: 1.3 hours
 
 **By Phase:**
 
@@ -30,10 +30,11 @@ Progress: [######....] 60%
 | 01-search-index | 2/2 | 36m | 18m |
 | 02-mcp-transport | 2/2 | 12m | 6m |
 | 03-mcp-read-only-tools | 2/2 | 21m | 10.5m |
+| 04-mcp-search-edit-tools | 1/2 | 13m | 13m |
 
 **Recent Trend:**
-- Last 5 plans: 5m, 7m, 6m, 6m, 15m
-- Trend: consistent ~6m for focused plans, 15m for integration plans
+- Last 5 plans: 7m, 6m, 6m, 15m, 13m
+- Trend: consistent ~6m for focused plans, 13-15m for TDD/integration plans
 
 *Updated after each plan completion*
 
@@ -58,6 +59,9 @@ Recent decisions affecting current work:
 - Lazy resolver rebuild on first tool call for in-memory mode
 - Router dispatch_request takes &Arc<Server> for tool access to docs/resolver
 - Forward links resolved via case-insensitive basename matching
+- Grep uses regex crate directly on Y.Doc text content -- precise ripgrep-compatible output
+- Test DocWithSyncKv creation via tokio block_on with None store -- avoids modifying y-sweet-core
+- session_id threaded through dispatch_tool for tool-level session awareness
 
 ### Pending Todos
 
@@ -69,6 +73,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-10 13:00 UTC
-Stopped at: Completed Phase 3 (MCP Read-Only Tools) - all tools verified live via MCP Inspector
+Last session: 2026-02-10 15:04 UTC
+Stopped at: Completed 04-01-PLAN.md (grep tool + session infrastructure)
 Resume file: None
