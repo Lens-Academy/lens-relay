@@ -19,12 +19,12 @@
 - [x] **MCP-01**: MCP endpoint mounted on relay server (e.g. `/mcp`), accessible via URL
 - [x] **MCP-02**: Custom Streamable HTTP transport (JSON-RPC over HTTP POST, no rmcp dependency)
 - [x] **MCP-03**: Session management via Mcp-Session-Id header (server-assigned on initialize)
-- [ ] **MCP-04**: Read-before-edit enforcement: server tracks which documents each session has read, rejects edits on unread documents
-- [ ] **MCP-05**: MCP tool: list all documents with metadata (name, folder, last modified)
-- [ ] **MCP-06**: MCP tool: read document content (returns markdown text)
-- [ ] **MCP-07**: MCP tool: keyword search across documents (queries shared search index)
-- [ ] **MCP-08**: MCP tool: get backlinks and forward links for a document (single-hop)
-- [ ] **MCP-09**: MCP tool: edit document via old_string/new_string interface (MCP server wraps in CriticMarkup transparently)
+- [x] **MCP-04**: Read-before-edit enforcement: server tracks which documents each session has read, rejects edits on unread documents
+- [x] **MCP-05**: MCP tool: list all documents with metadata (name, folder, last modified)
+- [x] **MCP-06**: MCP tool: read document content (returns markdown text)
+- [x] **MCP-07**: MCP tool: keyword search across documents (queries shared search index)
+- [x] **MCP-08**: MCP tool: get backlinks and forward links for a document (single-hop)
+- [x] **MCP-09**: MCP tool: edit document via old_string/new_string interface (MCP server wraps in CriticMarkup transparently)
 
 ### Search UI
 
@@ -79,12 +79,12 @@
 | MCP-01 | Phase 2 | Complete |
 | MCP-02 | Phase 2 | Complete |
 | MCP-03 | Phase 2 | Complete |
-| MCP-04 | Phase 4 | Pending |
-| MCP-05 | Phase 3 | Pending |
-| MCP-06 | Phase 3 | Pending |
-| MCP-07 | Phase 4 | Pending |
-| MCP-08 | Phase 3 | Pending |
-| MCP-09 | Phase 4 | Pending |
+| MCP-04 | Phase 4 | Complete |
+| MCP-05 | Phase 3 | Complete |
+| MCP-06 | Phase 3 | Complete |
+| MCP-07 | Phase 4 | Complete |
+| MCP-08 | Phase 3 | Complete |
+| MCP-09 | Phase 4 | Complete |
 | UI-01 | Phase 5 | Pending |
 | UI-02 | Phase 5 | Pending |
 | UI-03 | Phase 5 | Pending |
@@ -96,4 +96,4 @@
 
 ---
 *Requirements defined: 2026-02-08*
-*Last updated: 2026-02-08 -- Phase 1 (SRCH) and Phase 2 (MCP transport) marked complete*
+*Last updated: 2026-02-10 -- Phases 1-4 complete (SRCH, MCP transport, read-only tools, search & edit tools)*

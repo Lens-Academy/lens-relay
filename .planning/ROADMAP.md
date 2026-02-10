@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Search Index** - Full-text search with tantivy embedded in relay server
 - [x] **Phase 2: MCP Transport** - Custom Streamable HTTP endpoint with session management
 - [x] **Phase 3: MCP Read-Only Tools** - List, read, and link navigation tools
-- [ ] **Phase 4: MCP Search & Edit Tools** - Search queries and CriticMarkup editing via MCP
+- [x] **Phase 4: MCP Search & Edit Tools** - Search queries and CriticMarkup editing via MCP
 - [ ] **Phase 5: Search UI** - Search bar and results in lens-editor
 
 **Parallelization:** Phases 1 and 2 have no dependencies on each other and can be built in parallel. Phase 5 depends only on Phase 1 and can proceed in parallel with Phases 3-4.
@@ -77,8 +77,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 04-01-PLAN.md -- Grep tool (regex content search) + session read-tracking infrastructure (TDD)
-- [ ] 04-02-PLAN.md -- Edit tool with CriticMarkup wrapping and read-before-edit enforcement (TDD)
+- [x] 04-01-PLAN.md -- Grep tool (regex content search) + session read-tracking infrastructure (TDD)
+- [x] 04-02-PLAN.md -- Edit tool with CriticMarkup wrapping and read-before-edit enforcement (TDD)
 
 ### Phase 5: Search UI
 **Goal**: Users of lens-editor can search across all documents and navigate to results without leaving the editor
@@ -104,5 +104,5 @@ Phases 1 and 2 can proceed in parallel. Then 3 -> 4. Phase 5 can proceed after P
 | 1. Search Index | 2/2 | Complete | 2026-02-08 |
 | 2. MCP Transport | 2/2 | Complete | 2026-02-08 |
 | 3. MCP Read-Only Tools | 2/2 | Complete | 2026-02-10 |
-| 4. MCP Search & Edit Tools | 0/2 | Not started | - |
+| 4. MCP Search & Edit Tools | 2/2 | Complete | 2026-02-10 |
 | 5. Search UI | 0/2 | Not started | - |
