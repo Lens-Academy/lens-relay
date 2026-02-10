@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",
+    "discord.js": "^14.25.1",
     "hono": "^4.11.9"
   },
   "devDependencies": {
