@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A keyword search index and MCP server for the Lens Relay ecosystem. The search index enables full-text keyword search across all documents in the Lens and Lens Edu shared folders, exposed both to users via the lens-editor UI and to AI assistants via MCP. The MCP server gives AI assistants (used by collaborators) the ability to list, read, edit, search, and navigate the link graph of relay documents.
+A keyword search index and MCP server for the Lens Relay ecosystem. The search index provides full-text BM25-ranked search across all documents in the Lens and Lens Edu shared folders, exposed to users via a search UI in lens-editor and to AI assistants via 5 MCP tools. The MCP server runs embedded in the relay server at `/mcp`, giving AI assistants the ability to list, read, search, navigate links, and propose CriticMarkup edits to relay documents.
 
 ## Core Value
 
@@ -21,19 +21,21 @@ AI assistants can find and work with the right documents across the knowledge ba
 - ✓ CriticMarkup rendering in editor — existing
 - ✓ File attachment upload/download via presigned URLs — existing
 - ✓ Webhook dispatch on document changes — existing
+- ✓ Full-text keyword search index across Lens and Lens Edu folders — v1.0
+- ✓ Search API accessible by both lens-editor and MCP server — v1.0
+- ✓ Search UI in lens-editor (search bar, results with snippets, click-to-navigate) — v1.0
+- ✓ MCP server embedded in relay at /mcp endpoint — v1.0
+- ✓ MCP tool: list all documents (glob) — v1.0
+- ✓ MCP tool: read document content (cat -n format) — v1.0
+- ✓ MCP tool: edit document via CriticMarkup suggestions — v1.0
+- ✓ MCP tool: regex keyword search across documents (grep) — v1.0
+- ✓ MCP tool: backlinks and forward links (get_links, single-hop) — v1.0
+- ✓ Index updates when documents change (debounced) — v1.0
+- ✓ Read-before-edit enforcement per MCP session — v1.0
 
 ### Active
 
-- [ ] Full-text keyword search index across Lens and Lens Edu folders
-- [ ] Search API accessible by both lens-editor and MCP server
-- [ ] Search UI in lens-editor
-- [ ] MCP server running on VPS alongside relay server
-- [ ] MCP tool: list all documents
-- [ ] MCP tool: read document content
-- [ ] MCP tool: edit document via CriticMarkup (suggestions only)
-- [ ] MCP tool: keyword search across documents
-- [ ] MCP tool: traverse link graph (backlinks/forward links, N degrees deep)
-- [ ] Index updates when documents change
+(No active requirements — next milestone not yet planned)
 
 ### Out of Scope
 
@@ -43,41 +45,52 @@ AI assistants can find and work with the right documents across the knowledge ba
 - Content validation — handled externally for now
 - Direct document writes from MCP — CriticMarkup suggestions only, for safety without auth
 - Mobile app — web-first
+- SSE transport for MCP — Streamable HTTP POST sufficient for current use
+- Multi-hop graph traversal — single-hop covers primary use case
+- MCP Prompts — tools sufficient for v1
 
 ## Context
 
-This is a brownfield project building on the existing Lens Relay monorepo (Rust relay server + React lens-editor). The relay server is a y-sweet fork with custom HMAC auth and a link indexer. All document access currently goes through yjs WebSocket sync.
+Shipped v1.0 with ~4,270 LOC across Rust and TypeScript.
 
-The backlinks system (feature #1 in the original roadmap) is being built separately — the MCP server can read backlink data from the `backlinks_v0` Y.Map in folder docs rather than computing it.
+Tech stack: Rust (relay server with tantivy search + custom MCP), TypeScript/React (lens-editor with search UI).
 
-The search index is a shared service: lens-editor users get a search UI, and the MCP server queries the same index. This means the index needs its own API layer.
+New modules:
+- `crates/relay/src/mcp/` — 2,840 LOC Rust (JSON-RPC, sessions, transport, 5 tools)
+- `crates/y-sweet-core/src/search_index.rs` — 496 LOC Rust (tantivy BM25 search)
+- `crates/y-sweet-core/src/doc_resolver.rs` — 414 LOC Rust (path-UUID resolution)
+- `lens-editor/src/` — 520 LOC TypeScript (useSearch hook, SearchPanel component)
 
-The MCP server is embedded in the relay server as an endpoint (`/mcp`), using Streamable HTTP transport. Collaborators connect by adding the URL to their MCP client config — no local installation needed.
+95+ automated tests (80 Rust, 18 search UI). All passing.
 
-Two shared folders to index:
+Two shared folders indexed:
 - **Lens** — main knowledge base
 - **Lens Edu** — educational content
 
-Infrastructure: Hetzner VPS, Docker containers, Cloudflare R2 storage, Cloudflare Tunnel.
+Infrastructure: Hetzner VPS (4GB RAM), Docker containers, Cloudflare R2 storage, Cloudflare Tunnel.
 
 ## Constraints
 
-- **Runtime environment**: Hetzner VPS (4GB RAM) — search index must be memory-conscious
-- **Existing stack**: Rust (relay server) + TypeScript/React (lens-editor) — new components should align
+- **Runtime environment**: Hetzner VPS (4GB RAM) — search index uses tantivy MmapDirectory (memory-safe)
+- **Existing stack**: Rust (relay server) + TypeScript/React (lens-editor)
 - **Auth**: No custom AuthZ yet — MCP edits use CriticMarkup as safety mechanism
-- **No external MCP SDK**: Custom JSON-RPC handlers (5 tools, not worth a framework dependency)
+- **No external MCP SDK**: Custom JSON-RPC handlers (5 tools, full control over session state)
 - **Deployment**: Docker containers on same VPS as relay server
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| CriticMarkup for MCP edits | No custom AuthZ yet; suggestions are safe without permission checks | — Pending |
-| Keyword search only (no semantic) | Keeps scope tight; semantic search deferred to future milestone | — Pending |
-| Search index as shared service | Both lens-editor and MCP need search; avoids duplication | — Pending |
-| MCP embedded in relay (`/mcp` endpoint) | URL-based setup for collaborators, direct access to Y.Docs and search index | — Pending |
-| Custom MCP transport (no rmcp) | 5 tools doesn't justify a framework; avoids Axum 0.7→0.8 upgrade; gives control over session state | — Pending |
-| Read-before-edit enforcement | Session tracks read docs, rejects edits on unread docs; mirrors Claude Code's Edit tool pattern | — Pending |
+| CriticMarkup for MCP edits | No custom AuthZ yet; suggestions are safe without permission checks | ✓ Good — provides reviewable AI suggestions |
+| Keyword search only (no semantic) | Keeps scope tight; semantic search deferred to future milestone | ✓ Good — BM25 sufficient for knowledge base search |
+| Search index as shared service | Both lens-editor and MCP need search; avoids duplication | ✓ Good — single index, two consumers |
+| MCP embedded in relay (`/mcp` endpoint) | URL-based setup for collaborators, direct access to Y.Docs and search index | ✓ Good — zero-install for AI assistants |
+| Custom MCP transport (no rmcp) | 5 tools doesn't justify a framework; avoids Axum 0.7→0.8 upgrade; gives control over session state | ✓ Good — 2,840 LOC, full control |
+| Read-before-edit enforcement | Session tracks read docs, rejects edits on unread docs; mirrors Claude Code's Edit tool pattern | ✓ Good — prevents blind AI edits |
+| JSON-RPC parse by id field presence | Clearer than serde untagged enum; handles null id per spec | ✓ Good — clean implementation |
+| Grep via regex on Y.Docs (not tantivy) | Grep is for pattern matching, search is for BM25 ranking | ✓ Good — each tool does one thing well |
+| TOCTOU re-verify in edit transactions | Re-read content at write time to prevent stale edits | ✓ Good — prevents data corruption |
+| 300ms debounce for search UI | Prevents API spam during typing; correct for server-side requests | ✓ Good — smooth UX |
 
 ---
-*Last updated: 2026-02-08 after architecture discussion*
+*Last updated: 2026-02-11 after v1.0 milestone*
