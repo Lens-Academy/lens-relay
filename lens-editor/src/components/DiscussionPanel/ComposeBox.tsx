@@ -68,7 +68,7 @@ export function ComposeBox({ channelName, onSend, disabled }: ComposeBoxProps) {
           }}
           onKeyDown={handleKeyDown}
           placeholder={channelName ? `Message #${channelName}` : 'Send a message'}
-          maxRows={4}
+          maxRows={8}
           minRows={1}
           disabled={sending || disabled}
           className="flex-1 resize-none px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
