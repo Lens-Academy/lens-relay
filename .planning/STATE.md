@@ -5,21 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-08)
 
 **Core value:** Users can participate in the Discord discussion about a document without leaving the editor.
-**Current focus:** Phase 3 complete. Phase 4 (Connection Resilience) remaining.
+**Current focus:** All 4 phases complete. Project finished.
 
 ## Position
 
-- **Current phase:** 3 of 4 complete (Posting Messages)
-- **Plan:** 3 of 3 in phase complete (03-01, 03-02, 03-03 done)
-- **Status:** Phase 3 verified and complete
-- **Last activity:** 2026-02-11 - Completed Phase 3 (Posting Messages)
+- **Current phase:** 4 of 4 complete (Connection Resilience)
+- **Plan:** 1 of 1 in phase complete (04-01 done)
+- **Status:** Project complete
+- **Last activity:** 2026-02-11 - Completed Phase 4 (Connection Resilience)
 
-Progress: `[#########.] 9/10 plans (90%)`
+Progress: `[##########] 10/10 plans (100%)`
 
 ## Recent Decisions
 
 | Decision | Made In | Rationale |
 |----------|---------|-----------|
+| onopen clears only SSE errors, not fetch errors | 04-01 | Prevents SSE reconnection from hiding REST API failures |
+| sseReconnectTrigger for terminal CLOSED recovery | 04-01 | Browsers don't auto-reconnect CLOSED EventSources; state dependency forces recreation |
+| 75s heartbeat timeout (2.5x interval) | 04-01 | Balances false-positive avoidance with timely stale connection detection |
 | Bot API instead of webhooks for posting | 03-01 (refactored) | User preference: simpler setup, reuses existing bot token, no webhook URL needed |
 | Server-side message formatting with "(unverified)" | 03-01 | Ensures suffix is always applied; browser cannot bypass it |
 | Plain div overlay for non-closable modal (not Radix) | 03-02 | Radix Dialog is dismissable by design; plain div gives full control |
@@ -48,8 +51,8 @@ Progress: `[#########.] 9/10 plans (90%)`
 ## Session Continuity
 
 - **Last session:** 2026-02-11
-- **Stopped at:** Completed Phase 3 (Posting Messages) - all 3 plans executed, verified
+- **Stopped at:** Completed Phase 4 (Connection Resilience) - project complete
 - **Resume file:** None
 
 ---
-*Last updated: 2026-02-11 after completing Phase 3 (Posting Messages)*
+*Last updated: 2026-02-11 after completing Phase 4 (Connection Resilience)*
