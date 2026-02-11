@@ -11,7 +11,7 @@
 | 1 | Bridge + History Display | User sees Discord message history in a panel alongside the document | INFRA-01, INFRA-04, CHAN-01, CHAN-02, MSG-01, MSG-03, MSG-04, UX-01 | 3 plans |
 | 2 | Live Streaming | New Discord messages appear in the panel in real time | INFRA-02, MSG-02, MSG-05, MSG-06, MSG-07 | 3 plans |
 | 3 | Posting Messages | User can send messages to Discord from the editor panel | INFRA-03, POST-01, POST-02, POST-03 | 3 plans |
-| 4 | Connection Resilience | Panel handles network failures gracefully with clear feedback | UX-02, UX-03 | 1 |
+| 4 | Connection Resilience | Panel handles network failures gracefully with clear feedback | UX-02, UX-03 | 1 plan |
 
 ## Phase Details
 
@@ -67,6 +67,11 @@ Plans:
 ### Phase 4: Connection Resilience
 **Goal:** The panel communicates connection problems clearly and helps the user recover without manual page reloads.
 **Requirements:** UX-02, UX-03
+**Plans:** 1 plan
+
+Plans:
+- [ ] 04-01-PLAN.md -- Connection resilience: gateway status broadcasting, SSE reconnection with refetch, heartbeat timeout, terminal disconnect + retry, status text labels
+
 **Success Criteria:**
 1. When the SSE connection drops, a visible status indicator changes from "Live" to "Reconnecting" or "Disconnected"
 2. When the Discord API or bridge is unreachable, the panel shows an error message with a "Retry" button
