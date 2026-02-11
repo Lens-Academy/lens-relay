@@ -58,8 +58,11 @@ describe('SearchPanel', () => {
       />
     );
 
-    expect(screen.getByText('Lens')).toBeInTheDocument();
-    expect(screen.getByText('Lens Edu')).toBeInTheDocument();
+    // "Lens" also appears in the snippet <mark> tag, so query by selector
+    const folderLabels = document.querySelectorAll('span.text-gray-400');
+    expect(folderLabels).toHaveLength(2);
+    expect(folderLabels[0].textContent).toBe('Lens');
+    expect(folderLabels[1].textContent).toBe('Lens Edu');
   });
 
   it('renders snippet HTML with mark tags using dangerouslySetInnerHTML', () => {
