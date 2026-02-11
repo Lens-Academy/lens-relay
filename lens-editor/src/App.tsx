@@ -5,6 +5,9 @@ import { EditorArea } from './components/Layout';
 import { AwarenessInitializer } from './components/AwarenessInitializer/AwarenessInitializer';
 import { DisconnectionModal } from './components/DisconnectionModal/DisconnectionModal';
 import { NavigationContext } from './contexts/NavigationContext';
+import { DisplayNameProvider } from './contexts/DisplayNameContext';
+import { DisplayNamePrompt } from './components/DisplayNamePrompt';
+import { DisplayNameBadge } from './components/DisplayNameBadge';
 import { useMultiFolderMetadata, type FolderConfig } from './hooks/useMultiFolderMetadata';
 
 // VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
@@ -39,18 +42,27 @@ export function App() {
   const folderNames = FOLDERS.map(f => f.name);
 
   return (
-    <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate: setActiveDocId }}>
-      <div className="h-screen flex bg-gray-50">
-        {/* Sidebar is OUTSIDE the key boundary - stays mounted across document switches */}
-        <Sidebar activeDocId={activeDocId} onSelectDocument={setActiveDocId} />
+    <DisplayNameProvider>
+      <DisplayNamePrompt />
+      <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate: setActiveDocId }}>
+        <div className="h-screen flex flex-col bg-gray-50">
+          {/* Global identity bar */}
+          <div className="flex items-center justify-end px-4 py-1 bg-white border-b border-gray-100">
+            <DisplayNameBadge />
+          </div>
+          <div className="flex-1 flex min-h-0">
+            {/* Sidebar is OUTSIDE the key boundary - stays mounted across document switches */}
+            <Sidebar activeDocId={activeDocId} onSelectDocument={setActiveDocId} />
 
-        {/* Only EditorArea remounts on doc change via key prop */}
-        <RelayProvider key={activeDocId} docId={activeDocId}>
-          <AwarenessInitializer />
-          <EditorArea currentDocId={activeDocId} />
-          <DisconnectionModal />
-        </RelayProvider>
-      </div>
-    </NavigationContext.Provider>
+            {/* Only EditorArea remounts on doc change via key prop */}
+            <RelayProvider key={activeDocId} docId={activeDocId}>
+              <AwarenessInitializer />
+              <EditorArea currentDocId={activeDocId} />
+              <DisconnectionModal />
+            </RelayProvider>
+          </div>
+        </div>
+      </NavigationContext.Provider>
+    </DisplayNameProvider>
   );
 }
