@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-08)
 
 **Core value:** AI assistants can find and work with the right documents across the knowledge base
-**Current focus:** Phase 5 - Search UI (plan 1 of 2 complete)
-**Next:** Phase 5 Plan 02 - Sidebar integration
+**Current focus:** All phases complete
+**Next:** Milestone complete -- /gsd:complete-milestone
 
 ## Current Position
 
 Phase: 5 of 5 (Search UI)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-11 -- Completed 05-01-PLAN.md
+Plan: 2 of 2 in current phase
+Status: Complete
+Last activity: 2026-02-11 -- Completed 05-02-PLAN.md (all phases done)
 
-Progress: [#########.] 90%
+Progress: [##########] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
+- Total plans completed: 10
 - Average duration: 10m
-- Total execution time: 1.5 hours
+- Total execution time: ~1.6 hours
 
 **By Phase:**
 
@@ -32,11 +32,11 @@ Progress: [#########.] 90%
 | 02-mcp-transport | 2/2 | 12m | 6m |
 | 03-mcp-read-only-tools | 2/2 | 21m | 10.5m |
 | 04-mcp-search-edit-tools | 2/2 | 20m | 10m |
-| 05-search-ui | 1/2 | 5m | 5m |
+| 05-search-ui | 2/2 | 13m | 6.5m |
 
 **Recent Trend:**
-- Last 5 plans: 6m, 15m, 13m, 7m, 5m
-- Trend: consistent ~5-7m for focused plans, 13-15m for complex TDD plans
+- Last 5 plans: 15m, 13m, 7m, 5m, 8m
+- Trend: consistent ~5-8m for focused plans, 13-18m for complex TDD plans
 
 *Updated after each plan completion*
 
@@ -67,6 +67,9 @@ Recent decisions affecting current work:
 - CriticMarkup format: {--old--}{++new++} (deletion+insertion, not substitution syntax)
 - No replace_all for v1 -- single unique match required
 - TOCTOU re-verify in write transaction before applying edit
+- setTimeout debounce for search (not useDeferredValue) -- correct for server-side requests
+- dangerouslySetInnerHTML for tantivy snippets -- safe, only <mark> tags from SnippetGenerator
+- 2-char minimum for server search, below that use client-side tree filtering
 
 ### Pending Todos
 
@@ -78,6 +81,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-11 08:21 UTC
-Stopped at: Completed 05-01-PLAN.md -- ready for 05-02 (sidebar integration)
+Last session: 2026-02-11 09:15 UTC
+Stopped at: All 5 phases complete -- milestone ready for completion
 Resume file: None
