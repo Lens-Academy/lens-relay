@@ -30,6 +30,7 @@ interface UseMessagesResult {
   loading: boolean;
   error: string | null;
   refetch: () => void;
+  reconnect: () => void;
   gatewayStatus: GatewayStatus;
   sendMessage: (content: string, username: string) => Promise<void>;
 }
@@ -47,8 +48,15 @@ export function useMessages(channelId: string | null): UseMessagesResult {
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('disconnected');
   const abortRef = useRef<AbortController | null>(null);
   const [fetchTrigger, setFetchTrigger] = useState(0);
+  const [sseReconnectTrigger, setSseReconnectTrigger] = useState(0);
 
   const refetch = useCallback(() => {
+    setFetchTrigger((t) => t + 1);
+  }, []);
+
+  const reconnect = useCallback(() => {
+    setError(null);
+    setSseReconnectTrigger((t) => t + 1);
     setFetchTrigger((t) => t + 1);
   }, []);
 
@@ -131,10 +139,22 @@ export function useMessages(channelId: string | null): UseMessagesResult {
       return;
     }
 
+    const HEARTBEAT_TIMEOUT_MS = 75_000; // 2.5x the 30s heartbeat interval
+    let hasConnectedBefore = false;
+    let heartbeatTimer: ReturnType<typeof setTimeout>;
+
+    const resetHeartbeat = () => {
+      clearTimeout(heartbeatTimer);
+      heartbeatTimer = setTimeout(() => {
+        setGatewayStatus('reconnecting');
+      }, HEARTBEAT_TIMEOUT_MS);
+    };
+
     const eventSource = new EventSource(`/api/discord/channels/${channelId}/events`);
     setGatewayStatus('connecting');
 
     eventSource.addEventListener('message', (e) => {
+      resetHeartbeat();
       const newMsg: DiscordMessage = JSON.parse(e.data);
       setMessages((prev) => {
         // Dedup: skip if message ID already exists
@@ -144,28 +164,45 @@ export function useMessages(channelId: string | null): UseMessagesResult {
     });
 
     eventSource.addEventListener('status', (e) => {
+      resetHeartbeat();
       const { gateway } = JSON.parse(e.data);
       setGatewayStatus(gateway);
     });
 
     eventSource.addEventListener('heartbeat', () => {
-      // Heartbeat received, connection is alive. No action needed.
+      resetHeartbeat();
     });
 
     eventSource.onopen = () => {
       setGatewayStatus('connected');
+      // Only clear SSE-specific errors; leave fetch errors intact
+      setError((prev) => (prev === 'Connection lost' ? null : prev));
+      resetHeartbeat();
+      if (hasConnectedBefore) {
+        // Reconnected after a drop — reload message history to fill gap
+        setFetchTrigger((t) => t + 1);
+      }
+      hasConnectedBefore = true;
     };
 
     eventSource.onerror = () => {
-      // EventSource auto-reconnects. Update status for UI.
-      setGatewayStatus('reconnecting');
+      clearTimeout(heartbeatTimer);
+      if (eventSource.readyState === EventSource.CLOSED) {
+        // Terminal disconnect — browser will NOT auto-reconnect
+        setGatewayStatus('disconnected');
+        setError('Connection lost');
+      } else {
+        // readyState is CONNECTING — browser auto-reconnecting
+        setGatewayStatus('reconnecting');
+      }
     };
 
     return () => {
+      clearTimeout(heartbeatTimer);
       eventSource.close();
       setGatewayStatus('disconnected');
     };
-  }, [channelId]);
+  }, [channelId, sseReconnectTrigger]);
 
   const sendMessage = useCallback(
     async (content: string, username: string) => {
@@ -186,5 +223,5 @@ export function useMessages(channelId: string | null): UseMessagesResult {
     [channelId]
   );
 
-  return { messages, channelName, loading, error, refetch, gatewayStatus, sendMessage };
+  return { messages, channelName, loading, error, refetch, reconnect, gatewayStatus, sendMessage };
 }
