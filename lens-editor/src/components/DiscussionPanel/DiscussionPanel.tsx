@@ -2,6 +2,7 @@ import type * as Y from 'yjs';
 import { useDiscussion } from './useDiscussion';
 import { useMessages } from './useMessages';
 import { MessageList } from './MessageList';
+import { ComposeBox } from './ComposeBox';
 
 interface DiscussionPanelProps {
   /** Y.Doc to read frontmatter from. Pass null when no doc is loaded. */
@@ -18,7 +19,7 @@ interface DiscussionPanelProps {
  */
 export function DiscussionPanel({ doc }: DiscussionPanelProps) {
   const { channelId } = useDiscussion(doc);
-  const { messages, channelName, loading, error, refetch, gatewayStatus } = useMessages(channelId);
+  const { messages, channelName, loading, error, refetch, gatewayStatus, sendMessage } = useMessages(channelId);
 
   // Don't render anything if no discussion URL in frontmatter
   if (!channelId) return null;
@@ -64,7 +65,10 @@ export function DiscussionPanel({ doc }: DiscussionPanelProps) {
           </button>
         </div>
       ) : (
-        <MessageList messages={messages} />
+        <>
+          <MessageList messages={messages} />
+          <ComposeBox channelName={channelName} onSend={sendMessage} />
+        </>
       )}
     </aside>
   );
