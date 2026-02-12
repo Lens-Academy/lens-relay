@@ -487,15 +487,17 @@ impl Server {
         tracing::info!("Event dispatcher created successfully");
 
         let docs = Arc::new(DashMap::new());
+        let doc_resolver = Arc::new(DocumentResolver::new());
         let (link_indexer, index_rx) = LinkIndexer::new();
         let link_indexer = Arc::new(link_indexer);
 
         // Spawn background worker for link indexing
         let docs_for_indexer = docs.clone();
         let indexer_for_worker = link_indexer.clone();
+        let resolver_for_indexer = doc_resolver.clone();
         tokio::spawn(async move {
             let result = std::panic::AssertUnwindSafe(
-                indexer_for_worker.run_worker(index_rx, docs_for_indexer),
+                indexer_for_worker.run_worker(index_rx, docs_for_indexer, resolver_for_indexer),
             );
             if let Err(e) = futures::FutureExt::catch_unwind(result).await {
                 let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -587,7 +589,7 @@ impl Server {
             search_index,
             search_ready,
             search_tx: search_tx_final,
-            doc_resolver: Arc::new(DocumentResolver::new()),
+            doc_resolver,
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key,
         })

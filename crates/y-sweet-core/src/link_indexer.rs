@@ -1,3 +1,4 @@
+use crate::doc_resolver::DocumentResolver;
 use crate::doc_sync::DocWithSyncKv;
 use crate::link_parser::{compute_wikilink_rename_edits, extract_wikilinks};
 use dashmap::DashMap;
@@ -589,6 +590,7 @@ impl LinkIndexer {
         self: Arc<Self>,
         mut rx: mpsc::Receiver<String>,
         docs: Arc<DashMap<String, DocWithSyncKv>>,
+        doc_resolver: Arc<DocumentResolver>,
     ) {
         tracing::info!("Link indexer worker started");
         loop {
@@ -654,6 +656,12 @@ impl LinkIndexer {
                                 "Folder doc {}: skipping content re-queue after rename (avoids stale backlink race)",
                                 doc_id
                             );
+                        }
+
+                        // Update DocumentResolver so MCP tools see current paths
+                        let all_folder_ids = find_all_folder_docs(&docs);
+                        if let Some(folder_idx) = all_folder_ids.iter().position(|id| id == &doc_id) {
+                            doc_resolver.update_folder(&doc_id, folder_idx, &docs);
                         }
                     } else {
                         // Content doc — index it
