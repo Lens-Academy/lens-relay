@@ -20,7 +20,7 @@
     "test:integration:sidebar": "vitest run Sidebar.integration",
     "test:integration:smoke": "vitest run smoke.integration",
     "dev:fixtures": "cross-env VITE_USE_FIXTURES=true vite",
-    "discord:start": "cd ../discord-bridge && npm run dev",
+    "discord:start": "tsx watch server/discord/dev-server.ts",
     "discord:setup": "echo 'Set DISCORD_BOT_TOKEN env var and run npm run discord:start'",
     "generate-link": "tsx scripts/generate-share-link.ts",
     "start:prod": "tsx server/prod-server.ts"
