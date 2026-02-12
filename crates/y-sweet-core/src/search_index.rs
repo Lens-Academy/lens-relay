@@ -225,33 +225,43 @@ impl SearchIndex {
     }
 }
 
+/// Escape HTML special characters for safe embedding in markup.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 /// Render a tantivy Snippet using `<mark>` tags instead of the default `<b>` tags.
+/// HTML-escapes fragment text to prevent XSS when rendered via dangerouslySetInnerHTML.
 fn render_snippet_with_mark(snippet: &tantivy::snippet::Snippet) -> String {
     let fragment = snippet.fragment();
     let highlighted = snippet.highlighted();
 
     if highlighted.is_empty() {
-        return fragment.to_string();
+        return escape_html(fragment);
     }
 
     let mut result = String::new();
     let mut pos = 0;
 
     for range in highlighted {
-        // Append text before this highlight
+        // Append escaped text before this highlight
         if range.start > pos {
-            result.push_str(&fragment[pos..range.start]);
+            result.push_str(&escape_html(&fragment[pos..range.start]));
         }
-        // Append highlighted text with <mark> tags
+        // Append escaped highlighted text with <mark> tags
         result.push_str("<mark>");
-        result.push_str(&fragment[range.start..range.end]);
+        result.push_str(&escape_html(&fragment[range.start..range.end]));
         result.push_str("</mark>");
         pos = range.end;
     }
 
-    // Append remaining text after last highlight
+    // Append remaining escaped text after last highlight
     if pos < fragment.len() {
-        result.push_str(&fragment[pos..]);
+        result.push_str(&escape_html(&fragment[pos..]));
     }
 
     result
@@ -365,6 +375,32 @@ mod tests {
         assert!(
             !snippet.contains("<b>") && !snippet.contains("</b>"),
             "snippet should NOT contain <b> tags, got: {snippet}"
+        );
+    }
+
+    #[test]
+    fn snippet_escapes_html_special_characters() {
+        let index = create_index();
+        index
+            .add_document(
+                "doc1",
+                "XSS Test",
+                "try <script>alert(1)</script> here",
+                "Lens",
+            )
+            .unwrap();
+        let results = index.search("script", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        // The snippet should contain escaped HTML, not raw tags
+        assert!(
+            !results[0].snippet.contains("<script>"),
+            "snippet should not contain raw <script> tag, got: {}",
+            results[0].snippet
+        );
+        assert!(
+            results[0].snippet.contains("&lt;"),
+            "snippet should contain escaped &lt;, got: {}",
+            results[0].snippet
         );
     }
 
