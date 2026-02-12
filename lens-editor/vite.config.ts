@@ -5,9 +5,11 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 // Extract workspace number from directory name (e.g., "lens-editor-ws2" → 2)
+// or parent directory (e.g., "ws2/lens-editor" → 2).
 // Used to auto-assign ports: ws1 gets 5173/8090, ws2 gets 5273/8190, etc.
 // No workspace suffix → 5173/8090 (default)
-const workspaceMatch = path.basename(__dirname).match(/-ws(\d+)$/);
+const workspaceMatch = path.basename(__dirname).match(/-ws(\d+)$/)
+  || path.basename(path.dirname(__dirname)).match(/^ws(\d+)$/);
 const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
 const portOffset = (wsNum - 1) * 100; // ws1=0, ws2=100, ws3=200...
 const defaultVitePort = 5173 + portOffset;

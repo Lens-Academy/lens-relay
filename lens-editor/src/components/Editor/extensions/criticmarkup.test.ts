@@ -141,39 +141,37 @@ describe('CriticMarkup Extension', () => {
       expect(hasClass(view, 'cm-hidden-syntax')).toBe(true);
     });
 
-    it('shows markup syntax when cursor is inside', () => {
+    it('always hides markup syntax regardless of cursor position', () => {
       const { view, cleanup: c } = createCriticMarkupEditor(
         'hello {++world++} end',
         10 // cursor inside "world"
       );
       cleanup = c;
 
-      // The {++ and ++} should be visible (no hidden-syntax on them)
-      // Check that hidden-syntax count is 0
-      const hiddenCount = view.contentDOM.querySelectorAll('.cm-hidden-syntax').length;
-      expect(hiddenCount).toBe(0);
+      // Delimiters are always hidden, even when cursor is inside
+      expect(hasClass(view, 'cm-hidden-syntax')).toBe(true);
     });
 
-    it('updates decorations when cursor moves in and out', () => {
+    it('keeps syntax hidden when cursor moves in and out', () => {
       const { view, cleanup: c } = createCriticMarkupEditor(
         'hello {++world++} end',
         21 // start outside
       );
       cleanup = c;
 
-      // Initially outside - syntax hidden
+      // Outside - syntax hidden
       expect(hasClass(view, 'cm-hidden-syntax')).toBe(true);
 
       // Move cursor inside
       moveCursor(view, 10);
 
-      // Now inside - syntax visible
-      expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
+      // Still hidden - delimiters always hidden in live preview
+      expect(hasClass(view, 'cm-hidden-syntax')).toBe(true);
 
       // Move cursor back outside
       moveCursor(view, 21);
 
-      // Outside again - syntax hidden
+      // Still hidden
       expect(hasClass(view, 'cm-hidden-syntax')).toBe(true);
     });
 
@@ -484,32 +482,30 @@ describe('CriticMarkup Extension', () => {
       // Enable source mode
       toggleSourceMode(view, true);
 
-      // In source mode - decorations should NOT be applied
-      // Raw markup should be visible (no cm-addition styling)
-      expect(hasClass(view, 'cm-addition')).toBe(false);
+      // In source mode - color classes still applied (entire range), but syntax not hidden
+      expect(hasClass(view, 'cm-addition')).toBe(true);
       expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
     });
 
-    it('restores CriticMarkup decorations when source mode is OFF', () => {
+    it('restores hidden syntax when source mode is OFF', () => {
       const { view, cleanup: c } = createCriticMarkupEditorWithSourceMode(
         'hello {++world++} end',
         21
       );
       cleanup = c;
 
-      // Enable source mode
+      // Enable source mode — no hidden syntax
       toggleSourceMode(view, true);
-      expect(hasClass(view, 'cm-addition')).toBe(false);
+      expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
 
-      // Disable source mode
+      // Disable source mode — hidden syntax restored
       toggleSourceMode(view, false);
 
-      // Decorations should be back
       expect(hasClass(view, 'cm-addition')).toBe(true);
       expect(hasClass(view, 'cm-hidden-syntax')).toBe(true);
     });
 
-    it('shows raw deletion markup in source mode', () => {
+    it('shows color-coded deletion markup in source mode', () => {
       const { view, cleanup: c } = createCriticMarkupEditorWithSourceMode(
         'hello {--removed--} end',
         23
@@ -519,8 +515,8 @@ describe('CriticMarkup Extension', () => {
       // Enable source mode
       toggleSourceMode(view, true);
 
-      // Raw markup should be visible - no decoration classes
-      expect(hasClass(view, 'cm-deletion')).toBe(false);
+      // Color class applied to entire range, but delimiters visible (not hidden)
+      expect(hasClass(view, 'cm-deletion')).toBe(true);
       expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
     });
   });

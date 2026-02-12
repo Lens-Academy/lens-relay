@@ -23,10 +23,12 @@ import { fileURLToPath } from 'url';
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
 
-// Auto-detect workspace number from directory name
+// Auto-detect workspace number from directory name (e.g., "lens-editor-ws2")
+// or parent directory (e.g., "ws2/lens-editor")
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.basename(path.resolve(__dirname, '..'));
-const workspaceMatch = projectDir.match(/-ws(\d+)$/);
+const parentDir = path.basename(path.resolve(__dirname, '../..'));
+const workspaceMatch = projectDir.match(/-ws(\d+)$/) || parentDir.match(/^ws(\d+)$/);
 const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
 const portOffset = (wsNum - 1) * 100;
 const defaultRelayPort = 8090 + portOffset;

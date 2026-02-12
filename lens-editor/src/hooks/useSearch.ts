@@ -34,7 +34,18 @@ export function useSearch(query: string, debounceMs = 300): UseSearchReturn {
       try {
         const response = await searchDocuments(trimmed, 20, controller.signal);
         if (!controller.signal.aborted) {
-          setResults(response.results);
+          // Deduplicate by title+folder, keeping highest-scored entry.
+          // Stale Tantivy index entries can produce duplicates with different doc_ids.
+          const seen = new Map<string, SearchResult>();
+          for (const r of response.results) {
+            const key = `${r.title}||${r.folder}`;
+            const existing = seen.get(key);
+            if (!existing || r.score > existing.score) {
+              seen.set(key, r);
+            }
+          }
+          const deduped = Array.from(seen.values()).sort((a, b) => b.score - a.score);
+          setResults(deduped);
           setError(null);
         }
       } catch (err) {

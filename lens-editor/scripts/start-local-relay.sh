@@ -16,9 +16,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 RELAY_CRATES_DIR="$(dirname "$PROJECT_DIR")/crates"
 
-# Extract workspace number from directory name
+# Extract workspace number from directory name (e.g., "lens-editor-ws2")
+# or parent directory (e.g., "ws2/lens-editor")
 DIR_NAME=$(basename "$PROJECT_DIR")
+PARENT_NAME=$(basename "$(dirname "$PROJECT_DIR")")
 if [[ "$DIR_NAME" =~ -ws([0-9]+)$ ]]; then
+    WS_NUM="${BASH_REMATCH[1]}"
+elif [[ "$PARENT_NAME" =~ ^ws([0-9]+)$ ]]; then
     WS_NUM="${BASH_REMATCH[1]}"
 else
     WS_NUM=1

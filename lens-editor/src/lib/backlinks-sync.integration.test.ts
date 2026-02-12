@@ -28,7 +28,8 @@ import { YSweetProvider } from '@y-sweet/client';
 // ---------------------------------------------------------------------------
 
 const projectDir = path.basename(path.resolve(import.meta.dirname, '../..'));
-const workspaceMatch = projectDir.match(/-ws(\d+)$/);
+const parentDir = path.basename(path.resolve(import.meta.dirname, '../../..'));
+const workspaceMatch = projectDir.match(/-ws(\d+)$/) || parentDir.match(/^ws(\d+)$/);
 const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
 const defaultPort = 8090 + (wsNum - 1) * 100;
 

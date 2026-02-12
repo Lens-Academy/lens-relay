@@ -1,4 +1,6 @@
 import type { FileMetadata } from '../hooks/useFolderMetadata';
+import type { SearchResult } from './relay-api';
+import { getFolderNameFromPath } from './multi-folder-utils';
 
 export interface TreeNode {
   id: string;
@@ -177,4 +179,42 @@ export function getFolderIdsWithMatches(nodes: TreeNode[], term: string): Set<st
 
   nodes.forEach(checkNode);
   return ids;
+}
+
+/**
+ * Search file names from metadata using case-insensitive substring matching.
+ * Returns SearchResult[] for compatibility with SearchPanel.
+ */
+export function searchFileNames(
+  metadata: Record<string, FileMetadata>,
+  term: string,
+  folderNames: string[]
+): SearchResult[] {
+  if (!term.trim()) return [];
+
+  const lowerTerm = term.toLowerCase();
+  const results: SearchResult[] = [];
+
+  for (const [path, meta] of Object.entries(metadata)) {
+    if (meta.type === 'folder') continue;
+
+    // Get the filename portion (last segment of path)
+    const parts = path.split('/');
+    const filename = parts[parts.length - 1];
+
+    if (filename.toLowerCase().includes(lowerTerm)) {
+      const folder = getFolderNameFromPath(path, folderNames) ?? '';
+      results.push({
+        doc_id: meta.id,
+        title: filename.replace(/\.md$/, ''),
+        folder,
+        snippet: '',
+        score: 0,
+      });
+    }
+  }
+
+  // Sort alphabetically by title
+  results.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
+  return results;
 }
