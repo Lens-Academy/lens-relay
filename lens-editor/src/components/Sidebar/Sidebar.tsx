@@ -6,7 +6,7 @@ import { FileTreeProvider } from './FileTreeContext';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useSearch } from '../../hooks/useSearch';
-import { buildTreeFromPaths, filterTree } from '../../lib/tree-utils';
+import { buildTreeFromPaths, filterTree, searchFileNames } from '../../lib/tree-utils';
 import { createDocument, renameDocument, deleteDocument } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
@@ -19,6 +19,9 @@ interface SidebarProps {
 export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearch = useDeferredValue(searchTerm);
+
+  // State for file name filter (separate from full-text search)
+  const [fileFilter, setFileFilter] = useState('');
 
   // State for inline editing
   const [editingPath, setEditingPath] = useState<string | null>(null);
@@ -56,13 +59,19 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
     return buildTreeFromPaths(metadata);
   }, [metadata]);
 
-  // Filter tree based on search (used when searchTerm < 2 chars)
+  // Filter tree based on file filter input (used when search panel is NOT active)
   const filteredTree = useMemo(() => {
-    if (!deferredSearch) return treeData;
-    return filterTree(treeData, deferredSearch);
-  }, [treeData, deferredSearch]);
+    if (!fileFilter) return treeData;
+    return filterTree(treeData, fileFilter);
+  }, [treeData, fileFilter]);
 
-  // Visual feedback while filtering is processing
+  // Client-side filename matches for the search panel (instant, no debounce needed)
+  const fileNameMatches = useMemo(() => {
+    if (deferredSearch.trim().length < 2) return [];
+    return searchFileNames(metadata, deferredSearch, folderNames);
+  }, [metadata, deferredSearch, folderNames]);
+
+  // Visual feedback while deferred value is processing
   const isStale = searchTerm !== deferredSearch;
 
   // Whether to show server-side search results vs file tree
@@ -177,6 +186,7 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
         {showSearchResults ? (
           <SearchPanel
             results={searchResults}
+            fileNameMatches={fileNameMatches}
             loading={searchLoading}
             error={searchError}
             query={searchTerm}
@@ -184,6 +194,41 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
           />
         ) : (
           <>
+            {/* File name filter input */}
+            {folderDocs.size > 0 && (
+              <div className="px-3 py-1.5 border-b border-gray-100">
+                <div className="relative">
+                  <svg
+                    className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  </svg>
+                  <input
+                    type="text"
+                    value={fileFilter}
+                    onChange={(e) => setFileFilter(e.target.value)}
+                    placeholder="Filter files..."
+                    className="w-full pl-7 pr-6 py-1 text-xs bg-gray-50 border border-gray-200 rounded
+                               placeholder-gray-400 outline-none focus:border-gray-300 focus:bg-white"
+                  />
+                  {fileFilter && (
+                    <button
+                      onClick={() => setFileFilter('')}
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-gray-400 hover:text-gray-600"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Loading state: no doc yet or empty metadata */}
             {folderDocs.size === 0 && Object.keys(metadata).length === 0 && (
               <div className="p-4 text-sm text-gray-500">
@@ -193,7 +238,7 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
 
             {filteredTree.length === 0 && folderDocs.size > 0 && (
               <div className="p-4 text-sm text-gray-500 text-center">
-                {searchTerm ? (
+                {fileFilter ? (
                   'No matching documents'
                 ) : (
                   <>
@@ -219,7 +264,7 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
                 <FileTree
                   data={filteredTree}
                   onSelect={handleSelect}
-                  openAll={!!deferredSearch}
+                  openAll={!!fileFilter}
                 />
               </FileTreeProvider>
             )}
