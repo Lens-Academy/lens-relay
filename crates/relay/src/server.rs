@@ -784,7 +784,7 @@ impl Server {
             doc_id,
             self.store.clone(),
             move || {
-                send.try_send(()).unwrap();
+                let _ = send.try_send(());
             },
             event_callback,
         )
