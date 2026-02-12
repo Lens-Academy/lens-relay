@@ -148,30 +148,30 @@ describe('resolvePageName', () => {
 
 describe('generateNewDocPath', () => {
   it('adds .md extension', () => {
-    expect(generateNewDocPath('New Page')).toBe('New Page.md');
+    expect(generateNewDocPath('New Page')).toBe('/New Page.md');
   });
 
   it('sanitizes invalid filename characters', () => {
-    expect(generateNewDocPath('What is this?')).toBe('What is this-.md');
+    expect(generateNewDocPath('What is this?')).toBe('/What is this-.md');
   });
 
   it('replaces forward slashes', () => {
-    expect(generateNewDocPath('A/B')).toBe('A-B.md');
+    expect(generateNewDocPath('A/B')).toBe('/A-B.md');
   });
 
   it('replaces backslashes', () => {
-    expect(generateNewDocPath('A\\B')).toBe('A-B.md');
+    expect(generateNewDocPath('A\\B')).toBe('/A-B.md');
   });
 
   it('replaces colons', () => {
-    expect(generateNewDocPath('Time: 10:00')).toBe('Time- 10-00.md');
+    expect(generateNewDocPath('Time: 10:00')).toBe('/Time- 10-00.md');
   });
 
   it('handles names matching production document titles', () => {
     // Based on production-sample.json document names
-    expect(generateNewDocPath('Course YAML examples')).toBe('Course YAML examples.md');
+    expect(generateNewDocPath('Course YAML examples')).toBe('/Course YAML examples.md');
     expect(generateNewDocPath('Dev, Staging, and Production environments')).toBe(
-      'Dev, Staging, and Production environments.md'
+      '/Dev, Staging, and Production environments.md'
     );
   });
 });

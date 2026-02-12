@@ -48,5 +48,5 @@ export function resolvePageName(
 export function generateNewDocPath(pageName: string): string {
   // Sanitize: remove characters not allowed in filenames
   const safeName = pageName.replace(/[/\\?%*:|"<>]/g, '-');
-  return `${safeName}.md`;
+  return `/${safeName}.md`;
 }
