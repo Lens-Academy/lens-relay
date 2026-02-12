@@ -1,0 +1,64 @@
+# Production deployment for Hetzner VPS (46.224.127.155)
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yaml up -d
+#   docker compose -f docker-compose.prod.yaml logs -f
+#   docker compose -f docker-compose.prod.yaml down
+#
+# Prerequisites:
+#   - /root/relay.toml — relay server configuration
+#   - /root/auth.env — Cloudflare R2 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+#   - /root/relay-git-sync-data/ — git sync data, SSH keys, patched files
+#   - TUNNEL_TOKEN environment variable or in .env file
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+
+  relay-server:
+    build:
+      context: crates/
+      dockerfile: Dockerfile
+    image: relay-server:custom
+    container_name: relay-server
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 524288
+    volumes:
+      - /root/relay.toml:/app/relay.toml:ro
+    env_file:
+      - /root/auth.env
+
+  lens-editor:
+    build:
+      context: lens-editor/
+      dockerfile: Dockerfile
+    image: lens-editor:custom
+    container_name: lens-editor
+    restart: unless-stopped
+    environment:
+      - RELAY_URL=http://relay-server:8080
+      - RELAY_SERVER_TOKEN=${RELAY_SERVER_TOKEN}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - PORT=3000
+
+  relay-git-sync:
+    image: docker.system3.md/relay-git-sync:latest
+    container_name: relay-git-sync
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8000"
+    volumes:
+      - /root/relay-git-sync-data:/data
+      - /root/relay-git-sync-data/webhook_handler.py:/app/webhook_handler.py
+      - /root/relay-git-sync-data/persistence.py:/app/persistence.py
+    environment:
+      - RELAY_GIT_DATA_DIR=/data
+      - RELAY_SERVER_URL=http://relay-server:8080
+      - RELAY_SERVER_API_KEY=${RELAY_SERVER_API_KEY}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
