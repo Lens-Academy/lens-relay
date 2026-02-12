@@ -59,7 +59,7 @@ impl DocumentResolver {
         for (folder_idx, folder_doc_id) in folder_doc_ids.iter().enumerate() {
             if let Some(doc_ref) = docs.get(folder_doc_id) {
                 let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap();
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 self.rebuild_from_folder_doc(folder_doc_id, folder_idx, &guard.doc);
             }
         }
@@ -151,7 +151,7 @@ impl DocumentResolver {
 
         if let Some(doc_ref) = docs.get(folder_doc_id) {
             let awareness = doc_ref.awareness();
-            let guard = awareness.read().unwrap();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             self.rebuild_from_folder_doc(folder_doc_id, folder_idx, &guard.doc);
         }
     }

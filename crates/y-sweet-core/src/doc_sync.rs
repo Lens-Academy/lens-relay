@@ -51,10 +51,14 @@ impl DocWithSyncKv {
             let webhook_callback = webhook_callback.clone();
             let doc_key = key.to_string();
             doc.observe_update_v1(move |txn, event| {
-                sync_kv.push_update(DOC_NAME, &event.update).unwrap();
-                sync_kv
-                    .flush_doc_with(DOC_NAME, Default::default())
-                    .unwrap();
+                if let Err(e) = sync_kv.push_update(DOC_NAME, &event.update) {
+                    tracing::error!("Failed to push update for {}: {:?}", doc_key, e);
+                    return;
+                }
+                if let Err(e) = sync_kv.flush_doc_with(DOC_NAME, Default::default()) {
+                    tracing::error!("Failed to flush doc {}: {:?}", doc_key, e);
+                    return;
+                }
 
                 // Trigger webhook if callback is configured
                 if let Some(ref callback) = webhook_callback {
@@ -82,7 +86,7 @@ impl DocWithSyncKv {
     }
 
     pub fn as_update(&self) -> Vec<u8> {
-        let awareness_guard = self.awareness.read().unwrap();
+        let awareness_guard = self.awareness.read().unwrap_or_else(|e| e.into_inner());
         let doc = &awareness_guard.doc;
 
         let txn = doc.transact();
@@ -91,7 +95,7 @@ impl DocWithSyncKv {
     }
 
     pub fn apply_update(&self, update: &[u8]) -> Result<()> {
-        let awareness_guard = self.awareness.write().unwrap();
+        let awareness_guard = self.awareness.write().unwrap_or_else(|e| e.into_inner());
         let doc = &awareness_guard.doc;
 
         let update: Update =

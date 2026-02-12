@@ -56,7 +56,7 @@ pub fn execute(
             .get(&doc_info.doc_id)
             .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
         let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         match txn.get_text("contents") {
             Some(text) => text.get_string(&txn),
@@ -106,7 +106,7 @@ pub fn execute(
             .get(&doc_info.doc_id)
             .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
         let awareness = doc_ref.awareness();
-        let mut guard = awareness.write().unwrap();
+        let mut guard = awareness.write().unwrap_or_else(|e| e.into_inner());
         let mut txn = guard.doc.transact_mut();
         let text = txn.get_or_insert_text("contents");
 

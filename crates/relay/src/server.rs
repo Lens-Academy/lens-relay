@@ -261,7 +261,7 @@ fn search_handle_content_update(
             return;
         };
         let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         match txn.get_text("contents") {
             Some(text) => text.get_string(&txn),
@@ -290,7 +290,7 @@ fn search_find_title_and_folder(
             continue;
         };
         let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         let Some(filemeta) = txn.get_map("filemeta_v0") else {
             continue;
@@ -339,7 +339,7 @@ async fn search_handle_folder_update(
             return;
         };
         let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         let Some(filemeta) = txn.get_map("filemeta_v0") else {
             return;
@@ -932,7 +932,7 @@ impl Server {
                     continue;
                 };
                 let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap();
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let txn = guard.doc.transact();
                 let Some(filemeta) = txn.get_map("filemeta_v0") else {
                     continue;
@@ -974,7 +974,7 @@ impl Server {
                     {
                         if doc_uuid == uuid {
                             let awareness = entry.value().awareness();
-                            let guard = awareness.read().unwrap();
+                            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                             let txn = guard.doc.transact();
                             if let Some(text) = txn.get_text("contents") {
                                 body = text.get_string(&txn);

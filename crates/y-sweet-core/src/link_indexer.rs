@@ -158,7 +158,7 @@ pub fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String
     let mut result: Vec<String> = docs.iter()
         .filter_map(|entry| {
             let awareness = entry.value().awareness();
-            let guard = awareness.read().unwrap();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
             if let Some(filemeta) = txn.get_map("filemeta_v0") {
                 if filemeta.len(&txn) > 0 {
@@ -177,7 +177,7 @@ pub fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String
 pub fn is_folder_doc(doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) -> Option<Vec<String>> {
     let doc_ref = docs.get(doc_id)?;
     let awareness = doc_ref.awareness();
-    let guard = awareness.read().unwrap();
+    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
     let txn = guard.doc.transact();
     let filemeta = txn.get_map("filemeta_v0")?;
     if filemeta.len(&txn) == 0 {
@@ -511,7 +511,7 @@ impl LinkIndexer {
                 return false;
             };
             let awareness = doc_ref.awareness();
-            let guard = awareness.read().unwrap();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             self.detect_renames(folder_doc_id, &guard.doc)
         };
 
@@ -538,7 +538,7 @@ impl LinkIndexer {
                     continue;
                 };
                 let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap();
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let txn = guard.doc.transact();
                 if let Some(backlinks) = txn.get_map("backlinks_v0") {
                     read_backlinks_array(&backlinks, &txn, &rename.uuid)
@@ -572,7 +572,7 @@ impl LinkIndexer {
                 };
 
                 let awareness = content_ref.awareness();
-                let guard = awareness.write().unwrap();
+                let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
                 match update_wikilinks_in_doc(&guard.doc, &rename.old_name, &rename.new_name) {
                     Ok(count) => {
                         tracing::info!(
@@ -717,7 +717,7 @@ impl LinkIndexer {
 
         // Get Y.Docs from DocWithSyncKv via awareness
         let content_awareness = content_ref.awareness();
-        let content_guard = content_awareness.read().unwrap();
+        let content_guard = content_awareness.read().unwrap_or_else(|e| e.into_inner());
 
         // Build awareness guards for all folder docs
         let folder_awarnesses: Vec<_> = folder_refs
@@ -729,7 +729,7 @@ impl LinkIndexer {
         // Do NOT parallelize index_document calls without introducing lock ordering.
         let folder_guards: Vec<_> = folder_awarnesses
             .iter()
-            .map(|a| a.write().unwrap())
+            .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
             .collect();
         let folder_doc_refs: Vec<&Doc> = folder_guards
             .iter()
@@ -773,7 +773,7 @@ impl LinkIndexer {
         for folder_doc_id in &folder_doc_ids {
             if let Some(doc_ref) = docs.get(folder_doc_id) {
                 let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap();
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 self.detect_renames(folder_doc_id, &guard.doc);
             }
         }

@@ -54,7 +54,7 @@ fn read_backlinks(server: &Arc<Server>, folder_doc_id: &str, uuid: &str) -> Vec<
             return Vec::new();
         };
         let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         let Some(backlinks_map) = txn.get_map("backlinks_v0") else {
             return Vec::new();
@@ -81,7 +81,7 @@ fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
             return Vec::new();
         };
         let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         match txn.get_text("contents") {
             Some(text) => text.get_string(&txn),

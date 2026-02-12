@@ -185,7 +185,7 @@ fn build_context_ranges(
 fn read_doc_content(server: &Arc<Server>, doc_id: &str) -> Option<String> {
     let doc_ref = server.docs().get(doc_id)?;
     let awareness = doc_ref.awareness();
-    let guard = awareness.read().unwrap();
+    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
     let txn = guard.doc.transact();
     match txn.get_text("contents") {
         Some(text) => Some(text.get_string(&txn)),

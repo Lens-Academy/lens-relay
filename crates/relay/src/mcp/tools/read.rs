@@ -34,7 +34,7 @@ pub fn execute(server: &Arc<Server>, session_id: &str, arguments: &Value) -> Res
             .get(&doc_info.doc_id)
             .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
         let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         match txn.get_text("contents") {
             Some(text) => text.get_string(&txn),
