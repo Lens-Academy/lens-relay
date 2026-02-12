@@ -103,6 +103,8 @@ pub enum AuthError {
     NoKeyProvided,
     #[error("No signing key available")]
     NoSigningKey,
+    #[error("Invalid channel name: must contain only alphanumeric characters, hyphens, and underscores")]
+    InvalidChannelName,
     #[error("Duplicate key_id: {0}")]
     DuplicateKeyId(String),
     #[error("Invalid audience claim: expected '{expected}', found '{found}'")]
@@ -136,6 +138,7 @@ impl AuthError {
             AuthError::BothKeysProvided => "both_keys_provided",
             AuthError::NoKeyProvided => "no_key_provided",
             AuthError::NoSigningKey => "no_signing_key",
+            AuthError::InvalidChannelName => "invalid_channel_name",
             AuthError::DuplicateKeyId(_) => "duplicate_key_id",
             AuthError::InvalidAudience { .. } => "invalid_audience",
             AuthError::MissingAudience { .. } => "missing_audience",
@@ -1018,7 +1021,7 @@ impl Authenticator {
         // Validate channel if provided
         if let Some(ref channel_name) = channel {
             if !crate::api_types::validate_key(channel_name) {
-                panic!("Invalid channel name: must contain only alphanumeric characters, hyphens, and underscores");
+                return Err(AuthError::InvalidChannelName);
             }
         }
 
@@ -1113,7 +1116,7 @@ impl Authenticator {
         // Validate channel if provided
         if let Some(ref channel_name) = channel {
             if !crate::api_types::validate_key(channel_name) {
-                panic!("Invalid channel name: must contain only alphanumeric characters, hyphens, and underscores");
+                return Err(AuthError::InvalidChannelName);
             }
         }
 
