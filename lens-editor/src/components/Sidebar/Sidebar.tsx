@@ -123,15 +123,18 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
 
     try {
       // createDocument is now async - it creates on server first, then adds to filemeta
-      await createDocument(doc, path, 'markdown');
+      const id = await createDocument(doc, path, 'markdown');
       setNewDocName('');
       setIsCreating(false);
+      // Navigate to the newly created document
+      const compoundDocId = `${RELAY_ID}-${id}`;
+      onSelectDocument(compoundDocId);
     } catch (error) {
       console.error('Failed to create document:', error);
       setNewDocName('');
       setIsCreating(false);
     }
-  }, [folderDocs, folderNames, newDocName]);
+  }, [folderDocs, folderNames, newDocName, onSelectDocument]);
 
   const handleNewDocKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
