@@ -128,6 +128,8 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
       setIsCreating(false);
     } catch (error) {
       console.error('Failed to create document:', error);
+      setNewDocName('');
+      setIsCreating(false);
     }
   }, [folderDocs, folderNames, newDocName]);
 
@@ -154,7 +156,9 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
             onChange={(e) => setNewDocName(e.target.value)}
             onKeyDown={handleNewDocKeyDown}
             onBlur={() => {
-              if (!newDocName.trim()) {
+              if (newDocName.trim()) {
+                handleCreateDocument();
+              } else {
                 setIsCreating(false);
               }
             }}
