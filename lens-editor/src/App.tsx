@@ -1,11 +1,11 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
 import { AwarenessInitializer } from './components/AwarenessInitializer/AwarenessInitializer';
 import { DisconnectionModal } from './components/DisconnectionModal/DisconnectionModal';
-import { NavigationContext } from './contexts/NavigationContext';
+import { NavigationContext, useNavigation } from './contexts/NavigationContext';
 import { DisplayNameProvider } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 import { DisplayNameBadge } from './components/DisplayNameBadge';
@@ -79,12 +79,24 @@ function DocumentNotFound() {
  * Lives inside NavigationContext so it can access metadata and onNavigate.
  */
 function DocumentView() {
-  const { docUuid } = useParams<{ docUuid: string }>();
+  const { docUuid, '*': splatPath } = useParams<{ docUuid: string; '*': string }>();
+  const { metadata } = useNavigation();
+  const navigate = useNavigate();
 
   if (!docUuid) return <DocumentNotFound />;
 
   // Build compound doc ID directly from URL param — no metadata lookup needed
   const activeDocId = `${RELAY_ID}-${docUuid}`;
+
+  // Update decorative path in URL when metadata loads (without adding history entry)
+  useEffect(() => {
+    if (Object.keys(metadata).length === 0) return;
+    const expectedUrl = urlForDoc(activeDocId, metadata);
+    const currentPath = `/${docUuid}${splatPath ? `/${splatPath}` : ''}`;
+    if (currentPath !== expectedUrl) {
+      navigate(expectedUrl, { replace: true });
+    }
+  }, [metadata, activeDocId, docUuid, splatPath, navigate]);
 
   return (
     <RelayProvider key={activeDocId} docId={activeDocId}>

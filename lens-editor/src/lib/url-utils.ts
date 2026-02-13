@@ -27,10 +27,11 @@ export function urlForDoc(compoundDocId: string, metadata: FolderMetadata): stri
   // Find the file path in metadata by matching the doc UUID
   for (const [path, meta] of Object.entries(metadata)) {
     if (meta.id === docUuid) {
-      // Encode each path segment individually (preserves / separators)
+      // Encode each path segment, replacing spaces with dashes for readability
+      // (the path is decorative — the UUID is the canonical identifier)
       const encodedPath = path
         .split('/')
-        .map((segment) => encodeURIComponent(segment))
+        .map((segment) => segment.replace(/ /g, '-'))
         .join('/');
       return `/${docUuid}${encodedPath}`;
     }

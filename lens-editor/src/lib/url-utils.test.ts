@@ -29,11 +29,11 @@ describe('urlForDoc', () => {
     expect(urlForDoc(COMPOUND_ID, {})).toBe(`/${DOC_UUID}`);
   });
 
-  it('encodes spaces in file paths', () => {
+  it('replaces spaces with dashes in file paths', () => {
     const metadata = {
       '/Lens Edu/My Notes.md': { id: DOC_UUID, type: 'markdown' as const, version: 0 },
     };
-    expect(urlForDoc(COMPOUND_ID, metadata)).toBe(`/${DOC_UUID}/Lens%20Edu/My%20Notes.md`);
+    expect(urlForDoc(COMPOUND_ID, metadata)).toBe(`/${DOC_UUID}/Lens-Edu/My-Notes.md`);
   });
 });
 
