@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
@@ -13,6 +13,8 @@ import { AuthProvider } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
 import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken } from './lib/auth-share';
 import { setShareToken } from './lib/auth';
+import { QuickSwitcher } from './components/QuickSwitcher';
+import { useRecentFiles } from './hooks/useRecentFiles';
 
 // VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
@@ -62,6 +64,7 @@ function AccessDenied() {
 
 export function App() {
   const [activeDocId, setActiveDocId] = useState<string>(DEFAULT_DOC_ID);
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
 
   // No valid token → show access denied
   if (!shareToken || !shareRole) {
@@ -71,6 +74,32 @@ export function App() {
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
   const folderNames = FOLDERS.map(f => f.name);
+  const { recentFiles, pushRecent } = useRecentFiles();
+
+  // Track document visits for quick switcher recent files
+  useEffect(() => {
+    if (activeDocId) {
+      const uuid = activeDocId.slice(RELAY_ID.length + 1);
+      pushRecent(uuid);
+    }
+  }, [activeDocId, pushRecent]);
+
+  // Ctrl+O keyboard shortcut to open quick switcher
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
+        e.preventDefault();
+        setQuickSwitcherOpen(true);
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
+
+  const handleQuickSwitcherSelect = useCallback((docId: string) => {
+    const compoundId = `${RELAY_ID}-${docId}`;
+    setActiveDocId(compoundId);
+  }, []);
 
   return (
     <AuthProvider role={shareRole}>
@@ -94,6 +123,12 @@ export function App() {
               </RelayProvider>
             </div>
           </div>
+          <QuickSwitcher
+            open={quickSwitcherOpen}
+            onOpenChange={setQuickSwitcherOpen}
+            recentFiles={recentFiles}
+            onSelect={handleQuickSwitcherSelect}
+          />
         </NavigationContext.Provider>
       </DisplayNameProvider>
     </AuthProvider>
