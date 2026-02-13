@@ -55,6 +55,20 @@ describe('relay-api', () => {
       );
     });
 
+    it('generates valid UUID even when crypto.randomUUID is unavailable', async () => {
+      const original = crypto.randomUUID;
+      // @ts-expect-error - simulating insecure context
+      crypto.randomUUID = undefined;
+      try {
+        const id = await createDocument(doc, '/InsecureContext.md');
+        expect(id).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+        );
+      } finally {
+        crypto.randomUUID = original;
+      }
+    });
+
     it('adds entry to filemeta_v0 map', async () => {
       const id = await createDocument(doc, '/Test.md');
       const meta = filemeta.get('/Test.md');

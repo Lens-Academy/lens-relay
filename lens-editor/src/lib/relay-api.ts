@@ -17,6 +17,20 @@ function debug(operation: string, ...args: unknown[]) {
   console.log(`[relay-api] ${operation}:`, ...args);
 }
 
+/** UUID v4 generator that works in insecure contexts (plain HTTP). */
+function generateUUID(): string {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback using crypto.getRandomValues (available in all contexts)
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 /**
  * Create a document on the Relay server.
  * Routes through the Vite middleware which adds the server token server-side.
@@ -105,7 +119,7 @@ export async function createDocument(
   type: 'markdown' | 'canvas' = 'markdown'
 ): Promise<string> {
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
-  const id = crypto.randomUUID();
+  const id = generateUUID();
   const fullDocId = `${RELAY_ID}-${id}`;
 
   debug('createDocument', { path, type, id, fullDocId });
