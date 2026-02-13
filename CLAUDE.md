@@ -86,6 +86,12 @@ This auto-detects `crates/relay.toml` if present. For local dev, omit the config
 cd lens-editor && npm run relay:setup
 ```
 
+**After setup, always generate an editor share link** so the user can open the editor immediately:
+
+```bash
+cd lens-editor && npx tsx scripts/generate-share-link.ts --role edit --folder b0000001-0000-4000-8000-000000000001 --base-url http://dev.vps:5173
+```
+
 ## Running lens-editor
 
 ```bash

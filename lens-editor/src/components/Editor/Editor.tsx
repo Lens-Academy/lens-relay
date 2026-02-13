@@ -9,7 +9,7 @@ import {
   crosshairCursor,
 } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
-import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
+import { defaultKeymap } from '@codemirror/commands';
 import { indentOnInput, syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldKeymap } from '@codemirror/language';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
@@ -18,7 +18,7 @@ import { lintKeymap } from '@codemirror/lint';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
 import { indentMore, indentLess } from '@codemirror/commands';
-import { yCollab } from 'y-codemirror.next';
+import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
 import { livePreview, updateWikilinkContext } from './extensions/livePreview';
@@ -182,10 +182,14 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
     // Field name 'contents' matches Obsidian Relay document format
     const ytext = ydoc.getText('contents');
 
-    // Create UndoManager with captureTimeout: 0
+    // Create UndoManager scoped to local edits only.
+    // trackedOrigins starts empty; yCollab adds its sync origin so only local
+    // edits are tracked. This prevents the initial server sync from being
+    // recorded as an undoable operation (server sync uses origin `null`).
     // Note: Cross-user undo is a known limitation matching Obsidian+Relay behavior
     const undoManager = new Y.UndoManager(ytext, {
-      captureTimeout: 0,
+      captureTimeout: 500,
+      trackedOrigins: new Set([]),
     });
 
     // Create EditorState with extensions
@@ -196,7 +200,6 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
         ...(readOnly ? [EditorView.editable.of(false), EditorState.readOnly.of(true)] : []),
         // Core editing
         highlightSpecialChars(),
-        history(),
         drawSelection(),
         dropCursor(),
         EditorState.allowMultipleSelections.of(true),
@@ -212,7 +215,7 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
           ...closeBracketsKeymap,
           ...defaultKeymap,
           ...searchKeymap,
-          ...historyKeymap,
+          ...yUndoManagerKeymap,
           ...foldKeymap,
           ...completionKeymap,
           ...lintKeymap,
