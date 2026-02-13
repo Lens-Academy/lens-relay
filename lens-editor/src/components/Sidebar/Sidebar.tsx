@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useDeferredValue, useMemo, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { SearchInput } from './SearchInput';
 import { SearchPanel } from './SearchPanel';
 import { FileTree } from './FileTree';
@@ -11,14 +12,14 @@ import { createDocument, renameDocument, deleteDocument } from '../../lib/relay-
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
 
-interface SidebarProps {
-  activeDocId: string;
-  onSelectDocument: (docId: string) => void;
-}
-
-export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
+export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearch = useDeferredValue(searchTerm);
+
+  // Derive active doc ID from URL path (first segment is the doc UUID)
+  const location = useLocation();
+  const docUuid = location.pathname.split('/')[1] || '';
+  const activeDocId = docUuid ? `${RELAY_ID}-${docUuid}` : '';
 
   // State for file name filter (separate from full-text search)
   const [fileFilter, setFileFilter] = useState('');
@@ -77,11 +78,11 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
   // Whether to show server-side search results vs file tree
   const showSearchResults = searchTerm.trim().length >= 2;
 
-  // Build compound doc ID and call parent handler
+  // Build compound doc ID and navigate via URL
   const handleSelect = useCallback((docId: string) => {
     const compoundDocId = `${RELAY_ID}-${docId}`;
-    onSelectDocument(compoundDocId);
-  }, [onSelectDocument]);
+    onNavigate(compoundDocId);
+  }, [onNavigate]);
 
   // CRUD handlers
   const handleRenameSubmit = useCallback((prefixedOldPath: string, newName: string) => {

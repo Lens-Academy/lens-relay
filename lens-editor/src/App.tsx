@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useCallback } from 'react';
+import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
@@ -13,6 +14,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
 import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken } from './lib/auth-share';
 import { setShareToken } from './lib/auth';
+import { urlForDoc } from './lib/url-utils';
 
 // VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
@@ -33,10 +35,10 @@ const FOLDERS: FolderConfig[] = USE_LOCAL_RELAY
       { id: 'ea4015da-24af-4d9d-ac49-8c902cb17121', name: 'Lens Edu' },
     ];
 
-// Default document to show on load
-const DEFAULT_DOC_ID = USE_LOCAL_RELAY
-  ? `${RELAY_ID}-c0000001-0000-4000-8000-000000000001`
-  : `${RELAY_ID}-76c3e654-0e77-4538-962f-1b419647206e`;
+// Default document UUID (just the doc part, without RELAY_ID prefix)
+const DEFAULT_DOC_UUID = USE_LOCAL_RELAY
+  ? 'c0000001-0000-4000-8000-000000000001'
+  : '76c3e654-0e77-4538-962f-1b419647206e';
 
 // Read share token from URL once at module load (before React renders)
 const shareToken = getShareTokenFromUrl();
@@ -60,8 +62,41 @@ function AccessDenied() {
   );
 }
 
+function DocumentNotFound() {
+  return (
+    <main className="flex-1 flex items-center justify-center bg-gray-50">
+      <div className="text-center max-w-md px-6">
+        <h1 className="text-2xl font-semibold text-gray-800 mb-2">Document Not Found</h1>
+        <p className="text-gray-500 mb-4">This document may have been deleted or the link may be incorrect.</p>
+        <a href="/" className="text-blue-600 hover:text-blue-800 underline">Go to default document</a>
+      </div>
+    </main>
+  );
+}
+
+/**
+ * Document view — reads docUuid from URL params, renders editor.
+ * Lives inside NavigationContext so it can access metadata and onNavigate.
+ */
+function DocumentView() {
+  const { docUuid } = useParams<{ docUuid: string }>();
+
+  if (!docUuid) return <DocumentNotFound />;
+
+  // Build compound doc ID directly from URL param — no metadata lookup needed
+  const activeDocId = `${RELAY_ID}-${docUuid}`;
+
+  return (
+    <RelayProvider key={activeDocId} docId={activeDocId}>
+      <AwarenessInitializer />
+      <EditorArea currentDocId={activeDocId} />
+      <DisconnectionModal />
+    </RelayProvider>
+  );
+}
+
 export function App() {
-  const [activeDocId, setActiveDocId] = useState<string>(DEFAULT_DOC_ID);
+  const navigate = useNavigate();
 
   // No valid token → show access denied
   if (!shareToken || !shareRole) {
@@ -72,26 +107,31 @@ export function App() {
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
   const folderNames = FOLDERS.map(f => f.name);
 
+  // Navigate by updating the URL — React Router handles the rest
+  const onNavigate = useCallback((compoundDocId: string) => {
+    const url = urlForDoc(compoundDocId, metadata);
+    navigate(url);
+  }, [navigate, metadata]);
+
   return (
     <AuthProvider role={shareRole}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
-        <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate: setActiveDocId }}>
+        <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate }}>
           <div className="h-screen flex flex-col bg-gray-50">
             {/* Global identity bar */}
             <div className="flex items-center justify-end px-4 py-1 bg-white border-b border-gray-100">
               <DisplayNameBadge />
             </div>
             <div className="flex-1 flex min-h-0">
-              {/* Sidebar is OUTSIDE the key boundary - stays mounted across document switches */}
-              <Sidebar activeDocId={activeDocId} onSelectDocument={setActiveDocId} />
+              {/* Sidebar — uses onNavigate from context, no separate callback needed */}
+              <Sidebar />
 
-              {/* Only EditorArea remounts on doc change via key prop */}
-              <RelayProvider key={activeDocId} docId={activeDocId}>
-                <AwarenessInitializer />
-                <EditorArea currentDocId={activeDocId} />
-                <DisconnectionModal />
-              </RelayProvider>
+              {/* Route-based document rendering */}
+              <Routes>
+                <Route path="/:docUuid/*" element={<DocumentView />} />
+                <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
+              </Routes>
             </div>
           </div>
         </NavigationContext.Provider>
