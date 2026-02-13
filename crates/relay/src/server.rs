@@ -443,7 +443,7 @@ pub struct Server {
     search_pending: Option<Arc<DashMap<String, tokio::time::Instant>>>,
     doc_resolver: Arc<DocumentResolver>,
     pub(crate) mcp_sessions: Arc<crate::mcp::session::SessionManager>,
-    mcp_api_key: Option<String>,
+    pub(crate) mcp_api_key: Option<String>,
 }
 
 impl Server {
@@ -1260,7 +1260,8 @@ impl Server {
 
         // Only register /mcp if MCP_API_KEY is set
         if let Some(ref key) = self.mcp_api_key {
-            let mcp_routes = Router::new()
+            // Bearer auth: POST/GET/DELETE /mcp (for Claude Code / .mcp.json)
+            let bearer_routes = Router::new()
                 .route(
                     "/",
                     post(crate::mcp::transport::handle_mcp_post)
@@ -1270,7 +1271,19 @@ impl Server {
                 .layer(middleware::from_fn_with_state(
                     key.clone(),
                     crate::mcp::transport::mcp_auth_middleware,
-                ))
+                ));
+
+            // Path-key auth: POST/GET/DELETE /mcp/:key (for claude.ai connectors)
+            let path_key_routes = Router::new()
+                .route(
+                    "/:key",
+                    post(crate::mcp::transport::handle_mcp_post_with_key)
+                        .get(crate::mcp::transport::handle_mcp_get_with_key)
+                        .delete(crate::mcp::transport::handle_mcp_delete_with_key),
+                );
+
+            let mcp_routes = bearer_routes
+                .merge(path_key_routes)
                 .with_state(self.clone());
             router = router.nest("/mcp", mcp_routes);
         }

@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -170,6 +170,52 @@ pub async fn handle_mcp_delete(
     } else {
         StatusCode::NOT_FOUND.into_response()
     }
+}
+
+// --- Path-key variants: /mcp/:key validates key from URL path ---
+
+/// Validate the API key from the URL path. Returns 401 on mismatch.
+fn validate_path_key(server: &Server, key: &str) -> Option<Response> {
+    match &server.mcp_api_key {
+        Some(expected) if key == expected => None,
+        _ => Some(StatusCode::UNAUTHORIZED.into_response()),
+    }
+}
+
+/// Handle POST /mcp/:key — same as handle_mcp_post but auth via URL path.
+pub async fn handle_mcp_post_with_key(
+    State(server): State<Arc<Server>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if let Some(err) = validate_path_key(&server, &key) {
+        return err;
+    }
+    handle_mcp_post(State(server), headers, body).await
+}
+
+/// Handle GET /mcp/:key
+pub async fn handle_mcp_get_with_key(
+    State(server): State<Arc<Server>>,
+    Path(key): Path<String>,
+) -> Response {
+    if let Some(err) = validate_path_key(&server, &key) {
+        return err;
+    }
+    handle_mcp_get().await.into_response()
+}
+
+/// Handle DELETE /mcp/:key
+pub async fn handle_mcp_delete_with_key(
+    State(server): State<Arc<Server>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(err) = validate_path_key(&server, &key) {
+        return err;
+    }
+    handle_mcp_delete(State(server), headers).await
 }
 
 /// Extract the mcp-session-id from request headers.
