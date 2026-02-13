@@ -214,44 +214,45 @@ pub fn index_content_into_folders(
     content_doc: &Doc,
     folder_docs: &[&Doc],
 ) -> anyhow::Result<()> {
-    // 1. Extract markdown content
     let markdown = {
         let txn = content_doc.transact();
         if let Some(contents) = txn.get_text("contents") {
             contents.get_string(&txn)
         } else {
-            return Ok(()); // No content, nothing to index
+            return Ok(());
         }
     };
-
-    // 2. Parse wikilinks
     let link_names = extract_wikilinks(&markdown);
     tracing::info!(
         "Doc {}: content length={}, wikilinks={:?}",
         source_uuid, markdown.len(), link_names
     );
+    index_content_into_folders_from_text(source_uuid, &markdown, &link_names, folder_docs)
 
-    // 3. Resolve link names to (target_uuid, folder_index) across all folder docs.
-    //    Each target UUID is resolved to the folder that contains it.
-    //    Priority: exact root match > case-insensitive full-path > basename match.
-    //    First folder match wins (folders searched in order).
-    let mut resolved: Vec<(String, usize)> = Vec::new(); // (target_uuid, folder_idx)
+}
 
-    for name in &link_names {
-        let mut found = false;
+/// Core indexing logic: resolves wikilinks against folder docs and updates backlinks_v0.
+/// Used by `reindex_all_backlinks` to avoid holding a content read lock while
+/// taking folder write locks (which deadlocks when content doc == folder doc).
+fn index_content_into_folders_from_text(
+    source_uuid: &str,
+    markdown: &str,
+    link_names: &[String],
+    folder_docs: &[&Doc],
+) -> anyhow::Result<()> {
+    // Resolve link names to (target_uuid, folder_index) across all folder docs.
+    let mut resolved: Vec<(String, usize)> = Vec::new();
+
+    for name in link_names {
         for (fi, folder_doc) in folder_docs.iter().enumerate() {
             let txn = folder_doc.transact();
             if let Some(filemeta) = txn.get_map("filemeta_v0") {
                 let resolved_uuids = resolve_links_to_uuids(&[name.clone()], &filemeta, &txn);
                 if let Some(uuid) = resolved_uuids.into_iter().next() {
                     resolved.push((uuid, fi));
-                    found = true;
-                    break; // first folder match wins
+                    break;
                 }
             }
-        }
-        if !found {
-            // Unresolvable — silently skip
         }
     }
 
@@ -260,22 +261,20 @@ pub fn index_content_into_folders(
         source_uuid, link_names.len(), resolved.len(), folder_docs.len()
     );
 
-    // 4. Group resolved targets by folder index
+    // Group resolved targets by folder index
     let mut targets_per_folder: Vec<HashSet<String>> = vec![HashSet::new(); folder_docs.len()];
     for (uuid, fi) in &resolved {
         targets_per_folder[*fi].insert(uuid.clone());
     }
 
-    // All resolved target UUIDs (for stale cleanup)
     let all_new_targets: HashSet<&str> = resolved.iter().map(|(u, _)| u.as_str()).collect();
 
-    // 5. Diff-update backlinks_v0 on each folder doc
+    // Diff-update backlinks_v0 on each folder doc
     for (fi, folder_doc) in folder_docs.iter().enumerate() {
         let new_targets = &targets_per_folder[fi];
         let mut txn = folder_doc.transact_mut_with("link-indexer");
         let backlinks = txn.get_or_insert_map("backlinks_v0");
 
-        // Add source to each new target's backlinks in this folder
         for target_uuid in new_targets {
             let current: Vec<String> = read_backlinks_array(&backlinks, &txn, target_uuid);
             if !current.contains(&source_uuid.to_string()) {
@@ -289,11 +288,10 @@ pub fn index_content_into_folders(
             }
         }
 
-        // Remove source from targets it no longer links to in this folder
         let all_keys: Vec<String> = backlinks.keys(&txn).map(|k| k.to_string()).collect();
         for key in all_keys {
             if all_new_targets.contains(key.as_str()) {
-                continue; // Still linked (possibly in another folder), skip
+                continue;
             }
             let current: Vec<String> = read_backlinks_array(&backlinks, &txn, &key);
             if current.contains(&source_uuid.to_string()) {
@@ -677,7 +675,8 @@ impl LinkIndexer {
                     } else {
                         // Content doc — index it
                         tracing::info!("Indexing content doc: {}", doc_id);
-                        match self.index_document(&doc_id, &docs) {
+                        let folder_doc_ids = find_all_folder_docs(&docs);
+                        match self.index_document(&doc_id, &docs, &folder_doc_ids) {
                             Ok(()) => tracing::info!("Successfully indexed: {}", doc_id),
                             Err(e) => tracing::error!("Failed to index {}: {:?}", doc_id, e),
                         }
@@ -695,39 +694,49 @@ impl LinkIndexer {
         &self,
         doc_id: &str,
         docs: &DashMap<String, DocWithSyncKv>,
+        folder_doc_ids: &[String],
     ) -> anyhow::Result<()> {
         let (_relay_id, doc_uuid) = parse_doc_id(doc_id)
             .ok_or_else(|| anyhow::anyhow!("Invalid doc_id format: {}", doc_id))?;
 
-        // Find all folder docs so we can resolve cross-folder links
-        let folder_doc_ids = find_all_folder_docs(docs);
         if folder_doc_ids.is_empty() {
             return Err(anyhow::anyhow!("No folder docs found for indexing"));
         }
 
-        let content_ref = docs
-            .get(doc_id)
-            .ok_or_else(|| anyhow::anyhow!("Content doc not found: {}", doc_id))?;
+        // Phase 1: Extract content text under a short-lived read lock.
+        // We must NOT hold a content read lock while taking folder write locks,
+        // because the content doc might also be a folder doc — holding read + write
+        // on the same std::sync::RwLock deadlocks.
+        let markdown = {
+            let content_ref = docs
+                .get(doc_id)
+                .ok_or_else(|| anyhow::anyhow!("Content doc not found: {}", doc_id))?;
+            let awareness = content_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            if let Some(contents) = txn.get_text("contents") {
+                contents.get_string(&txn)
+            } else {
+                return Ok(()); // No content, nothing to index
+            }
+        }; // content read lock + DashMap guard dropped here
 
-        // Collect refs to all folder docs (need to hold DashMap guards)
+        let link_names = extract_wikilinks(&markdown);
+        tracing::info!(
+            "Doc {}: content length={}, wikilinks={:?}",
+            doc_uuid, markdown.len(), link_names
+        );
+
+        // Phase 2: Take write locks on folder docs to resolve links and update backlinks.
         let folder_refs: Vec<_> = folder_doc_ids
             .iter()
             .filter_map(|id| docs.get(id))
             .collect();
-
-        // Get Y.Docs from DocWithSyncKv via awareness
-        let content_awareness = content_ref.awareness();
-        let content_guard = content_awareness.read().unwrap_or_else(|e| e.into_inner());
-
-        // Build awareness guards for all folder docs
-        let folder_awarnesses: Vec<_> = folder_refs
+        let folder_awarenesses: Vec<_> = folder_refs
             .iter()
             .map(|r| r.awareness())
             .collect();
-        // SAFETY: We acquire write locks on ALL folder docs simultaneously.
-        // This is safe because run_worker processes docs sequentially (single loop iteration).
-        // Do NOT parallelize index_document calls without introducing lock ordering.
-        let folder_guards: Vec<_> = folder_awarnesses
+        let folder_guards: Vec<_> = folder_awarenesses
             .iter()
             .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
             .collect();
@@ -736,7 +745,7 @@ impl LinkIndexer {
             .map(|g| &g.doc)
             .collect();
 
-        index_content_into_folders(doc_uuid, &content_guard.doc, &folder_doc_refs)
+        index_content_into_folders_from_text(doc_uuid, &markdown, &link_names, &folder_doc_refs)
     }
 
     /// Reindex all backlinks by scanning every loaded document.
@@ -752,9 +761,13 @@ impl LinkIndexer {
         let mut indexed = 0;
         let mut skipped = 0;
 
-        for entry in docs.iter() {
-            let doc_id = entry.key();
-            match self.index_document(doc_id, docs) {
+        // Pre-compute folder doc IDs once (avoids re-scanning on every iteration).
+        let folder_doc_ids = find_all_folder_docs(docs);
+        tracing::info!("Found {} folder docs for indexing", folder_doc_ids.len());
+
+        let doc_ids: Vec<String> = docs.iter().map(|e| e.key().clone()).collect();
+        for doc_id in &doc_ids {
+            match self.index_document(doc_id, docs, &folder_doc_ids) {
                 Ok(()) => indexed += 1,
                 Err(_) => skipped += 1, // Not all docs are content docs
             }
@@ -769,7 +782,6 @@ impl LinkIndexer {
         // Seed filemeta cache for all folder docs.
         // This prevents false renames on the first folder doc update after startup
         // (without a cached snapshot, detect_renames would have no baseline to diff against).
-        let folder_doc_ids = find_all_folder_docs(docs);
         for folder_doc_id in &folder_doc_ids {
             if let Some(doc_ref) = docs.get(folder_doc_id) {
                 let awareness = doc_ref.awareness();

@@ -897,28 +897,38 @@ impl Server {
         // immediately GCed since no clients are connected yet.
         let gc_was_enabled = self.doc_gc.swap(false, std::sync::atomic::Ordering::Relaxed);
 
-        let mut loaded = 0;
-        let mut failed = 0;
+        let loaded = std::sync::atomic::AtomicUsize::new(0);
+        let failed = std::sync::atomic::AtomicUsize::new(0);
+        let loaded_ref = &loaded;
+        let failed_ref = &failed;
 
-        for (i, doc_id) in doc_ids.iter().enumerate() {
-            if self.docs.contains_key(doc_id) {
-                loaded += 1;
-                continue;
-            }
+        // Load docs in parallel — each load_doc is an R2 round-trip (~200ms),
+        // so sequential loading of 300+ docs takes minutes. With concurrency
+        // of 32 it drops to seconds.
+        futures::stream::iter(doc_ids.iter().enumerate())
+            .for_each_concurrent(32, |(_, doc_id)| async move {
+                if self.docs.contains_key(doc_id) {
+                    loaded_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
 
-            match self.load_doc(doc_id, None).await {
-                Ok(()) => {
-                    loaded += 1;
-                    if (i + 1) % 50 == 0 || i + 1 == total {
-                        tracing::info!("  Loaded {}/{} documents", i + 1, total);
+                match self.load_doc(doc_id, None).await {
+                    Ok(()) => {
+                        let n = loaded_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if n % 50 == 0 || n == total {
+                            tracing::info!("  Loaded {}/{} documents", n, total);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("  Failed to load doc {}: {:?}", doc_id, e);
+                        failed_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("  Failed to load doc {}: {:?}", doc_id, e);
-                    failed += 1;
-                }
-            }
-        }
+            })
+            .await;
+
+        let loaded = loaded.load(std::sync::atomic::Ordering::Relaxed);
+        let failed = failed.load(std::sync::atomic::Ordering::Relaxed);
 
         // Restore GC setting
         self.doc_gc.store(gc_was_enabled, std::sync::atomic::Ordering::Relaxed);

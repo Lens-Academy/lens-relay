@@ -1,0 +1,10 @@
+# Staging config - uses lens-relay-dev R2 bucket, no auth
+[server]
+host = "0.0.0.0"
+port = 8390
+
+[store]
+type = "cloudflare"
+account_id = "a6d884b270b09f11bd79a048e42f88d2"
+bucket = "lens-relay-dev"
+prefix = ""
