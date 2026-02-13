@@ -9,6 +9,7 @@ use yrs::{GetString, ReadTxn, Text, Transact, WriteTxn};
 /// collaborators can review and accept/reject the AI's proposed change.
 pub fn execute(
     server: &Arc<Server>,
+    session_id: &str,
     arguments: &Value,
 ) -> Result<String, String> {
     // 1. Parse parameters
@@ -26,11 +27,6 @@ pub fn execute(
         .get("new_string")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: new_string".to_string())?;
-
-    let session_id = arguments
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing required parameter: session_id. Pass the session value from the read tool's response.".to_string())?;
 
     // 2. Resolve document path to doc_id
     let doc_info = server
@@ -249,7 +245,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Hello.md", "old_string": "hello", "new_string": "world", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Hello.md", "old_string": "hello", "new_string": "world"}),
         );
 
         assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
@@ -293,7 +290,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Doc.md", "old_string": "some", "new_string": "any", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "some", "new_string": "any"}),
         );
 
         assert!(result.is_err(), "should reject edit on unread doc");
@@ -315,7 +313,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Doc.md", "old_string": "nonexistent", "new_string": "replacement", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "nonexistent", "new_string": "replacement"}),
         );
 
         assert!(result.is_err(), "should reject when old_string not found");
@@ -337,7 +336,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Cats.md", "old_string": "the cat", "new_string": "a dog", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Cats.md", "old_string": "the cat", "new_string": "a dog"}),
         );
 
         assert!(result.is_err(), "should reject when old_string is not unique");
@@ -356,7 +356,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Nonexistent/Doc.md", "old_string": "hello", "new_string": "world", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Nonexistent/Doc.md", "old_string": "hello", "new_string": "world"}),
         );
 
         assert!(result.is_err(), "should reject when document not found");
@@ -379,7 +380,8 @@ mod tests {
         // Missing old_string
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Doc.md", "new_string": "world", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "new_string": "world"}),
         );
         assert!(result.is_err(), "missing old_string should error");
         assert!(
@@ -390,7 +392,8 @@ mod tests {
         // Missing new_string
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Doc.md", "old_string": "content", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "content"}),
         );
         assert!(result.is_err(), "missing new_string should error");
         assert!(
@@ -401,7 +404,8 @@ mod tests {
         // Missing file_path
         let result = execute(
             &server,
-            &json!({"old_string": "content", "new_string": "replacement", "session_id": sid}),
+            &sid,
+            &json!({"old_string": "content", "new_string": "replacement"}),
         );
         assert!(result.is_err(), "missing file_path should error");
         assert!(
@@ -420,7 +424,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Lines.md", "old_string": "line 2", "new_string": "modified line 2", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Lines.md", "old_string": "line 2", "new_string": "modified line 2"}),
         );
 
         assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
@@ -450,7 +455,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Multi.md", "old_string": "line 2\nline 3", "new_string": "replaced lines", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Multi.md", "old_string": "line 2\nline 3", "new_string": "replaced lines"}),
         );
 
         assert!(result.is_ok(), "multiline edit should succeed, got: {:?}", result);
@@ -484,7 +490,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Del.md", "old_string": "delete me", "new_string": "", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Del.md", "old_string": "delete me", "new_string": ""}),
         );
 
         assert!(result.is_ok(), "deletion edit should succeed, got: {:?}", result);
@@ -514,7 +521,8 @@ mod tests {
 
         let result = execute(
             &server,
-            &json!({"file_path": "Lens/Msg.md", "old_string": "hello", "new_string": "goodbye", "session_id": sid}),
+            &sid,
+            &json!({"file_path": "Lens/Msg.md", "old_string": "hello", "new_string": "goodbye"}),
         );
 
         assert!(result.is_ok(), "edit should succeed");
@@ -531,46 +539,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn edit_missing_session_id_returns_error() {
-        let server = build_test_server(&[
-            ("/Doc.md", "uuid-doc", "content"),
-        ]);
-
-        let result = execute(
-            &server,
-            &json!({"file_path": "Lens/Doc.md", "old_string": "content", "new_string": "new"}),
-        );
-
-        assert!(result.is_err(), "missing session_id should error");
-        assert!(
-            result.unwrap_err().contains("session_id"),
-            "Error should mention session_id"
-        );
-    }
-
-    #[test]
-    fn edit_invalid_session_id_returns_error() {
-        let server = build_test_server(&[
-            ("/Doc.md", "uuid-doc", "content"),
-        ]);
-
-        let result = execute(
-            &server,
-            &json!({
-                "file_path": "Lens/Doc.md",
-                "old_string": "content",
-                "new_string": "new",
-                "session_id": "nonexistent-session-id"
-            }),
-        );
-
-        assert!(result.is_err(), "invalid session_id should error");
-        let err = result.unwrap_err();
-        assert!(
-            err.to_lowercase().contains("session"),
-            "Error should mention session: {}",
-            err
-        );
-    }
 }

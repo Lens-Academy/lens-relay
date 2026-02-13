@@ -85,7 +85,7 @@ impl SessionManager {
     /// Remove sessions older than `max_age`.
     pub fn cleanup_stale(&self, max_age: std::time::Duration) {
         let cutoff = Instant::now() - max_age;
-        self.sessions.retain(|_, session| session.created_at > cutoff);
+        self.sessions.retain(|_, session| session.last_activity > cutoff);
     }
 }
 

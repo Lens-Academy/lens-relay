@@ -48,7 +48,7 @@ pub fn execute(server: &Arc<Server>, session_id: &str, arguments: &Value) -> Res
         session.read_docs.insert(doc_info.doc_id.clone());
     }
 
-    Ok(format_cat_n_with_session(&content, offset, limit, session_id))
+    Ok(format_cat_n(&content, offset, limit))
 }
 
 /// Format content as cat -n output with 6-char right-aligned line numbers.
@@ -76,12 +76,6 @@ fn format_cat_n(content: &str, offset: usize, limit: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Format content as cat -n output with session ID appended.
-fn format_cat_n_with_session(content: &str, offset: usize, limit: usize, session_id: &str) -> String {
-    let formatted = format_cat_n(content, offset, limit);
-    format!("{}\n\n[session: {}]", formatted, session_id)
 }
 
 #[cfg(test)]
@@ -137,17 +131,4 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[test]
-    fn format_cat_n_with_session_appends_session_line() {
-        let content = "hello\nworld";
-        let result = format_cat_n_with_session(content, 0, 2000, "test-session-abc");
-        assert!(result.ends_with("\n\n[session: test-session-abc]"));
-        assert!(result.starts_with("     1\thello\n     2\tworld"));
-    }
-
-    #[test]
-    fn format_cat_n_with_session_empty_content() {
-        let result = format_cat_n_with_session("", 0, 2000, "sid-123");
-        assert_eq!(result, "\n\n[session: sid-123]");
-    }
 }

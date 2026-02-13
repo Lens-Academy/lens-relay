@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_five_tools() {
+    fn tools_list_returns_six_tools() {
         let server = test_server();
         let req = make_request(json!(3), "tools/list", None);
 
@@ -275,13 +275,14 @@ mod tests {
         let result = resp.result.unwrap();
         assert!(result["tools"].is_array());
         let tools_arr = result["tools"].as_array().unwrap();
-        assert_eq!(tools_arr.len(), 5);
+        assert_eq!(tools_arr.len(), 6);
 
         // Verify tool names
         let names: Vec<&str> = tools_arr
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
+        assert!(names.contains(&"create_session"));
         assert!(names.contains(&"read"));
         assert!(names.contains(&"glob"));
         assert!(names.contains(&"get_links"));
@@ -319,7 +320,7 @@ mod tests {
         let req = make_request(
             json!(5),
             "tools/call",
-            Some(json!({"name": "nonexistent_tool", "arguments": {}})),
+            Some(json!({"name": "nonexistent_tool", "arguments": {"session_id": &sid}})),
         );
 
         let (resp, _) = dispatch_request(&server, Some(&sid), &req);
@@ -458,7 +459,7 @@ mod tests {
         let req = make_request(
             json!(10),
             "tools/call",
-            Some(json!({"name": "read", "arguments": {"file_path": "Lens/TestDoc.md"}})),
+            Some(json!({"name": "read", "arguments": {"file_path": "Lens/TestDoc.md", "session_id": &sid}})),
         );
         let (resp, _) = dispatch_request(&server, Some(&sid), &req);
         assert!(resp.error.is_none(), "read should succeed");
@@ -523,40 +524,46 @@ mod tests {
         }
         server.docs().insert(content_doc_id.clone(), dwskv);
 
-        // Create and initialize a session (session 1 — used for read)
-        let sid = server
+        // Create and initialize transport session
+        let transport_sid = server
             .mcp_sessions
             .create_session("2025-03-26".into(), None);
-        server.mcp_sessions.mark_initialized(&sid);
+        server.mcp_sessions.mark_initialized(&transport_sid);
 
-        // Step 1: Call read tool
+        // Step 1: Call create_session to get a session_id
+        let create_req = make_request(
+            json!(19),
+            "tools/call",
+            Some(json!({"name": "create_session", "arguments": {}})),
+        );
+        let (create_resp, _) = dispatch_request(&server, Some(&transport_sid), &create_req);
+        assert!(create_resp.error.is_none(), "create_session should succeed");
+        let create_result = create_resp.result.unwrap();
+        let session_id = create_result["content"][0]["text"].as_str().unwrap();
+
+        // Step 2: Call read tool with session_id argument
         let read_req = make_request(
             json!(20),
             "tools/call",
-            Some(json!({"name": "read", "arguments": {"file_path": "Lens/EditTest.md"}})),
+            Some(json!({"name": "read", "arguments": {"file_path": "Lens/EditTest.md", "session_id": session_id}})),
         );
-        let (read_resp, _) = dispatch_request(&server, Some(&sid), &read_req);
+        let (read_resp, _) = dispatch_request(&server, Some(&transport_sid), &read_req);
         assert!(read_resp.error.is_none(), "read should succeed");
 
-        // Extract session ID from response text
+        // Verify read response does NOT contain [session: ...] anymore
         let read_result = read_resp.result.unwrap();
         let read_text = read_result["content"][0]["text"].as_str().unwrap();
         assert!(
-            read_text.contains("[session: "),
-            "read response should contain session ID: {}",
+            !read_text.contains("[session: "),
+            "read response should NOT contain session ID: {}",
             read_text
         );
-        let session_token = read_text
-            .rsplit("[session: ")
-            .next()
-            .unwrap()
-            .trim_end_matches(']');
 
-        // Step 2: Call edit tool with extracted session_id, using a DIFFERENT transport session
-        let sid2 = server
+        // Step 3: Call edit tool with same session_id, using a DIFFERENT transport session
+        let transport_sid2 = server
             .mcp_sessions
             .create_session("2025-03-26".into(), None);
-        server.mcp_sessions.mark_initialized(&sid2);
+        server.mcp_sessions.mark_initialized(&transport_sid2);
 
         let edit_req = make_request(
             json!(21),
@@ -567,12 +574,12 @@ mod tests {
                     "file_path": "Lens/EditTest.md",
                     "old_string": "hello",
                     "new_string": "goodbye",
-                    "session_id": session_token
+                    "session_id": session_id
                 }
             })),
         );
 
-        let (edit_resp, _) = dispatch_request(&server, Some(&sid2), &edit_req);
+        let (edit_resp, _) = dispatch_request(&server, Some(&transport_sid2), &edit_req);
         assert!(edit_resp.error.is_none(), "edit should succeed at protocol level");
 
         let edit_result = edit_resp.result.unwrap();
@@ -580,6 +587,37 @@ mod tests {
             edit_result["isError"], false,
             "edit tool should succeed: {}",
             edit_result["content"][0]["text"]
+        );
+    }
+
+    #[test]
+    fn create_session_returns_session_id() {
+        let server = test_server();
+
+        // Create and initialize transport session
+        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        server.mcp_sessions.mark_initialized(&sid);
+
+        let req = make_request(
+            json!(30),
+            "tools/call",
+            Some(json!({"name": "create_session", "arguments": {}})),
+        );
+
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req);
+        assert!(resp.error.is_none(), "create_session should succeed");
+
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], false);
+
+        // The returned session_id should be the transport session_id
+        let returned_id = result["content"][0]["text"].as_str().unwrap();
+        assert_eq!(returned_id, sid, "create_session should return the transport session_id");
+
+        // The returned session_id should be valid (exist in SessionManager)
+        assert!(
+            server.mcp_sessions.get_session(returned_id).is_some(),
+            "returned session_id should exist in SessionManager"
         );
     }
 }

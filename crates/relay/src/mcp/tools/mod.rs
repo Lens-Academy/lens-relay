@@ -13,11 +13,21 @@ use std::sync::Arc;
 pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
-            "name": "read",
-            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. The response includes a [session: ...] value — pass this to the edit tool's session_id parameter when editing.",
+            "name": "create_session",
+            "description": "Create a session for this conversation. Call this once before using other tools. Returns a session_id that must be passed to all subsequent tool calls.",
             "inputSchema": {
                 "type": "object",
-                "required": ["file_path"],
+                "required": [],
+                "additionalProperties": false,
+                "properties": {}
+            }
+        }),
+        json!({
+            "name": "read",
+            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["file_path", "session_id"],
                 "additionalProperties": false,
                 "properties": {
                     "file_path": {
@@ -31,6 +41,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "limit": {
                         "type": "number",
                         "description": "The number of lines to read. Only provide if the document is too large to read at once."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
                     }
                 }
             }
@@ -40,7 +54,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "description": "Fast document pattern matching. Returns matching document paths sorted alphabetically. Use to discover documents in the knowledge base.",
             "inputSchema": {
                 "type": "object",
-                "required": ["pattern"],
+                "required": ["pattern", "session_id"],
                 "additionalProperties": false,
                 "properties": {
                     "pattern": {
@@ -50,6 +64,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "path": {
                         "type": "string",
                         "description": "Folder to scope the search to (e.g. 'Lens', 'Lens Edu'). If not specified, searches all folders."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
                     }
                 }
             }
@@ -59,12 +77,16 @@ pub fn tool_definitions() -> Vec<Value> {
             "description": "Get backlinks and forward links for a document. Returns document paths that link TO this document (backlinks) and paths this document links TO (forward links).",
             "inputSchema": {
                 "type": "object",
-                "required": ["file_path"],
+                "required": ["file_path", "session_id"],
                 "additionalProperties": false,
                 "properties": {
                     "file_path": {
                         "type": "string",
                         "description": "Path to the document (e.g. 'Lens/Photosynthesis.md')"
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
                     }
                 }
             }
@@ -74,7 +96,7 @@ pub fn tool_definitions() -> Vec<Value> {
             "description": "Search document contents using regex patterns. Returns matching lines with context. Mirrors ripgrep output format.",
             "inputSchema": {
                 "type": "object",
-                "required": ["pattern"],
+                "required": ["pattern", "session_id"],
                 "additionalProperties": false,
                 "properties": {
                     "pattern": {
@@ -109,6 +131,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "head_limit": {
                         "type": "number",
                         "description": "Limit output to first N entries. In files_with_matches/count mode limits files, in content mode limits output lines."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
                     }
                 }
             }
@@ -135,7 +161,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "The session value from the read tool's response. Required to verify the document was read before editing."
+                        "description": "Session ID from create_session. Required for all tool calls."
                     }
                 }
             }
@@ -144,7 +170,22 @@ pub fn tool_definitions() -> Vec<Value> {
 }
 
 /// Dispatch a tool call to the correct handler and wrap result in MCP CallToolResult format.
-pub fn dispatch_tool(server: &Arc<Server>, session_id: &str, name: &str, arguments: &Value) -> Value {
+pub fn dispatch_tool(server: &Arc<Server>, transport_session_id: &str, name: &str, arguments: &Value) -> Value {
+    // create_session returns the transport session_id — no argument validation needed
+    if name == "create_session" {
+        return tool_success(transport_session_id);
+    }
+
+    // All other tools require session_id argument and validation
+    let session_id = match arguments.get("session_id").and_then(|v| v.as_str()) {
+        Some(sid) => sid,
+        None => return tool_error("Missing required parameter: session_id. Call create_session first and pass the returned session_id."),
+    };
+
+    if server.mcp_sessions.get_session(session_id).is_none() {
+        return tool_error("Invalid session_id. Call create_session to get a valid session.");
+    }
+
     // Lazy rebuild: if the resolver has no entries but docs exist, trigger a rebuild.
     // This handles the case where docs were created after server startup (e.g. local dev).
     if server.doc_resolver().all_paths().is_empty() {
@@ -168,7 +209,7 @@ pub fn dispatch_tool(server: &Arc<Server>, session_id: &str, name: &str, argumen
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "edit" => match edit::execute(server, arguments) {
+        "edit" => match edit::execute(server, session_id, arguments) {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
