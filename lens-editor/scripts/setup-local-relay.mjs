@@ -127,6 +127,33 @@ Check out [[Welcome]] for an overview, or [[Getting Started]] for setup instruct
 - [ ] Test document deletion
 `,
       },
+      {
+        path: '/Projects',
+        id: 'c0000011-0000-4000-8000-000000000011',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Projects/Roadmap.md',
+        id: 'c0000007-0000-4000-8000-000000000007',
+        type: 'markdown',
+        version: 0,
+        content: `# Roadmap
+
+This is a nested document in the Projects folder, a sibling to Notes.
+
+## Milestones
+
+- [ ] Wikilink autocomplete with relative paths
+- [ ] Cross-folder link resolution
+- [ ] Document search improvements
+
+## Related
+
+See [[Notes/Ideas]] for brainstorming and [[Welcome]] for an overview.
+`,
+      },
     ],
   },
   {

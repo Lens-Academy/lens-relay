@@ -14,7 +14,6 @@ import { ConnectedDiscussionPanel } from '../DiscussionPanel';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { findPathByUuid } from '../../lib/uuid-to-path';
-import { getFolderNameFromPath } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
 
 /**
@@ -25,17 +24,15 @@ import { RELAY_ID } from '../../App';
 export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
-  const { metadata, folderNames, onNavigate } = useNavigation();
+  const { metadata, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
 
-  // Derive current folder from doc ID for scoped wikilink resolution
-  const currentFolder = useMemo(() => {
+  // Derive current file path from doc ID for wikilink resolution
+  const currentFilePath = useMemo(() => {
     if (!metadata || !Object.keys(metadata).length) return undefined;
     const uuid = currentDocId.slice(RELAY_ID.length + 1);
-    const path = findPathByUuid(uuid, metadata);
-    if (!path) return undefined;
-    return getFolderNameFromPath(path, folderNames) ?? undefined;
-  }, [currentDocId, metadata, folderNames]);
+    return findPathByUuid(uuid, metadata) ?? undefined;
+  }, [currentDocId, metadata]);
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -77,7 +74,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onDocChange={handleDocChange}
               onNavigate={onNavigate}
               metadata={metadata}
-              currentFolder={currentFolder}
+              currentFilePath={currentFilePath}
             />
           </div>
         </div>

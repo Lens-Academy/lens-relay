@@ -45,7 +45,7 @@ interface EditorProps {
   onDocChange?: () => void;
   onNavigate?: (docId: string) => void;
   metadata?: FolderMetadata;
-  currentFolder?: string;
+  currentFilePath?: string;
 }
 
 /**
@@ -86,7 +86,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metadata, currentFolder }: EditorProps) {
+export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metadata, currentFilePath }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -101,8 +101,13 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
   const metadataRef = useRef<FolderMetadata | null>(null);
   metadataRef.current = metadata ?? null;
 
-  // Stable getter function for autocomplete extension
+  // Store currentFilePath in ref for autocomplete getter (avoids stale closures)
+  const currentFilePathRef = useRef<string | null>(null);
+  currentFilePathRef.current = currentFilePath ?? null;
+
+  // Stable getter functions for autocomplete extension
   const getMetadata = useCallback(() => metadataRef.current, []);
+  const getCurrentFilePath = useCallback(() => currentFilePathRef.current, []);
 
   // Stable onClose callback to prevent effect re-runs
   const handleCloseContextMenu = useCallback(() => {
@@ -142,17 +147,17 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
 
     return {
       onClick: (pageName: string) => {
-        const resolved = resolvePageName(pageName, metadata, currentFolder);
+        const resolved = resolvePageName(pageName, metadata, currentFilePath);
         if (resolved) {
           onNavigate(`${RELAY_ID}-${resolved.docId}`);
         }
         // Unresolved wikilinks do nothing on click (document creation deferred)
       },
       isResolved: (pageName: string) => {
-        return resolvePageName(pageName, metadata, currentFolder) !== null;
+        return resolvePageName(pageName, metadata, currentFilePath) !== null;
       },
     };
-  }, [metadata, onNavigate, currentFolder]);
+  }, [metadata, onNavigate, currentFilePath]);
 
   // Update the module-scoped wikilink context when it changes
   // This is separate from the editor creation effect to avoid recreating the editor
@@ -225,7 +230,7 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
         livePreview(wikilinkContextRef.current),
         listIndentKeymap,
         yCollab(ytext, provider.awareness, { undoManager }),
-        wikilinkAutocomplete(getMetadata),
+        wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         remoteCursorTheme,
         criticMarkupExtension(),
         EditorView.lineWrapping,

@@ -22,15 +22,14 @@ const testMetadata: FolderMetadata = {
  * Helper to get completions at a position by invoking the real completion source.
  * Creates real EditorState and CompletionContext, then calls the source function.
  */
-function getCompletions(content: string, pos: number, metadata: FolderMetadata | null) {
+function getCompletions(content: string, pos: number, metadata: FolderMetadata | null, currentFilePath?: string) {
   const state = EditorState.create({
     doc: content,
     selection: { anchor: pos },
     extensions: [markdown()],
   });
-
   const context = new CompletionContext(state, pos, false);
-  const source = createWikilinkCompletionSource(() => metadata);
+  const source = createWikilinkCompletionSource(() => metadata, () => currentFilePath ?? null);
   return source(context);
 }
 
@@ -70,7 +69,7 @@ describe('wikilinkAutocomplete', () => {
     const labels = result!.options.map(o => o.label);
     expect(labels).toContain('Notes');
     expect(labels).toContain('Tasks');
-    expect(labels).toContain('README');
+    expect(labels).toContain('Projects/README');
     // Image should not appear
     expect(labels.every(l => l !== 'image')).toBe(true);
   });
@@ -86,15 +85,15 @@ describe('wikilinkAutocomplete', () => {
     expect(notesOption!.apply).toBe('Notes]]');
   });
 
-  it('omits closing brackets in apply when already present', () => {
+  it('uses apply function to move cursor past ]] when already present', () => {
     // ]] exists after cursor (from closeBrackets auto-completing [[ -> [[]])
     const result = getCompletions('See [[No]]', 8, testMetadata);
 
     expect(result).not.toBeNull();
     const notesOption = result!.options.find(o => o.label === 'Notes');
     expect(notesOption).toBeDefined();
-    // apply should NOT include ]] since it already exists
-    expect(notesOption!.apply).toBe('Notes');
+    // apply should be a function that replaces through ]] and positions cursor after
+    expect(typeof notesOption!.apply).toBe('function');
   });
 
   it('boosts prefix matches over substring matches', () => {
@@ -134,6 +133,56 @@ describe('wikilinkAutocomplete', () => {
     expect(result).not.toBeNull();
     // "See " is 4 chars, [[ is 2 chars, so query starts at position 6
     expect(result!.from).toBe(6);
+  });
+});
+
+describe('relative path suggestions', () => {
+  const multiFolderMetadata: FolderMetadata = {
+    '/Relay Folder 1/Welcome.md': { id: 'w1', type: 'markdown', version: 0 },
+    '/Relay Folder 1/Notes/Ideas.md': { id: 'i1', type: 'markdown', version: 0 },
+    '/Relay Folder 1/Notes/Plans.md': { id: 'p1', type: 'markdown', version: 0 },
+    '/Relay Folder 2/Welcome.md': { id: 'w2', type: 'markdown', version: 0 },
+    '/Relay Folder 2/Archive/Old.md': { id: 'o2', type: 'markdown', version: 0 },
+  };
+
+  it('suggests sibling file as basename', () => {
+    const result = getCompletions('See [[', 6, multiFolderMetadata, '/Relay Folder 1/Notes/Ideas.md');
+    const labels = result!.options.map(o => o.label);
+    expect(labels).toContain('Plans');
+  });
+
+  it('suggests ../ for parent directory files', () => {
+    const result = getCompletions('See [[', 6, multiFolderMetadata, '/Relay Folder 1/Notes/Ideas.md');
+    const labels = result!.options.map(o => o.label);
+    expect(labels).toContain('../Welcome');
+  });
+
+  it('suggests ../../ for cross-folder files', () => {
+    const result = getCompletions('See [[', 6, multiFolderMetadata, '/Relay Folder 1/Notes/Ideas.md');
+    const labels = result!.options.map(o => o.label);
+    expect(labels).toContain('../../Relay Folder 2/Welcome');
+    expect(labels).toContain('../../Relay Folder 2/Archive/Old');
+  });
+
+  it('shows absolute paths when no currentFilePath', () => {
+    const result = getCompletions('See [[', 6, multiFolderMetadata);
+    const labels = result!.options.map(o => o.label);
+    expect(labels).toContain('Relay Folder 1/Welcome');
+    expect(labels).toContain('Relay Folder 1/Notes/Ideas');
+  });
+
+  it('filters by query on relative paths', () => {
+    const result = getCompletions('See [[../', 9, multiFolderMetadata, '/Relay Folder 1/Notes/Ideas.md');
+    const labels = result!.options.map(o => o.label);
+    expect(labels).toContain('../Welcome');
+    expect(labels).not.toContain('Plans');
+  });
+
+  it('uses relative path in apply string', () => {
+    const result = getCompletions('See [[', 6, multiFolderMetadata, '/Relay Folder 1/Notes/Ideas.md');
+    const option = result!.options.find(o => o.label === '../Welcome');
+    expect(option).toBeDefined();
+    expect(option!.apply).toBe('../Welcome]]');
   });
 });
 

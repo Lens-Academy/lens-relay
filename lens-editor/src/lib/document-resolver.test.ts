@@ -1,231 +1,156 @@
 import { describe, it, expect } from 'vitest';
-import { resolvePageName, generateNewDocPath } from './document-resolver';
+import { resolvePageName, resolveRelative, computeRelativePath, generateNewDocPath } from './document-resolver';
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
-import nestedHierarchy from '../test/fixtures/folder-metadata/nested-hierarchy.json';
-import edgeCases from '../test/fixtures/folder-metadata/edge-cases.json';
-
-// Type assertion for JSON imports
-const nestedMetadata = nestedHierarchy as FolderMetadata;
-const edgeCasesMetadata = edgeCases as FolderMetadata;
 
 describe('resolvePageName', () => {
-  describe('with nested hierarchy fixture', () => {
+  const metadata: FolderMetadata = {
+    '/RF1/Projects': { id: 'f-proj', type: 'folder', version: 0 },
+    '/RF1/Projects/Roadmap.md': { id: 'doc-roadmap', type: 'markdown', version: 0 },
+    '/RF1/Projects/Plan.md': { id: 'doc-plan', type: 'markdown', version: 0 },
+    '/RF1/Notes/Ideas.md': { id: 'doc-ideas', type: 'markdown', version: 0 },
+    '/RF1/Welcome.md': { id: 'doc-welcome-1', type: 'markdown', version: 0 },
+    '/RF2/Welcome.md': { id: 'doc-welcome-2', type: 'markdown', version: 0 },
+    '/RF2/Course Notes.md': { id: 'doc-course', type: 'markdown', version: 0 },
+  };
+
+  describe('relative resolution (priority 1)', () => {
+    it('resolves sibling file', () => {
+      const result = resolvePageName('Plan', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-plan');
+    });
+
+    it('resolves ../ to parent directory', () => {
+      const result = resolvePageName('../Welcome', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-welcome-1');
+    });
+
+    it('resolves ../Dir/File cousin path', () => {
+      const result = resolvePageName('../Notes/Ideas', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-ideas');
+    });
+
+    it('resolves cross-folder via ../../', () => {
+      const result = resolvePageName('../../RF2/Course Notes', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-course');
+    });
+
+    it('is case-insensitive', () => {
+      const result = resolvePageName('plan', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-plan');
+    });
+  });
+
+  describe('absolute resolution (priority 2)', () => {
+    it('resolves full path from root', () => {
+      // Relative: /RF1/Projects/RF1/Notes/Ideas.md → not found
+      // Absolute: /RF1/Notes/Ideas.md → found
+      const result = resolvePageName('RF1/Notes/Ideas', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-ideas');
+    });
+
+    it('resolves when no currentFilePath', () => {
+      const result = resolvePageName('RF1/Welcome', metadata);
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-welcome-1');
+    });
+
+    it('is case-insensitive', () => {
+      const result = resolvePageName('rf1/welcome', metadata);
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-welcome-1');
+    });
+  });
+
+  describe('relative takes priority over absolute', () => {
+    it('prefers relative match when both could match', () => {
+      const result = resolvePageName('Plan', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result!.docId).toBe('doc-plan');
+    });
+
+    it('falls through to absolute when relative misses', () => {
+      const result = resolvePageName('RF2/Welcome', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result!.docId).toBe('doc-welcome-2');
+    });
+  });
+
+  describe('resolution failure', () => {
+    it('returns null when not found anywhere', () => {
+      expect(resolvePageName('NonExistent', metadata, '/RF1/Projects/Roadmap.md')).toBeNull();
+    });
+
+    it('returns null for folder entries', () => {
+      expect(resolvePageName('Projects', metadata, '/RF1/Welcome.md')).toBeNull();
+    });
+
+    it('returns null for basename-only without currentFilePath', () => {
+      // "Plan" absolute → /Plan.md → not found
+      expect(resolvePageName('Plan', metadata)).toBeNull();
+    });
+  });
+
+  describe('single-folder metadata (no folder prefix)', () => {
+    const simpleMetadata: FolderMetadata = {
+      '/My Page.md': { id: 'doc-1', type: 'markdown', version: 0 },
+      '/Existing Page.md': { id: 'doc-2', type: 'markdown', version: 0 },
+    };
+
+    it('resolves via absolute path', () => {
+      const result = resolvePageName('My Page', simpleMetadata);
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe('doc-1');
+    });
+
     it('returns null for non-existent page', () => {
-      expect(resolvePageName('NonExistent', nestedMetadata)).toBeNull();
-    });
-
-    it('matches exact filename without extension', () => {
-      const result = resolvePageName('Daily Notes', nestedMetadata);
-
-      expect(result).not.toBeNull();
-      expect(result!.docId).toBe(nestedMetadata['/Daily Notes.md'].id);
-      expect(result!.path).toBe('/Daily Notes.md');
-    });
-
-    it('matches case-insensitively', () => {
-      const result = resolvePageName('daily notes', nestedMetadata);
-
-      expect(result!.docId).toBe(nestedMetadata['/Daily Notes.md'].id);
-    });
-
-    it('matches files in subdirectories', () => {
-      const result = resolvePageName('README', nestedMetadata);
-
-      expect(result!.docId).toBe(nestedMetadata['/Projects/Alpha/README.md'].id);
-      expect(result!.path).toBe('/Projects/Alpha/README.md');
-    });
-
-    it('matches files in deeply nested folders', () => {
-      const result = resolvePageName('Notes', nestedMetadata);
-
-      expect(result!.docId).toBe(nestedMetadata['/Projects/Beta/Notes.md'].id);
-      expect(result!.path).toBe('/Projects/Beta/Notes.md');
-    });
-
-    it('ignores folders', () => {
-      expect(resolvePageName('Archive', nestedMetadata)).toBeNull();
-      expect(resolvePageName('Projects', nestedMetadata)).toBeNull();
-    });
-
-    it('resolves exact path wikilink', () => {
-      const result = resolvePageName('Projects/Alpha/README', nestedMetadata);
-      expect(result).not.toBeNull();
-      expect(result!.docId).toBe(nestedMetadata['/Projects/Alpha/README.md'].id);
-      expect(result!.path).toBe('/Projects/Alpha/README.md');
-    });
-
-    it('resolves case-insensitive path wikilink', () => {
-      const result = resolvePageName('projects/alpha/readme', nestedMetadata);
-      expect(result).not.toBeNull();
-      expect(result!.docId).toBe(nestedMetadata['/Projects/Alpha/README.md'].id);
-    });
-
-    it('prefers exact path over basename match', () => {
-      // "Projects/Beta/Notes" should resolve to /Projects/Beta/Notes.md
-      // not just any file named "Notes" found by basename
-      const result = resolvePageName('Projects/Beta/Notes', nestedMetadata);
-      expect(result!.path).toBe('/Projects/Beta/Notes.md');
-    });
-
-    it('still resolves basename when no path match', () => {
-      // Existing behavior must not regress
-      const result = resolvePageName('README', nestedMetadata);
-      expect(result).not.toBeNull();
-      expect(result!.path).toBe('/Projects/Alpha/README.md');
+      expect(resolvePageName('NonExistent', simpleMetadata)).toBeNull();
     });
   });
+});
 
-  describe('with edge cases fixture', () => {
-    it('matches files with special characters in name', () => {
-      const result = resolvePageName('Special Characters !@#$', edgeCasesMetadata);
-
-      expect(result).not.toBeNull();
-      expect(result!.docId).toBe(edgeCasesMetadata['/Special Characters !@#$.md'].id);
-    });
-
-    it('matches files in deeply nested paths', () => {
-      const result = resolvePageName('File', edgeCasesMetadata);
-
-      expect(result!.docId).toBe(edgeCasesMetadata['/Deep/Nested/Path/File.md'].id);
-      expect(result!.path).toBe('/Deep/Nested/Path/File.md');
-    });
-
-    it('handles case variations (uppercase file)', () => {
-      const result = resolvePageName('uppercase', edgeCasesMetadata);
-
-      expect(result!.docId).toBe(edgeCasesMetadata['/UPPERCASE.md'].id);
-    });
-
-    it('handles case variations (lowercase file)', () => {
-      const result = resolvePageName('LOWERCASE', edgeCasesMetadata);
-
-      expect(result!.docId).toBe(edgeCasesMetadata['/lowercase.md'].id);
-    });
-
-    it('ignores non-markdown files', () => {
-      expect(resolvePageName('screenshot-1234567890', edgeCasesMetadata)).toBeNull();
-    });
-
-    it('ignores empty folders', () => {
-      expect(resolvePageName('Empty Folder', edgeCasesMetadata)).toBeNull();
-    });
+describe('resolveRelative', () => {
+  it('resolves sibling file', () => {
+    expect(resolveRelative('/RF1/Projects/Roadmap.md', 'Plan'))
+      .toBe('/RF1/Projects/Plan.md');
   });
 
-  describe('folder-prefixed paths (multi-folder)', () => {
-    // Simulates metadata from mergeMetadata() which prefixes paths with folder name
-    const prefixedMetadata: FolderMetadata = {
-      '/Relay Folder 1/Notes': { id: 'folder-notes', type: 'folder', version: 0 },
-      '/Relay Folder 1/Welcome.md': { id: 'doc-welcome-1', type: 'markdown', version: 0 },
-      '/Relay Folder 1/Notes/Ideas.md': { id: 'doc-ideas-1', type: 'markdown', version: 0 },
-      '/Relay Folder 2/Welcome.md': { id: 'doc-welcome-2', type: 'markdown', version: 0 },
-      '/Relay Folder 2/Notes/Ideas.md': { id: 'doc-ideas-2', type: 'markdown', version: 0 },
-    };
-
-    describe('path-based links (has /)', () => {
-      it('resolves path within current folder', () => {
-        const result = resolvePageName('Notes/Ideas', prefixedMetadata, 'Relay Folder 1');
-        expect(result).not.toBeNull();
-        expect(result!.docId).toBe('doc-ideas-1');
-      });
-
-      it('resolves path from different folder', () => {
-        const result = resolvePageName('Notes/Ideas', prefixedMetadata, 'Relay Folder 2');
-        expect(result).not.toBeNull();
-        expect(result!.docId).toBe('doc-ideas-2');
-      });
-
-      it('returns null when path not in current folder', () => {
-        const result = resolvePageName('Notes/Ideas', prefixedMetadata, 'Nonexistent Folder');
-        expect(result).toBeNull();
-      });
-
-      it('resolves case-insensitive path within folder', () => {
-        const result = resolvePageName('notes/ideas', prefixedMetadata, 'Relay Folder 1');
-        expect(result).not.toBeNull();
-        expect(result!.docId).toBe('doc-ideas-1');
-      });
-
-      it('does not cross folders for path-based links', () => {
-        // Path "Notes/Ideas" with a folder that has no Notes/Ideas.md
-        // should NOT fall back to another folder
-        const metadataOnlyInFolder1: FolderMetadata = {
-          '/Folder A/Notes/Ideas.md': { id: 'only-in-a', type: 'markdown', version: 0 },
-          '/Folder B/Other.md': { id: 'other-b', type: 'markdown', version: 0 },
-        };
-        const result = resolvePageName('Notes/Ideas', metadataOnlyInFolder1, 'Folder B');
-        expect(result).toBeNull();
-      });
-
-      it('resolves path globally when no currentFolder', () => {
-        const result = resolvePageName('Notes/Ideas', prefixedMetadata);
-        expect(result).not.toBeNull();
-      });
-    });
-
-    describe('basename links (no /)', () => {
-      it('resolves globally ignoring currentFolder', () => {
-        // "Welcome" exists in both folders — should find a match regardless of currentFolder
-        const result = resolvePageName('Welcome', prefixedMetadata, 'Nonexistent Folder');
-        expect(result).not.toBeNull();
-      });
-
-      it('resolves from any folder', () => {
-        const result = resolvePageName('Welcome', prefixedMetadata, 'Relay Folder 1');
-        expect(result).not.toBeNull();
-        // Should find a Welcome.md (could be from either folder)
-        expect(result!.path).toMatch(/Welcome\.md$/);
-      });
-
-      it('resolves without currentFolder', () => {
-        const result = resolvePageName('Welcome', prefixedMetadata);
-        expect(result).not.toBeNull();
-      });
-
-      it('resolves basename case-insensitively', () => {
-        const result = resolvePageName('welcome', prefixedMetadata, 'Relay Folder 1');
-        expect(result).not.toBeNull();
-      });
-    });
+  it('resolves parent directory with ../', () => {
+    expect(resolveRelative('/RF1/Projects/Roadmap.md', '../Welcome'))
+      .toBe('/RF1/Welcome.md');
   });
 
-  describe('ambiguous page names', () => {
-    // Extended fixture with multiple files having the same name
-    const ambiguousMetadata: FolderMetadata = {
-      ...nestedMetadata,
-      '/Projects/Beta/README.md': {
-        id: 'aaaabbbb-cccc-4ddd-8eee-ffffffffffff',
-        type: 'markdown',
-        version: 0,
-      },
-      '/Archive/README.md': {
-        id: 'bbbbcccc-dddd-4eee-8fff-000000000000',
-        type: 'markdown',
-        version: 0,
-      },
-    };
+  it('resolves cousin path via ../', () => {
+    expect(resolveRelative('/RF1/Projects/Roadmap.md', '../Notes/Ideas'))
+      .toBe('/RF1/Notes/Ideas.md');
+  });
 
-    it('returns the first match for duplicate page names', () => {
-      // The current implementation returns the first matching entry found
-      // This behavior depends on object iteration order
-      const result = resolvePageName('README', ambiguousMetadata);
+  it('resolves cross-folder with multiple ../', () => {
+    expect(resolveRelative('/RF1/Projects/Roadmap.md', '../../RF2/Course Notes'))
+      .toBe('/RF2/Course Notes.md');
+  });
 
-      expect(result).not.toBeNull();
-      // Should return one of the README files (exact behavior depends on iteration order)
-      const validIds = [
-        nestedMetadata['/Projects/Alpha/README.md'].id,
-        'aaaabbbb-cccc-4ddd-8eee-ffffffffffff',
-        'bbbbcccc-dddd-4eee-8fff-000000000000',
-      ];
-      expect(validIds).toContain(result!.docId);
-    });
+  it('resolves subdirectory path', () => {
+    expect(resolveRelative('/RF1/Projects/Roadmap.md', 'Sub/Deep'))
+      .toBe('/RF1/Projects/Sub/Deep.md');
+  });
 
-    it('prefers exact case match over case-insensitive for duplicate names', () => {
-      // When there are multiple matches, exact case should be preferred
-      const result = resolvePageName('README', ambiguousMetadata);
-      expect(result).not.toBeNull();
-      // All README files have exact case match, so any is valid
-      expect(result!.path).toMatch(/README\.md$/);
-    });
+  it('clamps at root (does not go above /)', () => {
+    expect(resolveRelative('/RF1/Welcome.md', '../../Above'))
+      .toBe('/Above.md');
+  });
+
+  it('handles root-level file', () => {
+    expect(resolveRelative('/Welcome.md', 'Other'))
+      .toBe('/Other.md');
+  });
+
+  it('handles . segments', () => {
+    expect(resolveRelative('/RF1/Projects/Roadmap.md', './Plan'))
+      .toBe('/RF1/Projects/Plan.md');
   });
 });
 
@@ -256,5 +181,44 @@ describe('generateNewDocPath', () => {
     expect(generateNewDocPath('Dev, Staging, and Production environments')).toBe(
       '/Dev, Staging, and Production environments.md'
     );
+  });
+});
+
+describe('computeRelativePath', () => {
+  it('returns basename for sibling file', () => {
+    expect(computeRelativePath('/RF1/Projects/Roadmap.md', '/RF1/Projects/Plan.md'))
+      .toBe('Plan');
+  });
+
+  it('returns ../ for parent directory file', () => {
+    expect(computeRelativePath('/RF1/Projects/Roadmap.md', '/RF1/Welcome.md'))
+      .toBe('../Welcome');
+  });
+
+  it('returns ../ path for cousin file', () => {
+    expect(computeRelativePath('/RF1/Projects/Roadmap.md', '/RF1/Notes/Ideas.md'))
+      .toBe('../Notes/Ideas');
+  });
+
+  it('returns multiple ../ for cross-folder file', () => {
+    expect(computeRelativePath('/RF1/Projects/Roadmap.md', '/RF2/Course Notes.md'))
+      .toBe('../../RF2/Course Notes');
+  });
+
+  it('returns subdirectory path', () => {
+    expect(computeRelativePath('/RF1/Projects/Roadmap.md', '/RF1/Projects/Sub/Deep.md'))
+      .toBe('Sub/Deep');
+  });
+
+  it('handles root-level files', () => {
+    expect(computeRelativePath('/Welcome.md', '/Other.md'))
+      .toBe('Other');
+  });
+
+  it('is inverse of resolveRelative', () => {
+    const from = '/RF1/Projects/Roadmap.md';
+    const to = '/RF1/Notes/Ideas.md';
+    const rel = computeRelativePath(from, to);
+    expect(resolveRelative(from, rel)).toBe(to);
   });
 });

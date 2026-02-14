@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "lens-relay": {
-      "type": "http",
-      "url": "https://relay.lensacademy.org/mcp/deDenjmwtwhHjQQwvacAhjFpBM2UBJddmfdqQloB"
-    }
-  }
-}
