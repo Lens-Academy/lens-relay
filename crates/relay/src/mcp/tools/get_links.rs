@@ -3,7 +3,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use y_sweet_core::link_indexer;
 use y_sweet_core::link_parser;
-use yrs::{GetString, Map, ReadTxn, Transact};
+use yrs::{GetString, ReadTxn, Transact};
+use y_sweet_core::doc_resolver::derive_folder_name;
 
 /// Execute the `get_links` tool: return backlinks and forward links for a document.
 pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
@@ -73,7 +74,9 @@ fn read_backlinks(server: &Arc<Server>, folder_doc_id: &str, uuid: &str) -> Vec<
     paths
 }
 
-/// Read forward links by extracting wikilinks from content and resolving them to paths.
+/// Read forward links by extracting wikilinks from content and resolving them
+/// using the same algorithm as the backend link indexer (relative > absolute,
+/// markdown-only, no basename matching).
 fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
     // Read content into owned String, then drop all guards
     let content: String = {
@@ -90,27 +93,78 @@ fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
         // guard, awareness, doc_ref all dropped here
     };
 
-    // Extract wikilink names from content
     let link_names = link_parser::extract_wikilinks(&content);
+    if link_names.is_empty() {
+        return Vec::new();
+    }
 
-    // Get all document paths for resolution
-    let all_paths = server.doc_resolver().all_paths();
+    // Parse the doc_id to get the doc UUID
+    let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
+        return Vec::new();
+    };
 
-    // Resolve each link name to a document path
-    let mut forward_links: Vec<String> = Vec::new();
-    for link_name in &link_names {
-        let normalized = link_name.to_lowercase();
+    // Find all folder docs
+    let folder_doc_ids = link_indexer::find_all_folder_docs(server.docs());
 
-        for path in &all_paths {
-            // Extract basename without extension
-            let basename = path.rsplit('/').next().unwrap_or(path);
-            let basename_no_ext = basename.strip_suffix(".md").unwrap_or(basename);
+    // Discover source document's path and folder index
+    let mut source_folder_idx: Option<usize> = None;
+    let mut source_path: Option<String> = None;
 
-            if basename_no_ext.to_lowercase() == normalized {
-                forward_links.push(path.clone());
-                break; // First match wins
+    for (fi, folder_doc_id) in folder_doc_ids.iter().enumerate() {
+        let Some(doc_ref) = server.docs().get(folder_doc_id) else {
+            continue;
+        };
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let txn = guard.doc.transact();
+        if let Some(filemeta) = txn.get_map("filemeta_v0") {
+            if let Some(path) = link_indexer::find_path_for_uuid(&filemeta, &txn, doc_uuid) {
+                source_folder_idx = Some(fi);
+                source_path = Some(path);
+                break;
             }
         }
+    }
+
+    // Resolve each link using the same algorithm as the indexer
+    let resolver = server.doc_resolver();
+    let mut forward_links: Vec<String> = Vec::new();
+
+    for link_name in &link_names {
+        let mut found = false;
+        for (fi, folder_doc_id) in folder_doc_ids.iter().enumerate() {
+            let Some(doc_ref) = server.docs().get(folder_doc_id) else {
+                continue;
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                // Only pass source_path for the source's own folder
+                let sp = if Some(fi) == source_folder_idx {
+                    source_path.as_deref()
+                } else {
+                    None
+                };
+                if let Some(uuid) = link_indexer::resolve_link_to_uuid(link_name, &filemeta, &txn, sp) {
+                    // Convert UUID back to user-facing path
+                    if let Some(path) = resolver.path_for_uuid(&uuid) {
+                        forward_links.push(path);
+                    } else {
+                        // Fallback: construct path from filemeta path + folder name
+                        if let Some(fpath) = link_indexer::find_path_for_uuid(&filemeta, &txn, &uuid) {
+                            let folder_name = derive_folder_name(fi);
+                            let stripped = fpath.strip_prefix('/').unwrap_or(&fpath);
+                            forward_links.push(format!("{}/{}", folder_name, stripped));
+                        }
+                    }
+                    found = true;
+                    break;
+                }
+            }
+        }
+        // If not found in any folder, silently skip (unresolvable link)
+        let _ = found;
     }
 
     // Deduplicate

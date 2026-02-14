@@ -59,6 +59,18 @@ mod tests {
         assert_eq!(result, vec!["Real"]);
     }
 
+    #[test]
+    fn preserves_relative_parent_segments() {
+        let result = extract_wikilinks("[[../Ideas]]");
+        assert_eq!(result, vec!["../Ideas"]);
+    }
+
+    #[test]
+    fn preserves_relative_dot_segments() {
+        let result = extract_wikilinks("[[./Sub/Ideas]]");
+        assert_eq!(result, vec!["./Sub/Ideas"]);
+    }
+
     // === extract_wikilink_occurrences tests ===
 
     #[test]

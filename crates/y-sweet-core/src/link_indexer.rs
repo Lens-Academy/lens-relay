@@ -34,6 +34,35 @@ pub fn parse_doc_id(doc_id: &str) -> Option<(&str, &str)> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Resolve a page name relative to the directory containing `current_file_path`.
+/// Returns an absolute filemeta path with `.md` extension.
+///
+/// Port of frontend's `resolveRelative()` in document-resolver.ts.
+///
+/// Example: `resolve_relative("/Notes/Source.md", "../Ideas")` → `"/Ideas.md"`
+pub fn resolve_relative(current_file_path: &str, page_name: &str) -> String {
+    let last_slash = current_file_path.rfind('/').unwrap_or(0);
+    let dir = &current_file_path[..last_slash];
+    let mut segments: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
+
+    for part in page_name.split('/') {
+        if part == ".." {
+            if !segments.is_empty() {
+                segments.pop();
+            }
+        } else if part != "." && !part.is_empty() {
+            segments.push(part);
+        }
+    }
+
+    if segments.is_empty() {
+        // Edge case: resolved to root with just a filename
+        format!("/.md")
+    } else {
+        format!("/{}.md", segments.join("/"))
+    }
+}
+
 /// Extract the "id" field from a filemeta_v0 entry value.
 ///
 /// filemeta_v0 entries can be stored as either:
@@ -57,6 +86,42 @@ pub fn extract_id_from_filemeta_entry(value: &Out, txn: &impl ReadTxn) -> Option
         }
         _ => None,
     }
+}
+
+/// Extract the "type" field from a filemeta_v0 entry value.
+///
+/// Parallel to `extract_id_from_filemeta_entry`. Handles both `Out::YMap` and `Out::Any(Any::Map)`.
+pub fn extract_type_from_filemeta_entry(value: &Out, txn: &impl ReadTxn) -> Option<String> {
+    match value {
+        Out::YMap(meta_map) => {
+            if let Some(Out::Any(Any::String(ref t))) = meta_map.get(txn, "type") {
+                Some(t.to_string())
+            } else {
+                None
+            }
+        }
+        Out::Any(Any::Map(ref map)) => {
+            if let Some(Any::String(ref t)) = map.get("type") {
+                Some(t.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Find the filemeta path key for a given UUID by scanning all entries.
+/// Returns `None` if the UUID is not found in the filemeta map.
+pub fn find_path_for_uuid(filemeta: &MapRef, txn: &impl ReadTxn, uuid: &str) -> Option<String> {
+    for (path, value) in filemeta.iter(txn) {
+        if let Some(id) = extract_id_from_filemeta_entry(&value, txn) {
+            if id == uuid {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Read a backlinks array for a given target UUID from a backlinks_v0 Y.Map.
@@ -83,69 +148,57 @@ pub fn read_backlinks_array(backlinks: &MapRef, txn: &impl ReadTxn, target_uuid:
         .unwrap_or_default()
 }
 
-/// Resolve link names (e.g., "Note") to UUIDs using filemeta_v0.
+/// Resolve a single link name to a UUID using filemeta_v0.
 ///
-/// filemeta_v0 structure:
-///   "/Welcome.md" -> Y.Map { "id": "uuid", "type": "markdown", "version": 0 }
-///   "/Notes/Ideas.md" -> Y.Map { "id": "other-uuid", ... }
-fn resolve_links_to_uuids(
-    link_names: &[String],
+/// Algorithm matches the frontend's `resolvePageName()`:
+/// 1. If `source_path` provided: compute relative path, try case-insensitive match
+/// 2. Always: compute absolute path `"/{name}.md"`, try case-insensitive match
+/// 3. Skip entries where type != "markdown"
+/// 4. No basename matching (removed — frontend never did this)
+///
+/// Priority: relative match returns immediately; absolute match is fallback.
+pub fn resolve_link_to_uuid(
+    name: &str,
     filemeta: &MapRef,
     txn: &impl ReadTxn,
-) -> Vec<String> {
-    let mut uuids = Vec::new();
+    source_path: Option<&str>,
+) -> Option<String> {
+    let relative_path = source_path.map(|sp| resolve_relative(sp, name));
+    let absolute_path = format!("/{}.md", name);
 
-    for name in link_names {
-        // Try exact match: "/{name}.md"
-        let path = format!("/{}.md", name);
+    let lower_relative = relative_path.as_ref().map(|p| p.to_lowercase());
+    let lower_absolute = absolute_path.to_lowercase();
 
-        if let Some(entry_value) = filemeta.get(txn, &*path) {
-            if let Some(id) = extract_id_from_filemeta_entry(&entry_value, txn) {
-                uuids.push(id);
+    let mut absolute_match: Option<String> = None;
+
+    for (entry_path, entry_value) in filemeta.iter(txn) {
+        // Skip non-markdown entries
+        if let Some(entry_type) = extract_type_from_filemeta_entry(&entry_value, txn) {
+            if entry_type != "markdown" {
                 continue;
             }
         }
 
-        // Try case-insensitive full-path match
-        let mut found = false;
-        for (entry_path, entry_value) in filemeta.iter(txn) {
-            let entry_name = entry_path
-                .strip_prefix('/')
-                .and_then(|s| s.strip_suffix(".md"))
-                .unwrap_or(entry_path);
+        let lower_entry = entry_path.to_lowercase();
 
-            if entry_name.to_lowercase() == name.to_lowercase() {
+        // Priority 1: relative match — return immediately
+        if let Some(ref lr) = lower_relative {
+            if lower_entry == *lr {
                 if let Some(id) = extract_id_from_filemeta_entry(&entry_value, txn) {
-                    uuids.push(id);
-                    found = true;
-                    break;
+                    return Some(id);
                 }
             }
         }
-        if found {
-            continue;
-        }
 
-        // Basename match (case-insensitive) — handles subdirectories
-        // e.g. [[Ideas]] matches /Notes/Ideas.md
-        for (entry_path, entry_value) in filemeta.iter(txn) {
-            let basename = entry_path
-                .rsplit('/')
-                .next()
-                .and_then(|s| s.strip_suffix(".md"))
-                .unwrap_or("");
-
-            if basename.to_lowercase() == name.to_lowercase() {
-                if let Some(id) = extract_id_from_filemeta_entry(&entry_value, txn) {
-                    uuids.push(id);
-                    break; // first match wins
-                }
+        // Priority 2: absolute match — save as fallback
+        if absolute_match.is_none() && lower_entry == lower_absolute {
+            if let Some(id) = extract_id_from_filemeta_entry(&entry_value, txn) {
+                absolute_match = Some(id);
             }
         }
-        // If not found, the link is unresolvable — silently skip
     }
 
-    uuids
+    absolute_match
 }
 
 // ---------------------------------------------------------------------------
@@ -236,10 +289,27 @@ pub fn index_content_into_folders(
 /// taking folder write locks (which deadlocks when content doc == folder doc).
 fn index_content_into_folders_from_text(
     source_uuid: &str,
-    markdown: &str,
+    _markdown: &str,
     link_names: &[String],
     folder_docs: &[&Doc],
 ) -> anyhow::Result<()> {
+    // Discover source document's path and folder index.
+    // We need the source path for relative link resolution, but only within
+    // the source's own folder (it has no relative position in other folders).
+    let mut source_folder_idx: Option<usize> = None;
+    let mut source_path: Option<String> = None;
+
+    for (fi, folder_doc) in folder_docs.iter().enumerate() {
+        let txn = folder_doc.transact();
+        if let Some(filemeta) = txn.get_map("filemeta_v0") {
+            if let Some(path) = find_path_for_uuid(&filemeta, &txn, source_uuid) {
+                source_folder_idx = Some(fi);
+                source_path = Some(path);
+                break;
+            }
+        }
+    }
+
     // Resolve link names to (target_uuid, folder_index) across all folder docs.
     let mut resolved: Vec<(String, usize)> = Vec::new();
 
@@ -247,8 +317,13 @@ fn index_content_into_folders_from_text(
         for (fi, folder_doc) in folder_docs.iter().enumerate() {
             let txn = folder_doc.transact();
             if let Some(filemeta) = txn.get_map("filemeta_v0") {
-                let resolved_uuids = resolve_links_to_uuids(&[name.clone()], &filemeta, &txn);
-                if let Some(uuid) = resolved_uuids.into_iter().next() {
+                // Only pass source_path for the source's own folder
+                let sp = if Some(fi) == source_folder_idx {
+                    source_path.as_deref()
+                } else {
+                    None
+                };
+                if let Some(uuid) = resolve_link_to_uuid(name, &filemeta, &txn, sp) {
                     resolved.push((uuid, fi));
                     break;
                 }
@@ -1076,8 +1151,10 @@ mod tests {
     // === Subdirectory wikilink resolution tests ===
 
     #[test]
-    fn resolves_wikilink_to_file_in_subdirectory() {
+    fn resolves_wikilink_to_sibling_in_subdirectory() {
+        // Source is in /Notes/, so [[Ideas]] resolves relatively to /Notes/Ideas.md
         let folder_doc = create_folder_doc(&[
+            ("/Notes/Source.md", "uuid-source"),
             ("/Notes/Ideas.md", "uuid-ideas"),
             ("/Projects/Todo.md", "uuid-todo"),
         ]);
@@ -1091,15 +1168,20 @@ mod tests {
 
     #[test]
     fn resolves_wikilink_case_insensitive_in_subdirectory() {
-        let folder_doc = create_folder_doc(&[("/Notes/ideas.md", "uuid-ideas")]);
+        // Source is in /Notes/, so [[Ideas]] resolves relatively to /Notes/ideas.md (case-insensitive)
+        let folder_doc = create_folder_doc(&[
+            ("/Notes/Source.md", "uuid-source"),
+            ("/Notes/ideas.md", "uuid-ideas"),
+        ]);
         let content_doc = create_content_doc("See [[Ideas]] for details.");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
         assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-source"]);
     }
 
     #[test]
-    fn prefers_exact_root_match_over_basename_match() {
-        // /Ideas.md should win over /Notes/Ideas.md for [[Ideas]]
+    fn absolute_match_when_source_not_in_filemeta() {
+        // Source not in filemeta → no relative resolution.
+        // [[Ideas]] absolute → /Ideas.md → matches root file.
         let folder_doc = create_folder_doc(&[
             ("/Ideas.md", "uuid-root"),
             ("/Notes/Ideas.md", "uuid-nested"),
@@ -1114,7 +1196,7 @@ mod tests {
 
     #[test]
     fn resolves_explicit_path_wikilink() {
-        // [[Notes/Ideas]] should match /Notes/Ideas.md
+        // [[Notes/Ideas]] should match /Notes/Ideas.md via absolute path
         let folder_doc = create_folder_doc(&[("/Notes/Ideas.md", "uuid-ideas")]);
         let content_doc = create_content_doc("See [[Notes/Ideas]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
@@ -1573,5 +1655,151 @@ mod tests {
 
         // Assert: [[Foo]] became [[Bar]], but [[Other]] is untouched
         assert_eq!(read_contents(&notes_doc), "See [[Bar]] and [[Other]]");
+    }
+
+    // === resolve_relative unit tests ===
+
+    #[test]
+    fn resolve_relative_sibling() {
+        // Source at /Notes/Source.md, link "Ideas" → /Notes/Ideas.md
+        assert_eq!(resolve_relative("/Notes/Source.md", "Ideas"), "/Notes/Ideas.md");
+    }
+
+    #[test]
+    fn resolve_relative_parent() {
+        // Source at /Notes/Source.md, link "../Welcome" → /Welcome.md
+        assert_eq!(resolve_relative("/Notes/Source.md", "../Welcome"), "/Welcome.md");
+    }
+
+    #[test]
+    fn resolve_relative_cousin() {
+        // Source at /Notes/Source.md, link "../Projects/Todo" → /Projects/Todo.md
+        assert_eq!(resolve_relative("/Notes/Source.md", "../Projects/Todo"), "/Projects/Todo.md");
+    }
+
+    #[test]
+    fn resolve_relative_root_clamping() {
+        // Source at /Source.md, link "../../Deep" → can't go above root → /Deep.md
+        assert_eq!(resolve_relative("/Source.md", "../../Deep"), "/Deep.md");
+    }
+
+    #[test]
+    fn resolve_relative_dot_segment() {
+        // Source at /Notes/Source.md, link "./Ideas" → /Notes/Ideas.md
+        assert_eq!(resolve_relative("/Notes/Source.md", "./Ideas"), "/Notes/Ideas.md");
+    }
+
+    #[test]
+    fn resolve_relative_root_level_file() {
+        // Source at /Source.md, link "Ideas" → /Ideas.md
+        assert_eq!(resolve_relative("/Source.md", "Ideas"), "/Ideas.md");
+    }
+
+    #[test]
+    fn resolve_relative_deep_nesting() {
+        // Source at /A/B/C/Source.md, link "../../X/Y" → /A/X/Y.md
+        assert_eq!(resolve_relative("/A/B/C/Source.md", "../../X/Y"), "/A/X/Y.md");
+    }
+
+    // === New link resolution behavior tests ===
+
+    #[test]
+    fn resolves_relative_sibling_link() {
+        // Source at /Notes/Source.md, link [[Ideas]], target /Notes/Ideas.md → backlink
+        let folder_doc = create_folder_doc(&[
+            ("/Notes/Source.md", "uuid-source"),
+            ("/Notes/Ideas.md", "uuid-ideas"),
+        ]);
+        let content_doc = create_content_doc("See [[Ideas]].");
+        index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
+        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-source"]);
+    }
+
+    #[test]
+    fn resolves_relative_parent_link() {
+        // Source at /Notes/Source.md, link [[../Welcome]], target /Welcome.md → backlink
+        let folder_doc = create_folder_doc(&[
+            ("/Notes/Source.md", "uuid-source"),
+            ("/Welcome.md", "uuid-welcome"),
+        ]);
+        let content_doc = create_content_doc("See [[../Welcome]].");
+        index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
+        assert_eq!(read_backlinks(&folder_doc, "uuid-welcome"), vec!["uuid-source"]);
+    }
+
+    #[test]
+    fn relative_match_beats_absolute() {
+        // Source at /Notes/Source.md, [[Ideas]]
+        // Both /Ideas.md and /Notes/Ideas.md exist
+        // → relative match /Notes/Ideas.md should win
+        let folder_doc = create_folder_doc(&[
+            ("/Notes/Source.md", "uuid-source"),
+            ("/Ideas.md", "uuid-root"),
+            ("/Notes/Ideas.md", "uuid-nested"),
+        ]);
+        let content_doc = create_content_doc("See [[Ideas]].");
+        index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
+        assert_eq!(read_backlinks(&folder_doc, "uuid-nested"), vec!["uuid-source"]);
+        assert!(read_backlinks(&folder_doc, "uuid-root").is_empty());
+    }
+
+    #[test]
+    fn bare_name_no_basename_matching() {
+        // Source not in filemeta, link [[Ideas]], only /Notes/Ideas.md exists
+        // → absolute "/Ideas.md" doesn't match /Notes/Ideas.md, no basename fallback
+        let folder_doc = create_folder_doc(&[
+            ("/Notes/Ideas.md", "uuid-ideas"),
+        ]);
+        let content_doc = create_content_doc("See [[Ideas]].");
+        index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
+        assert!(read_backlinks(&folder_doc, "uuid-ideas").is_empty());
+    }
+
+    #[test]
+    fn type_filter_skips_folders() {
+        // A folder-type entry with matching path should not resolve
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            // Add a "folder" type entry at /Ideas.md
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String("uuid-folder".into()));
+            map.insert("type".to_string(), Any::String("folder".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/Ideas.md", Any::Map(map.into()));
+        }
+        let content_doc = create_content_doc("See [[Ideas]].");
+        index_content_into_folder("uuid-source", &content_doc, &doc).unwrap();
+        assert!(read_backlinks(&doc, "uuid-folder").is_empty());
+    }
+
+    #[test]
+    fn resolves_link_with_spaces_in_path() {
+        let folder_doc = create_folder_doc(&[
+            ("/Source.md", "uuid-source"),
+            ("/Course YAML examples.md", "uuid-yaml"),
+        ]);
+        let content_doc = create_content_doc("See [[Course YAML examples]].");
+        index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
+        assert_eq!(read_backlinks(&folder_doc, "uuid-yaml"), vec!["uuid-source"]);
+    }
+
+    #[test]
+    fn cross_folder_uses_absolute_only() {
+        // Source is in folder_a at /Notes/Source.md
+        // Target is in folder_b at /Notes/Ideas.md
+        // [[Ideas]] should NOT resolve via relative path in folder_b
+        // (source has no relative position in folder_b)
+        // But it SHOULD resolve via absolute /Ideas.md if one exists in folder_b
+        let folder_a = create_folder_doc(&[("/Notes/Source.md", "uuid-source")]);
+        let folder_b = create_folder_doc(&[
+            ("/Notes/Ideas.md", "uuid-nested"),
+            ("/Ideas.md", "uuid-root"),
+        ]);
+        let content_doc = create_content_doc("See [[Ideas]].");
+        index_content_into_folders("uuid-source", &content_doc, &[&folder_a, &folder_b]).unwrap();
+        assert_eq!(read_backlinks(&folder_b, "uuid-root"), vec!["uuid-source"]);
+        assert!(read_backlinks(&folder_b, "uuid-nested").is_empty());
     }
 }

@@ -222,3 +222,90 @@ describe('computeRelativePath', () => {
     expect(resolveRelative(from, rel)).toBe(to);
   });
 });
+
+describe('Spec Matrix (docs/wikilink-resolution-spec.md)', () => {
+  // Virtual tree entries matching the spec exactly
+  const spec: FolderMetadata = {
+    '/Relay Folder 1/Welcome.md': { id: 'W', type: 'markdown', version: 0 },
+    '/Relay Folder 1/Getting Started.md': { id: 'GS', type: 'markdown', version: 0 },
+    '/Relay Folder 1/Notes': { id: 'f-notes', type: 'folder', version: 0 },
+    '/Relay Folder 1/Notes/Ideas.md': { id: 'I', type: 'markdown', version: 0 },
+    '/Relay Folder 1/Projects': { id: 'f-proj', type: 'folder', version: 0 },
+    '/Relay Folder 1/Projects/Roadmap.md': { id: 'R', type: 'markdown', version: 0 },
+    '/Relay Folder 2/Course Notes.md': { id: 'CN', type: 'markdown', version: 0 },
+    '/Relay Folder 2/Syllabus.md': { id: 'S', type: 'markdown', version: 0 },
+    '/Relay Folder 2/Resources': { id: 'f-res', type: 'folder', version: 0 },
+    '/Relay Folder 2/Resources/Links.md': { id: 'L', type: 'markdown', version: 0 },
+  };
+
+  // Helper: assert resolves to expected ID
+  const expectResolves = (link: string, from: string, expectedId: string) => {
+    const result = resolvePageName(link, spec, from);
+    expect(result, `[[${link}]] from ${from}`).not.toBeNull();
+    expect(result!.docId).toBe(expectedId);
+  };
+
+  // Helper: assert does NOT resolve
+  const expectNull = (link: string, from: string) => {
+    expect(resolvePageName(link, spec, from), `[[${link}]] from ${from}`).toBeNull();
+  };
+
+  describe('from [W] Relay Folder 1/Welcome.md', () => {
+    const W = '/Relay Folder 1/Welcome.md';
+    it('[[Getting Started]] → GS (relative sibling)', () => expectResolves('Getting Started', W, 'GS'));
+    it('[[Notes/Ideas]] → I (relative subdirectory)', () => expectResolves('Notes/Ideas', W, 'I'));
+    it('[[Ideas]] → null (no basename matching)', () => expectNull('Ideas', W));
+    it('[[Nonexistent]] → null', () => expectNull('Nonexistent', W));
+    it('[[Relay Folder 2/Syllabus]] → S (absolute cross-folder)', () => expectResolves('Relay Folder 2/Syllabus', W, 'S'));
+    it('[[../Relay Folder 2/Syllabus]] → S (relative cross-folder)', () => expectResolves('../Relay Folder 2/Syllabus', W, 'S'));
+  });
+
+  describe('from [I] Relay Folder 1/Notes/Ideas.md', () => {
+    const I = '/Relay Folder 1/Notes/Ideas.md';
+    it('[[../Welcome]] → W', () => expectResolves('../Welcome', I, 'W'));
+    it('[[../Projects/Roadmap]] → R', () => expectResolves('../Projects/Roadmap', I, 'R'));
+    it('[[../Getting Started]] → GS', () => expectResolves('../Getting Started', I, 'GS'));
+    it('[[Welcome]] → null (no /Notes/Welcome.md)', () => expectNull('Welcome', I));
+    it('[[Getting Started]] → null', () => expectNull('Getting Started', I));
+    it('[[Ideas]] → I (self-link)', () => expectResolves('Ideas', I, 'I'));
+    it('[[Relay Folder 1/Welcome]] → W (absolute)', () => expectResolves('Relay Folder 1/Welcome', I, 'W'));
+  });
+
+  describe('from [R] Relay Folder 1/Projects/Roadmap.md', () => {
+    const R = '/Relay Folder 1/Projects/Roadmap.md';
+    it('[[../Notes/Ideas]] → I', () => expectResolves('../Notes/Ideas', R, 'I'));
+    it('[[../Welcome]] → W', () => expectResolves('../Welcome', R, 'W'));
+    it('[[Notes/Ideas]] → null', () => expectNull('Notes/Ideas', R));
+    it('[[Welcome]] → null', () => expectNull('Welcome', R));
+  });
+
+  describe('from [L] Relay Folder 2/Resources/Links.md', () => {
+    const L = '/Relay Folder 2/Resources/Links.md';
+    it('[[../Syllabus]] → S', () => expectResolves('../Syllabus', L, 'S'));
+    it('[[../Course Notes]] → CN', () => expectResolves('../Course Notes', L, 'CN'));
+    it('[[Syllabus]] → null', () => expectNull('Syllabus', L));
+    it('[[../../Relay Folder 1/Notes/Ideas]] → I (cross-folder relative)', () => expectResolves('../../Relay Folder 1/Notes/Ideas', L, 'I'));
+    it('[[../../Relay Folder 1/Welcome]] → W (cross-folder relative)', () => expectResolves('../../Relay Folder 1/Welcome', L, 'W'));
+    it('[[Relay Folder 1/Notes/Ideas]] → I (cross-folder absolute)', () => expectResolves('Relay Folder 1/Notes/Ideas', L, 'I'));
+    it('[[../../Nonexistent Folder/File]] → null', () => expectNull('../../Nonexistent Folder/File', L));
+  });
+
+  describe('from [CN] Relay Folder 2/Course Notes.md', () => {
+    const CN = '/Relay Folder 2/Course Notes.md';
+    it('[[Syllabus]] → S', () => expectResolves('Syllabus', CN, 'S'));
+    it('[[Resources/Links]] → L', () => expectResolves('Resources/Links', CN, 'L'));
+    it('[[../Relay Folder 1/Welcome]] → W (cross-folder relative)', () => expectResolves('../Relay Folder 1/Welcome', CN, 'W'));
+    it('[[Relay Folder 1/Welcome]] → W (cross-folder absolute)', () => expectResolves('Relay Folder 1/Welcome', CN, 'W'));
+  });
+
+  describe('from [S] Relay Folder 2/Syllabus.md', () => {
+    const S = '/Relay Folder 2/Syllabus.md';
+    it('[[Course Notes]] → CN', () => expectResolves('Course Notes', S, 'CN'));
+    it('[[Resources/Links]] → L', () => expectResolves('Resources/Links', S, 'L'));
+  });
+
+  describe('type filtering', () => {
+    it('folder entries never resolve', () => expectNull('Notes', '/Relay Folder 1/Welcome.md'));
+    it('folder entries never resolve (RF2)', () => expectNull('Resources', '/Relay Folder 2/Course Notes.md'));
+  });
+});
