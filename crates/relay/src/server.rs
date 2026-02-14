@@ -663,6 +663,34 @@ impl Server {
         }
     }
 
+    /// Resolve a (possibly prefix-shortened) doc ID to a full doc ID.
+    /// Tries exact match first, then prefix match against in-memory docs.
+    /// Returns None if no match or multiple matches (ambiguous prefix).
+    ///
+    /// Note: Prefix matching only works for docs loaded in memory. Docs that have
+    /// been garbage-collected but still exist in the store require an exact match.
+    /// In practice, the frontend's client-side resolution (from metadata) handles
+    /// the common case; this endpoint is only for cold page loads where the doc
+    /// is typically still warm in memory.
+    pub async fn resolve_doc_id(&self, input: &str) -> Option<String> {
+        // Exact match — fast path (checks both in-memory and store)
+        if self.docs.contains_key(input) {
+            return Some(input.to_string());
+        }
+
+        // Prefix match against in-memory docs (early exit after 2 matches)
+        let mut matches = self
+            .docs
+            .iter()
+            .filter(|entry| entry.key().starts_with(input))
+            .take(2);
+
+        match (matches.next(), matches.next()) {
+            (Some(first), None) => Some(first.key().clone()), // Unique match
+            _ => None,                                        // No match or ambiguous
+        }
+    }
+
     pub async fn create_doc(&self) -> Result<String> {
         let doc_id = nanoid::nanoid!();
         self.load_doc(&doc_id, None).await?;
@@ -1246,6 +1274,7 @@ impl Server {
             .route("/doc/ws/:doc_id", get(handle_socket_upgrade_deprecated))
             .route("/doc/new", post(new_doc))
             .route("/doc/:doc_id/auth", post(auth_doc))
+            .route("/doc/resolve/:prefix", get(resolve_doc))
             .route("/doc/:doc_id/as-update", get(get_doc_as_update_deprecated))
             .route("/doc/:doc_id/update", post(update_doc_deprecated))
             .route("/d/:doc_id/as-update", get(get_doc_as_update))
@@ -2163,6 +2192,22 @@ async fn auth_doc(
         token,
         authorization,
     }))
+}
+
+async fn resolve_doc(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Path(prefix): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    match server_state.resolve_doc_id(&prefix).await {
+        Some(doc_id) => Ok(Json(serde_json::json!({ "docId": doc_id }))),
+        None => Err(AppError(
+            StatusCode::NOT_FOUND,
+            anyhow!("No unique doc matching prefix '{}'", prefix),
+        )),
+    }
 }
 
 fn get_token_from_header(
@@ -3530,6 +3575,174 @@ mod test {
             .download_url
             .contains(&format!("hash={}", file_hash)));
         assert!(response.download_url.contains(&format!("token={}", token)));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_doc_id_exact_match() {
+        let server_state = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            vec![],
+            CancellationToken::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let doc_id = server_state.create_doc().await.unwrap();
+        let server = Arc::new(server_state);
+        let resolved = server.resolve_doc_id(&doc_id).await;
+        assert_eq!(resolved, Some(doc_id.clone()));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_doc_id_prefix_match() {
+        let server_state = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            vec![],
+            CancellationToken::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let doc_id = server_state.create_doc().await.unwrap();
+        let prefix = &doc_id[..8];
+        let server = Arc::new(server_state);
+        let resolved = server.resolve_doc_id(prefix).await;
+        assert_eq!(resolved, Some(doc_id));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_doc_id_compound_prefix_match() {
+        let server_state = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            vec![],
+            CancellationToken::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let full_compound = "a0000000-0000-4000-8000-000000000000-c0000001-0000-4000-8000-000000000001";
+        server_state.load_doc(full_compound, None).await.unwrap();
+        let short_compound = "a0000000-0000-4000-8000-000000000000-c0000001";
+        let server = Arc::new(server_state);
+        let resolved = server.resolve_doc_id(short_compound).await;
+        assert_eq!(resolved, Some(full_compound.to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_doc_id_no_match() {
+        let server_state = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            vec![],
+            CancellationToken::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let server = Arc::new(server_state);
+        let resolved = server.resolve_doc_id("nonexistent").await;
+        assert_eq!(resolved, None);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_doc_handler() {
+        let server_state = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            vec![],
+            CancellationToken::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let doc_id = server_state.create_doc().await.unwrap();
+        let prefix = doc_id[..8].to_string();
+
+        let result = resolve_doc(
+            None,
+            State(Arc::new(server_state)),
+            Path(prefix),
+        )
+        .await
+        .unwrap();
+
+        let resolved_id = result.0["docId"].as_str().unwrap();
+        assert_eq!(resolved_id, doc_id);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_doc_handler_not_found() {
+        let server_state = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            vec![],
+            CancellationToken::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let result = resolve_doc(
+            None,
+            State(Arc::new(server_state)),
+            Path("nonexistent".to_string()),
+        )
+        .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_doc_id_ambiguous_prefix() {
+        let server_state = Server::new(
+            None,
+            Duration::from_secs(60),
+            None,
+            None,
+            vec![],
+            CancellationToken::new(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Create two docs with the same prefix
+        let doc1 = "a0000000-0000-4000-8000-000000000000-c0000001-aaaa-4000-8000-000000000001";
+        let doc2 = "a0000000-0000-4000-8000-000000000000-c0000001-aaaa-4000-8000-000000000002";
+        server_state.load_doc(doc1, None).await.unwrap();
+        server_state.load_doc(doc2, None).await.unwrap();
+
+        let ambiguous_prefix = "a0000000-0000-4000-8000-000000000000-c0000001-aaaa";
+        let server = Arc::new(server_state);
+        let resolved = server.resolve_doc_id(ambiguous_prefix).await;
+        assert_eq!(resolved, None); // Should return None for ambiguous match
     }
 }
 
