@@ -117,7 +117,7 @@ Try creating a [[Welcome]] link - it should navigate to the Welcome page!
 
 This is a nested document in the Notes folder.
 
-Check out [[Welcome]] for an overview, or [[Getting Started]] for setup instructions.
+Check out [[../Welcome]] for an overview, or [[../Getting Started]] for setup instructions.
 
 ## Todo
 
@@ -151,7 +151,7 @@ This is a nested document in the Projects folder, a sibling to Notes.
 
 ## Related
 
-See [[Notes/Ideas]] for brainstorming and [[Welcome]] for an overview.
+See [[../Notes/Ideas]] for brainstorming and [[../Welcome]] for an overview.
 `,
       },
     ],
@@ -219,7 +219,7 @@ See [[Course Notes]] for detailed notes on each topic.
         version: 0,
         content: `# Useful Links
 
-See [[Course Notes]] for course material and [[Syllabus]] for the schedule.
+See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule.
 
 ## Documentation
 
@@ -309,14 +309,18 @@ async function connectAndPopulate(docId, populateFn) {
   doc.destroy();
 }
 
-async function populateFolderDoc(folderDocId, testDocs) {
-  console.log('\n  Populating filemeta_v0 and legacy docs Y.Maps...');
+async function populateFolderDoc(folderDocId, folderName, testDocs) {
+  console.log('\n  Populating filemeta_v0, legacy docs, and folder_config Y.Maps...');
 
   await connectAndPopulate(folderDocId, (doc) => {
     const filemeta = doc.getMap('filemeta_v0');
     const legacyDocs = doc.getMap('docs');
 
     doc.transact(() => {
+      // Store folder display name so the backend can read it
+      const folderConfig = doc.getMap('folder_config');
+      folderConfig.set('name', folderName);
+
       for (const testDoc of testDocs) {
         if (!filemeta.has(testDoc.path)) {
           // Modern format: id, type, version
@@ -337,7 +341,7 @@ async function populateFolderDoc(folderDocId, testDocs) {
     });
   });
 
-  console.log('  ✓ filemeta_v0 + legacy docs populated');
+  console.log('  ✓ filemeta_v0 + legacy docs + folder_config populated');
 }
 
 async function populateDocContent(testDoc) {
@@ -412,8 +416,8 @@ async function main() {
       }
     }
 
-    // Populate the folder doc's filemeta_v0 Y.Map
-    await populateFolderDoc(folderDocId, folder.docs);
+    // Populate the folder doc's filemeta_v0 Y.Map and folder_config
+    await populateFolderDoc(folderDocId, folder.name, folder.docs);
 
     // Populate each document with content
     console.log('\n  Populating document content...');

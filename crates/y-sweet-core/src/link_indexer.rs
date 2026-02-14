@@ -1,4 +1,4 @@
-use crate::doc_resolver::DocumentResolver;
+use crate::doc_resolver::{read_folder_name, DocumentResolver};
 use crate::doc_sync::DocWithSyncKv;
 use crate::link_parser::{compute_wikilink_rename_edits, extract_wikilinks};
 use dashmap::DashMap;
@@ -148,57 +148,89 @@ pub fn read_backlinks_array(backlinks: &MapRef, txn: &impl ReadTxn, target_uuid:
         .unwrap_or_default()
 }
 
-/// Resolve a single link name to a UUID using filemeta_v0.
+/// An entry in the virtual filesystem tree that unifies all folder docs.
+/// Virtual paths include the folder name prefix, e.g., "/Relay Folder 1/Notes/Ideas.md".
+#[derive(Debug, Clone)]
+pub struct VirtualEntry {
+    /// Virtual path: "/{folder_name}{filemeta_path}", e.g., "/Lens/Notes/Ideas.md"
+    pub virtual_path: String,
+    /// Entry type: "markdown", "folder", etc.
+    pub entry_type: String,
+    /// Document UUID
+    pub id: String,
+    /// Index of the folder doc this entry came from
+    pub folder_idx: usize,
+}
+
+/// Resolve a wikilink in the virtual filesystem tree.
 ///
-/// Algorithm matches the frontend's `resolvePageName()`:
-/// 1. If `source_path` provided: compute relative path, try case-insensitive match
-/// 2. Always: compute absolute path `"/{name}.md"`, try case-insensitive match
-/// 3. Skip entries where type != "markdown"
-/// 4. No basename matching (removed — frontend never did this)
-///
-/// Priority: relative match returns immediately; absolute match is fallback.
-pub fn resolve_link_to_uuid(
-    name: &str,
-    filemeta: &MapRef,
-    txn: &impl ReadTxn,
-    source_path: Option<&str>,
-) -> Option<String> {
-    let relative_path = source_path.map(|sp| resolve_relative(sp, name));
-    let absolute_path = format!("/{}.md", name);
+/// Algorithm (matches frontend's `resolvePageName()` exactly):
+/// 1. Relative: resolve link_name from source's directory, case-insensitive, markdown-only
+/// 2. Absolute (fallback): /{link_name}.md, case-insensitive, markdown-only
+pub fn resolve_in_virtual_tree<'a>(
+    link_name: &str,
+    source_virtual_path: Option<&str>,
+    entries: &'a [VirtualEntry],
+) -> Option<&'a VirtualEntry> {
+    let relative_path = source_virtual_path.map(|svp| resolve_relative(svp, link_name));
+    let absolute_path = format!("/{}.md", link_name);
 
     let lower_relative = relative_path.as_ref().map(|p| p.to_lowercase());
     let lower_absolute = absolute_path.to_lowercase();
 
-    let mut absolute_match: Option<String> = None;
+    let mut absolute_match: Option<&VirtualEntry> = None;
 
-    for (entry_path, entry_value) in filemeta.iter(txn) {
-        // Skip non-markdown entries
-        if let Some(entry_type) = extract_type_from_filemeta_entry(&entry_value, txn) {
-            if entry_type != "markdown" {
-                continue;
-            }
+    for entry in entries {
+        if entry.entry_type != "markdown" {
+            continue;
         }
 
-        let lower_entry = entry_path.to_lowercase();
+        let lower_entry = entry.virtual_path.to_lowercase();
 
         // Priority 1: relative match — return immediately
         if let Some(ref lr) = lower_relative {
             if lower_entry == *lr {
-                if let Some(id) = extract_id_from_filemeta_entry(&entry_value, txn) {
-                    return Some(id);
-                }
+                return Some(entry);
             }
         }
 
         // Priority 2: absolute match — save as fallback
         if absolute_match.is_none() && lower_entry == lower_absolute {
-            if let Some(id) = extract_id_from_filemeta_entry(&entry_value, txn) {
-                absolute_match = Some(id);
-            }
+            absolute_match = Some(entry);
         }
     }
 
     absolute_match
+}
+
+/// Build a flat list of virtual entries from multiple folder docs.
+///
+/// Virtual paths are constructed as "/{folder_name}{filemeta_path}",
+/// e.g., "/Lens/Notes/Ideas.md" for filemeta path "/Notes/Ideas.md" in folder "Lens".
+pub fn build_virtual_entries(folder_docs: &[&Doc], folder_names: &[&str]) -> Vec<VirtualEntry> {
+    let mut entries = Vec::new();
+    for (fi, folder_doc) in folder_docs.iter().enumerate() {
+        let txn = folder_doc.transact();
+        if let Some(filemeta) = txn.get_map("filemeta_v0") {
+            let folder_name = folder_names[fi];
+            for (path, value) in filemeta.iter(&txn) {
+                let entry_type = extract_type_from_filemeta_entry(&value, &txn)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let id = match extract_id_from_filemeta_entry(&value, &txn) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                let virtual_path = format!("/{}{}", folder_name, path);
+                entries.push(VirtualEntry {
+                    virtual_path,
+                    entry_type,
+                    id,
+                    folder_idx: fi,
+                });
+            }
+        }
+    }
+    entries
 }
 
 // ---------------------------------------------------------------------------
@@ -280,7 +312,13 @@ pub fn index_content_into_folders(
         "Doc {}: content length={}, wikilinks={:?}",
         source_uuid, markdown.len(), link_names
     );
-    index_content_into_folders_from_text(source_uuid, &markdown, &link_names, folder_docs)
+    let folder_name_strings: Vec<String> = folder_docs.iter().enumerate()
+        .map(|(i, doc)| read_folder_name(doc, i))
+        .collect();
+    let folder_name_strs: Vec<&str> = folder_name_strings.iter()
+        .map(|s| s.as_str())
+        .collect();
+    index_content_into_folders_from_text(source_uuid, &markdown, &link_names, folder_docs, &folder_name_strs)
 
 }
 
@@ -292,42 +330,26 @@ fn index_content_into_folders_from_text(
     _markdown: &str,
     link_names: &[String],
     folder_docs: &[&Doc],
+    folder_names: &[&str],
 ) -> anyhow::Result<()> {
-    // Discover source document's path and folder index.
-    // We need the source path for relative link resolution, but only within
-    // the source's own folder (it has no relative position in other folders).
-    let mut source_folder_idx: Option<usize> = None;
-    let mut source_path: Option<String> = None;
+    // Build virtual tree from all folder docs
+    let entries = build_virtual_entries(folder_docs, folder_names);
 
-    for (fi, folder_doc) in folder_docs.iter().enumerate() {
-        let txn = folder_doc.transact();
-        if let Some(filemeta) = txn.get_map("filemeta_v0") {
-            if let Some(path) = find_path_for_uuid(&filemeta, &txn, source_uuid) {
-                source_folder_idx = Some(fi);
-                source_path = Some(path);
-                break;
-            }
-        }
-    }
+    // Find source's virtual path
+    let source_virtual_path: Option<String> = entries.iter()
+        .find(|e| e.id == source_uuid)
+        .map(|e| e.virtual_path.clone());
 
-    // Resolve link names to (target_uuid, folder_index) across all folder docs.
+    // Resolve each link in the virtual tree
     let mut resolved: Vec<(String, usize)> = Vec::new();
 
     for name in link_names {
-        for (fi, folder_doc) in folder_docs.iter().enumerate() {
-            let txn = folder_doc.transact();
-            if let Some(filemeta) = txn.get_map("filemeta_v0") {
-                // Only pass source_path for the source's own folder
-                let sp = if Some(fi) == source_folder_idx {
-                    source_path.as_deref()
-                } else {
-                    None
-                };
-                if let Some(uuid) = resolve_link_to_uuid(name, &filemeta, &txn, sp) {
-                    resolved.push((uuid, fi));
-                    break;
-                }
-            }
+        if let Some(entry) = resolve_in_virtual_tree(
+            name,
+            source_virtual_path.as_deref(),
+            &entries,
+        ) {
+            resolved.push((entry.id.clone(), entry.folder_idx));
         }
     }
 
@@ -820,7 +842,13 @@ impl LinkIndexer {
             .map(|g| &g.doc)
             .collect();
 
-        index_content_into_folders_from_text(doc_uuid, &markdown, &link_names, &folder_doc_refs)
+        let folder_name_strings: Vec<String> = folder_doc_refs.iter().enumerate()
+            .map(|(i, doc)| read_folder_name(doc, i))
+            .collect();
+        let folder_name_strs: Vec<&str> = folder_name_strings.iter()
+            .map(|s| s.as_str())
+            .collect();
+        index_content_into_folders_from_text(doc_uuid, &markdown, &link_names, &folder_doc_refs, &folder_name_strs)
     }
 
     /// Reindex all backlinks by scanning every loaded document.
@@ -978,6 +1006,13 @@ mod tests {
             }
         }
         doc
+    }
+
+    /// Set the folder display name in a folder doc's folder_config Y.Map.
+    fn set_folder_name(doc: &Doc, name: &str) {
+        let mut txn = doc.transact_mut();
+        let config = txn.get_or_insert_map("folder_config");
+        config.insert(&mut txn, "name", Any::String(name.into()));
     }
 
     /// Create a content Y.Doc with Y.Text("contents").
@@ -1180,24 +1215,25 @@ mod tests {
 
     #[test]
     fn absolute_match_when_source_not_in_filemeta() {
-        // Source not in filemeta → no relative resolution.
-        // [[Ideas]] absolute → /Ideas.md → matches root file.
+        // Source not in filemeta → no relative resolution, no source path.
+        // [[Ideas]] absolute → /Ideas.md → doesn't match /Lens/Ideas.md in virtual tree → no match.
         let folder_doc = create_folder_doc(&[
             ("/Ideas.md", "uuid-root"),
             ("/Notes/Ideas.md", "uuid-nested"),
         ]);
         let content_doc = create_content_doc("See [[Ideas]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
-        let root_backlinks = read_backlinks(&folder_doc, "uuid-root");
-        let nested_backlinks = read_backlinks(&folder_doc, "uuid-nested");
-        assert_eq!(root_backlinks, vec!["uuid-source"]);
-        assert!(nested_backlinks.is_empty());
+        assert!(read_backlinks(&folder_doc, "uuid-root").is_empty());
+        assert!(read_backlinks(&folder_doc, "uuid-nested").is_empty());
     }
 
     #[test]
     fn resolves_explicit_path_wikilink() {
-        // [[Notes/Ideas]] should match /Notes/Ideas.md via absolute path
-        let folder_doc = create_folder_doc(&[("/Notes/Ideas.md", "uuid-ideas")]);
+        // Source at root, [[Notes/Ideas]] resolves via relative to /Lens/Notes/Ideas.md
+        let folder_doc = create_folder_doc(&[
+            ("/Source.md", "uuid-source"),
+            ("/Notes/Ideas.md", "uuid-ideas"),
+        ]);
         let content_doc = create_content_doc("See [[Notes/Ideas]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
         assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-source"]);
@@ -1207,12 +1243,10 @@ mod tests {
 
     #[test]
     fn cross_folder_link_creates_backlink_in_target_folder() {
-        // Folder A contains source doc
         let folder_a = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
-        // Folder B contains target doc
         let folder_b = create_folder_doc(&[("/Syllabus.md", "uuid-syllabus")]);
-        // Source doc links to target
-        let content_doc = create_content_doc("See [[Syllabus]] for the course plan.");
+        // Cross-folder link using absolute path with folder name
+        let content_doc = create_content_doc("See [[Lens Edu/Syllabus]] for the course plan.");
 
         index_content_into_folders(
             "uuid-welcome",
@@ -1220,10 +1254,8 @@ mod tests {
             &[&folder_a, &folder_b],
         ).unwrap();
 
-        // Backlink should be in folder B (the target's folder), NOT folder A
         let backlinks_b = read_backlinks(&folder_b, "uuid-syllabus");
         assert_eq!(backlinks_b, vec!["uuid-welcome"]);
-        // Folder A should have no backlinks for uuid-syllabus (it's not in folder A)
         let backlinks_a = read_backlinks(&folder_a, "uuid-syllabus");
         assert!(backlinks_a.is_empty());
     }
@@ -1233,12 +1265,10 @@ mod tests {
         let folder_a = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
         let folder_b = create_folder_doc(&[("/Syllabus.md", "uuid-syllabus")]);
 
-        // First: create the link
-        let content_v1 = create_content_doc("See [[Syllabus]].");
+        let content_v1 = create_content_doc("See [[Lens Edu/Syllabus]].");
         index_content_into_folders("uuid-welcome", &content_v1, &[&folder_a, &folder_b]).unwrap();
         assert_eq!(read_backlinks(&folder_b, "uuid-syllabus"), vec!["uuid-welcome"]);
 
-        // Then: remove the link
         let content_v2 = create_content_doc("No links here.");
         index_content_into_folders("uuid-welcome", &content_v2, &[&folder_a, &folder_b]).unwrap();
         assert!(read_backlinks(&folder_b, "uuid-syllabus").is_empty());
@@ -1262,13 +1292,12 @@ mod tests {
 
     #[test]
     fn link_to_docs_in_multiple_folders() {
-        // One source links to targets in both folders
         let folder_a = create_folder_doc(&[
             ("/Welcome.md", "uuid-welcome"),
             ("/Resources.md", "uuid-resources"),
         ]);
         let folder_b = create_folder_doc(&[("/Syllabus.md", "uuid-syllabus")]);
-        let content_doc = create_content_doc("See [[Syllabus]] and [[Resources]].");
+        let content_doc = create_content_doc("See [[Lens Edu/Syllabus]] and [[Resources]].");
 
         index_content_into_folders("uuid-welcome", &content_doc, &[&folder_a, &folder_b]).unwrap();
 
@@ -1787,19 +1816,253 @@ mod tests {
 
     #[test]
     fn cross_folder_uses_absolute_only() {
-        // Source is in folder_a at /Notes/Source.md
-        // Target is in folder_b at /Notes/Ideas.md
-        // [[Ideas]] should NOT resolve via relative path in folder_b
-        // (source has no relative position in folder_b)
-        // But it SHOULD resolve via absolute /Ideas.md if one exists in folder_b
+        // Source in folder_a, target in folder_b.
+        // [[Lens Edu/Ideas]] should resolve via absolute path in virtual tree.
         let folder_a = create_folder_doc(&[("/Notes/Source.md", "uuid-source")]);
         let folder_b = create_folder_doc(&[
             ("/Notes/Ideas.md", "uuid-nested"),
             ("/Ideas.md", "uuid-root"),
         ]);
-        let content_doc = create_content_doc("See [[Ideas]].");
+        let content_doc = create_content_doc("See [[Lens Edu/Ideas]].");
         index_content_into_folders("uuid-source", &content_doc, &[&folder_a, &folder_b]).unwrap();
+        // Absolute /Lens Edu/Ideas.md matches /Ideas.md in folder_b
         assert_eq!(read_backlinks(&folder_b, "uuid-root"), vec!["uuid-source"]);
         assert!(read_backlinks(&folder_b, "uuid-nested").is_empty());
+    }
+
+    // === Bug: cross-folder relative link with UI-visible folder name ===
+    //
+    // The user sees folder names like "Relay Folder 2" in the UI, so they write
+    // [[../Relay Folder 2/Resources/Links]]. But derive_folder_name() returns
+    // "Lens Edu", so the virtual tree uses "/Lens Edu/Resources/Links.md" and
+    // the link doesn't resolve.
+    #[test]
+    fn cross_folder_relative_link_with_visible_folder_name() {
+        // Folder 0 ("Lens" per derive_folder_name): Welcome.md links to folder 1
+        let folder_a = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
+        // Folder 1 ("Lens Edu" per derive_folder_name): has Resources/Links.md
+        let folder_b = create_folder_doc(&[("/Resources/Links.md", "uuid-links")]);
+
+        // Set the folder names the user sees in the UI/sidebar.
+        set_folder_name(&folder_a, "Relay Folder 1");
+        set_folder_name(&folder_b, "Relay Folder 2");
+
+        // User writes the link using the name they SEE in the UI/sidebar
+        // ("Relay Folder 2"), not the hardcoded derive_folder_name() name ("Lens Edu").
+        // From /Relay Folder 1/Welcome.md, ".." goes to root, then "Relay Folder 2/Resources/Links".
+        // This resolves to "/Relay Folder 2/Resources/Links.md" which now matches
+        // because read_folder_name() reads "Relay Folder 2" from folder_config.
+        let content_doc = create_content_doc("Check [[../Relay Folder 2/Resources/Links]] for resources.");
+
+        index_content_into_folders(
+            "uuid-welcome",
+            &content_doc,
+            &[&folder_a, &folder_b],
+        ).unwrap();
+
+        // This SHOULD create a backlink in folder_b for Links.md
+        assert_eq!(
+            read_backlinks(&folder_b, "uuid-links"),
+            vec!["uuid-welcome"],
+            "cross-folder relative link using visible folder name should resolve"
+        );
+    }
+
+    mod virtual_tree_tests {
+        use super::super::*;
+
+        fn spec_entries() -> Vec<VirtualEntry> {
+            vec![
+                VirtualEntry { virtual_path: "/Relay Folder 1/Welcome.md".into(), entry_type: "markdown".into(), id: "W".into(), folder_idx: 0 },
+                VirtualEntry { virtual_path: "/Relay Folder 1/Getting Started.md".into(), entry_type: "markdown".into(), id: "GS".into(), folder_idx: 0 },
+                VirtualEntry { virtual_path: "/Relay Folder 1/Notes".into(), entry_type: "folder".into(), id: "f-notes".into(), folder_idx: 0 },
+                VirtualEntry { virtual_path: "/Relay Folder 1/Notes/Ideas.md".into(), entry_type: "markdown".into(), id: "I".into(), folder_idx: 0 },
+                VirtualEntry { virtual_path: "/Relay Folder 1/Projects".into(), entry_type: "folder".into(), id: "f-proj".into(), folder_idx: 0 },
+                VirtualEntry { virtual_path: "/Relay Folder 1/Projects/Roadmap.md".into(), entry_type: "markdown".into(), id: "R".into(), folder_idx: 0 },
+                VirtualEntry { virtual_path: "/Relay Folder 2/Course Notes.md".into(), entry_type: "markdown".into(), id: "CN".into(), folder_idx: 1 },
+                VirtualEntry { virtual_path: "/Relay Folder 2/Syllabus.md".into(), entry_type: "markdown".into(), id: "S".into(), folder_idx: 1 },
+                VirtualEntry { virtual_path: "/Relay Folder 2/Resources".into(), entry_type: "folder".into(), id: "f-res".into(), folder_idx: 1 },
+                VirtualEntry { virtual_path: "/Relay Folder 2/Resources/Links.md".into(), entry_type: "markdown".into(), id: "L".into(), folder_idx: 1 },
+            ]
+        }
+
+        // === From [W] — /Relay Folder 1/Welcome.md ===
+        const W: &str = "/Relay Folder 1/Welcome.md";
+
+        #[test]
+        fn w_getting_started() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Getting Started", Some(W), &e).map(|e| e.id.as_str()), Some("GS"));
+        }
+        #[test]
+        fn w_notes_ideas() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Notes/Ideas", Some(W), &e).map(|e| e.id.as_str()), Some("I"));
+        }
+        #[test]
+        fn w_ideas_no_match() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Ideas", Some(W), &e).is_none());
+        }
+        #[test]
+        fn w_nonexistent() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Nonexistent", Some(W), &e).is_none());
+        }
+        #[test]
+        fn w_cross_folder_absolute() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Relay Folder 2/Syllabus", Some(W), &e).map(|e| e.id.as_str()), Some("S"));
+        }
+        #[test]
+        fn w_cross_folder_relative() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Relay Folder 2/Syllabus", Some(W), &e).map(|e| e.id.as_str()), Some("S"));
+        }
+
+        // === From [I] — /Relay Folder 1/Notes/Ideas.md ===
+        const I_PATH: &str = "/Relay Folder 1/Notes/Ideas.md";
+
+        #[test]
+        fn i_parent_welcome() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Welcome", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+        }
+        #[test]
+        fn i_cousin_roadmap() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Projects/Roadmap", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("R"));
+        }
+        #[test]
+        fn i_parent_getting_started() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Getting Started", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("GS"));
+        }
+        #[test]
+        fn i_welcome_no_match() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Welcome", Some(I_PATH), &e).is_none());
+        }
+        #[test]
+        fn i_getting_started_no_match() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Getting Started", Some(I_PATH), &e).is_none());
+        }
+        #[test]
+        fn i_self_link() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Ideas", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("I"));
+        }
+        #[test]
+        fn i_absolute_cross_folder() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Relay Folder 1/Welcome", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+        }
+
+        // === From [R] — /Relay Folder 1/Projects/Roadmap.md ===
+        const R_PATH: &str = "/Relay Folder 1/Projects/Roadmap.md";
+
+        #[test]
+        fn r_cousin_ideas() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Notes/Ideas", Some(R_PATH), &e).map(|e| e.id.as_str()), Some("I"));
+        }
+        #[test]
+        fn r_parent_welcome() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Welcome", Some(R_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+        }
+        #[test]
+        fn r_notes_ideas_no_match() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Notes/Ideas", Some(R_PATH), &e).is_none());
+        }
+        #[test]
+        fn r_welcome_no_match() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Welcome", Some(R_PATH), &e).is_none());
+        }
+
+        // === From [L] — /Relay Folder 2/Resources/Links.md ===
+        const L_PATH: &str = "/Relay Folder 2/Resources/Links.md";
+
+        #[test]
+        fn l_parent_syllabus() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Syllabus", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("S"));
+        }
+        #[test]
+        fn l_parent_course_notes() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Course Notes", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("CN"));
+        }
+        #[test]
+        fn l_syllabus_no_match() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Syllabus", Some(L_PATH), &e).is_none());
+        }
+        #[test]
+        fn l_cross_folder_relative() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../../Relay Folder 1/Notes/Ideas", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("I"));
+        }
+        #[test]
+        fn l_cross_folder_relative_welcome() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../../Relay Folder 1/Welcome", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+        }
+        #[test]
+        fn l_cross_folder_absolute() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Relay Folder 1/Notes/Ideas", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("I"));
+        }
+        #[test]
+        fn l_nonexistent_folder() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("../../Nonexistent Folder/File", Some(L_PATH), &e).is_none());
+        }
+
+        // === From [CN] — /Relay Folder 2/Course Notes.md ===
+        const CN_PATH: &str = "/Relay Folder 2/Course Notes.md";
+
+        #[test]
+        fn cn_syllabus() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Syllabus", Some(CN_PATH), &e).map(|e| e.id.as_str()), Some("S"));
+        }
+        #[test]
+        fn cn_resources_links() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Resources/Links", Some(CN_PATH), &e).map(|e| e.id.as_str()), Some("L"));
+        }
+        #[test]
+        fn cn_cross_folder_relative() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("../Relay Folder 1/Welcome", Some(CN_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+        }
+        #[test]
+        fn cn_cross_folder_absolute() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Relay Folder 1/Welcome", Some(CN_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+        }
+
+        // === Type filtering ===
+        #[test]
+        fn folder_entries_never_resolve() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Notes", Some(W), &e).is_none());
+        }
+
+        // === No source path (absolute only) ===
+        #[test]
+        fn no_source_absolute_works() {
+            let e = spec_entries();
+            assert_eq!(resolve_in_virtual_tree("Relay Folder 1/Welcome", None, &e).map(|e| e.id.as_str()), Some("W"));
+        }
+        #[test]
+        fn no_source_bare_name_fails() {
+            let e = spec_entries();
+            assert!(resolve_in_virtual_tree("Welcome", None, &e).is_none());
+        }
     }
 }

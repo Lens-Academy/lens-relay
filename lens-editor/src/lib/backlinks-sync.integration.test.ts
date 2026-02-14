@@ -518,7 +518,7 @@ describe('Cross-folder Backlinks', () => {
     }
   });
 
-  it('resolves [[CrossTarget]] across folders — backlink appears in target folder', async () => {
+  it('resolves [[Lens Edu/CrossTarget]] across folders — backlink appears in target folder', async () => {
     // Uses unique filenames (CrossSource, CrossTarget) to avoid collisions
     // with other test groups' filemeta entries
     // 1. Create 2 folder docs + 2 content docs
@@ -556,7 +556,7 @@ describe('Cross-folder Backlinks', () => {
     // 4. Write [[CrossTarget]] to CrossSource content (in folder1)
     await connectRunAndDisconnect(CF_DOC_A_ID, (doc) => {
       const text = doc.getText('contents');
-      text.insert(0, '# CrossSource\n\nSee [[CrossTarget]] for the course plan.');
+      text.insert(0, '# CrossSource\n\nSee [[Lens Edu/CrossTarget]] for the course plan.');
     });
 
     // 5. Poll folder2's backlinks_v0 for CrossTarget UUID

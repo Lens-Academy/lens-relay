@@ -1,7 +1,7 @@
 use crate::doc_sync::DocWithSyncKv;
 use crate::link_indexer::{extract_id_from_filemeta_entry, find_all_folder_docs, parse_doc_id};
 use dashmap::DashMap;
-use yrs::{Doc, Map, ReadTxn, Transact};
+use yrs::{Any, Doc, Map, Out, ReadTxn, Transact};
 
 /// Information about a resolved document.
 #[derive(Clone, Debug)]
@@ -24,6 +24,20 @@ pub fn derive_folder_name(folder_idx: usize) -> &'static str {
         0 => "Lens",
         _ => "Lens Edu",
     }
+}
+
+/// Read the folder display name from a folder doc's `folder_config` Y.Map.
+/// Returns the `name` field if present, otherwise falls back to `derive_folder_name(idx)`.
+pub fn read_folder_name(doc: &Doc, folder_idx: usize) -> String {
+    let txn = doc.transact();
+    if let Some(config) = txn.get_map("folder_config") {
+        if let Some(Out::Any(Any::String(name))) = config.get(&txn, "name") {
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+    }
+    derive_folder_name(folder_idx).to_string()
 }
 
 /// Bidirectional cache mapping user-facing document paths (`Lens/Photosynthesis.md`)
@@ -67,7 +81,7 @@ impl DocumentResolver {
 
     /// Core rebuild logic operating on a bare Y.Doc. Testable without DocWithSyncKv.
     fn rebuild_from_folder_doc(&self, folder_doc_id: &str, folder_idx: usize, doc: &Doc) {
-        let folder_name = derive_folder_name(folder_idx);
+        let folder_name = read_folder_name(doc, folder_idx);
         let relay_id = parse_doc_id(folder_doc_id)
             .map(|(r, _)| r.to_string())
             .unwrap_or_default();
@@ -229,6 +243,37 @@ mod tests {
     #[test]
     fn derive_folder_name_second_is_lens_edu() {
         assert_eq!(derive_folder_name(1), "Lens Edu");
+    }
+
+    // === read_folder_name tests ===
+
+    #[test]
+    fn read_folder_name_from_doc() {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("My Custom Folder".into()));
+        }
+        assert_eq!(read_folder_name(&doc, 0), "My Custom Folder");
+    }
+
+    #[test]
+    fn read_folder_name_fallback_when_missing() {
+        let doc = Doc::new();
+        assert_eq!(read_folder_name(&doc, 0), "Lens");
+        assert_eq!(read_folder_name(&doc, 1), "Lens Edu");
+    }
+
+    #[test]
+    fn read_folder_name_fallback_when_empty() {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("".into()));
+        }
+        assert_eq!(read_folder_name(&doc, 0), "Lens");
     }
 
     // === rebuild tests ===

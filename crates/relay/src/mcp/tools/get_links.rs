@@ -3,8 +3,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use y_sweet_core::link_indexer;
 use y_sweet_core::link_parser;
-use yrs::{GetString, ReadTxn, Transact};
-use y_sweet_core::doc_resolver::derive_folder_name;
+use yrs::{GetString, Map, ReadTxn, Transact};
+use y_sweet_core::doc_resolver::read_folder_name;
 
 /// Execute the `get_links` tool: return backlinks and forward links for a document.
 pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
@@ -75,8 +75,7 @@ fn read_backlinks(server: &Arc<Server>, folder_doc_id: &str, uuid: &str) -> Vec<
 }
 
 /// Read forward links by extracting wikilinks from content and resolving them
-/// using the same algorithm as the backend link indexer (relative > absolute,
-/// markdown-only, no basename matching).
+/// using the virtual tree model (same algorithm as the backend link indexer).
 fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
     // Read content into owned String, then drop all guards
     let content: String = {
@@ -90,7 +89,6 @@ fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
             Some(text) => text.get_string(&txn),
             None => return Vec::new(),
         }
-        // guard, awareness, doc_ref all dropped here
     };
 
     let link_names = link_parser::extract_wikilinks(&content);
@@ -98,18 +96,15 @@ fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    // Parse the doc_id to get the doc UUID
+    // Parse doc_id to get source UUID
     let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
         return Vec::new();
     };
 
-    // Find all folder docs
+    // Find all folder docs and build virtual entries
     let folder_doc_ids = link_indexer::find_all_folder_docs(server.docs());
-
-    // Discover source document's path and folder index
-    let mut source_folder_idx: Option<usize> = None;
-    let mut source_path: Option<String> = None;
-
+    // Build virtual entries from all folder docs
+    let mut virtual_entries = Vec::new();
     for (fi, folder_doc_id) in folder_doc_ids.iter().enumerate() {
         let Some(doc_ref) = server.docs().get(folder_doc_id) else {
             continue;
@@ -118,56 +113,50 @@ fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         if let Some(filemeta) = txn.get_map("filemeta_v0") {
-            if let Some(path) = link_indexer::find_path_for_uuid(&filemeta, &txn, doc_uuid) {
-                source_folder_idx = Some(fi);
-                source_path = Some(path);
-                break;
+            let folder_name = read_folder_name(&guard.doc, fi);
+            for (path, value) in filemeta.iter(&txn) {
+                let entry_type = link_indexer::extract_type_from_filemeta_entry(&value, &txn)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let id = match link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                let virtual_path = format!("/{}{}", folder_name, path);
+                virtual_entries.push(link_indexer::VirtualEntry {
+                    virtual_path,
+                    entry_type,
+                    id,
+                    folder_idx: fi,
+                });
             }
         }
     }
 
-    // Resolve each link using the same algorithm as the indexer
+    // Find source virtual path
+    let source_virtual_path: Option<String> = virtual_entries.iter()
+        .find(|e| e.id == doc_uuid)
+        .map(|e| e.virtual_path.clone());
+
+    // Resolve each link
     let resolver = server.doc_resolver();
     let mut forward_links: Vec<String> = Vec::new();
 
     for link_name in &link_names {
-        let mut found = false;
-        for (fi, folder_doc_id) in folder_doc_ids.iter().enumerate() {
-            let Some(doc_ref) = server.docs().get(folder_doc_id) else {
-                continue;
-            };
-            let awareness = doc_ref.awareness();
-            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            let txn = guard.doc.transact();
-            if let Some(filemeta) = txn.get_map("filemeta_v0") {
-                // Only pass source_path for the source's own folder
-                let sp = if Some(fi) == source_folder_idx {
-                    source_path.as_deref()
-                } else {
-                    None
-                };
-                if let Some(uuid) = link_indexer::resolve_link_to_uuid(link_name, &filemeta, &txn, sp) {
-                    // Convert UUID back to user-facing path
-                    if let Some(path) = resolver.path_for_uuid(&uuid) {
-                        forward_links.push(path);
-                    } else {
-                        // Fallback: construct path from filemeta path + folder name
-                        if let Some(fpath) = link_indexer::find_path_for_uuid(&filemeta, &txn, &uuid) {
-                            let folder_name = derive_folder_name(fi);
-                            let stripped = fpath.strip_prefix('/').unwrap_or(&fpath);
-                            forward_links.push(format!("{}/{}", folder_name, stripped));
-                        }
-                    }
-                    found = true;
-                    break;
-                }
+        if let Some(entry) = link_indexer::resolve_in_virtual_tree(
+            link_name,
+            source_virtual_path.as_deref(),
+            &virtual_entries,
+        ) {
+            if let Some(path) = resolver.path_for_uuid(&entry.id) {
+                forward_links.push(path);
+            } else {
+                // Fallback: construct from virtual path (strip leading /)
+                let stripped = entry.virtual_path.strip_prefix('/').unwrap_or(&entry.virtual_path);
+                forward_links.push(stripped.to_string());
             }
         }
-        // If not found in any folder, silently skip (unresolvable link)
-        let _ = found;
     }
 
-    // Deduplicate
     forward_links.sort();
     forward_links.dedup();
     forward_links
