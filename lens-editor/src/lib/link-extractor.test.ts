@@ -119,4 +119,14 @@ describe('extractWikilinks', () => {
       expect(result).toEqual([]);
     });
   });
+
+  describe('embed syntax', () => {
+    it('extracts link from embed syntax ![[Page]]', () => {
+      expect(extractWikilinks('![[Page]]')).toEqual(['Page']);
+    });
+
+    it('extracts both embeds and regular links', () => {
+      expect(extractWikilinks('![[Embed]] and [[Regular]]')).toEqual(['Embed', 'Regular']);
+    });
+  });
 });

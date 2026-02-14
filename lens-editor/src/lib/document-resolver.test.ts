@@ -46,6 +46,33 @@ describe('resolvePageName', () => {
       expect(resolvePageName('Archive', nestedMetadata)).toBeNull();
       expect(resolvePageName('Projects', nestedMetadata)).toBeNull();
     });
+
+    it('resolves exact path wikilink', () => {
+      const result = resolvePageName('Projects/Alpha/README', nestedMetadata);
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe(nestedMetadata['/Projects/Alpha/README.md'].id);
+      expect(result!.path).toBe('/Projects/Alpha/README.md');
+    });
+
+    it('resolves case-insensitive path wikilink', () => {
+      const result = resolvePageName('projects/alpha/readme', nestedMetadata);
+      expect(result).not.toBeNull();
+      expect(result!.docId).toBe(nestedMetadata['/Projects/Alpha/README.md'].id);
+    });
+
+    it('prefers exact path over basename match', () => {
+      // "Projects/Beta/Notes" should resolve to /Projects/Beta/Notes.md
+      // not just any file named "Notes" found by basename
+      const result = resolvePageName('Projects/Beta/Notes', nestedMetadata);
+      expect(result!.path).toBe('/Projects/Beta/Notes.md');
+    });
+
+    it('still resolves basename when no path match', () => {
+      // Existing behavior must not regress
+      const result = resolvePageName('README', nestedMetadata);
+      expect(result).not.toBeNull();
+      expect(result!.path).toBe('/Projects/Alpha/README.md');
+    });
   });
 
   describe('with edge cases fixture', () => {
@@ -81,6 +108,83 @@ describe('resolvePageName', () => {
 
     it('ignores empty folders', () => {
       expect(resolvePageName('Empty Folder', edgeCasesMetadata)).toBeNull();
+    });
+  });
+
+  describe('folder-prefixed paths (multi-folder)', () => {
+    // Simulates metadata from mergeMetadata() which prefixes paths with folder name
+    const prefixedMetadata: FolderMetadata = {
+      '/Relay Folder 1/Notes': { id: 'folder-notes', type: 'folder', version: 0 },
+      '/Relay Folder 1/Welcome.md': { id: 'doc-welcome-1', type: 'markdown', version: 0 },
+      '/Relay Folder 1/Notes/Ideas.md': { id: 'doc-ideas-1', type: 'markdown', version: 0 },
+      '/Relay Folder 2/Welcome.md': { id: 'doc-welcome-2', type: 'markdown', version: 0 },
+      '/Relay Folder 2/Notes/Ideas.md': { id: 'doc-ideas-2', type: 'markdown', version: 0 },
+    };
+
+    describe('path-based links (has /)', () => {
+      it('resolves path within current folder', () => {
+        const result = resolvePageName('Notes/Ideas', prefixedMetadata, 'Relay Folder 1');
+        expect(result).not.toBeNull();
+        expect(result!.docId).toBe('doc-ideas-1');
+      });
+
+      it('resolves path from different folder', () => {
+        const result = resolvePageName('Notes/Ideas', prefixedMetadata, 'Relay Folder 2');
+        expect(result).not.toBeNull();
+        expect(result!.docId).toBe('doc-ideas-2');
+      });
+
+      it('returns null when path not in current folder', () => {
+        const result = resolvePageName('Notes/Ideas', prefixedMetadata, 'Nonexistent Folder');
+        expect(result).toBeNull();
+      });
+
+      it('resolves case-insensitive path within folder', () => {
+        const result = resolvePageName('notes/ideas', prefixedMetadata, 'Relay Folder 1');
+        expect(result).not.toBeNull();
+        expect(result!.docId).toBe('doc-ideas-1');
+      });
+
+      it('does not cross folders for path-based links', () => {
+        // Path "Notes/Ideas" with a folder that has no Notes/Ideas.md
+        // should NOT fall back to another folder
+        const metadataOnlyInFolder1: FolderMetadata = {
+          '/Folder A/Notes/Ideas.md': { id: 'only-in-a', type: 'markdown', version: 0 },
+          '/Folder B/Other.md': { id: 'other-b', type: 'markdown', version: 0 },
+        };
+        const result = resolvePageName('Notes/Ideas', metadataOnlyInFolder1, 'Folder B');
+        expect(result).toBeNull();
+      });
+
+      it('resolves path globally when no currentFolder', () => {
+        const result = resolvePageName('Notes/Ideas', prefixedMetadata);
+        expect(result).not.toBeNull();
+      });
+    });
+
+    describe('basename links (no /)', () => {
+      it('resolves globally ignoring currentFolder', () => {
+        // "Welcome" exists in both folders — should find a match regardless of currentFolder
+        const result = resolvePageName('Welcome', prefixedMetadata, 'Nonexistent Folder');
+        expect(result).not.toBeNull();
+      });
+
+      it('resolves from any folder', () => {
+        const result = resolvePageName('Welcome', prefixedMetadata, 'Relay Folder 1');
+        expect(result).not.toBeNull();
+        // Should find a Welcome.md (could be from either folder)
+        expect(result!.path).toMatch(/Welcome\.md$/);
+      });
+
+      it('resolves without currentFolder', () => {
+        const result = resolvePageName('Welcome', prefixedMetadata);
+        expect(result).not.toBeNull();
+      });
+
+      it('resolves basename case-insensitively', () => {
+        const result = resolvePageName('welcome', prefixedMetadata, 'Relay Folder 1');
+        expect(result).not.toBeNull();
+      });
     });
   });
 
@@ -121,27 +225,6 @@ describe('resolvePageName', () => {
       expect(result).not.toBeNull();
       // All README files have exact case match, so any is valid
       expect(result!.path).toMatch(/README\.md$/);
-    });
-  });
-
-  describe('case sensitivity preference', () => {
-    it('prefers exact case match when both exact and case-insensitive matches exist', () => {
-      // Create metadata with two files differing only in case
-      // Key insight: iteration order matters, so we deliberately put
-      // the case-insensitive match FIRST to test that exact match is still preferred
-      const caseTestMetadata: FolderMetadata = {
-        '/NOTES.md': { id: 'id-uppercase', type: 'markdown', version: 0 },
-        '/Notes.md': { id: 'id-exactcase', type: 'markdown', version: 0 },
-        '/notes.md': { id: 'id-lowercase', type: 'markdown', version: 0 },
-      };
-
-      // Search for "Notes" - should prefer exact case match
-      const result = resolvePageName('Notes', caseTestMetadata);
-
-      expect(result).not.toBeNull();
-      // Should return the exact case match, not NOTES or notes
-      expect(result!.docId).toBe('id-exactcase');
-      expect(result!.path).toBe('/Notes.md');
     });
   });
 });

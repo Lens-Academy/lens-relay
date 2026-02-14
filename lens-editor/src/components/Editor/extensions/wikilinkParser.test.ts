@@ -74,4 +74,27 @@ describe('WikilinkExtension parsing', () => {
     expect(names).not.toContain('Wikilink');
     expect(names).toContain('Link');
   });
+
+  it('parses ![[Page]] as Wikilink node', () => {
+    const names = getNodeNames('![[Page]]');
+    expect(names).toContain('Wikilink');
+  });
+
+  it('creates WikilinkContent for embed syntax', () => {
+    const tree = parseContent('![[Page Name]]');
+    let contentText = '';
+    tree.iterate({
+      enter(node) {
+        if (node.name === 'WikilinkContent') {
+          contentText = '![[Page Name]]'.slice(node.from, node.to);
+        }
+      },
+    });
+    expect(contentText).toBe('Page Name');
+  });
+
+  it('does not parse empty embed ![[]]', () => {
+    const names = getNodeNames('![[]]');
+    expect(names).not.toContain('Wikilink');
+  });
 });

@@ -45,6 +45,7 @@ interface EditorProps {
   onDocChange?: () => void;
   onNavigate?: (docId: string) => void;
   metadata?: FolderMetadata;
+  currentFolder?: string;
 }
 
 /**
@@ -85,7 +86,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metadata }: EditorProps) {
+export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metadata, currentFolder }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -141,17 +142,17 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
 
     return {
       onClick: (pageName: string) => {
-        const resolved = resolvePageName(pageName, metadata);
+        const resolved = resolvePageName(pageName, metadata, currentFolder);
         if (resolved) {
           onNavigate(`${RELAY_ID}-${resolved.docId}`);
         }
         // Unresolved wikilinks do nothing on click (document creation deferred)
       },
       isResolved: (pageName: string) => {
-        return resolvePageName(pageName, metadata) !== null;
+        return resolvePageName(pageName, metadata, currentFolder) !== null;
       },
     };
-  }, [metadata, onNavigate]);
+  }, [metadata, onNavigate, currentFolder]);
 
   // Update the module-scoped wikilink context when it changes
   // This is separate from the editor creation effect to avoid recreating the editor

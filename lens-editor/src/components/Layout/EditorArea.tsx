@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { EditorView } from '@codemirror/view';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
@@ -13,6 +13,9 @@ import { DebugYMapPanel } from '../DebugYMapPanel';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { findPathByUuid } from '../../lib/uuid-to-path';
+import { getFolderNameFromPath } from '../../lib/multi-folder-utils';
+import { RELAY_ID } from '../../App';
 
 /**
  * Editor area component that lives INSIDE the RelayProvider key boundary.
@@ -22,8 +25,17 @@ import { useAuth } from '../../contexts/AuthContext';
 export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
-  const { metadata, onNavigate } = useNavigation();
+  const { metadata, folderNames, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
+
+  // Derive current folder from doc ID for scoped wikilink resolution
+  const currentFolder = useMemo(() => {
+    if (!metadata || !Object.keys(metadata).length) return undefined;
+    const uuid = currentDocId.slice(RELAY_ID.length + 1);
+    const path = findPathByUuid(uuid, metadata);
+    if (!path) return undefined;
+    return getFolderNameFromPath(path, folderNames) ?? undefined;
+  }, [currentDocId, metadata, folderNames]);
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -65,6 +77,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onDocChange={handleDocChange}
               onNavigate={onNavigate}
               metadata={metadata}
+              currentFolder={currentFolder}
             />
           </div>
         </div>

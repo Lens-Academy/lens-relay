@@ -277,8 +277,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             // Wikilink: replace with clickable widget when cursor not on link
             if (node.name === 'Wikilink') {
               if (!selectionIntersects(selection, node.from, node.to)) {
-                // Extract page name: content is between [[ and ]]
-                const content = view.state.doc.sliceString(node.from + 2, node.to - 2);
+                // Extract page name from WikilinkContent child (works for both [[page]] and ![[page]])
+                const contentNode = node.node.getChild('WikilinkContent');
+                if (!contentNode) return;
+                const content = view.state.doc.sliceString(contentNode.from, contentNode.to);
 
                 decorations.push({
                   from: node.from,

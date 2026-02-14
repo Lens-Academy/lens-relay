@@ -6,39 +6,59 @@ export interface ResolvedDocument {
 }
 
 /**
- * Resolve a page name to a document ID.
- * Matches by:
- * 1. Exact filename match (without .md extension) - preferred
- * 2. Case-insensitive filename match - fallback
- * Returns null if no match found.
+ * Resolve a page name to a document ID (case-insensitive, matching Obsidian).
+ *
+ * Resolution strategy depends on whether pageName contains a path separator:
+ *
+ * - Basename only ("Ideas"): global search across all folders.
+ *   Matches any file whose name (without .md) equals pageName.
+ *
+ * - Path-based ("Notes/Ideas"): scoped to currentFolder when provided.
+ *   Matches paths ending with /pageName.md within the folder.
+ *   No cross-folder fallback — returns null if not found in currentFolder.
+ *
+ * All matching is case-insensitive.
  */
 export function resolvePageName(
   pageName: string,
-  metadata: FolderMetadata
+  metadata: FolderMetadata,
+  currentFolder?: string
 ): ResolvedDocument | null {
+  const hasPath = pageName.includes('/');
   const lowerName = pageName.toLowerCase();
-  let caseInsensitiveMatch: ResolvedDocument | null = null;
+  const lowerPathSuffix = ('/' + pageName + '.md').toLowerCase();
+
+  // Path-based links: scope to currentFolder only
+  // Basename links: search globally (ignore currentFolder)
+  const folderPrefix = (hasPath && currentFolder) ? `/${currentFolder}/` : null;
+  const lowerFolderPrefix = folderPrefix?.toLowerCase() ?? null;
+
+  let basenameMatch: ResolvedDocument | null = null;
 
   for (const [path, meta] of Object.entries(metadata)) {
     if (meta.type !== 'markdown') continue;
 
-    // Extract filename without extension
-    const filename = path.split('/').pop() || '';
-    const nameWithoutExt = filename.replace(/\.md$/i, '');
+    const lowerPath = path.toLowerCase();
 
-    // Exact match - return immediately (highest priority)
-    if (nameWithoutExt === pageName) {
+    // Skip entries outside current folder (only for path-based links)
+    if (lowerFolderPrefix && !lowerPath.startsWith(lowerFolderPrefix)) continue;
+
+    // Tier 1: Path suffix match — return immediately
+    if (lowerPath.endsWith(lowerPathSuffix)) {
       return { docId: meta.id, path };
     }
 
-    // Case-insensitive match - save as fallback (only keep first)
-    if (!caseInsensitiveMatch && nameWithoutExt.toLowerCase() === lowerName) {
-      caseInsensitiveMatch = { docId: meta.id, path };
+    // Tier 2: Basename match — save as fallback (only for non-path links)
+    if (!hasPath && !basenameMatch) {
+      const filename = path.split('/').pop() || '';
+      const nameWithoutExt = filename.replace(/\.md$/i, '');
+      if (nameWithoutExt.toLowerCase() === lowerName) {
+        basenameMatch = { docId: meta.id, path };
+      }
     }
   }
 
-  // Return case-insensitive match if no exact match found
-  return caseInsensitiveMatch;
+  return basenameMatch;
 }
 
 /**

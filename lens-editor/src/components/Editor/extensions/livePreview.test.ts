@@ -194,6 +194,22 @@ describe('livePreview - wikilinks', () => {
     expect(widget).not.toBeNull();
     expect(widget!.classList.contains('unresolved')).toBe(false);
   });
+
+  it('replaces ![[Page]] embed with widget when cursor outside', () => {
+    const content = '![[Page Name]] more';
+    const { view, cleanup: c } = createTestEditor(content, 19);
+    cleanup = c;
+    expect(hasClass(view, 'cm-wikilink-widget')).toBe(true);
+  });
+
+  it('widget displays page name for embed syntax', () => {
+    const content = '![[My Page]] end';
+    const { view, cleanup: c } = createTestEditor(content, 16, createRealContext());
+    cleanup = c;
+    const widgets = view.contentDOM.querySelectorAll('.cm-wikilink-widget');
+    expect(widgets.length).toBe(1);
+    expect(widgets[0].textContent).toBe('My Page');
+  });
 });
 
 describe('livePreview - markdown links', () => {
