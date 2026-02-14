@@ -12,6 +12,11 @@ import { Sidebar } from './Sidebar';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import * as Y from 'yjs';
 
+// Mock useResolvedDocId — unit tests don't test doc resolution
+vi.mock('../../hooks/useResolvedDocId', () => ({
+  useResolvedDocId: (compoundId: string) => compoundId || null,
+}));
+
 describe('Sidebar with multi-folder metadata', () => {
   it('renders folder prefixes as top-level folder nodes', () => {
     // Metadata with folder-prefixed paths (as produced by mergeMetadata)
@@ -30,7 +35,7 @@ describe('Sidebar with multi-folder metadata', () => {
     const errors = new Map<string, Error>();
 
     render(
-      <MemoryRouter initialEntries={['/c0000001-0000-4000-8000-000000000001/Lens/Welcome.md']}>
+      <MemoryRouter initialEntries={['/c0000001/Lens/Welcome.md']}>
         <NavigationContext.Provider
           value={{
             metadata,
