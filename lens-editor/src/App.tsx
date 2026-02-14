@@ -15,6 +15,7 @@ import type { UserRole } from './contexts/AuthContext';
 import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken } from './lib/auth-share';
 import { setShareToken } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
+import { useResolvedDocId } from './hooks/useResolvedDocId';
 
 // VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
@@ -35,10 +36,10 @@ const FOLDERS: FolderConfig[] = USE_LOCAL_RELAY
       { id: 'ea4015da-24af-4d9d-ac49-8c902cb17121', name: 'Lens Edu' },
     ];
 
-// Default document UUID (just the doc part, without RELAY_ID prefix)
+// Default document short UUID (first 8 chars — used only in URL redirect)
 const DEFAULT_DOC_UUID = USE_LOCAL_RELAY
-  ? 'c0000001-0000-4000-8000-000000000001'
-  : '76c3e654-0e77-4538-962f-1b419647206e';
+  ? 'c0000001'
+  : '76c3e654';
 
 // Read share token from URL once at module load (before React renders)
 const shareToken = getShareTokenFromUrl();
@@ -75,28 +76,44 @@ function DocumentNotFound() {
 }
 
 /**
- * Document view — reads docUuid from URL params, renders editor.
+ * Document view — reads docUuid from URL params, resolves short UUIDs, renders editor.
  * Lives inside NavigationContext so it can access metadata and onNavigate.
+ *
+ * IMPORTANT: All hooks must be called before any early returns (Rules of Hooks).
  */
 function DocumentView() {
   const { docUuid, '*': splatPath } = useParams<{ docUuid: string; '*': string }>();
   const { metadata } = useNavigation();
   const navigate = useNavigate();
 
-  if (!docUuid) return <DocumentNotFound />;
+  // Build compound ID from URL param (may be short: RELAY_ID + 8-char prefix)
+  // Empty string when docUuid is missing — hook handles this gracefully
+  const shortCompoundId = docUuid ? `${RELAY_ID}-${docUuid}` : '';
 
-  // Build compound doc ID directly from URL param — no metadata lookup needed
-  const activeDocId = `${RELAY_ID}-${docUuid}`;
+  // Resolve short UUID to full compound ID (instant from metadata, or server fetch)
+  // Returns null for empty input or while resolving
+  const activeDocId = useResolvedDocId(shortCompoundId, metadata);
 
-  // Update decorative path in URL when metadata loads (without adding history entry)
+  // Update URL to use short UUID + decorative path when metadata loads
   useEffect(() => {
-    if (Object.keys(metadata).length === 0) return;
+    if (!activeDocId || !docUuid || Object.keys(metadata).length === 0) return;
     const expectedUrl = urlForDoc(activeDocId, metadata);
     const currentPath = `/${docUuid}${splatPath ? `/${splatPath}` : ''}`;
     if (currentPath !== expectedUrl) {
       navigate(expectedUrl, { replace: true });
     }
   }, [metadata, activeDocId, docUuid, splatPath, navigate]);
+
+  if (!docUuid) return <DocumentNotFound />;
+
+  // Show loading while resolving short UUID on cold page load
+  if (!activeDocId) {
+    return (
+      <main className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Loading document...</div>
+      </main>
+    );
+  }
 
   return (
     <RelayProvider key={activeDocId} docId={activeDocId}>

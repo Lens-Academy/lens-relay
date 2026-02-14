@@ -6,6 +6,7 @@ import { FileTree } from './FileTree';
 import { FileTreeProvider } from './FileTreeContext';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames } from '../../lib/tree-utils';
 import { createDocument, renameDocument, deleteDocument } from '../../lib/relay-api';
@@ -16,10 +17,15 @@ export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearch = useDeferredValue(searchTerm);
 
-  // Derive active doc ID from URL path (first segment is the doc UUID)
+  // Get metadata from NavigationContext (needed early for doc ID resolution)
+  const { metadata, folderDocs, folderNames, onNavigate } = useNavigation();
+
+  // Derive active doc ID from URL path (first segment is the doc UUID — may be short)
   const location = useLocation();
-  const docUuid = location.pathname.split('/')[1] || '';
-  const activeDocId = docUuid ? `${RELAY_ID}-${docUuid}` : '';
+  const docUuidFromUrl = location.pathname.split('/')[1] || '';
+  const shortCompoundId = docUuidFromUrl ? `${RELAY_ID}-${docUuidFromUrl}` : '';
+  // Resolve short UUID to full compound ID (empty string = no active doc)
+  const activeDocId = useResolvedDocId(shortCompoundId, metadata) || '';
 
   // State for file name filter (separate from full-text search)
   const [fileFilter, setFileFilter] = useState('');
@@ -37,8 +43,7 @@ export function Sidebar() {
   // Ref for Ctrl+K keyboard shortcut focus
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Get metadata from NavigationContext (lifted to App level)
-  const { metadata, folderDocs, folderNames, onNavigate } = useNavigation();
+  // metadata, folderDocs, folderNames, onNavigate — destructured above (before resolution hook)
 
   // Server-side full-text search (activates when searchTerm >= 2 chars)
   const { results: searchResults, loading: searchLoading, error: searchError } = useSearch(searchTerm);
