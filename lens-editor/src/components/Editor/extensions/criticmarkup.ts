@@ -357,9 +357,10 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
       const decorations: Array<{ from: number; to: number; deco: Decoration }> = [];
 
       for (const range of ranges) {
+        // Only decorate the content, not the delimiters/metadata
         decorations.push({
-          from: range.from,
-          to: range.to,
+          from: range.contentFrom,
+          to: range.contentTo,
           deco: Decoration.mark({ class: TYPE_CLASSES[range.type] }),
         });
 
@@ -418,7 +419,7 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
   const ranges = tr.startState.field(criticMarkupField);
 
   // Check if cursor is inside an existing addition by the same author
-  const insideOwnAddition = ranges.some(
+  const ownAddition = ranges.find(
     (r) =>
       r.type === 'addition' &&
       r.metadata?.author === currentAuthor &&
@@ -426,8 +427,65 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
       cursorPos < r.to
   );
 
-  // If inside own addition, let the edit through without wrapping
-  if (insideOwnAddition) {
+  // If inside own addition, let the edit through — unless it empties the content
+  // or escapes the content boundaries (e.g. backspace at left edge)
+  if (ownAddition) {
+    let wouldEmpty = false;
+    let escapesLeft = false;
+    let escapesRight = false;
+    tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+      const added = inserted.toString();
+      if (fromA < ownAddition.contentFrom) {
+        escapesLeft = true;
+        return;
+      }
+      if (toA > ownAddition.contentTo) {
+        escapesRight = true;
+        return;
+      }
+      if (!added) {
+        const contentBefore = tr.startState.doc.sliceString(ownAddition.contentFrom, fromA);
+        const contentAfter = tr.startState.doc.sliceString(toA, ownAddition.contentTo);
+        if (!contentBefore && !contentAfter) {
+          wouldEmpty = true;
+        }
+      }
+    });
+
+    if (wouldEmpty) {
+      return {
+        changes: [{ from: ownAddition.from, to: ownAddition.to, insert: '' }],
+        selection: EditorSelection.cursor(ownAddition.from),
+        effects: tr.effects,
+      };
+    }
+
+    if (escapesLeft && ownAddition.from > 0) {
+      // Backspace at left edge of content: create deletion for char before the wrapper
+      const timestamp = Date.now();
+      const meta = JSON.stringify({ author: currentAuthor, timestamp });
+      const charBefore = tr.startState.doc.sliceString(ownAddition.from - 1, ownAddition.from);
+      const delInsert = `{--${meta}@@${charBefore}--}`;
+      return {
+        changes: [{ from: ownAddition.from - 1, to: ownAddition.from, insert: delInsert }],
+        selection: EditorSelection.cursor(ownAddition.from - 1),
+        effects: tr.effects,
+      };
+    }
+
+    if (escapesRight && ownAddition.to < tr.startState.doc.length) {
+      // Forward-delete at right edge: create deletion for char after the wrapper
+      const timestamp = Date.now();
+      const meta = JSON.stringify({ author: currentAuthor, timestamp });
+      const charAfter = tr.startState.doc.sliceString(ownAddition.to, ownAddition.to + 1);
+      const delInsert = `{--${meta}@@${charAfter}--}`;
+      return {
+        changes: [{ from: ownAddition.to, to: ownAddition.to + 1, insert: delInsert }],
+        selection: EditorSelection.cursor(ownAddition.to + delInsert.length),
+        effects: tr.effects,
+      };
+    }
+
     return tr;
   }
 
