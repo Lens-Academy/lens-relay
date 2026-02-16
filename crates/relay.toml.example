@@ -101,3 +101,15 @@ path = "./data"
 # timeout_ms = 5000             # Optional: request timeout
 
 
+# Folder display names (optional)
+# Maps folder doc UUIDs to human-readable names used by the link indexer,
+# document resolver, and search index. Without these, folders show as
+# "Folder-{uuid-prefix}" placeholders.
+#
+# [[folders]]
+# uuid = "b0000001-0000-4000-8000-000000000001"
+# name = "Lens"
+#
+# [[folders]]
+# uuid = "b0000002-0000-4000-8000-000000000002"
+# name = "Lens Edu"
