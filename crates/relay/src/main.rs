@@ -573,7 +573,7 @@ async fn main() -> Result<()> {
                 tracing::info!("Loaded {} webhook configurations", configs.len());
             }
 
-            let server = relay::server::Server::new(
+            let (server, worker_receivers) = relay::server::Server::new(
                 store,
                 std::time::Duration::from_secs(config.server.checkpoint_freq_seconds),
                 auth,
@@ -591,6 +591,9 @@ async fn main() -> Result<()> {
             if let Err(e) = server.startup_reindex(&config.folders).await {
                 tracing::warn!("Startup reindex failed: {:?}", e);
             }
+
+            // Spawn workers AFTER startup_reindex to avoid race conditions
+            server.spawn_workers(worker_receivers);
 
             let main_handle = tokio::spawn({
                 let server = server.clone();
@@ -954,7 +957,7 @@ async fn main() -> Result<()> {
                 );
             }
 
-            let server = relay::server::Server::new(
+            let (server, worker_receivers) = relay::server::Server::new(
                 store,
                 std::time::Duration::from_secs(checkpoint_freq_seconds.unwrap_or(10)),
                 None,   // No authenticator
@@ -966,11 +969,22 @@ async fn main() -> Result<()> {
             )
             .await?;
 
+            let server = Arc::new(server);
+
             // Load the one document we're operating with
             server
                 .load_doc(&doc_id, None)
                 .await
                 .context("Failed to load document")?;
+
+            // Spawn workers after loading
+            server.spawn_workers(worker_receivers);
+
+            // Unwrap Arc since serve_doc takes self by value
+            let server = match Arc::try_unwrap(server) {
+                Ok(s) => s,
+                Err(_) => panic!("no other references to server should exist at this point"),
+            };
 
             let addr = SocketAddr::new(
                 host.unwrap_or(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),

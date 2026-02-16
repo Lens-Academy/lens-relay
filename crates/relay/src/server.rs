@@ -446,6 +446,16 @@ pub struct Server {
     pub(crate) mcp_api_key: Option<String>,
 }
 
+/// Holds channel receivers for background workers.
+/// Returned by `Server::new()`, consumed by `Server::spawn_workers()`.
+pub struct WorkerReceivers {
+    index_rx: Receiver<String>,
+    search_rx: Option<(
+        tokio::sync::mpsc::Receiver<String>,
+        Arc<DashMap<String, tokio::time::Instant>>,
+    )>,
+}
+
 impl Server {
     pub async fn new(
         store: Option<Box<dyn Store>>,
@@ -456,7 +466,7 @@ impl Server {
         cancellation_token: CancellationToken,
         doc_gc: bool,
         webhook_configs: Option<Vec<WebhookConfig>>,
-    ) -> Result<Self> {
+    ) -> Result<(Self, WorkerReceivers)> {
         // Initialize metrics early so all senders can use them
         let metrics = RelayMetrics::new()
             .map_err(|e| anyhow!("Failed to initialize webhook metrics: {}", e))?;
@@ -500,28 +510,6 @@ impl Server {
         let (link_indexer, index_rx) = LinkIndexer::new();
         let link_indexer = Arc::new(link_indexer);
 
-        // Spawn background worker for link indexing
-        let docs_for_indexer = docs.clone();
-        let indexer_for_worker = link_indexer.clone();
-        let resolver_for_indexer = doc_resolver.clone();
-        tokio::spawn(async move {
-            let result = std::panic::AssertUnwindSafe(
-                indexer_for_worker.run_worker(index_rx, docs_for_indexer, resolver_for_indexer),
-            );
-            if let Err(e) = futures::FutureExt::catch_unwind(result).await {
-                let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = e.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "unknown panic payload".to_string()
-                };
-                tracing::error!("CRITICAL: Link indexer worker panicked: {msg}. Backlink indexing is now dead — restart the server.");
-            } else {
-                tracing::error!("CRITICAL: Link indexer worker exited unexpectedly (channel closed). Backlink indexing is now dead.");
-            }
-        });
-
         // Create SearchIndex with MmapDirectory in a temp directory
         let index_path = std::env::temp_dir().join("lens-relay-search-index");
         // Clean the directory on startup to ensure a fresh index
@@ -540,40 +528,20 @@ impl Server {
         };
         let search_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-        // Spawn background worker for search index updates
-        let (search_tx_final, search_pending_final) = if let Some(ref si) = search_index {
-            let (search_tx, search_rx) = tokio::sync::mpsc::channel::<String>(1000);
-            let si_for_worker = si.clone();
-            let docs_for_search = docs.clone();
-            let search_pending: Arc<DashMap<String, tokio::time::Instant>> =
-                Arc::new(DashMap::new());
-            let search_pending_for_struct = search_pending.clone();
-
-            tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(search_worker(
-                    search_rx,
-                    si_for_worker,
-                    docs_for_search,
-                    search_pending,
-                ));
-                if let Err(e) = futures::FutureExt::catch_unwind(result).await {
-                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = e.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "unknown panic payload".to_string()
-                    };
-                    tracing::error!("CRITICAL: Search index worker panicked: {msg}. Search indexing is now dead — restart the server.");
-                } else {
-                    tracing::error!("CRITICAL: Search index worker exited unexpectedly (channel closed). Search indexing is now dead.");
-                }
-            });
-
-            (Some(search_tx), Some(search_pending_for_struct))
-        } else {
-            (None, None)
-        };
+        // Create search channel and pending map (workers spawned later via spawn_workers)
+        let (search_tx_final, search_pending_final, search_rx_for_worker) =
+            if search_index.is_some() {
+                let (search_tx, search_rx) = tokio::sync::mpsc::channel::<String>(1000);
+                let search_pending: Arc<DashMap<String, tokio::time::Instant>> =
+                    Arc::new(DashMap::new());
+                (
+                    Some(search_tx),
+                    Some(search_pending.clone()),
+                    Some((search_rx, search_pending)),
+                )
+            } else {
+                (None, None, None)
+            };
 
         let mcp_api_key = std::env::var("MCP_API_KEY").ok();
         if mcp_api_key.is_some() {
@@ -582,7 +550,7 @@ impl Server {
             tracing::info!("MCP endpoint disabled (MCP_API_KEY not set)");
         }
 
-        Ok(Self {
+        let server = Self {
             docs,
             doc_worker_tracker: TaskTracker::new(),
             store: store.map(Arc::new),
@@ -603,7 +571,82 @@ impl Server {
             doc_resolver,
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key,
-        })
+        };
+
+        let receivers = WorkerReceivers {
+            index_rx,
+            search_rx: search_rx_for_worker,
+        };
+
+        Ok((server, receivers))
+    }
+
+    /// Spawn background workers for link indexing and search index updates.
+    /// Must be called after `startup_reindex` to avoid race conditions where
+    /// workers process notifications while startup is still writing to Y.Docs.
+    pub fn spawn_workers(self: &Arc<Self>, receivers: WorkerReceivers) {
+        let WorkerReceivers {
+            index_rx,
+            search_rx,
+        } = receivers;
+
+        // Spawn background worker for link indexing
+        if let Some(ref indexer) = self.link_indexer {
+            let docs_for_indexer = self.docs.clone();
+            let indexer_for_worker = indexer.clone();
+            let resolver_for_indexer = self.doc_resolver.clone();
+            tokio::spawn(async move {
+                let result = std::panic::AssertUnwindSafe(
+                    indexer_for_worker.run_worker(
+                        index_rx,
+                        docs_for_indexer,
+                        resolver_for_indexer,
+                    ),
+                );
+                if let Err(e) = futures::FutureExt::catch_unwind(result).await {
+                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic payload".to_string()
+                    };
+                    tracing::error!("CRITICAL: Link indexer worker panicked: {msg}. Backlink indexing is now dead — restart the server.");
+                } else {
+                    tracing::error!("CRITICAL: Link indexer worker exited unexpectedly (channel closed). Backlink indexing is now dead.");
+                }
+            });
+        }
+
+        // Spawn background worker for search index updates
+        if let Some((search_rx, search_pending)) = search_rx {
+            if let Some(ref si) = self.search_index {
+                let si_for_worker = si.clone();
+                let docs_for_search = self.docs.clone();
+                tokio::spawn(async move {
+                    let result = std::panic::AssertUnwindSafe(search_worker(
+                        search_rx,
+                        si_for_worker,
+                        docs_for_search,
+                        search_pending,
+                    ));
+                    if let Err(e) = futures::FutureExt::catch_unwind(result).await {
+                        let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = e.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "unknown panic payload".to_string()
+                        };
+                        tracing::error!("CRITICAL: Search index worker panicked: {msg}. Search indexing is now dead — restart the server.");
+                    } else {
+                        tracing::error!("CRITICAL: Search index worker exited unexpectedly (channel closed). Search indexing is now dead.");
+                    }
+                });
+            }
+        }
+
+        tracing::info!("Background workers started (link indexer, search index)");
     }
 
     /// Get the DocumentResolver for path-to-UUID resolution.
@@ -614,6 +657,33 @@ impl Server {
     /// Get the DashMap of all loaded documents.
     pub fn docs(&self) -> &Arc<DashMap<String, DocWithSyncKv>> {
         &self.docs
+    }
+
+    /// Convenience wrapper for tests: creates a Server and discards the WorkerReceivers.
+    /// Workers are not spawned, which is fine for tests that don't need background indexing.
+    #[cfg(test)]
+    pub async fn new_without_workers(
+        store: Option<Box<dyn Store>>,
+        checkpoint_freq: Duration,
+        authenticator: Option<Authenticator>,
+        url: Option<Url>,
+        allowed_hosts: Vec<AllowedHost>,
+        cancellation_token: CancellationToken,
+        doc_gc: bool,
+        webhook_configs: Option<Vec<WebhookConfig>>,
+    ) -> Result<Self> {
+        let (server, _receivers) = Self::new(
+            store,
+            checkpoint_freq,
+            authenticator,
+            url,
+            allowed_hosts,
+            cancellation_token,
+            doc_gc,
+            webhook_configs,
+        )
+        .await?;
+        Ok(server)
     }
 
     /// Create a minimal Server for testing. No store, no auth, no search.
@@ -3125,7 +3195,7 @@ mod test {
 
     #[tokio::test]
     async fn test_auth_doc() {
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
@@ -3165,7 +3235,7 @@ mod test {
     #[tokio::test]
     async fn test_auth_doc_with_prefix() {
         let prefix: Url = "https://foo.bar".parse().unwrap();
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
@@ -3277,7 +3347,7 @@ mod test {
 
         // Create the server with our mock components
         let server_state = Arc::new(
-            Server::new(
+            Server::new_without_workers(
                 Some(Box::new(mock_store)),
                 Duration::from_secs(60),
                 Some(authenticator.clone()),
@@ -3417,7 +3487,7 @@ mod test {
         ];
 
         let server_state = Arc::new(
-            Server::new(
+            Server::new_without_workers(
                 None,
                 Duration::from_secs(60),
                 None,
@@ -3458,7 +3528,7 @@ mod test {
 
         // Test with flycast host - create another server instance with same allowed hosts
         let server_state2 = Arc::new(
-            Server::new(
+            Server::new_without_workers(
                 None,
                 Duration::from_secs(60),
                 None,
@@ -3518,7 +3588,7 @@ mod test {
         let store = FileSystemStore::new(temp_dir.path().to_path_buf()).unwrap();
 
         let server_state = Arc::new(
-            Server::new(
+            Server::new_without_workers(
                 Some(Box::new(store)),
                 Duration::from_secs(60),
                 Some(authenticator.clone()),
@@ -3596,7 +3666,7 @@ mod test {
         let store = FileSystemStore::new(temp_dir.path().to_path_buf()).unwrap();
 
         let server_state = Arc::new(
-            Server::new(
+            Server::new_without_workers(
                 Some(Box::new(store)),
                 Duration::from_secs(60),
                 Some(authenticator.clone()),
@@ -3657,7 +3727,7 @@ mod test {
 
     #[tokio::test]
     async fn test_resolve_doc_id_exact_match() {
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
@@ -3678,7 +3748,7 @@ mod test {
 
     #[tokio::test]
     async fn test_resolve_doc_id_prefix_match() {
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
@@ -3700,7 +3770,7 @@ mod test {
 
     #[tokio::test]
     async fn test_resolve_doc_id_compound_prefix_match() {
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
@@ -3723,7 +3793,7 @@ mod test {
 
     #[tokio::test]
     async fn test_resolve_doc_id_no_match() {
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
@@ -3743,7 +3813,7 @@ mod test {
 
     #[tokio::test]
     async fn test_resolve_doc_handler() {
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
@@ -3773,7 +3843,7 @@ mod test {
 
     #[tokio::test]
     async fn test_resolve_doc_handler_not_found() {
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
@@ -3798,7 +3868,7 @@ mod test {
 
     #[tokio::test]
     async fn test_resolve_doc_id_ambiguous_prefix() {
-        let server_state = Server::new(
+        let server_state = Server::new_without_workers(
             None,
             Duration::from_secs(60),
             None,
