@@ -279,6 +279,9 @@ pub struct Config {
 
     pub metrics: Option<MetricsConfig>,
 
+    #[serde(default)]
+    pub folders: Vec<FolderConfig>,
+
     /// Track which fields were overridden by environment variables
     #[serde(skip)]
     pub env_overrides: HashMap<String, String>,
@@ -483,6 +486,12 @@ pub struct TigrisStoreConfig {
 
     #[serde(default = "default_presigned_url_expiration")]
     pub presigned_url_expiration: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FolderConfig {
+    pub uuid: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -932,6 +941,7 @@ impl Default for Config {
             webhooks: Vec::new(),
             logging: LoggingConfig::default(),
             metrics: None,
+            folders: Vec::new(),
             env_overrides: HashMap::new(),
         }
     }
@@ -1130,5 +1140,33 @@ public_key = "test-public-key"
 
         // Clean up
         std::fs::remove_file(&config_path).ok();
+    }
+
+    #[test]
+    fn test_folders_config_deserializes() {
+        let toml_content = r#"
+[[folders]]
+uuid = "b0000001-0000-4000-8000-000000000001"
+name = "Lens"
+
+[[folders]]
+uuid = "b0000002-0000-4000-8000-000000000002"
+name = "Lens Edu"
+"#;
+        let config: Config = toml::from_str(toml_content).unwrap();
+        assert_eq!(config.folders.len(), 2);
+        assert_eq!(config.folders[0].uuid, "b0000001-0000-4000-8000-000000000001");
+        assert_eq!(config.folders[0].name, "Lens");
+        assert_eq!(config.folders[1].name, "Lens Edu");
+    }
+
+    #[test]
+    fn test_empty_folders_config() {
+        let toml_content = r#"
+[server]
+port = 8080
+"#;
+        let config: Config = toml::from_str(toml_content).unwrap();
+        assert!(config.folders.is_empty());
     }
 }
