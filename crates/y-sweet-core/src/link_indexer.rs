@@ -1,6 +1,6 @@
 use crate::doc_resolver::{read_folder_name, DocumentResolver};
 use crate::doc_sync::DocWithSyncKv;
-use crate::link_parser::{compute_wikilink_rename_edits, extract_wikilinks};
+use crate::link_parser::{compute_wikilink_rename_edits, compute_wikilink_rename_edits_resolved, extract_wikilinks};
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -426,12 +426,30 @@ fn index_content_into_folders_from_text(
 ///
 /// Note: yrs defaults to `OffsetKind::Bytes` (UTF-8 byte offsets), which matches
 /// the byte offsets from `compute_wikilink_rename_edits()` directly — no conversion needed.
+/// Update wikilinks in a Y.Doc -- matches all basename occurrences (no resolution filter).
+/// Use `update_wikilinks_in_doc_resolved` for disambiguation in multi-folder setups.
 pub fn update_wikilinks_in_doc(
     content_doc: &Doc,
     old_name: &str,
     new_name: &str,
 ) -> anyhow::Result<usize> {
-    // 1. Read plain text
+    // Delegate with empty resolution context -- matches all basenames
+    update_wikilinks_in_doc_resolved(content_doc, old_name, new_name, None, &[], "")
+}
+
+/// Update wikilinks in a Y.Doc with resolution-based disambiguation.
+///
+/// For each wikilink whose basename matches `old_name`, resolves it against
+/// the virtual tree. Only edits links that resolve to `old_target_virtual_path`.
+/// When `old_target_virtual_path` is empty, falls back to matching all basenames.
+pub fn update_wikilinks_in_doc_resolved(
+    content_doc: &Doc,
+    old_name: &str,
+    new_name: &str,
+    source_virtual_path: Option<&str>,
+    entries: &[VirtualEntry],
+    old_target_virtual_path: &str,
+) -> anyhow::Result<usize> {
     let plain_text = {
         let txn = content_doc.transact();
         match txn.get_text("contents") {
@@ -440,13 +458,28 @@ pub fn update_wikilinks_in_doc(
         }
     };
 
-    // 2. Compute edits (already in reverse offset order)
-    let edits = compute_wikilink_rename_edits(&plain_text, old_name, new_name);
+    let edits = if old_target_virtual_path.is_empty() {
+        // No resolution context -- match all basenames (legacy behavior)
+        compute_wikilink_rename_edits(&plain_text, old_name, new_name)
+    } else {
+        // Resolution-aware -- only edit links that resolve to the renamed file
+        let old_target_lower = old_target_virtual_path.to_lowercase();
+        compute_wikilink_rename_edits_resolved(
+            &plain_text,
+            old_name,
+            new_name,
+            |link_name| {
+                resolve_in_virtual_tree(link_name, source_virtual_path, entries)
+                    .map(|e| e.virtual_path.to_lowercase() == old_target_lower)
+                    .unwrap_or(false)
+            },
+        )
+    };
+
     if edits.is_empty() {
         return Ok(0);
     }
 
-    // 3. Apply edits in reverse offset order so earlier byte offsets stay valid.
     let mut txn = content_doc.transact_mut_with("link-indexer");
     let text = txn.get_or_insert_text("contents");
 
@@ -455,7 +488,6 @@ pub fn update_wikilinks_in_doc(
         text.insert(&mut txn, edit.offset as u32, &edit.insert_text);
     }
 
-    // 5. Return count
     Ok(edits.len())
 }
 
@@ -472,12 +504,14 @@ pub(crate) struct RenameEvent {
     pub uuid: String,
     pub old_name: String,
     pub new_name: String,
+    /// Full filemeta path of the old file, e.g. "/Foo.md"
+    pub old_path: String,
 }
 
 pub struct LinkIndexer {
     pending: Arc<DashMap<String, Instant>>,
     index_tx: mpsc::Sender<String>,
-    filemeta_cache: Arc<DashMap<String, HashMap<String, String>>>, // folder_doc_id -> (uuid -> basename)
+    filemeta_cache: Arc<DashMap<String, HashMap<String, (String, String)>>>, // folder_doc_id -> (uuid -> (basename, path))
 }
 
 impl LinkIndexer {
@@ -535,8 +569,8 @@ impl LinkIndexer {
     /// whose basename has changed. Updates the cache after diffing.
     /// First call (no cache entry) seeds the cache and returns empty.
     pub(crate) fn detect_renames(&self, folder_doc_id: &str, folder_doc: &Doc) -> Vec<RenameEvent> {
-        // 1. Read filemeta_v0 and build uuid -> basename map
-        let current: HashMap<String, String> = {
+        // 1. Read filemeta_v0 and build uuid -> (basename, path) map
+        let current: HashMap<String, (String, String)> = {
             let txn = folder_doc.transact();
             let Some(filemeta) = txn.get_map("filemeta_v0") else {
                 return Vec::new();
@@ -555,7 +589,7 @@ impl LinkIndexer {
                         .next()
                         .unwrap_or(&path)
                         .to_string();
-                    map.insert(uuid, basename);
+                    map.insert(uuid, (basename, path.to_string()));
                 }
             }
             map
@@ -575,13 +609,14 @@ impl LinkIndexer {
 
         // 5. Compare: for each uuid in BOTH old and new, if basename changed, emit RenameEvent
         let mut renames = Vec::new();
-        for (uuid, new_basename) in &current {
-            if let Some(old_basename) = old.get(uuid) {
+        for (uuid, (new_basename, _new_path)) in &current {
+            if let Some((old_basename, old_path)) = old.get(uuid) {
                 if old_basename != new_basename {
                     renames.push(RenameEvent {
                         uuid: uuid.clone(),
                         old_name: old_basename.clone(),
                         new_name: new_basename.clone(),
+                        old_path: old_path.clone(),
                     });
                 }
             }
@@ -596,18 +631,22 @@ impl LinkIndexer {
     ///
     /// This is the server-level glue that:
     /// 1. Calls `detect_renames()` to diff filemeta against the cache
-    /// 2. For each rename, reads backlinks to find source docs
-    /// 3. Looks up each source doc in the DashMap and calls `update_wikilinks_in_doc()`
+    /// 2. Builds virtual tree from all folder docs for link resolution
+    /// 3. For each rename, reads backlinks to find source docs
+    /// 4. Resolves each wikilink to confirm it points to the renamed file
+    /// 5. Calls `update_wikilinks_in_doc_resolved()` for disambiguation
     /// Returns `true` if renames were detected and processed.
     fn apply_rename_updates(&self, folder_doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) -> bool {
-        // 1. Get the folder doc and detect renames
-        let renames = {
+        // 1. Get the folder doc, detect renames, read folder name
+        let (renames, folder_name) = {
             let Some(doc_ref) = docs.get(folder_doc_id) else {
                 return false;
             };
             let awareness = doc_ref.awareness();
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            self.detect_renames(folder_doc_id, &guard.doc)
+            let renames = self.detect_renames(folder_doc_id, &guard.doc);
+            let folder_name = read_folder_name(&guard.doc, "");
+            (renames, folder_name)
         };
 
         if renames.is_empty() {
@@ -625,9 +664,50 @@ impl LinkIndexer {
             folder_doc_id
         );
 
-        // 2. For each rename, read backlinks and update content docs
+        // 2. Build virtual entries from all folder docs
+        //    Snapshot entries one folder at a time to avoid holding multiple locks.
+        let folder_doc_ids = find_all_folder_docs(docs);
+        let mut entries: Vec<VirtualEntry> = Vec::new();
+        for fid in &folder_doc_ids {
+            if let Some(doc_ref) = docs.get(fid) {
+                let awareness = doc_ref.awareness();
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+                let fname = read_folder_name(&guard.doc, "");
+                let txn = guard.doc.transact();
+                if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                    for (path, value) in filemeta.iter(&txn) {
+                        if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
+                            let entry_type = extract_type_from_filemeta_entry(&value, &txn)
+                                .unwrap_or_default();
+                            entries.push(VirtualEntry {
+                                virtual_path: format!("/{}{}", fname, path),
+                                entry_type,
+                                id: uuid,
+                                folder_idx: 0, // not needed for resolution
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Patch virtual entries to reflect pre-rename state.
+        //    By the time we get here, filemeta already has the new paths.
+        //    Resolution must be against the old paths to correctly identify
+        //    which links pointed to the renamed file.
         for rename in &renames {
-            // Read backlinks for the renamed UUID from the folder doc
+            let old_virtual_path = format!("/{}{}", folder_name, rename.old_path);
+            for entry in entries.iter_mut() {
+                if entry.id == rename.uuid {
+                    entry.virtual_path = old_virtual_path.clone();
+                }
+            }
+        }
+
+        // 4. For each rename, read backlinks and update content docs
+        for rename in &renames {
+            let old_virtual_path = format!("/{}{}", folder_name, rename.old_path);
+
             let source_uuids = {
                 let Some(doc_ref) = docs.get(folder_doc_id) else {
                     continue;
@@ -655,7 +735,7 @@ impl LinkIndexer {
                 rename.old_name, rename.new_name, source_uuids.len()
             );
 
-            // 3. Update wikilinks in each source doc
+            // 5. Update wikilinks in each source doc with resolution context
             for source_uuid in &source_uuids {
                 let content_doc_id = format!("{}-{}", relay_id, source_uuid);
                 let Some(content_ref) = docs.get(&content_doc_id) else {
@@ -666,9 +746,20 @@ impl LinkIndexer {
                     continue;
                 };
 
+                let source_virtual_path = entries.iter()
+                    .find(|e| e.id == *source_uuid)
+                    .map(|e| e.virtual_path.clone());
+
                 let awareness = content_ref.awareness();
                 let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-                match update_wikilinks_in_doc(&guard.doc, &rename.old_name, &rename.new_name) {
+                match update_wikilinks_in_doc_resolved(
+                    &guard.doc,
+                    &rename.old_name,
+                    &rename.new_name,
+                    source_virtual_path.as_deref(),
+                    &entries,
+                    &old_virtual_path,
+                ) {
                     Ok(count) => {
                         tracing::info!(
                             "Updated {} wikilink(s) in {} ({} -> {})",
@@ -2061,6 +2152,413 @@ mod tests {
         fn no_source_bare_name_fails() {
             let e = spec_entries();
             assert!(resolve_in_virtual_tree("Welcome", None, &e).is_none());
+        }
+    }
+
+    mod cross_folder_rename_tests {
+        use super::*;
+
+        /// Shared fixture: two folders, each with a file named "Foo"
+        fn two_folder_fixture() -> (Doc, Doc) {
+            let folder_a = create_folder_doc(&[
+                ("/Foo.md", "uuid-foo-a"),
+                ("/Notes.md", "uuid-notes-a"),
+            ]);
+            set_folder_name(&folder_a, "Relay Folder 1");
+
+            let folder_b = create_folder_doc(&[
+                ("/Foo.md", "uuid-foo-b"),
+                ("/Journal.md", "uuid-journal-b"),
+            ]);
+            set_folder_name(&folder_b, "Relay Folder 2");
+
+            (folder_a, folder_b)
+        }
+
+        /// Helper: seed indexer cache, rename a file in filemeta, detect renames.
+        fn rename_in_folder(
+            indexer: &LinkIndexer,
+            folder_doc: &Doc,
+            folder_cache_key: &str,
+            old_path: &str,
+            new_path: &str,
+            uuid: &str,
+        ) -> Vec<RenameEvent> {
+            // Seed cache on first call
+            indexer.detect_renames(folder_cache_key, folder_doc);
+
+            // Rename: remove old path, add new path with same UUID
+            {
+                let mut txn = folder_doc.transact_mut();
+                let filemeta = txn.get_or_insert_map("filemeta_v0");
+                filemeta.remove(&mut txn, old_path);
+                let mut map = HashMap::new();
+                map.insert("id".to_string(), Any::String(uuid.into()));
+                map.insert("type".to_string(), Any::String("markdown".into()));
+                map.insert("version".to_string(), Any::Number(0.0));
+                filemeta.insert(&mut txn, new_path, Any::Map(map.into()));
+            }
+
+            indexer.detect_renames(folder_cache_key, folder_doc)
+        }
+
+        /// Helper: apply renames to a content doc using backlinks from a folder doc,
+        /// with resolution-aware disambiguation.
+        fn apply_renames_to_doc(
+            renames: &[RenameEvent],
+            folder_docs: &[&Doc],
+            folder_names: &[&str],
+            rename_folder_doc: &Doc,
+            rename_folder_name: &str,
+            source_uuid: &str,
+            content_doc: &Doc,
+        ) {
+            let mut entries = build_virtual_entries(folder_docs, folder_names);
+
+            // Patch virtual entries: restore old paths for renamed files so that
+            // link resolution works against the pre-rename state.
+            for rename in renames {
+                let old_virtual_path = format!("/{}{}", rename_folder_name, rename.old_path);
+                for entry in entries.iter_mut() {
+                    if entry.id == rename.uuid {
+                        entry.virtual_path = old_virtual_path.clone();
+                    }
+                }
+            }
+
+            let source_virtual_path: Option<String> = entries.iter()
+                .find(|e| e.id == source_uuid)
+                .map(|e| e.virtual_path.clone());
+
+            for rename in renames {
+                let txn = rename_folder_doc.transact();
+                if let Some(backlinks) = txn.get_map("backlinks_v0") {
+                    let source_uuids = read_backlinks_array(&backlinks, &txn, &rename.uuid);
+                    drop(txn);
+
+                    if source_uuids.contains(&source_uuid.to_string()) {
+                        let old_virtual_path = format!("/{}{}", rename_folder_name, rename.old_path);
+                        update_wikilinks_in_doc_resolved(
+                            content_doc,
+                            &rename.old_name,
+                            &rename.new_name,
+                            source_virtual_path.as_deref(),
+                            &entries,
+                            &old_virtual_path,
+                        ).unwrap();
+                    }
+                }
+            }
+        }
+
+        // --- Backlink indexing with same-name disambiguation ---
+
+        #[test]
+        fn same_name_bare_link_resolves_within_own_folder() {
+            let (folder_a, folder_b) = two_folder_fixture();
+            // Notes in folder A links to [[Foo]] — should resolve to folder A's Foo (relative)
+            let notes_doc = create_content_doc("See [[Foo]]");
+
+            index_content_into_folders(
+                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            // Backlink on folder A's Foo (correct — same-folder relative resolution)
+            assert_eq!(read_backlinks(&folder_a, "uuid-foo-a"), vec!["uuid-notes-a"]);
+            // No backlink on folder B's Foo
+            assert!(read_backlinks(&folder_b, "uuid-foo-b").is_empty());
+        }
+
+        #[test]
+        fn same_name_cross_folder_explicit_link() {
+            let (folder_a, folder_b) = two_folder_fixture();
+            // Notes in folder A links to [[Relay Folder 2/Foo]] — explicit cross-folder
+            let notes_doc = create_content_doc("See [[Relay Folder 2/Foo]]");
+
+            index_content_into_folders(
+                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            // Backlink on folder B's Foo
+            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+            // No backlink on folder A's Foo
+            assert!(read_backlinks(&folder_a, "uuid-foo-a").is_empty());
+        }
+
+        #[test]
+        fn same_name_both_bare_and_cross_folder_links() {
+            let (folder_a, folder_b) = two_folder_fixture();
+            // Notes links to BOTH Foos: bare resolves to own folder, explicit to other
+            let notes_doc = create_content_doc("[[Foo]] and [[Relay Folder 2/Foo]]");
+
+            index_content_into_folders(
+                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            // folder A's Foo: backlinked by notes-a (bare [[Foo]])
+            assert_eq!(read_backlinks(&folder_a, "uuid-foo-a"), vec!["uuid-notes-a"]);
+            // folder B's Foo: backlinked by notes-a ([[Relay Folder 2/Foo]])
+            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+        }
+
+        #[test]
+        fn same_name_other_folder_bare_link() {
+            let (folder_a, folder_b) = two_folder_fixture();
+            // Journal in folder B links to [[Foo]] — resolves to folder B's Foo
+            let journal_doc = create_content_doc("See [[Foo]]");
+
+            index_content_into_folders(
+                "uuid-journal-b", &journal_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-journal-b"]);
+            assert!(read_backlinks(&folder_a, "uuid-foo-a").is_empty());
+        }
+
+        // --- Cross-folder rename: path-qualified links (Bug 1) ---
+
+        #[test]
+        fn cross_folder_rename_updates_path_qualified_link() {
+            let (folder_a, folder_b) = two_folder_fixture();
+            let notes_doc = create_content_doc("See [[Relay Folder 2/Foo]] for details");
+
+            // Index: notes-a links to folder B's Foo
+            index_content_into_folders(
+                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+
+            // Rename folder B's Foo -> Qux
+            let (indexer, _rx) = LinkIndexer::new();
+            let renames = rename_in_folder(
+                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+            );
+            assert_eq!(renames.len(), 1);
+            assert_eq!(renames[0].old_name, "Foo");
+            assert_eq!(renames[0].new_name, "Qux");
+
+            // Apply rename to backlinkers
+            apply_renames_to_doc(
+                &renames,
+                &[&folder_a, &folder_b],
+                &["Relay Folder 1", "Relay Folder 2"],
+                &folder_b,
+                "Relay Folder 2",
+                "uuid-notes-a",
+                &notes_doc,
+            );
+
+            // BUG 1: [[Relay Folder 2/Foo]] should become [[Relay Folder 2/Qux]]
+            assert_eq!(
+                read_contents(&notes_doc),
+                "See [[Relay Folder 2/Qux]] for details",
+            );
+        }
+
+        #[test]
+        fn cross_folder_rename_preserves_anchor() {
+            let (folder_a, folder_b) = two_folder_fixture();
+            let notes_doc = create_content_doc("See [[Relay Folder 2/Foo#Section]]");
+
+            index_content_into_folders(
+                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            let (indexer, _rx) = LinkIndexer::new();
+            let renames = rename_in_folder(
+                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+            );
+
+            apply_renames_to_doc(
+                &renames,
+                &[&folder_a, &folder_b],
+                &["Relay Folder 1", "Relay Folder 2"],
+                &folder_b,
+                "Relay Folder 2",
+                "uuid-notes-a",
+                &notes_doc,
+            );
+
+            assert_eq!(
+                read_contents(&notes_doc),
+                "See [[Relay Folder 2/Qux#Section]]",
+            );
+        }
+
+        #[test]
+        fn cross_folder_rename_preserves_alias() {
+            let (folder_a, folder_b) = two_folder_fixture();
+            let notes_doc = create_content_doc("See [[Relay Folder 2/Foo|Display]]");
+
+            index_content_into_folders(
+                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            let (indexer, _rx) = LinkIndexer::new();
+            let renames = rename_in_folder(
+                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+            );
+
+            apply_renames_to_doc(
+                &renames,
+                &[&folder_a, &folder_b],
+                &["Relay Folder 1", "Relay Folder 2"],
+                &folder_b,
+                "Relay Folder 2",
+                "uuid-notes-a",
+                &notes_doc,
+            );
+
+            assert_eq!(
+                read_contents(&notes_doc),
+                "See [[Relay Folder 2/Qux|Display]]",
+            );
+        }
+
+        // --- Same-name disambiguation on rename (Bug 2) ---
+
+        #[test]
+        fn rename_same_name_only_updates_correct_links() {
+            // notes-a links to BOTH Foos: [[Foo]] (-> foo-a) and [[Relay Folder 2/Foo]] (-> foo-b)
+            let (folder_a, folder_b) = two_folder_fixture();
+            let notes_doc = create_content_doc("[[Foo]] and [[Relay Folder 2/Foo]]");
+
+            index_content_into_folders(
+                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            // Verify both backlinks exist
+            assert_eq!(read_backlinks(&folder_a, "uuid-foo-a"), vec!["uuid-notes-a"]);
+            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+
+            // Rename folder B's Foo -> Qux
+            let (indexer, _rx) = LinkIndexer::new();
+            let renames = rename_in_folder(
+                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+            );
+            assert_eq!(renames.len(), 1);
+
+            // Apply rename: only folder B's backlinkers should be updated
+            apply_renames_to_doc(
+                &renames,
+                &[&folder_a, &folder_b],
+                &["Relay Folder 1", "Relay Folder 2"],
+                &folder_b,
+                "Relay Folder 2",
+                "uuid-notes-a",
+                &notes_doc,
+            );
+
+            // Expected: [[Foo]] UNCHANGED (points to folder A's Foo),
+            //           [[Relay Folder 2/Foo]] -> [[Relay Folder 2/Qux]]
+            assert_eq!(
+                read_contents(&notes_doc),
+                "[[Foo]] and [[Relay Folder 2/Qux]]",
+            );
+        }
+
+        #[test]
+        fn rename_same_name_from_other_folder_perspective() {
+            // journal-b links to [[Foo]] (-> foo-b) and [[Relay Folder 1/Foo]] (-> foo-a)
+            let (folder_a, folder_b) = two_folder_fixture();
+            let journal_doc = create_content_doc("[[Foo]] and [[Relay Folder 1/Foo]]");
+
+            index_content_into_folders(
+                "uuid-journal-b", &journal_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-journal-b"]);
+            assert_eq!(read_backlinks(&folder_a, "uuid-foo-a"), vec!["uuid-journal-b"]);
+
+            // Rename folder A's Foo -> Baz
+            let (indexer, _rx) = LinkIndexer::new();
+            let renames = rename_in_folder(
+                &indexer, &folder_a, "folder-a", "/Foo.md", "/Baz.md", "uuid-foo-a",
+            );
+            assert_eq!(renames.len(), 1);
+
+            apply_renames_to_doc(
+                &renames,
+                &[&folder_a, &folder_b],
+                &["Relay Folder 1", "Relay Folder 2"],
+                &folder_a,
+                "Relay Folder 1",
+                "uuid-journal-b",
+                &journal_doc,
+            );
+
+            // Expected: [[Foo]] UNCHANGED (points to folder B's Foo),
+            //           [[Relay Folder 1/Foo]] -> [[Relay Folder 1/Baz]]
+            assert_eq!(
+                read_contents(&journal_doc),
+                "[[Foo]] and [[Relay Folder 1/Baz]]",
+            );
+        }
+
+        #[test]
+        fn rename_same_name_bare_link_updated_in_own_folder() {
+            // journal-b links to [[Foo]] which resolves to folder B's Foo (same-folder)
+            let (folder_a, folder_b) = two_folder_fixture();
+            let journal_doc = create_content_doc("See [[Foo]]");
+
+            index_content_into_folders(
+                "uuid-journal-b", &journal_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+
+            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-journal-b"]);
+
+            // Rename folder B's Foo -> Qux
+            let (indexer, _rx) = LinkIndexer::new();
+            let renames = rename_in_folder(
+                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+            );
+
+            apply_renames_to_doc(
+                &renames,
+                &[&folder_a, &folder_b],
+                &["Relay Folder 1", "Relay Folder 2"],
+                &folder_b,
+                "Relay Folder 2",
+                "uuid-journal-b",
+                &journal_doc,
+            );
+
+            // Bare [[Foo]] in folder B's own doc SHOULD be updated (same-folder rename)
+            assert_eq!(read_contents(&journal_doc), "See [[Qux]]");
+        }
+
+        // --- Cross-folder rename: relative path links ---
+
+        #[test]
+        fn cross_folder_rename_updates_relative_path_link() {
+            let (folder_a, folder_b) = two_folder_fixture();
+            // Relative cross-folder link: ../Relay Folder 2/Foo
+            let notes_doc = create_content_doc("See [[../Relay Folder 2/Foo]]");
+
+            index_content_into_folders(
+                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
+            ).unwrap();
+            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+
+            let (indexer, _rx) = LinkIndexer::new();
+            let renames = rename_in_folder(
+                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+            );
+
+            apply_renames_to_doc(
+                &renames,
+                &[&folder_a, &folder_b],
+                &["Relay Folder 1", "Relay Folder 2"],
+                &folder_b,
+                "Relay Folder 2",
+                "uuid-notes-a",
+                &notes_doc,
+            );
+
+            assert_eq!(
+                read_contents(&notes_doc),
+                "See [[../Relay Folder 2/Qux]]",
+            );
         }
     }
 }

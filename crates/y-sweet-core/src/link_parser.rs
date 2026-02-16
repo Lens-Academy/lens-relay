@@ -234,6 +234,20 @@ mod tests {
         assert_eq!(text, "[[Bar]] and [[Bar#Sec]] and [[Bar|Alias]]");
     }
 
+    #[test]
+    fn rename_edits_match_path_qualified_wikilink() {
+        // Cross-folder link: [[Relay Folder 2/Foo]] should match rename of "Foo"
+        let md = "See [[Relay Folder 2/Foo]] for details";
+        let edits = compute_wikilink_rename_edits(md, "Foo", "Qux");
+
+        // Should find one edit — the "Foo" portion of "Relay Folder 2/Foo"
+        assert_eq!(edits.len(), 1, "path-qualified link should match basename rename");
+
+        let edit = &edits[0];
+        assert_eq!(edit.insert_text, "Qux");
+        // After applying: "See [[Relay Folder 2/Qux]] for details"
+    }
+
     /// Helper to apply edits to a string (edits must be in reverse offset order)
     fn apply_edits(text: &mut String, edits: &[TextEdit]) {
         for edit in edits {
@@ -396,16 +410,67 @@ pub fn compute_wikilink_rename_edits(
 
     let mut edits: Vec<TextEdit> = occurrences
         .into_iter()
-        .filter(|occ| occ.name.to_lowercase() == old_lower)
-        .map(|occ| TextEdit {
-            offset: occ.name_start,
-            remove_len: occ.name_len,
-            insert_text: new_name.to_string(),
+        .filter_map(|occ| {
+            // Extract basename: last component after '/'
+            let basename = occ.name.rsplit('/').next().unwrap_or(&occ.name);
+            if basename.to_lowercase() != old_lower {
+                return None;
+            }
+
+            // Compute offset/len targeting only the basename portion
+            let basename_offset_in_name = occ.name.len() - basename.len();
+            Some(TextEdit {
+                offset: occ.name_start + basename_offset_in_name,
+                remove_len: basename.len(),
+                insert_text: new_name.to_string(),
+            })
         })
         .collect();
 
     // Sort in reverse offset order for safe sequential application
     edits.sort_by(|a, b| b.offset.cmp(&a.offset));
 
+    edits
+}
+
+/// Like `compute_wikilink_rename_edits`, but with a resolution filter.
+///
+/// For each wikilink whose basename matches `old_name` (case-insensitive),
+/// calls `should_edit(link_name)` to confirm this link actually points to
+/// the renamed file. Only produces edits for links where `should_edit` returns true.
+pub fn compute_wikilink_rename_edits_resolved<F>(
+    markdown: &str,
+    old_name: &str,
+    new_name: &str,
+    should_edit: F,
+) -> Vec<TextEdit>
+where
+    F: Fn(&str) -> bool,
+{
+    let occurrences = extract_wikilink_occurrences(markdown);
+    let old_lower = old_name.to_lowercase();
+
+    let mut edits: Vec<TextEdit> = occurrences
+        .into_iter()
+        .filter_map(|occ| {
+            let basename = occ.name.rsplit('/').next().unwrap_or(&occ.name);
+            if basename.to_lowercase() != old_lower {
+                return None;
+            }
+
+            if !should_edit(&occ.name) {
+                return None;
+            }
+
+            let basename_offset_in_name = occ.name.len() - basename.len();
+            Some(TextEdit {
+                offset: occ.name_start + basename_offset_in_name,
+                remove_len: basename.len(),
+                insert_text: new_name.to_string(),
+            })
+        })
+        .collect();
+
+    edits.sort_by(|a, b| b.offset.cmp(&a.offset));
     edits
 }
