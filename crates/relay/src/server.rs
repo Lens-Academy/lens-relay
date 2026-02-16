@@ -586,9 +586,24 @@ impl Server {
     /// workers process notifications while startup is still writing to Y.Docs.
     pub fn spawn_workers(self: &Arc<Self>, receivers: WorkerReceivers) {
         let WorkerReceivers {
-            index_rx,
+            mut index_rx,
             search_rx,
         } = receivers;
+
+        // Drain stale messages that accumulated during doc loading and startup_reindex.
+        // startup_reindex already indexed everything synchronously, so these are redundant.
+        let mut drained = 0usize;
+        while index_rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        if drained > 0 {
+            tracing::info!("Drained {} stale link indexer messages from startup", drained);
+        }
+
+        // Also drain the link indexer's pending map so the worker starts clean
+        if let Some(ref indexer) = self.link_indexer {
+            indexer.clear_pending();
+        }
 
         // Spawn background worker for link indexing
         if let Some(ref indexer) = self.link_indexer {
@@ -619,7 +634,16 @@ impl Server {
         }
 
         // Spawn background worker for search index updates
-        if let Some((search_rx, search_pending)) = search_rx {
+        if let Some((mut search_rx, search_pending)) = search_rx {
+            // Drain stale search messages too (startup_reindex builds the search index)
+            let mut search_drained = 0usize;
+            while search_rx.try_recv().is_ok() {
+                search_drained += 1;
+            }
+            search_pending.clear();
+            if search_drained > 0 {
+                tracing::info!("Drained {} stale search index messages from startup", search_drained);
+            }
             if let Some(ref si) = self.search_index {
                 let si_for_worker = si.clone();
                 let docs_for_search = self.docs.clone();

@@ -565,6 +565,12 @@ impl LinkIndexer {
         self.pending.remove(doc_id);
     }
 
+    /// Clear all pending entries. Called after startup_reindex to discard stale
+    /// timestamps so the worker starts clean.
+    pub fn clear_pending(&self) {
+        self.pending.clear();
+    }
+
     /// Diff current filemeta_v0 state against cache, emit RenameEvent for UUIDs
     /// whose basename has changed. Updates the cache after diffing.
     /// First call (no cache entry) seeds the cache and returns empty.
