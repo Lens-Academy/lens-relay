@@ -34,7 +34,7 @@ use tokio::{
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{span, Instrument, Level};
 use url::Url;
-use yrs::{GetString, Map, ReadTxn, Transact};
+use yrs::{GetString, Map, ReadTxn, Transact, WriteTxn};
 use y_sweet_core::{
     api_types::{
         validate_doc_name, validate_file_hash, AuthDocRequest, Authorization, ClientToken,
@@ -968,11 +968,87 @@ impl Server {
         Ok(loaded)
     }
 
+    /// Write folder display names from config into folder Y.Docs.
+    ///
+    /// For each configured folder, finds the folder doc whose doc_id ends with
+    /// the configured UUID, reads the current `folder_config.name` from the Y.Doc,
+    /// and writes the configured name if different. Persists changed docs to storage.
+    async fn apply_folder_names(&self, folders: &[y_sweet_core::config::FolderConfig]) -> Result<()> {
+        if folders.is_empty() {
+            return Ok(());
+        }
+
+        let folder_doc_ids = link_indexer::find_all_folder_docs(&self.docs);
+        let mut applied = 0;
+
+        for folder_config in folders {
+            // Find the folder doc whose doc_id ends with this UUID
+            let Some(folder_doc_id) = folder_doc_ids.iter().find(|id| {
+                link_indexer::parse_doc_id(id)
+                    .map(|(_, uuid)| uuid == folder_config.uuid)
+                    .unwrap_or(false)
+            }) else {
+                tracing::warn!(
+                    "Folder config for '{}' (uuid={}) — no matching folder doc found",
+                    folder_config.name,
+                    folder_config.uuid
+                );
+                continue;
+            };
+
+            let Some(doc_ref) = self.docs.get(folder_doc_id) else {
+                continue;
+            };
+
+            // Read current name and compare
+            let needs_update = {
+                let awareness = doc_ref.awareness();
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+                let current_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+                current_name != folder_config.name
+            };
+
+            if !needs_update {
+                tracing::debug!(
+                    "Folder '{}' already has correct name, skipping",
+                    folder_config.name
+                );
+                continue;
+            }
+
+            // Write the folder name
+            {
+                let awareness = doc_ref.awareness();
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+                let mut txn = guard.doc.transact_mut();
+                let config_map = txn.get_or_insert_map("folder_config");
+                config_map.insert(&mut txn, "name", yrs::Any::String(folder_config.name.clone().into()));
+            }
+
+            // Persist to storage
+            doc_ref.sync_kv().persist().await
+                .map_err(|e| anyhow!("Failed to persist folder name for '{}': {:?}", folder_config.name, e))?;
+
+            tracing::info!(
+                "Applied folder name '{}' to doc {}",
+                folder_config.name,
+                folder_doc_id
+            );
+            applied += 1;
+        }
+
+        if applied > 0 {
+            tracing::info!("Applied {} folder name(s) from config", applied);
+        }
+
+        Ok(())
+    }
+
     /// Load all documents from storage and reindex all backlinks.
     ///
     /// Called once on startup, before accepting connections.
     /// No-op if no store is configured (in-memory mode).
-    pub async fn startup_reindex(&self) -> Result<()> {
+    pub async fn startup_reindex(&self, folders: &[y_sweet_core::config::FolderConfig]) -> Result<()> {
         if self.store.is_none() {
             tracing::info!("No store configured, skipping startup reindex");
             // Even without a store, mark search as ready (empty index)
@@ -983,6 +1059,9 @@ impl Server {
 
         let loaded = self.load_all_docs().await?;
         tracing::info!("Loaded {} documents, now reindexing backlinks...", loaded);
+
+        // Apply folder names from config before reindexing
+        self.apply_folder_names(folders).await?;
 
         if let Some(ref indexer) = self.link_indexer {
             indexer.reindex_all_backlinks(&self.docs)?;

@@ -588,7 +588,7 @@ async fn main() -> Result<()> {
             let redact_errors = config.server.redact_errors;
             let server = Arc::new(server);
 
-            if let Err(e) = server.startup_reindex().await {
+            if let Err(e) = server.startup_reindex(&config.folders).await {
                 tracing::warn!("Startup reindex failed: {:?}", e);
             }
 
