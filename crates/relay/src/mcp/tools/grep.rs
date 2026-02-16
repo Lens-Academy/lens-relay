@@ -210,6 +210,12 @@ mod tests {
         format!("{}-{}", RELAY_ID, FOLDER0_UUID)
     }
 
+    fn set_folder_name(doc: &Doc, name: &str) {
+        let mut txn = doc.transact_mut();
+        let config = txn.get_or_insert_map("folder_config");
+        config.insert(&mut txn, "name", Any::String(name.into()));
+    }
+
     /// Create a folder Y.Doc with filemeta_v0 populated.
     /// entries: &[("/path.md", "uuid")]
     fn create_folder_doc(entries: &[(&str, &str)]) -> Doc {
@@ -249,10 +255,11 @@ mod tests {
         let filemeta_entries: Vec<(&str, &str)> =
             entries.iter().map(|(path, uuid, _)| (*path, *uuid)).collect();
         let folder_doc = create_folder_doc(&filemeta_entries);
+        set_folder_name(&folder_doc, "Lens");
 
         // Build resolver from folder doc
         let resolver = server.doc_resolver();
-        resolver.update_folder_from_doc(&folder0_id(), 0, &folder_doc);
+        resolver.update_folder_from_doc(&folder0_id(), &folder_doc);
 
         // Insert content docs into server.docs()
         // We need DocWithSyncKv, but for testing we use a tokio runtime to create them.
@@ -417,11 +424,13 @@ mod tests {
         let folder1_doc_id = format!("{}-{}", RELAY_ID, folder1_uuid);
 
         let folder0 = create_folder_doc(&[("/DocA.md", "uuid-a")]);
+        set_folder_name(&folder0, "Lens");
         let folder1 = create_folder_doc(&[("/DocB.md", "uuid-b")]);
+        set_folder_name(&folder1, "Lens Edu");
 
         let resolver = server.doc_resolver();
-        resolver.update_folder_from_doc(&folder0_doc_id, 0, &folder0);
-        resolver.update_folder_from_doc(&folder1_doc_id, 1, &folder1);
+        resolver.update_folder_from_doc(&folder0_doc_id, &folder0);
+        resolver.update_folder_from_doc(&folder1_doc_id, &folder1);
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -113,7 +113,7 @@ fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         if let Some(filemeta) = txn.get_map("filemeta_v0") {
-            let folder_name = read_folder_name(&guard.doc, fi);
+            let folder_name = read_folder_name(&guard.doc, folder_doc_id);
             for (path, value) in filemeta.iter(&txn) {
                 let entry_type = link_indexer::extract_type_from_filemeta_entry(&value, &txn)
                     .unwrap_or_else(|| "unknown".to_string());

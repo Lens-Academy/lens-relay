@@ -290,7 +290,7 @@ fn search_find_title_and_folder(
 ) -> (String, String) {
     let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
 
-    for (folder_idx, folder_doc_id) in folder_doc_ids.iter().enumerate() {
+    for folder_doc_id in &folder_doc_ids {
         let Some(doc_ref) = docs.get(folder_doc_id) else {
             continue;
         };
@@ -316,7 +316,7 @@ fn search_find_title_and_folder(
                         .unwrap_or(path_str)
                         .to_string();
 
-                    let folder_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_idx);
+                    let folder_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
 
                     return (title, folder_name);
                 }
@@ -977,13 +977,13 @@ impl Server {
             let mut uuid_metadata: std::collections::HashMap<String, (String, String)> =
                 std::collections::HashMap::new();
 
-            for (folder_idx, folder_doc_id) in folder_doc_ids.iter().enumerate() {
+            for folder_doc_id in &folder_doc_ids {
                 let Some(doc_ref) = self.docs.get(folder_doc_id) else {
                     continue;
                 };
                 let awareness = doc_ref.awareness();
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                let folder_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_idx);
+                let folder_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
                 let txn = guard.doc.transact();
                 let Some(filemeta) = txn.get_map("filemeta_v0") else {
                     continue;

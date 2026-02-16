@@ -14,21 +14,12 @@ pub struct DocInfo {
     pub doc_id: String,
 }
 
-/// Derive the human-readable folder name from the folder's position in the sorted folder doc list.
-///
-/// This centralizes the naming convention so it is not duplicated across modules.
-/// - Index 0 -> "Lens"
-/// - Index 1 -> "Lens Edu"
-pub fn derive_folder_name(folder_idx: usize) -> &'static str {
-    match folder_idx {
-        0 => "Lens",
-        _ => "Lens Edu",
-    }
-}
-
 /// Read the folder display name from a folder doc's `folder_config` Y.Map.
-/// Returns the `name` field if present, otherwise falls back to `derive_folder_name(idx)`.
-pub fn read_folder_name(doc: &Doc, folder_idx: usize) -> String {
+///
+/// Every folder doc must have `folder_config.name` set. If missing, returns a
+/// placeholder derived from the folder doc ID so the issue is visible rather than
+/// silently producing wrong results.
+pub fn read_folder_name(doc: &Doc, folder_doc_id: &str) -> String {
     let txn = doc.transact();
     if let Some(config) = txn.get_map("folder_config") {
         if let Some(Out::Any(Any::String(name))) = config.get(&txn, "name") {
@@ -37,7 +28,15 @@ pub fn read_folder_name(doc: &Doc, folder_idx: usize) -> String {
             }
         }
     }
-    derive_folder_name(folder_idx).to_string()
+    // folder_config.name not set — produce a visible placeholder
+    let folder_uuid = parse_doc_id(folder_doc_id)
+        .map(|(_, uuid)| uuid)
+        .unwrap_or(folder_doc_id);
+    if folder_uuid.len() >= 8 {
+        format!("Folder-{}", &folder_uuid[..8])
+    } else {
+        "Unknown Folder".to_string()
+    }
 }
 
 /// Bidirectional cache mapping user-facing document paths (`Lens/Photosynthesis.md`)
@@ -70,18 +69,18 @@ impl DocumentResolver {
 
         let folder_doc_ids = find_all_folder_docs(docs);
 
-        for (folder_idx, folder_doc_id) in folder_doc_ids.iter().enumerate() {
+        for folder_doc_id in &folder_doc_ids {
             if let Some(doc_ref) = docs.get(folder_doc_id) {
                 let awareness = doc_ref.awareness();
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                self.rebuild_from_folder_doc(folder_doc_id, folder_idx, &guard.doc);
+                self.rebuild_from_folder_doc(folder_doc_id, &guard.doc);
             }
         }
     }
 
     /// Core rebuild logic operating on a bare Y.Doc. Testable without DocWithSyncKv.
-    fn rebuild_from_folder_doc(&self, folder_doc_id: &str, folder_idx: usize, doc: &Doc) {
-        let folder_name = read_folder_name(doc, folder_idx);
+    fn rebuild_from_folder_doc(&self, folder_doc_id: &str, doc: &Doc) {
+        let folder_name = read_folder_name(doc, folder_doc_id);
         let relay_id = parse_doc_id(folder_doc_id)
             .map(|(r, _)| r.to_string())
             .unwrap_or_default();
@@ -158,7 +157,6 @@ impl DocumentResolver {
     pub fn update_folder(
         &self,
         folder_doc_id: &str,
-        folder_idx: usize,
         docs: &DashMap<String, DocWithSyncKv>,
     ) {
         self.remove_folder_entries(folder_doc_id);
@@ -166,7 +164,7 @@ impl DocumentResolver {
         if let Some(doc_ref) = docs.get(folder_doc_id) {
             let awareness = doc_ref.awareness();
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            self.rebuild_from_folder_doc(folder_doc_id, folder_idx, &guard.doc);
+            self.rebuild_from_folder_doc(folder_doc_id, &guard.doc);
         }
     }
 
@@ -174,11 +172,10 @@ impl DocumentResolver {
     pub fn update_folder_from_doc(
         &self,
         folder_doc_id: &str,
-        folder_idx: usize,
         doc: &Doc,
     ) {
         self.remove_folder_entries(folder_doc_id);
-        self.rebuild_from_folder_doc(folder_doc_id, folder_idx, doc);
+        self.rebuild_from_folder_doc(folder_doc_id, doc);
     }
 }
 
@@ -225,24 +222,18 @@ mod tests {
     }
 
     /// Build a DocumentResolver from bare Y.Docs (no DocWithSyncKv needed).
-    fn build_resolver(folder_specs: &[(&str, usize, &Doc)]) -> DocumentResolver {
+    fn build_resolver(folder_specs: &[(&str, &Doc)]) -> DocumentResolver {
         let resolver = DocumentResolver::new();
-        for (doc_id, folder_idx, doc) in folder_specs {
-            resolver.rebuild_from_folder_doc(doc_id, *folder_idx, doc);
+        for (doc_id, doc) in folder_specs {
+            resolver.rebuild_from_folder_doc(doc_id, doc);
         }
         resolver
     }
 
-    // === derive_folder_name tests ===
-
-    #[test]
-    fn derive_folder_name_first_is_lens() {
-        assert_eq!(derive_folder_name(0), "Lens");
-    }
-
-    #[test]
-    fn derive_folder_name_second_is_lens_edu() {
-        assert_eq!(derive_folder_name(1), "Lens Edu");
+    fn set_folder_name(doc: &Doc, name: &str) {
+        let mut txn = doc.transact_mut();
+        let config = txn.get_or_insert_map("folder_config");
+        config.insert(&mut txn, "name", Any::String(name.into()));
     }
 
     // === read_folder_name tests ===
@@ -255,14 +246,13 @@ mod tests {
             let config = txn.get_or_insert_map("folder_config");
             config.insert(&mut txn, "name", Any::String("My Custom Folder".into()));
         }
-        assert_eq!(read_folder_name(&doc, 0), "My Custom Folder");
+        assert_eq!(read_folder_name(&doc, "anything"), "My Custom Folder");
     }
 
     #[test]
-    fn read_folder_name_fallback_when_missing() {
-        let doc = Doc::new();
-        assert_eq!(read_folder_name(&doc, 0), "Lens");
-        assert_eq!(read_folder_name(&doc, 1), "Lens Edu");
+    fn read_folder_name_placeholder_when_missing() {
+        let doc = Doc::new(); // No folder_config
+        assert_eq!(read_folder_name(&doc, &folder0_id()), "Folder-aaaa0000");
     }
 
     #[test]
@@ -273,7 +263,13 @@ mod tests {
             let config = txn.get_or_insert_map("folder_config");
             config.insert(&mut txn, "name", Any::String("".into()));
         }
-        assert_eq!(read_folder_name(&doc, 0), "Lens");
+        assert_eq!(read_folder_name(&doc, &folder0_id()), "Folder-aaaa0000");
+    }
+
+    #[test]
+    fn read_folder_name_fallback_empty_doc_id() {
+        let doc = Doc::new();
+        assert_eq!(read_folder_name(&doc, ""), "Unknown Folder");
     }
 
     // === rebuild tests ===
@@ -284,11 +280,13 @@ mod tests {
             ("/Photosynthesis.md", "uuid-photo"),
             ("/Notes/Ideas.md", "uuid-ideas"),
         ]);
+        set_folder_name(&folder0, "Lens");
         let folder1 = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
+        set_folder_name(&folder1, "Lens Edu");
 
         let resolver = build_resolver(&[
-            (&folder0_id(), 0, &folder0),
-            (&folder1_id(), 1, &folder1),
+            (&folder0_id(), &folder0),
+            (&folder1_id(), &folder1),
         ]);
 
         let paths = resolver.all_paths();
@@ -301,11 +299,13 @@ mod tests {
             ("/Photosynthesis.md", "uuid-photo"),
             ("/Notes/Ideas.md", "uuid-ideas"),
         ]);
+        set_folder_name(&folder0, "Lens");
         let folder1 = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
+        set_folder_name(&folder1, "Lens Edu");
 
         let resolver = build_resolver(&[
-            (&folder0_id(), 0, &folder0),
-            (&folder1_id(), 1, &folder1),
+            (&folder0_id(), &folder0),
+            (&folder1_id(), &folder1),
         ]);
 
         let mut paths = resolver.all_paths();
@@ -332,9 +332,10 @@ mod tests {
     #[test]
     fn resolve_path_returns_correct_doc_info() {
         let folder0 = create_folder_doc(&[("/Photosynthesis.md", "uuid-photo")]);
+        set_folder_name(&folder0, "Lens");
         let f0id = folder0_id();
 
-        let resolver = build_resolver(&[(&f0id, 0, &folder0)]);
+        let resolver = build_resolver(&[(&f0id, &folder0)]);
 
         let info = resolver
             .resolve_path("Lens/Photosynthesis.md")
@@ -357,8 +358,9 @@ mod tests {
     #[test]
     fn path_for_uuid_returns_correct_path() {
         let folder0 = create_folder_doc(&[("/Photosynthesis.md", "uuid-photo")]);
+        set_folder_name(&folder0, "Lens");
 
-        let resolver = build_resolver(&[(&folder0_id(), 0, &folder0)]);
+        let resolver = build_resolver(&[(&folder0_id(), &folder0)]);
 
         let path = resolver
             .path_for_uuid("uuid-photo")
@@ -377,9 +379,10 @@ mod tests {
     #[test]
     fn update_folder_adds_new_file() {
         let folder0 = create_folder_doc(&[("/Photosynthesis.md", "uuid-photo")]);
+        set_folder_name(&folder0, "Lens");
         let f0id = folder0_id();
 
-        let resolver = build_resolver(&[(&f0id, 0, &folder0)]);
+        let resolver = build_resolver(&[(&f0id, &folder0)]);
         assert_eq!(resolver.all_paths().len(), 1);
 
         // Add a new file to the folder doc
@@ -393,7 +396,7 @@ mod tests {
             filemeta.insert(&mut txn, "/NewDoc.md", Any::Map(map.into()));
         }
 
-        resolver.update_folder_from_doc(&f0id, 0, &folder0);
+        resolver.update_folder_from_doc(&f0id, &folder0);
 
         assert_eq!(resolver.all_paths().len(), 2);
         assert!(resolver.resolve_path("Lens/NewDoc.md").is_some());
@@ -406,9 +409,10 @@ mod tests {
             ("/Photosynthesis.md", "uuid-photo"),
             ("/ToDelete.md", "uuid-delete"),
         ]);
+        set_folder_name(&folder0, "Lens");
         let f0id = folder0_id();
 
-        let resolver = build_resolver(&[(&f0id, 0, &folder0)]);
+        let resolver = build_resolver(&[(&f0id, &folder0)]);
         assert_eq!(resolver.all_paths().len(), 2);
 
         // Remove a file from the folder doc
@@ -418,7 +422,7 @@ mod tests {
             filemeta.remove(&mut txn, "/ToDelete.md");
         }
 
-        resolver.update_folder_from_doc(&f0id, 0, &folder0);
+        resolver.update_folder_from_doc(&f0id, &folder0);
 
         assert_eq!(resolver.all_paths().len(), 1);
         assert!(resolver.resolve_path("Lens/Photosynthesis.md").is_some());
@@ -434,9 +438,10 @@ mod tests {
             ("/Photosynthesis.md", "uuid-photo"),
             ("/OldDoc.md", "uuid-old"),
         ]);
+        set_folder_name(&folder0, "Lens");
         let f0id = folder0_id();
 
-        let resolver = build_resolver(&[(&f0id, 0, &folder0)]);
+        let resolver = build_resolver(&[(&f0id, &folder0)]);
         assert_eq!(resolver.all_paths().len(), 2);
 
         // Modify the folder doc to have only 1 entry
@@ -449,7 +454,7 @@ mod tests {
         // Full rebuild (clear + re-add)
         resolver.path_to_doc.clear();
         resolver.uuid_to_path.clear();
-        resolver.rebuild_from_folder_doc(&f0id, 0, &folder0);
+        resolver.rebuild_from_folder_doc(&f0id, &folder0);
 
         assert_eq!(resolver.all_paths().len(), 1);
         assert!(resolver.resolve_path("Lens/OldDoc.md").is_none());

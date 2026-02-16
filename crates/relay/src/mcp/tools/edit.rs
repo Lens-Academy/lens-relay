@@ -149,6 +149,12 @@ mod tests {
         format!("{}-{}", RELAY_ID, FOLDER0_UUID)
     }
 
+    fn set_folder_name(doc: &Doc, name: &str) {
+        let mut txn = doc.transact_mut();
+        let config = txn.get_or_insert_map("folder_config");
+        config.insert(&mut txn, "name", Any::String(name.into()));
+    }
+
     /// Create a folder Y.Doc with filemeta_v0 populated.
     fn create_folder_doc(entries: &[(&str, &str)]) -> Doc {
         let doc = Doc::new();
@@ -173,9 +179,10 @@ mod tests {
         let filemeta_entries: Vec<(&str, &str)> =
             entries.iter().map(|(path, uuid, _)| (*path, *uuid)).collect();
         let folder_doc = create_folder_doc(&filemeta_entries);
+        set_folder_name(&folder_doc, "Lens");
 
         let resolver = server.doc_resolver();
-        resolver.update_folder_from_doc(&folder0_id(), 0, &folder_doc);
+        resolver.update_folder_from_doc(&folder0_id(), &folder_doc);
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

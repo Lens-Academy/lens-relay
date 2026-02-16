@@ -417,12 +417,14 @@ mod tests {
             map.insert("type".to_string(), Any::String("markdown".into()));
             map.insert("version".to_string(), Any::Number(0.0));
             filemeta.insert(&mut txn, "/TestDoc.md", Any::Map(map.into()));
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Lens".into()));
         }
 
         // Register in resolver
         server
             .doc_resolver()
-            .update_folder_from_doc(&folder_doc_id, 0, &folder_doc);
+            .update_folder_from_doc(&folder_doc_id, &folder_doc);
 
         // Create content DocWithSyncKv
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -500,11 +502,13 @@ mod tests {
             map.insert("type".to_string(), Any::String("markdown".into()));
             map.insert("version".to_string(), Any::Number(0.0));
             filemeta.insert(&mut txn, "/EditTest.md", Any::Map(map.into()));
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Lens".into()));
         }
 
         server
             .doc_resolver()
-            .update_folder_from_doc(&folder_doc_id, 0, &folder_doc);
+            .update_folder_from_doc(&folder_doc_id, &folder_doc);
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

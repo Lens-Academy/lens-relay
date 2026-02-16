@@ -312,8 +312,8 @@ pub fn index_content_into_folders(
         "Doc {}: content length={}, wikilinks={:?}",
         source_uuid, markdown.len(), link_names
     );
-    let folder_name_strings: Vec<String> = folder_docs.iter().enumerate()
-        .map(|(i, doc)| read_folder_name(doc, i))
+    let folder_name_strings: Vec<String> = folder_docs.iter()
+        .map(|doc| read_folder_name(doc, ""))
         .collect();
     let folder_name_strs: Vec<&str> = folder_name_strings.iter()
         .map(|s| s.as_str())
@@ -765,10 +765,7 @@ impl LinkIndexer {
                         }
 
                         // Update DocumentResolver so MCP tools see current paths
-                        let all_folder_ids = find_all_folder_docs(&docs);
-                        if let Some(folder_idx) = all_folder_ids.iter().position(|id| id == &doc_id) {
-                            doc_resolver.update_folder(&doc_id, folder_idx, &docs);
-                        }
+                        doc_resolver.update_folder(&doc_id, &docs);
                     } else {
                         // Content doc — index it
                         tracing::info!("Indexing content doc: {}", doc_id);
@@ -842,8 +839,9 @@ impl LinkIndexer {
             .map(|g| &g.doc)
             .collect();
 
-        let folder_name_strings: Vec<String> = folder_doc_refs.iter().enumerate()
-            .map(|(i, doc)| read_folder_name(doc, i))
+        let folder_name_strings: Vec<String> = folder_doc_refs.iter()
+            .zip(folder_doc_ids.iter())
+            .map(|(doc, id)| read_folder_name(doc, id))
             .collect();
         let folder_name_strs: Vec<&str> = folder_name_strings.iter()
             .map(|s| s.as_str())
@@ -1244,7 +1242,9 @@ mod tests {
     #[test]
     fn cross_folder_link_creates_backlink_in_target_folder() {
         let folder_a = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
+        set_folder_name(&folder_a, "Lens");
         let folder_b = create_folder_doc(&[("/Syllabus.md", "uuid-syllabus")]);
+        set_folder_name(&folder_b, "Lens Edu");
         // Cross-folder link using absolute path with folder name
         let content_doc = create_content_doc("See [[Lens Edu/Syllabus]] for the course plan.");
 
@@ -1263,7 +1263,9 @@ mod tests {
     #[test]
     fn cross_folder_link_removal_cleans_target_folder() {
         let folder_a = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
+        set_folder_name(&folder_a, "Lens");
         let folder_b = create_folder_doc(&[("/Syllabus.md", "uuid-syllabus")]);
+        set_folder_name(&folder_b, "Lens Edu");
 
         let content_v1 = create_content_doc("See [[Lens Edu/Syllabus]].");
         index_content_into_folders("uuid-welcome", &content_v1, &[&folder_a, &folder_b]).unwrap();
@@ -1281,7 +1283,9 @@ mod tests {
             ("/Notes.md", "uuid-notes"),
             ("/Ideas.md", "uuid-ideas"),
         ]);
+        set_folder_name(&folder_a, "Lens");
         let folder_b = create_folder_doc(&[("/Syllabus.md", "uuid-syllabus")]);
+        set_folder_name(&folder_b, "Lens Edu");
         let content_doc = create_content_doc("See [[Ideas]].");
 
         index_content_into_folders("uuid-notes", &content_doc, &[&folder_a, &folder_b]).unwrap();
@@ -1296,7 +1300,9 @@ mod tests {
             ("/Welcome.md", "uuid-welcome"),
             ("/Resources.md", "uuid-resources"),
         ]);
+        set_folder_name(&folder_a, "Lens");
         let folder_b = create_folder_doc(&[("/Syllabus.md", "uuid-syllabus")]);
+        set_folder_name(&folder_b, "Lens Edu");
         let content_doc = create_content_doc("See [[Lens Edu/Syllabus]] and [[Resources]].");
 
         index_content_into_folders("uuid-welcome", &content_doc, &[&folder_a, &folder_b]).unwrap();
@@ -1819,10 +1825,12 @@ mod tests {
         // Source in folder_a, target in folder_b.
         // [[Lens Edu/Ideas]] should resolve via absolute path in virtual tree.
         let folder_a = create_folder_doc(&[("/Notes/Source.md", "uuid-source")]);
+        set_folder_name(&folder_a, "Lens");
         let folder_b = create_folder_doc(&[
             ("/Notes/Ideas.md", "uuid-nested"),
             ("/Ideas.md", "uuid-root"),
         ]);
+        set_folder_name(&folder_b, "Lens Edu");
         let content_doc = create_content_doc("See [[Lens Edu/Ideas]].");
         index_content_into_folders("uuid-source", &content_doc, &[&folder_a, &folder_b]).unwrap();
         // Absolute /Lens Edu/Ideas.md matches /Ideas.md in folder_b
@@ -1830,28 +1838,18 @@ mod tests {
         assert!(read_backlinks(&folder_b, "uuid-nested").is_empty());
     }
 
-    // === Bug: cross-folder relative link with UI-visible folder name ===
+    // === Cross-folder relative link with UI-visible folder name ===
     //
-    // The user sees folder names like "Relay Folder 2" in the UI, so they write
-    // [[../Relay Folder 2/Resources/Links]]. But derive_folder_name() returns
-    // "Lens Edu", so the virtual tree uses "/Lens Edu/Resources/Links.md" and
-    // the link doesn't resolve.
+    // The folder name is stored in the Y.Doc's folder_config map and read by
+    // read_folder_name(). This ensures virtual tree paths match what users see.
     #[test]
     fn cross_folder_relative_link_with_visible_folder_name() {
-        // Folder 0 ("Lens" per derive_folder_name): Welcome.md links to folder 1
         let folder_a = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
-        // Folder 1 ("Lens Edu" per derive_folder_name): has Resources/Links.md
         let folder_b = create_folder_doc(&[("/Resources/Links.md", "uuid-links")]);
 
         // Set the folder names the user sees in the UI/sidebar.
         set_folder_name(&folder_a, "Relay Folder 1");
         set_folder_name(&folder_b, "Relay Folder 2");
-
-        // User writes the link using the name they SEE in the UI/sidebar
-        // ("Relay Folder 2"), not the hardcoded derive_folder_name() name ("Lens Edu").
-        // From /Relay Folder 1/Welcome.md, ".." goes to root, then "Relay Folder 2/Resources/Links".
-        // This resolves to "/Relay Folder 2/Resources/Links.md" which now matches
-        // because read_folder_name() reads "Relay Folder 2" from folder_config.
         let content_doc = create_content_doc("Check [[../Relay Folder 2/Resources/Links]] for resources.");
 
         index_content_into_folders(
