@@ -32,9 +32,9 @@ public_key = "fbm9JLHrwPpST5HAYORTQR/i1VbZ1kdp2ZEy0XpMbf0="
 # Maps folder doc UUIDs to human-readable names for the link indexer,
 # document resolver, and search index.
 [[folders]]
-uuid = "b0000001-0000-4000-8000-000000000001"
+uuid = "fbd5eb54-73cc-41b0-ac28-2b93d3b4244e"
 name = "Lens"
 
 [[folders]]
-uuid = "b0000002-0000-4000-8000-000000000002"
+uuid = "ea4015da-24af-4d9d-ac49-8c902cb17121"
 name = "Lens Edu"

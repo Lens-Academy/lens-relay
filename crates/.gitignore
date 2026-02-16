@@ -4,3 +4,4 @@ target
 y-sweet-worker/dist
 data-local-*
 relay.local.toml
+relay.staging.toml
