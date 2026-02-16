@@ -3,11 +3,7 @@ import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
 import { getClientToken } from '../lib/auth';
 import { setupFilemetaDebugObserver } from '../lib/relay-api';
-
-const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
-const RELAY_ID = USE_LOCAL_RELAY
-  ? 'a0000000-0000-4000-8000-000000000000'
-  : 'cb696037-0f72-4e93-8717-4e433129d789';
+import { RELAY_ID } from '../App';
 
 export interface FileMetadata {
   id: string;
