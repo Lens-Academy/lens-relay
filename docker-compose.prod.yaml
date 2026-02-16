@@ -21,7 +21,7 @@ services:
   relay-server:
     build:
       context: crates/
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prebuilt
     image: relay-server:custom
     container_name: relay-server
     restart: unless-stopped

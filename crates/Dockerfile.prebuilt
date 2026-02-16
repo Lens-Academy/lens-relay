@@ -1,0 +1,24 @@
+# Fast deploy: uses a pre-built binary instead of compiling inside Docker.
+# Build the binary on the dev VPS first, then copy it to prod:
+#
+#   CARGO_TARGET_DIR=~/code/lens-relay/.cargo-target cargo build --release --bin relay
+#   scp ~/code/lens-relay/.cargo-target/release/relay relay-prod:/root/lens-relay/crates/relay-binary
+#   ssh relay-prod 'cd /root/lens-relay && docker compose -f docker-compose.prod.yaml build relay-server'
+#
+# To use this Dockerfile, set the build context in docker-compose.prod.yaml:
+#   dockerfile: Dockerfile.prebuilt
+
+FROM debian:trixie-slim
+
+RUN mkdir -p /app/data
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY ./relay-binary /app/relay
+COPY ./run.sh /app/run.sh
+COPY ./relay.toml /app/relay.toml
+RUN chmod +x /app/run.sh /app/relay
+
+ENTRYPOINT ["./run.sh"]
