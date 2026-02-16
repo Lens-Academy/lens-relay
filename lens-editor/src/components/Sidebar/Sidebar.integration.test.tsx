@@ -9,6 +9,7 @@
 import path from 'path';
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { render, waitFor, cleanup } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import { useMultiFolderMetadata, type FolderConfig } from '../../hooks/useMultiFolderMetadata';
@@ -59,6 +60,11 @@ vi.mock('../../hooks/useMultiFolderMetadata', async () => {
   return await vi.importActual<typeof import('../../hooks/useMultiFolderMetadata')>('../../hooks/useMultiFolderMetadata');
 });
 
+// Mock useResolvedDocId — this test doesn't test doc resolution
+vi.mock('../../hooks/useResolvedDocId', () => ({
+  useResolvedDocId: (compoundId: string) => compoundId || null,
+}));
+
 // Test folder configuration (matches setup-local-relay.mjs)
 const TEST_FOLDERS: FolderConfig[] = [
   { id: 'b0000001-0000-4000-8000-000000000001', name: 'Relay Folder 1' },
@@ -83,9 +89,11 @@ function TestApp({ onSelectDocument }: { onSelectDocument: (id: string) => void 
   const folderNames = TEST_FOLDERS.map(f => f.name);
 
   return (
-    <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate: onSelectDocument }}>
-      <Sidebar activeDocId={`${TEST_RELAY_ID}-c0000001-0000-4000-8000-000000000001`} onSelectDocument={onSelectDocument} />
-    </NavigationContext.Provider>
+    <MemoryRouter initialEntries={['/c0000001']}>
+      <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate: onSelectDocument }}>
+        <Sidebar />
+      </NavigationContext.Provider>
+    </MemoryRouter>
   );
 }
 

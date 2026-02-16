@@ -1,24 +1,31 @@
 import { useState, useEffect, useRef, useDeferredValue, useMemo, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { SearchInput } from './SearchInput';
 import { SearchPanel } from './SearchPanel';
 import { FileTree } from './FileTree';
 import { FileTreeProvider } from './FileTreeContext';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames } from '../../lib/tree-utils';
 import { createDocument, renameDocument, deleteDocument } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
 
-interface SidebarProps {
-  activeDocId: string;
-  onSelectDocument: (docId: string) => void;
-}
-
-export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
+export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
   const deferredSearch = useDeferredValue(searchTerm);
+
+  // Get metadata from NavigationContext (needed early for doc ID resolution)
+  const { metadata, folderDocs, folderNames, onNavigate } = useNavigation();
+
+  // Derive active doc ID from URL path (first segment is the doc UUID — may be short)
+  const location = useLocation();
+  const docUuidFromUrl = location.pathname.split('/')[1] || '';
+  const shortCompoundId = docUuidFromUrl ? `${RELAY_ID}-${docUuidFromUrl}` : '';
+  // Resolve short UUID to full compound ID (empty string = no active doc)
+  const activeDocId = useResolvedDocId(shortCompoundId, metadata) || '';
 
   // State for file name filter (separate from full-text search)
   const [fileFilter, setFileFilter] = useState('');
@@ -36,8 +43,7 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
   // Ref for Ctrl+K keyboard shortcut focus
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Get metadata from NavigationContext (lifted to App level)
-  const { metadata, folderDocs, folderNames, onNavigate } = useNavigation();
+  // metadata, folderDocs, folderNames, onNavigate — destructured above (before resolution hook)
 
   // Server-side full-text search (activates when searchTerm >= 2 chars)
   const { results: searchResults, loading: searchLoading, error: searchError } = useSearch(searchTerm);
@@ -77,11 +83,11 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
   // Whether to show server-side search results vs file tree
   const showSearchResults = searchTerm.trim().length >= 2;
 
-  // Build compound doc ID and call parent handler
+  // Build compound doc ID and navigate via URL
   const handleSelect = useCallback((docId: string) => {
     const compoundDocId = `${RELAY_ID}-${docId}`;
-    onSelectDocument(compoundDocId);
-  }, [onSelectDocument]);
+    onNavigate(compoundDocId);
+  }, [onNavigate]);
 
   // CRUD handlers
   const handleRenameSubmit = useCallback((prefixedOldPath: string, newName: string) => {
@@ -123,13 +129,18 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
 
     try {
       // createDocument is now async - it creates on server first, then adds to filemeta
-      await createDocument(doc, path, 'markdown');
+      const id = await createDocument(doc, path, 'markdown');
       setNewDocName('');
       setIsCreating(false);
+      // Navigate to the newly created document
+      const compoundDocId = `${RELAY_ID}-${id}`;
+      onSelectDocument(compoundDocId);
     } catch (error) {
       console.error('Failed to create document:', error);
+      setNewDocName('');
+      setIsCreating(false);
     }
-  }, [folderDocs, folderNames, newDocName]);
+  }, [folderDocs, folderNames, newDocName, onSelectDocument]);
 
   const handleNewDocKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -154,7 +165,9 @@ export function Sidebar({ activeDocId, onSelectDocument }: SidebarProps) {
             onChange={(e) => setNewDocName(e.target.value)}
             onKeyDown={handleNewDocKeyDown}
             onBlur={() => {
-              if (!newDocName.trim()) {
+              if (newDocName.trim()) {
+                handleCreateDocument();
+              } else {
                 setIsCreating(false);
               }
             }}

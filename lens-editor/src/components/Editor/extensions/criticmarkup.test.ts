@@ -391,6 +391,145 @@ describe('CriticMarkup Extension', () => {
         expect(doc).toMatch(/\{~~\{.*"timestamp".*\}@@world~>there~~\}/);
       });
     });
+
+    describe('empty wrapper cleanup', () => {
+      it('removes addition wrapper when all content is deleted', () => {
+        const meta = '{"author":"anonymous","timestamp":1000}';
+        const { view, cleanup: c } = createCriticMarkupEditor(
+          `before {++${meta}@@hello++} after`,
+          `before {++${meta}@@`.length + 1,
+        );
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+
+        const contentFrom = `before {++${meta}@@`.length;
+        const contentTo = contentFrom + 'hello'.length;
+        view.dispatch({
+          changes: { from: contentFrom, to: contentTo, insert: '' },
+          annotations: Transaction.userEvent.of('delete'),
+        });
+
+        const doc = view.state.doc.toString();
+        expect(doc).toBe('before  after');
+        const ranges = view.state.field(criticMarkupField);
+        expect(ranges).toHaveLength(0);
+      });
+
+      it('removes wrapper on final backspace of single-char content', () => {
+        const meta = '{"author":"anonymous","timestamp":1000}';
+        const content = `before {++${meta}@@x++} after`;
+        const contentStart = `before {++${meta}@@`.length;
+        const { view, cleanup: c } = createCriticMarkupEditor(
+          content,
+          contentStart + 1,
+        );
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+
+        view.dispatch({
+          changes: { from: contentStart, to: contentStart + 1, insert: '' },
+          annotations: Transaction.userEvent.of('delete.backward'),
+        });
+
+        const doc = view.state.doc.toString();
+        expect(doc).toBe('before  after');
+        expect(view.state.field(criticMarkupField)).toHaveLength(0);
+      });
+
+      it('does NOT remove wrapper when partial content remains', () => {
+        const meta = '{"author":"anonymous","timestamp":1000}';
+        const content = `{++${meta}@@hello++}`;
+        const contentStart = `{++${meta}@@`.length;
+        const { view, cleanup: c } = createCriticMarkupEditor(
+          content,
+          contentStart + 3,
+        );
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+
+        view.dispatch({
+          changes: { from: contentStart, to: contentStart + 3, insert: '' },
+          annotations: Transaction.userEvent.of('delete'),
+        });
+
+        const doc = view.state.doc.toString();
+        expect(doc).toMatch(/\{\+\+.*@@lo\+\+\}/);
+        expect(view.state.field(criticMarkupField)).toHaveLength(1);
+      });
+
+      it('does NOT remove wrapper when content is replaced (not deleted)', () => {
+        const meta = '{"author":"anonymous","timestamp":1000}';
+        const content = `{++${meta}@@hello++}`;
+        const contentStart = `{++${meta}@@`.length;
+        const { view, cleanup: c } = createCriticMarkupEditor(
+          content,
+          contentStart + 3,
+        );
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+
+        view.dispatch({
+          changes: { from: contentStart, to: contentStart + 5, insert: 'world' },
+          annotations: Transaction.userEvent.of('input'),
+        });
+
+        const doc = view.state.doc.toString();
+        expect(doc).toMatch(/\{\+\+.*@@world\+\+\}/);
+        expect(view.state.field(criticMarkupField)).toHaveLength(1);
+      });
+
+      it('places cursor at wrapper start position after removal', () => {
+        const meta = '{"author":"anonymous","timestamp":1000}';
+        const content = `abc {++${meta}@@XY++} def`;
+        const contentStart = `abc {++${meta}@@`.length;
+        const { view, cleanup: c } = createCriticMarkupEditor(
+          content,
+          contentStart + 1,
+        );
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+
+        view.dispatch({
+          changes: { from: contentStart, to: contentStart + 2, insert: '' },
+          annotations: Transaction.userEvent.of('delete'),
+        });
+
+        expect(view.state.selection.main.head).toBe(4);
+      });
+
+      it('backspace at left edge of content creates deletion suggestion instead of corrupting markup', () => {
+        const meta = '{"author":"anonymous","timestamp":1000}';
+        const content = `abc{++${meta}@@hello++} def`;
+        const contentStart = `abc{++${meta}@@`.length;
+        const { view, cleanup: c } = createCriticMarkupEditor(
+          content,
+          contentStart, // cursor at contentFrom (left edge of content)
+        );
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+
+        // Backspace at the left edge of content — should NOT eat into the markup
+        // Instead it should create a deletion suggestion for the char before the wrapper
+        view.dispatch({
+          changes: { from: contentStart - 1, to: contentStart, insert: '' },
+          annotations: Transaction.userEvent.of('delete.backward'),
+        });
+
+        const doc = view.state.doc.toString();
+        // The addition wrapper should still be intact
+        expect(doc).toMatch(/\{\+\+.*@@hello\+\+\}/);
+        // A deletion wrapper should appear for the char before the addition ('c')
+        expect(doc).toMatch(/\{--.*@@c--\}/);
+        // Cursor should be to the LEFT of the deletion wrapper (not between deletion and addition)
+        expect(view.state.selection.main.head).toBe(2);
+      });
+    });
   });
 
   describe('Accept/Reject Buttons', () => {
