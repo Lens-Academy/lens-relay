@@ -134,13 +134,13 @@ export function Sidebar() {
       setIsCreating(false);
       // Navigate to the newly created document
       const compoundDocId = `${RELAY_ID}-${id}`;
-      onSelectDocument(compoundDocId);
+      onNavigate(compoundDocId);
     } catch (error) {
       console.error('Failed to create document:', error);
       setNewDocName('');
       setIsCreating(false);
     }
-  }, [folderDocs, folderNames, newDocName, onSelectDocument]);
+  }, [folderDocs, folderNames, newDocName, onNavigate]);
 
   const handleNewDocKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {

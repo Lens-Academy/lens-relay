@@ -140,14 +140,6 @@ export function App() {
   const folderNames = FOLDERS.map(f => f.name);
   const { recentFiles, pushRecent } = useRecentFiles();
 
-  // Track document visits for quick switcher recent files
-  useEffect(() => {
-    if (activeDocId) {
-      const uuid = activeDocId.slice(RELAY_ID.length + 1);
-      pushRecent(uuid);
-    }
-  }, [activeDocId, pushRecent]);
-
   // Ctrl+O keyboard shortcut to open quick switcher
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -160,16 +152,19 @@ export function App() {
     return () => document.removeEventListener('keydown', handler);
   }, []);
 
-  const handleQuickSwitcherSelect = useCallback((docId: string) => {
-    const compoundId = `${RELAY_ID}-${docId}`;
-    setActiveDocId(compoundId);
-  }, []);
-
   // Navigate by updating the URL — React Router handles the rest
+  // Also tracks recent files at this chokepoint (all navigation paths go through here)
   const onNavigate = useCallback((compoundDocId: string) => {
+    const uuid = compoundDocId.slice(RELAY_ID.length + 1);
+    pushRecent(uuid);
     const url = urlForDoc(compoundDocId, metadata);
     navigate(url);
-  }, [navigate, metadata]);
+  }, [navigate, metadata, pushRecent]);
+
+  const handleQuickSwitcherSelect = useCallback((docId: string) => {
+    const compoundId = `${RELAY_ID}-${docId}`;
+    onNavigate(compoundId);
+  }, [onNavigate]);
 
   return (
     <AuthProvider role={shareRole}>

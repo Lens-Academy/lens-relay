@@ -1,0 +1,3 @@
+cargo:rustc-env=GIT_VERSION=unknown
+cargo:rerun-if-changed=.git/HEAD
+cargo:rerun-if-changed=.git/refs
