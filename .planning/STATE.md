@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** AI assistants can find and work with the right documents across the knowledge base
-**Current focus:** v1.1 File Move & Backlink Updates -- Phase 6: Generic Index Updates
+**Current focus:** v1.1 File Move & Backlink Updates -- Phase 7: Move API
 
 ## Current Position
 
-Phase: 6 of 8 (Generic Index Updates)
-Plan: 0 of 1 in current phase
+Phase: 7 of 8 (Move API)
+Plan: 0 of ? in current phase
 Status: Ready to plan
-Last activity: 2026-02-19 -- Roadmap created for v1.1
+Last activity: 2026-02-19 -- Phase 6 complete (generic index updates)
 
-Progress: [##########..........] 50% (10/15 plans -- 10 v1.0 complete, 5 v1.1 planned)
+Progress: [###########.........] 55% (11/15 plans -- 10 v1.0 + 1 v1.1 complete, 4 v1.1 remaining)
 
 ## Performance Metrics
 
@@ -32,12 +32,16 @@ Progress: [##########..........] 50% (10/15 plans -- 10 v1.0 complete, 5 v1.1 pl
 | 03-mcp-read-only-tools | 2/2 | 21m | 10.5m |
 | 04-mcp-search-edit-tools | 2/2 | 20m | 10m |
 | 05-search-ui | 2/2 | 13m | 6.5m |
+| 06-generic-index-updates | 1/1 | 3m | 3m |
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
+
+- Phase 6: upsert_doc handles old-path cleanup internally (no caller tracking needed)
+- Phase 6: remove_doc_from_backlinks returns count of modified arrays for observability
 
 ### Key Context for v1.1
 
@@ -48,6 +52,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Move surfaces: lens-editor UI + MCP tool
 - Cross-folder moves (Lens <-> Lens Edu) and within-folder path changes both needed
 - LINK-02/03/04 are generic CRUD update functions, not move-specific
+- All three indexes now have idempotent single-doc CRUD (upsert_doc, remove_doc, remove_doc_from_backlinks)
 
 ### Pending Todos
 
@@ -60,5 +65,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Roadmap created for v1.1, ready to plan Phase 6
+Stopped at: Completed 06-01-PLAN.md (generic index updates). Ready for Phase 7 planning.
 Resume file: None

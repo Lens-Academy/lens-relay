@@ -28,7 +28,7 @@ See `.planning/milestones/v1.0-ROADMAP.md` for full details.
 - Integer phases (6, 7, 8): Planned milestone work
 - Decimal phases (6.1, 7.1): Urgent insertions if needed (marked INSERTED)
 
-- [ ] **Phase 6: Generic Index Updates** - Idempotent CRUD update functions for all three indexes
+- [x] **Phase 6: Generic Index Updates** - Idempotent CRUD update functions for all three indexes
 - [ ] **Phase 7: Move API & Backlink Rewriting** - Server-side move operation with automatic wikilink rewriting
 - [ ] **Phase 8: Move Surfaces** - lens-editor file tree UI and MCP move tool
 
@@ -46,7 +46,7 @@ See `.planning/milestones/v1.0-ROADMAP.md` for full details.
 **Plans**: 1 plan
 
 Plans:
-- [ ] 06-01: DocumentResolver single-doc CRUD + SearchIndex idempotency tests + link index remove_doc_from_backlinks (TDD)
+- [x] 06-01: DocumentResolver single-doc CRUD + SearchIndex idempotency tests + link index remove_doc_from_backlinks (TDD)
 
 ### Phase 7: Move API & Backlink Rewriting
 **Goal**: Users can move documents within and across folders via a server API, with all wikilinks in other documents automatically rewritten to point to the new path
@@ -57,11 +57,11 @@ Plans:
   2. A document moved from Lens to Lens Edu (or vice versa) appears in the target folder's file tree and is removed from the source folder
   3. All wikilinks in other documents that pointed to the moved document's old path are rewritten to the new path
   4. An editor with the document open before the move remains connected and can continue editing without interruption
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: Move operation (filemeta_v0 update + index cascade + backlink rewriting)
-- [ ] 07-02: Move HTTP endpoint + cross-folder moves + live verification
+- [ ] 07-01: Core move_document function with TDD (filemeta_v0 update + index cascade + backlink rewriting)
+- [ ] 07-02: POST /doc/move HTTP endpoint + live verification
 
 ### Phase 8: Move Surfaces
 **Goal**: Users can move files through the lens-editor UI, and AI assistants can move files via MCP -- both backed by the move API
@@ -89,6 +89,6 @@ Phases execute in numeric order: 6 -> 7 -> 8
 | 3. MCP Read-Only Tools | v1.0 | 2/2 | Complete | 2026-02-10 |
 | 4. MCP Search & Edit Tools | v1.0 | 2/2 | Complete | 2026-02-11 |
 | 5. Search UI | v1.0 | 2/2 | Complete | 2026-02-11 |
-| 6. Generic Index Updates | v1.1 | 0/1 | Not started | - |
+| 6. Generic Index Updates | v1.1 | 1/1 | Complete | 2026-02-19 |
 | 7. Move API & Backlink Rewriting | v1.1 | 0/2 | Not started | - |
 | 8. Move Surfaces | v1.1 | 0/2 | Not started | - |
