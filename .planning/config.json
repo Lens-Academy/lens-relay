@@ -4,7 +4,7 @@
   "parallelization": true,
   "model_profile": "quality",
   "workflow": {
-    "research": true,
+    "research": false,
     "plan_check": true,
     "verifier": true
   }
