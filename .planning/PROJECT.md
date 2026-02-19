@@ -35,7 +35,16 @@ AI assistants can find and work with the right documents across the knowledge ba
 
 ### Active
 
-(No active requirements — next milestone not yet planned)
+**Current Milestone: v1.1 File Move & Backlink Updates**
+
+**Goal:** Users and AI assistants can move documents between and within folders, with automatic backlink rewriting.
+
+**Target features:**
+- Move documents between Lens and Lens Edu folders (cross-folder)
+- Move/reorganize documents within a folder (path change)
+- Automatic rewrite of wikilinks in other documents pointing to moved files
+- Move UI in lens-editor file tree (drag-and-drop and/or context menu based on complexity)
+- MCP tool for AI-assisted file moves
 
 ### Out of Scope
 
@@ -93,4 +102,4 @@ Infrastructure: Hetzner VPS (4GB RAM), Docker containers, Cloudflare R2 storage,
 | 300ms debounce for search UI | Prevents API spam during typing; correct for server-side requests | ✓ Good — smooth UX |
 
 ---
-*Last updated: 2026-02-11 after v1.0 milestone*
+*Last updated: 2026-02-19 after v1.1 milestone start*

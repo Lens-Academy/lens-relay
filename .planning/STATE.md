@@ -2,19 +2,19 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-02-11)
+See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** AI assistants can find and work with the right documents across the knowledge base
-**Current focus:** Planning next milestone
+**Current focus:** v1.1 File Move & Backlink Updates
 
 ## Current Position
 
-Phase: v1.0 complete — next milestone not yet planned
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-02-11 — v1.0 milestone complete
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-02-19 — Milestone v1.1 started
 
-Progress: [##########] v1.0 shipped
+Progress: ░░░░░░░░░░ 0%
 
 ## Performance Metrics (v1.0)
 
@@ -39,6 +39,15 @@ Progress: [##########] v1.0 shipped
 
 Decisions are logged in PROJECT.md Key Decisions table (updated with outcomes after v1.0).
 
+### Key Context for v1.1
+
+- Documents are UUID-based; "move" is a metadata-only operation on filemeta_v0
+- Active editors stay connected during moves (UUID doesn't change)
+- Wikilinks in other documents must be auto-rewritten to new paths
+- Indexes to update: search index, DocumentResolver, link index
+- Move surfaces: lens-editor UI + MCP tool
+- Cross-folder moves (Lens ↔ Lens Edu) and within-folder path changes both needed
+
 ### Pending Todos
 
 None.
@@ -49,6 +58,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-11
-Stopped at: v1.0 milestone archived
+Last session: 2026-02-19
+Stopped at: Defining v1.1 requirements
 Resume file: None
