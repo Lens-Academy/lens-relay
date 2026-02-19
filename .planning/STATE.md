@@ -5,20 +5,20 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** AI assistants can find and work with the right documents across the knowledge base
-**Current focus:** v1.1 File Move & Backlink Updates
+**Current focus:** v1.1 File Move & Backlink Updates -- Phase 6: Generic Index Updates
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-02-19 — Milestone v1.1 started
+Phase: 6 of 8 (Generic Index Updates)
+Plan: 0 of 1 in current phase
+Status: Ready to plan
+Last activity: 2026-02-19 -- Roadmap created for v1.1
 
-Progress: ░░░░░░░░░░ 0%
+Progress: [##########..........] 50% (10/15 plans -- 10 v1.0 complete, 5 v1.1 planned)
 
-## Performance Metrics (v1.0)
+## Performance Metrics
 
-**Velocity:**
+**Velocity (v1.0):**
 - Total plans completed: 10
 - Average duration: 10m
 - Total execution time: ~1.6 hours
@@ -37,7 +37,7 @@ Progress: ░░░░░░░░░░ 0%
 
 ### Decisions
 
-Decisions are logged in PROJECT.md Key Decisions table (updated with outcomes after v1.0).
+Decisions are logged in PROJECT.md Key Decisions table.
 
 ### Key Context for v1.1
 
@@ -46,7 +46,8 @@ Decisions are logged in PROJECT.md Key Decisions table (updated with outcomes af
 - Wikilinks in other documents must be auto-rewritten to new paths
 - Indexes to update: search index, DocumentResolver, link index
 - Move surfaces: lens-editor UI + MCP tool
-- Cross-folder moves (Lens ↔ Lens Edu) and within-folder path changes both needed
+- Cross-folder moves (Lens <-> Lens Edu) and within-folder path changes both needed
+- LINK-02/03/04 are generic CRUD update functions, not move-specific
 
 ### Pending Todos
 
@@ -59,5 +60,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Defining v1.1 requirements
+Stopped at: Roadmap created for v1.1, ready to plan Phase 6
 Resume file: None

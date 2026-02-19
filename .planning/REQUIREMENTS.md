@@ -10,7 +10,7 @@ Requirements for v1.1 File Move & Backlink Updates. Each maps to roadmap phases.
 ### File Operations
 
 - [ ] **MOVE-01**: User can move a document to a different path within the same folder
-- [ ] **MOVE-02**: User can move a document from one folder to another (Lens ↔ Lens Edu)
+- [ ] **MOVE-02**: User can move a document from one folder to another (Lens <-> Lens Edu)
 - [ ] **MOVE-03**: Active editors remain connected during a move (UUID-based connections unaffected)
 
 ### Backlink Updates
@@ -50,21 +50,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| MOVE-01 | — | Pending |
-| MOVE-02 | — | Pending |
-| MOVE-03 | — | Pending |
-| LINK-01 | — | Pending |
-| LINK-02 | — | Pending |
-| LINK-03 | — | Pending |
-| LINK-04 | — | Pending |
-| UI-04 | — | Pending |
-| UI-05 | — | Pending |
+| MOVE-01 | Phase 7 | Pending |
+| MOVE-02 | Phase 7 | Pending |
+| MOVE-03 | Phase 7 | Pending |
+| LINK-01 | Phase 7 | Pending |
+| LINK-02 | Phase 6 | Pending |
+| LINK-03 | Phase 6 | Pending |
+| LINK-04 | Phase 6 | Pending |
+| UI-04 | Phase 8 | Pending |
+| UI-05 | Phase 8 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 9 total
-- Mapped to phases: 0
-- Unmapped: 9
+- Mapped to phases: 9
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-19*
-*Last updated: 2026-02-19 after initial definition*
+*Last updated: 2026-02-19 after roadmap creation*
