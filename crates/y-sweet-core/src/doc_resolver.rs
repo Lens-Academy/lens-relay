@@ -177,6 +177,31 @@ impl DocumentResolver {
         self.remove_folder_entries(folder_doc_id);
         self.rebuild_from_folder_doc(folder_doc_id, doc);
     }
+
+    /// Insert or update a single document in both maps.
+    ///
+    /// Handles creates, path changes (moves), and metadata updates in one
+    /// idempotent call. If the uuid already exists with a different path, the
+    /// old path entry is removed first.
+    pub fn upsert_doc(&self, uuid: &str, path: &str, info: DocInfo) {
+        // If uuid already exists, remove the OLD path from path_to_doc
+        if let Some(old_path) = self.uuid_to_path.get(uuid) {
+            if old_path.value() != path {
+                self.path_to_doc.remove(old_path.value());
+            }
+        }
+        self.uuid_to_path.insert(uuid.to_string(), path.to_string());
+        self.path_to_doc.insert(path.to_string(), info);
+    }
+
+    /// Remove a single document from both maps by uuid.
+    ///
+    /// Idempotent: if the uuid is not found, this is a no-op.
+    pub fn remove_doc(&self, uuid: &str) {
+        if let Some((_, path)) = self.uuid_to_path.remove(uuid) {
+            self.path_to_doc.remove(&path);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +453,152 @@ mod tests {
         assert!(resolver.resolve_path("Lens/Photosynthesis.md").is_some());
         assert!(resolver.resolve_path("Lens/ToDelete.md").is_none());
         assert!(resolver.path_for_uuid("uuid-delete").is_none());
+    }
+
+    // === upsert_doc / remove_doc tests ===
+
+    #[test]
+    fn upsert_doc_creates_new_entry() {
+        let resolver = DocumentResolver::new();
+        let info = DocInfo {
+            uuid: "uuid-photo".to_string(),
+            relay_id: RELAY_ID.to_string(),
+            folder_doc_id: folder0_id(),
+            folder_name: "Lens".to_string(),
+            doc_id: format!("{}-uuid-photo", RELAY_ID),
+        };
+        resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", info);
+
+        // Forward lookup
+        let resolved = resolver.resolve_path("Lens/Photosynthesis.md");
+        assert!(resolved.is_some(), "should resolve after upsert");
+        assert_eq!(resolved.unwrap().uuid, "uuid-photo");
+
+        // Reverse lookup
+        let path = resolver.path_for_uuid("uuid-photo");
+        assert_eq!(path, Some("Lens/Photosynthesis.md".to_string()));
+    }
+
+    #[test]
+    fn upsert_doc_updates_existing_path() {
+        let resolver = DocumentResolver::new();
+        let info1 = DocInfo {
+            uuid: "uuid-photo".to_string(),
+            relay_id: RELAY_ID.to_string(),
+            folder_doc_id: folder0_id(),
+            folder_name: "Lens".to_string(),
+            doc_id: format!("{}-uuid-photo", RELAY_ID),
+        };
+        resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", info1);
+
+        // Move to new path
+        let info2 = DocInfo {
+            uuid: "uuid-photo".to_string(),
+            relay_id: RELAY_ID.to_string(),
+            folder_doc_id: folder0_id(),
+            folder_name: "Lens".to_string(),
+            doc_id: format!("{}-uuid-photo", RELAY_ID),
+        };
+        resolver.upsert_doc("uuid-photo", "Lens/Biology/Photosynthesis.md", info2);
+
+        // Old path should no longer resolve
+        assert!(
+            resolver.resolve_path("Lens/Photosynthesis.md").is_none(),
+            "old path should not resolve after move"
+        );
+        // New path should resolve
+        assert!(
+            resolver.resolve_path("Lens/Biology/Photosynthesis.md").is_some(),
+            "new path should resolve after move"
+        );
+        // Reverse lookup returns new path
+        assert_eq!(
+            resolver.path_for_uuid("uuid-photo"),
+            Some("Lens/Biology/Photosynthesis.md".to_string())
+        );
+    }
+
+    #[test]
+    fn upsert_doc_idempotent() {
+        let resolver = DocumentResolver::new();
+        let make_info = || DocInfo {
+            uuid: "uuid-photo".to_string(),
+            relay_id: RELAY_ID.to_string(),
+            folder_doc_id: folder0_id(),
+            folder_name: "Lens".to_string(),
+            doc_id: format!("{}-uuid-photo", RELAY_ID),
+        };
+        resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", make_info());
+        resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", make_info());
+
+        assert_eq!(
+            resolver.all_paths().len(),
+            1,
+            "calling upsert twice with same data should result in exactly 1 entry"
+        );
+    }
+
+    #[test]
+    fn remove_doc_clears_both_maps() {
+        let resolver = DocumentResolver::new();
+        let info = DocInfo {
+            uuid: "uuid-photo".to_string(),
+            relay_id: RELAY_ID.to_string(),
+            folder_doc_id: folder0_id(),
+            folder_name: "Lens".to_string(),
+            doc_id: format!("{}-uuid-photo", RELAY_ID),
+        };
+        resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", info);
+        assert!(resolver.resolve_path("Lens/Photosynthesis.md").is_some());
+
+        resolver.remove_doc("uuid-photo");
+
+        assert!(
+            resolver.resolve_path("Lens/Photosynthesis.md").is_none(),
+            "path should not resolve after remove"
+        );
+        assert!(
+            resolver.path_for_uuid("uuid-photo").is_none(),
+            "uuid should not resolve after remove"
+        );
+    }
+
+    #[test]
+    fn remove_doc_idempotent() {
+        let resolver = DocumentResolver::new();
+        // Removing a non-existent uuid should not panic
+        resolver.remove_doc("nonexistent-uuid");
+        // Also removing an already-removed uuid
+        let info = DocInfo {
+            uuid: "uuid-photo".to_string(),
+            relay_id: RELAY_ID.to_string(),
+            folder_doc_id: folder0_id(),
+            folder_name: "Lens".to_string(),
+            doc_id: format!("{}-uuid-photo", RELAY_ID),
+        };
+        resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", info);
+        resolver.remove_doc("uuid-photo");
+        resolver.remove_doc("uuid-photo"); // second remove is a no-op
+        assert!(resolver.all_paths().is_empty());
+    }
+
+    #[test]
+    fn upsert_doc_with_folder_context() {
+        let resolver = DocumentResolver::new();
+        let info = DocInfo {
+            uuid: "uuid-ideas".to_string(),
+            relay_id: RELAY_ID.to_string(),
+            folder_doc_id: folder0_id(),
+            folder_name: "Lens".to_string(),
+            doc_id: format!("{}-uuid-ideas", RELAY_ID),
+        };
+        resolver.upsert_doc("uuid-ideas", "Lens/Notes/Ideas.md", info);
+
+        let resolved = resolver.resolve_path("Lens/Notes/Ideas.md").unwrap();
+        assert_eq!(resolved.folder_name, "Lens");
+        assert_eq!(resolved.relay_id, RELAY_ID);
+        assert_eq!(resolved.doc_id, format!("{}-uuid-ideas", RELAY_ID));
+        assert_eq!(resolved.folder_doc_id, folder0_id());
     }
 
     // === rebuild clears old entries ===
