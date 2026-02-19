@@ -43,10 +43,10 @@ See `.planning/milestones/v1.0-ROADMAP.md` for full details.
   2. Calling the DocumentResolver update function with a changed path-UUID mapping reflects the new path in lookups, and calling it again with the same data is a no-op
   3. Calling the link index update function after a document's wikilink targets change updates backlink maps correctly, and stale entries self-heal on next update
   4. All three update functions work for creates, deletes, path changes, and content changes -- not just moves
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 06-01: Generic index update functions (TDD for all three indexes)
+- [ ] 06-01: DocumentResolver single-doc CRUD + SearchIndex idempotency tests + link index remove_doc_from_backlinks (TDD)
 
 ### Phase 7: Move API & Backlink Rewriting
 **Goal**: Users can move documents within and across folders via a server API, with all wikilinks in other documents automatically rewritten to point to the new path
