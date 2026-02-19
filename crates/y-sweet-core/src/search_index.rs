@@ -951,4 +951,40 @@ mod tests {
         let merged = merge_ranges(&ranges);
         assert_eq!(merged, vec![(0, 10)]);
     }
+
+    // === Idempotency edge-case tests ===
+
+    #[test]
+    fn remove_nonexistent_document_is_noop() {
+        let index = create_index();
+        index
+            .add_document("doc1", "Existing", "Some content.", "Lens")
+            .unwrap();
+        // Remove a document that was never added
+        let result = index.remove_document("nonexistent");
+        assert!(result.is_ok(), "removing nonexistent doc should not error");
+        // Original document should still be searchable
+        let results = index.search("Existing", 10).unwrap();
+        assert_eq!(results.len(), 1, "existing doc should still be findable");
+        assert_eq!(results[0].doc_id, "doc1");
+    }
+
+    #[test]
+    fn add_document_twice_no_duplicates() {
+        let index = create_index();
+        index
+            .add_document("doc1", "Photosynthesis", "Plants convert sunlight.", "Lens")
+            .unwrap();
+        // Add the same doc_id again (simulating re-index)
+        index
+            .add_document("doc1", "Photosynthesis", "Plants convert sunlight.", "Lens")
+            .unwrap();
+        let results = index.search("Photosynthesis", 10).unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "adding same doc_id twice should result in exactly 1 result, got {}",
+            results.len()
+        );
+    }
 }

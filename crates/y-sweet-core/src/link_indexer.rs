@@ -410,6 +410,46 @@ fn index_content_into_folders_from_text(
     Ok(())
 }
 
+/// Remove all backlink entries for a given source UUID from all folder docs.
+///
+/// Scans backlinks_v0 on each folder doc and removes source_uuid from every
+/// backlink array. Removes empty arrays entirely. Idempotent: calling on a
+/// UUID with no backlinks is a no-op.
+///
+/// Returns the number of backlink arrays modified.
+pub fn remove_doc_from_backlinks(
+    source_uuid: &str,
+    folder_docs: &[&Doc],
+) -> anyhow::Result<usize> {
+    let mut modified_count = 0;
+
+    for folder_doc in folder_docs {
+        let mut txn = folder_doc.transact_mut_with("link-indexer");
+        let backlinks = txn.get_or_insert_map("backlinks_v0");
+
+        let all_keys: Vec<String> = backlinks.keys(&txn).map(|k| k.to_string()).collect();
+        for key in all_keys {
+            let current: Vec<String> = read_backlinks_array(&backlinks, &txn, &key);
+            if current.contains(&source_uuid.to_string()) {
+                let updated: Vec<String> =
+                    current.into_iter().filter(|s| s != source_uuid).collect();
+                if updated.is_empty() {
+                    backlinks.remove(&mut txn, &key);
+                } else {
+                    let arr: Vec<Any> = updated
+                        .into_iter()
+                        .map(|s| Any::String(s.into()))
+                        .collect();
+                    backlinks.insert(&mut txn, key.as_str(), arr);
+                }
+                modified_count += 1;
+            }
+        }
+    }
+
+    Ok(modified_count)
+}
+
 // ---------------------------------------------------------------------------
 // Wikilink rename — apply rename edits to Y.Text
 // ---------------------------------------------------------------------------
@@ -2566,5 +2606,146 @@ mod tests {
                 "See [[../Relay Folder 2/Qux]]",
             );
         }
+    }
+
+    // === remove_doc_from_backlinks tests ===
+
+    #[test]
+    fn remove_doc_from_backlinks_clears_source() {
+        // Setup: folder with target_A having backlinks [source_X, source_Y]
+        let folder_doc = create_folder_doc(&[
+            ("/TargetA.md", "uuid-target-a"),
+            ("/SourceX.md", "uuid-source-x"),
+            ("/SourceY.md", "uuid-source-y"),
+        ]);
+
+        // Manually populate backlinks_v0
+        {
+            let mut txn = folder_doc.transact_mut_with("link-indexer");
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            let arr = vec![
+                Any::String("uuid-source-x".into()),
+                Any::String("uuid-source-y".into()),
+            ];
+            backlinks.insert(&mut txn, "uuid-target-a", arr);
+        }
+
+        // Verify precondition
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-target-a"),
+            vec!["uuid-source-x", "uuid-source-y"]
+        );
+
+        // Act: remove source_X from all backlinks
+        let modified = remove_doc_from_backlinks("uuid-source-x", &[&folder_doc]).unwrap();
+
+        // Assert: target_A's backlinks are now just [source_Y]
+        assert_eq!(modified, 1);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-target-a"),
+            vec!["uuid-source-y"]
+        );
+    }
+
+    #[test]
+    fn remove_doc_from_backlinks_removes_empty_arrays() {
+        // Setup: target_B's backlinks are just [source_X]
+        let folder_doc = create_folder_doc(&[
+            ("/TargetB.md", "uuid-target-b"),
+            ("/SourceX.md", "uuid-source-x"),
+        ]);
+        {
+            let mut txn = folder_doc.transact_mut_with("link-indexer");
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            let arr = vec![Any::String("uuid-source-x".into())];
+            backlinks.insert(&mut txn, "uuid-target-b", arr);
+        }
+
+        // Act
+        let modified = remove_doc_from_backlinks("uuid-source-x", &[&folder_doc]).unwrap();
+
+        // Assert: key removed entirely from backlinks_v0
+        assert_eq!(modified, 1);
+        assert!(
+            read_backlinks(&folder_doc, "uuid-target-b").is_empty(),
+            "empty backlinks should be removed entirely"
+        );
+        // Verify the key itself is gone
+        let txn = folder_doc.transact();
+        let backlinks = txn.get_map("backlinks_v0").unwrap();
+        assert!(
+            backlinks.get(&txn, "uuid-target-b").is_none(),
+            "key should be removed from backlinks_v0, not just empty"
+        );
+    }
+
+    #[test]
+    fn remove_doc_from_backlinks_idempotent() {
+        let folder_doc = create_folder_doc(&[("/TargetA.md", "uuid-target-a")]);
+        {
+            let mut txn = folder_doc.transact_mut_with("link-indexer");
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            let arr = vec![Any::String("uuid-other".into())];
+            backlinks.insert(&mut txn, "uuid-target-a", arr);
+        }
+
+        // Removing a UUID that is not in any backlinks array
+        let modified =
+            remove_doc_from_backlinks("uuid-nonexistent", &[&folder_doc]).unwrap();
+        assert_eq!(modified, 0, "should return 0 when source not found");
+
+        // Backlinks unchanged
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-target-a"),
+            vec!["uuid-other"]
+        );
+    }
+
+    #[test]
+    fn remove_doc_from_backlinks_multi_folder() {
+        // Source appears in backlinks across 2 folder docs
+        let folder_a = create_folder_doc(&[
+            ("/TargetA.md", "uuid-target-a"),
+            ("/SourceX.md", "uuid-source-x"),
+        ]);
+        let folder_b = create_folder_doc(&[
+            ("/TargetB.md", "uuid-target-b"),
+            ("/SourceX.md", "uuid-source-x"),
+        ]);
+
+        // Populate backlinks in both folders
+        {
+            let mut txn = folder_a.transact_mut_with("link-indexer");
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.insert(
+                &mut txn,
+                "uuid-target-a",
+                vec![Any::String("uuid-source-x".into())],
+            );
+        }
+        {
+            let mut txn = folder_b.transact_mut_with("link-indexer");
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.insert(
+                &mut txn,
+                "uuid-target-b",
+                vec![
+                    Any::String("uuid-source-x".into()),
+                    Any::String("uuid-other".into()),
+                ],
+            );
+        }
+
+        // Act: remove source_X from both folders
+        let modified =
+            remove_doc_from_backlinks("uuid-source-x", &[&folder_a, &folder_b]).unwrap();
+
+        // Assert: both folders cleaned
+        assert_eq!(modified, 2, "should modify arrays in both folders");
+        assert!(read_backlinks(&folder_a, "uuid-target-a").is_empty());
+        assert_eq!(
+            read_backlinks(&folder_b, "uuid-target-b"),
+            vec!["uuid-other"]
+        );
     }
 }
