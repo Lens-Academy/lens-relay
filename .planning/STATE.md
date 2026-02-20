@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-19)
 ## Current Position
 
 Phase: 7 of 8 (Move API)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-02-19 -- Phase 6 complete (generic index updates)
+Plan: 1 of 2 in current phase
+Status: Executing
+Last activity: 2026-02-20 -- Plan 07-01 complete (move_document core function)
 
-Progress: [###########.........] 55% (11/15 plans -- 10 v1.0 + 1 v1.1 complete, 4 v1.1 remaining)
+Progress: [############........] 60% (12/15 plans -- 10 v1.0 + 2 v1.1 complete, 3 v1.1 remaining)
 
 ## Performance Metrics
 
@@ -33,6 +33,7 @@ Progress: [###########.........] 55% (11/15 plans -- 10 v1.0 + 1 v1.1 complete, 
 | 04-mcp-search-edit-tools | 2/2 | 20m | 10m |
 | 05-search-ui | 2/2 | 13m | 6.5m |
 | 06-generic-index-updates | 1/1 | 3m | 3m |
+| 07-move-api-backlink-rewriting | 1/2 | 4m | 4m |
 
 ## Accumulated Context
 
@@ -42,6 +43,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 
 - Phase 6: upsert_doc handles old-path cleanup internally (no caller tracking needed)
 - Phase 6: remove_doc_from_backlinks returns count of modified arrays for observability
+- Phase 7-01: move_document uses ptr::eq for same-folder detection
+- Phase 7-01: SearchIndex updates excluded from move_document (HTTP handler responsibility)
+- Phase 7-01: Virtual tree patched to OLD paths before backlink resolution (same as apply_rename_updates)
 
 ### Key Context for v1.1
 
@@ -64,6 +68,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-19
-Stopped at: Completed 06-01-PLAN.md (generic index updates). Ready for Phase 7 planning.
+Last session: 2026-02-20
+Stopped at: Completed 07-01-PLAN.md (move_document core function). Ready for 07-02 (HTTP endpoint).
 Resume file: None
