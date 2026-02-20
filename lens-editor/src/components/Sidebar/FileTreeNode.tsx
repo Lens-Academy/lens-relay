@@ -57,6 +57,12 @@ export function FileTreeNode({
     ctx.onRequestDelete?.(node.data.path, node.data.name);
   };
 
+  const handleMove = () => {
+    if (node.data.docId) {
+      ctx.onRequestMove?.(node.data.path, node.data.docId);
+    }
+  };
+
   const handleSubmitRename = () => {
     const trimmed = editValue.trim();
     if (trimmed && trimmed !== node.data.name) {
@@ -200,6 +206,7 @@ export function FileTreeNode({
       <FileTreeContextMenu
         onRename={handleRename}
         onDelete={handleDelete}
+        onMove={handleMove}
         isFolder={isFolder}
       >
         {content}

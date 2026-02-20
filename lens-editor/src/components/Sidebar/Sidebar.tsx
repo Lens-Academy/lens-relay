@@ -4,12 +4,13 @@ import { SearchInput } from './SearchInput';
 import { SearchPanel } from './SearchPanel';
 import { FileTree } from './FileTree';
 import { FileTreeProvider } from './FileTreeContext';
+import * as Dialog from '@radix-ui/react-dialog';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames } from '../../lib/tree-utils';
-import { createDocument, renameDocument, deleteDocument } from '../../lib/relay-api';
+import { createDocument, renameDocument, deleteDocument, moveDocument } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
 
@@ -39,6 +40,13 @@ export function Sidebar() {
   // State for creating new document
   const [isCreating, setIsCreating] = useState(false);
   const [newDocName, setNewDocName] = useState('');
+
+  // State for move dialog
+  const [moveTarget, setMoveTarget] = useState<{ path: string; docId: string } | null>(null);
+  const [moveNewPath, setMoveNewPath] = useState('');
+  const [moveTargetFolder, setMoveTargetFolder] = useState<string>('');
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [isMoving, setIsMoving] = useState(false);
 
   // Ref for Ctrl+K keyboard shortcut focus
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -141,6 +149,34 @@ export function Sidebar() {
       setIsCreating(false);
     }
   }, [folderDocs, folderNames, newDocName, onNavigate]);
+
+  const handleMoveRequest = useCallback((prefixedPath: string, docId: string) => {
+    // Pre-populate with current path (strip folder prefix)
+    const folderName = getFolderNameFromPath(prefixedPath, folderNames);
+    const originalPath = folderName ? getOriginalPath(prefixedPath, folderName) : prefixedPath;
+    setMoveTarget({ path: prefixedPath, docId });
+    setMoveNewPath(originalPath);
+    setMoveTargetFolder(folderName || folderNames[0] || '');
+    setMoveError(null);
+  }, [folderNames]);
+
+  const handleMoveConfirm = useCallback(async () => {
+    if (!moveTarget || !moveNewPath.trim()) return;
+    setIsMoving(true);
+    setMoveError(null);
+    try {
+      // Determine if this is a cross-folder move
+      const currentFolder = getFolderNameFromPath(moveTarget.path, folderNames);
+      const targetFolder = moveTargetFolder !== currentFolder ? moveTargetFolder : undefined;
+      await moveDocument(moveTarget.docId, moveNewPath, targetFolder);
+      setMoveTarget(null);
+      setMoveNewPath('');
+    } catch (err: any) {
+      setMoveError(err.message || 'Move failed');
+    } finally {
+      setIsMoving(false);
+    }
+  }, [moveTarget, moveNewPath, moveTargetFolder, folderNames]);
 
   const handleNewDocKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -270,6 +306,7 @@ export function Sidebar() {
                   onEditingChange: setEditingPath,
                   onRequestRename: (path) => setEditingPath(path),
                   onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
+                  onRequestMove: handleMoveRequest,
                   onRenameSubmit: handleRenameSubmit,
                   activeDocId,
                 }}
@@ -294,6 +331,74 @@ export function Sidebar() {
         onConfirm={handleDeleteConfirm}
         confirmLabel="Delete"
       />
+
+      {/* Move dialog */}
+      <Dialog.Root open={!!moveTarget} onOpenChange={(open) => { if (!open) { setMoveTarget(null); setMoveError(null); } }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/50" />
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 w-[420px]">
+            <Dialog.Title className="text-lg font-semibold">
+              Move {moveTarget?.path.split('/').pop()}
+            </Dialog.Title>
+            <Dialog.Description className="text-gray-600 mt-1 text-sm">
+              Enter the new path for this document.
+            </Dialog.Description>
+
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">New path</label>
+                <input
+                  type="text"
+                  value={moveNewPath}
+                  onChange={(e) => setMoveNewPath(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !isMoving) {
+                      e.preventDefault();
+                      handleMoveConfirm();
+                    }
+                  }}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md outline-none focus:border-blue-400"
+                  autoFocus
+                />
+              </div>
+
+              {folderNames.length > 1 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Target folder</label>
+                  <select
+                    value={moveTargetFolder}
+                    onChange={(e) => setMoveTargetFolder(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md outline-none focus:border-blue-400 bg-white"
+                  >
+                    {folderNames.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {moveError && (
+                <p className="text-sm text-red-600">{moveError}</p>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 mt-4">
+              <Dialog.Close asChild>
+                <button className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200 text-sm">
+                  Cancel
+                </button>
+              </Dialog.Close>
+              <button
+                className="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleMoveConfirm}
+                disabled={isMoving || !moveNewPath.trim()}
+              >
+                {isMoving ? 'Moving...' : 'Move'}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </aside>
   );
 }

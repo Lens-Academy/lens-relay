@@ -3,6 +3,7 @@ import { createContext, useContext, type ReactNode } from 'react';
 export interface FileTreeContextValue {
   onRequestRename?: (path: string) => void;
   onRequestDelete?: (path: string, name: string) => void;
+  onRequestMove?: (path: string, docId: string) => void;
   onRenameSubmit?: (oldPath: string, newName: string) => void;
   editingPath: string | null;
   onEditingChange: (path: string | null) => void;

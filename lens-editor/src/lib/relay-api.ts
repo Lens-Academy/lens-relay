@@ -259,6 +259,49 @@ export interface SearchResponse {
   query: string;
 }
 
+// --- Move API ---
+
+export interface MoveDocumentResponse {
+  old_path: string;
+  new_path: string;
+  old_folder: string;
+  new_folder: string;
+  links_rewritten: number;
+}
+
+/**
+ * Move a document to a new path, optionally to a different folder.
+ * Calls the server's POST /doc/move endpoint which handles:
+ * - Metadata update in filemeta_v0
+ * - Backlink rewriting in other documents
+ * - Search index update
+ */
+export async function moveDocument(
+  uuid: string,
+  newPath: string,
+  targetFolder?: string
+): Promise<MoveDocumentResponse> {
+  const body: Record<string, string> = { uuid, new_path: newPath };
+  if (targetFolder) {
+    body.target_folder = targetFolder;
+  }
+
+  const response = await fetch('/api/relay/doc/move', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Move failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// --- Search API ---
+
 export async function searchDocuments(
   query: string,
   limit: number = 20,

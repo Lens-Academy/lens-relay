@@ -5,6 +5,7 @@ interface FileTreeContextMenuProps {
   children: ReactNode;
   onRename: () => void;
   onDelete: () => void;
+  onMove: () => void;
   isFolder: boolean;
 }
 
@@ -12,6 +13,7 @@ export function FileTreeContextMenu({
   children,
   onRename,
   onDelete,
+  onMove,
   isFolder,
 }: FileTreeContextMenuProps) {
   return (
@@ -29,6 +31,14 @@ export function FileTreeContextMenu({
           >
             Rename
           </ContextMenu.Item>
+          {!isFolder && (
+            <ContextMenu.Item
+              className="px-3 py-1.5 text-sm hover:bg-gray-100 cursor-pointer outline-none"
+              onSelect={onMove}
+            >
+              Move to...
+            </ContextMenu.Item>
+          )}
           <ContextMenu.Separator className="h-px bg-gray-200 my-1" />
           <ContextMenu.Item
             className="px-3 py-1.5 text-sm text-red-600 hover:bg-gray-100 cursor-pointer outline-none"
