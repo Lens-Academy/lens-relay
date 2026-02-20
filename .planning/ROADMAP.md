@@ -3,7 +3,7 @@
 ## Milestones
 
 - v1.0 Search & MCP MVP - Phases 1-5 (shipped 2026-02-11)
-- v1.1 File Move & Backlink Updates - Phases 6-8 (in progress)
+- v1.1 File Move & Backlink Updates - Phases 6-8 (shipped 2026-02-20)
 
 ## Phases
 
@@ -20,7 +20,7 @@ See `.planning/milestones/v1.0-ROADMAP.md` for full details.
 
 </details>
 
-### v1.1 File Move & Backlink Updates (In Progress)
+### v1.1 File Move & Backlink Updates (Shipped 2026-02-20)
 
 **Milestone Goal:** Users and AI assistants can move documents between and within folders, with automatic backlink rewriting.
 
@@ -30,7 +30,7 @@ See `.planning/milestones/v1.0-ROADMAP.md` for full details.
 
 - [x] **Phase 6: Generic Index Updates** - Idempotent CRUD update functions for all three indexes
 - [x] **Phase 7: Move API & Backlink Rewriting** - Server-side move operation with automatic wikilink rewriting
-- [ ] **Phase 8: Move Surfaces** - lens-editor file tree UI and MCP move tool
+- [x] **Phase 8: Move Surfaces** - lens-editor file tree UI and MCP move tool
 
 ## Phase Details
 
@@ -74,8 +74,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 08-01-PLAN.md -- MCP move_document tool (Rust: tool definition, dispatch, core move call)
-- [ ] 08-02-PLAN.md -- lens-editor file tree move UI (TypeScript: context menu, dialog, API call)
+- [x] 08-01: MCP move_document tool (Rust: tool definition, dispatch, core move call)
+- [x] 08-02: lens-editor file tree move UI (TypeScript: context menu, dialog, API call)
 
 ## Progress
 
@@ -91,4 +91,4 @@ Phases execute in numeric order: 6 -> 7 -> 8
 | 5. Search UI | v1.0 | 2/2 | Complete | 2026-02-11 |
 | 6. Generic Index Updates | v1.1 | 1/1 | Complete | 2026-02-19 |
 | 7. Move API & Backlink Rewriting | v1.1 | 2/2 | Complete | 2026-02-20 |
-| 8. Move Surfaces | v1.1 | 0/2 | Not started | - |
+| 8. Move Surfaces | v1.1 | 2/2 | Complete | 2026-02-20 |

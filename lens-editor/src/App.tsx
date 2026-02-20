@@ -23,16 +23,23 @@ import { useRecentFiles } from './hooks/useRecentFiles';
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 
 // Relay server ID — switches between production and local test IDs
-export const RELAY_ID = 'cb696037-0f72-4e93-8717-4e433129d789';
+export const RELAY_ID = USE_LOCAL_RELAY
+  ? 'a0000000-0000-4000-8000-000000000000'
+  : 'cb696037-0f72-4e93-8717-4e433129d789';
 
 // Folder configuration
-const FOLDERS: FolderConfig[] = [
-  { id: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e', name: 'Lens' },
-  { id: 'ea4015da-24af-4d9d-ac49-8c902cb17121', name: 'Lens Edu' },
-];
+const FOLDERS: FolderConfig[] = USE_LOCAL_RELAY
+  ? [
+      { id: 'b0000001-0000-4000-8000-000000000001', name: 'Relay Folder 1' },
+      { id: 'b0000002-0000-4000-8000-000000000002', name: 'Relay Folder 2' },
+    ]
+  : [
+      { id: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e', name: 'Lens' },
+      { id: 'ea4015da-24af-4d9d-ac49-8c902cb17121', name: 'Lens Edu' },
+    ];
 
 // Default document short UUID (first 8 chars — used only in URL redirect)
-const DEFAULT_DOC_UUID = '76c3e654';
+const DEFAULT_DOC_UUID = USE_LOCAL_RELAY ? 'c0000001' : '76c3e654';
 
 // Read share token from URL once at module load (before React renders)
 const shareToken = getShareTokenFromUrl();
