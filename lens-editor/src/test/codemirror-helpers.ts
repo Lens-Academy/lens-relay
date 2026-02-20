@@ -1,10 +1,12 @@
-import { EditorState } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
+import { EditorState, Prec } from '@codemirror/state';
+import { EditorView, keymap } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
+import { defaultKeymap } from '@codemirror/commands';
 import { WikilinkExtension } from '../components/Editor/extensions/wikilinkParser';
 import { livePreview } from '../components/Editor/extensions/livePreview';
 import type { WikilinkContext } from '../components/Editor/extensions/livePreview';
 import { criticMarkupExtension } from '../components/Editor/extensions/criticmarkup';
+import { tightMarkdownKeymap } from '../components/Editor/extensions/tightListEnter';
 
 /**
  * Create an EditorView with live preview extension for testing.
@@ -149,4 +151,45 @@ export function createCriticMarkupEditorWithSourceMode(
       view.destroy();
     },
   };
+}
+
+/**
+ * Create an EditorView with the tight-list markdown keymap for testing.
+ * Mirrors the Editor.tsx extension stack relevant to Enter/Backspace.
+ */
+export function createMarkdownEditor(
+  content: string,
+  cursorPos: number
+): { view: EditorView; cleanup: () => void } {
+  const state = EditorState.create({
+    doc: content,
+    selection: { anchor: cursorPos },
+    extensions: [
+      markdown({
+        extensions: [WikilinkExtension],
+        addKeymap: false,
+      }),
+      Prec.high(keymap.of(tightMarkdownKeymap)),
+      keymap.of(defaultKeymap),
+    ],
+  });
+
+  const view = new EditorView({
+    state,
+    parent: document.body,
+  });
+
+  return {
+    view,
+    cleanup: () => view.destroy(),
+  };
+}
+
+/**
+ * Simulate pressing Enter through the tight-list markdown keymap.
+ * Uses the same binding-lookup pattern as criticmarkup-commands.test.ts.
+ */
+export function pressEnter(view: EditorView): boolean {
+  const binding = tightMarkdownKeymap.find((k) => k.key === 'Enter');
+  return binding?.run?.(view) ?? false;
 }

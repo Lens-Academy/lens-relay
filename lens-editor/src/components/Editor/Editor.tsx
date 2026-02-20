@@ -8,7 +8,7 @@ import {
   rectangularSelection,
   crosshairCursor,
 } from '@codemirror/view';
-import { EditorState } from '@codemirror/state';
+import { EditorState, Prec } from '@codemirror/state';
 import { defaultKeymap } from '@codemirror/commands';
 import { indentOnInput, syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldKeymap } from '@codemirror/language';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
@@ -17,6 +17,7 @@ import { completionKeymap } from '@codemirror/autocomplete';
 import { lintKeymap } from '@codemirror/lint';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
+import { tightMarkdownKeymap } from './extensions/tightListEnter';
 import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
@@ -229,8 +230,10 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
         markdown({
           base: markdownLanguage,
           extensions: [WikilinkExtension],
+          addKeymap: false,
         }),
         livePreview(wikilinkContextRef.current),
+        Prec.high(keymap.of(tightMarkdownKeymap)),
         listIndentKeymap,
         yCollab(ytext, provider.awareness, { undoManager }),
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
