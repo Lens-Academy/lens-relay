@@ -1,4 +1,4 @@
-use crate::doc_resolver::{read_folder_name, DocumentResolver};
+use crate::doc_resolver::{read_folder_name, DocInfo, DocumentResolver};
 use crate::doc_sync::DocWithSyncKv;
 use crate::link_parser::{compute_wikilink_rename_edits, compute_wikilink_rename_edits_resolved, extract_wikilinks};
 use dashmap::DashMap;
@@ -448,6 +448,51 @@ pub fn remove_doc_from_backlinks(
     }
 
     Ok(modified_count)
+}
+
+// ---------------------------------------------------------------------------
+// Document move — filemeta update + index cascade + wikilink rewriting
+// ---------------------------------------------------------------------------
+
+/// Result of a document move operation.
+pub struct MoveResult {
+    /// Previous filemeta path (e.g. "/Photosynthesis.md")
+    pub old_path: String,
+    /// New filemeta path
+    pub new_path: String,
+    /// Folder name the document was in before the move
+    pub old_folder_name: String,
+    /// Folder name the document is in after the move
+    pub new_folder_name: String,
+    /// Total wikilink edits across all backlinker docs
+    pub links_rewritten: usize,
+}
+
+/// Move a document to a new path within or across folders.
+///
+/// Operates on bare Y.Docs (no DocWithSyncKv, no async). Steps:
+/// 1. Find UUID in source_folder_doc's filemeta_v0, extract old path + metadata
+/// 2. Update filemeta_v0 (within-folder: remove old + insert new; cross-folder: remove from source, add to target)
+/// 3. Update DocumentResolver with new path
+/// 4. Build virtual tree with OLD paths for backlink resolution
+/// 5. Read backlinks for the moved UUID, rewrite wikilinks in each backlinker
+/// 6. Re-index the moved doc's own backlinks (wikilinks may resolve differently at new location)
+///
+/// Does NOT update SearchIndex (caller can do that with content doc text).
+#[allow(clippy::too_many_arguments)]
+pub fn move_document(
+    uuid: &str,
+    new_path: &str,
+    source_folder_doc: &Doc,
+    target_folder_doc: &Doc,
+    all_folder_docs: &[&Doc],
+    all_folder_names: &[&str],
+    doc_resolver: &DocumentResolver,
+    content_docs: &HashMap<String, &Doc>,
+) -> anyhow::Result<MoveResult> {
+    // TODO: implement
+    let _ = (uuid, new_path, source_folder_doc, target_folder_doc, all_folder_docs, all_folder_names, doc_resolver, content_docs);
+    Err(anyhow::anyhow!("move_document not yet implemented"))
 }
 
 // ---------------------------------------------------------------------------
@@ -2747,5 +2792,270 @@ mod tests {
             read_backlinks(&folder_b, "uuid-target-b"),
             vec!["uuid-other"]
         );
+    }
+
+    // === move_document tests ===
+
+    mod move_document_tests {
+        use super::*;
+        use crate::doc_resolver::DocumentResolver;
+
+        const RELAY_ID: &str = "cb696037-0f72-4e93-8717-4e433129d789";
+
+        fn folder0_id() -> String {
+            format!("{}-aaaa0000-0000-0000-0000-000000000000", RELAY_ID)
+        }
+
+        fn folder1_id() -> String {
+            format!("{}-bbbb0000-0000-0000-0000-000000000000", RELAY_ID)
+        }
+
+        /// Build a DocumentResolver from bare Y.Docs using the public update_folder_from_doc.
+        fn build_resolver(folder_specs: &[(&str, &Doc)]) -> DocumentResolver {
+            let resolver = DocumentResolver::new();
+            for (doc_id, doc) in folder_specs {
+                resolver.update_folder_from_doc(doc_id, doc);
+            }
+            resolver
+        }
+
+        #[test]
+        fn move_within_folder_updates_filemeta_path() {
+            // Move /Photosynthesis.md -> /Biology/Photosynthesis.md within same folder
+            let folder = create_folder_doc(&[
+                ("/Photosynthesis.md", "uuid-photo"),
+                ("/Other.md", "uuid-other"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let content_docs = HashMap::new();
+
+            let result = move_document(
+                "uuid-photo",
+                "/Biology/Photosynthesis.md",
+                &folder,
+                &folder, // same folder
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            assert_eq!(result.old_path, "/Photosynthesis.md");
+            assert_eq!(result.new_path, "/Biology/Photosynthesis.md");
+            assert_eq!(result.old_folder_name, "Lens");
+            assert_eq!(result.new_folder_name, "Lens");
+
+            // Old path removed from filemeta
+            let txn = folder.transact();
+            let filemeta = txn.get_map("filemeta_v0").unwrap();
+            assert!(filemeta.get(&txn, "/Photosynthesis.md").is_none(),
+                "old path should be removed from filemeta");
+            // New path present in filemeta
+            let new_entry = filemeta.get(&txn, "/Biology/Photosynthesis.md");
+            assert!(new_entry.is_some(), "new path should be in filemeta");
+            let new_id = extract_id_from_filemeta_entry(&new_entry.unwrap(), &txn);
+            assert_eq!(new_id, Some("uuid-photo".to_string()), "UUID should be preserved");
+        }
+
+        #[test]
+        fn move_within_folder_rename_rewrites_backlinks() {
+            // Rename /Photosynthesis.md -> /Photosynthesis_v2.md
+            // Notes.md has [[Photosynthesis]] -> should become [[Photosynthesis_v2]]
+            let folder = create_folder_doc(&[
+                ("/Photosynthesis.md", "uuid-photo"),
+                ("/Notes.md", "uuid-notes"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            // Create content doc for Notes that links to Photosynthesis
+            let notes_doc = create_content_doc("See [[Photosynthesis]] for details");
+
+            // Index Notes -> creates backlinks
+            index_content_into_folder("uuid-notes", &notes_doc, &folder).unwrap();
+            assert_eq!(read_backlinks(&folder, "uuid-photo"), vec!["uuid-notes"]);
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-notes".to_string(), &notes_doc as &Doc);
+
+            let result = move_document(
+                "uuid-photo",
+                "/Photosynthesis_v2.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            assert_eq!(result.links_rewritten, 1);
+            assert_eq!(read_contents(&notes_doc), "See [[Photosynthesis_v2]] for details");
+        }
+
+        #[test]
+        fn move_cross_folder_updates_filemeta_in_both() {
+            // Move from Lens /Photosynthesis.md -> Lens Edu /Photosynthesis.md
+            let folder_a = create_folder_doc(&[
+                ("/Photosynthesis.md", "uuid-photo"),
+            ]);
+            set_folder_name(&folder_a, "Lens");
+            let folder_b = create_folder_doc(&[
+                ("/Welcome.md", "uuid-welcome"),
+            ]);
+            set_folder_name(&folder_b, "Lens Edu");
+            let f0id = folder0_id();
+            let f1id = folder1_id();
+
+            let resolver = build_resolver(&[
+                (&f0id, &folder_a),
+                (&f1id, &folder_b),
+            ]);
+            let content_docs = HashMap::new();
+
+            let result = move_document(
+                "uuid-photo",
+                "/Photosynthesis.md",
+                &folder_a,
+                &folder_b, // different folder
+                &[&folder_a, &folder_b],
+                &["Lens", "Lens Edu"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            assert_eq!(result.old_folder_name, "Lens");
+            assert_eq!(result.new_folder_name, "Lens Edu");
+
+            // Source filemeta: no entry
+            let txn_a = folder_a.transact();
+            let filemeta_a = txn_a.get_map("filemeta_v0").unwrap();
+            assert!(filemeta_a.get(&txn_a, "/Photosynthesis.md").is_none(),
+                "source filemeta should not have entry after cross-folder move");
+
+            // Target filemeta: has entry
+            let txn_b = folder_b.transact();
+            let filemeta_b = txn_b.get_map("filemeta_v0").unwrap();
+            let entry = filemeta_b.get(&txn_b, "/Photosynthesis.md");
+            assert!(entry.is_some(), "target filemeta should have the entry");
+            let id = extract_id_from_filemeta_entry(&entry.unwrap(), &txn_b);
+            assert_eq!(id, Some("uuid-photo".to_string()), "UUID should be preserved");
+
+            // DocumentResolver updated
+            let new_resolved = resolver.resolve_path("Lens Edu/Photosynthesis.md");
+            assert!(new_resolved.is_some(), "new path should be resolvable");
+            assert_eq!(new_resolved.unwrap().uuid, "uuid-photo");
+            assert!(resolver.resolve_path("Lens/Photosynthesis.md").is_none(),
+                "old path should not be resolvable");
+        }
+
+        #[test]
+        fn move_with_no_backlinkers_succeeds() {
+            // Move a document that nobody links to
+            let folder = create_folder_doc(&[
+                ("/Lonely.md", "uuid-lonely"),
+                ("/Other.md", "uuid-other"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let content_docs = HashMap::new();
+
+            let result = move_document(
+                "uuid-lonely",
+                "/Archive/Lonely.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed even with no backlinkers");
+
+            assert_eq!(result.links_rewritten, 0);
+        }
+
+        #[test]
+        fn move_preserves_uuid_in_resolver() {
+            // After move, uuid_to_path returns the new path
+            let folder = create_folder_doc(&[
+                ("/Photosynthesis.md", "uuid-photo"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            assert_eq!(
+                resolver.path_for_uuid("uuid-photo"),
+                Some("Lens/Photosynthesis.md".to_string())
+            );
+
+            let content_docs = HashMap::new();
+            move_document(
+                "uuid-photo",
+                "/Biology/Photosynthesis.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            // UUID still maps to a path, but the NEW path
+            assert_eq!(
+                resolver.path_for_uuid("uuid-photo"),
+                Some("Lens/Biology/Photosynthesis.md".to_string())
+            );
+            // Old path gone
+            assert!(resolver.resolve_path("Lens/Photosynthesis.md").is_none());
+            // New path resolves
+            let info = resolver.resolve_path("Lens/Biology/Photosynthesis.md").unwrap();
+            assert_eq!(info.uuid, "uuid-photo");
+        }
+
+        #[test]
+        fn move_rename_preserves_anchors_and_aliases() {
+            // [[Photosynthesis#Section]] -> [[NewName#Section]]
+            // [[Photosynthesis|Display]] -> [[NewName|Display]]
+            let folder = create_folder_doc(&[
+                ("/Photosynthesis.md", "uuid-photo"),
+                ("/Notes.md", "uuid-notes"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            let notes_doc = create_content_doc(
+                "See [[Photosynthesis#Section]] and [[Photosynthesis|Display]]"
+            );
+            index_content_into_folder("uuid-notes", &notes_doc, &folder).unwrap();
+            assert_eq!(read_backlinks(&folder, "uuid-photo"), vec!["uuid-notes"]);
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-notes".to_string(), &notes_doc as &Doc);
+
+            let result = move_document(
+                "uuid-photo",
+                "/NewName.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            assert_eq!(result.links_rewritten, 2);
+            assert_eq!(
+                read_contents(&notes_doc),
+                "See [[NewName#Section]] and [[NewName|Display]]"
+            );
+        }
     }
 }
