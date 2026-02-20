@@ -668,6 +668,19 @@ pub fn move_document(
         }
     }
 
+    // 6b. Rewrite outgoing links in the moved document itself
+    if let Some(content_doc) = content_docs.get(uuid) {
+        match rewrite_outgoing_links_for_move(
+            content_doc,
+            &old_virtual_path,
+            &new_virtual_path,
+            &entries,
+        ) {
+            Ok(count) => total_rewritten += count,
+            Err(e) => tracing::error!("Failed to rewrite outgoing links: {:?}", e),
+        }
+    }
+
     // 7. Re-index the moved doc's own backlinks (its wikilinks may resolve differently at new location)
     if let Some(content_doc) = content_docs.get(uuid) {
         // Re-index using the updated folder docs (filemeta already has new path)
@@ -818,6 +831,62 @@ fn rewrite_wikilinks_for_move(
                 .unwrap_or(false)
         },
         |_| new_name.clone(),
+    );
+
+    if edits.is_empty() {
+        return Ok(0);
+    }
+
+    let mut txn = content_doc.transact_mut_with("link-indexer");
+    let text = txn.get_or_insert_text("contents");
+
+    for edit in &edits {
+        text.remove_range(&mut txn, edit.offset as u32, edit.remove_len as u32);
+        text.insert(&mut txn, edit.offset as u32, &edit.insert_text);
+    }
+
+    Ok(edits.len())
+}
+
+/// Rewrite outgoing wikilinks in a moved document.
+///
+/// For each wikilink in the content doc, resolves it from the OLD source location.
+/// If it resolves to a target, computes the correct relative path from the NEW
+/// source location to that same target and replaces the link if it changed.
+fn rewrite_outgoing_links_for_move(
+    content_doc: &Doc,
+    old_source_virtual_path: &str,
+    new_source_virtual_path: &str,
+    entries: &[VirtualEntry],
+) -> anyhow::Result<usize> {
+    let plain_text = {
+        let txn = content_doc.transact();
+        match txn.get_text("contents") {
+            Some(text) => text.get_string(&txn),
+            None => return Ok(0),
+        }
+    };
+
+    let edits = compute_wikilink_move_edits(
+        &plain_text,
+        |link_name| {
+            // Resolve from OLD location — does this link find a target?
+            let target = resolve_in_virtual_tree(link_name, Some(old_source_virtual_path), entries);
+            if let Some(t) = target {
+                // Compute what the link text should be from the NEW location
+                let new_link = compute_relative_wikilink(new_source_virtual_path, &t.virtual_path);
+                // Only edit if the link text would actually change
+                new_link != link_name
+            } else {
+                false
+            }
+        },
+        |link_name| {
+            // Resolve from OLD location to find the target
+            let target = resolve_in_virtual_tree(link_name, Some(old_source_virtual_path), entries)
+                .expect("should_edit already confirmed resolution");
+            compute_relative_wikilink(new_source_virtual_path, &target.virtual_path)
+        },
     );
 
     if edits.is_empty() {
@@ -3588,6 +3657,190 @@ mod tests {
                 read_contents(&ideas_doc),
                 "Check [[Welcome]] for info",
                 "link to unmoved file should be unchanged"
+            );
+        }
+
+        // === Outgoing link rewriting tests ===
+        // When a document is moved, its own wikilinks (outgoing) that use
+        // path-qualified names may break because they resolve relative to
+        // the source's directory. These tests verify that move_document()
+        // rewrites outgoing links in the moved document itself.
+
+        #[test]
+        fn move_rewrites_outgoing_path_qualified_link() {
+            // /Welcome.md has [[Notes/Ideas]] (resolves to /Notes/Ideas.md from /)
+            // Move /Welcome.md -> /Archive/Welcome.md
+            // From /Archive/, [[Notes/Ideas]] resolves to /Archive/Notes/Ideas.md (wrong)
+            // Should become [[../Notes/Ideas]] (resolves to /Notes/Ideas.md from /Archive/)
+            let folder = create_folder_doc(&[
+                ("/Welcome.md", "uuid-welcome"),
+                ("/Notes/Ideas.md", "uuid-ideas"),
+                ("/Notes", "uuid-notes-folder"),
+                ("/Archive", "uuid-archive-folder"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            let welcome_doc = create_content_doc("Check out [[Notes/Ideas]] for inspiration");
+            index_content_into_folder("uuid-welcome", &welcome_doc, &folder).unwrap();
+            assert_eq!(read_backlinks(&folder, "uuid-ideas"), vec!["uuid-welcome"]);
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-welcome".to_string(), &welcome_doc as &Doc);
+
+            let result = move_document(
+                "uuid-welcome",
+                "/Archive/Welcome.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            assert!(result.links_rewritten > 0,
+                "outgoing path-qualified link should be rewritten");
+            assert_eq!(
+                read_contents(&welcome_doc),
+                "Check out [[../Notes/Ideas]] for inspiration",
+                "path-qualified outgoing link should be updated for new location"
+            );
+        }
+
+        #[test]
+        fn move_does_not_rewrite_unresolvable_outgoing_link() {
+            // /Welcome.md has [[Nonexistent Page]] (doesn't resolve to any entry)
+            // Move /Welcome.md -> /Archive/Welcome.md
+            // Since the link doesn't resolve, it should be left unchanged
+            let folder = create_folder_doc(&[
+                ("/Welcome.md", "uuid-welcome"),
+                ("/Archive", "uuid-archive-folder"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            let welcome_doc = create_content_doc("See [[Nonexistent Page]] first");
+            index_content_into_folder("uuid-welcome", &welcome_doc, &folder).unwrap();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-welcome".to_string(), &welcome_doc as &Doc);
+
+            let _result = move_document(
+                "uuid-welcome",
+                "/Archive/Welcome.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            assert_eq!(
+                read_contents(&welcome_doc),
+                "See [[Nonexistent Page]] first",
+                "unresolvable link should not be rewritten"
+            );
+        }
+
+        #[test]
+        fn move_rewrites_outgoing_relative_parent_link() {
+            // /Notes/Ideas.md has [[../Welcome]] (resolves to /Welcome.md)
+            // Move /Notes/Ideas.md -> /Ideas.md (to root)
+            // From /, [[../Welcome]] would resolve to /../Welcome.md (broken)
+            // Should become [[Welcome]] (resolves to /Welcome.md from /)
+            let folder = create_folder_doc(&[
+                ("/Notes/Ideas.md", "uuid-ideas"),
+                ("/Notes", "uuid-notes-folder"),
+                ("/Welcome.md", "uuid-welcome"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            let ideas_doc = create_content_doc("Return to [[../Welcome]]");
+            index_content_into_folder("uuid-ideas", &ideas_doc, &folder).unwrap();
+            assert_eq!(read_backlinks(&folder, "uuid-welcome"), vec!["uuid-ideas"]);
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-ideas".to_string(), &ideas_doc as &Doc);
+
+            let result = move_document(
+                "uuid-ideas",
+                "/Ideas.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            assert!(result.links_rewritten > 0,
+                "outgoing relative parent link should be rewritten");
+            assert_eq!(
+                read_contents(&ideas_doc),
+                "Return to [[Welcome]]",
+                "relative parent link should simplify when moved to same level as target"
+            );
+        }
+
+        #[test]
+        fn move_rewrites_outgoing_and_incoming_links() {
+            // Setup: /Welcome.md links to [[Notes/Ideas]] (outgoing)
+            //        /Getting Started.md links to [[Welcome]] (incoming backlink)
+            // Move /Welcome.md -> /Archive/Welcome.md
+            // Both should be rewritten:
+            //   Welcome's [[Notes/Ideas]] -> [[../Notes/Ideas]] (outgoing)
+            //   Getting Started's [[Welcome]] -> [[Archive/Welcome]] (incoming)
+            let folder = create_folder_doc(&[
+                ("/Welcome.md", "uuid-welcome"),
+                ("/Notes/Ideas.md", "uuid-ideas"),
+                ("/Notes", "uuid-notes-folder"),
+                ("/Getting Started.md", "uuid-gs"),
+                ("/Archive", "uuid-archive-folder"),
+            ]);
+            set_folder_name(&folder, "Lens");
+            let f0id = folder0_id();
+
+            let welcome_doc = create_content_doc("Check [[Notes/Ideas]]");
+            let gs_doc = create_content_doc("See [[Welcome]] for details");
+            index_content_into_folder("uuid-welcome", &welcome_doc, &folder).unwrap();
+            index_content_into_folder("uuid-gs", &gs_doc, &folder).unwrap();
+            assert_eq!(read_backlinks(&folder, "uuid-ideas"), vec!["uuid-welcome"]);
+            assert_eq!(read_backlinks(&folder, "uuid-welcome"), vec!["uuid-gs"]);
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-welcome".to_string(), &welcome_doc as &Doc);
+            content_docs.insert("uuid-gs".to_string(), &gs_doc as &Doc);
+
+            let result = move_document(
+                "uuid-welcome",
+                "/Archive/Welcome.md",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            // 1 incoming (Getting Started) + 1 outgoing (Welcome's own link)
+            assert_eq!(result.links_rewritten, 2,
+                "should rewrite both incoming backlinks and outgoing links");
+            assert_eq!(
+                read_contents(&welcome_doc),
+                "Check [[../Notes/Ideas]]",
+                "outgoing link should be updated for new location"
+            );
+            assert_eq!(
+                read_contents(&gs_doc),
+                "See [[Archive/Welcome]] for details",
+                "incoming backlink should be updated"
             );
         }
     }
