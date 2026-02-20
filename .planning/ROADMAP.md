@@ -29,7 +29,7 @@ See `.planning/milestones/v1.0-ROADMAP.md` for full details.
 - Decimal phases (6.1, 7.1): Urgent insertions if needed (marked INSERTED)
 
 - [x] **Phase 6: Generic Index Updates** - Idempotent CRUD update functions for all three indexes
-- [ ] **Phase 7: Move API & Backlink Rewriting** - Server-side move operation with automatic wikilink rewriting
+- [x] **Phase 7: Move API & Backlink Rewriting** - Server-side move operation with automatic wikilink rewriting
 - [ ] **Phase 8: Move Surfaces** - lens-editor file tree UI and MCP move tool
 
 ## Phase Details
@@ -60,8 +60,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 07-01: Core move_document function with TDD (filemeta_v0 update + index cascade + backlink rewriting)
-- [ ] 07-02: POST /doc/move HTTP endpoint + live verification
+- [x] 07-01: Core move_document function with TDD (filemeta_v0 update + index cascade + backlink rewriting)
+- [x] 07-02: POST /doc/move HTTP endpoint + live verification
 
 ### Phase 8: Move Surfaces
 **Goal**: Users can move files through the lens-editor UI, and AI assistants can move files via MCP -- both backed by the move API
@@ -90,5 +90,5 @@ Phases execute in numeric order: 6 -> 7 -> 8
 | 4. MCP Search & Edit Tools | v1.0 | 2/2 | Complete | 2026-02-11 |
 | 5. Search UI | v1.0 | 2/2 | Complete | 2026-02-11 |
 | 6. Generic Index Updates | v1.1 | 1/1 | Complete | 2026-02-19 |
-| 7. Move API & Backlink Rewriting | v1.1 | 0/2 | Not started | - |
+| 7. Move API & Backlink Rewriting | v1.1 | 2/2 | Complete | 2026-02-20 |
 | 8. Move Surfaces | v1.1 | 0/2 | Not started | - |

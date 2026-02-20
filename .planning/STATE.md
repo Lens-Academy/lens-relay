@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-19)
 
 **Core value:** AI assistants can find and work with the right documents across the knowledge base
-**Current focus:** v1.1 File Move & Backlink Updates -- Phase 7: Move API
+**Current focus:** v1.1 File Move & Backlink Updates -- Phase 8: Move Surfaces
 
 ## Current Position
 
