@@ -18,7 +18,7 @@ use axum::{
 use axum_extra::typed_header::TypedHeader;
 use dashmap::{mapref::entry::Entry, mapref::one::MappedRef, DashMap};
 use futures::{SinkExt, StreamExt, TryStreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
@@ -34,7 +34,7 @@ use tokio::{
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{span, Instrument, Level};
 use url::Url;
-use yrs::{GetString, Map, ReadTxn, Transact, WriteTxn};
+use yrs::{Array, GetString, Map, ReadTxn, Transact, WriteTxn};
 use y_sweet_core::{
     api_types::{
         validate_doc_name, validate_file_hash, AuthDocRequest, Authorization, ClientToken,
@@ -174,6 +174,22 @@ struct SearchQuery {
 
 fn default_search_limit() -> usize {
     20
+}
+
+#[derive(Deserialize)]
+struct MoveDocRequest {
+    uuid: String,
+    new_path: String,
+    target_folder: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MoveDocResponse {
+    old_path: String,
+    new_path: String,
+    old_folder: String,
+    new_folder: String,
+    links_rewritten: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -1457,7 +1473,8 @@ impl Server {
                 get(handle_socket_upgrade_full_path),
             )
             .route("/webhook/reload", post(reload_webhook_config_endpoint))
-            .route("/search", get(handle_search));
+            .route("/search", get(handle_search))
+            .route("/doc/move", post(handle_move_document));
 
         // Only register /mcp if MCP_API_KEY is set
         if let Some(ref key) = self.mcp_api_key {
@@ -2117,6 +2134,310 @@ async fn handle_search(
         "total_hits": total_hits,
         "query": params.q
     })))
+}
+
+/// Move a document to a new path within or across folders.
+///
+/// POST /doc/move
+/// Body: { "uuid": "...", "new_path": "/Biology/Photosynthesis.md", "target_folder": "Lens Edu" }
+/// Response: { "old_path", "new_path", "old_folder", "new_folder", "links_rewritten" }
+async fn handle_move_document(
+    State(server_state): State<Arc<Server>>,
+    Json(body): Json<MoveDocRequest>,
+) -> Result<Json<MoveDocResponse>, AppError> {
+    // Validate new_path format
+    if !body.new_path.starts_with('/') {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            anyhow!("new_path must start with '/'"),
+        ));
+    }
+    if !body.new_path.ends_with(".md") {
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            anyhow!("new_path must end with '.md'"),
+        ));
+    }
+
+    // All synchronous work (DashMap access, awareness locks, move_document call)
+    // is done inside this block to ensure non-Send guards don't cross .await points.
+    let (result, folder_sync_kvs, content_sync_kvs, source_folder_doc_id, target_folder_doc_id, relay_id) = {
+        let docs = &server_state.docs;
+
+        // 1. Find all folder doc IDs
+        let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
+        if folder_doc_ids.is_empty() {
+            return Err(AppError(
+                StatusCode::NOT_FOUND,
+                anyhow!("No folder documents found"),
+            ));
+        }
+
+        // 2. Find which folder doc contains the UUID, and read folder names.
+        let mut source_folder_doc_id: Option<String> = None;
+        let mut folder_names: Vec<(String, String)> = Vec::new(); // (doc_id, folder_name)
+
+        for folder_doc_id in &folder_doc_ids {
+            let Some(doc_ref) = docs.get(folder_doc_id) else {
+                continue;
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let folder_name =
+                y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+            folder_names.push((folder_doc_id.clone(), folder_name));
+
+            // Check if this folder contains the UUID
+            let txn = guard.doc.transact();
+            if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                for (_path, value) in filemeta.iter(&txn) {
+                    if let Some(id) =
+                        link_indexer::extract_id_from_filemeta_entry(&value, &txn)
+                    {
+                        if id == body.uuid {
+                            source_folder_doc_id = Some(folder_doc_id.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let source_folder_doc_id = source_folder_doc_id.ok_or_else(|| {
+            AppError(
+                StatusCode::NOT_FOUND,
+                anyhow!("UUID {} not found in any folder document", body.uuid),
+            )
+        })?;
+
+        // 3. Determine target folder doc ID
+        let target_folder_doc_id = if let Some(ref target_name) = body.target_folder {
+            let found = folder_names
+                .iter()
+                .find(|(_, name)| name == target_name)
+                .map(|(id, _)| id.clone());
+            found.ok_or_else(|| {
+                AppError(
+                    StatusCode::BAD_REQUEST,
+                    anyhow!("Target folder '{}' not found", target_name),
+                )
+            })?
+        } else {
+            source_folder_doc_id.clone()
+        };
+
+        // 4. Check if new_path already exists in target folder doc
+        {
+            let Some(doc_ref) = docs.get(&target_folder_doc_id) else {
+                return Err(AppError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    anyhow!("Target folder doc not loaded"),
+                ));
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                if filemeta.get(&txn, &body.new_path).is_some() {
+                    return Err(AppError(
+                        StatusCode::CONFLICT,
+                        anyhow!(
+                            "Path '{}' already exists in target folder",
+                            body.new_path
+                        ),
+                    ));
+                }
+            }
+        }
+
+        // 5. Collect all content doc UUIDs (from filemeta + backlinks).
+        let mut all_content_uuids: Vec<String> = Vec::new();
+        for folder_doc_id in &folder_doc_ids {
+            let Some(doc_ref) = docs.get(folder_doc_id) else {
+                continue;
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+
+            if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                for (_path, value) in filemeta.iter(&txn) {
+                    if let Some(id) =
+                        link_indexer::extract_id_from_filemeta_entry(&value, &txn)
+                    {
+                        if !all_content_uuids.contains(&id) {
+                            all_content_uuids.push(id);
+                        }
+                    }
+                }
+            }
+
+            if let Some(backlinks) = txn.get_map("backlinks_v0") {
+                if let Some(bl_array) = backlinks.get(&txn, &body.uuid) {
+                    if let yrs::Out::YArray(arr) = bl_array {
+                        for item in arr.iter(&txn) {
+                            if let yrs::Out::Any(yrs::Any::String(s)) = item {
+                                let s = s.to_string();
+                                if !all_content_uuids.contains(&s) {
+                                    all_content_uuids.push(s);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 6. Find the relay_id prefix from any folder doc
+        let relay_id = folder_doc_ids
+            .first()
+            .and_then(|id| link_indexer::parse_doc_id(id).map(|(r, _)| r.to_string()))
+            .unwrap_or_default();
+
+        // 7. Acquire awareness write locks on all folder docs and content docs.
+        //    All DashMap refs + awareness guards live in this scope.
+        let doc_resolver = server_state.doc_resolver.clone();
+
+        let folder_refs: Vec<_> = folder_doc_ids
+            .iter()
+            .filter_map(|id| docs.get(id))
+            .collect();
+        let folder_awareness: Vec<_> = folder_refs
+            .iter()
+            .map(|r| r.awareness())
+            .collect();
+        let folder_guards: Vec<_> = folder_awareness
+            .iter()
+            .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
+            .collect();
+
+        let folder_doc_refs: Vec<&yrs::Doc> = folder_guards.iter().map(|g| &g.doc).collect();
+        let folder_name_strings: Vec<String> = folder_doc_ids
+            .iter()
+            .zip(folder_guards.iter())
+            .map(|(id, g)| y_sweet_core::doc_resolver::read_folder_name(&g.doc, id))
+            .collect();
+        let folder_name_refs: Vec<&str> = folder_name_strings.iter().map(|s| s.as_str()).collect();
+
+        let source_idx = folder_doc_ids
+            .iter()
+            .position(|id| id == &source_folder_doc_id)
+            .ok_or_else(|| {
+                AppError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    anyhow!("Source folder doc not in folder list"),
+                )
+            })?;
+        let target_idx = folder_doc_ids
+            .iter()
+            .position(|id| id == &target_folder_doc_id)
+            .ok_or_else(|| {
+                AppError(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    anyhow!("Target folder doc not in folder list"),
+                )
+            })?;
+
+        let content_doc_ids: Vec<String> = all_content_uuids
+            .iter()
+            .map(|uuid| {
+                if relay_id.is_empty() {
+                    uuid.clone()
+                } else {
+                    format!("{}-{}", relay_id, uuid)
+                }
+            })
+            .collect();
+        let content_refs: Vec<_> = content_doc_ids
+            .iter()
+            .filter_map(|id| docs.get(id))
+            .collect();
+        let content_awareness: Vec<_> = content_refs
+            .iter()
+            .map(|r| r.awareness())
+            .collect();
+        let content_guards: Vec<_> = content_awareness
+            .iter()
+            .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
+            .collect();
+
+        let mut content_docs: std::collections::HashMap<String, &yrs::Doc> =
+            std::collections::HashMap::new();
+        for (i, guard) in content_guards.iter().enumerate() {
+            let doc_id = content_refs[i].key();
+            if let Some((_r, uuid)) = link_indexer::parse_doc_id(doc_id) {
+                content_docs.insert(uuid.to_string(), &guard.doc);
+            }
+        }
+
+        // 8. Call move_document
+        let result = link_indexer::move_document(
+            &body.uuid,
+            &body.new_path,
+            folder_doc_refs[source_idx],
+            folder_doc_refs[target_idx],
+            &folder_doc_refs,
+            &folder_name_refs,
+            &doc_resolver,
+            &content_docs,
+        )
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+        // Collect sync_kv arcs before guards are dropped at end of block
+        let folder_sync_kvs: Vec<_> = folder_refs.iter().map(|r| r.sync_kv()).collect();
+        let content_sync_kvs: Vec<_> = content_refs.iter().map(|r| r.sync_kv()).collect();
+
+        (result, folder_sync_kvs, content_sync_kvs, source_folder_doc_id, target_folder_doc_id, relay_id)
+    }; // All DashMap refs, awareness guards, and write guards dropped here
+
+    // 9. Persist all mutated folder docs and content docs (async, no guards held)
+    for sync_kv in &folder_sync_kvs {
+        if let Err(e) = sync_kv.persist().await {
+            tracing::error!("Failed to persist folder doc after move: {:?}", e);
+        }
+    }
+    for sync_kv in &content_sync_kvs {
+        if let Err(e) = sync_kv.persist().await {
+            tracing::error!("Failed to persist content doc after move: {:?}", e);
+        }
+    }
+
+    // 10. Update search index for the moved document
+    if let Some(ref search_index) = server_state.search_index {
+        let content_doc_id = if relay_id.is_empty() {
+            body.uuid.clone()
+        } else {
+            format!("{}-{}", relay_id, body.uuid)
+        };
+        search_handle_content_update(&content_doc_id, &server_state.docs, search_index);
+    }
+
+    // 11. Trigger link indexer on_document_update for folder docs
+    //     so background worker picks up the filemeta change
+    if let Some(ref indexer) = server_state.link_indexer {
+        indexer.on_document_update(&source_folder_doc_id).await;
+        if source_folder_doc_id != target_folder_doc_id {
+            indexer.on_document_update(&target_folder_doc_id).await;
+        }
+    }
+
+    tracing::info!(
+        "Document {} moved: {} -> {} (folder: {} -> {}, {} links rewritten)",
+        body.uuid,
+        result.old_path,
+        result.new_path,
+        result.old_folder_name,
+        result.new_folder_name,
+        result.links_rewritten,
+    );
+
+    Ok(Json(MoveDocResponse {
+        old_path: result.old_path,
+        new_path: result.new_path,
+        old_folder: result.old_folder_name,
+        new_folder: result.new_folder_name,
+        links_rewritten: result.links_rewritten,
+    }))
 }
 
 async fn new_doc(
