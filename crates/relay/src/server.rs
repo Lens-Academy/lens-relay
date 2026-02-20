@@ -267,7 +267,7 @@ async fn search_worker(
 }
 
 /// Handle a content doc update: read body, look up title from folder metadata, upsert into search index.
-fn search_handle_content_update(
+pub(crate) fn search_handle_content_update(
     doc_id: &str,
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
@@ -697,6 +697,11 @@ impl Server {
     /// Get the DashMap of all loaded documents.
     pub fn docs(&self) -> &Arc<DashMap<String, DocWithSyncKv>> {
         &self.docs
+    }
+
+    /// Get the search index, if enabled.
+    pub fn search_index(&self) -> &Option<Arc<SearchIndex>> {
+        &self.search_index
     }
 
     /// Convenience wrapper for tests: creates a Server and discards the WorkerReceivers.

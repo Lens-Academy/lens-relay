@@ -71,11 +71,11 @@ Plans:
   1. User can move a file in the lens-editor file tree via drag-and-drop or context menu, and the tree updates to reflect the new location
   2. AI assistant can call the MCP move tool to relocate a document and receives confirmation of the new path
   3. After a move via either surface, wikilinks in other documents are rewritten (the full pipeline works end-to-end)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 08-01: MCP move tool implementation
-- [ ] 08-02: lens-editor file tree move UI
+- [ ] 08-01-PLAN.md -- MCP move_document tool (Rust: tool definition, dispatch, core move call)
+- [ ] 08-02-PLAN.md -- lens-editor file tree move UI (TypeScript: context menu, dialog, API call)
 
 ## Progress
 

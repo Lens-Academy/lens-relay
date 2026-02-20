@@ -3,6 +3,7 @@ pub mod edit;
 pub mod get_links;
 pub mod glob;
 pub mod grep;
+pub mod move_doc;
 pub mod read;
 
 use crate::server::Server;
@@ -166,6 +167,33 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "move_document",
+            "description": "Move a document to a new path within the same folder or to a different folder. Automatically rewrites wikilinks in other documents that point to the moved file.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["file_path", "new_path", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Current path of the document (e.g. 'Lens/Biology/Photosynthesis.md')"
+                    },
+                    "new_path": {
+                        "type": "string",
+                        "description": "New path within the target folder, starting with '/' (e.g. '/Science/Photosynthesis.md')"
+                    },
+                    "target_folder": {
+                        "type": "string",
+                        "description": "Target folder for cross-folder moves (e.g. 'Lens Edu'). Omit to stay in the same folder."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
+                    }
+                }
+            }
+        }),
     ]
 }
 
@@ -210,6 +238,10 @@ pub fn dispatch_tool(server: &Arc<Server>, transport_session_id: &str, name: &st
             Err(msg) => tool_error(&msg),
         },
         "edit" => match edit::execute(server, session_id, arguments) {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "move_document" => match move_doc::execute(server, arguments) {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
