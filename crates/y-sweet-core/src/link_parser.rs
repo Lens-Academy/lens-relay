@@ -474,3 +474,39 @@ where
     edits.sort_by(|a, b| b.offset.cmp(&a.offset));
     edits
 }
+
+/// Compute edits for a directory move (or any move that changes the path).
+///
+/// For each wikilink where `should_edit(page_name)` returns true, replaces the
+/// entire page-name portion with the result of `compute_new_name(page_name)`.
+/// Preserves anchors (`#`) and aliases (`|`). Returns edits in reverse offset order.
+pub fn compute_wikilink_move_edits<F, G>(
+    markdown: &str,
+    should_edit: F,
+    compute_new_name: G,
+) -> Vec<TextEdit>
+where
+    F: Fn(&str) -> bool,
+    G: Fn(&str) -> String,
+{
+    let occurrences = extract_wikilink_occurrences(markdown);
+
+    let mut edits: Vec<TextEdit> = occurrences
+        .into_iter()
+        .filter_map(|occ| {
+            if !should_edit(&occ.name) {
+                return None;
+            }
+
+            let new_name = compute_new_name(&occ.name);
+            Some(TextEdit {
+                offset: occ.name_start,
+                remove_len: occ.name_len,
+                insert_text: new_name,
+            })
+        })
+        .collect();
+
+    edits.sort_by(|a, b| b.offset.cmp(&a.offset));
+    edits
+}
