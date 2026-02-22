@@ -2164,9 +2164,9 @@ async fn handle_move_document(
         ));
     }
 
-    // All synchronous work (DashMap access, awareness locks, move_document call)
-    // is done inside this block to ensure non-Send guards don't cross .await points.
-    let (result, folder_sync_kvs, content_sync_kvs, source_folder_doc_id, target_folder_doc_id, relay_id) = {
+    // Sync block 1: Gather metadata from folder docs (steps 1-6).
+    // Non-Send guards must not cross .await points, so we extract owned data here.
+    let (folder_doc_ids, source_folder_doc_id, target_folder_doc_id, relay_id, needed_uuids) = {
         let docs = &server_state.docs;
 
         // 1. Find all folder doc IDs
@@ -2255,8 +2255,9 @@ async fn handle_move_document(
             }
         }
 
-        // 5. Collect all content doc UUIDs (from filemeta + backlinks).
-        let mut all_content_uuids: Vec<String> = Vec::new();
+        // 5. Collect only the needed content UUIDs: backlinkers + the moved doc itself.
+        //    (Previously collected ALL filemeta UUIDs — hundreds of docs — most unneeded.)
+        let mut needed_uuids: Vec<String> = vec![body.uuid.clone()];
         for folder_doc_id in &folder_doc_ids {
             let Some(doc_ref) = docs.get(folder_doc_id) else {
                 continue;
@@ -2265,44 +2266,57 @@ async fn handle_move_document(
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
 
-            if let Some(filemeta) = txn.get_map("filemeta_v0") {
-                for (_path, value) in filemeta.iter(&txn) {
-                    if let Some(id) =
-                        link_indexer::extract_id_from_filemeta_entry(&value, &txn)
-                    {
-                        if !all_content_uuids.contains(&id) {
-                            all_content_uuids.push(id);
-                        }
-                    }
-                }
-            }
-
             if let Some(backlinks) = txn.get_map("backlinks_v0") {
-                if let Some(bl_array) = backlinks.get(&txn, &body.uuid) {
-                    if let yrs::Out::YArray(arr) = bl_array {
-                        for item in arr.iter(&txn) {
-                            if let yrs::Out::Any(yrs::Any::String(s)) = item {
-                                let s = s.to_string();
-                                if !all_content_uuids.contains(&s) {
-                                    all_content_uuids.push(s);
-                                }
-                            }
-                        }
+                for bl_uuid in link_indexer::read_backlinks_array(&backlinks, &txn, &body.uuid) {
+                    if !needed_uuids.contains(&bl_uuid) {
+                        needed_uuids.push(bl_uuid);
                     }
                 }
             }
         }
 
-        // 6. Find the relay_id prefix from any folder doc
-        let relay_id = folder_doc_ids
-            .first()
-            .and_then(|id| link_indexer::parse_doc_id(id).map(|(r, _)| r.to_string()))
+        // 6. Find the relay_id prefix from the source folder doc
+        //    (Must use source folder — not first() — because local test folders
+        //     may have a different relay_id than the R2-backed production folders.)
+        let relay_id = link_indexer::parse_doc_id(&source_folder_doc_id)
+            .map(|(r, _)| r.to_string())
             .unwrap_or_default();
+
+        (folder_doc_ids, source_folder_doc_id, target_folder_doc_id, relay_id, needed_uuids)
+    }; // All DashMap refs and awareness guards dropped here
+
+    // Pre-load backlinker + moved docs from storage if not already in DashMap.
+    let needed_content_ids: Vec<String> = needed_uuids
+        .iter()
+        .map(|uuid| {
+            if relay_id.is_empty() {
+                uuid.clone()
+            } else {
+                format!("{}-{}", relay_id, uuid)
+            }
+        })
+        .collect();
+
+    for content_id in &needed_content_ids {
+        if !server_state.docs.contains_key(content_id) {
+            if let Err(e) = server_state.load_doc(content_id, None).await {
+                tracing::warn!(
+                    "Failed to load backlinker doc {} from storage: {:?}",
+                    content_id, e
+                );
+                // Continue — move succeeds even if some backlinkers can't be updated.
+                // Background worker will retry if the doc gets loaded later.
+            }
+        }
+    }
+
+    // Sync block 2: Acquire write locks and perform the move (steps 7-8).
+    let (result, folder_sync_kvs, content_sync_kvs) = {
+        let docs = &server_state.docs;
+        let doc_resolver = server_state.doc_resolver.clone();
 
         // 7. Acquire awareness write locks on all folder docs and content docs.
         //    All DashMap refs + awareness guards live in this scope.
-        let doc_resolver = server_state.doc_resolver.clone();
-
         let folder_refs: Vec<_> = folder_doc_ids
             .iter()
             .filter_map(|id| docs.get(id))
@@ -2343,7 +2357,7 @@ async fn handle_move_document(
                 )
             })?;
 
-        let content_doc_ids: Vec<String> = all_content_uuids
+        let content_doc_ids: Vec<String> = needed_uuids
             .iter()
             .map(|uuid| {
                 if relay_id.is_empty() {
@@ -2357,12 +2371,6 @@ async fn handle_move_document(
             .iter()
             .filter_map(|id| docs.get(id))
             .collect();
-        tracing::info!(
-            "move_document: {} content UUIDs collected, {} found in DashMap ({} not loaded)",
-            content_doc_ids.len(),
-            content_refs.len(),
-            content_doc_ids.len() - content_refs.len(),
-        );
         let content_awareness: Vec<_> = content_refs
             .iter()
             .map(|r| r.awareness())
@@ -2398,7 +2406,7 @@ async fn handle_move_document(
         let folder_sync_kvs: Vec<_> = folder_refs.iter().map(|r| r.sync_kv()).collect();
         let content_sync_kvs: Vec<_> = content_refs.iter().map(|r| r.sync_kv()).collect();
 
-        (result, folder_sync_kvs, content_sync_kvs, source_folder_doc_id, target_folder_doc_id, relay_id)
+        (result, folder_sync_kvs, content_sync_kvs)
     }; // All DashMap refs, awareness guards, and write guards dropped here
 
     // 9. Persist all mutated folder docs and content docs (async, no guards held)
