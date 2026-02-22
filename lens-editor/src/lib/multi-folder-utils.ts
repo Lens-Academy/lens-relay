@@ -35,8 +35,7 @@ export function getFolderNameFromPath(path: string, folderNames: string[]): stri
   const sorted = [...folderNames].sort((a, b) => b.length - a.length);
 
   for (const name of sorted) {
-    const prefix = `/${name}/`;
-    if (path.startsWith(prefix)) {
+    if (path.startsWith(`/${name}/`) || path === `/${name}`) {
       return name;
     }
   }
