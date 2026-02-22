@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigation } from '../contexts/NavigationContext';
 import { findPathByUuid } from '../lib/uuid-to-path';
-import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath } from '../lib/multi-folder-utils';
-import { renameDocument } from '../lib/relay-api';
+import { getOriginalPath, getFolderNameFromPath } from '../lib/multi-folder-utils';
+import { moveDocument } from '../lib/relay-api';
 import { RELAY_ID } from '../App';
 
 interface DocumentTitleProps {
@@ -10,7 +10,7 @@ interface DocumentTitleProps {
 }
 
 export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
-  const { metadata, folderDocs, folderNames } = useNavigation();
+  const { metadata, folderNames } = useNavigation();
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
 
@@ -32,20 +32,23 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
     setValue(displayName);
   }, [displayName]);
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
     if (!trimmed || trimmed === displayName || !path) return;
 
-    const doc = getFolderDocForPath(path, folderDocs, folderNames);
-    if (!doc) return;
-    const folderName = getFolderNameFromPath(path, folderNames)!;
+    const folderName = getFolderNameFromPath(path, folderNames);
+    if (!folderName) return;
     const originalPath = getOriginalPath(path, folderName);
     const parts = originalPath.split('/');
     const filename = trimmed.endsWith('.md') ? trimmed : `${trimmed}.md`;
     parts[parts.length - 1] = filename;
     const newPath = parts.join('/');
-    renameDocument(doc, originalPath, newPath);
-  }, [value, displayName, path, folderDocs, folderNames]);
+    try {
+      await moveDocument(uuid, newPath);
+    } catch (err: any) {
+      console.error('Rename failed:', err);
+    }
+  }, [value, displayName, path, uuid, folderNames]);
 
   const handleBlur = () => {
     if (cancelledRef.current) {

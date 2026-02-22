@@ -556,18 +556,23 @@ pub fn move_document(
     let target_folder_name = read_folder_name(target_folder_doc, "");
     let is_cross_folder = !std::ptr::eq(source_folder_doc, target_folder_doc);
 
-    // 2. Update filemeta_v0
+    // 2. Update filemeta_v0 and legacy "docs" map
+    // Both maps must stay in sync — Obsidian treats entries only in filemeta_v0 as orphaned
     if is_cross_folder {
         // Cross-folder: remove from source, add to target
         {
             let mut txn = source_folder_doc.transact_mut_with("link-indexer");
             let filemeta = txn.get_or_insert_map("filemeta_v0");
             filemeta.remove(&mut txn, &old_path);
+            let docs_map = txn.get_or_insert_map("docs");
+            docs_map.remove(&mut txn, &old_path);
         }
         {
             let mut txn = target_folder_doc.transact_mut_with("link-indexer");
             let filemeta = txn.get_or_insert_map("filemeta_v0");
             filemeta.insert(&mut txn, new_path, Any::Map(meta_fields.clone().into()));
+            let docs_map = txn.get_or_insert_map("docs");
+            docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
         }
     } else {
         // Within-folder: remove old, insert new in one transaction
@@ -575,6 +580,9 @@ pub fn move_document(
         let filemeta = txn.get_or_insert_map("filemeta_v0");
         filemeta.remove(&mut txn, &old_path);
         filemeta.insert(&mut txn, new_path, Any::Map(meta_fields.clone().into()));
+        let docs_map = txn.get_or_insert_map("docs");
+        docs_map.remove(&mut txn, &old_path);
+        docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
     }
 
     // 3. Update DocumentResolver

@@ -70,7 +70,9 @@ export function FileTreeNode({
   const handleSubmitRename = () => {
     const trimmed = editValue.trim();
     if (trimmed && trimmed !== node.data.name) {
-      ctx.onRenameSubmit?.(node.data.path, trimmed);
+      if (node.data.docId) {
+        ctx.onRenameSubmit?.(node.data.path, trimmed, node.data.docId);
+      }
     }
     ctx.onEditingChange(null);
   };

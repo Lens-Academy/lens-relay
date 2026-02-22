@@ -2357,6 +2357,12 @@ async fn handle_move_document(
             .iter()
             .filter_map(|id| docs.get(id))
             .collect();
+        tracing::info!(
+            "move_document: {} content UUIDs collected, {} found in DashMap ({} not loaded)",
+            content_doc_ids.len(),
+            content_refs.len(),
+            content_doc_ids.len() - content_refs.len(),
+        );
         let content_awareness: Vec<_> = content_refs
             .iter()
             .map(|r| r.awareness())

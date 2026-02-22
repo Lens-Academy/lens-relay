@@ -12,7 +12,7 @@ import { useNavigation } from '../../contexts/NavigationContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames } from '../../lib/tree-utils';
-import { createDocument, renameDocument, deleteDocument, moveDocument } from '../../lib/relay-api';
+import { createDocument, deleteDocument, moveDocument } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
 
@@ -100,20 +100,21 @@ export function Sidebar() {
   }, [onNavigate]);
 
   // CRUD handlers
-  const handleRenameSubmit = useCallback((prefixedOldPath: string, newName: string) => {
-    const doc = getFolderDocForPath(prefixedOldPath, folderDocs, folderNames);
-    if (!doc) return;
-    // Strip folder prefix to get the original Y.Doc path
-    const folderName = getFolderNameFromPath(prefixedOldPath, folderNames)!;
+  const handleRenameSubmit = useCallback(async (prefixedOldPath: string, newName: string, docId: string) => {
+    const folderName = getFolderNameFromPath(prefixedOldPath, folderNames);
+    if (!folderName) return;
     const oldPath = getOriginalPath(prefixedOldPath, folderName);
-    // Build new path by replacing the filename
     const parts = oldPath.split('/');
-    // Preserve .md extension if user didn't include it
     const filename = newName.endsWith('.md') ? newName : `${newName}.md`;
     parts[parts.length - 1] = filename;
     const newPath = parts.join('/');
-    renameDocument(doc, oldPath, newPath);
-  }, [folderDocs, folderNames]);
+    try {
+      await moveDocument(docId, newPath);
+    } catch (err: any) {
+      console.error('Rename failed:', err);
+      setMoveError(err.message || 'Rename failed');
+    }
+  }, [folderNames]);
 
   const handleDeleteConfirm = useCallback(() => {
     if (!deleteTarget) return;
