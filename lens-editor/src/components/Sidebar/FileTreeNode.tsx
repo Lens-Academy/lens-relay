@@ -204,6 +204,22 @@ export function FileTreeNode({
           {node.data.name}
         </span>
       )}
+
+      {/* Create document button for folders */}
+      {isFolder && ctx.onCreateDocument && (
+        <button
+          aria-label={`Create document in ${node.data.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            ctx.onCreateDocument!(node.data.path);
+          }}
+          className="ml-auto flex-shrink-0 p-0.5 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 

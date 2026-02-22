@@ -350,6 +350,7 @@ export function Sidebar() {
                   onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
                   onRequestMove: handleMoveRequest,
                   onRenameSubmit: handleRenameSubmit,
+                  onCreateDocument: () => {}, // Placeholder — Task 5 wires the real handler
                   activeDocId,
                 }}
               >

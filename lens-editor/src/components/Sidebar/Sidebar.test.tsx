@@ -57,4 +57,36 @@ describe('Sidebar with multi-folder metadata', () => {
     expect(lensFolder).toBeInTheDocument();
     expect(lensEduFolder).toBeInTheDocument();
   });
+
+  it('shows create button on folder nodes', () => {
+    const metadata = {
+      '/Lens/Welcome.md': { id: 'welcome', type: 'markdown' as const, version: 0 },
+    };
+
+    const folderDocs = new Map<string, Y.Doc>([
+      ['Lens', new Y.Doc()],
+    ]);
+    const folderNames = ['Lens'];
+    const errors = new Map<string, Error>();
+
+    render(
+      <MemoryRouter initialEntries={['/welcome']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs,
+            folderNames,
+            errors,
+            onNavigate: vi.fn(),
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    // The Lens folder row should contain a create-document button
+    const createBtn = screen.getByRole('button', { name: /create document in Lens/i });
+    expect(createBtn).toBeInTheDocument();
+  });
 });
