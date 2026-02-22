@@ -90,7 +90,7 @@ function TestApp({ onSelectDocument }: { onSelectDocument: (id: string) => void 
 
   return (
     <MemoryRouter initialEntries={['/c0000001']}>
-      <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate: onSelectDocument }}>
+      <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate: onSelectDocument, justCreatedRef: { current: false } }}>
         <Sidebar />
       </NavigationContext.Provider>
     </MemoryRouter>

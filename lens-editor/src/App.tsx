@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
@@ -140,6 +140,7 @@ export function App() {
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
   const folderNames = FOLDERS.map(f => f.name);
   const { recentFiles, pushRecent } = useRecentFiles();
+  const justCreatedRef = useRef(false);
 
   // Ctrl+O keyboard shortcut to open quick switcher
   useEffect(() => {
@@ -171,7 +172,7 @@ export function App() {
     <AuthProvider role={shareRole}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
-        <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate }}>
+        <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div className="h-screen flex flex-col bg-gray-50">
             {/* Global identity bar */}
             <div className="flex items-center justify-end px-4 py-1 bg-white border-b border-gray-100">

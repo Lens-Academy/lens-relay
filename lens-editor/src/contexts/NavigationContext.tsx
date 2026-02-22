@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react';
+import { createContext, useContext, type RefObject } from 'react';
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 import type * as Y from 'yjs';
 
@@ -10,6 +10,8 @@ interface NavigationContextValue {
   /** Map from folder NAME to Error (for partial sync failures) */
   errors: Map<string, Error>;
   onNavigate: (docId: string) => void;
+  /** Set to true after instant-create; DocumentTitle reads and clears it */
+  justCreatedRef: RefObject<boolean>;
 }
 
 export const NavigationContext = createContext<NavigationContextValue | null>(null);

@@ -25,6 +25,7 @@ function renderSwitcher({ open = true, recentFiles = [] as string[] } = {}) {
       folderNames: ['Lens', 'Lens Edu'],
       errors: new Map(),
       onNavigate: vi.fn(),
+      justCreatedRef: { current: false },
     }}>
       <QuickSwitcher
         open={open}
@@ -151,6 +152,7 @@ describe('QuickSwitcher', () => {
         folderNames: ['Lens', 'Lens Edu'],
         errors: new Map(),
         onNavigate: vi.fn(),
+        justCreatedRef: { current: false },
       }}>
         <QuickSwitcher
           open={true}
@@ -172,6 +174,7 @@ describe('QuickSwitcher', () => {
         folderNames: ['Lens', 'Lens Edu'],
         errors: new Map(),
         onNavigate: vi.fn(),
+        justCreatedRef: { current: false },
       }}>
         <QuickSwitcher
           open={false}
@@ -189,6 +192,7 @@ describe('QuickSwitcher', () => {
         folderNames: ['Lens', 'Lens Edu'],
         errors: new Map(),
         onNavigate: vi.fn(),
+        justCreatedRef: { current: false },
       }}>
         <QuickSwitcher
           open={true}

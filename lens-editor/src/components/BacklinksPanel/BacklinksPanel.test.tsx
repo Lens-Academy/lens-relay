@@ -19,6 +19,7 @@ function createTestContext(metadata: FolderMetadata, backlinks: Record<string, s
     folderNames: ['Test Folder'],
     errors: new Map(),
     onNavigate: vi.fn(),
+    justCreatedRef: { current: false },
   };
 }
 
@@ -136,6 +137,7 @@ describe('BacklinksPanel', () => {
       folderNames: ['Test Folder'],
       errors: new Map(),
       onNavigate: vi.fn(),
+      justCreatedRef: { current: false },
     };
 
     render(
@@ -174,6 +176,7 @@ describe('BacklinksPanel', () => {
       folderNames: ['Test Folder'],
       errors: new Map(),
       onNavigate: vi.fn(),
+      justCreatedRef: { current: false },
     };
 
     // "Server" doc — separate Y.Doc simulating the relay server
@@ -225,6 +228,7 @@ describe('BacklinksPanel', () => {
       folderNames: ['Test Folder'],
       errors: new Map(),
       onNavigate: vi.fn(),
+      justCreatedRef: { current: false },
     };
 
     render(
@@ -254,6 +258,7 @@ describe('BacklinksPanel', () => {
       folderNames: [],
       errors: new Map(),
       onNavigate: vi.fn(),
+      justCreatedRef: { current: false },
     };
 
     render(

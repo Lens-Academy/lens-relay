@@ -14,6 +14,7 @@ vi.mock('../../contexts/NavigationContext', () => ({
     folderNames: [],
     errors: new Map(),
     onNavigate: vi.fn(),
+    justCreatedRef: { current: false },
   }),
 }));
 
