@@ -21,11 +21,11 @@ export function FileTree({ data, onSelect, onMove, openAll }: FileTreeProps) {
       overscanCount={5}
       disableDrag={(data: TreeNode) => !data || data.isFolder}
       disableDrop={({ parentNode, dragNodes }) => {
-        // Only allow drops on folders and root
-        if (parentNode?.data && !parentNode.data.isFolder) return true;
+        // Reject drops on leaf nodes (files); allow folders and synthetic root
+        if (!parentNode.isInternal) return true;
         // No-op: dropping onto current parent
         const dragNode = dragNodes[0];
-        if (dragNode && parentNode && dragNode.parent?.id === parentNode.id) return true;
+        if (dragNode && dragNode.parent?.id === parentNode.id) return true;
         return false;
       }}
       onMove={({ dragNodes, parentNode }) => onMove?.(dragNodes, parentNode)}
