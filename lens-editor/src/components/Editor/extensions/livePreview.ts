@@ -280,7 +280,9 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 // Extract page name from WikilinkContent child (works for both [[page]] and ![[page]])
                 const contentNode = node.node.getChild('WikilinkContent');
                 if (!contentNode) return;
-                const content = view.state.doc.sliceString(contentNode.from, contentNode.to);
+                const raw = view.state.doc.sliceString(contentNode.from, contentNode.to);
+                const pipeIndex = raw.indexOf('|');
+                const content = pipeIndex !== -1 ? raw.substring(0, pipeIndex) : raw;
 
                 decorations.push({
                   from: node.from,
