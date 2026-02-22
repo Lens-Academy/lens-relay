@@ -4,6 +4,8 @@ import { SearchInput } from './SearchInput';
 import { SearchPanel } from './SearchPanel';
 import { FileTree } from './FileTree';
 import { FileTreeProvider } from './FileTreeContext';
+import type { NodeApi } from 'react-arborist';
+import type { TreeNode } from '../../lib/tree-utils';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -178,6 +180,45 @@ export function Sidebar() {
     }
   }, [moveTarget, moveNewPath, moveTargetFolder, folderNames]);
 
+  const handleDragMove = useCallback(async (
+    dragNodes: NodeApi<TreeNode>[],
+    parentNode: NodeApi<TreeNode> | null,
+  ) => {
+    const dragNode = dragNodes[0];
+    if (!dragNode?.data.docId || dragNode.data.isFolder) return;
+
+    const fileName = dragNode.data.name;
+    const oldPrefixedPath = dragNode.data.path;
+
+    // Determine new parent path
+    const newParentPath = parentNode?.data.path ?? '';
+
+    // Compute source and target folder names
+    const sourceFolderName = getFolderNameFromPath(oldPrefixedPath, folderNames);
+    const targetFolderName = parentNode
+      ? getFolderNameFromPath(parentNode.data.path, folderNames)
+      : sourceFolderName; // dropping at root stays in same folder
+
+    if (!sourceFolderName || !targetFolderName) return;
+
+    // Strip folder prefix to get Y.Doc path
+    const newOriginalPath = getOriginalPath(
+      `${newParentPath}/${fileName}`,
+      targetFolderName,
+    );
+
+    const crossFolder = sourceFolderName !== targetFolderName
+      ? targetFolderName
+      : undefined;
+
+    try {
+      await moveDocument(dragNode.data.docId, newOriginalPath, crossFolder);
+    } catch (err: any) {
+      console.error('Drag move failed:', err);
+      setMoveError(err.message || 'Move failed');
+    }
+  }, [folderNames]);
+
   const handleNewDocKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -314,6 +355,7 @@ export function Sidebar() {
                 <FileTree
                   data={filteredTree}
                   onSelect={handleSelect}
+                  onMove={handleDragMove}
                   openAll={!!fileFilter}
                 />
               </FileTreeProvider>

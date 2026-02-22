@@ -1,14 +1,15 @@
-import { Tree } from 'react-arborist';
+import { Tree, type NodeApi } from 'react-arborist';
 import { FileTreeNode } from './FileTreeNode';
 import type { TreeNode } from '../../lib/tree-utils';
 
 interface FileTreeProps {
   data: TreeNode[];
   onSelect?: (docId: string) => void;
+  onMove?: (dragNodes: NodeApi<TreeNode>[], parentNode: NodeApi<TreeNode> | null) => void;
   openAll?: boolean;
 }
 
-export function FileTree({ data, onSelect, openAll }: FileTreeProps) {
+export function FileTree({ data, onSelect, onMove, openAll }: FileTreeProps) {
   return (
     <Tree<TreeNode>
       data={data}
@@ -18,8 +19,16 @@ export function FileTree({ data, onSelect, openAll }: FileTreeProps) {
       width="100%"
       height={600}
       overscanCount={5}
-      disableDrag
-      disableDrop
+      disableDrag={(data: TreeNode) => !data || data.isFolder}
+      disableDrop={({ parentNode, dragNodes }) => {
+        // Only allow drops on folders and root
+        if (parentNode?.data && !parentNode.data.isFolder) return true;
+        // No-op: dropping onto current parent
+        const dragNode = dragNodes[0];
+        if (dragNode && parentNode && dragNode.parent?.id === parentNode.id) return true;
+        return false;
+      }}
+      onMove={({ dragNodes, parentNode }) => onMove?.(dragNodes, parentNode)}
       disableMultiSelection
       onSelect={(nodes) => {
         if (nodes.length === 1 && !nodes[0].data.isFolder && nodes[0].data.docId) {

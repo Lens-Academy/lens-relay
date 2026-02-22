@@ -9,6 +9,7 @@ const INDENT_SIZE = 16; // Must match the indent prop in FileTree.tsx
 export function FileTreeNode({
   node,
   style,
+  dragHandle,
 }: NodeRendererProps<TreeNode>) {
   const isFolder = node.data.isFolder;
   const depth = node.level;
@@ -120,6 +121,7 @@ export function FileTreeNode({
 
   const content = (
     <div
+      ref={dragHandle}
       style={{ ...style, paddingLeft: 0 }} // Override react-arborist's padding, we handle it ourselves
       className={`flex items-center py-0.5 pr-2 cursor-pointer select-none
                   ${isActive ? 'bg-blue-100' : 'hover:bg-gray-100'}`}
