@@ -3,6 +3,7 @@ import type { NodeRendererProps } from 'react-arborist';
 import type { TreeNode } from '../../lib/tree-utils';
 import { FileTreeContextMenu } from './FileTreeContextMenu';
 import { useFileTreeContext } from './FileTreeContext';
+import { useDragTarget } from './FileTree';
 
 const INDENT_SIZE = 16; // Must match the indent prop in FileTree.tsx
 
@@ -14,6 +15,8 @@ export function FileTreeNode({
   const isFolder = node.data.isFolder;
   const depth = node.level;
   const ctx = useFileTreeContext();
+  const dragTargetPath = useDragTarget();
+  const isDropTarget = isFolder && dragTargetPath === node.data.path;
 
   const isEditing = ctx.editingPath === node.data.path;
 
@@ -124,7 +127,7 @@ export function FileTreeNode({
       ref={dragHandle}
       style={{ ...style, paddingLeft: 0 }} // Override react-arborist's padding, we handle it ourselves
       className={`flex items-center py-0.5 pr-2 cursor-pointer select-none
-                  ${isActive ? 'bg-blue-100' : 'hover:bg-gray-100'}`}
+                  ${isDropTarget ? 'bg-blue-100 ring-1 ring-blue-300' : isActive ? 'bg-blue-100' : 'hover:bg-gray-100'}`}
       onClick={(e) => {
         if (isEditing) return;
         if (isFolder) {

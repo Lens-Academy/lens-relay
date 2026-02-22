@@ -1,7 +1,10 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, createContext, useContext } from 'react';
 import { Tree, type NodeApi } from 'react-arborist';
 import { FileTreeNode } from './FileTreeNode';
 import type { TreeNode } from '../../lib/tree-utils';
+
+const DragTargetCtx = createContext<string | null>(null);
+export const useDragTarget = () => useContext(DragTargetCtx);
 
 interface FileTreeProps {
   data: TreeNode[];
@@ -37,6 +40,7 @@ export function FileTree({ data, onSelect, onMove, openAll }: FileTreeProps) {
           Move to: {dragTarget}
         </div>
       )}
+      <DragTargetCtx.Provider value={dragTarget}>
       <Tree<TreeNode>
         data={data}
         openByDefault={true}
@@ -76,6 +80,7 @@ export function FileTree({ data, onSelect, onMove, openAll }: FileTreeProps) {
       >
         {FileTreeNode}
       </Tree>
+      </DragTargetCtx.Provider>
     </div>
   );
 }
