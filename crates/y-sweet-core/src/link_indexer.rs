@@ -681,6 +681,42 @@ pub fn move_document(
         }
     }
 
+    // 6c. For cross-folder moves: transfer the moved doc's backlink target entry
+    //     from source folder's backlinks_v0 to target folder's backlinks_v0
+    if is_cross_folder {
+        // Read existing backlinks for the moved doc from source folder
+        let backlinker_uuids = {
+            let txn = source_folder_doc.transact();
+            if let Some(backlinks) = txn.get_map("backlinks_v0") {
+                read_backlinks_array(&backlinks, &txn, uuid)
+            } else {
+                Vec::new()
+            }
+        };
+
+        // Remove from source folder
+        {
+            let mut txn = source_folder_doc.transact_mut_with("link-indexer");
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.remove(&mut txn, uuid);
+        }
+
+        // Add to target folder (merge with any existing entries)
+        if !backlinker_uuids.is_empty() {
+            let mut txn = target_folder_doc.transact_mut_with("link-indexer");
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            let existing: Vec<String> = read_backlinks_array(&backlinks, &txn, uuid);
+            let mut merged = existing;
+            for bl in backlinker_uuids {
+                if !merged.contains(&bl) {
+                    merged.push(bl);
+                }
+            }
+            let arr: Vec<Any> = merged.into_iter().map(|s| Any::String(s.into())).collect();
+            backlinks.insert(&mut txn, uuid, arr);
+        }
+    }
+
     // 7. Re-index the moved doc's own backlinks (its wikilinks may resolve differently at new location)
     if let Some(content_doc) = content_docs.get(uuid) {
         // Re-index using the updated folder docs (filemeta already has new path)
