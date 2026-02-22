@@ -100,6 +100,14 @@ cd lens-editor && npm install && npm run dev:local
 
 `dev:local` sets `VITE_LOCAL_RELAY=true` to point the editor at the local relay server.
 
+For R2-backed local development (real production data instead of test fixtures):
+
+```bash
+cd lens-editor && npm run dev:local:r2
+```
+
+Use `dev:local:r2` with `relay:start:r2` — see `lens-editor/CLAUDE.md` for full setup.
+
 See `lens-editor/CLAUDE.md` for Y.Doc structure documentation and editor-specific development guidance.
 
 ## Upstream Sync

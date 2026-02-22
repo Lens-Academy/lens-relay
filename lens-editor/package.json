@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:local": "cross-env VITE_LOCAL_RELAY=true vite",
+    "dev:local:r2": "cross-env VITE_LOCAL_RELAY=true VITE_LOCAL_R2=true vite",
     "relay:start": "bash scripts/start-local-relay.sh",
     "relay:start:r2": "RELAY_STORAGE=r2 bash scripts/start-local-relay.sh",
     "relay:setup": "node scripts/setup-local-relay.mjs",

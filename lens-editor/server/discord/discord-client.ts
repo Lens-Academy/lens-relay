@@ -127,6 +127,9 @@ export async function fetchChannelInfo(
 
 // --- Webhook-based message sending ---
 
+/** Discord channel types that are threads (cannot host webhooks directly). */
+const THREAD_TYPES = new Set([10, 11, 12]); // announcement thread, public thread, private thread
+
 interface ChannelWebhook {
   id: string;
   token: string;
@@ -134,21 +137,37 @@ interface ChannelWebhook {
 
 const WEBHOOK_NAME = 'Lens Editor Bridge';
 
-// In-memory cache: channelId -> webhook credentials
+// In-memory cache: webhookChannelId -> webhook credentials
+// For threads, the key is the parent channel ID.
 const webhookCache = new Map<string, ChannelWebhook>();
 
 /**
+ * Resolve where to create the webhook and whether to use thread_id.
+ * Threads can't host webhooks — use the parent channel instead.
+ */
+async function resolveWebhookTarget(
+  channelId: string
+): Promise<{ webhookChannelId: string; threadId: string | null }> {
+  const channel = await fetchChannelInfo(channelId);
+
+  if (THREAD_TYPES.has(channel.type) && channel.parent_id) {
+    return { webhookChannelId: channel.parent_id, threadId: channelId };
+  }
+
+  return { webhookChannelId: channelId, threadId: null };
+}
+
+/**
  * Get or create a webhook for the given channel.
- * Bot must have MANAGE_WEBHOOKS permission.
+ * Bot must have MANAGE_WEBHOOKS permission on the target channel.
  */
 async function getOrCreateWebhook(
-  channelId: string
+  webhookChannelId: string
 ): Promise<ChannelWebhook> {
-  const cached = webhookCache.get(channelId);
+  const cached = webhookCache.get(webhookChannelId);
   if (cached) return cached;
 
-  // Check for existing webhook we own
-  const listUrl = `${DISCORD_API_BASE}/channels/${channelId}/webhooks`;
+  const listUrl = `${DISCORD_API_BASE}/channels/${webhookChannelId}/webhooks`;
   const listRes = await fetch(listUrl, { headers: authHeaders() });
   const webhooks = await handleResponse<
     Array<{ id: string; token?: string; name: string; user?: { id: string } }>
@@ -160,12 +179,11 @@ async function getOrCreateWebhook(
 
   if (existing) {
     const entry = { id: existing.id, token: existing.token! };
-    webhookCache.set(channelId, entry);
+    webhookCache.set(webhookChannelId, entry);
     return entry;
   }
 
-  // Create a new webhook
-  const createUrl = `${DISCORD_API_BASE}/channels/${channelId}/webhooks`;
+  const createUrl = `${DISCORD_API_BASE}/channels/${webhookChannelId}/webhooks`;
   const createRes = await fetch(createUrl, {
     method: 'POST',
     headers: authHeaders(),
@@ -176,24 +194,31 @@ async function getOrCreateWebhook(
   );
 
   const entry = { id: created.id, token: created.token };
-  webhookCache.set(channelId, entry);
+  webhookCache.set(webhookChannelId, entry);
   console.log(
-    `[discord-client] Created webhook for channel ${channelId}`
+    `[discord-client] Created webhook for channel ${webhookChannelId}`
   );
   return entry;
 }
 
 /**
- * Send a message to a Discord channel via a bot-managed webhook.
- * The webhook is auto-created per channel; username/avatar can be customized per message.
+ * Send a message to a Discord channel or thread via a bot-managed webhook.
+ * For threads, the webhook is created on the parent channel and executed
+ * with ?thread_id= to route the message into the thread.
  */
 export async function sendWebhookMessage(
   channelId: string,
   content: string,
   username: string
 ): Promise<DiscordMessage> {
-  const webhook = await getOrCreateWebhook(channelId);
-  const url = `${DISCORD_API_BASE}/webhooks/${webhook.id}/${webhook.token}?wait=true`;
+  const { webhookChannelId, threadId } = await resolveWebhookTarget(channelId);
+  const webhook = await getOrCreateWebhook(webhookChannelId);
+
+  let url = `${DISCORD_API_BASE}/webhooks/${webhook.id}/${webhook.token}?wait=true`;
+  if (threadId) {
+    url += `&thread_id=${threadId}`;
+  }
+
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

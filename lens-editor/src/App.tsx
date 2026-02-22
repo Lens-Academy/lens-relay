@@ -22,13 +22,16 @@ import { useRecentFiles } from './hooks/useRecentFiles';
 // VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 
+// Use R2 (production) data with local relay? Set VITE_LOCAL_R2=true
+const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
+
 // Relay server ID — switches between production and local test IDs
-export const RELAY_ID = USE_LOCAL_RELAY
+export const RELAY_ID = (USE_LOCAL_RELAY && !USE_LOCAL_R2)
   ? 'a0000000-0000-4000-8000-000000000000'
   : 'cb696037-0f72-4e93-8717-4e433129d789';
 
 // Folder configuration
-const FOLDERS: FolderConfig[] = USE_LOCAL_RELAY
+const FOLDERS: FolderConfig[] = (USE_LOCAL_RELAY && !USE_LOCAL_R2)
   ? [
       { id: 'b0000001-0000-4000-8000-000000000001', name: 'Relay Folder 1' },
       { id: 'b0000002-0000-4000-8000-000000000002', name: 'Relay Folder 2' },
@@ -39,7 +42,7 @@ const FOLDERS: FolderConfig[] = USE_LOCAL_RELAY
     ];
 
 // Default document short UUID (first 8 chars — used only in URL redirect)
-const DEFAULT_DOC_UUID = USE_LOCAL_RELAY ? 'c0000001' : '76c3e654';
+const DEFAULT_DOC_UUID = (USE_LOCAL_RELAY && !USE_LOCAL_R2) ? 'c0000001' : '76c3e654';
 
 // Read share token from URL once at module load (before React renders)
 const shareToken = getShareTokenFromUrl();

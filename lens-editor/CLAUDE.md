@@ -44,6 +44,22 @@ Local mode uses test IDs (`local-test-folder`, `local-welcome`, etc.) so there's
 
 **In-memory storage:** Local relay-server uses in-memory storage — data is lost on server restart. Run `npm run relay:setup` after each restart. Production uses S3/R2 cloud storage (see top-level CLAUDE.md).
 
+## Local Relay with R2 Storage (production data)
+
+Connects to the local relay-server backed by Cloudflare R2, using real production folder IDs.
+
+```bash
+# Terminal 1: Start relay with R2 storage
+npm run relay:start:r2
+
+# Terminal 2: Run frontend with production IDs
+npm run dev:local:r2
+```
+
+No `relay:setup` needed — R2 already has real data.
+
+Requires `crates/relay.local-r2.toml` and `crates/auth.local.env` (both gitignored).
+
 **Manual startup alternative:**
 ```bash
 cd ../relay-server/crates
