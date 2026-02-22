@@ -5,6 +5,7 @@ import {
   hasClass,
   countClass,
 } from '../../../test/codemirror-helpers';
+import { updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 
@@ -209,6 +210,38 @@ describe('livePreview - wikilinks', () => {
     const widgets = view.contentDOM.querySelectorAll('.cm-wikilink-widget');
     expect(widgets.length).toBe(1);
     expect(widgets[0].textContent).toBe('My Page');
+  });
+
+  it('updates widget resolved state when metadata changes', () => {
+    const content = '[[Target Page]] end';
+
+    // Start with isResolved returning false
+    const { view, cleanup: c } = createTestEditor(content, 19, {
+      onClick: () => {},
+      isResolved: () => false,
+    });
+    cleanup = c;
+
+    // Widget should be unresolved
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget');
+    expect(widget).not.toBeNull();
+    expect(widget!.classList.contains('unresolved')).toBe(true);
+
+    // Update context so isResolved returns true
+    updateWikilinkContext({
+      onClick: () => {},
+      isResolved: () => true,
+    });
+
+    // Dispatch the metadata changed effect to trigger rebuild
+    view.dispatch({
+      effects: wikilinkMetadataChanged.of(undefined),
+    });
+
+    // Widget should now be resolved (no unresolved class)
+    const updatedWidget = view.contentDOM.querySelector('.cm-wikilink-widget');
+    expect(updatedWidget).not.toBeNull();
+    expect(updatedWidget!.classList.contains('unresolved')).toBe(false);
   });
 });
 

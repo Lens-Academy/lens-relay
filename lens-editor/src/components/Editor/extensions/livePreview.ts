@@ -24,7 +24,7 @@ import {
 import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin } from './criticmarkup';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
-import { RangeSetBuilder, Compartment, EditorSelection } from '@codemirror/state';
+import { RangeSetBuilder, Compartment, EditorSelection, StateEffect } from '@codemirror/state';
 
 // CSS classes for heading sizes
 const HEADING_CLASSES: Record<string, string> = {
@@ -59,15 +59,23 @@ export interface WikilinkContext {
 let wikilinkContext: WikilinkContext | null = null;
 
 /**
+ * StateEffect dispatched when wikilink metadata changes (e.g., file renames).
+ * Triggers decoration rebuild so widget resolution state updates.
+ */
+export const wikilinkMetadataChanged = StateEffect.define<void>();
+
+/**
  * WikilinkWidget - Renders wikilinks as clickable internal links
  * Uses module-scoped wikilinkContext for navigation and resolution checking
  */
 class WikilinkWidget extends WidgetType {
   pageName: string;
+  resolved: boolean;
 
-  constructor(pageName: string) {
+  constructor(pageName: string, resolved: boolean) {
     super();
     this.pageName = pageName;
+    this.resolved = resolved;
   }
 
   toDOM(): HTMLElement {
@@ -75,7 +83,7 @@ class WikilinkWidget extends WidgetType {
     span.className = 'cm-wikilink-widget';
 
     // Add unresolved class if document doesn't exist
-    if (wikilinkContext && !wikilinkContext.isResolved(this.pageName)) {
+    if (!this.resolved) {
       span.classList.add('unresolved');
     }
 
@@ -91,7 +99,7 @@ class WikilinkWidget extends WidgetType {
   }
 
   eq(other: WikilinkWidget): boolean {
-    return this.pageName === other.pageName;
+    return this.pageName === other.pageName && this.resolved === other.resolved;
   }
 }
 
@@ -168,8 +176,13 @@ const livePreviewPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      // Rebuild on doc change, viewport change, OR selection change
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      // Rebuild on doc change, viewport change, selection change, OR metadata change
+      if (
+        update.docChanged ||
+        update.viewportChanged ||
+        update.selectionSet ||
+        update.transactions.some(tr => tr.effects.some(e => e.is(wikilinkMetadataChanged)))
+      ) {
         this.decorations = this.buildDecorations(update.view);
       }
     }
@@ -282,11 +295,12 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 if (!contentNode) return;
                 const content = view.state.doc.sliceString(contentNode.from, contentNode.to);
 
+                const resolved = wikilinkContext ? wikilinkContext.isResolved(content) : true;
                 decorations.push({
                   from: node.from,
                   to: node.to,
                   deco: Decoration.replace({
-                    widget: new WikilinkWidget(content),
+                    widget: new WikilinkWidget(content, resolved),
                   }),
                 });
                 // Skip children (WikilinkMark) - replaced by widget

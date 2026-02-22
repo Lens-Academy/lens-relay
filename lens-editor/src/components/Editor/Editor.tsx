@@ -22,7 +22,7 @@ import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
-import { livePreview, updateWikilinkContext } from './extensions/livePreview';
+import { livePreview, updateWikilinkContext, wikilinkMetadataChanged } from './extensions/livePreview';
 import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
 import { remoteCursorTheme } from './remoteCursorTheme';
@@ -164,6 +164,9 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
   // This is separate from the editor creation effect to avoid recreating the editor
   useEffect(() => {
     updateWikilinkContext(wikilinkContextRef.current);
+    viewRef.current?.dispatch({
+      effects: wikilinkMetadataChanged.of(undefined),
+    });
   }, [metadata, onNavigate]);
 
   // Track sync state for loading overlay
