@@ -45,10 +45,16 @@ export function BacklinksPanel({ currentDocId }: BacklinksPanelProps) {
     const relayPrefix = isCompound ? currentDocId.slice(0, 37) : '';
 
     const allSourceUuids: string[] = [];
+    const seen = new Set<string>();
     for (const doc of folderDocs.values()) {
       const backlinksMap = doc.getMap<string[]>('backlinks_v0');
       const sourceUuids = backlinksMap.get(docUuid) || [];
-      allSourceUuids.push(...sourceUuids);
+      for (const uuid of sourceUuids) {
+        if (!seen.has(uuid)) {
+          seen.add(uuid);
+          allSourceUuids.push(uuid);
+        }
+      }
     }
 
     // Resolve UUIDs to paths, filtering out missing docs

@@ -684,22 +684,14 @@ pub fn move_document(
     // 6c. For cross-folder moves: transfer the moved doc's backlink target entry
     //     from source folder's backlinks_v0 to target folder's backlinks_v0
     if is_cross_folder {
-        // Read existing backlinks for the moved doc from source folder
+        // Read + remove in one transaction to avoid TOCTOU window
         let backlinker_uuids = {
-            let txn = source_folder_doc.transact();
-            if let Some(backlinks) = txn.get_map("backlinks_v0") {
-                read_backlinks_array(&backlinks, &txn, uuid)
-            } else {
-                Vec::new()
-            }
-        };
-
-        // Remove from source folder
-        {
             let mut txn = source_folder_doc.transact_mut_with("link-indexer");
             let backlinks = txn.get_or_insert_map("backlinks_v0");
+            let uuids = read_backlinks_array(&backlinks, &txn, uuid);
             backlinks.remove(&mut txn, uuid);
-        }
+            uuids
+        };
 
         // Add to target folder (merge with any existing entries)
         if !backlinker_uuids.is_empty() {
@@ -3591,6 +3583,60 @@ mod tests {
                 read_contents(&gs_doc),
                 "See [[../Lens Edu/Welcome]] for details",
                 "wikilink should use cross-folder relative path"
+            );
+        }
+
+        #[test]
+        fn cross_folder_move_transfers_backlink_target_entry() {
+            // uuid-gs links to uuid-welcome, creating backlinks_v0[uuid-welcome] = [uuid-gs] on folder_a.
+            // Move uuid-welcome from folder_a to folder_b.
+            // After: folder_a's backlinks_v0 should NOT have uuid-welcome key.
+            //        folder_b's backlinks_v0 SHOULD have uuid-welcome with [uuid-gs].
+            let folder_a = create_folder_doc(&[
+                ("/Welcome.md", "uuid-welcome"),
+                ("/Getting Started.md", "uuid-gs"),
+            ]);
+            set_folder_name(&folder_a, "Lens");
+            let folder_b = create_folder_doc(&[
+                ("/Course Notes.md", "uuid-cn"),
+            ]);
+            set_folder_name(&folder_b, "Lens Edu");
+            let f0id = folder0_id();
+            let f1id = folder1_id();
+
+            let gs_doc = create_content_doc("See [[Welcome]] for details");
+            index_content_into_folders("uuid-gs", &gs_doc, &[&folder_a, &folder_b]).unwrap();
+            assert_eq!(read_backlinks(&folder_a, "uuid-welcome"), vec!["uuid-gs"]);
+            assert!(read_backlinks(&folder_b, "uuid-welcome").is_empty());
+
+            let resolver = build_resolver(&[
+                (&f0id, &folder_a),
+                (&f1id, &folder_b),
+            ]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-gs".to_string(), &gs_doc as &Doc);
+
+            let _result = move_document(
+                "uuid-welcome",
+                "/Welcome.md",
+                &folder_a,
+                &folder_b,
+                &[&folder_a, &folder_b],
+                &["Lens", "Lens Edu"],
+                &resolver,
+                &content_docs,
+            ).expect("move should succeed");
+
+            // Source folder's backlinks_v0 must NOT have the moved doc's key
+            assert!(
+                read_backlinks(&folder_a, "uuid-welcome").is_empty(),
+                "source folder's backlinks_v0 should not have entry for moved doc"
+            );
+            // Target folder should have the transferred entry
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-welcome"),
+                vec!["uuid-gs"],
+                "target folder's backlinks_v0 should have the transferred entry"
             );
         }
 
