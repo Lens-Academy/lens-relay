@@ -13,7 +13,7 @@ import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames } from '../../lib/tree-utils';
 import { createDocument, deleteDocument, moveDocument } from '../../lib/relay-api';
-import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
+import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
 
 export function Sidebar() {
@@ -21,7 +21,7 @@ export function Sidebar() {
   const deferredSearch = useDeferredValue(searchTerm);
 
   // Get metadata from NavigationContext (needed early for doc ID resolution)
-  const { metadata, folderDocs, folderNames, onNavigate } = useNavigation();
+  const { metadata, folderDocs, folderNames, onNavigate, justCreatedRef } = useNavigation();
 
   // Derive active doc ID from URL path (first segment is the doc UUID — may be short)
   const location = useLocation();
@@ -38,10 +38,6 @@ export function Sidebar() {
 
   // State for delete confirmation
   const [deleteTarget, setDeleteTarget] = useState<{ path: string; name: string } | null>(null);
-
-  // State for creating new document
-  const [isCreating, setIsCreating] = useState(false);
-  const [newDocName, setNewDocName] = useState('');
 
   // State for move dialog
   const [moveTarget, setMoveTarget] = useState<{ path: string; docId: string } | null>(null);
@@ -126,32 +122,28 @@ export function Sidebar() {
     setDeleteTarget(null);
   }, [folderDocs, folderNames, deleteTarget]);
 
-  const handleCreateDocument = useCallback(async () => {
-    if (!newDocName.trim()) return;
-    // Use first folder by default for new documents
-    const targetFolder = folderNames[0];
-    if (!targetFolder) return;
-    const doc = folderDocs.get(targetFolder);
+  const handleInstantCreate = useCallback(async (folderPath: string) => {
+    const folderName = getFolderNameFromPath(folderPath, folderNames);
+    if (!folderName) return;
+    const doc = folderDocs.get(folderName);
     if (!doc) return;
-    const name = newDocName.trim();
-    // Add .md extension if not present, and ensure path starts with /
-    const filename = name.endsWith('.md') ? name : `${name}.md`;
-    const path = `/${filename}`;
+
+    // Compute the relative path within the shared folder
+    const originalFolderPath = getOriginalPath(folderPath, folderName);
+    const untitledName = generateUntitledName(folderPath, metadata);
+    const path = originalFolderPath === '' || originalFolderPath === '/'
+      ? `/${untitledName}`
+      : `${originalFolderPath}/${untitledName}`;
 
     try {
-      // createDocument is now async - it creates on server first, then adds to filemeta
       const id = await createDocument(doc, path, 'markdown');
-      setNewDocName('');
-      setIsCreating(false);
-      // Navigate to the newly created document
+      justCreatedRef.current = true;
       const compoundDocId = `${RELAY_ID}-${id}`;
       onNavigate(compoundDocId);
     } catch (error) {
       console.error('Failed to create document:', error);
-      setNewDocName('');
-      setIsCreating(false);
     }
-  }, [folderDocs, folderNames, newDocName, onNavigate]);
+  }, [folderDocs, folderNames, metadata, onNavigate, justCreatedRef]);
 
   const handleMoveRequest = useCallback((prefixedPath: string, docId: string) => {
     // Pre-populate with current path (strip folder prefix)
@@ -220,50 +212,10 @@ export function Sidebar() {
     }
   }, [folderNames]);
 
-  const handleNewDocKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleCreateDocument();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setIsCreating(false);
-      setNewDocName('');
-    }
-  };
-
   return (
     <aside className="w-64 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col h-full">
       {/* Header with search */}
       <div className="p-3 border-b border-gray-200 space-y-2">
-        {/* New Document button/input */}
-        {isCreating ? (
-          <input
-            type="text"
-            value={newDocName}
-            onChange={(e) => setNewDocName(e.target.value)}
-            onKeyDown={handleNewDocKeyDown}
-            onBlur={() => {
-              if (newDocName.trim()) {
-                handleCreateDocument();
-              } else {
-                setIsCreating(false);
-              }
-            }}
-            placeholder="New document name..."
-            className="w-full px-3 py-1.5 text-sm border border-blue-400 rounded-md outline-none"
-            autoFocus
-          />
-        ) : (
-          <button
-            onClick={() => setIsCreating(true)}
-            disabled={folderDocs.size === 0}
-            className="w-full px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100
-                       hover:bg-gray-200 rounded-md disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            + New Document
-          </button>
-        )}
-
         <SearchInput
           ref={searchInputRef}
           value={searchTerm}
@@ -335,7 +287,7 @@ export function Sidebar() {
                   <>
                     No documents yet.
                     <br />
-                    Click &ldquo;New Document&rdquo; to create one.
+                    Use the + button on a folder to create a document.
                   </>
                 )}
               </div>
@@ -350,7 +302,7 @@ export function Sidebar() {
                   onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
                   onRequestMove: handleMoveRequest,
                   onRenameSubmit: handleRenameSubmit,
-                  onCreateDocument: () => {}, // Placeholder — Task 5 wires the real handler
+                  onCreateDocument: handleInstantCreate,
                   activeDocId,
                 }}
               >

@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { NavigationContext } from '../../contexts/NavigationContext';
@@ -16,6 +17,16 @@ import * as Y from 'yjs';
 vi.mock('../../hooks/useResolvedDocId', () => ({
   useResolvedDocId: (compoundId: string) => compoundId || null,
 }));
+
+vi.mock('../../lib/relay-api', async () => {
+  const actual = await vi.importActual('../../lib/relay-api');
+  return {
+    ...actual,
+    createDocument: vi.fn().mockResolvedValue('new-doc-id'),
+    deleteDocument: vi.fn(),
+    moveDocument: vi.fn(),
+  };
+});
 
 describe('Sidebar with multi-folder metadata', () => {
   it('renders folder prefixes as top-level folder nodes', () => {
@@ -43,6 +54,7 @@ describe('Sidebar with multi-folder metadata', () => {
             folderNames,
             errors,
             onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
           }}
         >
           <Sidebar />
@@ -78,6 +90,7 @@ describe('Sidebar with multi-folder metadata', () => {
             folderNames,
             errors,
             onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
           }}
         >
           <Sidebar />
@@ -88,5 +101,50 @@ describe('Sidebar with multi-folder metadata', () => {
     // The Lens folder row should contain a create-document button
     const createBtn = screen.getByRole('button', { name: /create document in Lens/i });
     expect(createBtn).toBeInTheDocument();
+  });
+
+  it('creates document in correct folder when "+" is clicked', async () => {
+    const user = userEvent.setup();
+    const { createDocument: mockCreate } = await import('../../lib/relay-api');
+    const metadata = {
+      '/Lens/Welcome.md': { id: 'welcome', type: 'markdown' as const, version: 0 },
+      '/Lens Edu/Course.md': { id: 'course', type: 'markdown' as const, version: 0 },
+    };
+
+    const lensDoc = new Y.Doc();
+    const eduDoc = new Y.Doc();
+    const folderDocs = new Map<string, Y.Doc>([
+      ['Lens', lensDoc],
+      ['Lens Edu', eduDoc],
+    ]);
+    const folderNames = ['Lens', 'Lens Edu'];
+    const errors = new Map<string, Error>();
+    const mockNavigate = vi.fn();
+
+    render(
+      <MemoryRouter initialEntries={['/welcome']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs,
+            folderNames,
+            errors,
+            onNavigate: mockNavigate,
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    // Click "+" on Lens Edu folder
+    const createBtn = screen.getByRole('button', { name: /create document in Lens Edu/i });
+    await user.click(createBtn);
+
+    // Should call createDocument with the Lens Edu doc and correct path
+    expect(mockCreate).toHaveBeenCalledWith(eduDoc, '/Untitled.md', 'markdown');
+    // Should navigate to new doc
+    expect(mockNavigate).toHaveBeenCalled();
   });
 });

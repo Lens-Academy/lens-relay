@@ -10,7 +10,7 @@ interface DocumentTitleProps {
 }
 
 export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
-  const { metadata, folderNames } = useNavigation();
+  const { metadata, folderNames, justCreatedRef } = useNavigation();
   const inputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
 
@@ -31,6 +31,19 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
   useEffect(() => {
     setValue(displayName);
   }, [displayName]);
+
+  // Auto-focus and select when document was just created via instant-create
+  useEffect(() => {
+    if (justCreatedRef.current && inputRef.current) {
+      justCreatedRef.current = false;
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          inputRef.current.select();
+        }
+      }, 100);
+    }
+  }, [justCreatedRef, displayName]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
