@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, createContext, useContext } from 'react';
-import { Tree, type NodeApi } from 'react-arborist';
+import { Tree, TreeApi, type NodeApi } from 'react-arborist';
 import { FileTreeNode } from './FileTreeNode';
 import type { TreeNode } from '../../lib/tree-utils';
 
@@ -16,6 +16,7 @@ interface FileTreeProps {
 export function FileTree({ data, onSelect, onMove, openAll }: FileTreeProps) {
   const [dragTarget, setDragTarget] = useState<string | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const treeRef = useRef<TreeApi<TreeNode>>();
   const clearTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const clearDragTarget = useCallback(() => {
@@ -27,6 +28,18 @@ export function FileTree({ data, onSelect, onMove, openAll }: FileTreeProps) {
     if (tooltipRef.current) {
       tooltipRef.current.style.left = `${e.clientX + 12}px`;
       tooltipRef.current.style.top = `${e.clientY - 8}px`;
+    }
+    // Auto-scroll tree when dragging near top/bottom edges
+    const scrollEl = treeRef.current?.listEl?.current;
+    if (scrollEl) {
+      const rect = scrollEl.getBoundingClientRect();
+      const threshold = 40;
+      const speed = 8;
+      if (e.clientY < rect.top + threshold) {
+        scrollEl.scrollTop -= speed;
+      } else if (e.clientY > rect.bottom - threshold) {
+        scrollEl.scrollTop += speed;
+      }
     }
   }, []);
 
@@ -42,6 +55,7 @@ export function FileTree({ data, onSelect, onMove, openAll }: FileTreeProps) {
       )}
       <DragTargetCtx.Provider value={dragTarget}>
       <Tree<TreeNode>
+        ref={treeRef}
         data={data}
         openByDefault={true}
         indent={16}
