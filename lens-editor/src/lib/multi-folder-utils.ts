@@ -67,3 +67,28 @@ export function getFolderDocForPath(
   if (!folderName) return null;
   return folderDocs.get(folderName) ?? null;
 }
+
+/**
+ * Generate a unique "Untitled.md" / "Untitled N.md" name for a folder.
+ * Checks merged metadata (prefixed paths) for collisions.
+ * @param folderPath - The prefixed folder path, e.g. "/Lens" or "/Lens/Notes"
+ * @param metadata - The merged folder metadata with prefixed paths
+ */
+export function generateUntitledName(
+  folderPath: string,
+  metadata: FolderMetadata
+): string {
+  const prefix = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
+  const existing = new Set(
+    Object.keys(metadata)
+      .filter((p) => p.startsWith(prefix))
+      .map((p) => p.slice(prefix.length).split('/')[0]) // Only direct children
+  );
+
+  if (!existing.has('Untitled.md')) return 'Untitled.md';
+
+  for (let i = 1; ; i++) {
+    const candidate = `Untitled ${i}.md`;
+    if (!existing.has(candidate)) return candidate;
+  }
+}

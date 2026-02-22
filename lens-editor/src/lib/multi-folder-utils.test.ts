@@ -5,9 +5,10 @@ import {
   mergeMetadata,
   getFolderNameFromPath,
   getOriginalPath,
-  getFolderDocForPath
+  getFolderDocForPath,
+  generateUntitledName
 } from './multi-folder-utils';
-import type { FileMetadata } from '../hooks/useFolderMetadata';
+import type { FileMetadata, FolderMetadata } from '../hooks/useFolderMetadata';
 
 describe('mergeMetadata', () => {
   it('combines folders with name prefixes', () => {
@@ -100,5 +101,45 @@ describe('getFolderDocForPath', () => {
     const folderNames = ['Lens'];
 
     expect(getFolderDocForPath('/Unknown/doc.md', folderDocs, folderNames)).toBeNull();
+  });
+});
+
+describe('generateUntitledName', () => {
+  it('returns "Untitled.md" when no conflicts', () => {
+    const metadata: FolderMetadata = {
+      '/Lens/Notes.md': { id: '1', type: 'markdown', version: 0 },
+    };
+    expect(generateUntitledName('/Lens', metadata)).toBe('Untitled.md');
+  });
+
+  it('returns "Untitled 1.md" when "Untitled.md" exists', () => {
+    const metadata: FolderMetadata = {
+      '/Lens/Untitled.md': { id: '1', type: 'markdown', version: 0 },
+    };
+    expect(generateUntitledName('/Lens', metadata)).toBe('Untitled 1.md');
+  });
+
+  it('returns "Untitled 2.md" when 0 and 1 exist', () => {
+    const metadata: FolderMetadata = {
+      '/Lens/Untitled.md': { id: '1', type: 'markdown', version: 0 },
+      '/Lens/Untitled 1.md': { id: '2', type: 'markdown', version: 0 },
+    };
+    expect(generateUntitledName('/Lens', metadata)).toBe('Untitled 2.md');
+  });
+
+  it('handles subfolder paths', () => {
+    const metadata: FolderMetadata = {
+      '/Lens/Notes/Untitled.md': { id: '1', type: 'markdown', version: 0 },
+    };
+    expect(generateUntitledName('/Lens/Notes', metadata)).toBe('Untitled 1.md');
+  });
+
+  it('assigns lowest available number even when higher numbers exist', () => {
+    const metadata: FolderMetadata = {
+      '/Lens/Untitled.md': { id: '1', type: 'markdown', version: 0 },
+      '/Lens/Untitled 3.md': { id: '2', type: 'markdown', version: 0 },
+    };
+    // Should take next sequential, not fill gap
+    expect(generateUntitledName('/Lens', metadata)).toBe('Untitled 1.md');
   });
 });

@@ -5,6 +5,7 @@ export interface FileTreeContextValue {
   onRequestDelete?: (path: string, name: string) => void;
   onRequestMove?: (path: string, docId: string) => void;
   onRenameSubmit?: (oldPath: string, newName: string, docId: string) => void;
+  onCreateDocument?: (folderPath: string) => void;
   editingPath: string | null;
   onEditingChange: (path: string | null) => void;
   activeDocId?: string;
