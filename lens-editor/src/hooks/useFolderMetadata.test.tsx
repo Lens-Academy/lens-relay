@@ -132,8 +132,8 @@ describe('useFolderMetadata', () => {
     // Simulate server sending some metadata by populating the Y.Map
     act(() => {
       const filemeta = provider.doc.getMap<FileMetadata>('filemeta_v0');
-      filemeta.set('/notes/hello.md', { id: 'doc-uuid-1', type: 'markdown' });
-      filemeta.set('/images/photo.png', { id: 'img-uuid-1', type: 'image' });
+      filemeta.set('/notes/hello.md', { id: 'doc-uuid-1', type: 'markdown', version: 0 });
+      filemeta.set('/images/photo.png', { id: 'img-uuid-1', type: 'image', version: 0 });
     });
 
     // Emit synced event
@@ -146,8 +146,8 @@ describe('useFolderMetadata', () => {
     });
 
     expect(result.current.metadata).toEqual({
-      '/notes/hello.md': { id: 'doc-uuid-1', type: 'markdown' },
-      '/images/photo.png': { id: 'img-uuid-1', type: 'image' },
+      '/notes/hello.md': { id: 'doc-uuid-1', type: 'markdown', version: 0 },
+      '/images/photo.png': { id: 'img-uuid-1', type: 'image', version: 0 },
     });
   });
 
@@ -163,7 +163,7 @@ describe('useFolderMetadata', () => {
 
     // Initial data and sync
     act(() => {
-      filemeta.set('/file1.md', { id: 'id-1', type: 'markdown' });
+      filemeta.set('/file1.md', { id: 'id-1', type: 'markdown', version: 0 });
       provider.emitSynced();
     });
 
@@ -173,7 +173,7 @@ describe('useFolderMetadata', () => {
 
     // Add another file after sync
     act(() => {
-      filemeta.set('/file2.md', { id: 'id-2', type: 'markdown' });
+      filemeta.set('/file2.md', { id: 'id-2', type: 'markdown', version: 0 });
     });
 
     await waitFor(() => {
@@ -181,8 +181,8 @@ describe('useFolderMetadata', () => {
     });
 
     expect(result.current.metadata).toEqual({
-      '/file1.md': { id: 'id-1', type: 'markdown' },
-      '/file2.md': { id: 'id-2', type: 'markdown' },
+      '/file1.md': { id: 'id-1', type: 'markdown', version: 0 },
+      '/file2.md': { id: 'id-2', type: 'markdown', version: 0 },
     });
   });
 
@@ -198,8 +198,8 @@ describe('useFolderMetadata', () => {
 
     // Initial data
     act(() => {
-      filemeta.set('/keep.md', { id: 'id-1', type: 'markdown' });
-      filemeta.set('/delete.md', { id: 'id-2', type: 'markdown' });
+      filemeta.set('/keep.md', { id: 'id-1', type: 'markdown', version: 0 });
+      filemeta.set('/delete.md', { id: 'id-2', type: 'markdown', version: 0 });
       provider.emitSynced();
     });
 
@@ -232,7 +232,7 @@ describe('useFolderMetadata', () => {
 
     // Initial data as markdown
     act(() => {
-      filemeta.set('/doc.md', { id: 'id-1', type: 'markdown' });
+      filemeta.set('/doc.md', { id: 'id-1', type: 'markdown', version: 0 });
       provider.emitSynced();
     });
 
@@ -242,7 +242,7 @@ describe('useFolderMetadata', () => {
 
     // Update to canvas type
     act(() => {
-      filemeta.set('/doc.md', { id: 'id-1', type: 'canvas' });
+      filemeta.set('/doc.md', { id: 'id-1', type: 'canvas', version: 0 });
     });
 
     await waitFor(() => {
@@ -303,7 +303,7 @@ describe('useFolderMetadata', () => {
     // Simulate data arriving before synced event is emitted
     // (the hook should handle this via filemeta.size > 0 check)
     act(() => {
-      filemeta.set('/early.md', { id: 'early-id', type: 'markdown' });
+      filemeta.set('/early.md', { id: 'early-id', type: 'markdown', version: 0 });
     });
 
     // The hook should detect the data immediately since size > 0

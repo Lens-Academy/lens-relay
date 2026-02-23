@@ -47,13 +47,12 @@ export function useFolderMetadata(folderId: string) {
       docRef.current = newDoc;
       setDoc(newDoc);  // Trigger re-render when doc is ready
 
-      // Debug: expose to window for console inspection
-      (window as any).__folderDoc = newDoc;
-      (window as any).__filemeta = newDoc.getMap('filemeta_v0');
-      console.log('[DEBUG] Y.Doc created and exposed as window.__folderDoc and window.__filemeta');
-
-      // Set up debug observer to log all filemeta changes
-      debugObserverCleanupRef.current = setupFilemetaDebugObserver(newDoc);
+      // Set up debug observer in dev builds only
+      if (import.meta.env.DEV) {
+        (window as any).__folderDoc = newDoc;
+        (window as any).__filemeta = newDoc.getMap('filemeta_v0');
+        debugObserverCleanupRef.current = setupFilemetaDebugObserver(newDoc);
+      }
 
       // Auth endpoint function for the folder doc
       const authEndpoint = () => getClientToken(folderDocId);

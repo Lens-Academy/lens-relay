@@ -8,9 +8,11 @@ import { RELAY_ID } from '../App';
 // the source of Y.js changes and avoid processing its own updates
 const LENS_EDITOR_ORIGIN = 'lens-editor';
 
-// Debug logging helper
+// Debug logging helper — gated to dev builds only
 function debug(operation: string, ...args: unknown[]) {
-  console.log(`[relay-api] ${operation}:`, ...args);
+  if (import.meta.env.DEV) {
+    console.log(`[relay-api] ${operation}:`, ...args);
+  }
 }
 
 /** UUID v4 generator that works in insecure contexts (plain HTTP). */

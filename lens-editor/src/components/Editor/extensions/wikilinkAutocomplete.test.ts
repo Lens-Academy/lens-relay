@@ -12,10 +12,10 @@ import { createWikilinkCompletionSource, wikilinkAutocomplete } from './wikilink
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 
 const testMetadata: FolderMetadata = {
-  '/Notes.md': { id: 'doc-notes', type: 'markdown' },
-  '/Tasks.md': { id: 'doc-tasks', type: 'markdown' },
-  '/Projects/README.md': { id: 'doc-proj', type: 'markdown' },
-  '/attachments/image.png': { id: 'img-1', type: 'image' },
+  '/Notes.md': { id: 'doc-notes', type: 'markdown', version: 0 },
+  '/Tasks.md': { id: 'doc-tasks', type: 'markdown', version: 0 },
+  '/Projects/README.md': { id: 'doc-proj', type: 'markdown', version: 0 },
+  '/attachments/image.png': { id: 'img-1', type: 'image', version: 0 },
 };
 
 /**
@@ -104,9 +104,9 @@ describe('wikilinkAutocomplete', () => {
     // Without boost: Anote would be first (alphabetical)
     // With boost: Notebook should be first (prefix match boosted)
     const boostTestMetadata: FolderMetadata = {
-      '/Anote.md': { id: 'doc-anote', type: 'markdown' },      // substring match, alpha first
-      '/Notebook.md': { id: 'doc-notebook', type: 'markdown' }, // prefix match, alpha second
-      '/Denote.md': { id: 'doc-denote', type: 'markdown' },     // substring match
+      '/Anote.md': { id: 'doc-anote', type: 'markdown', version: 0 },      // substring match, alpha first
+      '/Notebook.md': { id: 'doc-notebook', type: 'markdown', version: 0 }, // prefix match, alpha second
+      '/Denote.md': { id: 'doc-denote', type: 'markdown', version: 0 },     // substring match
     };
 
     const result = getCompletions('See [[note', 10, boostTestMetadata);
@@ -188,8 +188,8 @@ describe('relative path suggestions', () => {
 
 describe('wikilinkAutocomplete EditorView integration', () => {
   const testMetadata: FolderMetadata = {
-    '/Notes.md': { id: 'doc-notes', type: 'markdown' },
-    '/Tasks.md': { id: 'doc-tasks', type: 'markdown' },
+    '/Notes.md': { id: 'doc-notes', type: 'markdown', version: 0 },
+    '/Tasks.md': { id: 'doc-tasks', type: 'markdown', version: 0 },
   };
 
   function createEditorWithAutocomplete(doc: string, metadata: FolderMetadata) {

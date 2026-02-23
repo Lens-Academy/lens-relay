@@ -193,7 +193,7 @@ describe('relay-api', () => {
 
       const doc2 = new Y.Doc();
       const filemeta2 = doc2.getMap<FileMetadata>('filemeta_v0');
-      filemeta2.set('/DocB.md', { id: 'client2-id', type: 'markdown' });
+      filemeta2.set('/DocB.md', { id: 'client2-id', type: 'markdown', version: 0 });
 
       // Cross-apply updates
       Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc));

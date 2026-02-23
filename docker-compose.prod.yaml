@@ -13,7 +13,7 @@
 
 services:
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared@sha256:e9bcb2ef08d25632ff74344e73a025f4f4bf12718335b196fa0e670cacace8c5
     container_name: cloudflared
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
@@ -49,6 +49,7 @@ services:
       - PORT=3000
 
   relay-git-sync:
+    # Private registry — no versioned tags available. Pin when possible.
     image: docker.system3.md/relay-git-sync:latest
     container_name: relay-git-sync
     restart: unless-stopped

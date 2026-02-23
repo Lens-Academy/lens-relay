@@ -369,11 +369,15 @@ fn get_store_from_config(
 
 fn get_store_from_opts(store_path: &str) -> Result<Box<dyn Store>> {
     if store_path.starts_with("s3://") {
-        // Set the RELAY_SERVER_STORAGE environment variable so S3Config::from_env can use it
-        env::set_var("RELAY_SERVER_STORAGE", store_path);
+        let url = Url::parse(store_path)?;
+        let bucket = url
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid S3 URL: no bucket"))?
+            .to_owned();
+        let prefix = url.path().trim_start_matches('/').to_owned();
+        let prefix = (!prefix.is_empty()).then_some(prefix);
 
-        // Use the unified S3Config::from_env method
-        let config = S3Config::from_env(None, None)?;
+        let config = S3Config::from_env(Some(bucket), prefix)?;
         let store = S3Store::new(config);
         Ok(Box::new(store))
     } else {
@@ -643,11 +647,27 @@ async fn main() -> Result<()> {
                 tracing::info!("Metrics disabled");
             }
 
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to install CTRL+C signal handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Received Ctrl+C, shutting down.");
+                },
+                _ = async {
+                    #[cfg(unix)]
+                    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                        Ok(mut signal) => signal.recv().await,
+                        Err(e) => {
+                            tracing::error!("Failed to install SIGTERM handler: {}", e);
+                            std::future::pending::<Option<()>>().await
+                        }
+                    }
 
-            tracing::info!("Shutting down.");
+                    #[cfg(not(unix))]
+                    std::future::pending::<Option<()>>().await
+                } => {
+                    tracing::info!("Received SIGTERM, shutting down.");
+                }
+            }
+
             token.cancel();
 
             if let Some(metrics_handle) = metrics_handle {

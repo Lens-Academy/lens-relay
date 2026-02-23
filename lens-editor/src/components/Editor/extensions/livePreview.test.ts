@@ -131,8 +131,8 @@ describe('livePreview - wikilinks', () => {
 
   // Test metadata with real document entries for resolution testing
   const testMetadata: FolderMetadata = {
-    '/My Page.md': { id: 'doc-1', type: 'markdown' },
-    '/Existing Page.md': { id: 'doc-2', type: 'markdown' },
+    '/My Page.md': { id: 'doc-1', type: 'markdown', version: 0 },
+    '/Existing Page.md': { id: 'doc-2', type: 'markdown', version: 0 },
   };
 
   // Create context with real resolution logic

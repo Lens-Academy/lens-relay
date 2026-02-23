@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { buildTreeFromPaths, filterTree, getFolderIdsWithMatches, buildDocIdToPathMap } from './tree-utils';
-import simpleFlat from '../test/fixtures/folder-metadata/simple-flat.json';
-import nestedHierarchy from '../test/fixtures/folder-metadata/nested-hierarchy.json';
+import type { FolderMetadata } from '../hooks/useFolderMetadata';
+import simpleFlatRaw from '../test/fixtures/folder-metadata/simple-flat.json';
+import nestedHierarchyRaw from '../test/fixtures/folder-metadata/nested-hierarchy.json';
+
+// JSON imports widen `type` to string — cast to satisfy FileMetadata's union type
+const simpleFlat = simpleFlatRaw as unknown as FolderMetadata;
+const nestedHierarchy = nestedHierarchyRaw as unknown as FolderMetadata;
 
 describe('buildTreeFromPaths', () => {
   it('builds flat file list from simple metadata', () => {
