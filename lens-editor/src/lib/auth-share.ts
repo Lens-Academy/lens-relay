@@ -44,6 +44,23 @@ function base64urlToBytes(str: string): Uint8Array {
  * Token format: base64url(role:1 + uuid:16 + expiry:4 + hmac:8)
  * Role is the first byte: 1=edit, 2=suggest, 3=view.
  */
+/**
+ * Check if a compact binary share token has expired.
+ * Token format: base64url(role:1 + uuid:16 + expiry:4 + hmac:8)
+ * Expiry is a big-endian uint32 at byte offset 17.
+ */
+export function isTokenExpired(token: string): boolean {
+  try {
+    const bytes = base64urlToBytes(token);
+    if (bytes.length < 21) return true; // too short to contain expiry
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const expiry = view.getUint32(17, false); // big-endian
+    return expiry < Math.floor(Date.now() / 1000);
+  } catch {
+    return true; // malformed → treat as expired
+  }
+}
+
 export function decodeRoleFromToken(token: string): UserRole | null {
   try {
     const bytes = base64urlToBytes(token);

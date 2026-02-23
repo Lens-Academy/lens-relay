@@ -12,8 +12,8 @@ import { DisplayNameBadge } from './components/DisplayNameBadge';
 import { useMultiFolderMetadata, type FolderConfig } from './hooks/useMultiFolderMetadata';
 import { AuthProvider } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
-import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken } from './lib/auth-share';
-import { setShareToken } from './lib/auth';
+import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired } from './lib/auth-share';
+import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { QuickSwitcher } from './components/QuickSwitcher';
@@ -47,6 +47,7 @@ const DEFAULT_DOC_UUID = (USE_LOCAL_RELAY && !USE_LOCAL_R2) ? 'c0000001' : '76c3
 // Read share token from URL once at module load (before React renders)
 const shareToken = getShareTokenFromUrl();
 const shareRole: UserRole | null = shareToken ? decodeRoleFromToken(shareToken) : null;
+const shareExpired: boolean = shareToken ? isTokenExpired(shareToken) : false;
 
 // Store share token for all relay auth calls, then strip from URL bar
 if (shareToken) {
@@ -61,6 +62,34 @@ function AccessDenied() {
         <div className="text-5xl mb-4">🔒</div>
         <h1 className="text-2xl font-semibold text-gray-800 mb-2">Access Required</h1>
         <p className="text-gray-500">You need a share link to access this editor. Please ask the document owner for a link.</p>
+      </div>
+    </div>
+  );
+}
+
+function TokenExpired() {
+  return (
+    <div className="h-screen flex items-center justify-center bg-gray-50">
+      <div className="text-center max-w-md px-6">
+        <div className="text-5xl mb-4">⏱️</div>
+        <h1 className="text-2xl font-semibold text-gray-800 mb-2">Link Expired</h1>
+        <p className="text-gray-500">
+          Your share link has expired. Please ask an admin for a new access link.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function TokenInvalid() {
+  return (
+    <div className="h-screen flex items-center justify-center bg-gray-50">
+      <div className="text-center max-w-md px-6">
+        <div className="text-5xl mb-4">🔑</div>
+        <h1 className="text-2xl font-semibold text-gray-800 mb-2">Access Link Invalid</h1>
+        <p className="text-gray-500">
+          Your access link is no longer valid. Please ask an admin for a new access link.
+        </p>
       </div>
     </div>
   );
@@ -128,8 +157,20 @@ function DocumentView() {
 }
 
 export function App() {
+  const [authError, setAuthError] = useState(false);
+
+  useEffect(() => {
+    setAuthErrorCallback(() => setAuthError(true));
+  }, []);
+
   if (!shareToken || !shareRole) {
     return <AccessDenied />;
+  }
+  if (shareExpired) {
+    return <TokenExpired />;
+  }
+  if (authError) {
+    return <TokenInvalid />;
   }
   return <AuthenticatedApp role={shareRole} />;
 }

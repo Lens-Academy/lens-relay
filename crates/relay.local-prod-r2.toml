@@ -1,0 +1,17 @@
+[server]
+host = "0.0.0.0"
+
+[store]
+type = "cloudflare"
+account_id = "a6d884b270b09f11bd79a048e42f88d2"
+bucket = "lens-relay-storage"
+prefix = ""
+
+# Folder display names
+[[folders]]
+uuid = "fbd5eb54-73cc-41b0-ac28-2b93d3b4244e"
+name = "Lens"
+
+[[folders]]
+uuid = "ea4015da-24af-4d9d-ac49-8c902cb17121"
+name = "Lens Edu"
