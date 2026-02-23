@@ -62,6 +62,24 @@ echo ""
 
 cd "$RELAY_CRATES_DIR"
 
+# For in-memory mode, auto-run setup once the server is ready
+if [ "$RELAY_STORAGE" != "r2" ]; then
+    (
+        # Wait for server to accept connections
+        for i in $(seq 1 30); do
+            if curl -sf "http://localhost:$RELAY_PORT" >/dev/null 2>&1; then
+                echo ""
+                echo "Server ready — running relay:setup..."
+                cd "$PROJECT_DIR" && node scripts/setup-local-relay.mjs
+                echo "Setup complete."
+                break
+            fi
+            sleep 1
+        done
+    ) &
+    SETUP_PID=$!
+fi
+
 PORT=$RELAY_PORT \
 RELAY_SERVER_URL="http://localhost:$RELAY_PORT" \
 cargo run -p relay -- serve --config "$CONFIG_FILE"

@@ -19,6 +19,7 @@ const mockResults: SearchResult[] = [
     doc_id: 'uuid-1',
     title: 'Welcome Document',
     folder: 'Lens',
+    path: 'Lens',
     snippet: 'Welcome to <mark>Lens</mark> Relay!',
     score: 2.5,
   },
@@ -26,6 +27,7 @@ const mockResults: SearchResult[] = [
     doc_id: 'uuid-2',
     title: 'Getting Started',
     folder: 'Lens Edu',
+    path: 'Lens Edu / Guides',
     snippet: 'This guide helps you get <mark>started</mark> with the editor.',
     score: 1.8,
   },
@@ -48,7 +50,7 @@ describe('SearchPanel', () => {
     expect(screen.getByText('Getting Started')).toBeInTheDocument();
   });
 
-  it('renders folder labels', () => {
+  it('renders path labels (falling back to folder when no path)', () => {
     render(
       <SearchPanel
         results={mockResults}
@@ -60,11 +62,11 @@ describe('SearchPanel', () => {
       />
     );
 
-    // "Lens" also appears in the snippet <mark> tag, so query by selector
+    // path is preferred over folder; second result has nested path
     const folderLabels = document.querySelectorAll('span.text-gray-400');
     expect(folderLabels).toHaveLength(2);
     expect(folderLabels[0].textContent).toBe('Lens');
-    expect(folderLabels[1].textContent).toBe('Lens Edu');
+    expect(folderLabels[1].textContent).toBe('Lens Edu / Guides');
   });
 
   it('renders snippet HTML with mark tags using dangerouslySetInnerHTML', () => {

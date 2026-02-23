@@ -182,6 +182,32 @@ export function getFolderIdsWithMatches(nodes: TreeNode[], term: string): Set<st
 }
 
 /**
+ * Build a map from doc_id to display path for all non-folder entries.
+ * Display path is the parent directory chain joined with " / ".
+ * Example: "/Lens/Physics/Quantum.md" → "Lens / Physics"
+ *          "/Lens/Welcome.md" → "Lens"
+ */
+export function buildDocIdToPathMap(metadata: Record<string, FileMetadata>): Map<string, string> {
+  const map = new Map<string, string>();
+
+  for (const [path, meta] of Object.entries(metadata)) {
+    if (meta.type === 'folder') continue;
+
+    // Split path into segments, filter empties (leading slash)
+    const segments = path.split('/').filter(Boolean);
+    // Parent segments = everything except the filename
+    const parentSegments = segments.slice(0, -1);
+    const displayPath = parentSegments.join(' / ');
+
+    if (displayPath) {
+      map.set(meta.id, displayPath);
+    }
+  }
+
+  return map;
+}
+
+/**
  * Search file names from metadata using case-insensitive substring matching.
  * Returns SearchResult[] for compatibility with SearchPanel.
  */
@@ -194,6 +220,7 @@ export function searchFileNames(
 
   const lowerTerm = term.toLowerCase();
   const results: SearchResult[] = [];
+  const docIdToPath = buildDocIdToPathMap(metadata);
 
   for (const [path, meta] of Object.entries(metadata)) {
     if (meta.type === 'folder') continue;
@@ -208,6 +235,7 @@ export function searchFileNames(
         doc_id: meta.id,
         title: filename.replace(/\.md$/, ''),
         folder,
+        path: docIdToPath.get(meta.id) ?? folder,
         snippet: '',
         score: 0,
       });

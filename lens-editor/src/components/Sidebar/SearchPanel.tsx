@@ -41,8 +41,8 @@ export function SearchPanel({ results, fileNameMatches, loading, error, query, o
                   <div className="text-sm font-medium text-gray-900 truncate">
                     {match.title}
                   </div>
-                  {match.folder && (
-                    <span className="text-xs text-gray-400">{match.folder}</span>
+                  {(match.path || match.folder) && (
+                    <span className="text-xs text-gray-400">{match.path || match.folder}</span>
                   )}
                 </button>
               </li>
@@ -72,8 +72,8 @@ export function SearchPanel({ results, fileNameMatches, loading, error, query, o
                     <div className="text-sm font-medium text-gray-900 truncate">
                       {result.title}
                     </div>
-                    {result.folder && (
-                      <span className="text-xs text-gray-400">{result.folder}</span>
+                    {(result.path || result.folder) && (
+                      <span className="text-xs text-gray-400">{result.path || result.folder}</span>
                     )}
                     {result.snippet && (
                       <div

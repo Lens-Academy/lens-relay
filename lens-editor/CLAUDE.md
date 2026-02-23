@@ -19,52 +19,43 @@ VITE_PORT=5999 npm run dev
 RELAY_PORT=8999 npm run relay:setup
 ```
 
-## Production Relay (default)
+## Three Server Modes
+
+### 1. Production Relay (default)
 
 ```bash
 npm run dev
 ```
 
-Connects to `relay.lensacademy.org` with the shared Lens folder.
+Frontend connects directly to `relay.lensacademy.org`. No local server needed.
 
-## Local Relay Server (isolated testing)
+### 2. Local (in-memory)
 
 ```bash
-# Terminal 1: Start local relay-server (port auto-detected: 8190 for ws2)
+# Terminal 1: Start relay + auto-populate test data
 npm run relay:start
 
-# Terminal 2: Setup test documents (in-memory, need to re-run after each server restart)
-npm run relay:setup
-
-# Terminal 3: Run frontend (port auto-detected: 5273 for ws2)
+# Terminal 2: Start frontend
 npm run dev:local
 ```
 
-Local mode uses test IDs (`local-test-folder`, `local-welcome`, etc.) so there's no interference with production data.
+In-memory storage — starts fresh every time. Setup runs automatically after the server is ready. Uses test IDs (`local-test-folder`, `local-welcome`, etc.) with no interference with production.
 
-**In-memory storage:** Local relay-server uses in-memory storage — data is lost on server restart. Run `npm run relay:setup` after each restart. Production uses S3/R2 cloud storage (see top-level CLAUDE.md).
-
-## Local Relay with R2 Storage (production data)
-
-Connects to the local relay-server backed by Cloudflare R2, using real production folder IDs.
+### 3. Local with R2 (copy of production data)
 
 ```bash
-# Terminal 1: Start relay with R2 storage
+# Terminal 1: Start relay backed by R2
 npm run relay:start:r2
 
-# Terminal 2: Run frontend with production IDs
+# Terminal 2: Start frontend with production folder IDs
 npm run dev:local:r2
 ```
 
-No `relay:setup` needed — R2 already has real data.
+Runs a local relay server against the **dev R2 bucket** (`lens-relay-dev`), a copy of production data safe to write to. No setup needed. Requires `crates/auth.local.env` (symlinked from parent dir, gitignored).
 
-Requires `crates/relay.local-r2.toml` and `crates/auth.local.env` (both gitignored).
-
-**Manual startup alternative:**
-```bash
-cd ../relay-server/crates
-PORT=8190 RELAY_SERVER_URL="http://localhost:8190" cargo run -p relay -- serve --config relay.local.toml
-```
+**R2 buckets:**
+- `lens-relay-dev` — dev bucket, used by `relay:start:r2`
+- `lens-relay-storage` — production bucket, used only by the prod server
 
 ## Integration Tests
 

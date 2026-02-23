@@ -1,8 +1,11 @@
 target
 .auth.staging.env
 .auth.env
+auth.local.env
 y-sweet-worker/dist
 data-local-*
+data
 relay.local.toml
+relay.local-r2.toml
 relay.staging.toml
 relay-binary
