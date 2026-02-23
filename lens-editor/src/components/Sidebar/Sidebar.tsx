@@ -11,7 +11,7 @@ import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
-import { buildTreeFromPaths, filterTree, searchFileNames } from '../../lib/tree-utils';
+import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } from '../../lib/tree-utils';
 import { createDocument, deleteDocument, moveDocument } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
@@ -53,6 +53,17 @@ export function Sidebar() {
 
   // Server-side full-text search (activates when searchTerm >= 2 chars)
   const { results: searchResults, loading: searchLoading, error: searchError } = useSearch(searchTerm);
+
+  // Build doc_id → display path lookup from metadata
+  const docIdToPath = useMemo(() => buildDocIdToPathMap(metadata), [metadata]);
+
+  // Enrich server search results with display paths
+  const enrichedSearchResults = useMemo(() => {
+    return searchResults.map(r => ({
+      ...r,
+      path: docIdToPath.get(r.doc_id) ?? r.folder,
+    }));
+  }, [searchResults, docIdToPath]);
 
   // Ctrl+K / Cmd+K keyboard shortcut to focus search input
   useEffect(() => {
@@ -228,7 +239,7 @@ export function Sidebar() {
       <div className={`flex-1 overflow-y-auto ${isStale && !showSearchResults ? 'opacity-80' : ''}`}>
         {showSearchResults ? (
           <SearchPanel
-            results={searchResults}
+            results={enrichedSearchResults}
             fileNameMatches={fileNameMatches}
             loading={searchLoading}
             error={searchError}

@@ -249,6 +249,7 @@ export interface SearchResult {
   doc_id: string;   // UUID (no RELAY_ID prefix)
   title: string;
   folder: string;
+  path?: string;    // Display path, e.g. "Lens / Physics" (client-enriched)
   snippet: string;  // HTML with <mark> tags
   score: number;
 }

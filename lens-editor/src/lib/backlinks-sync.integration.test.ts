@@ -73,6 +73,12 @@ const CF_FOLDER2_DOC_ID = `${TEST_RELAY_UUID}-${CF_FOLDER2_UUID}`;
 const CF_DOC_A_ID = `${TEST_RELAY_UUID}-${CF_DOC_A_UUID}`;
 const CF_DOC_B_ID = `${TEST_RELAY_UUID}-${CF_DOC_B_UUID}`;
 
+// Unique per-run folder names to avoid virtual tree collisions across runs.
+// The server resolves [[FolderName/Page]] by searching ALL loaded folder docs.
+// If two runs use the same folder name, the stale run's entries shadow the new ones.
+const CF_FOLDER1_NAME = `Lens-${RUN_ID}`;
+const CF_FOLDER2_NAME = `LensEdu-${RUN_ID}`;
+
 // ---------------------------------------------------------------------------
 // Helpers (duplicated — small, ~60 lines)
 // ---------------------------------------------------------------------------
@@ -518,9 +524,12 @@ describe('Cross-folder Backlinks', () => {
     }
   });
 
-  it('resolves [[Lens Edu/CrossTarget]] across folders — backlink appears in target folder', async () => {
+  it('resolves cross-folder wikilink — backlink appears in target folder', async () => {
     // Uses unique filenames (CrossSource, CrossTarget) to avoid collisions
-    // with other test groups' filemeta entries
+    // with other test groups' filemeta entries.
+    // Folder names include RUN_ID to avoid virtual tree collisions across runs
+    // (the server's resolve_in_virtual_tree picks the first match).
+
     // 1. Create 2 folder docs + 2 content docs
     await Promise.all([
       createDocumentOnServer(CF_FOLDER1_DOC_ID),
@@ -529,11 +538,15 @@ describe('Cross-folder Backlinks', () => {
       createDocumentOnServer(CF_DOC_B_ID),
     ]);
 
-    // 2. Populate filemeta: CrossSource in folder1, CrossTarget in folder2
+    // 2. Populate filemeta + folder_config.name: CrossSource in folder1, CrossTarget in folder2
+    //    folder_config.name is required for cross-folder resolution — the server builds
+    //    virtual paths like "/{FolderName}/CrossTarget.md" from it.
     await connectRunAndDisconnect(CF_FOLDER1_DOC_ID, (doc) => {
       const filemeta = doc.getMap('filemeta_v0');
       const legacyDocs = doc.getMap('docs');
+      const folderConfig = doc.getMap('folder_config');
       doc.transact(() => {
+        folderConfig.set('name', CF_FOLDER1_NAME);
         filemeta.set('/CrossSource.md', { id: CF_DOC_A_UUID, type: 'markdown', version: 0 });
         legacyDocs.set('/CrossSource.md', CF_DOC_A_UUID);
       });
@@ -542,7 +555,9 @@ describe('Cross-folder Backlinks', () => {
     await connectRunAndDisconnect(CF_FOLDER2_DOC_ID, (doc) => {
       const filemeta = doc.getMap('filemeta_v0');
       const legacyDocs = doc.getMap('docs');
+      const folderConfig = doc.getMap('folder_config');
       doc.transact(() => {
+        folderConfig.set('name', CF_FOLDER2_NAME);
         filemeta.set('/CrossTarget.md', { id: CF_DOC_B_UUID, type: 'markdown', version: 0 });
         legacyDocs.set('/CrossTarget.md', CF_DOC_B_UUID);
       });
@@ -553,10 +568,10 @@ describe('Cross-folder Backlinks', () => {
     openConnections.push(folder2Conn);
     const backlinks = folder2Conn.doc.getMap('backlinks_v0');
 
-    // 4. Write [[CrossTarget]] to CrossSource content (in folder1)
+    // 4. Write wikilink to CrossSource content (in folder1), using folder2's unique name
     await connectRunAndDisconnect(CF_DOC_A_ID, (doc) => {
       const text = doc.getText('contents');
-      text.insert(0, '# CrossSource\n\nSee [[Lens Edu/CrossTarget]] for the course plan.');
+      text.insert(0, `# CrossSource\n\nSee [[${CF_FOLDER2_NAME}/CrossTarget]] for the course plan.`);
     });
 
     // 5. Poll folder2's backlinks_v0 for CrossTarget UUID

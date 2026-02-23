@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTreeFromPaths, filterTree, getFolderIdsWithMatches } from './tree-utils';
+import { buildTreeFromPaths, filterTree, getFolderIdsWithMatches, buildDocIdToPathMap } from './tree-utils';
 import simpleFlat from '../test/fixtures/folder-metadata/simple-flat.json';
 import nestedHierarchy from '../test/fixtures/folder-metadata/nested-hierarchy.json';
 
@@ -101,6 +101,52 @@ describe('filterTree', () => {
 
     const projects = tree.find((n) => n.name === 'Projects');
     expect(projects!.children).toHaveLength(2);
+  });
+});
+
+describe('buildDocIdToPathMap', () => {
+  it('produces folder name for root-level files', () => {
+    const metadata = {
+      '/Lens/Welcome.md': { id: 'id-1', type: 'markdown' as const, version: 0 },
+    };
+    const map = buildDocIdToPathMap(metadata);
+    expect(map.get('id-1')).toBe('Lens');
+  });
+
+  it('produces parent path for nested files', () => {
+    const metadata = {
+      '/Lens/Physics/Quantum.md': { id: 'id-2', type: 'markdown' as const, version: 0 },
+    };
+    const map = buildDocIdToPathMap(metadata);
+    expect(map.get('id-2')).toBe('Lens / Physics');
+  });
+
+  it('produces deeply nested path', () => {
+    const metadata = {
+      '/Lens Edu/CS/Algorithms/Sorting.md': { id: 'id-3', type: 'markdown' as const, version: 0 },
+    };
+    const map = buildDocIdToPathMap(metadata);
+    expect(map.get('id-3')).toBe('Lens Edu / CS / Algorithms');
+  });
+
+  it('skips folder entries', () => {
+    const metadata = {
+      '/Lens/Physics': { id: 'folder-1', type: 'folder' as const, version: 0 },
+      '/Lens/Physics/Quantum.md': { id: 'id-4', type: 'markdown' as const, version: 0 },
+    };
+    const map = buildDocIdToPathMap(metadata);
+    expect(map.has('folder-1')).toBe(false);
+    expect(map.get('id-4')).toBe('Lens / Physics');
+  });
+
+  it('does not include files with no parent path', () => {
+    // Edge case: a file at root level with no folder prefix
+    const metadata = {
+      '/Orphan.md': { id: 'id-5', type: 'markdown' as const, version: 0 },
+    };
+    const map = buildDocIdToPathMap(metadata);
+    // No parent segments → no entry
+    expect(map.has('id-5')).toBe(false);
   });
 });
 
