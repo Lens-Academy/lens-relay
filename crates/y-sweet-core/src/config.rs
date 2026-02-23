@@ -525,7 +525,7 @@ fn default_doc_gc() -> bool {
 }
 
 fn default_redact_errors() -> bool {
-    false
+    true
 }
 
 fn default_expiration_seconds() -> u64 {

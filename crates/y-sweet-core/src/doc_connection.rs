@@ -124,7 +124,7 @@ impl DocConnection {
         let closed = Arc::new(OnceLock::new());
 
         let (doc_subscription, awareness_subscription) = {
-            let mut awareness = awareness.write().unwrap();
+            let mut awareness = awareness.write().unwrap_or_else(|e| e.into_inner());
 
             // Initial handshake is based on this:
             // https://github.com/y-crdt/y-sync/blob/56958e83acfd1f3c09f5dd67cf23c9c72f000707/src/sync.rs#L45-L54
@@ -246,12 +246,12 @@ impl DocConnection {
         match msg {
             Message::Sync(msg) => match msg {
                 SyncMessage::SyncStep1(sv) => {
-                    let awareness = a.read().unwrap();
+                    let awareness = a.read().unwrap_or_else(|e| e.into_inner());
                     protocol.handle_sync_step1(&awareness, sv)
                 }
                 SyncMessage::SyncStep2(update) => {
                     if can_write {
-                        let mut awareness = a.write().unwrap();
+                        let mut awareness = a.write().unwrap_or_else(|e| e.into_inner());
                         protocol.handle_sync_step2(&mut awareness, Update::decode_v1(&update)?)
                     } else {
                         Err(sync::Error::PermissionDenied {
@@ -261,7 +261,7 @@ impl DocConnection {
                 }
                 SyncMessage::Update(update) => {
                     if can_write {
-                        let mut awareness = a.write().unwrap();
+                        let mut awareness = a.write().unwrap_or_else(|e| e.into_inner());
                         protocol.handle_update(&mut awareness, Update::decode_v1(&update)?)
                     } else {
                         Err(sync::Error::PermissionDenied {
@@ -271,11 +271,11 @@ impl DocConnection {
                 }
             },
             Message::Auth(reason) => {
-                let awareness = a.read().unwrap();
+                let awareness = a.read().unwrap_or_else(|e| e.into_inner());
                 protocol.handle_auth(&awareness, reason)
             }
             Message::AwarenessQuery => {
-                let awareness = a.read().unwrap();
+                let awareness = a.read().unwrap_or_else(|e| e.into_inner());
                 protocol.handle_awareness_query(&awareness)
             }
             Message::Awareness(update) => {
@@ -285,7 +285,7 @@ impl DocConnection {
                 } else {
                     tracing::warn!("Received awareness update with more than one client");
                 }
-                let mut awareness = a.write().unwrap();
+                let mut awareness = a.write().unwrap_or_else(|e| e.into_inner());
                 protocol.handle_awareness_update(&mut awareness, update)
             }
             Message::Custom(SYNC_STATUS_MESSAGE, data) => {
@@ -328,7 +328,7 @@ impl DocConnection {
                 Ok(None)
             }
             Message::Custom(tag, data) => {
-                let mut awareness = a.write().unwrap();
+                let mut awareness = a.write().unwrap_or_else(|e| e.into_inner());
                 protocol.missing_handle(&mut awareness, tag, data)
             }
         }
@@ -381,7 +381,7 @@ impl Drop for DocConnection {
 
         // If this client had an awareness state, remove it.
         if let Some(client_id) = self.client_id.get() {
-            let mut awareness = self.awareness.write().unwrap();
+            let mut awareness = self.awareness.write().unwrap_or_else(|e| e.into_inner());
             awareness.remove_state(*client_id);
         }
     }

@@ -14,6 +14,28 @@ const channelCache = new Map<string, CacheEntry<DiscordChannel>>();
 const MESSAGE_CACHE_TTL_MS = 60 * 1000; // 60 seconds
 const CHANNEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+const MAX_MESSAGE_CACHE = 500;
+const MAX_CHANNEL_CACHE = 500;
+const MAX_WEBHOOK_CACHE = 100;
+
+/** Evict expired entries, then oldest if still over limit. */
+function evictIfNeeded<T extends { expiresAt?: number }>(
+  cache: Map<string, T>,
+  maxSize: number,
+): void {
+  if (cache.size < maxSize) return;
+  const now = Date.now();
+  for (const [key, entry] of cache) {
+    if ('expiresAt' in entry && (entry.expiresAt as number) < now) cache.delete(key);
+  }
+  // Still over? Drop oldest entries (Map iteration is insertion-order)
+  while (cache.size >= maxSize) {
+    const first = cache.keys().next().value;
+    if (first !== undefined) cache.delete(first);
+    else break;
+  }
+}
+
 function getToken(): string {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) {
@@ -93,6 +115,7 @@ export async function fetchChannelMessages(
   const res = await fetch(url, { headers: authHeaders() });
   const data = await handleResponse<DiscordMessage[]>(res);
 
+  evictIfNeeded(messageCache, MAX_MESSAGE_CACHE);
   messageCache.set(cacheKey, {
     data,
     expiresAt: Date.now() + MESSAGE_CACHE_TTL_MS,
@@ -117,6 +140,7 @@ export async function fetchChannelInfo(
   const res = await fetch(url, { headers: authHeaders() });
   const data = await handleResponse<DiscordChannel>(res);
 
+  evictIfNeeded(channelCache, MAX_CHANNEL_CACHE);
   channelCache.set(channelId, {
     data,
     expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS,
@@ -179,6 +203,7 @@ async function getOrCreateWebhook(
 
   if (existing) {
     const entry = { id: existing.id, token: existing.token! };
+    evictIfNeeded(webhookCache, MAX_WEBHOOK_CACHE);
     webhookCache.set(webhookChannelId, entry);
     return entry;
   }
@@ -194,6 +219,7 @@ async function getOrCreateWebhook(
   );
 
   const entry = { id: created.id, token: created.token };
+  evictIfNeeded(webhookCache, MAX_WEBHOOK_CACHE);
   webhookCache.set(webhookChannelId, entry);
   console.log(
     `[discord-client] Created webhook for channel ${webhookChannelId}`

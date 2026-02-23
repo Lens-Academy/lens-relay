@@ -870,10 +870,10 @@ impl Server {
                     // Log the full event payload as JSON after user assignment
                     match serde_json::to_string(&event) {
                         Ok(json_str) => {
-                            tracing::info!("Document updated event dispatched: {}", json_str);
+                            tracing::debug!("Document updated event dispatched: {}", json_str);
                         }
                         Err(e) => {
-                            tracing::info!(
+                            tracing::debug!(
                                 "Document updated event dispatched for doc_id: {} (JSON serialization failed: {})",
                                 event.doc_id, e
                             );
@@ -1567,9 +1567,9 @@ impl Server {
 
         let app = routes.layer(middleware::from_fn(Self::version_header_middleware));
         let app = if redact_errors {
-            app
-        } else {
             app.layer(middleware::from_fn(Self::redact_error_middleware))
+        } else {
+            app
         };
 
         tracing::info!("Starting HTTP server...");
