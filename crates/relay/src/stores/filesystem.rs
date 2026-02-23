@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::{
     fs::{create_dir_all, read_dir, remove_file},
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
     time::SystemTime,
 };
 use y_sweet_core::store::{FileInfo, Result, Store, StoreError};
@@ -41,6 +41,18 @@ impl FileSystemStore {
         create_dir_all(base_path.clone())?;
         Ok(Self { base_path })
     }
+
+    fn safe_path(&self, key: &str) -> Result<PathBuf> {
+        if Path::new(key)
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+        {
+            return Err(StoreError::NotAuthorized(
+                "Invalid key: path traversal".into(),
+            ));
+        }
+        Ok(self.base_path.join(key))
+    }
 }
 
 #[async_trait]
@@ -50,7 +62,7 @@ impl Store for FileSystemStore {
     }
 
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let path = self.base_path.join(key);
+        let path = self.safe_path(key)?;
         let contents = std::fs::read(path);
         match contents {
             Ok(contents) => Ok(Some(contents)),
@@ -60,7 +72,7 @@ impl Store for FileSystemStore {
     }
 
     async fn set(&self, key: &str, value: Vec<u8>) -> Result<()> {
-        let path = self.base_path.join(key);
+        let path = self.safe_path(key)?;
         create_dir_all(path.parent().expect("Bad parent"))
             .map_err(|_| StoreError::NotAuthorized("Error creating directories".to_string()))?;
         std::fs::write(path, value)
@@ -69,19 +81,19 @@ impl Store for FileSystemStore {
     }
 
     async fn remove(&self, key: &str) -> Result<()> {
-        let path = self.base_path.join(key);
+        let path = self.safe_path(key)?;
         remove_file(path)
             .map_err(|_| StoreError::NotAuthorized("Error removing file.".to_string()))?;
         Ok(())
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
-        let path = self.base_path.join(key);
+        let path = self.safe_path(key)?;
         Ok(path.exists())
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<FileInfo>> {
-        let dir_path = self.base_path.join(prefix);
+        let dir_path = self.safe_path(prefix)?;
 
         if !dir_path.exists() || !dir_path.is_dir() {
             return Ok(Vec::new());
@@ -312,6 +324,27 @@ mod tests {
         // Test invalid key format
         let invalid_key = "invalid/key";
         assert!(extract_doc_id_from_key(invalid_key).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_path_traversal_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let store = FileSystemStore::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let result = store.get("../../../etc/passwd").await;
+        assert!(result.is_err());
+
+        let result = store.set("../../evil".into(), vec![1, 2, 3]).await;
+        assert!(result.is_err());
+
+        let result = store.exists("foo/../../bar").await;
+        assert!(result.is_err());
+
+        let result = store.remove("../secret").await;
+        assert!(result.is_err());
+
+        let result = store.list("../").await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

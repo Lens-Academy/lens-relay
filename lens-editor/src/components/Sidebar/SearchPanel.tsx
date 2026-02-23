@@ -1,6 +1,21 @@
 import { RELAY_ID } from '../../App';
 import type { SearchResult } from '../../lib/relay-api';
 
+function SafeSnippet({ html }: { html: string }) {
+  const parts = html.split(/(<mark>.*?<\/mark>)/g);
+  return (
+    <div className="text-xs text-gray-600 mt-0.5 line-clamp-3">
+      {parts.map((part, i) => {
+        const match = part.match(/^<mark>(.*?)<\/mark>$/);
+        if (match) {
+          return <mark key={i} className="bg-yellow-200 rounded-sm">{match[1]}</mark>;
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </div>
+  );
+}
+
 interface SearchPanelProps {
   results: SearchResult[];
   fileNameMatches: SearchResult[];
@@ -76,10 +91,7 @@ export function SearchPanel({ results, fileNameMatches, loading, error, query, o
                       <span className="text-xs text-gray-400">{result.path || result.folder}</span>
                     )}
                     {result.snippet && (
-                      <div
-                        className="text-xs text-gray-600 mt-0.5 line-clamp-3 [&_mark]:bg-yellow-200 [&_mark]:rounded-sm"
-                        dangerouslySetInnerHTML={{ __html: result.snippet }}
-                      />
+                      <SafeSnippet html={result.snippet} />
                     )}
                   </button>
                 </li>

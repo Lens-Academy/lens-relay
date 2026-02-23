@@ -4,7 +4,7 @@ use axum::{
     extract::{
         multipart::Multipart,
         ws::{CloseFrame, Message, WebSocket},
-        Path, Query, Request, State, WebSocketUpgrade,
+        DefaultBodyLimit, Path, Query, Request, State, WebSocketUpgrade,
     },
     http::{
         header::{HeaderName, HeaderValue},
@@ -1530,13 +1530,17 @@ impl Server {
                 router = router
                     .route(
                         "/f/:doc_id/upload",
-                        post(handle_file_upload).put(handle_file_upload_raw),
+                        post(handle_file_upload)
+                            .put(handle_file_upload_raw)
+                            .layer(DefaultBodyLimit::max(100 * 1024 * 1024)), // 100MB for file uploads
                     )
                     .route("/f/:doc_id/download", get(handle_file_download));
             }
         }
 
-        router.with_state(self.clone())
+        router
+            .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB default
+            .with_state(self.clone())
     }
 
     pub fn single_doc_routes(self: &Arc<Self>) -> Router {
@@ -2095,9 +2099,11 @@ async fn ready() -> Result<Json<Value>, AppError> {
 }
 
 async fn handle_search(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
     State(server_state): State<Arc<Server>>,
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<Value>, AppError> {
+    server_state.check_auth(auth_header)?;
     // Check if search is ready (503 during initial indexing)
     if !server_state
         .search_ready
@@ -2147,9 +2153,11 @@ async fn handle_search(
 /// Body: { "uuid": "...", "new_path": "/Biology/Photosynthesis.md", "target_folder": "Lens Edu" }
 /// Response: { "old_path", "new_path", "old_folder", "new_folder", "links_rewritten" }
 async fn handle_move_document(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
     State(server_state): State<Arc<Server>>,
     Json(body): Json<MoveDocRequest>,
 ) -> Result<Json<MoveDocResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
     // Validate new_path format
     if !body.new_path.starts_with('/') {
         return Err(AppError(

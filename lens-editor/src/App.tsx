@@ -128,13 +128,15 @@ function DocumentView() {
 }
 
 export function App() {
-  const navigate = useNavigate();
-  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
-
-  // No valid token → show access denied
   if (!shareToken || !shareRole) {
     return <AccessDenied />;
   }
+  return <AuthenticatedApp role={shareRole} />;
+}
+
+function AuthenticatedApp({ role }: { role: UserRole }) {
+  const navigate = useNavigate();
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
@@ -169,7 +171,7 @@ export function App() {
   }, [onNavigate]);
 
   return (
-    <AuthProvider role={shareRole}>
+    <AuthProvider role={role}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
