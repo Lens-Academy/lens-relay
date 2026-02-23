@@ -355,9 +355,11 @@ impl WebhookDispatcher {
 pub type WebhookCallback = Arc<dyn Fn(crate::event::DocumentUpdatedEvent, bool) + Send + Sync>;
 
 pub fn create_webhook_callback(dispatcher: Arc<WebhookDispatcher>) -> WebhookCallback {
-    Arc::new(move |event: crate::event::DocumentUpdatedEvent, _is_indexer: bool| {
-        dispatcher.send_webhooks(event.doc_id.clone());
-    })
+    Arc::new(
+        move |event: crate::event::DocumentUpdatedEvent, _is_indexer: bool| {
+            dispatcher.send_webhooks(event.doc_id.clone());
+        },
+    )
 }
 
 struct DocumentQueue {
@@ -572,13 +574,15 @@ impl DebouncedWebhookQueue {
 }
 
 pub fn create_debounced_webhook_callback(queue: Arc<DebouncedWebhookQueue>) -> WebhookCallback {
-    Arc::new(move |event: crate::event::DocumentUpdatedEvent, _is_indexer: bool| {
-        let queue_clone = queue.clone();
-        let doc_id = event.doc_id.clone();
-        tokio::spawn(async move {
-            queue_clone.queue_webhook(doc_id).await;
-        });
-    })
+    Arc::new(
+        move |event: crate::event::DocumentUpdatedEvent, _is_indexer: bool| {
+            let queue_clone = queue.clone();
+            let doc_id = event.doc_id.clone();
+            tokio::spawn(async move {
+                queue_clone.queue_webhook(doc_id).await;
+            });
+        },
+    )
 }
 
 #[cfg(test)]

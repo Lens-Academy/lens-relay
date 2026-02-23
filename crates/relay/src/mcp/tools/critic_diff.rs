@@ -76,7 +76,10 @@ pub fn smart_critic_markup(old: &str, new: &str, meta_prefix: Option<&str>) -> S
                     let eq_val = changes[i].value();
                     let is_trivial = eq_val.chars().all(|c| c == ' ');
 
-                    if is_trivial && i + 1 < changes.len() && changes[i + 1].tag() != ChangeTag::Equal {
+                    if is_trivial
+                        && i + 1 < changes.len()
+                        && changes[i + 1].tag() != ChangeTag::Equal
+                    {
                         // Absorb this separator into both sides of the change.
                         del_parts.push_str(eq_val);
                         ins_parts.push_str(eq_val);

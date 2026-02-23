@@ -32,7 +32,12 @@ pub fn dispatch_request(
             }
             // session_id is Some(&str) here since validate_session passed
             (
-                handle_tools_call(server, session_id.unwrap(), request.id.clone(), request.params.as_ref()),
+                handle_tools_call(
+                    server,
+                    session_id.unwrap(),
+                    request.id.clone(),
+                    request.params.as_ref(),
+                ),
                 None,
             )
         }
@@ -59,12 +64,18 @@ pub fn handle_notification(
                 if sessions.mark_initialized(sid) {
                     debug!(session_id = sid, "Session marked as initialized");
                 } else {
-                    debug!(session_id = sid, "Session not found for initialized notification");
+                    debug!(
+                        session_id = sid,
+                        "Session not found for initialized notification"
+                    );
                 }
             }
         }
         "notifications/cancelled" => {
-            debug!(method = "notifications/cancelled", "Cancellation notification received (no-op)");
+            debug!(
+                method = "notifications/cancelled",
+                "Cancellation notification received (no-op)"
+            );
         }
         other => {
             debug!(method = other, "Unknown notification received");
@@ -130,21 +141,12 @@ fn handle_tools_call(
 ) -> JsonRpcResponse {
     let (name, arguments) = match params {
         Some(p) => {
-            let name = p
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let arguments = p
-                .get("arguments")
-                .cloned()
-                .unwrap_or(json!({}));
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let arguments = p.get("arguments").cloned().unwrap_or(json!({}));
             (name.to_string(), arguments)
         }
         None => {
-            return success_response(
-                id,
-                tools::dispatch_tool(server, session_id, "", &json!({})),
-            );
+            return success_response(id, tools::dispatch_tool(server, session_id, "", &json!({})));
         }
     };
 
@@ -263,7 +265,9 @@ mod tests {
         let req = make_request(json!(3), "tools/list", None);
 
         // Create and initialize a session
-        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        let sid = server
+            .mcp_sessions
+            .create_session("2025-03-26".into(), None);
         server.mcp_sessions.mark_initialized(&sid);
 
         let (resp, new_session_id) = dispatch_request(&server, Some(&sid), &req);
@@ -315,7 +319,9 @@ mod tests {
     #[test]
     fn tools_call_unknown_tool_returns_tool_error() {
         let server = test_server();
-        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        let sid = server
+            .mcp_sessions
+            .create_session("2025-03-26".into(), None);
         server.mcp_sessions.mark_initialized(&sid);
 
         let req = make_request(
@@ -373,7 +379,9 @@ mod tests {
     #[test]
     fn tools_call_with_uninitialized_session_returns_error() {
         let server = test_server();
-        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        let sid = server
+            .mcp_sessions
+            .create_session("2025-03-26".into(), None);
         // Not calling mark_initialized -- session exists but is not initialized
 
         let req = make_request(
@@ -462,7 +470,9 @@ mod tests {
         let req = make_request(
             json!(10),
             "tools/call",
-            Some(json!({"name": "read", "arguments": {"file_path": "Lens/TestDoc.md", "session_id": &sid}})),
+            Some(
+                json!({"name": "read", "arguments": {"file_path": "Lens/TestDoc.md", "session_id": &sid}}),
+            ),
         );
         let (resp, _) = dispatch_request(&server, Some(&sid), &req);
         assert!(resp.error.is_none(), "read should succeed");
@@ -550,7 +560,9 @@ mod tests {
         let read_req = make_request(
             json!(20),
             "tools/call",
-            Some(json!({"name": "read", "arguments": {"file_path": "Lens/EditTest.md", "session_id": session_id}})),
+            Some(
+                json!({"name": "read", "arguments": {"file_path": "Lens/EditTest.md", "session_id": session_id}}),
+            ),
         );
         let (read_resp, _) = dispatch_request(&server, Some(&transport_sid), &read_req);
         assert!(read_resp.error.is_none(), "read should succeed");
@@ -585,7 +597,10 @@ mod tests {
         );
 
         let (edit_resp, _) = dispatch_request(&server, Some(&transport_sid2), &edit_req);
-        assert!(edit_resp.error.is_none(), "edit should succeed at protocol level");
+        assert!(
+            edit_resp.error.is_none(),
+            "edit should succeed at protocol level"
+        );
 
         let edit_result = edit_resp.result.unwrap();
         assert_eq!(
@@ -600,7 +615,9 @@ mod tests {
         let server = test_server();
 
         // Create and initialize transport session
-        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        let sid = server
+            .mcp_sessions
+            .create_session("2025-03-26".into(), None);
         server.mcp_sessions.mark_initialized(&sid);
 
         let req = make_request(
@@ -617,7 +634,10 @@ mod tests {
 
         // The returned session_id should be the transport session_id
         let returned_id = result["content"][0]["text"].as_str().unwrap();
-        assert_eq!(returned_id, sid, "create_session should return the transport session_id");
+        assert_eq!(
+            returned_id, sid,
+            "create_session should return the transport session_id"
+        );
 
         // The returned session_id should be valid (exist in SessionManager)
         assert!(

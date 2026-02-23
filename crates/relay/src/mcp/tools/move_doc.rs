@@ -107,9 +107,7 @@ pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String
 
             if let Some(filemeta) = txn.get_map("filemeta_v0") {
                 for (_path, value) in filemeta.iter(&txn) {
-                    if let Some(id) =
-                        link_indexer::extract_id_from_filemeta_entry(&value, &txn)
-                    {
+                    if let Some(id) = link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
                         if !all_content_uuids.contains(&id) {
                             all_content_uuids.push(id);
                         }
@@ -152,15 +150,13 @@ pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String
             .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
             .collect();
 
-        let folder_doc_refs: Vec<&yrs::Doc> =
-            folder_guards.iter().map(|g| &g.doc).collect();
+        let folder_doc_refs: Vec<&yrs::Doc> = folder_guards.iter().map(|g| &g.doc).collect();
         let folder_name_strings: Vec<String> = folder_doc_ids
             .iter()
             .zip(folder_guards.iter())
             .map(|(id, g)| y_sweet_core::doc_resolver::read_folder_name(&g.doc, id))
             .collect();
-        let folder_name_refs: Vec<&str> =
-            folder_name_strings.iter().map(|s| s.as_str()).collect();
+        let folder_name_refs: Vec<&str> = folder_name_strings.iter().map(|s| s.as_str()).collect();
 
         let source_idx = folder_doc_ids
             .iter()
@@ -185,8 +181,7 @@ pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String
             .iter()
             .filter_map(|id| docs.get(id))
             .collect();
-        let content_awareness: Vec<_> =
-            content_refs.iter().map(|r| r.awareness()).collect();
+        let content_awareness: Vec<_> = content_refs.iter().map(|r| r.awareness()).collect();
         let content_guards: Vec<_> = content_awareness
             .iter()
             .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))

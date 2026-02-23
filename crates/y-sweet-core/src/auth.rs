@@ -103,7 +103,9 @@ pub enum AuthError {
     NoKeyProvided,
     #[error("No signing key available")]
     NoSigningKey,
-    #[error("Invalid channel name: must contain only alphanumeric characters, hyphens, and underscores")]
+    #[error(
+        "Invalid channel name: must contain only alphanumeric characters, hyphens, and underscores"
+    )]
     InvalidChannelName,
     #[error("Duplicate key_id: {0}")]
     DuplicateKeyId(String),

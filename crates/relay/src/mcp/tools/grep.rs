@@ -108,7 +108,8 @@ pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String
             }
             "content" | _ => {
                 // Build ranges with context, merging overlapping
-                let ranges = build_context_ranges(&match_line_indices, context_b, context_a, lines.len());
+                let ranges =
+                    build_context_ranges(&match_line_indices, context_b, context_a, lines.len());
 
                 let mut first_range = true;
                 for range in &ranges {
@@ -252,8 +253,10 @@ mod tests {
         let server = Server::new_for_test();
 
         // Create filemeta entries
-        let filemeta_entries: Vec<(&str, &str)> =
-            entries.iter().map(|(path, uuid, _)| (*path, *uuid)).collect();
+        let filemeta_entries: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|(path, uuid, _)| (*path, *uuid))
+            .collect();
         let folder_doc = create_folder_doc(&filemeta_entries);
         set_folder_name(&folder_doc, "Lens");
 
@@ -300,9 +303,11 @@ mod tests {
 
     #[test]
     fn grep_basic_match() {
-        let server = build_test_server(&[
-            ("/Photosynthesis.md", "uuid-photo", "# Photosynthesis\nPlants use sunlight.\nThis is important."),
-        ]);
+        let server = build_test_server(&[(
+            "/Photosynthesis.md",
+            "uuid-photo",
+            "# Photosynthesis\nPlants use sunlight.\nThis is important.",
+        )]);
 
         let result = execute(
             &server,
@@ -310,14 +315,20 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("Lens/Photosynthesis.md:2:Plants use sunlight."), "Expected match with path:line:content, got: {}", result);
+        assert!(
+            result.contains("Lens/Photosynthesis.md:2:Plants use sunlight."),
+            "Expected match with path:line:content, got: {}",
+            result
+        );
     }
 
     #[test]
     fn grep_case_insensitive() {
-        let server = build_test_server(&[
-            ("/Test.md", "uuid-test", "Hello World\nhello world\nHELLO WORLD"),
-        ]);
+        let server = build_test_server(&[(
+            "/Test.md",
+            "uuid-test",
+            "Hello World\nhello world\nHELLO WORLD",
+        )]);
 
         let result = execute(
             &server,
@@ -326,9 +337,21 @@ mod tests {
         .unwrap();
 
         // Should match all three lines
-        assert!(result.contains("Lens/Test.md:1:Hello World"), "Missing line 1 in: {}", result);
-        assert!(result.contains("Lens/Test.md:2:hello world"), "Missing line 2 in: {}", result);
-        assert!(result.contains("Lens/Test.md:3:HELLO WORLD"), "Missing line 3 in: {}", result);
+        assert!(
+            result.contains("Lens/Test.md:1:Hello World"),
+            "Missing line 1 in: {}",
+            result
+        );
+        assert!(
+            result.contains("Lens/Test.md:2:hello world"),
+            "Missing line 2 in: {}",
+            result
+        );
+        assert!(
+            result.contains("Lens/Test.md:3:HELLO WORLD"),
+            "Missing line 3 in: {}",
+            result
+        );
     }
 
     #[test]
@@ -349,9 +372,11 @@ mod tests {
 
     #[test]
     fn grep_count_mode() {
-        let server = build_test_server(&[
-            ("/Multi.md", "uuid-multi", "apple\nbanana\napple pie\ncherry apple"),
-        ]);
+        let server = build_test_server(&[(
+            "/Multi.md",
+            "uuid-multi",
+            "apple\nbanana\napple pie\ncherry apple",
+        )]);
 
         let result = execute(
             &server,
@@ -359,14 +384,17 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("Lens/Multi.md:3"), "Expected count of 3 matching lines, got: {}", result);
+        assert!(
+            result.contains("Lens/Multi.md:3"),
+            "Expected count of 3 matching lines, got: {}",
+            result
+        );
     }
 
     #[test]
     fn grep_context_lines() {
-        let server = build_test_server(&[
-            ("/Ctx.md", "uuid-ctx", "line1\nline2\nMATCH\nline4\nline5"),
-        ]);
+        let server =
+            build_test_server(&[("/Ctx.md", "uuid-ctx", "line1\nline2\nMATCH\nline4\nline5")]);
 
         let result = execute(
             &server,
@@ -374,16 +402,30 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("Lens/Ctx.md-2-line2"), "Missing before context: {}", result);
-        assert!(result.contains("Lens/Ctx.md:3:MATCH"), "Missing match line: {}", result);
-        assert!(result.contains("Lens/Ctx.md-4-line4"), "Missing after context: {}", result);
+        assert!(
+            result.contains("Lens/Ctx.md-2-line2"),
+            "Missing before context: {}",
+            result
+        );
+        assert!(
+            result.contains("Lens/Ctx.md:3:MATCH"),
+            "Missing match line: {}",
+            result
+        );
+        assert!(
+            result.contains("Lens/Ctx.md-4-line4"),
+            "Missing after context: {}",
+            result
+        );
     }
 
     #[test]
     fn grep_after_context() {
-        let server = build_test_server(&[
-            ("/After.md", "uuid-after", "before\nMATCH\nafter1\nafter2\nafter3"),
-        ]);
+        let server = build_test_server(&[(
+            "/After.md",
+            "uuid-after",
+            "before\nMATCH\nafter1\nafter2\nafter3",
+        )]);
 
         let result = execute(
             &server,
@@ -391,17 +433,35 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("Lens/After.md:2:MATCH"), "Missing match: {}", result);
-        assert!(result.contains("Lens/After.md-3-after1"), "Missing after1: {}", result);
-        assert!(result.contains("Lens/After.md-4-after2"), "Missing after2: {}", result);
-        assert!(!result.contains("after3"), "Should not include after3: {}", result);
+        assert!(
+            result.contains("Lens/After.md:2:MATCH"),
+            "Missing match: {}",
+            result
+        );
+        assert!(
+            result.contains("Lens/After.md-3-after1"),
+            "Missing after1: {}",
+            result
+        );
+        assert!(
+            result.contains("Lens/After.md-4-after2"),
+            "Missing after2: {}",
+            result
+        );
+        assert!(
+            !result.contains("after3"),
+            "Should not include after3: {}",
+            result
+        );
     }
 
     #[test]
     fn grep_before_context() {
-        let server = build_test_server(&[
-            ("/Before.md", "uuid-before", "before1\nbefore2\nMATCH\nafter"),
-        ]);
+        let server = build_test_server(&[(
+            "/Before.md",
+            "uuid-before",
+            "before1\nbefore2\nMATCH\nafter",
+        )]);
 
         let result = execute(
             &server,
@@ -409,9 +469,21 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("Lens/Before.md-2-before2"), "Missing before context: {}", result);
-        assert!(result.contains("Lens/Before.md:3:MATCH"), "Missing match: {}", result);
-        assert!(!result.contains("before1"), "Should not include before1: {}", result);
+        assert!(
+            result.contains("Lens/Before.md-2-before2"),
+            "Missing before context: {}",
+            result
+        );
+        assert!(
+            result.contains("Lens/Before.md:3:MATCH"),
+            "Missing match: {}",
+            result
+        );
+        assert!(
+            !result.contains("before1"),
+            "Should not include before1: {}",
+            result
+        );
     }
 
     #[test]
@@ -437,7 +509,10 @@ mod tests {
             .build()
             .unwrap();
 
-        for (uuid, content) in &[("uuid-a", "target word here"), ("uuid-b", "target word there")] {
+        for (uuid, content) in &[
+            ("uuid-a", "target word here"),
+            ("uuid-b", "target word there"),
+        ] {
             let doc_id = format!("{}-{}", RELAY_ID, uuid);
             let content_owned = content.to_string();
             let dwskv = rt.block_on(async {
@@ -462,15 +537,21 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.contains("Lens/DocA.md"), "Should include Lens doc: {}", result);
-        assert!(!result.contains("Lens Edu"), "Should not include Lens Edu doc: {}", result);
+        assert!(
+            result.contains("Lens/DocA.md"),
+            "Should include Lens doc: {}",
+            result
+        );
+        assert!(
+            !result.contains("Lens Edu"),
+            "Should not include Lens Edu doc: {}",
+            result
+        );
     }
 
     #[test]
     fn grep_no_matches() {
-        let server = build_test_server(&[
-            ("/Doc.md", "uuid-doc", "nothing special here"),
-        ]);
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "nothing special here")]);
 
         let result = execute(
             &server,
@@ -483,9 +564,7 @@ mod tests {
 
     #[test]
     fn grep_invalid_regex() {
-        let server = build_test_server(&[
-            ("/Doc.md", "uuid-doc", "some content"),
-        ]);
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "some content")]);
 
         let result = execute(
             &server,
@@ -493,7 +572,10 @@ mod tests {
         );
 
         assert!(result.is_err(), "Invalid regex should return error");
-        assert!(result.unwrap_err().contains("regex"), "Error should mention regex");
+        assert!(
+            result.unwrap_err().contains("regex"),
+            "Error should mention regex"
+        );
     }
 
     #[test]
@@ -511,7 +593,12 @@ mod tests {
         .unwrap();
 
         let lines: Vec<&str> = result.lines().collect();
-        assert_eq!(lines.len(), 1, "head_limit=1 should return 1 file, got: {:?}", lines);
+        assert_eq!(
+            lines.len(),
+            1,
+            "head_limit=1 should return 1 file, got: {:?}",
+            lines
+        );
     }
 
     #[test]

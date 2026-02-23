@@ -107,13 +107,7 @@ impl SearchIndex {
     ///
     /// This is idempotent: if a document with the same `doc_id` already exists,
     /// it is deleted before the new version is added.
-    pub fn add_document(
-        &self,
-        doc_id: &str,
-        title: &str,
-        body: &str,
-        folder: &str,
-    ) -> Result<()> {
+    pub fn add_document(&self, doc_id: &str, title: &str, body: &str, folder: &str) -> Result<()> {
         let mut writer = self.writer.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
         // Delete existing document with same doc_id
         let term = Term::from_field_text(self.doc_id_field, doc_id);
@@ -504,7 +498,12 @@ mod tests {
     fn search_by_title_finds_document() {
         let index = create_index();
         index
-            .add_document("doc1", "Quantum Physics", "Introduction to quantum mechanics.", "Lens")
+            .add_document(
+                "doc1",
+                "Quantum Physics",
+                "Introduction to quantum mechanics.",
+                "Lens",
+            )
             .unwrap();
         let results = index.search("Quantum", 10).unwrap();
         assert_eq!(results.len(), 1);
@@ -517,7 +516,12 @@ mod tests {
     fn search_by_body_finds_document() {
         let index = create_index();
         index
-            .add_document("doc1", "Physics Notes", "The Schrodinger equation is fundamental.", "Lens")
+            .add_document(
+                "doc1",
+                "Physics Notes",
+                "The Schrodinger equation is fundamental.",
+                "Lens",
+            )
             .unwrap();
         let results = index.search("Schrodinger", 10).unwrap();
         assert_eq!(results.len(), 1);
@@ -538,15 +542,24 @@ mod tests {
             .unwrap();
         // doc2 has "gravity" in title
         index
-            .add_document("doc2", "Gravity Explained", "An overview of forces.", "Lens")
+            .add_document(
+                "doc2",
+                "Gravity Explained",
+                "An overview of forces.",
+                "Lens",
+            )
             .unwrap();
         let results = index.search("gravity", 10).unwrap();
         assert!(results.len() >= 2, "expected at least 2 results");
         // The title match (doc2) should score higher
         assert_eq!(
-            results[0].doc_id, "doc2",
+            results[0].doc_id,
+            "doc2",
             "title match should rank first, got {:?}",
-            results.iter().map(|r| (&r.doc_id, r.score)).collect::<Vec<_>>()
+            results
+                .iter()
+                .map(|r| (&r.doc_id, r.score))
+                .collect::<Vec<_>>()
         );
         assert!(
             results[0].score > results[1].score,
@@ -630,7 +643,12 @@ mod tests {
             .unwrap();
         // Update with new content
         index
-            .add_document("doc1", "Updated Title", "Completely different body text.", "Lens")
+            .add_document(
+                "doc1",
+                "Updated Title",
+                "Completely different body text.",
+                "Lens",
+            )
             .unwrap();
         // Old content should not be found
         let old_results = index.search("Original", 10).unwrap();
@@ -719,11 +737,20 @@ mod tests {
             )
             .unwrap();
         index
-            .add_document("doc2", "Other Notes", "The quick red car drives fast.", "Lens")
+            .add_document(
+                "doc2",
+                "Other Notes",
+                "The quick red car drives fast.",
+                "Lens",
+            )
             .unwrap();
         // Phrase search should only match doc1
         let results = index.search("\"quick brown fox\"", 10).unwrap();
-        assert_eq!(results.len(), 1, "phrase search should match exactly one doc");
+        assert_eq!(
+            results.len(),
+            1,
+            "phrase search should match exactly one doc"
+        );
         assert_eq!(results[0].doc_id, "doc1");
     }
 
@@ -913,8 +940,8 @@ mod tests {
     fn find_all_ascii_ci_basic() {
         let results = find_all_ascii_ci("Test the test of Testing", "test");
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0], (0, 4));   // "Test"
-        assert_eq!(results[1], (9, 13));  // "test"
+        assert_eq!(results[0], (0, 4)); // "Test"
+        assert_eq!(results[1], (9, 13)); // "test"
         assert_eq!(results[2], (17, 21)); // "Test" in "Testing"
     }
 

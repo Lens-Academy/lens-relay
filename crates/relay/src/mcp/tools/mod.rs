@@ -198,7 +198,12 @@ pub fn tool_definitions() -> Vec<Value> {
 }
 
 /// Dispatch a tool call to the correct handler and wrap result in MCP CallToolResult format.
-pub fn dispatch_tool(server: &Arc<Server>, transport_session_id: &str, name: &str, arguments: &Value) -> Value {
+pub fn dispatch_tool(
+    server: &Arc<Server>,
+    transport_session_id: &str,
+    name: &str,
+    arguments: &Value,
+) -> Value {
     // create_session returns the transport session_id — no argument validation needed
     if name == "create_session" {
         return tool_success(transport_session_id);

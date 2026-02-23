@@ -34,7 +34,6 @@ use tokio::{
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{span, Instrument, Level};
 use url::Url;
-use yrs::{Array, GetString, Map, ReadTxn, Transact, WriteTxn};
 use y_sweet_core::{
     api_types::{
         validate_doc_name, validate_file_hash, AuthDocRequest, Authorization, ClientToken,
@@ -43,12 +42,12 @@ use y_sweet_core::{
     },
     auth::{Authenticator, ExpirationTimeEpochMillis, Permission, DEFAULT_EXPIRATION_SECONDS},
     doc_connection::DocConnection,
+    doc_resolver::DocumentResolver,
     doc_sync::DocWithSyncKv,
     event::{
         DebouncedSyncProtocolEventSender, DocumentUpdatedEvent, EventDispatcher, EventEnvelope,
         EventSender, SyncProtocolEventSender, UnifiedEventDispatcher, WebhookSender,
     },
-    doc_resolver::DocumentResolver,
     link_indexer::{self, LinkIndexer},
     metrics::RelayMetrics,
     search_index::SearchIndex,
@@ -57,6 +56,7 @@ use y_sweet_core::{
     sync_kv::SyncKv,
     webhook::WebhookConfig,
 };
+use yrs::{Array, GetString, Map, ReadTxn, Transact, WriteTxn};
 
 const RELAY_SERVER_VERSION: &str = env!("GIT_VERSION");
 
@@ -212,8 +212,7 @@ async fn search_worker(
     tracing::info!("Search index worker started");
 
     // Cache of folder doc -> { uuid -> (path, title) } for detecting adds/removes
-    let filemeta_cache: DashMap<String, std::collections::HashMap<String, String>> =
-        DashMap::new();
+    let filemeta_cache: DashMap<String, std::collections::HashMap<String, String>> = DashMap::new();
 
     loop {
         match rx.recv().await {
@@ -332,7 +331,8 @@ fn search_find_title_and_folder(
                         .unwrap_or(path_str)
                         .to_string();
 
-                    let folder_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+                    let folder_name =
+                        y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
 
                     return (title, folder_name);
                 }
@@ -386,9 +386,7 @@ async fn search_handle_folder_update(
     };
 
     // Get old snapshot from cache
-    let old_map = filemeta_cache
-        .get(folder_doc_id)
-        .map(|r| r.clone());
+    let old_map = filemeta_cache.get(folder_doc_id).map(|r| r.clone());
 
     // Update cache with current snapshot
     filemeta_cache.insert(folder_doc_id.to_string(), current_map.clone());
@@ -613,7 +611,10 @@ impl Server {
             drained += 1;
         }
         if drained > 0 {
-            tracing::info!("Drained {} stale link indexer messages from startup", drained);
+            tracing::info!(
+                "Drained {} stale link indexer messages from startup",
+                drained
+            );
         }
 
         // Also drain the link indexer's pending map so the worker starts clean
@@ -627,13 +628,11 @@ impl Server {
             let indexer_for_worker = indexer.clone();
             let resolver_for_indexer = self.doc_resolver.clone();
             tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(
-                    indexer_for_worker.run_worker(
-                        index_rx,
-                        docs_for_indexer,
-                        resolver_for_indexer,
-                    ),
-                );
+                let result = std::panic::AssertUnwindSafe(indexer_for_worker.run_worker(
+                    index_rx,
+                    docs_for_indexer,
+                    resolver_for_indexer,
+                ));
                 if let Err(e) = futures::FutureExt::catch_unwind(result).await {
                     let msg = if let Some(s) = e.downcast_ref::<&str>() {
                         s.to_string()
@@ -658,7 +657,10 @@ impl Server {
             }
             search_pending.clear();
             if search_drained > 0 {
-                tracing::info!("Drained {} stale search index messages from startup", search_drained);
+                tracing::info!(
+                    "Drained {} stale search index messages from startup",
+                    search_drained
+                );
             }
             if let Some(ref si) = self.search_index {
                 let si_for_worker = si.clone();
@@ -861,86 +863,47 @@ impl Server {
             let doc_key_for_indexer = doc_id.to_string();
 
             if let Some(dispatcher) = event_dispatcher {
-                Some(Arc::new(move |mut event: DocumentUpdatedEvent, is_indexer: bool| {
-                    // Add user to event if available
-                    if let Some(ref user) = user_for_callback {
-                        event.user = Some(user.clone());
-                    }
-
-                    // Log the full event payload as JSON after user assignment
-                    match serde_json::to_string(&event) {
-                        Ok(json_str) => {
-                            tracing::debug!("Document updated event dispatched: {}", json_str);
+                Some(
+                    Arc::new(move |mut event: DocumentUpdatedEvent, is_indexer: bool| {
+                        // Add user to event if available
+                        if let Some(ref user) = user_for_callback {
+                            event.user = Some(user.clone());
                         }
-                        Err(e) => {
-                            tracing::debug!(
+
+                        // Log the full event payload as JSON after user assignment
+                        match serde_json::to_string(&event) {
+                            Ok(json_str) => {
+                                tracing::debug!("Document updated event dispatched: {}", json_str);
+                            }
+                            Err(e) => {
+                                tracing::debug!(
                                 "Document updated event dispatched for doc_id: {} (JSON serialization failed: {})",
                                 event.doc_id, e
                             );
-                        }
-                    }
-
-                    // Step 1: Create the envelope with predetermined routing channel
-                    let envelope = EventEnvelope::new(routing_channel_for_callback.clone(), event);
-
-                    // Step 2: Send via dispatcher
-                    dispatcher.send_event(envelope);
-
-                    // Notify link indexer (if this update is not from the indexer itself)
-                    if !is_indexer {
-                        if let Some(ref indexer) = link_indexer_for_callback {
-                            let indexer = indexer.clone();
-                            let doc_key = doc_key_for_indexer.clone();
-                            tokio::spawn(async move {
-                                indexer.on_document_update(&doc_key).await;
-                            });
-                        }
-
-                        // Notify search index worker (with deduplication)
-                        if let Some(ref tx) = search_tx_for_callback {
-                            if let Some(ref pending) = search_pending_for_callback {
-                                let is_new = match pending.entry(doc_key_for_indexer.clone()) {
-                                    Entry::Occupied(mut e) => {
-                                        e.insert(tokio::time::Instant::now());
-                                        false
-                                    }
-                                    Entry::Vacant(e) => {
-                                        e.insert(tokio::time::Instant::now());
-                                        true
-                                    }
-                                };
-                                if is_new {
-                                    if let Err(e) = tx.try_send(doc_key_for_indexer.clone()) {
-                                        tracing::error!("Search index channel send failed (worker dead?): {e}");
-                                    }
-                                }
                             }
                         }
-                    }
-                }) as y_sweet_core::webhook::WebhookCallback)
-            } else {
-                // Even without event dispatcher, we still want indexing
-                let has_indexer = link_indexer_for_callback.is_some();
-                let has_search = search_tx_for_callback.is_some();
-                if has_indexer || has_search {
-                    let indexer = link_indexer_for_callback.clone();
-                    let search_tx = search_tx_for_callback.clone();
-                    let search_pending = search_pending_for_callback.clone();
-                    let doc_key = doc_key_for_indexer.clone();
-                    Some(Arc::new(move |_event: DocumentUpdatedEvent, is_indexer: bool| {
+
+                        // Step 1: Create the envelope with predetermined routing channel
+                        let envelope =
+                            EventEnvelope::new(routing_channel_for_callback.clone(), event);
+
+                        // Step 2: Send via dispatcher
+                        dispatcher.send_event(envelope);
+
+                        // Notify link indexer (if this update is not from the indexer itself)
                         if !is_indexer {
-                            if let Some(ref indexer) = indexer {
+                            if let Some(ref indexer) = link_indexer_for_callback {
                                 let indexer = indexer.clone();
-                                let doc_key = doc_key.clone();
+                                let doc_key = doc_key_for_indexer.clone();
                                 tokio::spawn(async move {
                                     indexer.on_document_update(&doc_key).await;
                                 });
                             }
 
                             // Notify search index worker (with deduplication)
-                            if let Some(ref tx) = search_tx {
-                                if let Some(ref pending) = search_pending {
-                                    let is_new = match pending.entry(doc_key.clone()) {
+                            if let Some(ref tx) = search_tx_for_callback {
+                                if let Some(ref pending) = search_pending_for_callback {
+                                    let is_new = match pending.entry(doc_key_for_indexer.clone()) {
                                         Entry::Occupied(mut e) => {
                                             e.insert(tokio::time::Instant::now());
                                             false
@@ -951,14 +914,58 @@ impl Server {
                                         }
                                     };
                                     if is_new {
-                                        if let Err(e) = tx.try_send(doc_key.clone()) {
+                                        if let Err(e) = tx.try_send(doc_key_for_indexer.clone()) {
                                             tracing::error!("Search index channel send failed (worker dead?): {e}");
                                         }
                                     }
                                 }
                             }
                         }
-                    }) as y_sweet_core::webhook::WebhookCallback)
+                    }) as y_sweet_core::webhook::WebhookCallback,
+                )
+            } else {
+                // Even without event dispatcher, we still want indexing
+                let has_indexer = link_indexer_for_callback.is_some();
+                let has_search = search_tx_for_callback.is_some();
+                if has_indexer || has_search {
+                    let indexer = link_indexer_for_callback.clone();
+                    let search_tx = search_tx_for_callback.clone();
+                    let search_pending = search_pending_for_callback.clone();
+                    let doc_key = doc_key_for_indexer.clone();
+                    Some(
+                        Arc::new(move |_event: DocumentUpdatedEvent, is_indexer: bool| {
+                            if !is_indexer {
+                                if let Some(ref indexer) = indexer {
+                                    let indexer = indexer.clone();
+                                    let doc_key = doc_key.clone();
+                                    tokio::spawn(async move {
+                                        indexer.on_document_update(&doc_key).await;
+                                    });
+                                }
+
+                                // Notify search index worker (with deduplication)
+                                if let Some(ref tx) = search_tx {
+                                    if let Some(ref pending) = search_pending {
+                                        let is_new = match pending.entry(doc_key.clone()) {
+                                            Entry::Occupied(mut e) => {
+                                                e.insert(tokio::time::Instant::now());
+                                                false
+                                            }
+                                            Entry::Vacant(e) => {
+                                                e.insert(tokio::time::Instant::now());
+                                                true
+                                            }
+                                        };
+                                        if is_new {
+                                            if let Err(e) = tx.try_send(doc_key.clone()) {
+                                                tracing::error!("Search index channel send failed (worker dead?): {e}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }) as y_sweet_core::webhook::WebhookCallback,
+                    )
                 } else {
                     None
                 }
@@ -1027,10 +1034,14 @@ impl Server {
     /// Enumerates all doc IDs in the store and calls `load_doc()` for each.
     /// Used on startup to populate the in-memory doc map before reindexing backlinks.
     pub async fn load_all_docs(&self) -> Result<usize> {
-        let store = self.store.as_ref()
+        let store = self
+            .store
+            .as_ref()
             .ok_or_else(|| anyhow!("No store configured — cannot load docs from storage"))?;
 
-        let doc_ids = store.list_doc_ids().await
+        let doc_ids = store
+            .list_doc_ids()
+            .await
             .map_err(|e| anyhow!("Failed to list doc IDs from storage: {:?}", e))?;
 
         let total = doc_ids.len();
@@ -1038,7 +1049,9 @@ impl Server {
 
         // Temporarily disable GC during bulk loading — all docs would be
         // immediately GCed since no clients are connected yet.
-        let gc_was_enabled = self.doc_gc.swap(false, std::sync::atomic::Ordering::Relaxed);
+        let gc_was_enabled = self
+            .doc_gc
+            .swap(false, std::sync::atomic::Ordering::Relaxed);
 
         let loaded = std::sync::atomic::AtomicUsize::new(0);
         let failed = std::sync::atomic::AtomicUsize::new(0);
@@ -1074,11 +1087,14 @@ impl Server {
         let failed = failed.load(std::sync::atomic::Ordering::Relaxed);
 
         // Restore GC setting
-        self.doc_gc.store(gc_was_enabled, std::sync::atomic::Ordering::Relaxed);
+        self.doc_gc
+            .store(gc_was_enabled, std::sync::atomic::Ordering::Relaxed);
 
         tracing::info!(
             "Document loading complete: {} loaded, {} failed, {} total in storage",
-            loaded, failed, total
+            loaded,
+            failed,
+            total
         );
         Ok(loaded)
     }
@@ -1088,7 +1104,10 @@ impl Server {
     /// For each configured folder, finds the folder doc whose doc_id ends with
     /// the configured UUID, reads the current `folder_config.name` from the Y.Doc,
     /// and writes the configured name if different. Persists changed docs to storage.
-    async fn apply_folder_names(&self, folders: &[y_sweet_core::config::FolderConfig]) -> Result<()> {
+    async fn apply_folder_names(
+        &self,
+        folders: &[y_sweet_core::config::FolderConfig],
+    ) -> Result<()> {
         if folders.is_empty() {
             return Ok(());
         }
@@ -1119,7 +1138,8 @@ impl Server {
             let needs_update = {
                 let awareness = doc_ref.awareness();
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                let current_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+                let current_name =
+                    y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
                 current_name != folder_config.name
             };
 
@@ -1137,12 +1157,21 @@ impl Server {
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let mut txn = guard.doc.transact_mut();
                 let config_map = txn.get_or_insert_map("folder_config");
-                config_map.insert(&mut txn, "name", yrs::Any::String(folder_config.name.clone().into()));
+                config_map.insert(
+                    &mut txn,
+                    "name",
+                    yrs::Any::String(folder_config.name.clone().into()),
+                );
             }
 
             // Persist to storage
-            doc_ref.sync_kv().persist().await
-                .map_err(|e| anyhow!("Failed to persist folder name for '{}': {:?}", folder_config.name, e))?;
+            doc_ref.sync_kv().persist().await.map_err(|e| {
+                anyhow!(
+                    "Failed to persist folder name for '{}': {:?}",
+                    folder_config.name,
+                    e
+                )
+            })?;
 
             tracing::info!(
                 "Applied folder name '{}' to doc {}",
@@ -1163,7 +1192,10 @@ impl Server {
     ///
     /// Called once on startup, before accepting connections.
     /// No-op if no store is configured (in-memory mode).
-    pub async fn startup_reindex(&self, folders: &[y_sweet_core::config::FolderConfig]) -> Result<()> {
+    pub async fn startup_reindex(
+        &self,
+        folders: &[y_sweet_core::config::FolderConfig],
+    ) -> Result<()> {
         if self.store.is_none() {
             tracing::info!("No store configured, skipping startup reindex");
             // Even without a store, mark search as ready (empty index)
@@ -1205,16 +1237,15 @@ impl Server {
                 };
                 let awareness = doc_ref.awareness();
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                let folder_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+                let folder_name =
+                    y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
                 let txn = guard.doc.transact();
                 let Some(filemeta) = txn.get_map("filemeta_v0") else {
                     continue;
                 };
 
                 for (path, value) in filemeta.iter(&txn) {
-                    if let Some(uuid) =
-                        link_indexer::extract_id_from_filemeta_entry(&value, &txn)
-                    {
+                    if let Some(uuid) = link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
                         // Extract title: strip leading "/" and trailing ".md", take basename
                         let title = path
                             .strip_prefix('/')
@@ -1242,9 +1273,7 @@ impl Server {
                 // Search through all loaded docs for one ending with this UUID
                 let mut body = String::new();
                 for entry in self.docs.iter() {
-                    if let Some((_relay_id, doc_uuid)) =
-                        link_indexer::parse_doc_id(entry.key())
-                    {
+                    if let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(entry.key()) {
                         if doc_uuid == uuid {
                             let awareness = entry.value().awareness();
                             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
@@ -1260,11 +1289,7 @@ impl Server {
                 match search_index.add_document_buffered(uuid, title, &body, folder_name) {
                     Ok(()) => indexed += 1,
                     Err(e) => {
-                        tracing::error!(
-                            "Failed to index doc {} into search: {:?}",
-                            uuid,
-                            e
-                        );
+                        tracing::error!("Failed to index doc {} into search: {:?}", uuid, e);
                     }
                 }
             }
@@ -1497,13 +1522,12 @@ impl Server {
                 ));
 
             // Path-key auth: POST/GET/DELETE /mcp/:key (for claude.ai connectors)
-            let path_key_routes = Router::new()
-                .route(
-                    "/:key",
-                    post(crate::mcp::transport::handle_mcp_post_with_key)
-                        .get(crate::mcp::transport::handle_mcp_get_with_key)
-                        .delete(crate::mcp::transport::handle_mcp_delete_with_key),
-                );
+            let path_key_routes = Router::new().route(
+                "/:key",
+                post(crate::mcp::transport::handle_mcp_post_with_key)
+                    .get(crate::mcp::transport::handle_mcp_get_with_key)
+                    .delete(crate::mcp::transport::handle_mcp_delete_with_key),
+            );
 
             let mcp_routes = bearer_routes
                 .merge(path_key_routes)
@@ -2204,9 +2228,7 @@ async fn handle_move_document(
             let txn = guard.doc.transact();
             if let Some(filemeta) = txn.get_map("filemeta_v0") {
                 for (_path, value) in filemeta.iter(&txn) {
-                    if let Some(id) =
-                        link_indexer::extract_id_from_filemeta_entry(&value, &txn)
-                    {
+                    if let Some(id) = link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
                         if id == body.uuid {
                             source_folder_doc_id = Some(folder_doc_id.clone());
                             break;
@@ -2254,10 +2276,7 @@ async fn handle_move_document(
                 if filemeta.get(&txn, &body.new_path).is_some() {
                     return Err(AppError(
                         StatusCode::CONFLICT,
-                        anyhow!(
-                            "Path '{}' already exists in target folder",
-                            body.new_path
-                        ),
+                        anyhow!("Path '{}' already exists in target folder", body.new_path),
                     ));
                 }
             }
@@ -2290,7 +2309,13 @@ async fn handle_move_document(
             .map(|(r, _)| r.to_string())
             .unwrap_or_default();
 
-        (folder_doc_ids, source_folder_doc_id, target_folder_doc_id, relay_id, needed_uuids)
+        (
+            folder_doc_ids,
+            source_folder_doc_id,
+            target_folder_doc_id,
+            relay_id,
+            needed_uuids,
+        )
     }; // All DashMap refs and awareness guards dropped here
 
     // Pre-load backlinker + moved docs from storage if not already in DashMap.
@@ -2310,7 +2335,8 @@ async fn handle_move_document(
             if let Err(e) = server_state.load_doc(content_id, None).await {
                 tracing::warn!(
                     "Failed to load backlinker doc {} from storage: {:?}",
-                    content_id, e
+                    content_id,
+                    e
                 );
                 // Continue — move succeeds even if some backlinkers can't be updated.
                 // Background worker will retry if the doc gets loaded later.
@@ -2329,10 +2355,7 @@ async fn handle_move_document(
             .iter()
             .filter_map(|id| docs.get(id))
             .collect();
-        let folder_awareness: Vec<_> = folder_refs
-            .iter()
-            .map(|r| r.awareness())
-            .collect();
+        let folder_awareness: Vec<_> = folder_refs.iter().map(|r| r.awareness()).collect();
         let folder_guards: Vec<_> = folder_awareness
             .iter()
             .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
@@ -2379,10 +2402,7 @@ async fn handle_move_document(
             .iter()
             .filter_map(|id| docs.get(id))
             .collect();
-        let content_awareness: Vec<_> = content_refs
-            .iter()
-            .map(|r| r.awareness())
-            .collect();
+        let content_awareness: Vec<_> = content_refs.iter().map(|r| r.awareness()).collect();
         let content_guards: Vec<_> = content_awareness
             .iter()
             .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
@@ -2962,7 +2982,8 @@ async fn handle_file_download_url(
                                     )
                                 })?;
                             let separator = if download_url.contains('?') { "&" } else { "?" };
-                            download_url = format!("{}{}token={}", download_url, separator, file_token);
+                            download_url =
+                                format!("{}{}token={}", download_url, separator, file_token);
                         }
                         return Ok(Json(FileDownloadUrlResponse { download_url }));
                     } else {
@@ -3040,7 +3061,8 @@ async fn handle_file_download_url(
                                     )
                                 })?;
                             let separator = if download_url.contains('?') { "&" } else { "?" };
-                            download_url = format!("{}{}token={}", download_url, separator, file_token);
+                            download_url =
+                                format!("{}{}token={}", download_url, separator, file_token);
                         }
                         return Ok(Json(FileDownloadUrlResponse { download_url }));
                     } else {
@@ -4155,7 +4177,8 @@ mod test {
         .await
         .unwrap();
 
-        let full_compound = "a0000000-0000-4000-8000-000000000000-c0000001-0000-4000-8000-000000000001";
+        let full_compound =
+            "a0000000-0000-4000-8000-000000000000-c0000001-0000-4000-8000-000000000001";
         server_state.load_doc(full_compound, None).await.unwrap();
         let short_compound = "a0000000-0000-4000-8000-000000000000-c0000001";
         let server = Arc::new(server_state);
@@ -4201,13 +4224,9 @@ mod test {
         let doc_id = server_state.create_doc().await.unwrap();
         let prefix = doc_id[..8].to_string();
 
-        let result = resolve_doc(
-            None,
-            State(Arc::new(server_state)),
-            Path(prefix),
-        )
-        .await
-        .unwrap();
+        let result = resolve_doc(None, State(Arc::new(server_state)), Path(prefix))
+            .await
+            .unwrap();
 
         let resolved_id = result.0["docId"].as_str().unwrap();
         assert_eq!(resolved_id, doc_id);

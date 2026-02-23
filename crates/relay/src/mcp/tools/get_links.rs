@@ -1,10 +1,10 @@
 use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
+use y_sweet_core::doc_resolver::read_folder_name;
 use y_sweet_core::link_indexer;
 use y_sweet_core::link_parser;
 use yrs::{GetString, Map, ReadTxn, Transact};
-use y_sweet_core::doc_resolver::read_folder_name;
 
 /// Execute the `get_links` tool: return backlinks and forward links for a document.
 pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
@@ -133,7 +133,8 @@ fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
     }
 
     // Find source virtual path
-    let source_virtual_path: Option<String> = virtual_entries.iter()
+    let source_virtual_path: Option<String> = virtual_entries
+        .iter()
         .find(|e| e.id == doc_uuid)
         .map(|e| e.virtual_path.clone());
 
@@ -151,7 +152,10 @@ fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
                 forward_links.push(path);
             } else {
                 // Fallback: construct from virtual path (strip leading /)
-                let stripped = entry.virtual_path.strip_prefix('/').unwrap_or(&entry.virtual_path);
+                let stripped = entry
+                    .virtual_path
+                    .strip_prefix('/')
+                    .unwrap_or(&entry.virtual_path);
                 forward_links.push(stripped.to_string());
             }
         }

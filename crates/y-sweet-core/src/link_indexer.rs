@@ -1,6 +1,9 @@
 use crate::doc_resolver::{read_folder_name, DocInfo, DocumentResolver};
 use crate::doc_sync::DocWithSyncKv;
-use crate::link_parser::{compute_wikilink_move_edits, compute_wikilink_rename_edits, compute_wikilink_rename_edits_resolved, extract_wikilinks};
+use crate::link_parser::{
+    compute_wikilink_move_edits, compute_wikilink_rename_edits,
+    compute_wikilink_rename_edits_resolved, extract_wikilinks,
+};
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -125,7 +128,11 @@ pub fn find_path_for_uuid(filemeta: &MapRef, txn: &impl ReadTxn, uuid: &str) -> 
 }
 
 /// Read a backlinks array for a given target UUID from a backlinks_v0 Y.Map.
-pub fn read_backlinks_array(backlinks: &MapRef, txn: &impl ReadTxn, target_uuid: &str) -> Vec<String> {
+pub fn read_backlinks_array(
+    backlinks: &MapRef,
+    txn: &impl ReadTxn,
+    target_uuid: &str,
+) -> Vec<String> {
     backlinks
         .get(txn, target_uuid)
         .and_then(|v| {
@@ -281,7 +288,8 @@ pub fn build_virtual_entries(folder_docs: &[&Doc], folder_names: &[&str]) -> Vec
 /// Find all loaded folder docs (docs with non-empty filemeta_v0).
 /// Returns doc_ids of all folder docs.
 pub fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String> {
-    let mut result: Vec<String> = docs.iter()
+    let mut result: Vec<String> = docs
+        .iter()
         .filter_map(|entry| {
             let awareness = entry.value().awareness();
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
@@ -351,16 +359,22 @@ pub fn index_content_into_folders(
     let link_names = extract_wikilinks(&markdown);
     tracing::info!(
         "Doc {}: content length={}, wikilinks={:?}",
-        source_uuid, markdown.len(), link_names
+        source_uuid,
+        markdown.len(),
+        link_names
     );
-    let folder_name_strings: Vec<String> = folder_docs.iter()
+    let folder_name_strings: Vec<String> = folder_docs
+        .iter()
         .map(|doc| read_folder_name(doc, ""))
         .collect();
-    let folder_name_strs: Vec<&str> = folder_name_strings.iter()
-        .map(|s| s.as_str())
-        .collect();
-    index_content_into_folders_from_text(source_uuid, &markdown, &link_names, folder_docs, &folder_name_strs)
-
+    let folder_name_strs: Vec<&str> = folder_name_strings.iter().map(|s| s.as_str()).collect();
+    index_content_into_folders_from_text(
+        source_uuid,
+        &markdown,
+        &link_names,
+        folder_docs,
+        &folder_name_strs,
+    )
 }
 
 /// Core indexing logic: resolves wikilinks against folder docs and updates backlinks_v0.
@@ -377,7 +391,8 @@ fn index_content_into_folders_from_text(
     let entries = build_virtual_entries(folder_docs, folder_names);
 
     // Find source's virtual path
-    let source_virtual_path: Option<String> = entries.iter()
+    let source_virtual_path: Option<String> = entries
+        .iter()
         .find(|e| e.id == source_uuid)
         .map(|e| e.virtual_path.clone());
 
@@ -385,18 +400,18 @@ fn index_content_into_folders_from_text(
     let mut resolved: Vec<(String, usize)> = Vec::new();
 
     for name in link_names {
-        if let Some(entry) = resolve_in_virtual_tree(
-            name,
-            source_virtual_path.as_deref(),
-            &entries,
-        ) {
+        if let Some(entry) = resolve_in_virtual_tree(name, source_virtual_path.as_deref(), &entries)
+        {
             resolved.push((entry.id.clone(), entry.folder_idx));
         }
     }
 
     tracing::info!(
         "Doc {}: resolved {} links -> {} targets across {} folders",
-        source_uuid, link_names.len(), resolved.len(), folder_docs.len()
+        source_uuid,
+        link_names.len(),
+        resolved.len(),
+        folder_docs.len()
     );
 
     // Group resolved targets by folder index
@@ -418,10 +433,7 @@ fn index_content_into_folders_from_text(
             if !current.contains(&source_uuid.to_string()) {
                 let mut updated = current;
                 updated.push(source_uuid.to_string());
-                let arr: Vec<Any> = updated
-                    .into_iter()
-                    .map(|s| Any::String(s.into()))
-                    .collect();
+                let arr: Vec<Any> = updated.into_iter().map(|s| Any::String(s.into())).collect();
                 backlinks.insert(&mut txn, target_uuid.as_str(), arr);
             }
         }
@@ -438,10 +450,8 @@ fn index_content_into_folders_from_text(
                 if updated.is_empty() {
                     backlinks.remove(&mut txn, &key);
                 } else {
-                    let arr: Vec<Any> = updated
-                        .into_iter()
-                        .map(|s| Any::String(s.into()))
-                        .collect();
+                    let arr: Vec<Any> =
+                        updated.into_iter().map(|s| Any::String(s.into())).collect();
                     backlinks.insert(&mut txn, key.as_str(), arr);
                 }
             }
@@ -458,10 +468,7 @@ fn index_content_into_folders_from_text(
 /// UUID with no backlinks is a no-op.
 ///
 /// Returns the number of backlink arrays modified.
-pub fn remove_doc_from_backlinks(
-    source_uuid: &str,
-    folder_docs: &[&Doc],
-) -> anyhow::Result<usize> {
+pub fn remove_doc_from_backlinks(source_uuid: &str, folder_docs: &[&Doc]) -> anyhow::Result<usize> {
     let mut modified_count = 0;
 
     for folder_doc in folder_docs {
@@ -477,10 +484,8 @@ pub fn remove_doc_from_backlinks(
                 if updated.is_empty() {
                     backlinks.remove(&mut txn, &key);
                 } else {
-                    let arr: Vec<Any> = updated
-                        .into_iter()
-                        .map(|s| Any::String(s.into()))
-                        .collect();
+                    let arr: Vec<Any> =
+                        updated.into_iter().map(|s| Any::String(s.into())).collect();
                     backlinks.insert(&mut txn, key.as_str(), arr);
                 }
                 modified_count += 1;
@@ -534,7 +539,8 @@ pub fn move_document(
     // 1. Find the UUID in source filemeta_v0, extract old path + metadata fields
     let (old_path, meta_fields) = {
         let txn = source_folder_doc.transact();
-        let filemeta = txn.get_map("filemeta_v0")
+        let filemeta = txn
+            .get_map("filemeta_v0")
             .ok_or_else(|| anyhow::anyhow!("source folder doc has no filemeta_v0"))?;
 
         let mut found: Option<(String, HashMap<String, Any>)> = None;
@@ -591,18 +597,22 @@ pub fn move_document(
 
     // Build DocInfo for the resolver -- we need relay_id and folder_doc_id
     // Try to get them from the existing resolver entry, or construct minimal ones
-    let (relay_id, folder_doc_id) = if let Some(old_info) = doc_resolver.path_for_uuid(uuid)
+    let (relay_id, folder_doc_id) = if let Some(old_info) = doc_resolver
+        .path_for_uuid(uuid)
         .and_then(|p| doc_resolver.resolve_path(&p))
     {
-        (old_info.relay_id.clone(), if is_cross_folder {
-            // For cross-folder, we don't know the new folder_doc_id from here,
-            // but we can try to find it from the resolver's existing entries
-            // for the target folder. For now, keep old folder_doc_id and let
-            // the HTTP handler update it. In tests, this field isn't checked.
-            old_info.folder_doc_id.clone()
-        } else {
-            old_info.folder_doc_id.clone()
-        })
+        (
+            old_info.relay_id.clone(),
+            if is_cross_folder {
+                // For cross-folder, we don't know the new folder_doc_id from here,
+                // but we can try to find it from the resolver's existing entries
+                // for the target folder. For now, keep old folder_doc_id and let
+                // the HTTP handler update it. In tests, this field isn't checked.
+                old_info.folder_doc_id.clone()
+            } else {
+                old_info.folder_doc_id.clone()
+            },
+        )
     } else {
         (String::new(), String::new())
     };
@@ -652,7 +662,8 @@ pub fn move_document(
     for backlinker_uuid in &all_backlinker_uuids {
         if let Some(content_doc) = content_docs.get(backlinker_uuid) {
             // Find the backlinker's virtual path for resolution context
-            let source_virtual_path: Option<&str> = entries.iter()
+            let source_virtual_path: Option<&str> = entries
+                .iter()
                 .find(|e| e.id == *backlinker_uuid)
                 .map(|e| e.virtual_path.as_str());
 
@@ -668,7 +679,8 @@ pub fn move_document(
                     Err(e) => {
                         tracing::error!(
                             "Failed to update wikilinks in backlinker {}: {:?}",
-                            backlinker_uuid, e
+                            backlinker_uuid,
+                            e
                         );
                     }
                 }
@@ -809,16 +821,11 @@ pub fn update_wikilinks_in_doc_resolved(
     } else {
         // Resolution-aware -- only edit links that resolve to the renamed file
         let old_target_lower = old_target_virtual_path.to_lowercase();
-        compute_wikilink_rename_edits_resolved(
-            &plain_text,
-            old_name,
-            new_name,
-            |link_name| {
-                resolve_in_virtual_tree(link_name, source_virtual_path, entries)
-                    .map(|e| e.virtual_path.to_lowercase() == old_target_lower)
-                    .unwrap_or(false)
-            },
-        )
+        compute_wikilink_rename_edits_resolved(&plain_text, old_name, new_name, |link_name| {
+            resolve_in_virtual_tree(link_name, source_virtual_path, entries)
+                .map(|e| e.virtual_path.to_lowercase() == old_target_lower)
+                .unwrap_or(false)
+        })
     };
 
     if edits.is_empty() {
@@ -1091,7 +1098,11 @@ impl LinkIndexer {
     /// 4. Resolves each wikilink to confirm it points to the renamed file
     /// 5. Calls `update_wikilinks_in_doc_resolved()` for disambiguation
     /// Returns `true` if renames were detected and processed.
-    fn apply_rename_updates(&self, folder_doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) -> bool {
+    fn apply_rename_updates(
+        &self,
+        folder_doc_id: &str,
+        docs: &DashMap<String, DocWithSyncKv>,
+    ) -> bool {
         // 1. Get the folder doc, detect renames, read folder name
         let (renames, folder_name) = {
             let Some(doc_ref) = docs.get(folder_doc_id) else {
@@ -1132,8 +1143,8 @@ impl LinkIndexer {
                 if let Some(filemeta) = txn.get_map("filemeta_v0") {
                     for (path, value) in filemeta.iter(&txn) {
                         if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
-                            let entry_type = extract_type_from_filemeta_entry(&value, &txn)
-                                .unwrap_or_default();
+                            let entry_type =
+                                extract_type_from_filemeta_entry(&value, &txn).unwrap_or_default();
                             entries.push(VirtualEntry {
                                 virtual_path: format!("/{}{}", fname, path),
                                 entry_type,
@@ -1180,14 +1191,18 @@ impl LinkIndexer {
             if source_uuids.is_empty() {
                 tracing::info!(
                     "Rename {} -> {}: no backlinkers for uuid {}",
-                    rename.old_name, rename.new_name, rename.uuid
+                    rename.old_name,
+                    rename.new_name,
+                    rename.uuid
                 );
                 continue;
             }
 
             tracing::info!(
                 "Rename {} -> {}: updating {} backlinker(s)",
-                rename.old_name, rename.new_name, source_uuids.len()
+                rename.old_name,
+                rename.new_name,
+                source_uuids.len()
             );
 
             // 5. Update wikilinks in each source doc with resolution context
@@ -1201,7 +1216,8 @@ impl LinkIndexer {
                     continue;
                 };
 
-                let source_virtual_path = entries.iter()
+                let source_virtual_path = entries
+                    .iter()
                     .find(|e| e.id == *source_uuid)
                     .map(|e| e.virtual_path.clone());
 
@@ -1218,13 +1234,17 @@ impl LinkIndexer {
                     Ok(count) => {
                         tracing::info!(
                             "Updated {} wikilink(s) in {} ({} -> {})",
-                            count, content_doc_id, rename.old_name, rename.new_name
+                            count,
+                            content_doc_id,
+                            rename.old_name,
+                            rename.new_name
                         );
                     }
                     Err(e) => {
                         tracing::error!(
                             "Failed to update wikilinks in {}: {:?}",
-                            content_doc_id, e
+                            content_doc_id,
+                            e
                         );
                     }
                 }
@@ -1291,7 +1311,8 @@ impl LinkIndexer {
                         if !had_renames {
                             tracing::info!(
                                 "Folder doc {} has {} content docs, re-queuing loaded ones",
-                                doc_id, content_uuids.len()
+                                doc_id,
+                                content_uuids.len()
                             );
                             let relay_id = parse_doc_id(&doc_id)
                                 .map(|(r, _)| r)
@@ -1364,7 +1385,9 @@ impl LinkIndexer {
         let link_names = extract_wikilinks(&markdown);
         tracing::info!(
             "Doc {}: content length={}, wikilinks={:?}",
-            doc_uuid, markdown.len(), link_names
+            doc_uuid,
+            markdown.len(),
+            link_names
         );
 
         // Phase 2: Take write locks on folder docs to resolve links and update backlinks.
@@ -1372,27 +1395,26 @@ impl LinkIndexer {
             .iter()
             .filter_map(|id| docs.get(id))
             .collect();
-        let folder_awarenesses: Vec<_> = folder_refs
-            .iter()
-            .map(|r| r.awareness())
-            .collect();
+        let folder_awarenesses: Vec<_> = folder_refs.iter().map(|r| r.awareness()).collect();
         let folder_guards: Vec<_> = folder_awarenesses
             .iter()
             .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
             .collect();
-        let folder_doc_refs: Vec<&Doc> = folder_guards
-            .iter()
-            .map(|g| &g.doc)
-            .collect();
+        let folder_doc_refs: Vec<&Doc> = folder_guards.iter().map(|g| &g.doc).collect();
 
-        let folder_name_strings: Vec<String> = folder_doc_refs.iter()
+        let folder_name_strings: Vec<String> = folder_doc_refs
+            .iter()
             .zip(folder_doc_ids.iter())
             .map(|(doc, id)| read_folder_name(doc, id))
             .collect();
-        let folder_name_strs: Vec<&str> = folder_name_strings.iter()
-            .map(|s| s.as_str())
-            .collect();
-        index_content_into_folders_from_text(doc_uuid, &markdown, &link_names, &folder_doc_refs, &folder_name_strs)
+        let folder_name_strs: Vec<&str> = folder_name_strings.iter().map(|s| s.as_str()).collect();
+        index_content_into_folders_from_text(
+            doc_uuid,
+            &markdown,
+            &link_names,
+            &folder_doc_refs,
+            &folder_name_strs,
+        )
     }
 
     /// Reindex all backlinks by scanning every loaded document.
@@ -1436,7 +1458,10 @@ impl LinkIndexer {
                 self.detect_renames(folder_doc_id, &guard.doc);
             }
         }
-        tracing::info!("Seeded filemeta cache for {} folder docs", folder_doc_ids.len());
+        tracing::info!(
+            "Seeded filemeta cache for {} folder docs",
+            folder_doc_ids.len()
+        );
 
         Ok(())
     }
@@ -1450,7 +1475,7 @@ impl LinkIndexer {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use yrs::{Doc, GetString, Map, Text, Transact, WriteTxn, Any};
+    use yrs::{Any, Doc, GetString, Map, Text, Transact, WriteTxn};
 
     // === Debounce pipeline tests ===
 
@@ -1482,13 +1507,19 @@ mod tests {
         }
 
         // Not ready yet (last update was just now)
-        assert!(!indexer.is_ready("doc-1"), "should not be ready during rapid updates");
+        assert!(
+            !indexer.is_ready("doc-1"),
+            "should not be ready during rapid updates"
+        );
 
         // Wait for full debounce duration
         tokio::time::sleep(DEBOUNCE_DURATION + Duration::from_millis(100)).await;
 
         // Now should be ready (no updates during the wait)
-        assert!(indexer.is_ready("doc-1"), "should be ready after debounce settles");
+        assert!(
+            indexer.is_ready("doc-1"),
+            "should be ready after debounce settles"
+        );
     }
 
     #[tokio::test]
@@ -1504,7 +1535,10 @@ mod tests {
 
         // New update should send a new channel message (not suppressed)
         indexer.on_document_update("doc-1").await;
-        assert!(rx.try_recv().is_ok(), "should queue new message after mark_indexed");
+        assert!(
+            rx.try_recv().is_ok(),
+            "should queue new message after mark_indexed"
+        );
     }
 
     // === parse_doc_id tests ===
@@ -1585,10 +1619,8 @@ mod tests {
     #[test]
     fn indexes_wikilink_into_backlinks() {
         // Setup: folder with two docs, content doc links to the other
-        let folder_doc = create_folder_doc(&[
-            ("/Notes.md", "uuid-notes"),
-            ("/Ideas.md", "uuid-ideas"),
-        ]);
+        let folder_doc =
+            create_folder_doc(&[("/Notes.md", "uuid-notes"), ("/Ideas.md", "uuid-ideas")]);
         let content_doc = create_content_doc("See [[Ideas]] for more");
 
         // Act: index the content doc
@@ -1624,8 +1656,14 @@ mod tests {
         index_content_into_folder("uuid-notes", &content_doc, &folder_doc).unwrap();
 
         // Assert: both targets have Notes as backlink
-        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-notes"]);
-        assert_eq!(read_backlinks(&folder_doc, "uuid-other"), vec!["uuid-notes"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-ideas"),
+            vec!["uuid-notes"]
+        );
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-other"),
+            vec!["uuid-notes"]
+        );
     }
 
     #[test]
@@ -1639,8 +1677,14 @@ mod tests {
 
         // First index: both targets have backlinks
         index_content_into_folder("uuid-notes", &content_doc, &folder_doc).unwrap();
-        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-notes"]);
-        assert_eq!(read_backlinks(&folder_doc, "uuid-other"), vec!["uuid-notes"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-ideas"),
+            vec!["uuid-notes"]
+        );
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-other"),
+            vec!["uuid-notes"]
+        );
 
         // Edit: remove the Other link
         {
@@ -1656,7 +1700,10 @@ mod tests {
         index_content_into_folder("uuid-notes", &content_doc, &folder_doc).unwrap();
 
         // Assert: Ideas still has backlink, Other's backlink is gone
-        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-notes"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-ideas"),
+            vec!["uuid-notes"]
+        );
         assert!(read_backlinks(&folder_doc, "uuid-other").is_empty());
     }
 
@@ -1714,10 +1761,8 @@ mod tests {
 
     #[test]
     fn no_links_no_backlinks() {
-        let folder_doc = create_folder_doc(&[
-            ("/Notes.md", "uuid-notes"),
-            ("/Other.md", "uuid-other"),
-        ]);
+        let folder_doc =
+            create_folder_doc(&[("/Notes.md", "uuid-notes"), ("/Other.md", "uuid-other")]);
         let content_doc = create_content_doc("Just plain text, no links");
 
         let result = index_content_into_folder("uuid-notes", &content_doc, &folder_doc);
@@ -1754,7 +1799,10 @@ mod tests {
         ]);
         let content_doc = create_content_doc("See [[Ideas]] for details.");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
-        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-source"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-ideas"),
+            vec!["uuid-source"]
+        );
     }
 
     #[test]
@@ -1780,7 +1828,10 @@ mod tests {
         ]);
         let content_doc = create_content_doc("See [[Notes/Ideas]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
-        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-source"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-ideas"),
+            vec!["uuid-source"]
+        );
     }
 
     // === Cross-folder backlink tests ===
@@ -1794,11 +1845,7 @@ mod tests {
         // Cross-folder link using absolute path with folder name
         let content_doc = create_content_doc("See [[Lens Edu/Syllabus]] for the course plan.");
 
-        index_content_into_folders(
-            "uuid-welcome",
-            &content_doc,
-            &[&folder_a, &folder_b],
-        ).unwrap();
+        index_content_into_folders("uuid-welcome", &content_doc, &[&folder_a, &folder_b]).unwrap();
 
         let backlinks_b = read_backlinks(&folder_b, "uuid-syllabus");
         assert_eq!(backlinks_b, vec!["uuid-welcome"]);
@@ -1815,7 +1862,10 @@ mod tests {
 
         let content_v1 = create_content_doc("See [[Lens Edu/Syllabus]].");
         index_content_into_folders("uuid-welcome", &content_v1, &[&folder_a, &folder_b]).unwrap();
-        assert_eq!(read_backlinks(&folder_b, "uuid-syllabus"), vec!["uuid-welcome"]);
+        assert_eq!(
+            read_backlinks(&folder_b, "uuid-syllabus"),
+            vec!["uuid-welcome"]
+        );
 
         let content_v2 = create_content_doc("No links here.");
         index_content_into_folders("uuid-welcome", &content_v2, &[&folder_a, &folder_b]).unwrap();
@@ -1825,10 +1875,8 @@ mod tests {
     #[test]
     fn within_folder_link_still_works_with_multi_folder() {
         // Same-folder links should still work when multiple folders are passed
-        let folder_a = create_folder_doc(&[
-            ("/Notes.md", "uuid-notes"),
-            ("/Ideas.md", "uuid-ideas"),
-        ]);
+        let folder_a =
+            create_folder_doc(&[("/Notes.md", "uuid-notes"), ("/Ideas.md", "uuid-ideas")]);
         set_folder_name(&folder_a, "Lens");
         let folder_b = create_folder_doc(&[("/Syllabus.md", "uuid-syllabus")]);
         set_folder_name(&folder_b, "Lens Edu");
@@ -1853,8 +1901,14 @@ mod tests {
 
         index_content_into_folders("uuid-welcome", &content_doc, &[&folder_a, &folder_b]).unwrap();
 
-        assert_eq!(read_backlinks(&folder_b, "uuid-syllabus"), vec!["uuid-welcome"]);
-        assert_eq!(read_backlinks(&folder_a, "uuid-resources"), vec!["uuid-welcome"]);
+        assert_eq!(
+            read_backlinks(&folder_b, "uuid-syllabus"),
+            vec!["uuid-welcome"]
+        );
+        assert_eq!(
+            read_backlinks(&folder_a, "uuid-resources"),
+            vec!["uuid-welcome"]
+        );
     }
 
     // === update_wikilinks_in_doc tests ===
@@ -1927,13 +1981,13 @@ mod tests {
     #[test]
     fn first_call_seeds_cache_returns_empty() {
         let (indexer, _rx) = LinkIndexer::new();
-        let folder_doc = create_folder_doc(&[
-            ("/Foo.md", "uuid-1"),
-            ("/Bar.md", "uuid-2"),
-        ]);
+        let folder_doc = create_folder_doc(&[("/Foo.md", "uuid-1"), ("/Bar.md", "uuid-2")]);
 
         let renames = indexer.detect_renames("folder-1", &folder_doc);
-        assert!(renames.is_empty(), "first call should seed cache and return empty");
+        assert!(
+            renames.is_empty(),
+            "first call should seed cache and return empty"
+        );
     }
 
     #[test]
@@ -1965,7 +2019,10 @@ mod tests {
         // Move to /Archive/Foo.md — same basename "Foo"
         let folder_v2 = create_folder_doc(&[("/Archive/Foo.md", "uuid-1")]);
         let renames = indexer.detect_renames("folder-1", &folder_v2);
-        assert!(renames.is_empty(), "folder move with same basename should not be a rename");
+        assert!(
+            renames.is_empty(),
+            "folder move with same basename should not be a rename"
+        );
     }
 
     #[test]
@@ -1973,17 +2030,11 @@ mod tests {
         let (indexer, _rx) = LinkIndexer::new();
 
         // Seed
-        let folder_v1 = create_folder_doc(&[
-            ("/Foo.md", "uuid-1"),
-            ("/Bar.md", "uuid-2"),
-        ]);
+        let folder_v1 = create_folder_doc(&[("/Foo.md", "uuid-1"), ("/Bar.md", "uuid-2")]);
         indexer.detect_renames("folder-1", &folder_v1);
 
         // Rename both
-        let folder_v2 = create_folder_doc(&[
-            ("/Baz.md", "uuid-1"),
-            ("/Qux.md", "uuid-2"),
-        ]);
+        let folder_v2 = create_folder_doc(&[("/Baz.md", "uuid-1"), ("/Qux.md", "uuid-2")]);
         let mut renames = indexer.detect_renames("folder-1", &folder_v2);
         renames.sort_by(|a, b| a.uuid.cmp(&b.uuid));
         assert_eq!(renames.len(), 2);
@@ -2004,12 +2055,12 @@ mod tests {
         indexer.detect_renames("folder-1", &folder_v1);
 
         // Add a new file (new UUID)
-        let folder_v2 = create_folder_doc(&[
-            ("/Foo.md", "uuid-1"),
-            ("/NewFile.md", "uuid-2"),
-        ]);
+        let folder_v2 = create_folder_doc(&[("/Foo.md", "uuid-1"), ("/NewFile.md", "uuid-2")]);
         let renames = indexer.detect_renames("folder-1", &folder_v2);
-        assert!(renames.is_empty(), "new files should not produce rename events");
+        assert!(
+            renames.is_empty(),
+            "new files should not produce rename events"
+        );
     }
 
     #[test]
@@ -2017,16 +2068,16 @@ mod tests {
         let (indexer, _rx) = LinkIndexer::new();
 
         // Seed with two files
-        let folder_v1 = create_folder_doc(&[
-            ("/Foo.md", "uuid-1"),
-            ("/Bar.md", "uuid-2"),
-        ]);
+        let folder_v1 = create_folder_doc(&[("/Foo.md", "uuid-1"), ("/Bar.md", "uuid-2")]);
         indexer.detect_renames("folder-1", &folder_v1);
 
         // Remove uuid-2
         let folder_v2 = create_folder_doc(&[("/Foo.md", "uuid-1")]);
         let renames = indexer.detect_renames("folder-1", &folder_v2);
-        assert!(renames.is_empty(), "deleted files should not produce rename events");
+        assert!(
+            renames.is_empty(),
+            "deleted files should not produce rename events"
+        );
     }
 
     // === Rename pipeline integration tests ===
@@ -2035,10 +2086,7 @@ mod tests {
     #[test]
     fn rename_updates_wikilinks_in_backlinkers() {
         // 1. Create folder with Foo.md (uuid-foo) and Notes.md (uuid-notes)
-        let folder_doc = create_folder_doc(&[
-            ("/Foo.md", "uuid-foo"),
-            ("/Notes.md", "uuid-notes"),
-        ]);
+        let folder_doc = create_folder_doc(&[("/Foo.md", "uuid-foo"), ("/Notes.md", "uuid-notes")]);
 
         // 2. Create content doc for Notes with a link to Foo
         let notes_doc = create_content_doc("See [[Foo]] for details");
@@ -2094,10 +2142,7 @@ mod tests {
 
     #[test]
     fn rename_preserves_anchors_and_aliases_in_backlinkers() {
-        let folder_doc = create_folder_doc(&[
-            ("/Foo.md", "uuid-foo"),
-            ("/Notes.md", "uuid-notes"),
-        ]);
+        let folder_doc = create_folder_doc(&[("/Foo.md", "uuid-foo"), ("/Notes.md", "uuid-notes")]);
 
         // Notes has both anchor and alias links to Foo
         let notes_doc = create_content_doc("See [[Foo#Section]] and [[Foo|Display]]");
@@ -2145,10 +2190,7 @@ mod tests {
 
     #[test]
     fn rename_with_no_backlinkers_is_noop() {
-        let folder_doc = create_folder_doc(&[
-            ("/Foo.md", "uuid-foo"),
-            ("/Notes.md", "uuid-notes"),
-        ]);
+        let folder_doc = create_folder_doc(&[("/Foo.md", "uuid-foo"), ("/Notes.md", "uuid-notes")]);
 
         // Notes has NO link to Foo, so Foo has no backlinks
         let notes_doc = create_content_doc("Just some text");
@@ -2183,7 +2225,10 @@ mod tests {
         };
         drop(txn);
 
-        assert!(source_uuids.is_empty(), "no backlinkers means nothing to update");
+        assert!(
+            source_uuids.is_empty(),
+            "no backlinkers means nothing to update"
+        );
         // Notes content unchanged
         assert_eq!(read_contents(&notes_doc), "Just some text");
     }
@@ -2200,7 +2245,10 @@ mod tests {
         let notes_doc = create_content_doc("See [[Foo]] and [[Other]]");
         index_content_into_folder("uuid-notes", &notes_doc, &folder_doc).unwrap();
         assert_eq!(read_backlinks(&folder_doc, "uuid-foo"), vec!["uuid-notes"]);
-        assert_eq!(read_backlinks(&folder_doc, "uuid-other"), vec!["uuid-notes"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-other"),
+            vec!["uuid-notes"]
+        );
 
         // Seed cache and rename only Foo -> Bar
         let (indexer, _rx) = LinkIndexer::new();
@@ -2243,19 +2291,28 @@ mod tests {
     #[test]
     fn resolve_relative_sibling() {
         // Source at /Notes/Source.md, link "Ideas" → /Notes/Ideas.md
-        assert_eq!(resolve_relative("/Notes/Source.md", "Ideas"), "/Notes/Ideas.md");
+        assert_eq!(
+            resolve_relative("/Notes/Source.md", "Ideas"),
+            "/Notes/Ideas.md"
+        );
     }
 
     #[test]
     fn resolve_relative_parent() {
         // Source at /Notes/Source.md, link "../Welcome" → /Welcome.md
-        assert_eq!(resolve_relative("/Notes/Source.md", "../Welcome"), "/Welcome.md");
+        assert_eq!(
+            resolve_relative("/Notes/Source.md", "../Welcome"),
+            "/Welcome.md"
+        );
     }
 
     #[test]
     fn resolve_relative_cousin() {
         // Source at /Notes/Source.md, link "../Projects/Todo" → /Projects/Todo.md
-        assert_eq!(resolve_relative("/Notes/Source.md", "../Projects/Todo"), "/Projects/Todo.md");
+        assert_eq!(
+            resolve_relative("/Notes/Source.md", "../Projects/Todo"),
+            "/Projects/Todo.md"
+        );
     }
 
     #[test]
@@ -2267,7 +2324,10 @@ mod tests {
     #[test]
     fn resolve_relative_dot_segment() {
         // Source at /Notes/Source.md, link "./Ideas" → /Notes/Ideas.md
-        assert_eq!(resolve_relative("/Notes/Source.md", "./Ideas"), "/Notes/Ideas.md");
+        assert_eq!(
+            resolve_relative("/Notes/Source.md", "./Ideas"),
+            "/Notes/Ideas.md"
+        );
     }
 
     #[test]
@@ -2279,7 +2339,10 @@ mod tests {
     #[test]
     fn resolve_relative_deep_nesting() {
         // Source at /A/B/C/Source.md, link "../../X/Y" → /A/X/Y.md
-        assert_eq!(resolve_relative("/A/B/C/Source.md", "../../X/Y"), "/A/X/Y.md");
+        assert_eq!(
+            resolve_relative("/A/B/C/Source.md", "../../X/Y"),
+            "/A/X/Y.md"
+        );
     }
 
     // === New link resolution behavior tests ===
@@ -2293,7 +2356,10 @@ mod tests {
         ]);
         let content_doc = create_content_doc("See [[Ideas]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
-        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-source"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-ideas"),
+            vec!["uuid-source"]
+        );
     }
 
     #[test]
@@ -2305,7 +2371,10 @@ mod tests {
         ]);
         let content_doc = create_content_doc("See [[../Welcome]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
-        assert_eq!(read_backlinks(&folder_doc, "uuid-welcome"), vec!["uuid-source"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-welcome"),
+            vec!["uuid-source"]
+        );
     }
 
     #[test]
@@ -2320,7 +2389,10 @@ mod tests {
         ]);
         let content_doc = create_content_doc("See [[Ideas]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
-        assert_eq!(read_backlinks(&folder_doc, "uuid-nested"), vec!["uuid-source"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-nested"),
+            vec!["uuid-source"]
+        );
         assert!(read_backlinks(&folder_doc, "uuid-root").is_empty());
     }
 
@@ -2328,9 +2400,7 @@ mod tests {
     fn bare_name_no_basename_matching() {
         // Source not in filemeta, link [[Ideas]], only /Notes/Ideas.md exists
         // → absolute "/Ideas.md" doesn't match /Notes/Ideas.md, no basename fallback
-        let folder_doc = create_folder_doc(&[
-            ("/Notes/Ideas.md", "uuid-ideas"),
-        ]);
+        let folder_doc = create_folder_doc(&[("/Notes/Ideas.md", "uuid-ideas")]);
         let content_doc = create_content_doc("See [[Ideas]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
         assert!(read_backlinks(&folder_doc, "uuid-ideas").is_empty());
@@ -2363,7 +2433,10 @@ mod tests {
         ]);
         let content_doc = create_content_doc("See [[Course YAML examples]].");
         index_content_into_folder("uuid-source", &content_doc, &folder_doc).unwrap();
-        assert_eq!(read_backlinks(&folder_doc, "uuid-yaml"), vec!["uuid-source"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-yaml"),
+            vec!["uuid-source"]
+        );
     }
 
     #[test]
@@ -2396,13 +2469,10 @@ mod tests {
         // Set the folder names the user sees in the UI/sidebar.
         set_folder_name(&folder_a, "Relay Folder 1");
         set_folder_name(&folder_b, "Relay Folder 2");
-        let content_doc = create_content_doc("Check [[../Relay Folder 2/Resources/Links]] for resources.");
+        let content_doc =
+            create_content_doc("Check [[../Relay Folder 2/Resources/Links]] for resources.");
 
-        index_content_into_folders(
-            "uuid-welcome",
-            &content_doc,
-            &[&folder_a, &folder_b],
-        ).unwrap();
+        index_content_into_folders("uuid-welcome", &content_doc, &[&folder_a, &folder_b]).unwrap();
 
         // This SHOULD create a backlink in folder_b for Links.md
         assert_eq!(
@@ -2417,16 +2487,66 @@ mod tests {
 
         fn spec_entries() -> Vec<VirtualEntry> {
             vec![
-                VirtualEntry { virtual_path: "/Relay Folder 1/Welcome.md".into(), entry_type: "markdown".into(), id: "W".into(), folder_idx: 0 },
-                VirtualEntry { virtual_path: "/Relay Folder 1/Getting Started.md".into(), entry_type: "markdown".into(), id: "GS".into(), folder_idx: 0 },
-                VirtualEntry { virtual_path: "/Relay Folder 1/Notes".into(), entry_type: "folder".into(), id: "f-notes".into(), folder_idx: 0 },
-                VirtualEntry { virtual_path: "/Relay Folder 1/Notes/Ideas.md".into(), entry_type: "markdown".into(), id: "I".into(), folder_idx: 0 },
-                VirtualEntry { virtual_path: "/Relay Folder 1/Projects".into(), entry_type: "folder".into(), id: "f-proj".into(), folder_idx: 0 },
-                VirtualEntry { virtual_path: "/Relay Folder 1/Projects/Roadmap.md".into(), entry_type: "markdown".into(), id: "R".into(), folder_idx: 0 },
-                VirtualEntry { virtual_path: "/Relay Folder 2/Course Notes.md".into(), entry_type: "markdown".into(), id: "CN".into(), folder_idx: 1 },
-                VirtualEntry { virtual_path: "/Relay Folder 2/Syllabus.md".into(), entry_type: "markdown".into(), id: "S".into(), folder_idx: 1 },
-                VirtualEntry { virtual_path: "/Relay Folder 2/Resources".into(), entry_type: "folder".into(), id: "f-res".into(), folder_idx: 1 },
-                VirtualEntry { virtual_path: "/Relay Folder 2/Resources/Links.md".into(), entry_type: "markdown".into(), id: "L".into(), folder_idx: 1 },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 1/Welcome.md".into(),
+                    entry_type: "markdown".into(),
+                    id: "W".into(),
+                    folder_idx: 0,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 1/Getting Started.md".into(),
+                    entry_type: "markdown".into(),
+                    id: "GS".into(),
+                    folder_idx: 0,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 1/Notes".into(),
+                    entry_type: "folder".into(),
+                    id: "f-notes".into(),
+                    folder_idx: 0,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 1/Notes/Ideas.md".into(),
+                    entry_type: "markdown".into(),
+                    id: "I".into(),
+                    folder_idx: 0,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 1/Projects".into(),
+                    entry_type: "folder".into(),
+                    id: "f-proj".into(),
+                    folder_idx: 0,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 1/Projects/Roadmap.md".into(),
+                    entry_type: "markdown".into(),
+                    id: "R".into(),
+                    folder_idx: 0,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 2/Course Notes.md".into(),
+                    entry_type: "markdown".into(),
+                    id: "CN".into(),
+                    folder_idx: 1,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 2/Syllabus.md".into(),
+                    entry_type: "markdown".into(),
+                    id: "S".into(),
+                    folder_idx: 1,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 2/Resources".into(),
+                    entry_type: "folder".into(),
+                    id: "f-res".into(),
+                    folder_idx: 1,
+                },
+                VirtualEntry {
+                    virtual_path: "/Relay Folder 2/Resources/Links.md".into(),
+                    entry_type: "markdown".into(),
+                    id: "L".into(),
+                    folder_idx: 1,
+                },
             ]
         }
 
@@ -2436,12 +2556,18 @@ mod tests {
         #[test]
         fn w_getting_started() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Getting Started", Some(W), &e).map(|e| e.id.as_str()), Some("GS"));
+            assert_eq!(
+                resolve_in_virtual_tree("Getting Started", Some(W), &e).map(|e| e.id.as_str()),
+                Some("GS")
+            );
         }
         #[test]
         fn w_notes_ideas() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Notes/Ideas", Some(W), &e).map(|e| e.id.as_str()), Some("I"));
+            assert_eq!(
+                resolve_in_virtual_tree("Notes/Ideas", Some(W), &e).map(|e| e.id.as_str()),
+                Some("I")
+            );
         }
         #[test]
         fn w_ideas_no_match() {
@@ -2456,12 +2582,20 @@ mod tests {
         #[test]
         fn w_cross_folder_absolute() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Relay Folder 2/Syllabus", Some(W), &e).map(|e| e.id.as_str()), Some("S"));
+            assert_eq!(
+                resolve_in_virtual_tree("Relay Folder 2/Syllabus", Some(W), &e)
+                    .map(|e| e.id.as_str()),
+                Some("S")
+            );
         }
         #[test]
         fn w_cross_folder_relative() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Relay Folder 2/Syllabus", Some(W), &e).map(|e| e.id.as_str()), Some("S"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Relay Folder 2/Syllabus", Some(W), &e)
+                    .map(|e| e.id.as_str()),
+                Some("S")
+            );
         }
 
         // === From [I] — /Relay Folder 1/Notes/Ideas.md ===
@@ -2470,17 +2604,28 @@ mod tests {
         #[test]
         fn i_parent_welcome() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Welcome", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Welcome", Some(I_PATH), &e).map(|e| e.id.as_str()),
+                Some("W")
+            );
         }
         #[test]
         fn i_cousin_roadmap() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Projects/Roadmap", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("R"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Projects/Roadmap", Some(I_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("R")
+            );
         }
         #[test]
         fn i_parent_getting_started() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Getting Started", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("GS"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Getting Started", Some(I_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("GS")
+            );
         }
         #[test]
         fn i_welcome_no_match() {
@@ -2495,12 +2640,19 @@ mod tests {
         #[test]
         fn i_self_link() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Ideas", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("I"));
+            assert_eq!(
+                resolve_in_virtual_tree("Ideas", Some(I_PATH), &e).map(|e| e.id.as_str()),
+                Some("I")
+            );
         }
         #[test]
         fn i_absolute_cross_folder() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Relay Folder 1/Welcome", Some(I_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+            assert_eq!(
+                resolve_in_virtual_tree("Relay Folder 1/Welcome", Some(I_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("W")
+            );
         }
 
         // === From [R] — /Relay Folder 1/Projects/Roadmap.md ===
@@ -2509,12 +2661,18 @@ mod tests {
         #[test]
         fn r_cousin_ideas() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Notes/Ideas", Some(R_PATH), &e).map(|e| e.id.as_str()), Some("I"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Notes/Ideas", Some(R_PATH), &e).map(|e| e.id.as_str()),
+                Some("I")
+            );
         }
         #[test]
         fn r_parent_welcome() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Welcome", Some(R_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Welcome", Some(R_PATH), &e).map(|e| e.id.as_str()),
+                Some("W")
+            );
         }
         #[test]
         fn r_notes_ideas_no_match() {
@@ -2533,12 +2691,18 @@ mod tests {
         #[test]
         fn l_parent_syllabus() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Syllabus", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("S"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Syllabus", Some(L_PATH), &e).map(|e| e.id.as_str()),
+                Some("S")
+            );
         }
         #[test]
         fn l_parent_course_notes() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Course Notes", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("CN"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Course Notes", Some(L_PATH), &e).map(|e| e.id.as_str()),
+                Some("CN")
+            );
         }
         #[test]
         fn l_syllabus_no_match() {
@@ -2548,22 +2712,37 @@ mod tests {
         #[test]
         fn l_cross_folder_relative() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../../Relay Folder 1/Notes/Ideas", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("I"));
+            assert_eq!(
+                resolve_in_virtual_tree("../../Relay Folder 1/Notes/Ideas", Some(L_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("I")
+            );
         }
         #[test]
         fn l_cross_folder_relative_welcome() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../../Relay Folder 1/Welcome", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+            assert_eq!(
+                resolve_in_virtual_tree("../../Relay Folder 1/Welcome", Some(L_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("W")
+            );
         }
         #[test]
         fn l_cross_folder_absolute() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Relay Folder 1/Notes/Ideas", Some(L_PATH), &e).map(|e| e.id.as_str()), Some("I"));
+            assert_eq!(
+                resolve_in_virtual_tree("Relay Folder 1/Notes/Ideas", Some(L_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("I")
+            );
         }
         #[test]
         fn l_nonexistent_folder() {
             let e = spec_entries();
-            assert!(resolve_in_virtual_tree("../../Nonexistent Folder/File", Some(L_PATH), &e).is_none());
+            assert!(
+                resolve_in_virtual_tree("../../Nonexistent Folder/File", Some(L_PATH), &e)
+                    .is_none()
+            );
         }
 
         // === From [CN] — /Relay Folder 2/Course Notes.md ===
@@ -2572,22 +2751,37 @@ mod tests {
         #[test]
         fn cn_syllabus() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Syllabus", Some(CN_PATH), &e).map(|e| e.id.as_str()), Some("S"));
+            assert_eq!(
+                resolve_in_virtual_tree("Syllabus", Some(CN_PATH), &e).map(|e| e.id.as_str()),
+                Some("S")
+            );
         }
         #[test]
         fn cn_resources_links() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Resources/Links", Some(CN_PATH), &e).map(|e| e.id.as_str()), Some("L"));
+            assert_eq!(
+                resolve_in_virtual_tree("Resources/Links", Some(CN_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("L")
+            );
         }
         #[test]
         fn cn_cross_folder_relative() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("../Relay Folder 1/Welcome", Some(CN_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+            assert_eq!(
+                resolve_in_virtual_tree("../Relay Folder 1/Welcome", Some(CN_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("W")
+            );
         }
         #[test]
         fn cn_cross_folder_absolute() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Relay Folder 1/Welcome", Some(CN_PATH), &e).map(|e| e.id.as_str()), Some("W"));
+            assert_eq!(
+                resolve_in_virtual_tree("Relay Folder 1/Welcome", Some(CN_PATH), &e)
+                    .map(|e| e.id.as_str()),
+                Some("W")
+            );
         }
 
         // === Type filtering ===
@@ -2601,7 +2795,10 @@ mod tests {
         #[test]
         fn no_source_absolute_works() {
             let e = spec_entries();
-            assert_eq!(resolve_in_virtual_tree("Relay Folder 1/Welcome", None, &e).map(|e| e.id.as_str()), Some("W"));
+            assert_eq!(
+                resolve_in_virtual_tree("Relay Folder 1/Welcome", None, &e).map(|e| e.id.as_str()),
+                Some("W")
+            );
         }
         #[test]
         fn no_source_bare_name_fails() {
@@ -2615,16 +2812,12 @@ mod tests {
 
         /// Shared fixture: two folders, each with a file named "Foo"
         fn two_folder_fixture() -> (Doc, Doc) {
-            let folder_a = create_folder_doc(&[
-                ("/Foo.md", "uuid-foo-a"),
-                ("/Notes.md", "uuid-notes-a"),
-            ]);
+            let folder_a =
+                create_folder_doc(&[("/Foo.md", "uuid-foo-a"), ("/Notes.md", "uuid-notes-a")]);
             set_folder_name(&folder_a, "Relay Folder 1");
 
-            let folder_b = create_folder_doc(&[
-                ("/Foo.md", "uuid-foo-b"),
-                ("/Journal.md", "uuid-journal-b"),
-            ]);
+            let folder_b =
+                create_folder_doc(&[("/Foo.md", "uuid-foo-b"), ("/Journal.md", "uuid-journal-b")]);
             set_folder_name(&folder_b, "Relay Folder 2");
 
             (folder_a, folder_b)
@@ -2681,7 +2874,8 @@ mod tests {
                 }
             }
 
-            let source_virtual_path: Option<String> = entries.iter()
+            let source_virtual_path: Option<String> = entries
+                .iter()
                 .find(|e| e.id == source_uuid)
                 .map(|e| e.virtual_path.clone());
 
@@ -2692,7 +2886,8 @@ mod tests {
                     drop(txn);
 
                     if source_uuids.contains(&source_uuid.to_string()) {
-                        let old_virtual_path = format!("/{}{}", rename_folder_name, rename.old_path);
+                        let old_virtual_path =
+                            format!("/{}{}", rename_folder_name, rename.old_path);
                         update_wikilinks_in_doc_resolved(
                             content_doc,
                             &rename.old_name,
@@ -2700,7 +2895,8 @@ mod tests {
                             source_virtual_path.as_deref(),
                             &entries,
                             &old_virtual_path,
-                        ).unwrap();
+                        )
+                        .unwrap();
                     }
                 }
             }
@@ -2714,12 +2910,14 @@ mod tests {
             // Notes in folder A links to [[Foo]] — should resolve to folder A's Foo (relative)
             let notes_doc = create_content_doc("See [[Foo]]");
 
-            index_content_into_folders(
-                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-notes-a", &notes_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
             // Backlink on folder A's Foo (correct — same-folder relative resolution)
-            assert_eq!(read_backlinks(&folder_a, "uuid-foo-a"), vec!["uuid-notes-a"]);
+            assert_eq!(
+                read_backlinks(&folder_a, "uuid-foo-a"),
+                vec!["uuid-notes-a"]
+            );
             // No backlink on folder B's Foo
             assert!(read_backlinks(&folder_b, "uuid-foo-b").is_empty());
         }
@@ -2730,12 +2928,14 @@ mod tests {
             // Notes in folder A links to [[Relay Folder 2/Foo]] — explicit cross-folder
             let notes_doc = create_content_doc("See [[Relay Folder 2/Foo]]");
 
-            index_content_into_folders(
-                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-notes-a", &notes_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
             // Backlink on folder B's Foo
-            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-foo-b"),
+                vec!["uuid-notes-a"]
+            );
             // No backlink on folder A's Foo
             assert!(read_backlinks(&folder_a, "uuid-foo-a").is_empty());
         }
@@ -2746,14 +2946,19 @@ mod tests {
             // Notes links to BOTH Foos: bare resolves to own folder, explicit to other
             let notes_doc = create_content_doc("[[Foo]] and [[Relay Folder 2/Foo]]");
 
-            index_content_into_folders(
-                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-notes-a", &notes_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
             // folder A's Foo: backlinked by notes-a (bare [[Foo]])
-            assert_eq!(read_backlinks(&folder_a, "uuid-foo-a"), vec!["uuid-notes-a"]);
+            assert_eq!(
+                read_backlinks(&folder_a, "uuid-foo-a"),
+                vec!["uuid-notes-a"]
+            );
             // folder B's Foo: backlinked by notes-a ([[Relay Folder 2/Foo]])
-            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-foo-b"),
+                vec!["uuid-notes-a"]
+            );
         }
 
         #[test]
@@ -2762,11 +2967,13 @@ mod tests {
             // Journal in folder B links to [[Foo]] — resolves to folder B's Foo
             let journal_doc = create_content_doc("See [[Foo]]");
 
-            index_content_into_folders(
-                "uuid-journal-b", &journal_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-journal-b", &journal_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
-            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-journal-b"]);
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-foo-b"),
+                vec!["uuid-journal-b"]
+            );
             assert!(read_backlinks(&folder_a, "uuid-foo-a").is_empty());
         }
 
@@ -2778,15 +2985,22 @@ mod tests {
             let notes_doc = create_content_doc("See [[Relay Folder 2/Foo]] for details");
 
             // Index: notes-a links to folder B's Foo
-            index_content_into_folders(
-                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
-            ).unwrap();
-            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+            index_content_into_folders("uuid-notes-a", &notes_doc, &[&folder_a, &folder_b])
+                .unwrap();
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-foo-b"),
+                vec!["uuid-notes-a"]
+            );
 
             // Rename folder B's Foo -> Qux
             let (indexer, _rx) = LinkIndexer::new();
             let renames = rename_in_folder(
-                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+                &indexer,
+                &folder_b,
+                "folder-b",
+                "/Foo.md",
+                "/Qux.md",
+                "uuid-foo-b",
             );
             assert_eq!(renames.len(), 1);
             assert_eq!(renames[0].old_name, "Foo");
@@ -2815,13 +3029,17 @@ mod tests {
             let (folder_a, folder_b) = two_folder_fixture();
             let notes_doc = create_content_doc("See [[Relay Folder 2/Foo#Section]]");
 
-            index_content_into_folders(
-                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-notes-a", &notes_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
             let (indexer, _rx) = LinkIndexer::new();
             let renames = rename_in_folder(
-                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+                &indexer,
+                &folder_b,
+                "folder-b",
+                "/Foo.md",
+                "/Qux.md",
+                "uuid-foo-b",
             );
 
             apply_renames_to_doc(
@@ -2845,13 +3063,17 @@ mod tests {
             let (folder_a, folder_b) = two_folder_fixture();
             let notes_doc = create_content_doc("See [[Relay Folder 2/Foo|Display]]");
 
-            index_content_into_folders(
-                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-notes-a", &notes_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
             let (indexer, _rx) = LinkIndexer::new();
             let renames = rename_in_folder(
-                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+                &indexer,
+                &folder_b,
+                "folder-b",
+                "/Foo.md",
+                "/Qux.md",
+                "uuid-foo-b",
             );
 
             apply_renames_to_doc(
@@ -2878,18 +3100,28 @@ mod tests {
             let (folder_a, folder_b) = two_folder_fixture();
             let notes_doc = create_content_doc("[[Foo]] and [[Relay Folder 2/Foo]]");
 
-            index_content_into_folders(
-                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-notes-a", &notes_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
             // Verify both backlinks exist
-            assert_eq!(read_backlinks(&folder_a, "uuid-foo-a"), vec!["uuid-notes-a"]);
-            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+            assert_eq!(
+                read_backlinks(&folder_a, "uuid-foo-a"),
+                vec!["uuid-notes-a"]
+            );
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-foo-b"),
+                vec!["uuid-notes-a"]
+            );
 
             // Rename folder B's Foo -> Qux
             let (indexer, _rx) = LinkIndexer::new();
             let renames = rename_in_folder(
-                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+                &indexer,
+                &folder_b,
+                "folder-b",
+                "/Foo.md",
+                "/Qux.md",
+                "uuid-foo-b",
             );
             assert_eq!(renames.len(), 1);
 
@@ -2918,17 +3150,27 @@ mod tests {
             let (folder_a, folder_b) = two_folder_fixture();
             let journal_doc = create_content_doc("[[Foo]] and [[Relay Folder 1/Foo]]");
 
-            index_content_into_folders(
-                "uuid-journal-b", &journal_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-journal-b", &journal_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
-            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-journal-b"]);
-            assert_eq!(read_backlinks(&folder_a, "uuid-foo-a"), vec!["uuid-journal-b"]);
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-foo-b"),
+                vec!["uuid-journal-b"]
+            );
+            assert_eq!(
+                read_backlinks(&folder_a, "uuid-foo-a"),
+                vec!["uuid-journal-b"]
+            );
 
             // Rename folder A's Foo -> Baz
             let (indexer, _rx) = LinkIndexer::new();
             let renames = rename_in_folder(
-                &indexer, &folder_a, "folder-a", "/Foo.md", "/Baz.md", "uuid-foo-a",
+                &indexer,
+                &folder_a,
+                "folder-a",
+                "/Foo.md",
+                "/Baz.md",
+                "uuid-foo-a",
             );
             assert_eq!(renames.len(), 1);
 
@@ -2956,16 +3198,23 @@ mod tests {
             let (folder_a, folder_b) = two_folder_fixture();
             let journal_doc = create_content_doc("See [[Foo]]");
 
-            index_content_into_folders(
-                "uuid-journal-b", &journal_doc, &[&folder_a, &folder_b],
-            ).unwrap();
+            index_content_into_folders("uuid-journal-b", &journal_doc, &[&folder_a, &folder_b])
+                .unwrap();
 
-            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-journal-b"]);
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-foo-b"),
+                vec!["uuid-journal-b"]
+            );
 
             // Rename folder B's Foo -> Qux
             let (indexer, _rx) = LinkIndexer::new();
             let renames = rename_in_folder(
-                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+                &indexer,
+                &folder_b,
+                "folder-b",
+                "/Foo.md",
+                "/Qux.md",
+                "uuid-foo-b",
             );
 
             apply_renames_to_doc(
@@ -2990,14 +3239,21 @@ mod tests {
             // Relative cross-folder link: ../Relay Folder 2/Foo
             let notes_doc = create_content_doc("See [[../Relay Folder 2/Foo]]");
 
-            index_content_into_folders(
-                "uuid-notes-a", &notes_doc, &[&folder_a, &folder_b],
-            ).unwrap();
-            assert_eq!(read_backlinks(&folder_b, "uuid-foo-b"), vec!["uuid-notes-a"]);
+            index_content_into_folders("uuid-notes-a", &notes_doc, &[&folder_a, &folder_b])
+                .unwrap();
+            assert_eq!(
+                read_backlinks(&folder_b, "uuid-foo-b"),
+                vec!["uuid-notes-a"]
+            );
 
             let (indexer, _rx) = LinkIndexer::new();
             let renames = rename_in_folder(
-                &indexer, &folder_b, "folder-b", "/Foo.md", "/Qux.md", "uuid-foo-b",
+                &indexer,
+                &folder_b,
+                "folder-b",
+                "/Foo.md",
+                "/Qux.md",
+                "uuid-foo-b",
             );
 
             apply_renames_to_doc(
@@ -3010,10 +3266,7 @@ mod tests {
                 &notes_doc,
             );
 
-            assert_eq!(
-                read_contents(&notes_doc),
-                "See [[../Relay Folder 2/Qux]]",
-            );
+            assert_eq!(read_contents(&notes_doc), "See [[../Relay Folder 2/Qux]]",);
         }
     }
 
@@ -3099,8 +3352,7 @@ mod tests {
         }
 
         // Removing a UUID that is not in any backlinks array
-        let modified =
-            remove_doc_from_backlinks("uuid-nonexistent", &[&folder_doc]).unwrap();
+        let modified = remove_doc_from_backlinks("uuid-nonexistent", &[&folder_doc]).unwrap();
         assert_eq!(modified, 0, "should return 0 when source not found");
 
         // Backlinks unchanged
@@ -3146,8 +3398,7 @@ mod tests {
         }
 
         // Act: remove source_X from both folders
-        let modified =
-            remove_doc_from_backlinks("uuid-source-x", &[&folder_a, &folder_b]).unwrap();
+        let modified = remove_doc_from_backlinks("uuid-source-x", &[&folder_a, &folder_b]).unwrap();
 
         // Assert: both folders cleaned
         assert_eq!(modified, 2, "should modify arrays in both folders");
@@ -3205,7 +3456,8 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             assert_eq!(result.old_path, "/Photosynthesis.md");
             assert_eq!(result.new_path, "/Biology/Photosynthesis.md");
@@ -3215,13 +3467,19 @@ mod tests {
             // Old path removed from filemeta
             let txn = folder.transact();
             let filemeta = txn.get_map("filemeta_v0").unwrap();
-            assert!(filemeta.get(&txn, "/Photosynthesis.md").is_none(),
-                "old path should be removed from filemeta");
+            assert!(
+                filemeta.get(&txn, "/Photosynthesis.md").is_none(),
+                "old path should be removed from filemeta"
+            );
             // New path present in filemeta
             let new_entry = filemeta.get(&txn, "/Biology/Photosynthesis.md");
             assert!(new_entry.is_some(), "new path should be in filemeta");
             let new_id = extract_id_from_filemeta_entry(&new_entry.unwrap(), &txn);
-            assert_eq!(new_id, Some("uuid-photo".to_string()), "UUID should be preserved");
+            assert_eq!(
+                new_id,
+                Some("uuid-photo".to_string()),
+                "UUID should be preserved"
+            );
         }
 
         #[test]
@@ -3255,30 +3513,27 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             assert_eq!(result.links_rewritten, 1);
-            assert_eq!(read_contents(&notes_doc), "See [[Photosynthesis_v2]] for details");
+            assert_eq!(
+                read_contents(&notes_doc),
+                "See [[Photosynthesis_v2]] for details"
+            );
         }
 
         #[test]
         fn move_cross_folder_updates_filemeta_in_both() {
             // Move from Lens /Photosynthesis.md -> Lens Edu /Photosynthesis.md
-            let folder_a = create_folder_doc(&[
-                ("/Photosynthesis.md", "uuid-photo"),
-            ]);
+            let folder_a = create_folder_doc(&[("/Photosynthesis.md", "uuid-photo")]);
             set_folder_name(&folder_a, "Lens");
-            let folder_b = create_folder_doc(&[
-                ("/Welcome.md", "uuid-welcome"),
-            ]);
+            let folder_b = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
             set_folder_name(&folder_b, "Lens Edu");
             let f0id = folder0_id();
             let f1id = folder1_id();
 
-            let resolver = build_resolver(&[
-                (&f0id, &folder_a),
-                (&f1id, &folder_b),
-            ]);
+            let resolver = build_resolver(&[(&f0id, &folder_a), (&f1id, &folder_b)]);
             let content_docs = HashMap::new();
 
             let result = move_document(
@@ -3290,7 +3545,8 @@ mod tests {
                 &["Lens", "Lens Edu"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             assert_eq!(result.old_folder_name, "Lens");
             assert_eq!(result.new_folder_name, "Lens Edu");
@@ -3298,8 +3554,10 @@ mod tests {
             // Source filemeta: no entry
             let txn_a = folder_a.transact();
             let filemeta_a = txn_a.get_map("filemeta_v0").unwrap();
-            assert!(filemeta_a.get(&txn_a, "/Photosynthesis.md").is_none(),
-                "source filemeta should not have entry after cross-folder move");
+            assert!(
+                filemeta_a.get(&txn_a, "/Photosynthesis.md").is_none(),
+                "source filemeta should not have entry after cross-folder move"
+            );
 
             // Target filemeta: has entry
             let txn_b = folder_b.transact();
@@ -3307,23 +3565,27 @@ mod tests {
             let entry = filemeta_b.get(&txn_b, "/Photosynthesis.md");
             assert!(entry.is_some(), "target filemeta should have the entry");
             let id = extract_id_from_filemeta_entry(&entry.unwrap(), &txn_b);
-            assert_eq!(id, Some("uuid-photo".to_string()), "UUID should be preserved");
+            assert_eq!(
+                id,
+                Some("uuid-photo".to_string()),
+                "UUID should be preserved"
+            );
 
             // DocumentResolver updated
             let new_resolved = resolver.resolve_path("Lens Edu/Photosynthesis.md");
             assert!(new_resolved.is_some(), "new path should be resolvable");
             assert_eq!(new_resolved.unwrap().uuid, "uuid-photo");
-            assert!(resolver.resolve_path("Lens/Photosynthesis.md").is_none(),
-                "old path should not be resolvable");
+            assert!(
+                resolver.resolve_path("Lens/Photosynthesis.md").is_none(),
+                "old path should not be resolvable"
+            );
         }
 
         #[test]
         fn move_with_no_backlinkers_succeeds() {
             // Move a document that nobody links to
-            let folder = create_folder_doc(&[
-                ("/Lonely.md", "uuid-lonely"),
-                ("/Other.md", "uuid-other"),
-            ]);
+            let folder =
+                create_folder_doc(&[("/Lonely.md", "uuid-lonely"), ("/Other.md", "uuid-other")]);
             set_folder_name(&folder, "Lens");
             let f0id = folder0_id();
 
@@ -3339,7 +3601,8 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed even with no backlinkers");
+            )
+            .expect("move should succeed even with no backlinkers");
 
             assert_eq!(result.links_rewritten, 0);
         }
@@ -3347,9 +3610,7 @@ mod tests {
         #[test]
         fn move_preserves_uuid_in_resolver() {
             // After move, uuid_to_path returns the new path
-            let folder = create_folder_doc(&[
-                ("/Photosynthesis.md", "uuid-photo"),
-            ]);
+            let folder = create_folder_doc(&[("/Photosynthesis.md", "uuid-photo")]);
             set_folder_name(&folder, "Lens");
             let f0id = folder0_id();
 
@@ -3369,7 +3630,8 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             // UUID still maps to a path, but the NEW path
             assert_eq!(
@@ -3379,7 +3641,9 @@ mod tests {
             // Old path gone
             assert!(resolver.resolve_path("Lens/Photosynthesis.md").is_none());
             // New path resolves
-            let info = resolver.resolve_path("Lens/Biology/Photosynthesis.md").unwrap();
+            let info = resolver
+                .resolve_path("Lens/Biology/Photosynthesis.md")
+                .unwrap();
             assert_eq!(info.uuid, "uuid-photo");
         }
 
@@ -3394,9 +3658,8 @@ mod tests {
             set_folder_name(&folder, "Lens");
             let f0id = folder0_id();
 
-            let notes_doc = create_content_doc(
-                "See [[Photosynthesis#Section]] and [[Photosynthesis|Display]]"
-            );
+            let notes_doc =
+                create_content_doc("See [[Photosynthesis#Section]] and [[Photosynthesis|Display]]");
             index_content_into_folder("uuid-notes", &notes_doc, &folder).unwrap();
             assert_eq!(read_backlinks(&folder, "uuid-photo"), vec!["uuid-notes"]);
 
@@ -3413,7 +3676,8 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             assert_eq!(result.links_rewritten, 2);
             assert_eq!(
@@ -3455,10 +3719,13 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
-            assert_eq!(result.links_rewritten, 1,
-                "sibling backlink should be rewritten when file moves to subfolder");
+            assert_eq!(
+                result.links_rewritten, 1,
+                "sibling backlink should be rewritten when file moves to subfolder"
+            );
             assert_eq!(
                 read_contents(&gs_doc),
                 "See [[Archive/Welcome]] for details",
@@ -3495,10 +3762,13 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
-            assert_eq!(result.links_rewritten, 1,
-                "nested backlink should be rewritten when target moves to subfolder");
+            assert_eq!(
+                result.links_rewritten, 1,
+                "nested backlink should be rewritten when target moves to subfolder"
+            );
             assert_eq!(
                 read_contents(&ideas_doc),
                 "Check [[../Archive/Welcome]] for info",
@@ -3535,10 +3805,13 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
-            assert_eq!(result.links_rewritten, 1,
-                "backlink should be rewritten when file moves from subfolder to root");
+            assert_eq!(
+                result.links_rewritten, 1,
+                "backlink should be rewritten when file moves from subfolder to root"
+            );
             assert_eq!(
                 read_contents(&gs_doc),
                 "See [[Welcome]] for details",
@@ -3555,9 +3828,7 @@ mod tests {
                 ("/Getting Started.md", "uuid-gs"),
             ]);
             set_folder_name(&folder_a, "Lens");
-            let folder_b = create_folder_doc(&[
-                ("/Course Notes.md", "uuid-cn"),
-            ]);
+            let folder_b = create_folder_doc(&[("/Course Notes.md", "uuid-cn")]);
             set_folder_name(&folder_b, "Lens Edu");
             let f0id = folder0_id();
             let f1id = folder1_id();
@@ -3566,10 +3837,7 @@ mod tests {
             index_content_into_folders("uuid-gs", &gs_doc, &[&folder_a, &folder_b]).unwrap();
             assert_eq!(read_backlinks(&folder_a, "uuid-welcome"), vec!["uuid-gs"]);
 
-            let resolver = build_resolver(&[
-                (&f0id, &folder_a),
-                (&f1id, &folder_b),
-            ]);
+            let resolver = build_resolver(&[(&f0id, &folder_a), (&f1id, &folder_b)]);
             let mut content_docs = HashMap::new();
             content_docs.insert("uuid-gs".to_string(), &gs_doc as &Doc);
 
@@ -3582,10 +3850,13 @@ mod tests {
                 &["Lens", "Lens Edu"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
-            assert_eq!(result.links_rewritten, 1,
-                "backlink should be rewritten for cross-folder move even with same basename");
+            assert_eq!(
+                result.links_rewritten, 1,
+                "backlink should be rewritten for cross-folder move even with same basename"
+            );
             // From /Lens/Getting Started.md, [[../Lens Edu/Welcome]] resolves to /Lens Edu/Welcome.md
             assert_eq!(
                 read_contents(&gs_doc),
@@ -3605,9 +3876,7 @@ mod tests {
                 ("/Getting Started.md", "uuid-gs"),
             ]);
             set_folder_name(&folder_a, "Lens");
-            let folder_b = create_folder_doc(&[
-                ("/Course Notes.md", "uuid-cn"),
-            ]);
+            let folder_b = create_folder_doc(&[("/Course Notes.md", "uuid-cn")]);
             set_folder_name(&folder_b, "Lens Edu");
             let f0id = folder0_id();
             let f1id = folder1_id();
@@ -3617,10 +3886,7 @@ mod tests {
             assert_eq!(read_backlinks(&folder_a, "uuid-welcome"), vec!["uuid-gs"]);
             assert!(read_backlinks(&folder_b, "uuid-welcome").is_empty());
 
-            let resolver = build_resolver(&[
-                (&f0id, &folder_a),
-                (&f1id, &folder_b),
-            ]);
+            let resolver = build_resolver(&[(&f0id, &folder_a), (&f1id, &folder_b)]);
             let mut content_docs = HashMap::new();
             content_docs.insert("uuid-gs".to_string(), &gs_doc as &Doc);
 
@@ -3633,7 +3899,8 @@ mod tests {
                 &["Lens", "Lens Edu"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             // Source folder's backlinks_v0 must NOT have the moved doc's key
             assert!(
@@ -3653,16 +3920,12 @@ mod tests {
             // Move /Welcome.md -> /Archive/Welcome.md
             // Notes.md has [[Welcome#Features]] and [[Welcome|Home]] ->
             //   should become [[Archive/Welcome#Features]] and [[Archive/Welcome|Home]]
-            let folder = create_folder_doc(&[
-                ("/Welcome.md", "uuid-welcome"),
-                ("/Notes.md", "uuid-notes"),
-            ]);
+            let folder =
+                create_folder_doc(&[("/Welcome.md", "uuid-welcome"), ("/Notes.md", "uuid-notes")]);
             set_folder_name(&folder, "Lens");
             let f0id = folder0_id();
 
-            let notes_doc = create_content_doc(
-                "See [[Welcome#Features]] and [[Welcome|Home]]"
-            );
+            let notes_doc = create_content_doc("See [[Welcome#Features]] and [[Welcome|Home]]");
             index_content_into_folder("uuid-notes", &notes_doc, &folder).unwrap();
             assert_eq!(read_backlinks(&folder, "uuid-welcome"), vec!["uuid-notes"]);
 
@@ -3679,10 +3942,13 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
-            assert_eq!(result.links_rewritten, 2,
-                "both anchor and alias links should be rewritten");
+            assert_eq!(
+                result.links_rewritten, 2,
+                "both anchor and alias links should be rewritten"
+            );
             assert_eq!(
                 read_contents(&notes_doc),
                 "See [[Archive/Welcome#Features]] and [[Archive/Welcome|Home]]",
@@ -3716,7 +3982,10 @@ mod tests {
             // uuid-welcome should have uuid-gs as backlinker (relative sibling)
             assert_eq!(read_backlinks(&folder, "uuid-welcome"), vec!["uuid-gs"]);
             // uuid-notes-welcome should have uuid-ideas as backlinker (relative sibling)
-            assert_eq!(read_backlinks(&folder, "uuid-notes-welcome"), vec!["uuid-ideas"]);
+            assert_eq!(
+                read_backlinks(&folder, "uuid-notes-welcome"),
+                vec!["uuid-ideas"]
+            );
 
             let resolver = build_resolver(&[(&f0id, &folder)]);
             let mut content_docs = HashMap::new();
@@ -3732,11 +4001,14 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             // Only Getting Started.md's link should be rewritten
-            assert_eq!(result.links_rewritten, 1,
-                "only the link that pointed to the moved file should be rewritten");
+            assert_eq!(
+                result.links_rewritten, 1,
+                "only the link that pointed to the moved file should be rewritten"
+            );
             assert_eq!(
                 read_contents(&gs_doc),
                 "See [[Archive/Welcome]] for details",
@@ -3788,10 +4060,13 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
-            assert!(result.links_rewritten > 0,
-                "outgoing path-qualified link should be rewritten");
+            assert!(
+                result.links_rewritten > 0,
+                "outgoing path-qualified link should be rewritten"
+            );
             assert_eq!(
                 read_contents(&welcome_doc),
                 "Check out [[../Notes/Ideas]] for inspiration",
@@ -3827,7 +4102,8 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             assert_eq!(
                 read_contents(&welcome_doc),
@@ -3867,10 +4143,13 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
-            assert!(result.links_rewritten > 0,
-                "outgoing relative parent link should be rewritten");
+            assert!(
+                result.links_rewritten > 0,
+                "outgoing relative parent link should be rewritten"
+            );
             assert_eq!(
                 read_contents(&ideas_doc),
                 "Return to [[Welcome]]",
@@ -3917,11 +4196,14 @@ mod tests {
                 &["Lens"],
                 &resolver,
                 &content_docs,
-            ).expect("move should succeed");
+            )
+            .expect("move should succeed");
 
             // 1 incoming (Getting Started) + 1 outgoing (Welcome's own link)
-            assert_eq!(result.links_rewritten, 2,
-                "should rewrite both incoming backlinks and outgoing links");
+            assert_eq!(
+                result.links_rewritten, 2,
+                "should rewrite both incoming backlinks and outgoing links"
+            );
             assert_eq!(
                 read_contents(&welcome_doc),
                 "Check [[../Notes/Ideas]]",

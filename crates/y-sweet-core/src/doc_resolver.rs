@@ -154,11 +154,7 @@ impl DocumentResolver {
 
     /// Update maps for a single folder doc. Removes all entries associated with
     /// the given folder_doc_id, then re-adds from current filemeta_v0.
-    pub fn update_folder(
-        &self,
-        folder_doc_id: &str,
-        docs: &DashMap<String, DocWithSyncKv>,
-    ) {
+    pub fn update_folder(&self, folder_doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) {
         self.remove_folder_entries(folder_doc_id);
 
         if let Some(doc_ref) = docs.get(folder_doc_id) {
@@ -169,11 +165,7 @@ impl DocumentResolver {
     }
 
     /// Update maps for a single folder using a bare Y.Doc (testable without DocWithSyncKv).
-    pub fn update_folder_from_doc(
-        &self,
-        folder_doc_id: &str,
-        doc: &Doc,
-    ) {
+    pub fn update_folder_from_doc(&self, folder_doc_id: &str, doc: &Doc) {
         self.remove_folder_entries(folder_doc_id);
         self.rebuild_from_folder_doc(folder_doc_id, doc);
     }
@@ -309,10 +301,7 @@ mod tests {
         let folder1 = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
         set_folder_name(&folder1, "Lens Edu");
 
-        let resolver = build_resolver(&[
-            (&folder0_id(), &folder0),
-            (&folder1_id(), &folder1),
-        ]);
+        let resolver = build_resolver(&[(&folder0_id(), &folder0), (&folder1_id(), &folder1)]);
 
         let paths = resolver.all_paths();
         assert_eq!(paths.len(), 3, "expected 3 paths, got {:?}", paths);
@@ -328,10 +317,7 @@ mod tests {
         let folder1 = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
         set_folder_name(&folder1, "Lens Edu");
 
-        let resolver = build_resolver(&[
-            (&folder0_id(), &folder0),
-            (&folder1_id(), &folder1),
-        ]);
+        let resolver = build_resolver(&[(&folder0_id(), &folder0), (&folder1_id(), &folder1)]);
 
         let mut paths = resolver.all_paths();
         paths.sort();
@@ -508,7 +494,9 @@ mod tests {
         );
         // New path should resolve
         assert!(
-            resolver.resolve_path("Lens/Biology/Photosynthesis.md").is_some(),
+            resolver
+                .resolve_path("Lens/Biology/Photosynthesis.md")
+                .is_some(),
             "new path should resolve after move"
         );
         // Reverse lookup returns new path

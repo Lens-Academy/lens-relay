@@ -62,7 +62,8 @@ impl DocWithSyncKv {
 
                 // Trigger webhook if callback is configured
                 if let Some(ref callback) = webhook_callback {
-                    let is_indexer = txn.origin()
+                    let is_indexer = txn
+                        .origin()
                         .map(|o| o.as_ref() == b"link-indexer")
                         .unwrap_or(false);
                     // Create the event payload with business data, metadata, and update

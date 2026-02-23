@@ -1155,7 +1155,10 @@ name = "Lens Edu"
 "#;
         let config: Config = toml::from_str(toml_content).unwrap();
         assert_eq!(config.folders.len(), 2);
-        assert_eq!(config.folders[0].uuid, "b0000001-0000-4000-8000-000000000001");
+        assert_eq!(
+            config.folders[0].uuid,
+            "b0000001-0000-4000-8000-000000000001"
+        );
         assert_eq!(config.folders[0].name, "Lens");
         assert_eq!(config.folders[1].name, "Lens Edu");
     }

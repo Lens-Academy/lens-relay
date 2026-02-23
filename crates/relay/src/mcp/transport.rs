@@ -89,8 +89,7 @@ pub async fn handle_mcp_post(
 
             if req.method == "initialize" {
                 // Initialize does not require an existing session
-                let (resp, new_session_id) =
-                    router::dispatch_request(&server, None, &req);
+                let (resp, new_session_id) = router::dispatch_request(&server, None, &req);
 
                 let mut response = (StatusCode::OK, Json(resp)).into_response();
 
@@ -137,8 +136,7 @@ pub async fn handle_mcp_post(
                         .into_response();
                 }
 
-                let (resp, _) =
-                    router::dispatch_request(&server, Some(&sid), &req);
+                let (resp, _) = router::dispatch_request(&server, Some(&sid), &req);
 
                 (StatusCode::OK, Json(resp)).into_response()
             }
@@ -152,10 +150,7 @@ pub async fn handle_mcp_get() -> impl IntoResponse {
 }
 
 /// Handle DELETE /mcp — session termination.
-pub async fn handle_mcp_delete(
-    State(server): State<Arc<Server>>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn handle_mcp_delete(State(server): State<Arc<Server>>, headers: HeaderMap) -> Response {
     let session_id = match extract_session_id(&headers) {
         Some(sid) => sid,
         None => {

@@ -213,7 +213,10 @@ mod tests {
         // verify edits[0].offset > edits[1].offset (reverse sorted)
         let edits = compute_wikilink_rename_edits("[[Foo]] and [[Foo]]", "Foo", "Bar");
         assert_eq!(edits.len(), 2);
-        assert!(edits[0].offset > edits[1].offset, "edits should be in reverse offset order");
+        assert!(
+            edits[0].offset > edits[1].offset,
+            "edits should be in reverse offset order"
+        );
     }
 
     #[test]
@@ -241,7 +244,11 @@ mod tests {
         let edits = compute_wikilink_rename_edits(md, "Foo", "Qux");
 
         // Should find one edit — the "Foo" portion of "Relay Folder 2/Foo"
-        assert_eq!(edits.len(), 1, "path-qualified link should match basename rename");
+        assert_eq!(
+            edits.len(),
+            1,
+            "path-qualified link should match basename rename"
+        );
 
         let edit = &edits[0];
         assert_eq!(edit.insert_text, "Qux");
@@ -251,7 +258,10 @@ mod tests {
     /// Helper to apply edits to a string (edits must be in reverse offset order)
     fn apply_edits(text: &mut String, edits: &[TextEdit]) {
         for edit in edits {
-            text.replace_range(edit.offset..edit.offset + edit.remove_len, &edit.insert_text);
+            text.replace_range(
+                edit.offset..edit.offset + edit.remove_len,
+                &edit.insert_text,
+            );
         }
     }
 }
@@ -260,17 +270,12 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 // Compile regex once, reuse across calls
-static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[\[([^\]]+)\]\]").unwrap()
-});
+static WIKILINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\]]+)\]\]").unwrap());
 
-static FENCED_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)```[^\n]*\n.*?```|~~~[^\n]*\n.*?~~~").unwrap()
-});
+static FENCED_CODE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)```[^\n]*\n.*?```|~~~[^\n]*\n.*?~~~").unwrap());
 
-static INLINE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"`[^`]*`").unwrap()
-});
+static INLINE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`[^`]*`").unwrap());
 
 /// Extract wikilink targets from markdown text.
 /// Returns page names only (strips anchors and aliases).
@@ -338,7 +343,9 @@ fn build_excluded_ranges(markdown: &str) -> Vec<(usize, usize)> {
 
 /// Returns true if the byte offset falls within any excluded range.
 fn is_excluded(offset: usize, excluded: &[(usize, usize)]) -> bool {
-    excluded.iter().any(|&(start, end)| offset >= start && offset < end)
+    excluded
+        .iter()
+        .any(|&(start, end)| offset >= start && offset < end)
 }
 
 /// Extract wikilink occurrences with byte positions of the page-name portion.

@@ -29,11 +29,7 @@ impl SessionManager {
     }
 
     /// Create a new session, returning the session ID.
-    pub fn create_session(
-        &self,
-        protocol_version: String,
-        client_info: Option<Value>,
-    ) -> String {
+    pub fn create_session(&self, protocol_version: String, client_info: Option<Value>) -> String {
         self.cleanup_stale(SESSION_TTL);
         let session_id = nanoid::nanoid!(8);
         let now = Instant::now();
@@ -85,7 +81,8 @@ impl SessionManager {
     /// Remove sessions older than `max_age`.
     pub fn cleanup_stale(&self, max_age: std::time::Duration) {
         let cutoff = Instant::now() - max_age;
-        self.sessions.retain(|_, session| session.last_activity > cutoff);
+        self.sessions
+            .retain(|_, session| session.last_activity > cutoff);
     }
 }
 

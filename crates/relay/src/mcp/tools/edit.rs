@@ -92,10 +92,7 @@ pub fn execute(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    let meta_prefix = format!(
-        r#"{{"author":"AI","timestamp":{}}}@@"#,
-        timestamp
-    );
+    let meta_prefix = format!(r#"{{"author":"AI","timestamp":{}}}@@"#, timestamp);
     let replacement =
         super::critic_diff::smart_critic_markup(old_string, new_string, Some(&meta_prefix));
 
@@ -176,8 +173,10 @@ mod tests {
     fn build_test_server(entries: &[(&str, &str, &str)]) -> Arc<Server> {
         let server = Server::new_for_test();
 
-        let filemeta_entries: Vec<(&str, &str)> =
-            entries.iter().map(|(path, uuid, _)| (*path, *uuid)).collect();
+        let filemeta_entries: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|(path, uuid, _)| (*path, *uuid))
+            .collect();
         let folder_doc = create_folder_doc(&filemeta_entries);
         set_folder_name(&folder_doc, "Lens");
 
@@ -214,7 +213,9 @@ mod tests {
 
     /// Create a session with a doc marked as already read.
     fn setup_session_with_read(server: &Arc<Server>, doc_id: &str) -> String {
-        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        let sid = server
+            .mcp_sessions
+            .create_session("2025-03-26".into(), None);
         server.mcp_sessions.mark_initialized(&sid);
         if let Some(mut session) = server.mcp_sessions.get_session_mut(&sid) {
             session.read_docs.insert(doc_id.to_string());
@@ -224,7 +225,9 @@ mod tests {
 
     /// Create a session WITHOUT any docs marked as read.
     fn setup_session_no_reads(server: &Arc<Server>) -> String {
-        let sid = server.mcp_sessions.create_session("2025-03-26".into(), None);
+        let sid = server
+            .mcp_sessions
+            .create_session("2025-03-26".into(), None);
         server.mcp_sessions.mark_initialized(&sid);
         sid
     }
@@ -244,9 +247,7 @@ mod tests {
 
     #[test]
     fn edit_basic_replacement() {
-        let server = build_test_server(&[
-            ("/Hello.md", "uuid-hello", "say hello to all"),
-        ]);
+        let server = build_test_server(&[("/Hello.md", "uuid-hello", "say hello to all")]);
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-hello");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -263,35 +264,39 @@ mod tests {
         // Metadata is dynamic (timestamp), so check structure not exact string
         assert!(
             content.contains("{--") && content.contains("--}"),
-            "Should contain deletion markup: {}", content
+            "Should contain deletion markup: {}",
+            content
         );
         assert!(
             content.contains("{++") && content.contains("++}"),
-            "Should contain insertion markup: {}", content
+            "Should contain insertion markup: {}",
+            content
         );
         assert!(
             content.contains(r#""author":"AI""#),
-            "Should contain author metadata: {}", content
+            "Should contain author metadata: {}",
+            content
         );
         assert!(
             content.contains("@@hello--}"),
-            "Deletion should contain old text after @@: {}", content
+            "Deletion should contain old text after @@: {}",
+            content
         );
         assert!(
             content.contains("@@world++}"),
-            "Insertion should contain new text after @@: {}", content
+            "Insertion should contain new text after @@: {}",
+            content
         );
         assert!(
             content.starts_with("say ") && content.ends_with(" to all"),
-            "Surrounding text should be preserved: {}", content
+            "Surrounding text should be preserved: {}",
+            content
         );
     }
 
     #[test]
     fn edit_read_before_edit_enforced() {
-        let server = build_test_server(&[
-            ("/Doc.md", "uuid-doc", "some content"),
-        ]);
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "some content")]);
         // Session WITHOUT the doc in read_docs
         let sid = setup_session_no_reads(&server);
 
@@ -312,9 +317,7 @@ mod tests {
 
     #[test]
     fn edit_old_string_not_found() {
-        let server = build_test_server(&[
-            ("/Doc.md", "uuid-doc", "actual content here"),
-        ]);
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "actual content here")]);
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-doc");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -335,9 +338,7 @@ mod tests {
 
     #[test]
     fn edit_old_string_not_unique() {
-        let server = build_test_server(&[
-            ("/Cats.md", "uuid-cats", "the cat sat on the cat"),
-        ]);
+        let server = build_test_server(&[("/Cats.md", "uuid-cats", "the cat sat on the cat")]);
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-cats");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -347,7 +348,10 @@ mod tests {
             &json!({"file_path": "Lens/Cats.md", "old_string": "the cat", "new_string": "a dog"}),
         );
 
-        assert!(result.is_err(), "should reject when old_string is not unique");
+        assert!(
+            result.is_err(),
+            "should reject when old_string is not unique"
+        );
         let err = result.unwrap_err();
         assert!(
             err.to_lowercase().contains("not unique") || err.contains("2"),
@@ -378,9 +382,7 @@ mod tests {
 
     #[test]
     fn edit_missing_parameters() {
-        let server = build_test_server(&[
-            ("/Doc.md", "uuid-doc", "content"),
-        ]);
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "content")]);
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-doc");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -423,9 +425,7 @@ mod tests {
 
     #[test]
     fn edit_preserves_surrounding_content() {
-        let server = build_test_server(&[
-            ("/Lines.md", "uuid-lines", "line 1\nline 2\nline 3"),
-        ]);
+        let server = build_test_server(&[("/Lines.md", "uuid-lines", "line 1\nline 2\nline 3")]);
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-lines");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -440,23 +440,25 @@ mod tests {
         let content = read_doc_content(&server, &doc_id);
         assert!(
             content.starts_with("line 1\n{++"),
-            "Should start with line 1 then insertion markup: {}", content
+            "Should start with line 1 then insertion markup: {}",
+            content
         );
         assert!(
             content.contains("@@modified "),
-            "Insertion should contain 'modified ' after @@: {}", content
+            "Insertion should contain 'modified ' after @@: {}",
+            content
         );
         assert!(
             content.ends_with("line 2\nline 3"),
-            "Should preserve surrounding content: {}", content
+            "Should preserve surrounding content: {}",
+            content
         );
     }
 
     #[test]
     fn edit_multiline_old_string() {
-        let server = build_test_server(&[
-            ("/Multi.md", "uuid-multi", "line 1\nline 2\nline 3\nline 4"),
-        ]);
+        let server =
+            build_test_server(&[("/Multi.md", "uuid-multi", "line 1\nline 2\nline 3\nline 4")]);
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-multi");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -466,32 +468,38 @@ mod tests {
             &json!({"file_path": "Lens/Multi.md", "old_string": "line 2\nline 3", "new_string": "replaced lines"}),
         );
 
-        assert!(result.is_ok(), "multiline edit should succeed, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "multiline edit should succeed, got: {:?}",
+            result
+        );
 
         let content = read_doc_content(&server, &doc_id);
         assert!(
             content.starts_with("line 1\n{--"),
-            "Should start with line 1 then deletion markup: {}", content
+            "Should start with line 1 then deletion markup: {}",
+            content
         );
         assert!(
             content.contains("@@line 2\nline 3--}"),
-            "Deletion should wrap multiline old text: {}", content
+            "Deletion should wrap multiline old text: {}",
+            content
         );
         assert!(
             content.contains("@@replaced lines++}"),
-            "Insertion should contain new text: {}", content
+            "Insertion should contain new text: {}",
+            content
         );
         assert!(
             content.ends_with("\nline 4"),
-            "Should preserve trailing content: {}", content
+            "Should preserve trailing content: {}",
+            content
         );
     }
 
     #[test]
     fn edit_empty_new_string() {
-        let server = build_test_server(&[
-            ("/Del.md", "uuid-del", "keep delete me keep"),
-        ]);
+        let server = build_test_server(&[("/Del.md", "uuid-del", "keep delete me keep")]);
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-del");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -501,28 +509,33 @@ mod tests {
             &json!({"file_path": "Lens/Del.md", "old_string": "delete me", "new_string": ""}),
         );
 
-        assert!(result.is_ok(), "deletion edit should succeed, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "deletion edit should succeed, got: {:?}",
+            result
+        );
 
         let content = read_doc_content(&server, &doc_id);
         assert!(
             content.starts_with("keep {--") && content.ends_with("--} keep"),
-            "Should wrap deletion with surrounding text preserved: {}", content
+            "Should wrap deletion with surrounding text preserved: {}",
+            content
         );
         assert!(
             content.contains("@@delete me--}"),
-            "Deletion should contain old text after @@: {}", content
+            "Deletion should contain old text after @@: {}",
+            content
         );
         assert!(
             !content.contains("{++"),
-            "Pure deletion should not have insertion markup: {}", content
+            "Pure deletion should not have insertion markup: {}",
+            content
         );
     }
 
     #[test]
     fn edit_success_message() {
-        let server = build_test_server(&[
-            ("/Msg.md", "uuid-msg", "hello world"),
-        ]);
+        let server = build_test_server(&[("/Msg.md", "uuid-msg", "hello world")]);
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-msg");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -545,5 +558,4 @@ mod tests {
             msg
         );
     }
-
 }

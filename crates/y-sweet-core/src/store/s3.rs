@@ -532,7 +532,8 @@ impl Store for S3Store {
             }
 
             let url = action.sign(Duration::from_secs(60));
-            let response = self.client
+            let response = self
+                .client
                 .request(Method::GET, url.to_string())
                 .send()
                 .await
@@ -550,16 +551,15 @@ impl Store for S3Store {
                 .await
                 .map_err(|e| StoreError::ConnectionError(e.to_string()))?;
 
-            let parsed = ListObjectsV2::parse_response(&bytes)
-                .map_err(|e| StoreError::ConnectionError(format!(
-                    "Error parsing S3 list response: {}", e
-                )))?;
+            let parsed = ListObjectsV2::parse_response(&bytes).map_err(|e| {
+                StoreError::ConnectionError(format!("Error parsing S3 list response: {}", e))
+            })?;
 
             let prefix_str = prefix.as_deref().unwrap_or("");
             for item in &parsed.contents {
                 // Keys may be URL-encoded (encoding-type=url is set by default)
-                let decoded_key = urlencoding::decode(&item.key)
-                    .unwrap_or(std::borrow::Cow::Borrowed(&item.key));
+                let decoded_key =
+                    urlencoding::decode(&item.key).unwrap_or(std::borrow::Cow::Borrowed(&item.key));
                 let unprefixed = decoded_key.strip_prefix(prefix_str).unwrap_or(&decoded_key);
                 if let Some(doc_id) = unprefixed.strip_suffix("/data.ysweet") {
                     doc_ids.insert(doc_id.to_string());
@@ -1148,7 +1148,8 @@ impl Store for S3Store {
             }
 
             let url = action.sign(Duration::from_secs(60));
-            let response = self.client
+            let response = self
+                .client
                 .request(Method::GET, url.to_string())
                 .send()
                 .await
@@ -1166,16 +1167,15 @@ impl Store for S3Store {
                 .await
                 .map_err(|e| StoreError::ConnectionError(e.to_string()))?;
 
-            let parsed = ListObjectsV2::parse_response(&bytes)
-                .map_err(|e| StoreError::ConnectionError(format!(
-                    "Error parsing S3 list response: {}", e
-                )))?;
+            let parsed = ListObjectsV2::parse_response(&bytes).map_err(|e| {
+                StoreError::ConnectionError(format!("Error parsing S3 list response: {}", e))
+            })?;
 
             let prefix_str = prefix.as_deref().unwrap_or("");
             for item in &parsed.contents {
                 // Keys may be URL-encoded (encoding-type=url is set by default)
-                let decoded_key = urlencoding::decode(&item.key)
-                    .unwrap_or(std::borrow::Cow::Borrowed(&item.key));
+                let decoded_key =
+                    urlencoding::decode(&item.key).unwrap_or(std::borrow::Cow::Borrowed(&item.key));
                 let unprefixed = decoded_key.strip_prefix(prefix_str).unwrap_or(&decoded_key);
                 if let Some(doc_id) = unprefixed.strip_suffix("/data.ysweet") {
                     doc_ids.insert(doc_id.to_string());
