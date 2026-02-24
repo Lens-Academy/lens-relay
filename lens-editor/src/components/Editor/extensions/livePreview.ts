@@ -11,6 +11,9 @@
  * - Asterisks/underscores hidden when cursor not on that text
  * - Links render as clickable text with external link icon
  * - Inline code shows with distinct background styling
+ * - Bullet list markers replaced with dot (•) widget
+ * - Checklists rendered as interactive checkboxes with toggle
+ * - Completed tasks shown with strikethrough
  */
 
 import {
