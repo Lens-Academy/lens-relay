@@ -16,6 +16,7 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { completionKeymap } from '@codemirror/autocomplete';
 import { lintKeymap } from '@codemirror/lint';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { TaskList } from '@lezer/markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
 import { tightMarkdownKeymap } from './extensions/tightListEnter';
 import { indentMore, indentLess } from '@codemirror/commands';
@@ -232,7 +233,7 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
         ]),
         markdown({
           base: markdownLanguage,
-          extensions: [WikilinkExtension],
+          extensions: [WikilinkExtension, TaskList],
           addKeymap: false,
         }),
         livePreview(wikilinkContextRef.current),
