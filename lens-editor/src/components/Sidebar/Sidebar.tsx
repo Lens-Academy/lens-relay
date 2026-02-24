@@ -236,7 +236,7 @@ export function Sidebar() {
       </div>
 
       {/* Tree content or search results */}
-      <div className={`flex-1 overflow-y-auto ${isStale && !showSearchResults ? 'opacity-80' : ''}`}>
+      <div className={`flex-1 min-h-0 flex flex-col ${showSearchResults ? 'overflow-y-auto' : ''} ${isStale && !showSearchResults ? 'opacity-80' : ''}`}>
         {showSearchResults ? (
           <SearchPanel
             results={enrichedSearchResults}
@@ -305,25 +305,28 @@ export function Sidebar() {
             )}
 
             {filteredTree.length > 0 && (
-              <FileTreeProvider
-                value={{
-                  editingPath,
-                  onEditingChange: setEditingPath,
-                  onRequestRename: (path) => setEditingPath(path),
-                  onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
-                  onRequestMove: handleMoveRequest,
-                  onRenameSubmit: handleRenameSubmit,
-                  onCreateDocument: handleInstantCreate,
-                  activeDocId,
-                }}
-              >
-                <FileTree
-                  data={filteredTree}
-                  onSelect={handleSelect}
-                  onMove={handleDragMove}
-                  openAll={!!fileFilter}
-                />
-              </FileTreeProvider>
+              <div className="flex-1 min-h-0">
+                <FileTreeProvider
+                  value={{
+                    editingPath,
+                    onEditingChange: setEditingPath,
+                    onRequestRename: (path) => setEditingPath(path),
+                    onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
+                    onRequestMove: handleMoveRequest,
+                    onRenameSubmit: handleRenameSubmit,
+                    onCreateDocument: handleInstantCreate,
+                    activeDocId,
+                  }}
+                >
+                  <FileTree
+                    data={filteredTree}
+                    onSelect={handleSelect}
+                    onMove={handleDragMove}
+                    openAll={!!fileFilter}
+                    activeDocId={activeDocId}
+                  />
+                </FileTreeProvider>
+              </div>
             )}
           </>
         )}
