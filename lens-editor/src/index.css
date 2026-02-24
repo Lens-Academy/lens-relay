@@ -156,6 +156,11 @@
   font-size: 0.9em;
 }
 
+/* Bullet list dot */
+.cm-bullet {
+  color: #6b7280;
+}
+
 /* Table of Contents panel */
 .toc-panel {
   font-size: 0.875rem;

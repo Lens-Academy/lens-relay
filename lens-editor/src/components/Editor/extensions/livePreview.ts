@@ -145,6 +145,22 @@ class LinkWidget extends WidgetType {
 }
 
 /**
+ * BulletWidget - Renders bullet list markers as a dot character
+ */
+class BulletWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-bullet';
+    span.textContent = '\u2022';
+    return span;
+  }
+
+  eq(): boolean {
+    return true;
+  }
+}
+
+/**
  * Check if any selection range intersects with the given range
  */
 function selectionIntersects(
@@ -332,6 +348,32 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     from: node.from,
                     to: node.to,
                     deco: Decoration.mark({ class: HIDDEN_CLASS }),
+                  });
+                }
+              }
+            }
+
+            // ListMark in bullet lists: replace with dot widget when cursor not touching
+            if (node.name === 'ListMark') {
+              // Only handle bullet lists, not ordered lists
+              const parent = node.node.parent; // ListItem
+              const grandparent = parent?.parent; // BulletList or OrderedList
+              if (grandparent && grandparent.name === 'BulletList') {
+                // Skip if this is a task list item (has Task child — handled by checklist code)
+                const listItem = parent;
+                let isTask = false;
+                if (listItem) {
+                  for (let child = listItem.firstChild; child; child = child.nextSibling) {
+                    if (child.name === 'Task') { isTask = true; break; }
+                  }
+                }
+                if (!isTask && !selectionIntersects(selection, node.from, node.to)) {
+                  decorations.push({
+                    from: node.from,
+                    to: node.to,
+                    deco: Decoration.replace({
+                      widget: new BulletWidget(),
+                    }),
                   });
                 }
               }
