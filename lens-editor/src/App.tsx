@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { Group, Panel, Separator } from 'react-resizable-panels';
+import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
@@ -10,6 +10,7 @@ import { NavigationContext, useNavigation } from './contexts/NavigationContext';
 import { DisplayNameProvider } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 import { DisplayNameBadge } from './components/DisplayNameBadge';
+import { SidebarContext } from './contexts/SidebarContext';
 import { useMultiFolderMetadata, type FolderConfig } from './hooks/useMultiFolderMetadata';
 import { AuthProvider } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
@@ -138,12 +139,36 @@ export function App() {
 function AuthenticatedApp({ role }: { role: UserRole }) {
   const navigate = useNavigate();
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+  const sidebarRef = usePanelRef();
+  const rightSidebarRef = usePanelRef();
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
   const folderNames = FOLDERS.map(f => f.name);
   const { recentFiles, pushRecent } = useRecentFiles();
   const justCreatedRef = useRef(false);
+
+  const toggleLeftSidebar = useCallback(() => {
+    const panel = sidebarRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) {
+      panel.expand();
+    } else {
+      panel.collapse();
+    }
+  }, [sidebarRef]);
+
+  const toggleRightSidebar = useCallback(() => {
+    const panel = rightSidebarRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) {
+      panel.expand();
+    } else {
+      panel.collapse();
+    }
+  }, [rightSidebarRef]);
 
   // Ctrl+O keyboard shortcut to open quick switcher
   useEffect(() => {
@@ -175,14 +200,43 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     <AuthProvider role={role}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
+        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, rightSidebarRef, rightCollapsed, setRightCollapsed }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div className="h-screen flex flex-col bg-gray-50">
-            {/* Global identity bar */}
-            <div className="flex items-center justify-end px-4 py-1 bg-white border-b border-gray-100">
-              <DisplayNameBadge />
-            </div>
+            {/* Full-width global header */}
+            <header className="flex items-center justify-between px-4 py-2 bg-white shadow-sm border-b border-gray-200">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={toggleLeftSidebar}
+                  title="Toggle left sidebar"
+                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M9 3v18" />
+                    {!leftCollapsed && <rect x="3" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
+                  </svg>
+                </button>
+                <h1 className="text-lg font-semibold text-gray-900">Lens Editor</h1>
+              </div>
+              <div className="flex items-center gap-4">
+                <div id="header-controls" className="flex items-center gap-4" />
+                <DisplayNameBadge />
+                <button
+                  onClick={toggleRightSidebar}
+                  title="Toggle right sidebar"
+                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M15 3v18" />
+                    {!rightCollapsed && <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
+                  </svg>
+                </button>
+              </div>
+            </header>
             <Group id="app-outer" className="flex-1 min-h-0">
-              <Panel id="sidebar" defaultSize="18%" minSize="12%"  collapsible collapsedSize="0%">
+              <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize="12%" collapsible collapsedSize="0%" onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}>
                 <Sidebar />
               </Panel>
               <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
@@ -201,6 +255,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
             onSelect={handleQuickSwitcherSelect}
           />
         </NavigationContext.Provider>
+        </SidebarContext.Provider>
       </DisplayNameProvider>
     </AuthProvider>
   );
