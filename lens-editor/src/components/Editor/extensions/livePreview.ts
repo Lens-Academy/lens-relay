@@ -161,6 +161,46 @@ class BulletWidget extends WidgetType {
 }
 
 /**
+ * CheckboxWidget - Renders checklist markers as interactive checkboxes.
+ * Clicking toggles [ ] <-> [x] in the document.
+ */
+class CheckboxWidget extends WidgetType {
+  private checked: boolean;
+  private view: EditorView;
+  private markerFrom: number;
+  private markerTo: number;
+
+  constructor(checked: boolean, view: EditorView, markerFrom: number, markerTo: number) {
+    super();
+    this.checked = checked;
+    this.view = view;
+    this.markerFrom = markerFrom;
+    this.markerTo = markerTo;
+  }
+
+  toDOM(): HTMLElement {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'cm-checkbox';
+    input.checked = this.checked;
+    input.onclick = (e) => {
+      e.preventDefault();
+      const newText = this.checked ? '[ ]' : '[x]';
+      this.view.dispatch({
+        changes: { from: this.markerFrom, to: this.markerTo, insert: newText },
+      });
+    };
+    return input;
+  }
+
+  eq(other: CheckboxWidget): boolean {
+    return this.checked === other.checked
+      && this.markerFrom === other.markerFrom
+      && this.markerTo === other.markerTo;
+  }
+}
+
+/**
  * Check if any selection range intersects with the given range
  */
 function selectionIntersects(
@@ -375,6 +415,51 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                       widget: new BulletWidget(),
                     }),
                   });
+                }
+              }
+            }
+
+            // TaskMarker: replace list marker + task marker with checkbox widget
+            if (node.name === 'TaskMarker') {
+              // Find the ListMark sibling (the `- ` part)
+              const task = node.node.parent; // Task node
+              const listItem = task?.parent; // ListItem node
+              let listMark: { from: number; to: number } | null = null;
+              if (listItem) {
+                for (let child = listItem.firstChild; child; child = child.nextSibling) {
+                  if (child.name === 'ListMark') {
+                    listMark = { from: child.from, to: child.to };
+                    break;
+                  }
+                }
+              }
+
+              const replaceFrom = listMark ? listMark.from : node.from;
+              // Include trailing space after ] in the replacement range
+              const replaceTo = Math.min(node.to + 1, view.state.doc.lineAt(node.from).to);
+
+              if (!selectionIntersects(selection, replaceFrom, replaceTo)) {
+                const markerText = view.state.doc.sliceString(node.from, node.to);
+                const isChecked = markerText !== '[ ]';
+
+                decorations.push({
+                  from: replaceFrom,
+                  to: replaceTo,
+                  deco: Decoration.replace({
+                    widget: new CheckboxWidget(isChecked, view, node.from, node.to),
+                  }),
+                });
+
+                // Strikethrough for completed tasks
+                if (isChecked) {
+                  const lineEnd = view.state.doc.lineAt(node.from).to;
+                  if (replaceTo < lineEnd) {
+                    decorations.push({
+                      from: replaceTo,
+                      to: lineEnd,
+                      deco: Decoration.mark({ class: 'cm-task-completed' }),
+                    });
+                  }
                 }
               }
             }
