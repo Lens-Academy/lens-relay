@@ -58,6 +58,7 @@ describe('BacklinksPanel', () => {
 
     expect(screen.getByText('Source1')).toBeInTheDocument();
     expect(screen.getByText('Source2')).toBeInTheDocument();
+    expect(screen.getByText('Folder/')).toBeInTheDocument();
   });
 
   it('calls onNavigate with compound doc ID when clicking a backlink', () => {

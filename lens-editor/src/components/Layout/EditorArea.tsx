@@ -14,6 +14,7 @@ import { ConnectedDiscussionPanel } from '../DiscussionPanel';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { findPathByUuid } from '../../lib/uuid-to-path';
+import { pathToSegments } from '../../lib/path-display';
 import { RELAY_ID } from '../../App';
 
 /**
@@ -50,7 +51,22 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     <main className="flex-1 flex flex-col min-h-0">
       {/* Header bar */}
       <header className="flex items-center justify-between px-4 py-3 bg-white shadow-sm border-b border-gray-200">
-        <h1 className="text-lg font-semibold text-gray-900">Lens Editor</h1>
+        {(() => {
+          const segments = pathToSegments(currentFilePath);
+          if (segments.length === 0) {
+            return <h1 className="text-lg font-semibold text-gray-900">Lens Editor</h1>;
+          }
+          return (
+            <h1 className="text-lg font-semibold text-gray-900 truncate">
+              {segments.map((seg, i) => (
+                <span key={i}>
+                  {i > 0 && <span className="mx-1 text-gray-400">›</span>}
+                  {seg}
+                </span>
+              ))}
+            </h1>
+          );
+        })()}
         <div className="flex items-center gap-4">
           <DebugYMapPanel />
           <SuggestionModeToggle view={editorView} />

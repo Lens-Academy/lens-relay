@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { findPathByUuid } from '../../lib/uuid-to-path';
+import { pathToParentSegments } from '../../lib/path-display';
 
 interface BacklinksPanelProps {
   currentDocId: string;
@@ -63,14 +64,14 @@ export function BacklinksPanel({ currentDocId }: BacklinksPanelProps) {
         const path = findPathByUuid(uuid, metadata);
         if (!path) return null;
 
-        // Extract filename without extension for display
-        const filename = path.split('/').pop() || path;
-        const displayName = filename.replace(/\.md$/i, '');
+        const segments = path.split('/').filter(Boolean);
+        const filename = (segments.pop() || '').replace(/\.md$/i, '');
+        const parentPath = segments.join('/');
 
         // Build compound doc ID for navigation (relay_uuid-doc_uuid)
         const navId = relayPrefix + uuid;
 
-        return { navId, path, displayName };
+        return { navId, path, filename, parentPath };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
   }, [folderDocs, currentDocId, metadata, backlinksVersion]);
@@ -98,13 +99,16 @@ export function BacklinksPanel({ currentDocId }: BacklinksPanelProps) {
         Backlinks
       </h3>
       <ul className="space-y-1">
-        {backlinks.map(({ navId, displayName }) => (
+        {backlinks.map(({ navId, filename, parentPath }) => (
           <li key={navId}>
             <button
               onClick={() => onNavigate(navId)}
-              className="w-full text-left px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded transition-colors cursor-pointer"
+              className="w-full text-left px-2 py-1 text-sm hover:bg-gray-100 rounded transition-colors cursor-pointer"
             >
-              {displayName}
+              {parentPath && (
+                <span className="text-xs text-gray-400">{parentPath}/</span>
+              )}
+              <span className="text-gray-700">{filename}</span>
             </button>
           </li>
         ))}

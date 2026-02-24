@@ -29,7 +29,7 @@ export function fuzzyMatch(query: string, target: string): FuzzyMatchResult {
   const indices: number[] = [];
   let qi = 0;
   for (let ti = 0; ti < lowerTarget.length && qi < lowerQuery.length; ti++) {
-    if (lowerTarget[ti] === lowerQuery[qi]) {
+    if (lowerTarget[ti] === lowerQuery[qi] || (lowerQuery[qi] === ' ' && lowerTarget[ti] === '/')) {
       indices.push(ti);
       qi++;
     }

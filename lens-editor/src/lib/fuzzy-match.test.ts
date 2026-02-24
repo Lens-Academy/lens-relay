@@ -62,4 +62,10 @@ describe('fuzzyMatch', () => {
     const result = fuzzyMatch('a', '');
     expect(result.match).toBe(false);
   });
+
+  it('matches space in query against / in target (path-aware)', () => {
+    const result = fuzzyMatch('resources links', 'Relay Folder 2/Resources/Links');
+    expect(result.match).toBe(true);
+    expect(result.score).toBeGreaterThan(0);
+  });
 });

@@ -55,8 +55,8 @@ describe('QuickSwitcher', () => {
 
   it('shows recent files when query is empty', () => {
     renderSwitcher({ recentFiles: ['doc-intro', 'doc-start'] });
-    expect(screen.getByText('Introduction')).toBeTruthy();
-    expect(screen.getByText('Getting Started')).toBeTruthy();
+    expect(screen.getByText('Lens/Introduction')).toBeTruthy();
+    expect(screen.getByText('Lens/Getting Started')).toBeTruthy();
     expect(screen.getByText('Recent')).toBeTruthy();
   });
 
@@ -77,11 +77,12 @@ describe('QuickSwitcher', () => {
     expect(screen.queryByText('Advanced Topics')).toBeNull();
   });
 
-  it('shows folder path alongside file name', async () => {
+  it('shows full path inline', async () => {
     renderSwitcher();
     const input = screen.getByPlaceholderText('Type to search...');
     await userEvent.type(input, 'course');
-    expect(screen.getByText('Lens Edu')).toBeTruthy();
+    const options = screen.getAllByRole('option');
+    expect(options[0].textContent).toContain('Lens Edu/Course Notes');
   });
 
   it('excludes folder entries from results', async () => {
@@ -89,8 +90,9 @@ describe('QuickSwitcher', () => {
     const input = screen.getByPlaceholderText('Type to search...');
     // Type something that matches "Alpha" (which is inside the Projects folder)
     await userEvent.type(input, 'alpha');
-    // Alpha.md should appear
-    expect(screen.getByText('Alpha')).toBeTruthy();
+    // Alpha.md should appear with full path
+    const options = screen.getAllByRole('option');
+    expect(options[0].textContent).toContain('Lens/Projects/Alpha');
     // The "Projects" folder entry should not appear as a selectable result
     // (Projects folder path is shown as context, but the folder itself is not a row)
   });
@@ -130,8 +132,8 @@ describe('QuickSwitcher', () => {
 
   it('skips nonexistent recent files', () => {
     renderSwitcher({ recentFiles: ['doc-intro', 'nonexistent-id', 'doc-start'] });
-    expect(screen.getByText('Introduction')).toBeTruthy();
-    expect(screen.getByText('Getting Started')).toBeTruthy();
+    expect(screen.getByText('Lens/Introduction')).toBeTruthy();
+    expect(screen.getByText('Lens/Getting Started')).toBeTruthy();
     // Should show exactly 2 result rows, not 3
     const rows = screen.getAllByRole('option');
     expect(rows).toHaveLength(2);
@@ -209,7 +211,7 @@ describe('QuickSwitcher', () => {
 
   it('selects item on click', async () => {
     renderSwitcher({ recentFiles: ['doc-intro'] });
-    const row = screen.getByText('Introduction').closest('[role="option"]')!;
+    const row = screen.getByText('Lens/Introduction').closest('[role="option"]')!;
     await userEvent.click(row);
     expect(mockOnSelect).toHaveBeenCalledWith('doc-intro');
   });
