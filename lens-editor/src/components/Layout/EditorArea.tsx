@@ -48,7 +48,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   }, []);
 
   return (
-    <main className="flex-1 flex flex-col min-h-0">
+    <main className="h-full flex flex-col min-h-0">
       {/* Header bar */}
       <header className="flex items-center justify-between px-4 py-3 bg-white shadow-sm border-b border-gray-200">
         <h1 className="text-lg font-semibold text-gray-900">Lens Editor</h1>
