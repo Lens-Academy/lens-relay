@@ -441,7 +441,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               // Include trailing space after ] in the replacement range
               const replaceTo = Math.min(node.to + 1, view.state.doc.lineAt(node.from).to);
 
-              if (!selectionIntersects(selection, replaceFrom, replaceTo)) {
+              // Cursor proximity: reveal raw when cursor touches the marker chars.
+              // node.to is the position right after ], which counts as "touching".
+              // The trailing space (node.to + 1) does NOT trigger reveal.
+              if (!selectionIntersects(selection, replaceFrom, node.to)) {
                 const markerText = view.state.doc.sliceString(node.from, node.to);
                 const isChecked = markerText !== '[ ]';
 

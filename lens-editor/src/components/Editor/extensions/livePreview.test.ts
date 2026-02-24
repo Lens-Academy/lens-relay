@@ -435,6 +435,24 @@ describe('livePreview - checklists', () => {
     expect(hasClass(view, 'cm-checkbox')).toBe(false);
   });
 
+  it('reveals raw markdown when cursor is right after ] (position 5, touching)', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    // Position 5 = right after `]`, directly touching the marker
+    const { view, cleanup: c } = createTestEditor(content, 5);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-checkbox')).toBe(false);
+  });
+
+  it('keeps checkbox rendered when cursor is on trailing space (position 6, not touching)', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    // Position 6 = after the space following `]`, one space away from marker
+    const { view, cleanup: c } = createTestEditor(content, 6);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-checkbox')).toBe(true);
+  });
+
   it('applies strikethrough to completed task text', () => {
     const content = '- [x] done task\n\nParagraph';
     const { view, cleanup: c } = createTestEditor(content, 25);
