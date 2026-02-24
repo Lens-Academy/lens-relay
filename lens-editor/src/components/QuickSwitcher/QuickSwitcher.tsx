@@ -3,6 +3,8 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { fuzzyMatch } from '../../lib/fuzzy-match';
 import { getFolderNameFromPath } from '../../lib/multi-folder-utils';
+import { RELAY_ID } from '../../App';
+import { openDocInNewTab } from '../../lib/url-utils';
 
 interface QuickSwitcherProps {
   open: boolean;
@@ -164,6 +166,11 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
     onOpenChange(false);
   }, [onSelect, onOpenChange]);
 
+  const handleOpenNewTab = useCallback((docId: string) => {
+    openDocInNewTab(RELAY_ID, docId, metadata);
+    onOpenChange(false);
+  }, [metadata, onOpenChange]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (displayItems.length === 0) return;
 
@@ -182,12 +189,16 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
         e.preventDefault();
         const item = displayItems[selectedIndex];
         if (item) {
-          handleSelect(item.entry.id);
+          if (e.ctrlKey || e.metaKey) {
+            handleOpenNewTab(item.entry.id);
+          } else {
+            handleSelect(item.entry.id);
+          }
         }
         break;
       }
     }
-  }, [displayItems, selectedIndex, handleSelect]);
+  }, [displayItems, selectedIndex, handleSelect, handleOpenNewTab]);
 
   const isRecentMode = results === null;
   const hasItems = displayItems.length > 0;
@@ -245,6 +256,13 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
                   }`}
                   onMouseEnter={() => setSelectedIndex(index)}
                   onClick={() => handleSelect(item.entry.id)}
+                  onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      handleOpenNewTab(item.entry.id);
+                    }
+                  }}
                 >
                   <span className="text-sm font-medium text-gray-900 truncate min-w-0 flex-1">
                     <HighlightedName name={item.entry.name} ranges={item.ranges} />

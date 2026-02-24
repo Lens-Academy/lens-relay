@@ -134,10 +134,19 @@ export function FileTreeNode({
         if (isEditing) return;
         if (isFolder) {
           node.toggle();
+        } else if ((e.ctrlKey || e.metaKey) && ctx.onOpenNewTab && node.data.docId) {
+          ctx.onOpenNewTab(node.data.docId);
         } else {
           node.select();
         }
         e.stopPropagation();
+      }}
+      onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+      onAuxClick={(e) => {
+        if (e.button === 1 && !isFolder && node.data.docId && ctx.onOpenNewTab) {
+          e.preventDefault();
+          ctx.onOpenNewTab(node.data.docId);
+        }
       }}
       onDoubleClick={(e) => {
         if (!isFolder && !isEditing) {

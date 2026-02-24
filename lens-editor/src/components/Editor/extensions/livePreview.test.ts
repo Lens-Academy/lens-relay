@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   createTestEditor,
   moveCursor,
@@ -210,6 +210,74 @@ describe('livePreview - wikilinks', () => {
     const widgets = view.contentDOM.querySelectorAll('.cm-wikilink-widget');
     expect(widgets.length).toBe(1);
     expect(widgets[0].textContent).toBe('My Page');
+  });
+
+  it('calls onOpenNewTab on ctrl+click', () => {
+    const onClick = vi.fn();
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('[[My Page]] end', 15, {
+      onClick,
+      onOpenNewTab,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget).not.toBeNull();
+    widget.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('calls onOpenNewTab on meta+click', () => {
+    const onClick = vi.fn();
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('[[My Page]] end', 15, {
+      onClick,
+      onOpenNewTab,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget).not.toBeNull();
+    widget.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true }));
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('calls onOpenNewTab on middle-click', () => {
+    const onClick = vi.fn();
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('[[My Page]] end', 15, {
+      onClick,
+      onOpenNewTab,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget).not.toBeNull();
+    widget.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('calls onClick on plain click (no modifiers)', () => {
+    const onClick = vi.fn();
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('[[My Page]] end', 15, {
+      onClick,
+      onOpenNewTab,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget).not.toBeNull();
+    widget.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onClick).toHaveBeenCalledWith('My Page');
+    expect(onOpenNewTab).not.toHaveBeenCalled();
   });
 
   it('updates widget resolved state when metadata changes', () => {

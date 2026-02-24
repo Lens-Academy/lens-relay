@@ -1,9 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QuickSwitcher } from './QuickSwitcher';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
+
+vi.mock('../../App', async () => {
+  const actual = await vi.importActual('../../App');
+  return { ...actual, RELAY_ID: 'cb696037-0f72-4e93-8717-4e433129d789' };
+});
 
 const mockMetadata: FolderMetadata = {
   '/Lens/Introduction.md': { id: 'doc-intro', type: 'markdown', version: 0 },
@@ -212,5 +217,32 @@ describe('QuickSwitcher', () => {
     const row = screen.getByText('Introduction').closest('[role="option"]')!;
     await userEvent.click(row);
     expect(mockOnSelect).toHaveBeenCalledWith('doc-intro');
+  });
+
+  it('opens doc in new tab on ctrl+Enter', async () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderSwitcher();
+    const input = screen.getByPlaceholderText('Type to search...');
+    await userEvent.type(input, 'intro');
+    await userEvent.keyboard('{Control>}{Enter}{/Control}');
+    expect(windowOpen).toHaveBeenCalledWith(
+      expect.stringContaining('/doc-intr'),
+      '_blank'
+    );
+    expect(mockOnSelect).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
+  });
+
+  it('opens doc in new tab on middle-click', async () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderSwitcher({ recentFiles: ['doc-intro'] });
+    const row = screen.getByText('Introduction').closest('[role="option"]') as HTMLElement;
+    fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(windowOpen).toHaveBeenCalledWith(
+      expect.stringContaining('/doc-intr'),
+      '_blank'
+    );
+    expect(mockOnSelect).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
   });
 });

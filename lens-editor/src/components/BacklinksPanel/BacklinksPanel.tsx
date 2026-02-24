@@ -1,6 +1,8 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { findPathByUuid } from '../../lib/uuid-to-path';
+import { RELAY_ID } from '../../App';
+import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 
 interface BacklinksPanelProps {
   currentDocId: string;
@@ -101,7 +103,20 @@ export function BacklinksPanel({ currentDocId }: BacklinksPanelProps) {
         {backlinks.map(({ navId, displayName }) => (
           <li key={navId}>
             <button
-              onClick={() => onNavigate(navId)}
+              onClick={(e) => {
+                if (e.ctrlKey || e.metaKey) {
+                  openDocInNewTab(RELAY_ID, docUuidFromCompoundId(navId), metadata);
+                } else {
+                  onNavigate(navId);
+                }
+              }}
+              onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+              onAuxClick={(e) => {
+                if (e.button === 1) {
+                  e.preventDefault();
+                  openDocInNewTab(RELAY_ID, docUuidFromCompoundId(navId), metadata);
+                }
+              }}
               className="w-full text-left px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded transition-colors cursor-pointer"
             >
               {displayName}

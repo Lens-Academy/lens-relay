@@ -52,6 +52,7 @@ const INLINE_CODE_CLASS = 'cm-inline-code';
  */
 export interface WikilinkContext {
   onClick: (pageName: string) => void;
+  onOpenNewTab?: (pageName: string) => void;
   isResolved: (pageName: string) => boolean;
 }
 
@@ -91,8 +92,18 @@ class WikilinkWidget extends WidgetType {
     span.style.cursor = 'pointer';
     span.onclick = (e) => {
       e.preventDefault();
-      if (wikilinkContext) {
+      if (!wikilinkContext) return;
+      if (e.ctrlKey || e.metaKey) {
+        wikilinkContext.onOpenNewTab?.(this.pageName);
+      } else {
         wikilinkContext.onClick(this.pageName);
+      }
+    };
+    span.onmousedown = (e) => { if (e.button === 1) e.preventDefault(); };
+    span.onauxclick = (e) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        wikilinkContext?.onOpenNewTab?.(this.pageName);
       }
     };
     return span;

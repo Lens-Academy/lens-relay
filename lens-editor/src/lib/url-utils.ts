@@ -52,6 +52,16 @@ export function urlForDoc(compoundDocId: string, metadata: FolderMetadata): stri
 }
 
 /**
+ * Open a document in a new browser tab.
+ * Constructs the URL from relay ID + doc UUID using existing URL helpers.
+ */
+export function openDocInNewTab(relayId: string, docUuid: string, metadata: FolderMetadata): void {
+  const compoundId = compoundIdFromDocUuid(relayId, docUuid);
+  const path = urlForDoc(compoundId, metadata);
+  window.open(`${window.location.origin}${path}`, '_blank');
+}
+
+/**
  * Build a compound doc ID from a URL param doc UUID.
  * This is a pure string operation — no metadata lookup needed.
  * Works with both full UUIDs and short prefixes.

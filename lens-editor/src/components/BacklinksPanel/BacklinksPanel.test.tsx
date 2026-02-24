@@ -251,6 +251,50 @@ describe('BacklinksPanel', () => {
     });
   });
 
+  it('opens backlink in new tab on ctrl+click', () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const metadata: FolderMetadata = {
+      '/Target.md': { id: 'target-uuid', type: 'markdown' as const, version: 0 },
+      '/Source.md': { id: 'source-uuid', type: 'markdown' as const, version: 0 },
+    };
+    const backlinks = { 'target-uuid': ['source-uuid'] };
+    const ctx = createTestContext(metadata, backlinks);
+    const compoundDocId = 'a0000000-0000-4000-8000-000000000000-target-uuid';
+
+    render(
+      <NavigationContext.Provider value={ctx}>
+        <BacklinksPanel currentDocId={compoundDocId} />
+      </NavigationContext.Provider>
+    );
+
+    fireEvent.click(screen.getByText('Source'), { ctrlKey: true });
+    expect(windowOpen).toHaveBeenCalledWith(expect.stringContaining('/source-u'), '_blank');
+    expect(ctx.onNavigate).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
+  });
+
+  it('opens backlink in new tab on middle-click', () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const metadata: FolderMetadata = {
+      '/Target.md': { id: 'target-uuid', type: 'markdown' as const, version: 0 },
+      '/Source.md': { id: 'source-uuid', type: 'markdown' as const, version: 0 },
+    };
+    const backlinks = { 'target-uuid': ['source-uuid'] };
+    const ctx = createTestContext(metadata, backlinks);
+    const compoundDocId = 'a0000000-0000-4000-8000-000000000000-target-uuid';
+
+    render(
+      <NavigationContext.Provider value={ctx}>
+        <BacklinksPanel currentDocId={compoundDocId} />
+      </NavigationContext.Provider>
+    );
+
+    fireEvent(screen.getByText('Source'), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(windowOpen).toHaveBeenCalledWith(expect.stringContaining('/source-u'), '_blank');
+    expect(ctx.onNavigate).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
+  });
+
   it('shows loading state when folderDocs is empty', () => {
     const ctx = {
       metadata: {},

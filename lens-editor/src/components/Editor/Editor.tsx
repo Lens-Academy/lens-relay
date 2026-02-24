@@ -31,6 +31,7 @@ import { ContextMenu } from './ContextMenu';
 import { getContextMenuItems } from './extensions/criticmarkup-context-menu';
 import type { ContextMenuItem } from './extensions/criticmarkup-context-menu';
 import { resolvePageName } from '../../lib/document-resolver';
+import { openDocInNewTab } from '../../lib/url-utils';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 
@@ -153,6 +154,12 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
           onNavigate(`${RELAY_ID}-${resolved.docId}`);
         }
         // Unresolved wikilinks do nothing on click (document creation deferred)
+      },
+      onOpenNewTab: (pageName: string) => {
+        const resolved = resolvePageName(pageName, metadata, currentFilePath);
+        if (resolved) {
+          openDocInNewTab(RELAY_ID, resolved.docId, metadata);
+        }
       },
       isResolved: (pageName: string) => {
         return resolvePageName(pageName, metadata, currentFilePath) !== null;

@@ -15,6 +15,7 @@ import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } 
 import { createDocument, deleteDocument, moveDocument } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
+import { openDocInNewTab } from '../../lib/url-utils';
 
 export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -105,6 +106,11 @@ export function Sidebar() {
     const compoundDocId = `${RELAY_ID}-${docId}`;
     onNavigate(compoundDocId);
   }, [onNavigate]);
+
+  // Open a document in a new browser tab
+  const handleOpenNewTab = useCallback((docId: string) => {
+    openDocInNewTab(RELAY_ID, docId, metadata);
+  }, [metadata]);
 
   // CRUD handlers
   const handleRenameSubmit = useCallback(async (prefixedOldPath: string, newName: string, docId: string) => {
@@ -314,6 +320,7 @@ export function Sidebar() {
                   onRequestMove: handleMoveRequest,
                   onRenameSubmit: handleRenameSubmit,
                   onCreateDocument: handleInstantCreate,
+                  onOpenNewTab: handleOpenNewTab,
                   activeDocId,
                 }}
               >
