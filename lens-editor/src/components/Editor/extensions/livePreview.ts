@@ -158,7 +158,7 @@ class BulletWidget extends WidgetType {
     return span;
   }
 
-  eq(): boolean {
+  eq(_other: BulletWidget): boolean {
     return true;
   }
 }

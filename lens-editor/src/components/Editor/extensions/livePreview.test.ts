@@ -372,6 +372,14 @@ describe('livePreview - bullet lists', () => {
     expect(countClass(view, 'cm-bullet')).toBe(2);
   });
 
+  it('replaces * and + bullet markers with dot widget', () => {
+    const content = '* star item\n+ plus item\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 30);
+    cleanup = c;
+
+    expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+
   it('does not replace bullet marker on task list items', () => {
     // Task list items are handled by the checklist code, not bullet code
     const content = '- [ ] task item\n\nParagraph';
@@ -405,6 +413,17 @@ describe('livePreview - checklists', () => {
     const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement | null;
     expect(checkbox).not.toBeNull();
     expect(checkbox!.checked).toBe(true);
+  });
+
+  it('treats uppercase [X] as checked', () => {
+    const content = '- [X] uppercase check\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 30);
+    cleanup = c;
+
+    const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement | null;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox!.checked).toBe(true);
+    expect(hasClass(view, 'cm-task-completed')).toBe(true);
   });
 
   it('shows raw [ ] when cursor touches checkbox marker', () => {
