@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Group, Panel, Separator } from 'react-resizable-panels';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
@@ -180,16 +181,18 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
             <div className="flex items-center justify-end px-4 py-1 bg-white border-b border-gray-100">
               <DisplayNameBadge />
             </div>
-            <div className="flex-1 flex min-h-0">
-              {/* Sidebar — uses onNavigate from context, no separate callback needed */}
-              <Sidebar />
-
-              {/* Route-based document rendering */}
-              <Routes>
-                <Route path="/:docUuid/*" element={<DocumentView />} />
-                <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
-              </Routes>
-            </div>
+            <Group id="app-outer" className="flex-1 min-h-0">
+              <Panel id="sidebar" defaultSize="18%" minSize="12%"  collapsible collapsedSize="0%">
+                <Sidebar />
+              </Panel>
+              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+              <Panel id="main-content" minSize="30%">
+                <Routes>
+                  <Route path="/:docUuid/*" element={<DocumentView />} />
+                  <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
+                </Routes>
+              </Panel>
+            </Group>
           </div>
           <QuickSwitcher
             open={quickSwitcherOpen}

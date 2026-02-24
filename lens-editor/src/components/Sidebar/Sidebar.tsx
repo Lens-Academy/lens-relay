@@ -224,7 +224,7 @@ export function Sidebar() {
   }, [folderNames]);
 
   return (
-    <aside className="w-64 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col h-full">
+    <aside className="w-full h-full bg-white border-r border-gray-200 flex flex-col">
       {/* Header with search */}
       <div className="p-3 border-b border-gray-200 space-y-2">
         <SearchInput

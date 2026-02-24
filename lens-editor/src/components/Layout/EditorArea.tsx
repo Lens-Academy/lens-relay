@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
+import { Group, Panel, Separator } from 'react-resizable-panels';
 import { EditorView } from '@codemirror/view';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
@@ -61,38 +62,55 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       </header>
       {/* Editor + Sidebars container */}
       <div className="flex-1 flex min-h-0">
-        {/* Editor */}
-        <div className="flex-1 flex flex-col min-w-0 bg-white">
-          <div className="px-6 pt-5 pb-1">
-            <DocumentTitle currentDocId={currentDocId} />
-          </div>
-          <div className="mx-6 border-b border-gray-200" />
-          <div className="flex-1 min-h-0">
-            <Editor
-              readOnly={!canWrite}
-              onEditorReady={handleEditorReady}
-              onDocChange={handleDocChange}
-              onNavigate={onNavigate}
-              metadata={metadata}
-              currentFilePath={currentFilePath}
-            />
-          </div>
-        </div>
-        {/* Right Sidebars */}
-        <aside className="w-64 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col">
-          {/* ToC */}
-          <div className="border-b border-gray-200 overflow-y-auto">
-            <TableOfContents view={editorView} stateVersion={stateVersion} />
-          </div>
-          {/* Backlinks */}
-          <div className="border-b border-gray-200 overflow-y-auto">
-            <BacklinksPanel currentDocId={currentDocId} />
-          </div>
-          {/* Comments */}
-          <div className="flex-1 overflow-y-auto">
-            <CommentsPanel view={editorView} stateVersion={stateVersion} />
-          </div>
-        </aside>
+        <Group id="editor-area" className="flex-1 min-h-0">
+          {/* Editor */}
+          <Panel id="editor" minSize="30%">
+            <div className="h-full flex flex-col min-w-0 bg-white">
+              <div className="px-6 pt-5 pb-1">
+                <DocumentTitle currentDocId={currentDocId} />
+              </div>
+              <div className="mx-6 border-b border-gray-200" />
+              <div className="flex-1 min-h-0">
+                <Editor
+                  readOnly={!canWrite}
+                  onEditorReady={handleEditorReady}
+                  onDocChange={handleDocChange}
+                  onNavigate={onNavigate}
+                  metadata={metadata}
+                  currentFilePath={currentFilePath}
+                />
+              </div>
+            </div>
+          </Panel>
+
+          <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+
+          {/* Right sidebar — vertical Group for ToC / Backlinks / Comments */}
+          <Panel id="right-sidebar" defaultSize="22%" minSize="14%" collapsible collapsedSize="0%">
+            <div className="h-full border-l border-gray-200 bg-white">
+              <Group id="right-panels" orientation="vertical">
+                <Panel id="toc" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
+                  <div className="h-full overflow-y-auto">
+                    <TableOfContents view={editorView} stateVersion={stateVersion} />
+                  </div>
+                </Panel>
+                <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
+                <Panel id="backlinks" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
+                  <div className="h-full overflow-y-auto">
+                    <BacklinksPanel currentDocId={currentDocId} />
+                  </div>
+                </Panel>
+                <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
+                <Panel id="comments" defaultSize="40%" minSize="10%" collapsible collapsedSize="0%">
+                  <div className="h-full overflow-y-auto">
+                    <CommentsPanel view={editorView} stateVersion={stateVersion} />
+                  </div>
+                </Panel>
+              </Group>
+            </div>
+          </Panel>
+        </Group>
+
         {/* Discussion panel - renders only when document has discussion frontmatter */}
         <ConnectedDiscussionPanel />
       </div>
