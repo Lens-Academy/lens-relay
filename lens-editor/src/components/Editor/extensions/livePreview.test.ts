@@ -381,3 +381,101 @@ describe('livePreview - bullet lists', () => {
     expect(hasClass(view, 'cm-bullet')).toBe(false);
   });
 });
+
+describe('livePreview - checklists', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  it('replaces unchecked task with checkbox widget when cursor outside', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 24);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-checkbox')).toBe(true);
+  });
+
+  it('replaces checked task with checked checkbox when cursor outside', () => {
+    const content = '- [x] buy milk\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 24);
+    cleanup = c;
+
+    const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement | null;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox!.checked).toBe(true);
+  });
+
+  it('shows raw [ ] when cursor touches checkbox marker', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    // Cursor at position 2 = on the `[` character
+    const { view, cleanup: c } = createTestEditor(content, 2);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-checkbox')).toBe(false);
+  });
+
+  it('applies strikethrough to completed task text', () => {
+    const content = '- [x] done task\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 25);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-task-completed')).toBe(true);
+  });
+
+  it('no strikethrough on unchecked task text', () => {
+    const content = '- [ ] pending task\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 27);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-task-completed')).toBe(false);
+  });
+
+  it('checkbox click toggles [ ] to [x]', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 24);
+    cleanup = c;
+
+    const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+
+    // Click the checkbox
+    checkbox.click();
+
+    // Document should now contain [x]
+    expect(view.state.doc.toString()).toContain('- [x] buy milk');
+  });
+
+  it('checkbox click toggles [x] to [ ]', () => {
+    const content = '- [x] buy milk\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 24);
+    cleanup = c;
+
+    const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+
+    // Click the checkbox
+    checkbox.click();
+
+    // Document should now contain [ ]
+    expect(view.state.doc.toString()).toContain('- [ ] buy milk');
+  });
+
+  it('toggle preserves surrounding text', () => {
+    const content = '- [ ] buy milk\n- [x] eggs\n\nEnd';
+    const { view, cleanup: c } = createTestEditor(content, 30);
+    cleanup = c;
+
+    // Toggle the first checkbox
+    const checkboxes = view.contentDOM.querySelectorAll('.cm-checkbox') as NodeListOf<HTMLInputElement>;
+    expect(checkboxes.length).toBe(2);
+
+    checkboxes[0].click();
+
+    const doc = view.state.doc.toString();
+    expect(doc).toContain('- [x] buy milk');
+    expect(doc).toContain('- [x] eggs');
+    expect(doc).toContain('End');
+  });
+});
