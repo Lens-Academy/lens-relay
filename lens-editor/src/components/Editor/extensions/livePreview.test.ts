@@ -313,3 +313,71 @@ describe('livePreview - inline code', () => {
     expect(hasClass(view, 'cm-inline-code')).toBe(false);
   });
 });
+
+describe('livePreview - bullet lists', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  it('replaces bullet marker with dot widget when cursor outside', () => {
+    const content = '- item one\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 20);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-bullet')).toBe(true);
+  });
+
+  it('shows raw - marker when cursor touches marker', () => {
+    // Cursor at position 0 = on the `-` character
+    const content = '- item one\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-bullet')).toBe(false);
+  });
+
+  it('updates when cursor moves in and out of marker', () => {
+    const content = '- item one\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 20);
+    cleanup = c;
+
+    // Initially outside: bullet widget shown
+    expect(hasClass(view, 'cm-bullet')).toBe(true);
+
+    // Move cursor onto marker
+    moveCursor(view, 0);
+    expect(hasClass(view, 'cm-bullet')).toBe(false);
+
+    // Move cursor back outside
+    moveCursor(view, 20);
+    expect(hasClass(view, 'cm-bullet')).toBe(true);
+  });
+
+  it('does not replace ordered list markers', () => {
+    const content = '1. first item\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 22);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-bullet')).toBe(false);
+  });
+
+  it('handles nested bullet lists', () => {
+    const content = '- outer\n  - inner\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 27);
+    cleanup = c;
+
+    // Both bullets should be rendered
+    expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+
+  it('does not replace bullet marker on task list items', () => {
+    // Task list items are handled by the checklist code, not bullet code
+    const content = '- [ ] task item\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 25);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-bullet')).toBe(false);
+  });
+});
