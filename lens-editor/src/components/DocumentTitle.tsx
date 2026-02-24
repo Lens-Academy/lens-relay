@@ -32,6 +32,12 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
     setValue(displayName);
   }, [displayName]);
 
+  // Update browser tab title to reflect current document
+  useEffect(() => {
+    document.title = displayName ? `${displayName} - Editor` : 'Editor';
+    return () => { document.title = 'Editor'; };
+  }, [displayName]);
+
   // Auto-focus and select when document was just created via instant-create
   useEffect(() => {
     if (justCreatedRef.current && inputRef.current) {
