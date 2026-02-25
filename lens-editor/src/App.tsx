@@ -182,8 +182,10 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [commentMarginCollapsed, setCommentMarginCollapsed] = useState(false);
   const sidebarRef = usePanelRef();
   const rightSidebarRef = usePanelRef();
+  const commentMarginRef = usePanelRef();
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
@@ -241,7 +243,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     <AuthProvider role={role}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
-        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, rightSidebarRef, rightCollapsed, setRightCollapsed }}>
+        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, rightSidebarRef, rightCollapsed, setRightCollapsed, commentMarginRef, commentMarginCollapsed, setCommentMarginCollapsed }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div className="h-screen flex flex-col bg-gray-50">
             {/* Full-width global header */}

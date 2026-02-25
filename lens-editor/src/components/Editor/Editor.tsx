@@ -138,6 +138,7 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, onReq
       // Always add "Add Comment" item
       const addCommentItem: ContextMenuItem = {
         label: 'Add Comment',
+        shortcut: 'Ctrl+Shift+M',
         action: () => {
           view.dispatch({ selection: { anchor: clickPos } });
           view.focus();
@@ -268,6 +269,13 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, onReq
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         remoteCursorTheme,
         criticMarkupExtension(),
+        Prec.highest(keymap.of([{
+          key: 'Mod-Shift-m',
+          run: () => {
+            onRequestAddCommentRef.current?.();
+            return true;
+          },
+        }])),
         EditorView.lineWrapping,
         EditorView.theme({
           '&': {

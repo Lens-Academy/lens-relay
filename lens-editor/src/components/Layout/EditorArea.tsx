@@ -10,7 +10,7 @@ import { SuggestionModeToggle } from '../SuggestionModeToggle/SuggestionModeTogg
 import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
-import { CommentsPanel } from '../CommentsPanel';
+import { CommentMargin } from '../CommentMargin';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -30,7 +30,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
-  const { rightSidebarRef, rightCollapsed, setRightCollapsed } = useSidebar();
+  const { rightSidebarRef, rightCollapsed, setRightCollapsed, commentMarginRef, commentMarginCollapsed, setCommentMarginCollapsed } = useSidebar();
   const [addCommentTrigger, setAddCommentTrigger] = useState(0);
 
   // Derive current file path from doc ID for wikilink resolution
@@ -54,11 +54,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
   // Callback for "Add Comment" from editor context menu
   const handleRequestAddComment = useCallback(() => {
-    if (rightCollapsed) {
-      rightSidebarRef.current?.expand();
+    if (commentMarginCollapsed) {
+      commentMarginRef.current?.expand();
     }
     setAddCommentTrigger(v => v + 1);
-  }, [rightCollapsed, rightSidebarRef]);
+  }, [commentMarginCollapsed, commentMarginRef]);
 
   // Portal targets in the global header
   const breadcrumbTarget = document.getElementById('header-breadcrumb');
@@ -117,27 +117,34 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </div>
           </Panel>
 
+          {/* Comment margin — position-aligned cards, no visible separator */}
+          <Panel id="comment-margin" panelRef={commentMarginRef} defaultSize="16%" minSize="0%" collapsible collapsedSize="0%" onResize={(size) => setCommentMarginCollapsed(size.asPercentage === 0)}>
+            <div className="h-full border-l border-gray-100 bg-gray-50/50">
+              {editorView && (
+                <CommentMargin
+                  view={editorView}
+                  stateVersion={stateVersion}
+                  addCommentTrigger={addCommentTrigger}
+                />
+              )}
+            </div>
+          </Panel>
+
           <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
 
-          {/* Right sidebar — vertical Group for ToC / Backlinks / Comments */}
-          <Panel id="right-sidebar" panelRef={rightSidebarRef} defaultSize="22%" minSize="14%" collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
+          {/* Right sidebar — vertical Group for ToC / Backlinks */}
+          <Panel id="right-sidebar" panelRef={rightSidebarRef} defaultSize="18%" minSize="14%" collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
             <div className="h-full border-l border-gray-200 bg-white">
               <Group id="right-panels" orientation="vertical">
-                <Panel id="toc" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
+                <Panel id="toc" defaultSize="50%" minSize="10%" collapsible collapsedSize="0%">
                   <div className="h-full overflow-y-auto">
                     <TableOfContents view={editorView} stateVersion={stateVersion} />
                   </div>
                 </Panel>
                 <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
-                <Panel id="backlinks" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
+                <Panel id="backlinks" defaultSize="50%" minSize="10%" collapsible collapsedSize="0%">
                   <div className="h-full overflow-y-auto">
                     <BacklinksPanel currentDocId={currentDocId} />
-                  </div>
-                </Panel>
-                <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
-                <Panel id="comments" defaultSize="40%" minSize="10%" collapsible collapsedSize="0%">
-                  <div className="h-full overflow-y-auto">
-                    <CommentsPanel view={editorView} stateVersion={stateVersion} addCommentTrigger={addCommentTrigger} />
                   </div>
                 </Panel>
               </Group>

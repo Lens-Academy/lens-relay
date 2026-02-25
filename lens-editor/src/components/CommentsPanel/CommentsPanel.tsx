@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import type { EditorView } from '@codemirror/view';
 import { useComments } from './useComments';
 import { AddCommentForm } from './AddCommentForm';
-import { getCurrentAuthor } from '../Editor/extensions/criticmarkup';
+import { insertCommentAt, scrollToPosition } from '../../lib/comment-utils';
 import { formatTimestamp } from '../../lib/format-timestamp';
 import type { CriticMarkupRange, CommentThread as CommentThreadType } from '../../lib/criticmarkup-parser';
 
@@ -11,32 +11,6 @@ interface CommentsPanelProps {
   view: EditorView | null;
   stateVersion?: number; // Triggers re-render on doc changes
   addCommentTrigger?: number; // Increment to open add-comment form externally
-}
-
-/**
- * Scroll the editor to a specific position and focus it.
- */
-function scrollToPosition(view: EditorView, pos: number): void {
-  view.dispatch({
-    selection: { anchor: pos },
-    scrollIntoView: true,
-  });
-  view.focus();
-}
-
-/**
- * Insert a comment at the specified position.
- * Used for both new comments and replies (replies insert at thread end for adjacency).
- */
-function insertCommentAt(view: EditorView, content: string, pos: number): void {
-  const author = getCurrentAuthor();
-  const timestamp = Date.now();
-  const meta = JSON.stringify({ author, timestamp });
-  const markup = `{>>${meta}@@${content}<<}`;
-
-  view.dispatch({
-    changes: { from: pos, insert: markup },
-  });
 }
 
 /**

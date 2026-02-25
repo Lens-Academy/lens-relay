@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { Transaction } from '@codemirror/state';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
-import { criticMarkupField, toggleSuggestionMode, suggestionModeField } from './criticmarkup';
+import { criticMarkupField, toggleSuggestionMode, suggestionModeField, focusCommentThread } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
 
 describe('CriticMarkup Extension', () => {
@@ -108,14 +108,16 @@ describe('CriticMarkup Extension', () => {
       expect(hasClass(view, 'cm-highlight')).toBe(true);
     });
 
-    it('applies cm-comment class to comments', () => {
+    it('replaces comments with badge (no cm-comment class in live preview)', () => {
       const { view, cleanup: c } = createCriticMarkupEditor(
         'hello {>>note<<} end',
         20
       );
       cleanup = c;
 
-      expect(hasClass(view, 'cm-comment')).toBe(true);
+      // Comments are now replaced with badges, not styled with cm-comment
+      expect(hasClass(view, 'cm-comment')).toBe(false);
+      expect(hasClass(view, 'cm-comment-badge')).toBe(true);
     });
 
     it('applies cm-substitution class to substitutions', () => {
@@ -657,6 +659,109 @@ describe('CriticMarkup Extension', () => {
       // Color class applied to entire range, but delimiters visible (not hidden)
       expect(hasClass(view, 'cm-deletion')).toBe(true);
       expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
+    });
+  });
+
+  describe('Comment Badge Decorations', () => {
+    it('renders badge for single comment', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'hello {>>a comment<<} end',
+        0 // cursor outside
+      );
+      cleanup = c;
+
+      const badge = view.contentDOM.querySelector('.cm-comment-badge');
+      expect(badge).not.toBeNull();
+    });
+
+    it('badge contains superscript number', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'hello {>>a comment<<} end',
+        0
+      );
+      cleanup = c;
+
+      const badge = view.contentDOM.querySelector('.cm-comment-badge');
+      expect(badge?.textContent).toBe('\u00B9'); // superscript 1
+    });
+
+    it('hides comment content with badge replacement', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'hello {>>a comment<<} end',
+        0
+      );
+      cleanup = c;
+
+      // Comment content should NOT be visible (replaced by badge)
+      const commentElements = view.contentDOM.querySelectorAll('.cm-comment');
+      expect(commentElements.length).toBe(0);
+    });
+
+    it('assigns sequential badge numbers to multiple threads', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'hello {>>first<<} middle {>>second<<} end',
+        0
+      );
+      cleanup = c;
+
+      const badges = view.contentDOM.querySelectorAll('.cm-comment-badge');
+      expect(badges.length).toBe(2);
+      expect(badges[0].textContent).toBe('\u00B9'); // 1
+      expect(badges[1].textContent).toBe('\u00B2'); // 2
+    });
+
+    it('uses single badge for adjacent comments (thread)', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'hello {>>first<<}{>>reply<<} end',
+        0
+      );
+      cleanup = c;
+
+      const badges = view.contentDOM.querySelectorAll('.cm-comment-badge');
+      expect(badges.length).toBe(1);
+      expect(badges[0].textContent).toBe('\u00B9');
+    });
+
+    it('stores thread from position in data attribute', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'hello {>>a comment<<} end',
+        0
+      );
+      cleanup = c;
+
+      const badge = view.contentDOM.querySelector('.cm-comment-badge');
+      expect(badge?.getAttribute('data-thread-from')).toBe('6');
+    });
+
+    it('dispatches focusCommentThread effect on badge click', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'hello {>>a comment<<} end',
+        0
+      );
+      cleanup = c;
+
+      const badge = view.contentDOM.querySelector('.cm-comment-badge') as HTMLElement;
+      expect(badge).not.toBeNull();
+
+      // Listen for the effect
+      let receivedFrom: number | undefined;
+      const originalDispatch = view.dispatch.bind(view);
+      view.dispatch = (...args: Parameters<typeof view.dispatch>) => {
+        for (const arg of args) {
+          if (arg && typeof arg === 'object' && 'effects' in arg) {
+            const effects = Array.isArray(arg.effects) ? arg.effects : [arg.effects];
+            for (const effect of effects) {
+              if (effect && effect.is && effect.is(focusCommentThread)) {
+                receivedFrom = effect.value;
+              }
+            }
+          }
+        }
+        return originalDispatch(...args);
+      };
+
+      badge.click();
+      expect(receivedFrom).toBe(6); // thread.from
     });
   });
 });

@@ -18,7 +18,7 @@ import {
 } from '@codemirror/view';
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
 import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor } from './criticmarkup-commands';
-import { parse, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+import { parse, parseThreads, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 // Author context - can be set externally
 let currentAuthor = 'anonymous';
@@ -57,6 +57,47 @@ const LINE_CLASSES: Partial<Record<CriticMarkupRange['type'], string>> = {
  * StateEffect to toggle suggestion mode on/off.
  */
 export const toggleSuggestionMode = StateEffect.define<boolean>();
+
+/**
+ * StateEffect dispatched when a comment badge is clicked.
+ * Carries the thread's `from` position for focusing the comment card.
+ */
+export const focusCommentThread = StateEffect.define<number>();
+
+// Superscript digit characters for badge numbers
+const SUPERSCRIPT_DIGITS = ['\u2070', '\u00B9', '\u00B2', '\u00B3', '\u2074', '\u2075', '\u2076', '\u2077', '\u2078', '\u2079'];
+
+function toSuperscript(n: number): string {
+  return String(n).split('').map(d => SUPERSCRIPT_DIGITS[parseInt(d)]).join('');
+}
+
+/**
+ * Widget that renders a numbered badge for comment threads.
+ */
+class CommentBadgeWidget extends WidgetType {
+  constructor(
+    private number: number,
+    private threadFrom: number,
+  ) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-comment-badge';
+    span.textContent = toSuperscript(this.number);
+    span.dataset.threadFrom = String(this.threadFrom);
+    return span;
+  }
+
+  eq(other: CommentBadgeWidget): boolean {
+    return this.number === other.number && this.threadFrom === other.threadFrom;
+  }
+
+  ignoreEvent(): boolean {
+    return false; // Allow click events
+  }
+}
 
 /**
  * StateField that tracks whether suggestion mode is active.
@@ -179,7 +220,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
     constructor(view: EditorView) {
       this.decorations = this.buildDecorations(view);
 
-      // Event delegation for accept/reject button clicks
+      // Event delegation for accept/reject button clicks and comment badge clicks
       view.contentDOM.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
         if (target.classList.contains('cm-criticmarkup-accept')) {
@@ -190,6 +231,13 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           e.preventDefault();
           e.stopPropagation();
           rejectChangeAtCursor(view);
+        } else if (target.classList.contains('cm-comment-badge')) {
+          e.preventDefault();
+          e.stopPropagation();
+          const threadFrom = parseInt(target.dataset.threadFrom ?? '', 10);
+          if (!isNaN(threadFrom)) {
+            view.dispatch({ effects: focusCommentThread.of(threadFrom) });
+          }
         }
       });
     }
@@ -210,10 +258,69 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       // Line decorations are added separately (must not be mixed into mark sort)
       const lineDecos: Array<{ from: number; deco: Decoration }> = [];
 
+      // Build comment thread info for badge numbering
+      const threads = parseThreads(ranges);
+      // Map each comment range's `from` to its badge info
+      const commentBadgeMap = new Map<number, { badgeNumber: number; isFirst: boolean; threadFrom: number }>();
+      for (let ti = 0; ti < threads.length; ti++) {
+        const thread = threads[ti];
+        for (let ci = 0; ci < thread.comments.length; ci++) {
+          commentBadgeMap.set(thread.comments[ci].from, {
+            badgeNumber: ti + 1,
+            isFirst: ci === 0,
+            threadFrom: thread.from,
+          });
+        }
+      }
+
       for (const range of ranges) {
         const className = TYPE_CLASSES[range.type];
         const cursorInside = selectionIntersects(selection, range.from, range.to);
 
+        // Comments: hide all text, show badge widget for first in thread
+        if (range.type === 'comment') {
+          const badgeInfo = commentBadgeMap.get(range.from);
+          const spansLineBreak = view.state.doc.lineAt(range.from).number !== view.state.doc.lineAt(range.to).number;
+
+          if (spansLineBreak) {
+            // Multiline comments can't use Decoration.replace (CM6 plugin limitation).
+            // Hide all text with cm-hidden-syntax marks and place badge widget at start.
+            decorations.push({
+              from: range.from,
+              to: range.to,
+              deco: Decoration.mark({ class: 'cm-hidden-syntax' }),
+            });
+            if (badgeInfo?.isFirst) {
+              decorations.push({
+                from: range.from,
+                to: range.from,
+                deco: Decoration.widget({
+                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, badgeInfo.threadFrom),
+                  side: -1,
+                }),
+              });
+            }
+          } else if (badgeInfo?.isFirst) {
+            // First comment in thread (single line): replace entire range with badge
+            decorations.push({
+              from: range.from,
+              to: range.to,
+              deco: Decoration.replace({
+                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, badgeInfo.threadFrom),
+              }),
+            });
+          } else {
+            // Non-first comment in thread (single line): hide entirely
+            decorations.push({
+              from: range.from,
+              to: range.to,
+              deco: Decoration.replace({}),
+            });
+          }
+          continue;
+        }
+
+        // Non-comment ranges: standard three-decoration pattern
         // Always hide delimiters and metadata, only show colored content
         // Opening delimiter + metadata (everything before content)
         decorations.push({

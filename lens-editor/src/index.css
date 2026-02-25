@@ -232,6 +232,37 @@
   background-color: rgba(250, 204, 21, 0.4); /* yellow-400 with opacity */
 }
 
+/* Comment badge - numbered superscript pill for comment threads */
+.cm-comment-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  margin: 0 1px;
+  background-color: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: super;
+  transition: background-color 0.15s;
+}
+
+.cm-comment-badge:hover {
+  background-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Comment margin cards */
+.comment-card-focused {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6, 0 1px 3px rgba(59, 130, 246, 0.2);
+}
+
 /* CriticMarkup Accept/Reject Buttons */
 .cm-criticmarkup-buttons {
   display: inline-flex;
