@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveOverlaps,
+  resolveOverlapsAnchored,
   computeSharedHeight,
   computeEditorPadding,
   mapThreadPositions,
@@ -82,6 +83,115 @@ describe('resolveOverlaps', () => {
       { layoutY: 100 },
       { layoutY: 134 }, // 100 + 30 + 4
     ]);
+  });
+});
+
+describe('resolveOverlapsAnchored', () => {
+  it('pins anchor at its targetY', () => {
+    const items: LayoutItem[] = [
+      { targetY: 0, height: 40 },
+      { targetY: 100, height: 40 },
+      { targetY: 200, height: 40 },
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 1);
+    expect(result[1].layoutY).toBe(100);
+  });
+
+  it('pushes items below anchor down when overlapping', () => {
+    const items: LayoutItem[] = [
+      { targetY: 0, height: 40 },
+      { targetY: 50, height: 40 },  // anchor
+      { targetY: 60, height: 40 },  // overlaps anchor (50+40 > 60)
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 1);
+    expect(result[1].layoutY).toBe(50);
+    expect(result[2].layoutY).toBe(94); // 50 + 40 + 4
+  });
+
+  it('pushes items above anchor up when overlapping', () => {
+    const items: LayoutItem[] = [
+      { targetY: 80, height: 40 },   // overlaps anchor (80+40+4 > 100)
+      { targetY: 100, height: 40 },  // anchor
+      { targetY: 200, height: 40 },
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 1);
+    expect(result[1].layoutY).toBe(100); // anchor pinned
+    expect(result[0].layoutY).toBe(56);  // 100 - 40 - 4
+  });
+
+  it('clamps upward-pushed items at y >= 0', () => {
+    const items: LayoutItem[] = [
+      { targetY: 10, height: 40 },
+      { targetY: 20, height: 40 },  // anchor
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 1);
+    expect(result[1].layoutY).toBe(20); // anchor pinned
+    // item 0 wants: 20 - 40 - 4 = -24, clamped to 0
+    expect(result[0].layoutY).toBe(0);
+  });
+
+  it('cascades upward push for multiple items above anchor', () => {
+    const items: LayoutItem[] = [
+      { targetY: 90, height: 40 },
+      { targetY: 95, height: 40 },
+      { targetY: 100, height: 40 },  // anchor
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 2);
+    expect(result[2].layoutY).toBe(100); // anchor pinned
+    expect(result[1].layoutY).toBe(56);  // 100 - 40 - 4
+    expect(result[0].layoutY).toBe(12);  // 56 - 40 - 4
+  });
+
+  it('keeps non-overlapping items at targetY in both directions', () => {
+    const items: LayoutItem[] = [
+      { targetY: 0, height: 40 },
+      { targetY: 200, height: 40 },  // anchor
+      { targetY: 400, height: 40 },
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 1);
+    expect(result).toEqual([
+      { layoutY: 0 },
+      { layoutY: 200 },
+      { layoutY: 400 },
+    ]);
+  });
+
+  it('handles anchor at index 0', () => {
+    const items: LayoutItem[] = [
+      { targetY: 50, height: 40 },  // anchor
+      { targetY: 60, height: 40 },
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 0);
+    expect(result[0].layoutY).toBe(50);
+    expect(result[1].layoutY).toBe(94); // 50 + 40 + 4
+  });
+
+  it('handles anchor at last index', () => {
+    const items: LayoutItem[] = [
+      { targetY: 80, height: 40 },
+      { targetY: 100, height: 40 },  // anchor
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 1);
+    expect(result[1].layoutY).toBe(100);
+    expect(result[0].layoutY).toBe(56); // 100 - 40 - 4
+  });
+
+  it('handles single item', () => {
+    const items: LayoutItem[] = [{ targetY: 100, height: 40 }];
+    const result = resolveOverlapsAnchored(items, 4, 0);
+    expect(result).toEqual([{ layoutY: 100 }]);
+  });
+
+  it('bidirectional push with all items clustered', () => {
+    const items: LayoutItem[] = [
+      { targetY: 100, height: 40 },
+      { targetY: 100, height: 40 },  // anchor
+      { targetY: 100, height: 40 },
+    ];
+    const result = resolveOverlapsAnchored(items, 4, 1);
+    expect(result[1].layoutY).toBe(100); // anchor pinned
+    expect(result[0].layoutY).toBe(56);  // 100 - 40 - 4
+    expect(result[2].layoutY).toBe(144); // 100 + 40 + 4
   });
 });
 

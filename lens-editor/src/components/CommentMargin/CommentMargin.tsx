@@ -7,6 +7,7 @@ import { insertCommentAt, scrollToPosition } from '../../lib/comment-utils';
 import { focusedThreadField, focusCommentThread } from '../Editor/extensions/criticmarkup';
 import {
   resolveOverlaps,
+  resolveOverlapsAnchored,
   computeSharedHeight,
   mapThreadPositions,
   type PositionMapper,
@@ -85,7 +86,13 @@ export function CommentMargin({
     height: cardHeightsRef.current.get(thread.from) ?? DEFAULT_CARD_HEIGHT,
   }));
 
-  const layoutResults = resolveOverlaps(layoutItems, CARD_GAP);
+  const focusedIndex = focusedThreadFrom != null
+    ? mappedThreads.findIndex(({ thread }) => thread.from === focusedThreadFrom)
+    : -1;
+
+  const layoutResults = focusedIndex >= 0
+    ? resolveOverlapsAnchored(layoutItems, CARD_GAP, focusedIndex)
+    : resolveOverlaps(layoutItems, CARD_GAP);
 
   // Compute shared height
   const lastBottom = layoutResults.length > 0
@@ -161,10 +168,18 @@ export function CommentMargin({
               focused={focusedThreadFrom === thread.from}
               onFocus={() => {
                 const current = view.state.field(focusedThreadField);
-                view.dispatch({ effects: focusCommentThread.of(current === thread.from ? null : thread.from) });
+                if (current === thread.from) {
+                  // Toggle off — no scroll needed
+                  view.dispatch({ effects: focusCommentThread.of(null) });
+                } else {
+                  // Focus + scroll in one dispatch to avoid clobbering
+                  scrollToPosition(view, thread.comments[0].contentFrom, [
+                    focusCommentThread.of(thread.from),
+                  ]);
+                }
               }}
               onReply={(content) => handleReply(thread.to, content)}
-              onScrollToComment={() => scrollToPosition(view, thread.comments[0].contentFrom)}
+              onScrollToComment={() => {}}
               style={{ position: 'absolute', top: layoutY, left: 6, right: 6 }}
             />
           );
