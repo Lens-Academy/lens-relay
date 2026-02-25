@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { EditorView } from '@codemirror/view';
@@ -18,6 +18,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
+import { useContainerWidth } from '../../hooks/useContainerWidth';
 import { RELAY_ID } from '../../App';
 
 /**
@@ -31,6 +32,13 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const { metadata, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
   const { rightSidebarRef, setRightCollapsed } = useSidebar();
+
+  const { ref: innerRef, width: innerWidth } = useContainerWidth();
+
+  const RIGHT_SIDEBAR_MIN_PX = 200;
+  const rightMinPercent = innerWidth > 0
+    ? Math.max((RIGHT_SIDEBAR_MIN_PX / innerWidth) * 100, 1)
+    : 14;
 
   // Derive current file path from doc ID for wikilink resolution
   const currentFilePath = useMemo(() => {
@@ -85,7 +93,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         portalTarget
       )}
       {/* Editor + Sidebars container */}
-      <div className="flex-1 flex min-h-0">
+      <div ref={innerRef as RefObject<HTMLDivElement>} className="flex-1 flex min-h-0">
         <Group id="editor-area" className="flex-1 min-h-0">
           {/* Editor */}
           <Panel id="editor" minSize="30%">
@@ -110,7 +118,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
 
           {/* Right sidebar — vertical Group for ToC / Backlinks / Comments */}
-          <Panel id="right-sidebar" panelRef={rightSidebarRef} defaultSize="22%" minSize="14%" collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
+          <Panel id="right-sidebar" panelRef={rightSidebarRef} defaultSize="22%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
             <div className="h-full border-l border-gray-200 bg-white">
               <Group id="right-panels" orientation="vertical">
                 <Panel id="toc" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
