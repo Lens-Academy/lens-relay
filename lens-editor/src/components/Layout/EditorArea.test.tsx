@@ -86,8 +86,8 @@ describe('EditorArea', () => {
     expect(container.querySelector('.comments-panel')).toBeInTheDocument();
     expect(container.querySelector('.toc-panel')).toBeInTheDocument();
 
-    // Check that sidebar uses w-64
-    const sidebar = container.querySelector('aside');
-    expect(sidebar).toHaveClass('w-64');
+    // Check that main uses resizable panel layout (no aside since sidebar moved to App)
+    const main = container.querySelector('main');
+    expect(main).toBeInTheDocument();
   });
 });

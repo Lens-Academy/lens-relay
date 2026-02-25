@@ -17,6 +17,16 @@ export function setShareToken(token: string): void {
   _shareToken = token;
 }
 
+type AuthErrorCallback = () => void;
+let _onAuthError: AuthErrorCallback | null = null;
+let _authErrorFired = false;
+
+/** Register a one-shot callback for persistent auth failures. */
+export function setAuthErrorCallback(cb: AuthErrorCallback): void {
+  _onAuthError = cb;
+  _authErrorFired = false;
+}
+
 /**
  * Rewrite relay URLs to use the Vite WebSocket proxy in development.
  * The relay returns ws://localhost:PORT/... URLs which the browser can't reach
@@ -61,6 +71,10 @@ export async function getClientToken(docId: string): Promise<ClientToken> {
   });
 
   if (!response.ok) {
+    if (response.status === 401 && !_authErrorFired && _onAuthError) {
+      _authErrorFired = true;
+      _onAuthError();
+    }
     const text = await response.text().catch(() => '');
     throw new Error(`Share token auth failed: ${response.status} ${text}`);
   }

@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   docUuidFromCompoundId,
   compoundIdFromDocUuid,
   urlForDoc,
   docIdFromUrlParam,
   shortUuid,
+  openDocInNewTab,
 } from './url-utils';
 
 const RELAY_ID = 'cb696037-0f72-4e93-8717-4e433129d789';
@@ -51,6 +52,31 @@ describe('urlForDoc', () => {
       '/Lens Edu/My Notes.md': { id: DOC_UUID, type: 'markdown' as const, version: 0 },
     };
     expect(urlForDoc(COMPOUND_ID, metadata)).toBe(`/${SHORT}/Lens-Edu/My-Notes.md`);
+  });
+});
+
+describe('openDocInNewTab', () => {
+  it('opens correct URL in new tab', () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const metadata = {
+      '/Lens/Page.md': { id: DOC_UUID, type: 'markdown' as const, version: 0 },
+    };
+    openDocInNewTab(RELAY_ID, DOC_UUID, metadata);
+    expect(windowOpen).toHaveBeenCalledWith(
+      expect.stringContaining(`/${SHORT}/Lens/Page.md`),
+      '_blank'
+    );
+    windowOpen.mockRestore();
+  });
+
+  it('falls back to short UUID when doc not in metadata', () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    openDocInNewTab(RELAY_ID, DOC_UUID, {});
+    expect(windowOpen).toHaveBeenCalledWith(
+      expect.stringContaining(`/${SHORT}`),
+      '_blank'
+    );
+    windowOpen.mockRestore();
   });
 });
 

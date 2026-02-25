@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { fuzzyMatch } from '../../lib/fuzzy-match';
-import { getFolderNameFromPath } from '../../lib/multi-folder-utils';
+import { pathToDisplayString } from '../../lib/path-display';
+import { RELAY_ID } from '../../App';
+import { openDocInNewTab } from '../../lib/url-utils';
 
 interface QuickSwitcherProps {
   open: boolean;
@@ -14,7 +16,7 @@ interface QuickSwitcherProps {
 interface FileEntry {
   path: string;
   name: string;
-  folder: string;
+  displayPath: string;
   id: string;
 }
 
@@ -61,7 +63,7 @@ function extractFileName(path: string): string {
 }
 
 export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: QuickSwitcherProps) {
-  const { metadata, folderNames } = useNavigation();
+  const { metadata } = useNavigation();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
@@ -73,11 +75,11 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
     for (const [path, meta] of Object.entries(metadata)) {
       if (meta.type === 'folder') continue;
       const name = extractFileName(path);
-      const folder = getFolderNameFromPath(path, folderNames) ?? '';
-      entries.push({ path, name, folder, id: meta.id });
+      const displayPath = pathToDisplayString(path);
+      entries.push({ path, name, displayPath, id: meta.id });
     }
     return entries;
-  }, [metadata, folderNames]);
+  }, [metadata]);
 
   // Build a lookup from doc ID to FileEntry
   const idToEntry = useMemo(() => {
@@ -96,7 +98,7 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
 
     const scored: { entry: FileEntry; score: number; ranges: [number, number][] }[] = [];
     for (const entry of fileEntries) {
-      const result = fuzzyMatch(query, entry.name);
+      const result = fuzzyMatch(query, entry.displayPath);
       if (result.match) {
         scored.push({ entry, score: result.score, ranges: result.ranges });
       }
@@ -164,6 +166,11 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
     onOpenChange(false);
   }, [onSelect, onOpenChange]);
 
+  const handleOpenNewTab = useCallback((docId: string) => {
+    openDocInNewTab(RELAY_ID, docId, metadata);
+    onOpenChange(false);
+  }, [metadata, onOpenChange]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (displayItems.length === 0) return;
 
@@ -182,12 +189,16 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
         e.preventDefault();
         const item = displayItems[selectedIndex];
         if (item) {
-          handleSelect(item.entry.id);
+          if (e.ctrlKey || e.metaKey) {
+            handleOpenNewTab(item.entry.id);
+          } else {
+            handleSelect(item.entry.id);
+          }
         }
         break;
       }
     }
-  }, [displayItems, selectedIndex, handleSelect]);
+  }, [displayItems, selectedIndex, handleSelect, handleOpenNewTab]);
 
   const isRecentMode = results === null;
   const hasItems = displayItems.length > 0;
@@ -245,15 +256,17 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
                   }`}
                   onMouseEnter={() => setSelectedIndex(index)}
                   onClick={() => handleSelect(item.entry.id)}
+                  onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      handleOpenNewTab(item.entry.id);
+                    }
+                  }}
                 >
                   <span className="text-sm font-medium text-gray-900 truncate min-w-0 flex-1">
-                    <HighlightedName name={item.entry.name} ranges={item.ranges} />
+                    <HighlightedName name={item.entry.displayPath} ranges={item.ranges} />
                   </span>
-                  {item.entry.folder && (
-                    <span className="text-xs text-gray-400 truncate flex-shrink-0">
-                      {item.entry.folder}
-                    </span>
-                  )}
                 </div>
               );
             })}

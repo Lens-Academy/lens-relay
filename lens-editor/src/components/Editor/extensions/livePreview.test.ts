@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   createTestEditor,
   moveCursor,
@@ -212,6 +212,74 @@ describe('livePreview - wikilinks', () => {
     expect(widgets[0].textContent).toBe('My Page');
   });
 
+  it('calls onOpenNewTab on ctrl+click', () => {
+    const onClick = vi.fn();
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('[[My Page]] end', 15, {
+      onClick,
+      onOpenNewTab,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget).not.toBeNull();
+    widget.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('calls onOpenNewTab on meta+click', () => {
+    const onClick = vi.fn();
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('[[My Page]] end', 15, {
+      onClick,
+      onOpenNewTab,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget).not.toBeNull();
+    widget.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true }));
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('calls onOpenNewTab on middle-click', () => {
+    const onClick = vi.fn();
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('[[My Page]] end', 15, {
+      onClick,
+      onOpenNewTab,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget).not.toBeNull();
+    widget.dispatchEvent(new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(onOpenNewTab).toHaveBeenCalledWith('My Page');
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('calls onClick on plain click (no modifiers)', () => {
+    const onClick = vi.fn();
+    const onOpenNewTab = vi.fn();
+    const { view, cleanup: c } = createTestEditor('[[My Page]] end', 15, {
+      onClick,
+      onOpenNewTab,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget).not.toBeNull();
+    widget.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onClick).toHaveBeenCalledWith('My Page');
+    expect(onOpenNewTab).not.toHaveBeenCalled();
+  });
+
   it('updates widget resolved state when metadata changes', () => {
     const content = '[[Target Page]] end';
 
@@ -311,5 +379,208 @@ describe('livePreview - inline code', () => {
 
     // Backticks should be visible (no hidden-syntax on CodeMark)
     expect(hasClass(view, 'cm-inline-code')).toBe(false);
+  });
+});
+
+describe('livePreview - bullet lists', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  it('replaces bullet marker with dot widget when cursor outside', () => {
+    const content = '- item one\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 20);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-bullet')).toBe(true);
+  });
+
+  it('shows raw - marker when cursor touches marker', () => {
+    // Cursor at position 0 = on the `-` character
+    const content = '- item one\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-bullet')).toBe(false);
+  });
+
+  it('updates when cursor moves in and out of marker', () => {
+    const content = '- item one\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 20);
+    cleanup = c;
+
+    // Initially outside: bullet widget shown
+    expect(hasClass(view, 'cm-bullet')).toBe(true);
+
+    // Move cursor onto marker
+    moveCursor(view, 0);
+    expect(hasClass(view, 'cm-bullet')).toBe(false);
+
+    // Move cursor back outside
+    moveCursor(view, 20);
+    expect(hasClass(view, 'cm-bullet')).toBe(true);
+  });
+
+  it('does not replace ordered list markers', () => {
+    const content = '1. first item\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 22);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-bullet')).toBe(false);
+  });
+
+  it('handles nested bullet lists', () => {
+    const content = '- outer\n  - inner\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 27);
+    cleanup = c;
+
+    // Both bullets should be rendered
+    expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+
+  it('replaces * and + bullet markers with dot widget', () => {
+    const content = '* star item\n+ plus item\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 30);
+    cleanup = c;
+
+    expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+
+  it('does not replace bullet marker on task list items', () => {
+    // Task list items are handled by the checklist code, not bullet code
+    const content = '- [ ] task item\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 25);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-bullet')).toBe(false);
+  });
+});
+
+describe('livePreview - checklists', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  it('replaces unchecked task with checkbox widget when cursor outside', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 24);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-checkbox')).toBe(true);
+  });
+
+  it('replaces checked task with checked checkbox when cursor outside', () => {
+    const content = '- [x] buy milk\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 24);
+    cleanup = c;
+
+    const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement | null;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox!.checked).toBe(true);
+  });
+
+  it('treats uppercase [X] as checked', () => {
+    const content = '- [X] uppercase check\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 30);
+    cleanup = c;
+
+    const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement | null;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox!.checked).toBe(true);
+    expect(hasClass(view, 'cm-task-completed')).toBe(true);
+  });
+
+  it('shows raw [ ] when cursor touches checkbox marker', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    // Cursor at position 2 = on the `[` character
+    const { view, cleanup: c } = createTestEditor(content, 2);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-checkbox')).toBe(false);
+  });
+
+  it('reveals raw markdown when cursor is right after ] (position 5, touching)', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    // Position 5 = right after `]`, directly touching the marker
+    const { view, cleanup: c } = createTestEditor(content, 5);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-checkbox')).toBe(false);
+  });
+
+  it('keeps checkbox rendered when cursor is on trailing space (position 6, not touching)', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    // Position 6 = after the space following `]`, one space away from marker
+    const { view, cleanup: c } = createTestEditor(content, 6);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-checkbox')).toBe(true);
+  });
+
+  it('applies strikethrough to completed task text', () => {
+    const content = '- [x] done task\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 25);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-task-completed')).toBe(true);
+  });
+
+  it('no strikethrough on unchecked task text', () => {
+    const content = '- [ ] pending task\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 27);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-task-completed')).toBe(false);
+  });
+
+  it('checkbox click toggles [ ] to [x]', () => {
+    const content = '- [ ] buy milk\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 24);
+    cleanup = c;
+
+    const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+
+    // Click the checkbox
+    checkbox.click();
+
+    // Document should now contain [x]
+    expect(view.state.doc.toString()).toContain('- [x] buy milk');
+  });
+
+  it('checkbox click toggles [x] to [ ]', () => {
+    const content = '- [x] buy milk\n\nParagraph';
+    const { view, cleanup: c } = createTestEditor(content, 24);
+    cleanup = c;
+
+    const checkbox = view.contentDOM.querySelector('.cm-checkbox') as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+
+    // Click the checkbox
+    checkbox.click();
+
+    // Document should now contain [ ]
+    expect(view.state.doc.toString()).toContain('- [ ] buy milk');
+  });
+
+  it('toggle preserves surrounding text', () => {
+    const content = '- [ ] buy milk\n- [x] eggs\n\nEnd';
+    const { view, cleanup: c } = createTestEditor(content, 30);
+    cleanup = c;
+
+    // Toggle the first checkbox
+    const checkboxes = view.contentDOM.querySelectorAll('.cm-checkbox') as NodeListOf<HTMLInputElement>;
+    expect(checkboxes.length).toBe(2);
+
+    checkboxes[0].click();
+
+    const doc = view.state.doc.toString();
+    expect(doc).toContain('- [x] buy milk');
+    expect(doc).toContain('- [x] eggs');
+    expect(doc).toContain('End');
   });
 });

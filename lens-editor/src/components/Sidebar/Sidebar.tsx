@@ -15,6 +15,7 @@ import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } 
 import { createDocument, deleteDocument, moveDocument } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
+import { openDocInNewTab } from '../../lib/url-utils';
 
 export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -105,6 +106,11 @@ export function Sidebar() {
     const compoundDocId = `${RELAY_ID}-${docId}`;
     onNavigate(compoundDocId);
   }, [onNavigate]);
+
+  // Open a document in a new browser tab
+  const handleOpenNewTab = useCallback((docId: string) => {
+    openDocInNewTab(RELAY_ID, docId, metadata);
+  }, [metadata]);
 
   // CRUD handlers
   const handleRenameSubmit = useCallback(async (prefixedOldPath: string, newName: string, docId: string) => {
@@ -224,7 +230,7 @@ export function Sidebar() {
   }, [folderNames]);
 
   return (
-    <aside className="w-64 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col h-full">
+    <aside className="w-full h-full bg-white border-r border-gray-200 flex flex-col">
       {/* Header with search */}
       <div className="p-3 border-b border-gray-200 space-y-2">
         <SearchInput
@@ -236,7 +242,7 @@ export function Sidebar() {
       </div>
 
       {/* Tree content or search results */}
-      <div className={`flex-1 overflow-y-auto ${isStale && !showSearchResults ? 'opacity-80' : ''}`}>
+      <div className={`flex-1 min-h-0 flex flex-col ${showSearchResults ? 'overflow-y-auto' : ''} ${isStale && !showSearchResults ? 'opacity-80' : ''}`}>
         {showSearchResults ? (
           <SearchPanel
             results={enrichedSearchResults}
@@ -305,25 +311,29 @@ export function Sidebar() {
             )}
 
             {filteredTree.length > 0 && (
-              <FileTreeProvider
-                value={{
-                  editingPath,
-                  onEditingChange: setEditingPath,
-                  onRequestRename: (path) => setEditingPath(path),
-                  onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
-                  onRequestMove: handleMoveRequest,
-                  onRenameSubmit: handleRenameSubmit,
-                  onCreateDocument: handleInstantCreate,
-                  activeDocId,
-                }}
-              >
-                <FileTree
-                  data={filteredTree}
-                  onSelect={handleSelect}
-                  onMove={handleDragMove}
-                  openAll={!!fileFilter}
-                />
-              </FileTreeProvider>
+              <div className="flex-1 min-h-0">
+                <FileTreeProvider
+                  value={{
+                    editingPath,
+                    onEditingChange: setEditingPath,
+                    onRequestRename: (path) => setEditingPath(path),
+                    onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
+                    onRequestMove: handleMoveRequest,
+                    onRenameSubmit: handleRenameSubmit,
+                    onCreateDocument: handleInstantCreate,
+                    onOpenNewTab: handleOpenNewTab,
+                    activeDocId,
+                  }}
+                >
+                  <FileTree
+                    data={filteredTree}
+                    onSelect={handleSelect}
+                    onMove={handleDragMove}
+                    openAll={!!fileFilter}
+                    activeDocId={activeDocId}
+                  />
+                </FileTreeProvider>
+              </div>
             )}
           </>
         )}

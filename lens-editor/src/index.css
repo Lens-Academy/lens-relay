@@ -156,6 +156,25 @@
   font-size: 0.9em;
 }
 
+/* Bullet list dot */
+.cm-bullet {
+  color: #6b7280;
+}
+
+/* Checklist checkbox */
+.cm-checkbox {
+  cursor: pointer;
+  vertical-align: middle;
+  margin: 0 4px 0 0;
+  width: 15px;
+  height: 15px;
+}
+
+/* Completed task strikethrough */
+.cm-task-completed {
+  text-decoration: line-through;
+}
+
 /* Table of Contents panel */
 .toc-panel {
   font-size: 0.875rem;

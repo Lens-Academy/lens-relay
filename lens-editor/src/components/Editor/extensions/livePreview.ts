@@ -11,6 +11,9 @@
  * - Asterisks/underscores hidden when cursor not on that text
  * - Links render as clickable text with external link icon
  * - Inline code shows with distinct background styling
+ * - Bullet list markers replaced with dot (•) widget
+ * - Checklists rendered as interactive checkboxes with toggle
+ * - Completed tasks shown with strikethrough
  */
 
 import {
@@ -52,6 +55,7 @@ const INLINE_CODE_CLASS = 'cm-inline-code';
  */
 export interface WikilinkContext {
   onClick: (pageName: string) => void;
+  onOpenNewTab?: (pageName: string) => void;
   isResolved: (pageName: string) => boolean;
 }
 
@@ -91,8 +95,18 @@ class WikilinkWidget extends WidgetType {
     span.style.cursor = 'pointer';
     span.onclick = (e) => {
       e.preventDefault();
-      if (wikilinkContext) {
+      if (!wikilinkContext) return;
+      if (e.ctrlKey || e.metaKey) {
+        wikilinkContext.onOpenNewTab?.(this.pageName);
+      } else {
         wikilinkContext.onClick(this.pageName);
+      }
+    };
+    span.onmousedown = (e) => { if (e.button === 1) e.preventDefault(); };
+    span.onauxclick = (e) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        wikilinkContext?.onOpenNewTab?.(this.pageName);
       }
     };
     return span;
@@ -141,6 +155,62 @@ class LinkWidget extends WidgetType {
 
   eq(other: LinkWidget): boolean {
     return this.text === other.text && this.url === other.url;
+  }
+}
+
+/**
+ * BulletWidget - Renders bullet list markers as a dot character
+ */
+class BulletWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-bullet';
+    span.textContent = '\u2022';
+    return span;
+  }
+
+  eq(_other: BulletWidget): boolean {
+    return true;
+  }
+}
+
+/**
+ * CheckboxWidget - Renders checklist markers as interactive checkboxes.
+ * Clicking toggles [ ] <-> [x] in the document.
+ */
+class CheckboxWidget extends WidgetType {
+  private checked: boolean;
+  private view: EditorView;
+  private markerFrom: number;
+  private markerTo: number;
+
+  constructor(checked: boolean, view: EditorView, markerFrom: number, markerTo: number) {
+    super();
+    this.checked = checked;
+    this.view = view;
+    this.markerFrom = markerFrom;
+    this.markerTo = markerTo;
+  }
+
+  toDOM(): HTMLElement {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'cm-checkbox';
+    input.checked = this.checked;
+    input.onclick = (e) => {
+      e.preventDefault();
+      const newText = this.checked ? '[ ]' : '[x]';
+      this.view.dispatch({
+        changes: { from: this.markerFrom, to: this.markerTo, insert: newText },
+      });
+    };
+    return input;
+  }
+
+  eq(other: CheckboxWidget): boolean {
+    return this.checked === other.checked
+      && this.markerFrom === other.markerFrom
+      && this.markerTo === other.markerTo;
   }
 }
 
@@ -333,6 +403,80 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     to: node.to,
                     deco: Decoration.mark({ class: HIDDEN_CLASS }),
                   });
+                }
+              }
+            }
+
+            // ListMark in bullet lists: replace with dot widget when cursor not touching
+            if (node.name === 'ListMark') {
+              // Only handle bullet lists, not ordered lists
+              const parent = node.node.parent; // ListItem
+              const grandparent = parent?.parent; // BulletList or OrderedList
+              if (grandparent && grandparent.name === 'BulletList') {
+                // Skip if this is a task list item (has Task child — handled by checklist code)
+                const listItem = parent;
+                let isTask = false;
+                if (listItem) {
+                  for (let child = listItem.firstChild; child; child = child.nextSibling) {
+                    if (child.name === 'Task') { isTask = true; break; }
+                  }
+                }
+                if (!isTask && !selectionIntersects(selection, node.from, node.to)) {
+                  decorations.push({
+                    from: node.from,
+                    to: node.to,
+                    deco: Decoration.replace({
+                      widget: new BulletWidget(),
+                    }),
+                  });
+                }
+              }
+            }
+
+            // TaskMarker: replace list marker + task marker with checkbox widget
+            if (node.name === 'TaskMarker') {
+              // Find the ListMark sibling (the `- ` part)
+              const task = node.node.parent; // Task node
+              const listItem = task?.parent; // ListItem node
+              let listMark: { from: number; to: number } | null = null;
+              if (listItem) {
+                for (let child = listItem.firstChild; child; child = child.nextSibling) {
+                  if (child.name === 'ListMark') {
+                    listMark = { from: child.from, to: child.to };
+                    break;
+                  }
+                }
+              }
+
+              const replaceFrom = listMark ? listMark.from : node.from;
+              // Include trailing space after ] in the replacement range
+              const replaceTo = Math.min(node.to + 1, view.state.doc.lineAt(node.from).to);
+
+              // Cursor proximity: reveal raw when cursor touches the marker chars.
+              // node.to is the position right after ], which counts as "touching".
+              // The trailing space (node.to + 1) does NOT trigger reveal.
+              if (!selectionIntersects(selection, replaceFrom, node.to)) {
+                const markerText = view.state.doc.sliceString(node.from, node.to);
+                const isChecked = markerText !== '[ ]';
+
+                decorations.push({
+                  from: replaceFrom,
+                  to: replaceTo,
+                  deco: Decoration.replace({
+                    widget: new CheckboxWidget(isChecked, view, node.from, node.to),
+                  }),
+                });
+
+                // Strikethrough for completed tasks
+                if (isChecked) {
+                  const lineEnd = view.state.doc.lineAt(node.from).to;
+                  if (replaceTo < lineEnd) {
+                    decorations.push({
+                      from: replaceTo,
+                      to: lineEnd,
+                      deco: Decoration.mark({ class: 'cm-task-completed' }),
+                    });
+                  }
                 }
               }
             }

@@ -5,8 +5,8 @@
  *
  * @vitest-environment happy-dom
  */
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
@@ -101,6 +101,75 @@ describe('Sidebar with multi-folder metadata', () => {
     // The Lens folder row should contain a create-document button
     const createBtn = screen.getByRole('button', { name: /create document in Lens/i });
     expect(createBtn).toBeInTheDocument();
+  });
+
+  it('opens file in new tab on ctrl+click', async () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const mockNavigate = vi.fn();
+    const metadata = {
+      '/Lens/Welcome.md': { id: 'welcome', type: 'markdown' as const, version: 0 },
+    };
+    const folderDocs = new Map<string, Y.Doc>([['Lens', new Y.Doc()]]);
+    const folderNames = ['Lens'];
+    const errors = new Map<string, Error>();
+
+    render(
+      <MemoryRouter initialEntries={['/c0000001/Lens/Welcome.md']}>
+        <NavigationContext.Provider
+          value={{ metadata, folderDocs, folderNames, errors, onNavigate: mockNavigate, justCreatedRef: { current: false } }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    // Find the file node text, then its clickable parent row
+    const fileText = screen.getByText('Welcome.md');
+    const fileRow = fileText.closest('[class*="cursor-pointer"]') as HTMLElement;
+    expect(fileRow).not.toBeNull();
+
+    fireEvent.click(fileRow, { ctrlKey: true });
+
+    expect(windowOpen).toHaveBeenCalledWith(
+      expect.stringContaining('/welcome'),
+      '_blank'
+    );
+    expect(mockNavigate).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
+  });
+
+  it('opens file in new tab on middle-click', async () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const mockNavigate = vi.fn();
+    const metadata = {
+      '/Lens/Welcome.md': { id: 'welcome', type: 'markdown' as const, version: 0 },
+    };
+    const folderDocs = new Map<string, Y.Doc>([['Lens', new Y.Doc()]]);
+    const folderNames = ['Lens'];
+    const errors = new Map<string, Error>();
+
+    render(
+      <MemoryRouter initialEntries={['/c0000001/Lens/Welcome.md']}>
+        <NavigationContext.Provider
+          value={{ metadata, folderDocs, folderNames, errors, onNavigate: mockNavigate, justCreatedRef: { current: false } }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    const fileText = screen.getByText('Welcome.md');
+    const fileRow = fileText.closest('[class*="cursor-pointer"]') as HTMLElement;
+    expect(fileRow).not.toBeNull();
+
+    fireEvent(fileRow, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+
+    expect(windowOpen).toHaveBeenCalledWith(
+      expect.stringContaining('/welcome'),
+      '_blank'
+    );
+    expect(mockNavigate).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
   });
 
   it('creates document in correct folder when "+" is clicked', async () => {
