@@ -184,6 +184,8 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const sidebarRef = usePanelRef();
   const rightSidebarRef = usePanelRef();
+  const discussionRef = usePanelRef();
+  const [discussionCollapsed, setDiscussionCollapsed] = useState(true);
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
@@ -210,6 +212,16 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
       panel.collapse();
     }
   }, [rightSidebarRef]);
+
+  const toggleDiscussion = useCallback(() => {
+    const panel = discussionRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) {
+      panel.expand();
+    } else {
+      panel.collapse();
+    }
+  }, [discussionRef]);
 
   // Ctrl+O keyboard shortcut to open quick switcher
   useEffect(() => {
@@ -241,7 +253,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     <AuthProvider role={role}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
-        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, rightSidebarRef, rightCollapsed, setRightCollapsed }}>
+        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, headerStage: 'full' }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div className="h-screen flex flex-col bg-gray-50">
             {/* Full-width global header */}
