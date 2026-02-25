@@ -36,6 +36,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const { rightSidebarRef, setRightCollapsed, discussionRef, setDiscussionCollapsed, headerStage } = useSidebar();
   const hasDiscussion = useHasDiscussion();
 
+  const [isDragging, setIsDragging] = useState(false);
   const { ref: innerRef, width: innerWidth } = useContainerWidth();
 
   const RIGHT_SIDEBAR_MIN_PX = 200;
@@ -111,7 +112,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       )}
       {/* Editor + Sidebars container */}
       <div ref={innerRef as RefObject<HTMLDivElement>} className="flex-1 flex min-h-0">
-        <Group id="editor-area" className="flex-1 min-h-0">
+        <Group id="editor-area" className={`flex-1 min-h-0${isDragging ? ' panels-dragging' : ''}`}>
           {/* Editor */}
           <Panel id="editor" order={1} minSize="30%">
             <div className="h-full flex flex-col min-w-0 bg-white">
@@ -132,7 +133,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </div>
           </Panel>
 
-          <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+          <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
 
           {/* Right sidebar — vertical Group for ToC / Backlinks / Comments */}
           <Panel id="right-sidebar" order={2} panelRef={rightSidebarRef} defaultSize="22%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
@@ -161,7 +162,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
           {hasDiscussion && (
             <>
-              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
               <Panel
                 id="discussion"
                 order={3}

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import { RelayProvider } from './providers/RelayProvider';
@@ -189,6 +189,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const rightSidebarRef = usePanelRef();
   const discussionRef = usePanelRef();
   const [discussionCollapsed, setDiscussionCollapsed] = useState(true);
+  const [isDragging, setIsDragging] = useState(false);
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
@@ -211,9 +212,10 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     : 12;
 
   // Auto-collapse all sidebars when content would be squeezed
+  const autoCollapseRefs = useMemo(() => [sidebarRef, rightSidebarRef], [sidebarRef, rightSidebarRef]);
   useAutoCollapse({
     containerWidth: outerWidth,
-    panelRefs: [sidebarRef, rightSidebarRef],
+    panelRefs: autoCollapseRefs,
     pixelMinimums: [LEFT_SIDEBAR_MIN_PX, RIGHT_SIDEBAR_MIN_PX],
     contentMinPx: CONTENT_MIN_PX,
   });
@@ -280,10 +282,10 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
         <DisplayNamePrompt />
         <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, headerStage }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
-          <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50">
+          <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}
-            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-white shadow-sm border-b border-gray-200">
-              <div className="flex items-center gap-6">
+            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-white shadow-sm border-b border-gray-200 min-w-0 overflow-hidden">
+              <div className="flex items-center gap-6 min-w-0">
                 <button
                   onClick={toggleLeftSidebar}
                   title="Toggle left sidebar"
@@ -300,7 +302,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                 )}
                 <div id="header-breadcrumb" />
               </div>
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4 flex-shrink-0">
                 <div id="header-controls" className="flex items-center gap-4" />
                 {headerStage !== 'overflow' && (
                   <DisplayNameBadge compact={headerStage === 'hide-username'} />
@@ -328,11 +330,11 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                 </button>
               </div>
             </header>
-            <Group id="app-outer" className="flex-1 min-h-0">
+            <Group id="app-outer" className={`flex-1 min-h-0${isDragging ? ' panels-dragging' : ''}`}>
               <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize={`${leftMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}>
                 <Sidebar />
               </Panel>
-              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
               <Panel id="main-content" minSize="30%">
                 <Routes>
                   <Route path="/:docUuid/*" element={<DocumentView />} />

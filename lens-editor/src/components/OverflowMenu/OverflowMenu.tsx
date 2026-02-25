@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 interface OverflowMenuProps {
   children: ReactNode;
@@ -6,16 +7,40 @@ interface OverflowMenuProps {
 
 /**
  * A "..." button that shows a dropdown with overflowed header items.
+ * Uses a portal so the dropdown escapes overflow-hidden ancestors.
  */
 export function OverflowMenu({ children }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Position dropdown below the button
+  const [pos, setPos] = useState({ top: 0, right: 0 });
+  const updatePosition = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    setPos({
+      top: rect.bottom + 4,
+      right: window.innerWidth - rect.right,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    return () => window.removeEventListener('resize', updatePosition);
+  }, [open, updatePosition]);
 
   // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        buttonRef.current && !buttonRef.current.contains(target) &&
+        dropdownRef.current && !dropdownRef.current.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -34,8 +59,9 @@ export function OverflowMenu({ children }: OverflowMenuProps) {
   }, [open]);
 
   return (
-    <div ref={menuRef} className="relative">
+    <>
       <button
+        ref={buttonRef}
         onClick={() => setOpen(!open)}
         className="p-1.5 rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors cursor-pointer"
         aria-label="More options"
@@ -46,13 +72,18 @@ export function OverflowMenu({ children }: OverflowMenuProps) {
         </svg>
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-48">
+      {open && createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-48"
+          style={{ top: pos.top, right: pos.right }}
+        >
           <div className="flex flex-col gap-1 p-2">
             {children}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }

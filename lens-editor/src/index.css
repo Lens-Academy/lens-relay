@@ -285,3 +285,14 @@
   outline: 2px solid #2563eb;
   outline-offset: 1px;
 }
+
+/* Panel collapse/expand animation */
+[data-panel-group-id="app-outer"] > [data-panel],
+[data-panel-group-id="editor-area"] > [data-panel] {
+  transition: flex-grow 200ms ease-out;
+}
+
+/* Disable animation during manual drag resize */
+[data-panel-group-id].panels-dragging > [data-panel] {
+  transition: none;
+}

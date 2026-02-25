@@ -13,9 +13,14 @@ interface UseAutoCollapseOptions {
   contentMinPx: number;
 }
 
+const HYSTERESIS_PX = 50;
+
 /**
- * Auto-collapses all panels when the container is too narrow for content.
- * One-time trigger per threshold crossing — resets when going back above.
+ * Auto-collapses panels when the container is too narrow, and auto-expands
+ * them when it grows back. Uses hysteresis to prevent flickering.
+ *
+ * Only panels that were auto-collapsed get auto-expanded — panels the user
+ * manually collapsed are left alone.
  */
 export function useAutoCollapse({
   containerWidth,
@@ -23,22 +28,26 @@ export function useAutoCollapse({
   pixelMinimums,
   contentMinPx,
 }: UseAutoCollapseOptions) {
-  const hasCollapsedRef = useRef(false);
+  const autoCollapsedRef = useRef<Set<RefObject<PanelImperativeHandle | null>>>(new Set());
 
   const threshold = pixelMinimums.reduce((sum, px) => sum + px, 0) + contentMinPx;
   const isBelowThreshold = containerWidth > 0 && containerWidth < threshold;
+  const isAboveExpandThreshold = containerWidth >= threshold + HYSTERESIS_PX;
 
   useEffect(() => {
-    if (isBelowThreshold && !hasCollapsedRef.current) {
+    if (isBelowThreshold && autoCollapsedRef.current.size === 0) {
       for (const ref of panelRefs) {
         const panel = ref.current;
         if (panel && !panel.isCollapsed()) {
           panel.collapse();
+          autoCollapsedRef.current.add(ref);
         }
       }
-      hasCollapsedRef.current = true;
-    } else if (!isBelowThreshold) {
-      hasCollapsedRef.current = false;
+    } else if (isAboveExpandThreshold && autoCollapsedRef.current.size > 0) {
+      for (const ref of autoCollapsedRef.current) {
+        ref.current?.expand();
+      }
+      autoCollapsedRef.current.clear();
     }
-  }, [isBelowThreshold, panelRefs]);
+  }, [isBelowThreshold, isAboveExpandThreshold, panelRefs]);
 }
