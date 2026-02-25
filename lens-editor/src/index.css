@@ -186,15 +186,6 @@
   padding: 0;
 }
 
-.toc-panel li {
-  border-left: 2px solid transparent;
-  transition: border-color 0.15s ease;
-}
-
-.toc-panel li:hover {
-  border-left-color: #6366f1;
-}
-
 /* CriticMarkup styles */
 .cm-addition {
   background-color: rgba(34, 197, 94, 0.2); /* green-500 with opacity */
