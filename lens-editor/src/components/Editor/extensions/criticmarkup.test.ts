@@ -674,7 +674,7 @@ describe('CriticMarkup Extension', () => {
       expect(badge).not.toBeNull();
     });
 
-    it('badge contains superscript number', () => {
+    it('badge contains plain number', () => {
       const { view, cleanup: c } = createCriticMarkupEditor(
         'hello {>>a comment<<} end',
         0
@@ -682,7 +682,7 @@ describe('CriticMarkup Extension', () => {
       cleanup = c;
 
       const badge = view.contentDOM.querySelector('.cm-comment-badge');
-      expect(badge?.textContent).toBe('\u00B9'); // superscript 1
+      expect(badge?.textContent).toBe('1');
     });
 
     it('hides comment content with badge replacement', () => {
@@ -706,8 +706,8 @@ describe('CriticMarkup Extension', () => {
 
       const badges = view.contentDOM.querySelectorAll('.cm-comment-badge');
       expect(badges.length).toBe(2);
-      expect(badges[0].textContent).toBe('\u00B9'); // 1
-      expect(badges[1].textContent).toBe('\u00B2'); // 2
+      expect(badges[0].textContent).toBe('1');
+      expect(badges[1].textContent).toBe('2');
     });
 
     it('uses single badge for adjacent comments (thread)', () => {
@@ -719,7 +719,7 @@ describe('CriticMarkup Extension', () => {
 
       const badges = view.contentDOM.querySelectorAll('.cm-comment-badge');
       expect(badges.length).toBe(1);
-      expect(badges[0].textContent).toBe('\u00B9');
+      expect(badges[0].textContent).toBe('1');
     });
 
     it('stores thread from position in data attribute', () => {

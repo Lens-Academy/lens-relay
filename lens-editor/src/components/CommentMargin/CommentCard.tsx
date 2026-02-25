@@ -33,13 +33,13 @@ export const CommentCard = forwardRef<HTMLDivElement, CommentCardProps>(
         className={`comment-card border border-gray-200 rounded-lg bg-white shadow-sm ${focused ? 'comment-card-focused' : ''}`}
         style={style}
         onClick={() => {
+          if (!focused) onScrollToComment();
           onFocus();
-          onScrollToComment();
         }}
       >
         <div className="px-3 py-2">
           <div className="flex items-center gap-2 mb-1">
-            <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-blue-50 text-blue-600 border border-blue-200 rounded-full text-xs font-semibold">
+            <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-xs font-semibold border ${focused ? 'bg-blue-700 text-white border-blue-700' : 'bg-blue-50 text-blue-600 border-blue-200'}`}>
               {badgeNumber}
             </span>
             <span className="text-sm font-medium text-gray-900">{author}</span>

@@ -62,7 +62,24 @@ export const toggleSuggestionMode = StateEffect.define<boolean>();
  * StateEffect dispatched when a comment badge is clicked.
  * Carries the thread's `from` position for focusing the comment card.
  */
-export const focusCommentThread = StateEffect.define<number>();
+export const focusCommentThread = StateEffect.define<number | null>();
+
+/**
+ * StateField tracking which comment thread is focused (by `from` position).
+ * Updated when a comment badge is clicked or a card is focused in the margin.
+ */
+export const focusedThreadField = StateField.define<number | null>({
+  create() { return null; },
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(focusCommentThread)) return e.value;
+    }
+    if (value !== null && tr.docChanged) {
+      return tr.changes.mapPos(value);
+    }
+    return value;
+  },
+});
 
 // Superscript digit characters for badge numbers
 const SUPERSCRIPT_DIGITS = ['\u2070', '\u00B9', '\u00B2', '\u00B3', '\u2074', '\u2075', '\u2076', '\u2077', '\u2078', '\u2079'];
@@ -85,7 +102,7 @@ class CommentBadgeWidget extends WidgetType {
   toDOM(): HTMLElement {
     const span = document.createElement('span');
     span.className = 'cm-comment-badge';
-    span.textContent = toSuperscript(this.number);
+    span.textContent = String(this.number);
     span.dataset.threadFrom = String(this.threadFrom);
     return span;
   }
@@ -234,9 +251,10 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         } else if (target.classList.contains('cm-comment-badge')) {
           e.preventDefault();
           e.stopPropagation();
+          const currentFocused = view.state.field(focusedThreadField);
           const threadFrom = parseInt(target.dataset.threadFrom ?? '', 10);
           if (!isNaN(threadFrom)) {
-            view.dispatch({ effects: focusCommentThread.of(threadFrom) });
+            view.dispatch({ effects: focusCommentThread.of(currentFocused === threadFrom ? null : threadFrom) });
           }
         }
       });
@@ -245,6 +263,15 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
     update(update: ViewUpdate) {
       if (update.docChanged || update.viewportChanged || update.selectionSet) {
         this.decorations = this.buildDecorations(update.view);
+        return;
+      }
+      for (const tr of update.transactions) {
+        for (const e of tr.effects) {
+          if (e.is(focusCommentThread)) {
+            this.decorations = this.buildDecorations(update.view);
+            return;
+          }
+        }
       }
     }
 
@@ -270,6 +297,24 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
             isFirst: ci === 0,
             threadFrom: thread.from,
           });
+        }
+      }
+
+      // Focused comment thread highlight
+      const focusedFrom = view.state.field(focusedThreadField);
+      if (focusedFrom !== null) {
+        const focusedThread = threads.find(t => t.from === focusedFrom);
+        if (focusedThread) {
+          const doc = view.state.doc;
+          const startLine = doc.lineAt(focusedThread.from).number;
+          const endLine = doc.lineAt(focusedThread.to).number;
+          for (let ln = startLine; ln <= endLine; ln++) {
+            const line = doc.line(ln);
+            lineDecos.push({
+              from: line.from,
+              deco: Decoration.line({ class: 'cm-comment-focused-line' }),
+            });
+          }
         }
       }
 
@@ -787,6 +832,7 @@ export function criticMarkupExtension() {
   return [
     criticMarkupField,
     suggestionModeField,
+    focusedThreadField,
     suggestionModeFilter,
     criticMarkupCompartment.of(criticMarkupPlugin),
     keymap.of(criticMarkupKeymap),

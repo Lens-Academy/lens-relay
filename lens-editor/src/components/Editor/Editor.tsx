@@ -27,7 +27,7 @@ import { livePreview, updateWikilinkContext, wikilinkMetadataChanged } from './e
 import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
 import { remoteCursorTheme } from './remoteCursorTheme';
-import { criticMarkupExtension } from './extensions/criticmarkup';
+import { criticMarkupExtension, focusCommentThread } from './extensions/criticmarkup';
 import { ContextMenu } from './ContextMenu';
 import { getContextMenuItems } from './extensions/criticmarkup-context-menu';
 import type { ContextMenuItem } from './extensions/criticmarkup-context-menu';
@@ -305,9 +305,14 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, onReq
             textDecoration: 'none !important',
           },
         }),
-        // Notify parent of document changes (for ToC updates)
+        // Notify parent of document changes and comment focus (for ToC + comment margin updates)
         ...(onDocChange ? [EditorView.updateListener.of((update) => {
-          if (update.docChanged) onDocChange();
+          if (update.docChanged) { onDocChange(); return; }
+          for (const tr of update.transactions) {
+            for (const e of tr.effects) {
+              if (e.is(focusCommentThread)) { onDocChange(); return; }
+            }
+          }
         })] : []),
       ],
     });

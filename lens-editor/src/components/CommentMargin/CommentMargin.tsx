@@ -4,6 +4,7 @@ import { useComments } from '../CommentsPanel/useComments';
 import { CommentCard } from './CommentCard';
 import { NewCommentCard } from './NewCommentCard';
 import { insertCommentAt, scrollToPosition } from '../../lib/comment-utils';
+import { focusedThreadField, focusCommentThread } from '../Editor/extensions/criticmarkup';
 import {
   resolveOverlaps,
   computeSharedHeight,
@@ -31,16 +32,20 @@ export function CommentMargin({
   const mapper: PositionMapper = positionMapper ?? ((pos) => view.lineBlockAt(pos).top);
 
   const threads = useComments(view);
-  const [focusedThreadFrom, setFocusedThreadFrom] = useState<number | null>(null);
+  const focusedThreadFrom = view.state.field(focusedThreadField);
   const [showNewComment, setShowNewComment] = useState(false);
   const [newCommentY, setNewCommentY] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const cardHeightsRef = useRef<Map<number, number>>(new Map());
+  const cardElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const [cardHeightsVersion, setCardHeightsVersion] = useState(0);
   const prevTriggerRef = useRef(addCommentTrigger);
 
-  // Trigger re-render (stateVersion changes handled by parent)
+  // Trigger re-render (stateVersion and cardHeightsVersion changes)
   void stateVersion;
+  void cardHeightsVersion;
 
   // Show new comment card when trigger increments
   useEffect(() => {
@@ -89,13 +94,39 @@ export function CommentMargin({
   const editorScrollHeight = view.scrollDOM.scrollHeight;
   const sharedHeight = computeSharedHeight(editorScrollHeight, lastBottom);
 
-  // Measure card heights via ref callbacks
-  const measureCard = useCallback((threadFrom: number, el: HTMLDivElement | null) => {
-    if (el) {
-      const height = el.getBoundingClientRect().height;
-      if (height > 0) {
-        cardHeightsRef.current.set(threadFrom, height);
+  // ResizeObserver to track card height changes (replies, form open/close)
+  useEffect(() => {
+    const observer = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const entry of entries) {
+        const el = entry.target as HTMLDivElement;
+        const threadFrom = Number(el.dataset.threadFrom);
+        if (isNaN(threadFrom)) continue;
+        const newHeight = el.getBoundingClientRect().height;
+        if (newHeight > 0 && cardHeightsRef.current.get(threadFrom) !== newHeight) {
+          cardHeightsRef.current.set(threadFrom, newHeight);
+          changed = true;
+        }
       }
+      if (changed) setCardHeightsVersion(v => v + 1);
+    });
+    observerRef.current = observer;
+    return () => observer.disconnect();
+  }, []);
+
+  // Ref callback: observe/unobserve card elements for resize tracking
+  const measureCard = useCallback((threadFrom: number, el: HTMLDivElement | null) => {
+    const observer = observerRef.current;
+    if (!observer) return;
+    const prev = cardElsRef.current.get(threadFrom);
+    if (prev && prev !== el) {
+      observer.unobserve(prev);
+      cardElsRef.current.delete(threadFrom);
+    }
+    if (el) {
+      el.dataset.threadFrom = String(threadFrom);
+      observer.observe(el);
+      cardElsRef.current.set(threadFrom, el);
     }
   }, []);
 
@@ -128,10 +159,13 @@ export function CommentMargin({
               thread={thread}
               badgeNumber={badgeNumber}
               focused={focusedThreadFrom === thread.from}
-              onFocus={() => setFocusedThreadFrom(thread.from)}
+              onFocus={() => {
+                const current = view.state.field(focusedThreadField);
+                view.dispatch({ effects: focusCommentThread.of(current === thread.from ? null : thread.from) });
+              }}
               onReply={(content) => handleReply(thread.to, content)}
               onScrollToComment={() => scrollToPosition(view, thread.comments[0].contentFrom)}
-              style={{ position: 'absolute', top: layoutY, width: '100%' }}
+              style={{ position: 'absolute', top: layoutY, left: 6, right: 6 }}
             />
           );
         })}
@@ -140,7 +174,7 @@ export function CommentMargin({
           <NewCommentCard
             onSubmit={handleNewCommentSubmit}
             onCancel={() => setShowNewComment(false)}
-            style={{ position: 'absolute', top: newCommentY, width: '100%' }}
+            style={{ position: 'absolute', top: newCommentY, left: 6, right: 6 }}
           />
         )}
       </div>
