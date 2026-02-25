@@ -245,7 +245,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div className="h-screen flex flex-col bg-gray-50">
             {/* Full-width global header */}
-            <header className="flex items-center justify-between px-4 py-2 bg-white shadow-sm border-b border-gray-200">
+            <header className="flex items-center justify-between px-4 py-2 bg-[#f6f6f6] border-b border-gray-200">
               <div className="flex items-center gap-6">
                 <button
                   onClick={toggleLeftSidebar}
@@ -281,7 +281,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize="12%" collapsible collapsedSize="0%" onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}>
                 <Sidebar />
               </Panel>
-              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+              <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
               <Panel id="main-content" minSize="30%">
                 <Routes>
                   <Route path="/:docUuid/*" element={<DocumentView />} />

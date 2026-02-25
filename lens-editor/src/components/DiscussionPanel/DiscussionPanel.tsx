@@ -55,7 +55,7 @@ export function DiscussionPanel({ doc }: DiscussionPanelProps) {
 
   return (
     <aside
-      className="w-80 flex-shrink-0 border-l border-gray-200 bg-white flex flex-col"
+      className="w-80 flex-shrink-0 bg-[#f6f6f6] flex flex-col"
       role="complementary"
       aria-label="Discussion"
     >

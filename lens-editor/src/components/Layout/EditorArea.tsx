@@ -107,24 +107,24 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </div>
           </Panel>
 
-          <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+          <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
 
           {/* Right sidebar — vertical Group for ToC / Backlinks / Comments */}
           <Panel id="right-sidebar" panelRef={rightSidebarRef} defaultSize="22%" minSize="14%" collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
-            <div className="h-full border-l border-gray-200 bg-white">
+            <div className="h-full bg-[#f6f6f6]">
               <Group id="right-panels" orientation="vertical">
                 <Panel id="toc" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
                   <div className="h-full overflow-y-auto">
                     <TableOfContents view={editorView} stateVersion={stateVersion} />
                   </div>
                 </Panel>
-                <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
+                <Separator className="h-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
                 <Panel id="backlinks" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
                   <div className="h-full overflow-y-auto">
                     <BacklinksPanel currentDocId={currentDocId} />
                   </div>
                 </Panel>
-                <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
+                <Separator className="h-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
                 <Panel id="comments" defaultSize="40%" minSize="10%" collapsible collapsedSize="0%">
                   <div className="h-full overflow-y-auto">
                     <CommentsPanel view={editorView} stateVersion={stateVersion} />
