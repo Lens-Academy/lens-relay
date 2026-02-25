@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import { RelayProvider } from './providers/RelayProvider';
@@ -20,6 +20,8 @@ import { urlForDoc } from './lib/url-utils';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { useRecentFiles } from './hooks/useRecentFiles';
+import { useContainerWidth } from './hooks/useContainerWidth';
+import { useAutoCollapse } from './hooks/useAutoCollapse';
 
 // VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
@@ -193,6 +195,26 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const { recentFiles, pushRecent } = useRecentFiles();
   const justCreatedRef = useRef(false);
 
+  const { ref: outerRef, width: outerWidth } = useContainerWidth();
+
+  // Pixel minimums
+  const LEFT_SIDEBAR_MIN_PX = 200;
+  const CONTENT_MIN_PX = 450;
+  const RIGHT_SIDEBAR_MIN_PX = 200;
+
+  // Dynamic minSize as percentage
+  const leftMinPercent = outerWidth > 0
+    ? Math.max((LEFT_SIDEBAR_MIN_PX / outerWidth) * 100, 1)
+    : 12;
+
+  // Auto-collapse all sidebars when content would be squeezed
+  useAutoCollapse({
+    containerWidth: outerWidth,
+    panelRefs: [sidebarRef, rightSidebarRef],
+    pixelMinimums: [LEFT_SIDEBAR_MIN_PX, RIGHT_SIDEBAR_MIN_PX],
+    contentMinPx: CONTENT_MIN_PX,
+  });
+
   const toggleLeftSidebar = useCallback(() => {
     const panel = sidebarRef.current;
     if (!panel) return;
@@ -255,7 +277,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
         <DisplayNamePrompt />
         <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, headerStage: 'full' }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
-          <div className="h-screen flex flex-col bg-gray-50">
+          <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50">
             {/* Full-width global header */}
             <header className="flex items-center justify-between px-4 py-2 bg-white shadow-sm border-b border-gray-200">
               <div className="flex items-center gap-6">
@@ -290,7 +312,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               </div>
             </header>
             <Group id="app-outer" className="flex-1 min-h-0">
-              <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize="12%" collapsible collapsedSize="0%" onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}>
+              <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize={`${leftMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}>
                 <Sidebar />
               </Panel>
               <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
