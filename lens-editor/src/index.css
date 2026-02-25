@@ -163,11 +163,27 @@
 
 /* Checklist checkbox */
 .cm-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
   cursor: pointer;
   vertical-align: middle;
+  position: relative;
+  top: -1.5px;
   margin: 0 4px 0 0;
   width: 15px;
   height: 15px;
+  border: 1px solid #9ca3af;
+  border-radius: 3px;
+  background: transparent;
+}
+
+.cm-checkbox:checked {
+  background-color: #9873f7;
+  border-color: #9873f7;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+  background-size: 12px 12px;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 /* Completed task strikethrough */
