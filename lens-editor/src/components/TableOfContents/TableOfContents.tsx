@@ -15,18 +15,7 @@ interface TableOfContentsProps {
 
 const INDENT_SIZE = 12;
 
-/** Style presets per normalized display level */
-const LEVEL_STYLES: Record<number, string> = {
-  1: 'text-[13px] font-semibold text-gray-900',
-  2: 'text-[12.5px] font-medium text-gray-800',
-  3: 'text-[12px] font-normal text-gray-700',
-  4: 'text-[11.5px] font-normal text-gray-500',
-};
-const LEVEL_STYLE_DEFAULT = 'text-[11px] font-normal text-gray-400';
-
-function getLevelStyle(displayLevel: number): string {
-  return LEVEL_STYLES[displayLevel] ?? LEVEL_STYLE_DEFAULT;
-}
+const HEADING_STYLE = 'text-xs font-normal text-gray-700';
 
 export function TableOfContents({ view, stateVersion }: TableOfContentsProps) {
   // stateVersion triggers re-render, not directly used in computation
@@ -130,10 +119,10 @@ export function TableOfContents({ view, stateVersion }: TableOfContentsProps) {
             guides.push(
               <span
                 key={g}
-                className="flex-shrink-0 relative"
+                className="flex-shrink-0 relative self-stretch"
                 style={{ width: INDENT_SIZE }}
               >
-                <span className="absolute left-[5px] top-0 bottom-0 w-px bg-gray-200" />
+                <span className="absolute left-[5px] -top-1.5 -bottom-1.5 w-px bg-gray-300" />
               </span>
             );
           }
@@ -143,10 +132,8 @@ export function TableOfContents({ view, stateVersion }: TableOfContentsProps) {
               key={`${heading.from}-${index}`}
               ref={isActive ? activeRef : null}
               className={[
-                'flex items-center py-1.5 pr-3 border-l-2 cursor-pointer transition-all duration-150',
-                isActive
-                  ? 'border-l-indigo-500 bg-indigo-50/60 text-gray-900 font-semibold'
-                  : `border-l-transparent hover:border-l-gray-300 hover:bg-gray-50 ${getLevelStyle(heading.displayLevel)}`,
+                `flex items-center py-1.5 pr-3 cursor-pointer transition-colors duration-150 ${HEADING_STYLE}`,
+                isActive ? 'bg-gray-100' : 'hover:bg-gray-50',
               ].join(' ')}
               title={heading.text}
               onClick={() => handleClick(heading)}

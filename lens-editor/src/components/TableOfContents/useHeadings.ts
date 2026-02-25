@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
+import { StateEffect } from '@codemirror/state';
 import type { EditorState } from '@codemirror/state';
 
 export interface Heading {
@@ -119,7 +120,8 @@ export function normalizeHeadingLevels(headings: Heading[]): NormalizedHeading[]
 }
 
 /**
- * Hook that tracks which heading is at/near the viewport top.
+ * Hook that tracks which heading the cursor is under.
+ * Finds the last heading at or before the cursor position.
  * Returns the index of the active heading (or -1 if none).
  */
 export function useActiveHeading(view: EditorView | null, headings: Heading[]): number {
@@ -131,20 +133,19 @@ export function useActiveHeading(view: EditorView | null, headings: Heading[]): 
       return;
     }
 
-    const viewportFrom = view.viewport.from;
+    const cursorPos = view.state.selection.main.head;
     let active = -1;
 
-    // Find the last heading at or before the viewport top
+    // Find the last heading at or before the cursor position
     for (let i = 0; i < headings.length; i++) {
-      if (headings[i].from <= viewportFrom) {
+      if (headings[i].from <= cursorPos) {
         active = i;
       } else {
         break;
       }
     }
 
-    // If no heading is before viewport top, use the first heading
-    // if the viewport is near the start of the document
+    // If cursor is before the first heading, highlight the first one
     if (active === -1 && headings.length > 0) {
       active = 0;
     }
@@ -158,21 +159,18 @@ export function useActiveHeading(view: EditorView | null, headings: Heading[]): 
     // Initial computation
     updateActive();
 
-    let rafId: number | null = null;
-    const onScroll = () => {
-      if (rafId !== null) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
+    // Listen for selection/cursor changes via EditorView update listener
+    const extension = EditorView.updateListener.of((update) => {
+      if (update.selectionSet) {
         updateActive();
-      });
-    };
+      }
+    });
 
-    view.scrollDOM.addEventListener('scroll', onScroll, { passive: true });
+    // Dispatch a reconfigure to add the listener
+    view.dispatch({ effects: StateEffect.appendConfig.of(extension) });
 
-    return () => {
-      view.scrollDOM.removeEventListener('scroll', onScroll);
-      if (rafId !== null) cancelAnimationFrame(rafId);
-    };
+    // No clean way to remove a dynamically added extension, but the effect
+    // is idempotent (setActiveIndex with same value is a no-op)
   }, [view, updateActive]);
 
   return activeIndex;
