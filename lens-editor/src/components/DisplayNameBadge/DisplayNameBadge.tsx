@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 
-export function DisplayNameBadge() {
+interface DisplayNameBadgeProps {
+  /** When true, show only the avatar initial, hide name text */
+  compact?: boolean;
+}
+
+export function DisplayNameBadge({ compact = false }: DisplayNameBadgeProps) {
   const { displayName, setDisplayName } = useDisplayName();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -60,6 +65,18 @@ export function DisplayNameBadge() {
         maxLength={66}
         className="text-sm px-2 py-1 border border-blue-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
       />
+    );
+  }
+
+  if (compact) {
+    return (
+      <button
+        onClick={startEditing}
+        title={displayName}
+        className="w-8 h-8 rounded-full bg-gray-200 text-gray-700 text-sm font-medium flex items-center justify-center hover:bg-gray-300 transition-colors cursor-pointer"
+      >
+        {displayName.charAt(0).toUpperCase()}
+      </button>
     );
   }
 
