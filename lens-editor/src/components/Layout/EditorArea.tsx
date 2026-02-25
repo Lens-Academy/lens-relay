@@ -8,6 +8,7 @@ import { DocumentTitle } from '../DocumentTitle';
 import { SourceModeToggle } from '../SourceModeToggle/SourceModeToggle';
 import { SuggestionModeToggle } from '../SuggestionModeToggle/SuggestionModeToggle';
 import { PresencePanel } from '../PresencePanel/PresencePanel';
+import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { CommentsPanel } from '../CommentsPanel';
@@ -32,7 +33,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
-  const { rightSidebarRef, setRightCollapsed, discussionRef, setDiscussionCollapsed } = useSidebar();
+  const { rightSidebarRef, setRightCollapsed, discussionRef, setDiscussionCollapsed, headerStage } = useSidebar();
   const hasDiscussion = useHasDiscussion();
 
   const { ref: innerRef, width: innerWidth } = useContainerWidth();
@@ -90,13 +91,22 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       })()}
       {/* Portal editor controls into global header */}
       {portalTarget && createPortal(
-        <>
-          <DebugYMapPanel />
-          <SuggestionModeToggle view={editorView} />
-          <SourceModeToggle editorView={editorView} />
-          <PresencePanel />
-          <SyncStatus />
-        </>,
+        headerStage === 'overflow' ? (
+          <OverflowMenu>
+            <SuggestionModeToggle view={editorView} iconOnly />
+            <SourceModeToggle editorView={editorView} />
+            <PresencePanel />
+            <SyncStatus />
+          </OverflowMenu>
+        ) : (
+          <>
+            <DebugYMapPanel />
+            <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} />
+            <SourceModeToggle editorView={editorView} />
+            <PresencePanel />
+            <SyncStatus />
+          </>
+        ),
         portalTarget
       )}
       {/* Editor + Sidebars container */}

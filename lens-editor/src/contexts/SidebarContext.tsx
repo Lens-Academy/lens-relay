@@ -1,5 +1,6 @@
 import { createContext, useContext, type RefObject } from 'react';
 import type { PanelImperativeHandle } from 'react-resizable-panels';
+import type { HeaderStage } from '../hooks/useHeaderBreakpoints';
 
 interface SidebarContextValue {
   toggleLeftSidebar: () => void;
@@ -12,7 +13,7 @@ interface SidebarContextValue {
   discussionCollapsed: boolean;
   setDiscussionCollapsed: (collapsed: boolean) => void;
   toggleDiscussion: () => void;
-  headerStage: string;
+  headerStage: HeaderStage;
 }
 
 export const SidebarContext = createContext<SidebarContextValue>({
