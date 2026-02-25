@@ -13,6 +13,7 @@ import { BacklinksPanel } from '../BacklinksPanel';
 import { CommentsPanel } from '../CommentsPanel';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
+import { useHasDiscussion } from '../DiscussionPanel/useHasDiscussion';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSidebar } from '../../contexts/SidebarContext';
@@ -31,7 +32,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
-  const { rightSidebarRef, setRightCollapsed } = useSidebar();
+  const { rightSidebarRef, setRightCollapsed, discussionRef, setDiscussionCollapsed } = useSidebar();
+  const hasDiscussion = useHasDiscussion();
 
   const { ref: innerRef, width: innerWidth } = useContainerWidth();
 
@@ -39,6 +41,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const rightMinPercent = innerWidth > 0
     ? Math.max((RIGHT_SIDEBAR_MIN_PX / innerWidth) * 100, 1)
     : 14;
+
+  const DISCUSSION_MIN_PX = 250;
+  const discussionMinPercent = innerWidth > 0
+    ? Math.max((DISCUSSION_MIN_PX / innerWidth) * 100, 1)
+    : 20;
 
   // Derive current file path from doc ID for wikilink resolution
   const currentFilePath = useMemo(() => {
@@ -96,7 +103,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       <div ref={innerRef as RefObject<HTMLDivElement>} className="flex-1 flex min-h-0">
         <Group id="editor-area" className="flex-1 min-h-0">
           {/* Editor */}
-          <Panel id="editor" minSize="30%">
+          <Panel id="editor" order={1} minSize="30%">
             <div className="h-full flex flex-col min-w-0 bg-white">
               <div className="px-6 pt-5 pb-1">
                 <DocumentTitle currentDocId={currentDocId} />
@@ -118,7 +125,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
 
           {/* Right sidebar — vertical Group for ToC / Backlinks / Comments */}
-          <Panel id="right-sidebar" panelRef={rightSidebarRef} defaultSize="22%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
+          <Panel id="right-sidebar" order={2} panelRef={rightSidebarRef} defaultSize="22%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
             <div className="h-full border-l border-gray-200 bg-white">
               <Group id="right-panels" orientation="vertical">
                 <Panel id="toc" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
@@ -141,10 +148,25 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               </Group>
             </div>
           </Panel>
-        </Group>
 
-        {/* Discussion panel - renders only when document has discussion frontmatter */}
-        <ConnectedDiscussionPanel />
+          {hasDiscussion && (
+            <>
+              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+              <Panel
+                id="discussion"
+                order={3}
+                panelRef={discussionRef}
+                defaultSize="20%"
+                minSize={`${discussionMinPercent}%`}
+                collapsible
+                collapsedSize="0%"
+                onResize={(size) => setDiscussionCollapsed(size.asPercentage === 0)}
+              >
+                <ConnectedDiscussionPanel />
+              </Panel>
+            </>
+          )}
+        </Group>
       </div>
     </main>
   );

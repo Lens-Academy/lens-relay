@@ -65,6 +65,10 @@ vi.mock('../DiscussionPanel', () => ({
   ConnectedDiscussionPanel: () => null,
 }));
 
+vi.mock('../DiscussionPanel/useHasDiscussion', () => ({
+  useHasDiscussion: () => false,
+}));
+
 describe('EditorArea', () => {
   it('renders CommentsPanel in sidebar', () => {
     const { container } = render(<EditorArea currentDocId="test-doc" />);

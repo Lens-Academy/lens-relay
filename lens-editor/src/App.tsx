@@ -309,6 +309,16 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                     {!rightCollapsed && <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
                   </svg>
                 </button>
+                <button
+                  onClick={toggleDiscussion}
+                  title="Toggle discussion"
+                  className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    {!discussionCollapsed && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
+                  </svg>
+                </button>
               </div>
             </header>
             <Group id="app-outer" className="flex-1 min-h-0">
