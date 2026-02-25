@@ -47,6 +47,7 @@ interface EditorProps {
   onEditorReady?: (view: EditorView) => void;
   onDocChange?: () => void;
   onNavigate?: (docId: string) => void;
+  onRequestAddComment?: () => void;
   metadata?: FolderMetadata;
   currentFilePath?: string;
 }
@@ -89,7 +90,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metadata, currentFilePath }: EditorProps) {
+export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, onRequestAddComment, metadata, currentFilePath }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -117,6 +118,10 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
     setContextMenu(null);
   }, []);
 
+  // Store onRequestAddComment in ref to avoid re-creating callback
+  const onRequestAddCommentRef = useRef(onRequestAddComment);
+  onRequestAddCommentRef.current = onRequestAddComment;
+
   // Context menu handler - uses click position, not cursor position
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -127,15 +132,28 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
       const clickPos = view.posAtCoords({ x: e.clientX, y: e.clientY });
       if (clickPos === null) return;
 
-      // Get items at click position (not cursor position)
-      const items = getContextMenuItems(view, clickPos);
-      if (items.length > 0) {
-        e.preventDefault();
-        setContextMenu({
-          items,
-          position: { x: e.clientX, y: e.clientY },
-        });
-      }
+      // Get CriticMarkup items at click position (accept/reject)
+      const markupItems = getContextMenuItems(view, clickPos);
+
+      // Always add "Add Comment" item
+      const addCommentItem: ContextMenuItem = {
+        label: 'Add Comment',
+        action: () => {
+          view.dispatch({ selection: { anchor: clickPos } });
+          view.focus();
+          onRequestAddCommentRef.current?.();
+        },
+      };
+
+      const items = markupItems.length > 0
+        ? [...markupItems, addCommentItem]
+        : [addCommentItem];
+
+      e.preventDefault();
+      setContextMenu({
+        items,
+        position: { x: e.clientX, y: e.clientY },
+      });
     },
     []
   );

@@ -30,7 +30,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
-  const { rightSidebarRef, setRightCollapsed } = useSidebar();
+  const { rightSidebarRef, rightCollapsed, setRightCollapsed } = useSidebar();
+  const [addCommentTrigger, setAddCommentTrigger] = useState(0);
 
   // Derive current file path from doc ID for wikilink resolution
   const currentFilePath = useMemo(() => {
@@ -50,6 +51,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const handleDocChange = useCallback(() => {
     setStateVersion(v => v + 1);
   }, []);
+
+  // Callback for "Add Comment" from editor context menu
+  const handleRequestAddComment = useCallback(() => {
+    if (rightCollapsed) {
+      rightSidebarRef.current?.expand();
+    }
+    setAddCommentTrigger(v => v + 1);
+  }, [rightCollapsed, rightSidebarRef]);
 
   // Portal targets in the global header
   const breadcrumbTarget = document.getElementById('header-breadcrumb');
@@ -100,6 +109,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
                   onEditorReady={handleEditorReady}
                   onDocChange={handleDocChange}
                   onNavigate={onNavigate}
+                  onRequestAddComment={handleRequestAddComment}
                   metadata={metadata}
                   currentFilePath={currentFilePath}
                 />
@@ -127,7 +137,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
                 <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
                 <Panel id="comments" defaultSize="40%" minSize="10%" collapsible collapsedSize="0%">
                   <div className="h-full overflow-y-auto">
-                    <CommentsPanel view={editorView} stateVersion={stateVersion} />
+                    <CommentsPanel view={editorView} stateVersion={stateVersion} addCommentTrigger={addCommentTrigger} />
                   </div>
                 </Panel>
               </Group>

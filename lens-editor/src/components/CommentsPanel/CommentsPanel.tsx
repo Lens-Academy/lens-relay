@@ -1,5 +1,5 @@
 // src/components/CommentsPanel/CommentsPanel.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { EditorView } from '@codemirror/view';
 import { useComments } from './useComments';
 import { AddCommentForm } from './AddCommentForm';
@@ -10,6 +10,7 @@ import type { CriticMarkupRange, CommentThread as CommentThreadType } from '../.
 interface CommentsPanelProps {
   view: EditorView | null;
   stateVersion?: number; // Triggers re-render on doc changes
+  addCommentTrigger?: number; // Increment to open add-comment form externally
 }
 
 /**
@@ -138,11 +139,18 @@ function CommentThread({
   );
 }
 
-export function CommentsPanel({ view, stateVersion }: CommentsPanelProps) {
+export function CommentsPanel({ view, stateVersion, addCommentTrigger }: CommentsPanelProps) {
   // stateVersion triggers re-render (parent increments on doc change)
   void stateVersion;
 
   const [showAddForm, setShowAddForm] = useState(false);
+
+  // Open add-comment form when triggered externally (e.g. right-click menu)
+  useEffect(() => {
+    if (addCommentTrigger && addCommentTrigger > 0) {
+      setShowAddForm(true);
+    }
+  }, [addCommentTrigger]);
   const threads = useComments(view);
 
   const handleAddComment = (content: string) => {
