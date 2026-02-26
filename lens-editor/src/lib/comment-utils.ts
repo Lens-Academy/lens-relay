@@ -37,7 +37,8 @@ export function insertCommentAt(view: EditorView, content: string, pos: number):
   const author = getCurrentAuthor();
   const timestamp = Date.now();
   const meta = JSON.stringify({ author, timestamp });
-  const markup = `{>>${meta}@@${content}<<}`;
+  const encoded = content.replace(/\\/g, '\\\\').replace(/\n/g, '\\n');
+  const markup = `{>>${meta}@@${encoded}<<}`;
 
   view.dispatch({
     changes: { from: pos, insert: markup },

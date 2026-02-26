@@ -47,7 +47,7 @@ export const CommentCard = forwardRef<HTMLDivElement, CommentCardProps>(
               <span className="text-xs text-gray-400">{formatTimestamp(timestamp)}</span>
             )}
           </div>
-          <p className="text-sm text-gray-700">{rootComment.content}</p>
+          <p className="text-sm text-gray-700 whitespace-pre-wrap">{rootComment.content}</p>
         </div>
 
         {/* Replies */}
@@ -59,7 +59,7 @@ export const CommentCard = forwardRef<HTMLDivElement, CommentCardProps>(
                 <span className="text-xs text-gray-400">{formatTimestamp(reply.metadata.timestamp)}</span>
               )}
             </div>
-            <p className="text-sm text-gray-600">{reply.content}</p>
+            <p className="text-sm text-gray-600 whitespace-pre-wrap">{reply.content}</p>
           </div>
         ))}
 

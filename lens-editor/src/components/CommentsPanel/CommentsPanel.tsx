@@ -39,7 +39,7 @@ function CommentItem({
           </span>
         )}
       </div>
-      <p className="text-sm text-gray-700">{comment.content}</p>
+      <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.content}</p>
     </div>
   );
 }

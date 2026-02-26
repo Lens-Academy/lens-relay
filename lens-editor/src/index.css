@@ -232,6 +232,16 @@
   background-color: rgba(250, 204, 21, 0.4); /* yellow-400 with opacity */
 }
 
+/* Collapse ghost lines within legacy multi-line comments */
+.cm-comment-collapsed-line {
+  font-size: 0;
+  line-height: 0 !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+  height: 0 !important;
+  overflow: hidden;
+}
+
 /* Comment badge - numbered superscript pill for comment threads */
 .cm-comment-badge {
   display: inline-flex;

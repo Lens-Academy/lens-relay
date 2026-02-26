@@ -345,6 +345,21 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
                 }),
               });
             }
+
+            // Collapse intermediate ghost lines (lines entirely within hidden comment range)
+            const doc = view.state.doc;
+            const startLine = doc.lineAt(range.from).number;
+            const endLine = doc.lineAt(range.to).number;
+            for (let ln = startLine; ln <= endLine; ln++) {
+              const line = doc.line(ln);
+              const lineFullyHidden = line.from >= range.from && line.to <= range.to;
+              if (lineFullyHidden) {
+                lineDecos.push({
+                  from: line.from,
+                  deco: Decoration.line({ class: 'cm-comment-collapsed-line' }),
+                });
+              }
+            }
           } else if (badgeInfo?.isFirst) {
             // First comment in thread (single line): replace entire range with badge
             decorations.push({
