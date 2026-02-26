@@ -1,6 +1,6 @@
-import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } from 'react';
+import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { Group, Panel, Separator, usePanelRef, type GroupImperativeHandle } from 'react-resizable-panels';
+import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
@@ -21,8 +21,16 @@ import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { useContainerWidth } from './hooks/useContainerWidth';
-import { useAutoCollapse } from './hooks/useAutoCollapse';
+import { usePanelManager, type PanelConfig } from './hooks/usePanelManager';
 import { useHeaderBreakpoints } from './hooks/useHeaderBreakpoints';
+
+// Panel configuration — single source of truth for all panel behavior
+const PANEL_CONFIG: PanelConfig = {
+  'left-sidebar':   { group: 'app-outer',   defaultSize: 18, minPx: 200, tier: 2 },
+  'right-sidebar':  { group: 'editor-area', defaultSize: 22, minPx: 200, tier: 2 },
+  'comment-margin': { group: 'editor-area', defaultSize: 16, minPx: 0,   tier: null },
+  'discussion':     { group: 'editor-area', defaultSize: 20, minPx: 250, tier: 1 },
+};
 
 // VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
@@ -183,52 +191,15 @@ export function App() {
 function AuthenticatedApp({ role }: { role: UserRole }) {
   const navigate = useNavigate();
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
-  const [commentMarginCollapsed, setCommentMarginCollapsed] = useState(false);
   const sidebarRef = usePanelRef();
-  const rightSidebarRef = usePanelRef();
-  const discussionRef = usePanelRef();
-  const [discussionCollapsed, setDiscussionCollapsed] = useState(true);
-  const [isDragging, setIsDragging] = useState(false);
-  const desiredCollapsedRef = useRef<Record<string, boolean>>({
-    'right-sidebar': false,
-    'discussion': true,
-    'comment-margin': false,
-  });
-  const editorAreaGroupRef = useRef<GroupImperativeHandle | null>(null);
-  const commentMarginRef = usePanelRef();
 
-  // Default expanded sizes for editor-area panels (percentage of editor-area group)
-  const EDITOR_AREA_PANEL_DEFAULTS: Record<string, number> = { 'right-sidebar': 22, 'discussion': 20, 'comment-margin': 16 };
+  // Unified panel manager — single source of truth for all panel collapse/expand
+  const manager = usePanelManager(PANEL_CONFIG);
 
-  // Apply desiredCollapsedRef to the editor-area layout atomically via setLayout().
-  // Panels marked collapsed → 0%, panels marked expanded → default size, editor absorbs the difference.
-  const applyEditorAreaLayout = useCallback(() => {
-    const group = editorAreaGroupRef.current;
-    if (!group) return;
-    const layout = group.getLayout();
-    if (!layout) return;
-
-    const corrected = { ...layout };
-    let delta = 0; // positive = freed space, negative = needed space
-
-    for (const [id, shouldBeCollapsed] of Object.entries(desiredCollapsedRef.current)) {
-      if (shouldBeCollapsed && (corrected[id] ?? 0) > 0) {
-        delta += corrected[id];
-        corrected[id] = 0;
-      } else if (!shouldBeCollapsed && (corrected[id] ?? 0) === 0) {
-        const targetSize = EDITOR_AREA_PANEL_DEFAULTS[id] ?? 20;
-        corrected[id] = targetSize;
-        delta -= targetSize;
-      }
-    }
-
-    if (delta !== 0) {
-      corrected['editor'] = Math.max((corrected['editor'] ?? 0) + delta, 30);
-      group.setLayout(corrected);
-    }
-  }, []);
+  // Register the left sidebar panel ref with the manager
+  useEffect(() => {
+    manager.setPanelRef('left-sidebar', sidebarRef);
+  }, [manager.setPanelRef, sidebarRef]);
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
@@ -240,85 +211,16 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const { ref: headerRef, width: headerWidth } = useContainerWidth();
   const headerStage = useHeaderBreakpoints(headerWidth);
 
-  // Pixel minimums
-  const LEFT_SIDEBAR_MIN_PX = 200;
-  const CONTENT_MIN_PX = 450;
-  const RIGHT_SIDEBAR_MIN_PX = 200;
-  const DISCUSSION_MIN_PX = 250;
-
   // Dynamic minSize as percentage
+  const LEFT_SIDEBAR_MIN_PX = 200;
   const leftMinPercent = outerWidth > 0
     ? Math.max((LEFT_SIDEBAR_MIN_PX / outerWidth) * 100, 1)
     : 12;
 
-  // Tiered auto-collapse: discussion collapses first, then sidebars
-  // Tier 1: Discussion collapses first (threshold = 250 + 850 = 1100px)
-  const discussionCollapseRefs = useMemo(() => [discussionRef], [discussionRef]);
-  useAutoCollapse({
-    containerWidth: outerWidth,
-    panelRefs: discussionCollapseRefs,
-    pixelMinimums: [DISCUSSION_MIN_PX],
-    contentMinPx: CONTENT_MIN_PX + LEFT_SIDEBAR_MIN_PX + RIGHT_SIDEBAR_MIN_PX,
-    onAutoCollapse: () => {
-      desiredCollapsedRef.current['discussion'] = true;
-      applyEditorAreaLayout();
-      return true;
-    },
-    onAutoExpand: () => {
-      desiredCollapsedRef.current['discussion'] = false;
-      applyEditorAreaLayout();
-      return true; // handled — skip panel.expand() which breaks after setLayout
-    },
-  });
-
-  // Tier 2: Sidebars collapse second (threshold = 200 + 200 + 450 = 850px)
-  const autoCollapseRefs = useMemo(() => [sidebarRef, rightSidebarRef], [sidebarRef, rightSidebarRef]);
-  useAutoCollapse({
-    containerWidth: outerWidth,
-    panelRefs: autoCollapseRefs,
-    pixelMinimums: [LEFT_SIDEBAR_MIN_PX, RIGHT_SIDEBAR_MIN_PX],
-    contentMinPx: CONTENT_MIN_PX,
-    onAutoCollapse: (ref) => {
-      if (ref === rightSidebarRef) {
-        desiredCollapsedRef.current['right-sidebar'] = true;
-        applyEditorAreaLayout();
-        return true;
-      }
-    },
-    onAutoExpand: (ref) => {
-      if (ref === rightSidebarRef) {
-        desiredCollapsedRef.current['right-sidebar'] = false;
-        applyEditorAreaLayout();
-        return true; // handled — skip panel.expand()
-      }
-      // Left sidebar is in app-outer Group — panel.expand() works fine there
-    },
-  });
-
-  const toggleLeftSidebar = useCallback(() => {
-    const panel = sidebarRef.current;
-    if (!panel) return;
-    if (panel.isCollapsed()) {
-      panel.expand();
-    } else {
-      panel.collapse();
-    }
-  }, [sidebarRef]);
-
-  const toggleRightSidebar = useCallback(() => {
-    desiredCollapsedRef.current['right-sidebar'] = !desiredCollapsedRef.current['right-sidebar'];
-    applyEditorAreaLayout();
-  }, [applyEditorAreaLayout]);
-
-  const toggleDiscussion = useCallback(() => {
-    desiredCollapsedRef.current['discussion'] = !desiredCollapsedRef.current['discussion'];
-    applyEditorAreaLayout();
-  }, [applyEditorAreaLayout]);
-
-  const toggleCommentMargin = useCallback(() => {
-    desiredCollapsedRef.current['comment-margin'] = !desiredCollapsedRef.current['comment-margin'];
-    applyEditorAreaLayout();
-  }, [applyEditorAreaLayout]);
+  // Auto-collapse/expand panels based on viewport width
+  useEffect(() => {
+    manager.autoResize(outerWidth);
+  }, [outerWidth, manager.autoResize]);
 
   // Ctrl+O keyboard shortcut to open quick switcher
   useEffect(() => {
@@ -346,18 +248,24 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     onNavigate(compoundId);
   }, [onNavigate]);
 
+  const { collapsedState } = manager;
+  const leftCollapsed = collapsedState['left-sidebar'] ?? false;
+  const rightCollapsed = collapsedState['right-sidebar'] ?? false;
+  const commentMarginCollapsed = collapsedState['comment-margin'] ?? false;
+  const discussionCollapsed = collapsedState['discussion'] ?? true;
+
   return (
     <AuthProvider role={role}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
-        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, desiredCollapsedRef, editorAreaGroupRef, applyEditorAreaLayout, toggleCommentMargin, headerStage, commentMarginRef, commentMarginCollapsed, setCommentMarginCollapsed }}>
+        <SidebarContext.Provider value={{ manager, headerStage }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}
             <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
               <div className="flex items-center gap-6 min-w-0">
                 <button
-                  onClick={toggleLeftSidebar}
+                  onClick={() => manager.toggle('left-sidebar')}
                   title="Toggle left sidebar"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
                 >
@@ -378,7 +286,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                   <DisplayNameBadge compact={headerStage === 'hide-username'} />
                 )}
                 <button
-                  onClick={toggleCommentMargin}
+                  onClick={() => manager.toggle('comment-margin')}
                   title="Toggle comments"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
                 >
@@ -388,7 +296,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                   </svg>
                 </button>
                 <button
-                  onClick={toggleRightSidebar}
+                  onClick={() => manager.toggle('right-sidebar')}
                   title="Toggle right sidebar"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
                 >
@@ -399,7 +307,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                   </svg>
                 </button>
                 <button
-                  onClick={toggleDiscussion}
+                  onClick={() => manager.toggle('discussion')}
                   title="Toggle discussion"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
                 >
@@ -410,11 +318,11 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                 </button>
               </div>
             </header>
-            <Group id="app-outer" className={`flex-1 min-h-0${isDragging ? ' panels-dragging' : ''}`}>
-              <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize={`${leftMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}>
+            <Group id="app-outer" className="flex-1 min-h-0">
+              <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize={`${leftMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => manager.onPanelResize('left-sidebar', size.asPercentage)}>
                 <Sidebar />
               </Panel>
-              <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
+              <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
               <Panel id="main-content" minSize="30%">
                 <Routes>
                   <Route path="/:docUuid/*" element={<DocumentView />} />

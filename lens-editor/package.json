@@ -20,6 +20,7 @@
     "test:integration:editor": "vitest run Editor.integration",
     "test:integration:sidebar": "vitest run Sidebar.integration",
     "test:integration:smoke": "vitest run smoke.integration",
+    "test:e2e": "npx playwright test",
     "dev:fixtures": "cross-env VITE_USE_FIXTURES=true vite",
     "discord:start": "tsx watch server/discord/dev-server.ts",
     "discord:setup": "echo 'Set DISCORD_BOT_TOKEN env var and run npm run discord:start'",
@@ -54,6 +55,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/vite": "^4.1.18",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",

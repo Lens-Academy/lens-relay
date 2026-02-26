@@ -351,14 +351,7 @@
   outline-offset: 1px;
 }
 
-/* Panel collapse/expand animation */
-#app-outer > [data-panel],
-#editor-area > [data-panel] {
+/* Panel collapse/expand animation — only when explicitly triggered */
+.panels-animating > [data-panel] {
   transition: flex-grow 200ms ease-out;
-}
-
-/* Disable animation during manual drag resize */
-#app-outer.panels-dragging > [data-panel],
-#editor-area.panels-dragging > [data-panel] {
-  transition: none;
 }
