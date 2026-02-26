@@ -13,6 +13,7 @@ interface SidebarContextValue {
   discussionCollapsed: boolean;
   setDiscussionCollapsed: (collapsed: boolean) => void;
   toggleDiscussion: () => void;
+  toggleCommentMargin: () => void;
   headerStage: HeaderStage;
   commentMarginRef: RefObject<PanelImperativeHandle | null>;
   commentMarginCollapsed: boolean;
@@ -30,6 +31,7 @@ export const SidebarContext = createContext<SidebarContextValue>({
   discussionCollapsed: true,
   setDiscussionCollapsed: () => {},
   toggleDiscussion: () => {},
+  toggleCommentMargin: () => {},
   headerStage: 'full',
   commentMarginRef: { current: null },
   commentMarginCollapsed: false,
