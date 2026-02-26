@@ -11,7 +11,7 @@ import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
-import { CommentsPanel } from '../CommentsPanel';
+import { CommentMargin } from '../CommentMargin';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
 import { useHasDiscussion } from '../DiscussionPanel/useHasDiscussion';
@@ -33,9 +33,9 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
-  const { rightSidebarRef, setRightCollapsed, discussionRef, setDiscussionCollapsed, desiredCollapsedRef, editorAreaGroupRef, applyEditorAreaLayout, headerStage } = useSidebar();
+  const { rightSidebarRef, rightCollapsed, setRightCollapsed, commentMarginRef, commentMarginCollapsed, setCommentMarginCollapsed, discussionRef, setDiscussionCollapsed, desiredCollapsedRef, editorAreaGroupRef, applyEditorAreaLayout, headerStage } = useSidebar();
   const hasDiscussion = useHasDiscussion();
-
+  const [addCommentTrigger, setAddCommentTrigger] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const { ref: innerRef, width: innerWidth } = useContainerWidth();
 
@@ -83,8 +83,18 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       desiredCollapsedRef.current[panelId] = sizePercent === 0;
     }
     if (panelId === 'right-sidebar') setRightCollapsed(sizePercent === 0);
+    if (panelId === 'comment-margin') setCommentMarginCollapsed(sizePercent === 0);
     if (panelId === 'discussion') setDiscussionCollapsed(sizePercent === 0);
   }, [applyEditorAreaLayout, desiredCollapsedRef, setRightCollapsed, setDiscussionCollapsed]);
+
+  // Callback for "Add Comment" from editor context menu
+  const handleRequestAddComment = useCallback(() => {
+    if (commentMarginCollapsed) {
+      desiredCollapsedRef.current['comment-margin'] = false;
+      applyEditorAreaLayout();
+    }
+    setAddCommentTrigger(v => v + 1);
+  }, [commentMarginCollapsed, desiredCollapsedRef, applyEditorAreaLayout]);
 
   // Portal targets in the global header
   const breadcrumbTarget = document.getElementById('header-breadcrumb');
@@ -144,6 +154,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
                   onEditorReady={handleEditorReady}
                   onDocChange={handleDocChange}
                   onNavigate={onNavigate}
+                  onRequestAddComment={handleRequestAddComment}
                   metadata={metadata}
                   currentFilePath={currentFilePath}
                 />
@@ -151,27 +162,34 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </div>
           </Panel>
 
-          <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
+          {/* Comment margin — position-aligned cards, no visible separator */}
+          <Panel id="comment-margin" panelRef={commentMarginRef} defaultSize="16%" minSize="0%" collapsible collapsedSize="0%" onResize={(size) => handlePanelResize('comment-margin', size.asPercentage)}>
+            <div className="h-full border-l border-gray-100 bg-gray-50/50">
+              {editorView && (
+                <CommentMargin
+                  view={editorView}
+                  stateVersion={stateVersion}
+                  addCommentTrigger={addCommentTrigger}
+                />
+              )}
+            </div>
+          </Panel>
 
-          {/* Right sidebar — vertical Group for ToC / Backlinks / Comments */}
-          <Panel id="right-sidebar" order={2} panelRef={rightSidebarRef} defaultSize="22%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => handlePanelResize('right-sidebar', size.asPercentage)}>
-            <div className="h-full border-l border-gray-200 bg-white">
+          <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
+
+          {/* Right sidebar — vertical Group for ToC / Backlinks */}
+          <Panel id="right-sidebar" order={2} panelRef={rightSidebarRef} defaultSize="18%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => handlePanelResize('right-sidebar', size.asPercentage)}>
+            <div className="h-full bg-[#f6f6f6]">
               <Group id="right-panels" orientation="vertical">
-                <Panel id="toc" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
+                <Panel id="toc" defaultSize="50%" minSize="10%" collapsible collapsedSize="0%">
                   <div className="h-full overflow-y-auto">
                     <TableOfContents view={editorView} stateVersion={stateVersion} />
                   </div>
                 </Panel>
-                <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
-                <Panel id="backlinks" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
+                <Separator className="h-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
+                <Panel id="backlinks" defaultSize="50%" minSize="10%" collapsible collapsedSize="0%">
                   <div className="h-full overflow-y-auto">
                     <BacklinksPanel currentDocId={currentDocId} />
-                  </div>
-                </Panel>
-                <Separator className="h-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-row-resize" />
-                <Panel id="comments" defaultSize="40%" minSize="10%" collapsible collapsedSize="0%">
-                  <div className="h-full overflow-y-auto">
-                    <CommentsPanel view={editorView} stateVersion={stateVersion} />
                   </div>
                 </Panel>
               </Group>

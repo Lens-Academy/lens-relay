@@ -185,6 +185,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [commentMarginCollapsed, setCommentMarginCollapsed] = useState(false);
   const sidebarRef = usePanelRef();
   const rightSidebarRef = usePanelRef();
   const discussionRef = usePanelRef();
@@ -193,11 +194,13 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const desiredCollapsedRef = useRef<Record<string, boolean>>({
     'right-sidebar': false,
     'discussion': true,
+    'comment-margin': false,
   });
   const editorAreaGroupRef = useRef<GroupImperativeHandle | null>(null);
+  const commentMarginRef = usePanelRef();
 
   // Default expanded sizes for editor-area panels (percentage of editor-area group)
-  const EDITOR_AREA_PANEL_DEFAULTS: Record<string, number> = { 'right-sidebar': 22, 'discussion': 20 };
+  const EDITOR_AREA_PANEL_DEFAULTS: Record<string, number> = { 'right-sidebar': 22, 'discussion': 20, 'comment-margin': 16 };
 
   // Apply desiredCollapsedRef to the editor-area layout atomically via setLayout().
   // Panels marked collapsed → 0%, panels marked expanded → default size, editor absorbs the difference.
@@ -312,6 +315,11 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     applyEditorAreaLayout();
   }, [applyEditorAreaLayout]);
 
+  const toggleCommentMargin = useCallback(() => {
+    desiredCollapsedRef.current['comment-margin'] = !desiredCollapsedRef.current['comment-margin'];
+    applyEditorAreaLayout();
+  }, [applyEditorAreaLayout]);
+
   // Ctrl+O keyboard shortcut to open quick switcher
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -342,11 +350,11 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     <AuthProvider role={role}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
-        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, desiredCollapsedRef, editorAreaGroupRef, applyEditorAreaLayout, headerStage }}>
+        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, desiredCollapsedRef, editorAreaGroupRef, applyEditorAreaLayout, toggleCommentMargin, headerStage, commentMarginRef, commentMarginCollapsed, setCommentMarginCollapsed }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}
-            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-white shadow-sm border-b border-gray-200 min-w-0 overflow-hidden">
+            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
               <div className="flex items-center gap-6 min-w-0">
                 <button
                   onClick={toggleLeftSidebar}
@@ -370,6 +378,16 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                   <DisplayNameBadge compact={headerStage === 'hide-username'} />
                 )}
                 <button
+                  onClick={toggleCommentMargin}
+                  title="Toggle comments"
+                  className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    {!commentMarginCollapsed && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
+                  </svg>
+                </button>
+                <button
                   onClick={toggleRightSidebar}
                   title="Toggle right sidebar"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
@@ -385,9 +403,9 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                   title="Toggle discussion"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
                 >
-                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    {!discussionCollapsed && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
+                  <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M19.73 4.87a18.2 18.2 0 0 0-4.6-1.44c-.2.36-.43.85-.59 1.23a16.84 16.84 0 0 0-5.07 0c-.16-.38-.4-.87-.6-1.23a18.17 18.17 0 0 0-4.6 1.44A19.25 19.25 0 0 0 .96 18.06a18.32 18.32 0 0 0 5.63 2.87c.46-.62.86-1.28 1.2-1.98a11.83 11.83 0 0 1-1.89-.91c.16-.12.31-.24.46-.37a12.97 12.97 0 0 0 11.28 0c.15.13.3.25.46.37-.6.36-1.23.67-1.9.92.35.7.75 1.35 1.2 1.97a18.27 18.27 0 0 0 5.63-2.87A19.22 19.22 0 0 0 19.73 4.87ZM8.3 15.12c-1.18 0-2.16-1.1-2.16-2.44 0-1.34.95-2.44 2.16-2.44 1.2 0 2.18 1.1 2.16 2.44 0 1.34-.95 2.44-2.16 2.44Zm7.4 0c-1.18 0-2.16-1.1-2.16-2.44 0-1.34.95-2.44 2.16-2.44 1.2 0 2.18 1.1 2.16 2.44 0 1.34-.96 2.44-2.16 2.44Z" />
+                    {!discussionCollapsed && <path d="M19.73 4.87a18.2 18.2 0 0 0-4.6-1.44c-.2.36-.43.85-.59 1.23a16.84 16.84 0 0 0-5.07 0c-.16-.38-.4-.87-.6-1.23a18.17 18.17 0 0 0-4.6 1.44A19.25 19.25 0 0 0 .96 18.06a18.32 18.32 0 0 0 5.63 2.87c.46-.62.86-1.28 1.2-1.98a11.83 11.83 0 0 1-1.89-.91c.16-.12.31-.24.46-.37a12.97 12.97 0 0 0 11.28 0c.15.13.3.25.46.37-.6.36-1.23.67-1.9.92.35.7.75 1.35 1.2 1.97a18.27 18.27 0 0 0 5.63-2.87A19.22 19.22 0 0 0 19.73 4.87ZM8.3 15.12c-1.18 0-2.16-1.1-2.16-2.44 0-1.34.95-2.44 2.16-2.44 1.2 0 2.18 1.1 2.16 2.44 0 1.34-.95 2.44-2.16 2.44Zm7.4 0c-1.18 0-2.16-1.1-2.16-2.44 0-1.34.95-2.44 2.16-2.44 1.2 0 2.18 1.1 2.16 2.44 0 1.34-.96 2.44-2.16 2.44Z" opacity="0.45" />}
                   </svg>
                 </button>
               </div>
@@ -396,7 +414,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize={`${leftMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}>
                 <Sidebar />
               </Panel>
-              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
+              <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
               <Panel id="main-content" minSize="30%">
                 <Routes>
                   <Route path="/:docUuid/*" element={<DocumentView />} />

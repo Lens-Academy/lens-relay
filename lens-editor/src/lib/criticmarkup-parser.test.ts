@@ -1,6 +1,6 @@
 // src/lib/criticmarkup-parser.test.ts
 import { describe, it, expect } from 'vitest';
-import { parse, parseThreads } from './criticmarkup-parser';
+import { parse, parseThreads, decodeCommentContent } from './criticmarkup-parser';
 
 describe('CriticMarkup Parser', () => {
   describe('basic patterns', () => {
@@ -188,6 +188,71 @@ multi-line comment
       const threads = parseThreads(ranges);
 
       expect(threads).toHaveLength(0);
+    });
+  });
+
+  describe('comment newline encoding', () => {
+    it('decodes encoded newlines in comment content', () => {
+      expect(decodeCommentContent('line1\\nline2')).toBe('line1\nline2');
+    });
+
+    it('decodes escaped backslashes', () => {
+      expect(decodeCommentContent('path\\\\to\\\\file')).toBe('path\\to\\file');
+    });
+
+    it('decodes backslash before n correctly', () => {
+      // Literal backslash+n in original content: encoded as \\\\n, decoded as \\n -> \n? No.
+      // Original: "foo\n" (literal backslash then n) -> encoded as "foo\\\\n"
+      // Decode: "foo\\\\n" -> first \\n -> \n (wrong order!)
+      // That's why decode must be: \\n -> \n first, then \\\\ -> \\
+      // Actually: "foo\\n" with literal backslash = encoded "foo\\\\\\n"
+      // Wait, let's trace: original "a\\nb" (backslash, n, not newline)
+      // Encode: replace \\ -> \\\\ = "a\\\\nb", then \n -> \\n = "a\\\\nb" (no real newlines)
+      // Decode: replace \\n -> \n = "a\\\nb" (wrong! the \\ is part of \\\\)
+      // Hmm, need to be more careful. Let's test the actual roundtrip.
+      const original = 'before\\nafter'; // literal backslash-n, not a newline
+      // Encode: \\ -> \\\\ first, then \n (newline) -> \\n
+      const encoded = original.replace(/\\/g, '\\\\').replace(/\n/g, '\\n');
+      expect(encoded).toBe('before\\\\nafter');
+      const decoded = decodeCommentContent(encoded);
+      expect(decoded).toBe(original);
+    });
+
+    it('roundtrips content with newlines', () => {
+      const original = 'line1\nline2\nline3';
+      const encoded = original.replace(/\\/g, '\\\\').replace(/\n/g, '\\n');
+      expect(encoded).toBe('line1\\nline2\\nline3');
+      expect(encoded).not.toContain('\n'); // single-line in document
+      const decoded = decodeCommentContent(encoded);
+      expect(decoded).toBe(original);
+    });
+
+    it('roundtrips content with backslashes and newlines', () => {
+      const original = 'path\\to\\file\nnew line';
+      const encoded = original.replace(/\\/g, '\\\\').replace(/\n/g, '\\n');
+      expect(encoded).toBe('path\\\\to\\\\file\\nnew line');
+      const decoded = decodeCommentContent(encoded);
+      expect(decoded).toBe(original);
+    });
+
+    it('parser decodes encoded comment content', () => {
+      const doc = '{>>{"author":"alice"}@@line1\\nline2<<}';
+      const result = parse(doc);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].content).toBe('line1\nline2');
+    });
+
+    it('parser does not decode non-comment ranges', () => {
+      const doc = '{++text with \\n literal++}';
+      const result = parse(doc);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].content).toBe('text with \\n literal');
+    });
+
+    it('leaves plain comment content unchanged', () => {
+      expect(decodeCommentContent('no special chars')).toBe('no special chars');
     });
   });
 

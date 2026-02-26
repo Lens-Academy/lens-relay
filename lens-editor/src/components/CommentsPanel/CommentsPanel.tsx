@@ -1,41 +1,16 @@
 // src/components/CommentsPanel/CommentsPanel.tsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { EditorView } from '@codemirror/view';
 import { useComments } from './useComments';
 import { AddCommentForm } from './AddCommentForm';
-import { getCurrentAuthor } from '../Editor/extensions/criticmarkup';
+import { insertCommentAt, scrollToPosition } from '../../lib/comment-utils';
 import { formatTimestamp } from '../../lib/format-timestamp';
 import type { CriticMarkupRange, CommentThread as CommentThreadType } from '../../lib/criticmarkup-parser';
 
 interface CommentsPanelProps {
   view: EditorView | null;
   stateVersion?: number; // Triggers re-render on doc changes
-}
-
-/**
- * Scroll the editor to a specific position and focus it.
- */
-function scrollToPosition(view: EditorView, pos: number): void {
-  view.dispatch({
-    selection: { anchor: pos },
-    scrollIntoView: true,
-  });
-  view.focus();
-}
-
-/**
- * Insert a comment at the specified position.
- * Used for both new comments and replies (replies insert at thread end for adjacency).
- */
-function insertCommentAt(view: EditorView, content: string, pos: number): void {
-  const author = getCurrentAuthor();
-  const timestamp = Date.now();
-  const meta = JSON.stringify({ author, timestamp });
-  const markup = `{>>${meta}@@${content}<<}`;
-
-  view.dispatch({
-    changes: { from: pos, insert: markup },
-  });
+  addCommentTrigger?: number; // Increment to open add-comment form externally
 }
 
 /**
@@ -64,7 +39,7 @@ function CommentItem({
           </span>
         )}
       </div>
-      <p className="text-sm text-gray-700">{comment.content}</p>
+      <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.content}</p>
     </div>
   );
 }
@@ -138,11 +113,18 @@ function CommentThread({
   );
 }
 
-export function CommentsPanel({ view, stateVersion }: CommentsPanelProps) {
+export function CommentsPanel({ view, stateVersion, addCommentTrigger }: CommentsPanelProps) {
   // stateVersion triggers re-render (parent increments on doc change)
   void stateVersion;
 
   const [showAddForm, setShowAddForm] = useState(false);
+
+  // Open add-comment form when triggered externally (e.g. right-click menu)
+  useEffect(() => {
+    if (addCommentTrigger && addCommentTrigger > 0) {
+      setShowAddForm(true);
+    }
+  }, [addCommentTrigger]);
   const threads = useComments(view);
 
   const handleAddComment = (content: string) => {

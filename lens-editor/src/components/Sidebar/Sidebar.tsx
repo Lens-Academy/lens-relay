@@ -230,7 +230,7 @@ export function Sidebar() {
   }, [folderNames]);
 
   return (
-    <aside className="w-full h-full bg-white border-r border-gray-200 flex flex-col">
+    <aside className="w-full h-full bg-[#f6f6f6] flex flex-col">
       {/* Header with search */}
       <div className="p-3 border-b border-gray-200 space-y-2">
         <SearchInput
@@ -272,8 +272,8 @@ export function Sidebar() {
                     value={fileFilter}
                     onChange={(e) => setFileFilter(e.target.value)}
                     placeholder="Filter files..."
-                    className="w-full pl-7 pr-6 py-1 text-xs bg-gray-50 border border-gray-200 rounded
-                               placeholder-gray-400 outline-none focus:border-gray-300 focus:bg-white"
+                    className="w-full pl-7 pr-6 py-1 text-xs bg-white border border-gray-200 rounded
+                               placeholder-gray-400 outline-none focus:border-gray-300"
                   />
                   {fileFilter && (
                     <button

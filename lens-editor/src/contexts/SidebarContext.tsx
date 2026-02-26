@@ -17,7 +17,11 @@ interface SidebarContextValue {
   editorAreaGroupRef: RefObject<GroupImperativeHandle | null>;
   /** Apply desiredCollapsedRef to the editor-area layout via setLayout() */
   applyEditorAreaLayout: () => void;
+  toggleCommentMargin: () => void;
   headerStage: HeaderStage;
+  commentMarginRef: RefObject<PanelImperativeHandle | null>;
+  commentMarginCollapsed: boolean;
+  setCommentMarginCollapsed: (collapsed: boolean) => void;
 }
 
 export const SidebarContext = createContext<SidebarContextValue>({
@@ -34,7 +38,11 @@ export const SidebarContext = createContext<SidebarContextValue>({
   desiredCollapsedRef: { current: {} },
   editorAreaGroupRef: { current: null },
   applyEditorAreaLayout: () => {},
+  toggleCommentMargin: () => {},
   headerStage: 'full',
+  commentMarginRef: { current: null },
+  commentMarginCollapsed: false,
+  setCommentMarginCollapsed: () => {},
 });
 
 export const useSidebar = () => useContext(SidebarContext);

@@ -27,7 +27,7 @@ import { livePreview, updateWikilinkContext, wikilinkMetadataChanged } from './e
 import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
 import { remoteCursorTheme } from './remoteCursorTheme';
-import { criticMarkupExtension } from './extensions/criticmarkup';
+import { criticMarkupExtension, focusCommentThread } from './extensions/criticmarkup';
 import { ContextMenu } from './ContextMenu';
 import { getContextMenuItems } from './extensions/criticmarkup-context-menu';
 import type { ContextMenuItem } from './extensions/criticmarkup-context-menu';
@@ -47,6 +47,7 @@ interface EditorProps {
   onEditorReady?: (view: EditorView) => void;
   onDocChange?: () => void;
   onNavigate?: (docId: string) => void;
+  onRequestAddComment?: () => void;
   metadata?: FolderMetadata;
   currentFilePath?: string;
 }
@@ -89,7 +90,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metadata, currentFilePath }: EditorProps) {
+export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, onRequestAddComment, metadata, currentFilePath }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -117,6 +118,10 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
     setContextMenu(null);
   }, []);
 
+  // Store onRequestAddComment in ref to avoid re-creating callback
+  const onRequestAddCommentRef = useRef(onRequestAddComment);
+  onRequestAddCommentRef.current = onRequestAddComment;
+
   // Context menu handler - uses click position, not cursor position
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
@@ -127,15 +132,29 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
       const clickPos = view.posAtCoords({ x: e.clientX, y: e.clientY });
       if (clickPos === null) return;
 
-      // Get items at click position (not cursor position)
-      const items = getContextMenuItems(view, clickPos);
-      if (items.length > 0) {
-        e.preventDefault();
-        setContextMenu({
-          items,
-          position: { x: e.clientX, y: e.clientY },
-        });
-      }
+      // Get CriticMarkup items at click position (accept/reject)
+      const markupItems = getContextMenuItems(view, clickPos);
+
+      // Always add "Add Comment" item
+      const addCommentItem: ContextMenuItem = {
+        label: 'Add Comment',
+        shortcut: 'Ctrl+Shift+M',
+        action: () => {
+          view.dispatch({ selection: { anchor: clickPos } });
+          view.focus();
+          onRequestAddCommentRef.current?.();
+        },
+      };
+
+      const items = markupItems.length > 0
+        ? [...markupItems, addCommentItem]
+        : [addCommentItem];
+
+      e.preventDefault();
+      setContextMenu({
+        items,
+        position: { x: e.clientX, y: e.clientY },
+      });
     },
     []
   );
@@ -250,6 +269,13 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         remoteCursorTheme,
         criticMarkupExtension(),
+        Prec.highest(keymap.of([{
+          key: 'Mod-Shift-m',
+          run: () => {
+            onRequestAddCommentRef.current?.();
+            return true;
+          },
+        }])),
         EditorView.lineWrapping,
         EditorView.theme({
           '&': {
@@ -279,9 +305,14 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onNavigate, metad
             textDecoration: 'none !important',
           },
         }),
-        // Notify parent of document changes (for ToC updates)
+        // Notify parent of document changes and comment focus (for ToC + comment margin updates)
         ...(onDocChange ? [EditorView.updateListener.of((update) => {
-          if (update.docChanged) onDocChange();
+          if (update.docChanged) { onDocChange(); return; }
+          for (const tr of update.transactions) {
+            for (const e of tr.effects) {
+              if (e.is(focusCommentThread)) { onDocChange(); return; }
+            }
+          }
         })] : []),
       ],
     });

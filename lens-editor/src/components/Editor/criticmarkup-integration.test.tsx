@@ -10,7 +10,7 @@ import { markdown } from '@codemirror/lang-markdown';
 import { history, undo } from '@codemirror/commands';
 import { moveCursor, hasClass } from '../../test/codemirror-helpers';
 import { criticMarkupExtension } from './extensions/criticmarkup';
-import { criticMarkupKeymap } from './extensions/criticmarkup-commands';
+import { criticMarkupKeymap, acceptChangeAtCursor } from './extensions/criticmarkup-commands';
 
 /**
  * Create an EditorView with CriticMarkup extension AND history for testing undo.
@@ -210,8 +210,9 @@ describe('CriticMarkup Accept/Reject Integration', () => {
       );
       cleanup = c;
 
-      const acceptBtn = view.contentDOM.querySelector('.cm-criticmarkup-accept');
-      (acceptBtn as HTMLButtonElement).click();
+      // Comments are now replaced with badge widgets (no accept button).
+      // Use the command directly.
+      acceptChangeAtCursor(view);
 
       expect(view.state.doc.toString()).toBe('hello  world');
     });
