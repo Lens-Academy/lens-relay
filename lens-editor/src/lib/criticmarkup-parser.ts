@@ -46,6 +46,14 @@ function extractMetadata(rawContent: string): ParsedContent {
   }
 }
 
+/**
+ * Decode escaped newlines and backslashes in comment content.
+ * Comments encode newlines as literal \n to stay single-line in the document.
+ */
+export function decodeCommentContent(raw: string): string {
+  return raw.replace(/\\(\\|n)/g, (_, ch) => ch === 'n' ? '\n' : '\\');
+}
+
 const DELIM_LENGTHS = {
   addition: { open: 3, close: 3 },      // {++ ++}
   deletion: { open: 3, close: 3 },      // {-- --}
@@ -92,7 +100,7 @@ export function parse(doc: string): CriticMarkupRange[] {
         newContent = match[2];
       } else {
         const parsed = extractMetadata(match[1]);
-        content = parsed.content;
+        content = type === 'comment' ? decodeCommentContent(parsed.content) : parsed.content;
         metadata = parsed.metadata;
         metadataLength = parsed.metadataLength;
       }

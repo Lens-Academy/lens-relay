@@ -1,5 +1,7 @@
 import { useYjsProvider } from '@y-sweet/react';
 import { useEffect } from 'react';
+import { useDisplayName } from '../../contexts/DisplayNameContext';
+import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
 
 // 6-color palette per CONTEXT.md - good contrast on white backgrounds
 const USER_COLORS = [
@@ -18,6 +20,7 @@ function generateUserColor(clientId: number): string {
 
 export function AwarenessInitializer() {
   const provider = useYjsProvider();
+  const { displayName } = useDisplayName();
 
   useEffect(() => {
     if (!provider) return;
@@ -27,7 +30,7 @@ export function AwarenessInitializer() {
     // Initialize user presence state
     // Standard Yjs awareness format for compatibility with y-codemirror.next (Phase 2)
     provider.awareness.setLocalStateField('user', {
-      name: `User ${clientId % 1000}`, // Temporary name until auth
+      name: displayName ?? `User ${clientId % 1000}`,
       color: generateUserColor(clientId),
     });
 
@@ -50,6 +53,17 @@ export function AwarenessInitializer() {
       provider.off('status', handleStatus);
     };
   }, [provider]);
+
+  // Keep awareness and comment authorship in sync with display name changes
+  useEffect(() => {
+    if (!provider || !displayName) return;
+
+    provider.awareness.setLocalStateField('user', {
+      ...provider.awareness.getLocalState()?.user,
+      name: displayName,
+    });
+    setCurrentAuthor(displayName);
+  }, [provider, displayName]);
 
   return null; // This component only handles side effects
 }

@@ -185,11 +185,13 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [commentMarginCollapsed, setCommentMarginCollapsed] = useState(false);
   const sidebarRef = usePanelRef();
   const rightSidebarRef = usePanelRef();
   const discussionRef = usePanelRef();
   const [discussionCollapsed, setDiscussionCollapsed] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
+  const commentMarginRef = usePanelRef();
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
@@ -280,11 +282,11 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     <AuthProvider role={role}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
-        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, headerStage }}>
+        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, headerStage, commentMarginRef, commentMarginCollapsed, setCommentMarginCollapsed }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}
-            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-white shadow-sm border-b border-gray-200 min-w-0 overflow-hidden">
+            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
               <div className="flex items-center gap-6 min-w-0">
                 <button
                   onClick={toggleLeftSidebar}
@@ -334,7 +336,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize={`${leftMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setLeftCollapsed(size.asPercentage === 0)}>
                 <Sidebar />
               </Panel>
-              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
+              <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
               <Panel id="main-content" minSize="30%">
                 <Routes>
                   <Route path="/:docUuid/*" element={<DocumentView />} />

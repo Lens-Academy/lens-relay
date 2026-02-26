@@ -55,7 +55,7 @@ export function DiscussionPanel({ doc }: DiscussionPanelProps) {
 
   return (
     <aside
-      className="h-full border-l border-gray-200 bg-white flex flex-col"
+      className="h-full bg-[#f6f6f6] flex flex-col"
       role="complementary"
       aria-label="Discussion"
     >
