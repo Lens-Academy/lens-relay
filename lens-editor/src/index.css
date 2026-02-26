@@ -352,12 +352,13 @@
 }
 
 /* Panel collapse/expand animation */
-[data-panel-group-id="app-outer"] > [data-panel],
-[data-panel-group-id="editor-area"] > [data-panel] {
+#app-outer > [data-panel],
+#editor-area > [data-panel] {
   transition: flex-grow 200ms ease-out;
 }
 
 /* Disable animation during manual drag resize */
-[data-panel-group-id].panels-dragging > [data-panel] {
+#app-outer.panels-dragging > [data-panel],
+#editor-area.panels-dragging > [data-panel] {
   transition: none;
 }
