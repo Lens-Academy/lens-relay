@@ -128,6 +128,31 @@ Check out [[../Welcome]] for an overview, or [[../Getting Started]] for setup in
 `,
       },
       {
+        path: '/Discord.md',
+        id: 'c0000008-0000-4000-8000-000000000008',
+        type: 'markdown',
+        version: 0,
+        content: `---
+discussion: https://discord.com/channels/1443369661847834688/1443369662560735264
+---
+# Discord Integration
+
+This document has a linked Discord channel for discussion.
+
+Use the discussion panel on the right to view and post messages from the linked Discord thread.
+
+## How It Works
+
+The \`discussion\` frontmatter field links this document to a Discord channel. The editor fetches messages from the Discord API and displays them in a side panel.
+
+## Testing
+
+- Open this document and check the discussion panel appears
+- Try posting a message from the compose box
+- Verify messages load from the linked channel
+`,
+      },
+      {
         path: '/Projects',
         id: 'c0000011-0000-4000-8000-000000000011',
         type: 'folder',

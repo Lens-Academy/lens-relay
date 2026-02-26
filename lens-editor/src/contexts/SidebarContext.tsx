@@ -1,5 +1,5 @@
 import { createContext, useContext, type RefObject } from 'react';
-import type { PanelImperativeHandle } from 'react-resizable-panels';
+import type { PanelImperativeHandle, GroupImperativeHandle } from 'react-resizable-panels';
 import type { HeaderStage } from '../hooks/useHeaderBreakpoints';
 
 interface SidebarContextValue {
@@ -13,6 +13,10 @@ interface SidebarContextValue {
   discussionCollapsed: boolean;
   setDiscussionCollapsed: (collapsed: boolean) => void;
   toggleDiscussion: () => void;
+  desiredCollapsedRef: RefObject<Record<string, boolean>>;
+  editorAreaGroupRef: RefObject<GroupImperativeHandle | null>;
+  /** Apply desiredCollapsedRef to the editor-area layout via setLayout() */
+  applyEditorAreaLayout: () => void;
   headerStage: HeaderStage;
 }
 
@@ -27,6 +31,9 @@ export const SidebarContext = createContext<SidebarContextValue>({
   discussionCollapsed: true,
   setDiscussionCollapsed: () => {},
   toggleDiscussion: () => {},
+  desiredCollapsedRef: { current: {} },
+  editorAreaGroupRef: { current: null },
+  applyEditorAreaLayout: () => {},
   headerStage: 'full',
 });
 

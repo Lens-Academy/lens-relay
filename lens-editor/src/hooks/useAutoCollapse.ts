@@ -11,6 +11,11 @@ interface UseAutoCollapseOptions {
   pixelMinimums: number[];
   /** Minimum content area width in pixels */
   contentMinPx: number;
+  /** Called synchronously before each panel is auto-collapsed */
+  onAutoCollapse?: (ref: RefObject<PanelImperativeHandle | null>) => void;
+  /** Called synchronously before each panel is auto-expanded.
+   *  Return true to skip the default panel.expand() call (caller handled it). */
+  onAutoExpand?: (ref: RefObject<PanelImperativeHandle | null>) => boolean | void;
 }
 
 const HYSTERESIS_PX = 50;
@@ -27,6 +32,8 @@ export function useAutoCollapse({
   panelRefs,
   pixelMinimums,
   contentMinPx,
+  onAutoCollapse,
+  onAutoExpand,
 }: UseAutoCollapseOptions) {
   const autoCollapsedRef = useRef<Set<RefObject<PanelImperativeHandle | null>>>(new Set());
 
@@ -39,13 +46,15 @@ export function useAutoCollapse({
       for (const ref of panelRefs) {
         const panel = ref.current;
         if (panel && !panel.isCollapsed()) {
+          onAutoCollapse?.(ref);
           panel.collapse();
           autoCollapsedRef.current.add(ref);
         }
       }
     } else if (isAboveExpandThreshold && autoCollapsedRef.current.size > 0) {
       for (const ref of autoCollapsedRef.current) {
-        ref.current?.expand();
+        const handled = onAutoExpand?.(ref);
+        if (!handled) ref.current?.expand();
       }
       autoCollapsedRef.current.clear();
     }

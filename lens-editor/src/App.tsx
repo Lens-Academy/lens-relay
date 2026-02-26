@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
+import { Group, Panel, Separator, usePanelRef, type GroupImperativeHandle } from 'react-resizable-panels';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
@@ -190,6 +190,42 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const discussionRef = usePanelRef();
   const [discussionCollapsed, setDiscussionCollapsed] = useState(true);
   const [isDragging, setIsDragging] = useState(false);
+  const desiredCollapsedRef = useRef<Record<string, boolean>>({
+    'right-sidebar': false,
+    'discussion': true,
+  });
+  const editorAreaGroupRef = useRef<GroupImperativeHandle | null>(null);
+
+  // Default expanded sizes for editor-area panels (percentage of editor-area group)
+  const EDITOR_AREA_PANEL_DEFAULTS: Record<string, number> = { 'right-sidebar': 22, 'discussion': 20 };
+
+  // Apply desiredCollapsedRef to the editor-area layout atomically via setLayout().
+  // Panels marked collapsed → 0%, panels marked expanded → default size, editor absorbs the difference.
+  const applyEditorAreaLayout = useCallback(() => {
+    const group = editorAreaGroupRef.current;
+    if (!group) return;
+    const layout = group.getLayout();
+    if (!layout) return;
+
+    const corrected = { ...layout };
+    let delta = 0; // positive = freed space, negative = needed space
+
+    for (const [id, shouldBeCollapsed] of Object.entries(desiredCollapsedRef.current)) {
+      if (shouldBeCollapsed && (corrected[id] ?? 0) > 0) {
+        delta += corrected[id];
+        corrected[id] = 0;
+      } else if (!shouldBeCollapsed && (corrected[id] ?? 0) === 0) {
+        const targetSize = EDITOR_AREA_PANEL_DEFAULTS[id] ?? 20;
+        corrected[id] = targetSize;
+        delta -= targetSize;
+      }
+    }
+
+    if (delta !== 0) {
+      corrected['editor'] = Math.max((corrected['editor'] ?? 0) + delta, 30);
+      group.setLayout(corrected);
+    }
+  }, []);
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
@@ -205,19 +241,47 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const LEFT_SIDEBAR_MIN_PX = 200;
   const CONTENT_MIN_PX = 450;
   const RIGHT_SIDEBAR_MIN_PX = 200;
+  const DISCUSSION_MIN_PX = 250;
 
   // Dynamic minSize as percentage
   const leftMinPercent = outerWidth > 0
     ? Math.max((LEFT_SIDEBAR_MIN_PX / outerWidth) * 100, 1)
     : 12;
 
-  // Auto-collapse all sidebars when content would be squeezed
+  // Tiered auto-collapse: discussion collapses first, then sidebars
+  // Tier 1: Discussion collapses first (threshold = 250 + 850 = 1100px)
+  const discussionCollapseRefs = useMemo(() => [discussionRef], [discussionRef]);
+  useAutoCollapse({
+    containerWidth: outerWidth,
+    panelRefs: discussionCollapseRefs,
+    pixelMinimums: [DISCUSSION_MIN_PX],
+    contentMinPx: CONTENT_MIN_PX + LEFT_SIDEBAR_MIN_PX + RIGHT_SIDEBAR_MIN_PX,
+    onAutoCollapse: () => { desiredCollapsedRef.current['discussion'] = true; },
+    onAutoExpand: () => {
+      desiredCollapsedRef.current['discussion'] = false;
+      applyEditorAreaLayout();
+      return true; // handled — skip panel.expand() which breaks after setLayout
+    },
+  });
+
+  // Tier 2: Sidebars collapse second (threshold = 200 + 200 + 450 = 850px)
   const autoCollapseRefs = useMemo(() => [sidebarRef, rightSidebarRef], [sidebarRef, rightSidebarRef]);
   useAutoCollapse({
     containerWidth: outerWidth,
     panelRefs: autoCollapseRefs,
     pixelMinimums: [LEFT_SIDEBAR_MIN_PX, RIGHT_SIDEBAR_MIN_PX],
     contentMinPx: CONTENT_MIN_PX,
+    onAutoCollapse: (ref) => {
+      if (ref === rightSidebarRef) desiredCollapsedRef.current['right-sidebar'] = true;
+    },
+    onAutoExpand: (ref) => {
+      if (ref === rightSidebarRef) {
+        desiredCollapsedRef.current['right-sidebar'] = false;
+        applyEditorAreaLayout();
+        return true; // handled — skip panel.expand()
+      }
+      // Left sidebar is in app-outer Group — panel.expand() works fine there
+    },
   });
 
   const toggleLeftSidebar = useCallback(() => {
@@ -231,24 +295,14 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   }, [sidebarRef]);
 
   const toggleRightSidebar = useCallback(() => {
-    const panel = rightSidebarRef.current;
-    if (!panel) return;
-    if (panel.isCollapsed()) {
-      panel.expand();
-    } else {
-      panel.collapse();
-    }
-  }, [rightSidebarRef]);
+    desiredCollapsedRef.current['right-sidebar'] = !desiredCollapsedRef.current['right-sidebar'];
+    applyEditorAreaLayout();
+  }, [applyEditorAreaLayout]);
 
   const toggleDiscussion = useCallback(() => {
-    const panel = discussionRef.current;
-    if (!panel) return;
-    if (panel.isCollapsed()) {
-      panel.expand();
-    } else {
-      panel.collapse();
-    }
-  }, [discussionRef]);
+    desiredCollapsedRef.current['discussion'] = !desiredCollapsedRef.current['discussion'];
+    applyEditorAreaLayout();
+  }, [applyEditorAreaLayout]);
 
   // Ctrl+O keyboard shortcut to open quick switcher
   useEffect(() => {
@@ -280,7 +334,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     <AuthProvider role={role}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
-        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, headerStage }}>
+        <SidebarContext.Provider value={{ toggleLeftSidebar, leftCollapsed, sidebarRef, rightSidebarRef, rightCollapsed, setRightCollapsed, discussionRef, discussionCollapsed, setDiscussionCollapsed, toggleDiscussion, desiredCollapsedRef, editorAreaGroupRef, applyEditorAreaLayout, headerStage }}>
         <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}

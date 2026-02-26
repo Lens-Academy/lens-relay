@@ -33,7 +33,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate } = useNavigation();
   const { canWrite } = useAuth();
-  const { rightSidebarRef, setRightCollapsed, discussionRef, setDiscussionCollapsed, headerStage } = useSidebar();
+  const { rightSidebarRef, setRightCollapsed, discussionRef, setDiscussionCollapsed, desiredCollapsedRef, editorAreaGroupRef, applyEditorAreaLayout, headerStage } = useSidebar();
   const hasDiscussion = useHasDiscussion();
 
   const [isDragging, setIsDragging] = useState(false);
@@ -67,6 +67,24 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const handleDocChange = useCallback(() => {
     setStateVersion(v => v + 1);
   }, []);
+
+  // Generic resize handler for collapsible panels in editor-area.
+  // Detects redistribution (panel should be collapsed but got space) and corrects
+  // via applyEditorAreaLayout which uses setLayout() atomically.
+  const handlePanelResize = useCallback((panelId: string, sizePercent: number) => {
+    if (desiredCollapsedRef.current[panelId] && sizePercent > 0) {
+      // Redistribution expanded a collapsed panel — correct atomically
+      applyEditorAreaLayout();
+      return;
+    }
+
+    // Normal resize (user drag or intentional toggle) — sync state
+    if (panelId in desiredCollapsedRef.current) {
+      desiredCollapsedRef.current[panelId] = sizePercent === 0;
+    }
+    if (panelId === 'right-sidebar') setRightCollapsed(sizePercent === 0);
+    if (panelId === 'discussion') setDiscussionCollapsed(sizePercent === 0);
+  }, [applyEditorAreaLayout, desiredCollapsedRef, setRightCollapsed, setDiscussionCollapsed]);
 
   // Portal targets in the global header
   const breadcrumbTarget = document.getElementById('header-breadcrumb');
@@ -112,7 +130,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       )}
       {/* Editor + Sidebars container */}
       <div ref={innerRef as RefObject<HTMLDivElement>} className="flex-1 flex min-h-0">
-        <Group id="editor-area" className={`flex-1 min-h-0${isDragging ? ' panels-dragging' : ''}`}>
+        <Group id="editor-area" groupRef={editorAreaGroupRef} className={`flex-1 min-h-0${isDragging ? ' panels-dragging' : ''}`}>
           {/* Editor */}
           <Panel id="editor" order={1} minSize="30%">
             <div className="h-full flex flex-col min-w-0 bg-white">
@@ -136,7 +154,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" onDragging={setIsDragging} />
 
           {/* Right sidebar — vertical Group for ToC / Backlinks / Comments */}
-          <Panel id="right-sidebar" order={2} panelRef={rightSidebarRef} defaultSize="22%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => setRightCollapsed(size.asPercentage === 0)}>
+          <Panel id="right-sidebar" order={2} panelRef={rightSidebarRef} defaultSize="22%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => handlePanelResize('right-sidebar', size.asPercentage)}>
             <div className="h-full border-l border-gray-200 bg-white">
               <Group id="right-panels" orientation="vertical">
                 <Panel id="toc" defaultSize="30%" minSize="10%" collapsible collapsedSize="0%">
@@ -171,7 +189,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
                 minSize={`${discussionMinPercent}%`}
                 collapsible
                 collapsedSize="0%"
-                onResize={(size) => setDiscussionCollapsed(size.asPercentage === 0)}
+                onResize={(size) => handlePanelResize('discussion', size.asPercentage)}
               >
                 <ConnectedDiscussionPanel />
               </Panel>
