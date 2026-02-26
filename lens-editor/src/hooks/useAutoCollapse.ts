@@ -11,8 +11,9 @@ interface UseAutoCollapseOptions {
   pixelMinimums: number[];
   /** Minimum content area width in pixels */
   contentMinPx: number;
-  /** Called synchronously before each panel is auto-collapsed */
-  onAutoCollapse?: (ref: RefObject<PanelImperativeHandle | null>) => void;
+  /** Called synchronously before each panel is auto-collapsed.
+   *  Return true to skip the default panel.collapse() call (caller handled it). */
+  onAutoCollapse?: (ref: RefObject<PanelImperativeHandle | null>) => boolean | void;
   /** Called synchronously before each panel is auto-expanded.
    *  Return true to skip the default panel.expand() call (caller handled it). */
   onAutoExpand?: (ref: RefObject<PanelImperativeHandle | null>) => boolean | void;
@@ -46,8 +47,8 @@ export function useAutoCollapse({
       for (const ref of panelRefs) {
         const panel = ref.current;
         if (panel && !panel.isCollapsed()) {
-          onAutoCollapse?.(ref);
-          panel.collapse();
+          const handled = onAutoCollapse?.(ref);
+          if (!handled) panel.collapse();
           autoCollapsedRef.current.add(ref);
         }
       }

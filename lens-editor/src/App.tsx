@@ -256,7 +256,11 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     panelRefs: discussionCollapseRefs,
     pixelMinimums: [DISCUSSION_MIN_PX],
     contentMinPx: CONTENT_MIN_PX + LEFT_SIDEBAR_MIN_PX + RIGHT_SIDEBAR_MIN_PX,
-    onAutoCollapse: () => { desiredCollapsedRef.current['discussion'] = true; },
+    onAutoCollapse: () => {
+      desiredCollapsedRef.current['discussion'] = true;
+      applyEditorAreaLayout();
+      return true;
+    },
     onAutoExpand: () => {
       desiredCollapsedRef.current['discussion'] = false;
       applyEditorAreaLayout();
@@ -272,7 +276,11 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
     pixelMinimums: [LEFT_SIDEBAR_MIN_PX, RIGHT_SIDEBAR_MIN_PX],
     contentMinPx: CONTENT_MIN_PX,
     onAutoCollapse: (ref) => {
-      if (ref === rightSidebarRef) desiredCollapsedRef.current['right-sidebar'] = true;
+      if (ref === rightSidebarRef) {
+        desiredCollapsedRef.current['right-sidebar'] = true;
+        applyEditorAreaLayout();
+        return true;
+      }
     },
     onAutoExpand: (ref) => {
       if (ref === rightSidebarRef) {

@@ -256,7 +256,7 @@ describe('onAutoCollapse / onAutoExpand callbacks', () => {
     const onAutoCollapse = vi.fn();
     const callOrder: string[] = [];
 
-    onAutoCollapse.mockImplementation(() => callOrder.push('callback'));
+    onAutoCollapse.mockImplementation(() => { callOrder.push('callback'); });
     vi.mocked(leftRef.current!.collapse).mockImplementation(() => callOrder.push('collapse'));
     vi.mocked(rightRef.current!.collapse).mockImplementation(() => callOrder.push('collapse'));
 
@@ -329,6 +329,29 @@ describe('onAutoCollapse / onAutoExpand callbacks', () => {
 
     rerender({ width: 710 });
     expect(leftRef.current!.expand).toHaveBeenCalled();
+  });
+
+  it('skips collapse() when onAutoCollapse returns true', () => {
+    const leftRef = mockPanelRef();
+    const rightRef = mockPanelRef();
+    const onAutoCollapse = vi.fn().mockReturnValue(true);
+
+    const { rerender } = renderHook(
+      ({ width }) => useAutoCollapse({
+        containerWidth: width,
+        panelRefs: [leftRef, rightRef],
+        pixelMinimums: [200, 200],
+        contentMinPx: 450,
+        onAutoCollapse,
+      }),
+      { initialProps: { width: 1200 } },
+    );
+
+    rerender({ width: 800 });
+
+    expect(onAutoCollapse).toHaveBeenCalledTimes(2);
+    expect(leftRef.current!.collapse).not.toHaveBeenCalled();
+    expect(rightRef.current!.collapse).not.toHaveBeenCalled();
   });
 
   it('does not call onAutoExpand for panels that were manually collapsed', () => {
