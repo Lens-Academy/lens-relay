@@ -46,7 +46,7 @@ export function SegmentedToggle({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="inline-flex items-center bg-gray-100 rounded p-0.5"
+      className="inline-flex items-center bg-gray-200 rounded p-0.5"
     >
       <button
         type="button"

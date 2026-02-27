@@ -9,7 +9,6 @@ import { DisconnectionModal } from './components/DisconnectionModal/Disconnectio
 import { NavigationContext, useNavigation } from './contexts/NavigationContext';
 import { DisplayNameProvider } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
-import { DisplayNameBadge } from './components/DisplayNameBadge';
 import { SidebarContext } from './contexts/SidebarContext';
 import { useMultiFolderMetadata, type FolderConfig } from './hooks/useMultiFolderMetadata';
 import { AuthProvider } from './contexts/AuthContext';
@@ -252,7 +251,6 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const leftCollapsed = collapsedState['left-sidebar'] ?? false;
   const rightCollapsed = collapsedState['right-sidebar'] ?? false;
   const commentMarginCollapsed = collapsedState['comment-margin'] ?? false;
-  const discussionCollapsed = collapsedState['discussion'] ?? true;
 
   return (
     <AuthProvider role={role}>
@@ -282,9 +280,6 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               </div>
               <div className="flex items-center gap-4 flex-shrink-0">
                 <div id="header-controls" className="flex items-center gap-4" />
-                {headerStage !== 'overflow' && (
-                  <DisplayNameBadge compact={headerStage === 'hide-username'} />
-                )}
                 <button
                   onClick={() => manager.toggle('comment-margin')}
                   title="Toggle comments"
@@ -306,15 +301,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                     {!rightCollapsed && <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
                   </svg>
                 </button>
-                <button
-                  onClick={() => manager.toggle('discussion')}
-                  title="Toggle discussion"
-                  className="cursor-pointer text-gray-600 hover:text-gray-700 transition-colors"
-                >
-                  <svg className="w-[22px] h-[22px]" viewBox="0 0 24 24" fill="currentColor" opacity={discussionCollapsed ? 0.2 : 0.45}>
-                    <path d="M19.73 4.87a18.2 18.2 0 0 0-4.6-1.44c-.2.36-.43.85-.59 1.23a16.84 16.84 0 0 0-5.07 0c-.16-.38-.4-.87-.6-1.23a18.17 18.17 0 0 0-4.6 1.44A19.25 19.25 0 0 0 .96 18.06a18.32 18.32 0 0 0 5.63 2.87c.46-.62.86-1.28 1.2-1.98a11.83 11.83 0 0 1-1.89-.91c.16-.12.31-.24.46-.37a12.97 12.97 0 0 0 11.28 0c.15.13.3.25.46.37-.6.36-1.23.67-1.9.92.35.7.75 1.35 1.2 1.97a18.27 18.27 0 0 0 5.63-2.87A19.22 19.22 0 0 0 19.73 4.87ZM8.3 15.12c-1.18 0-2.16-1.1-2.16-2.44 0-1.34.95-2.44 2.16-2.44 1.2 0 2.18 1.1 2.16 2.44 0 1.34-.95 2.44-2.16 2.44Zm7.4 0c-1.18 0-2.16-1.1-2.16-2.44 0-1.34.95-2.44 2.16-2.44 1.2 0 2.18 1.1 2.16 2.44 0 1.34-.96 2.44-2.16 2.44Z" />
-                  </svg>
-                </button>
+                <div id="header-discussion-toggle" className="flex" />
               </div>
             </header>
             <Group id="app-outer" className="flex-1 min-h-0">
