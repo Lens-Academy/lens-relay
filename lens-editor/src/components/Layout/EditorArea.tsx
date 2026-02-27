@@ -62,6 +62,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     ? Math.max((DISCUSSION_MIN_PX / innerWidth) * 100, 1)
     : 20;
 
+  const COMMENT_MARGIN_MIN_PX = 150;
+  const commentMarginMinPercent = innerWidth > 0
+    ? Math.max((COMMENT_MARGIN_MIN_PX / innerWidth) * 100, 1)
+    : 10;
+
   // Derive current file path from doc ID for wikilink resolution
   const currentFilePath = useMemo(() => {
     if (!metadata || !Object.keys(metadata).length) return undefined;
@@ -169,7 +174,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           </Panel>
 
           {/* Comment margin — position-aligned cards, no visible separator */}
-          <Panel id="comment-margin" panelRef={commentMarginRef} defaultSize="16%" minSize="0%" collapsible collapsedSize="0%" onResize={(size) => manager.onPanelResize('comment-margin', size.asPercentage)}>
+          <Panel id="comment-margin" panelRef={commentMarginRef} defaultSize="16%" minSize={`${commentMarginMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => manager.onPanelResize('comment-margin', size.asPercentage)}>
             <div className="h-full border-l border-gray-100 bg-gray-50/50">
               {editorView && (
                 <CommentMargin
