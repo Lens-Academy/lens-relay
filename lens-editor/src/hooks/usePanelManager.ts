@@ -1,16 +1,14 @@
 import { useState, useCallback, useRef } from 'react';
-import type { RefObject } from 'react';
-import type { PanelImperativeHandle, GroupImperativeHandle } from 'react-resizable-panels';
 
 // --- Types ---
 
 export interface PanelEntry {
   /** Which panel group this panel belongs to */
   group: string;
-  /** Default expanded size as a percentage of the group */
-  defaultSize: number;
-  /** Minimum width in pixels (used for auto-collapse threshold calculation) */
+  /** Minimum width in pixels (used for auto-collapse threshold calculation and drag clamping) */
   minPx: number;
+  /** Preferred max width in pixels (expand target, auto-resize cap) */
+  maxPx?: number;
   /** Priority for auto-collapse ordering: lower numbers get lower thresholds (open first) */
   priority: number;
 }
@@ -20,6 +18,7 @@ export type PanelConfig = Record<string, PanelEntry>;
 export interface PanelDebugInfo {
   lastWidth: number;
   userThresholds: Map<string, number | 'infinity'>;
+  widths: Record<string, number>;
 }
 
 export interface PanelManager {
@@ -31,15 +30,15 @@ export interface PanelManager {
   expand: (id: string) => void;
   /** React to container width changes for auto-collapse/expand */
   autoResize: (widthPx: number) => void;
-  /** Sync state when library reports a panel resize */
-  onPanelResize: (id: string, sizePct: number) => void;
-  /** Register a panel ref */
-  setPanelRef: (id: string, ref: RefObject<PanelImperativeHandle | null>) => void;
-  /** Register a group ref */
-  setGroupRef: (groupId: string, ref: RefObject<GroupImperativeHandle | null>) => void;
+  /** Get pixel width for a panel */
+  getWidth: (id: string) => number;
+  /** Set pixel width for a panel (clamped to minPx) */
+  setWidth: (id: string, width: number) => void;
+  /** Called after user finishes dragging a resize handle — records user threshold */
+  onDragEnd: (id: string) => void;
   /** Get the collapsed state map (for rendering) */
   collapsedState: Record<string, boolean>;
-  /** Get debug info snapshot (viewport width, user thresholds) */
+  /** Get debug info snapshot (viewport width, user thresholds, pixel widths) */
   getDebugInfo: () => PanelDebugInfo;
 }
 
@@ -58,41 +57,40 @@ function buildInitialCollapsed(config: PanelConfig): Record<string, boolean> {
   return state;
 }
 
-/** Temporarily add panels-animating class for smooth transitions.
- *
- * The class enables `transition: flex-grow 200ms` on child [data-panel] elements.
- * We force a reflow after adding the class so the browser records the current
- * flex-grow values as the transition's "from" state before React asynchronously
- * updates them via setLayout()/collapse().
- *
- * Removal uses transitionend so the class stays for the full animation, with a
- * fallback timeout in case the transition is skipped (e.g. element not visible).
- */
-function animatePanels(groupId: string) {
-  const el = document.getElementById(groupId);
+// Build initial pixel widths for ALL panels
+function buildInitialWidths(config: PanelConfig): Record<string, number> {
+  const widths: Record<string, number> = {};
+  for (const [id, entry] of Object.entries(config)) {
+    widths[id] = entry.maxPx ?? entry.minPx;
+  }
+  return widths;
+}
+
+/** Temporarily add sidebar-animating class for smooth width transitions. */
+function animateContainer(containerId: string) {
+  const el = document.getElementById(containerId);
   if (!el) return;
 
-  el.classList.add('panels-animating');
-  // Force reflow — establishes "before" computed styles for the CSS transition
+  el.classList.add('sidebar-animating');
+  // Force reflow so browser records current widths before React updates them
   void el.offsetHeight;
 
   let removed = false;
   const remove = () => {
     if (removed) return;
     removed = true;
-    el.classList.remove('panels-animating');
+    el.classList.remove('sidebar-animating');
     el.removeEventListener('transitionend', onEnd);
   };
 
   const onEnd = (e: Event) => {
-    // Only react to flex-grow transitions on direct child panels
-    if ((e as TransitionEvent).propertyName === 'flex-grow') {
+    if ((e as TransitionEvent).propertyName === 'width') {
       remove();
     }
   };
   el.addEventListener('transitionend', onEnd);
 
-  // Fallback: remove class after generous timeout if transitionend never fires
+  // Fallback timeout
   setTimeout(remove, 500);
 }
 
@@ -119,13 +117,9 @@ export function computeDefaultThresholds(
 
 export function usePanelManager(config: PanelConfig): PanelManager {
   const [collapsed, setCollapsed] = useState(() => buildInitialCollapsed(config));
-  const panelRefs = useRef<Record<string, RefObject<PanelImperativeHandle | null>>>({});
-  const groupRefs = useRef<Record<string, RefObject<GroupImperativeHandle | null>>>({});
+  const [widths, setWidths] = useState(() => buildInitialWidths(config));
   // Mutable mirror of collapsed state for use inside callbacks without stale closures
   const collapsedRef = useRef(buildInitialCollapsed(config));
-  // Tracks panels whose collapsed state was set by a manager action (toggle/autoResize)
-  // vs by library sync (onPanelResize). Only manager-set collapsed panels get redistribution guard.
-  const managerSetRef = useRef<Set<string>>(new Set());
   // Per-panel user threshold overrides
   const userThresholdRef = useRef<Map<string, number | 'infinity'>>(new Map());
   // Last known viewport width, updated at start of autoResize()
@@ -135,43 +129,30 @@ export function usePanelManager(config: PanelConfig): PanelManager {
     return collapsed[id] ?? false;
   }, [collapsed]);
 
-  const setPanelRef = useCallback((id: string, ref: RefObject<PanelImperativeHandle | null>) => {
-    panelRefs.current[id] = ref;
-  }, []);
+  // --- Pixel width management ---
 
-  const setGroupRef = useCallback((groupId: string, ref: RefObject<GroupImperativeHandle | null>) => {
-    groupRefs.current[groupId] = ref;
-  }, []);
+  const getWidth = useCallback((id: string): number => {
+    return widths[id] ?? 0;
+  }, [widths]);
 
-  // Apply the desired collapsed state to a group layout via setLayout()
-  const applyGroupLayout = useCallback((groupId: string, desiredState: Record<string, boolean>) => {
-    const groupRef = groupRefs.current[groupId];
-    const group = groupRef?.current;
-    if (!group) return;
-    const layout = group.getLayout();
-    if (!layout) return;
-
-    const corrected = { ...layout };
-    let delta = 0;
-
-    for (const [id, entry] of Object.entries(config)) {
-      if (entry.group !== groupId) continue;
-      const shouldBeCollapsed = desiredState[id] ?? false;
-      if (shouldBeCollapsed && (corrected[id] ?? 0) > 0) {
-        delta += corrected[id];
-        corrected[id] = 0;
-      } else if (!shouldBeCollapsed && (corrected[id] ?? 0) === 0) {
-        const targetSize = entry.defaultSize;
-        corrected[id] = targetSize;
-        delta -= targetSize;
-      }
-    }
-
-    if (delta !== 0) {
-      corrected['editor'] = Math.max((corrected['editor'] ?? 0) + delta, 30);
-      group.setLayout(corrected);
-    }
+  const setWidth = useCallback((id: string, width: number): void => {
+    const entry = config[id];
+    if (!entry) return;
+    // During drag: only clamp at minPx (user can exceed maxPx soft limit)
+    const clamped = Math.max(width, entry.minPx);
+    setWidths(prev => ({ ...prev, [id]: clamped }));
   }, [config]);
+
+  const onDragEnd = useCallback((id: string): void => {
+    // After user drag, set threshold so auto-resize respects the user's manual choice
+    const W = lastWidthRef.current;
+    if (W >= WIDE_BOUNDARY) {
+      // At wide viewport, don't set threshold — user drag doesn't imply auto-resize preference
+      return;
+    }
+    // Set a close buffer so auto-resize won't immediately collapse what user just sized
+    userThresholdRef.current.set(id, W + CLOSE_BUFFER_FIXED + W * CLOSE_BUFFER_PCT);
+  }, []);
 
   // Set user threshold when user opens or closes a panel
   const setUserThreshold = useCallback((id: string, opening: boolean) => {
@@ -216,30 +197,13 @@ export function usePanelManager(config: PanelConfig): PanelManager {
     collapsedRef.current[id] = newCollapsed;
     setCollapsed(prev => ({ ...prev, [id]: newCollapsed }));
 
-    // Mark as manager-set for redistribution guard
-    if (newCollapsed) {
-      managerSetRef.current.add(id);
-    } else {
-      managerSetRef.current.delete(id);
+    // Animate width transition
+    animateContainer(entry.group);
+    if (!newCollapsed) {
+      // Expanding — set width to maxPx (preferred size)
+      setWidths(prev => ({ ...prev, [id]: entry.maxPx ?? entry.minPx }));
     }
-
-    // Dispatch collapse/expand action based on group type
-    if (entry.group === 'app-outer') {
-      const panelRef = panelRefs.current[id];
-      const panel = panelRef?.current;
-      if (panel) {
-        animatePanels('app-outer');
-        if (newCollapsed) {
-          panel.collapse();
-        } else {
-          panel.expand();
-        }
-      }
-    } else {
-      animatePanels(entry.group);
-      applyGroupLayout(entry.group, collapsedRef.current);
-    }
-  }, [config, applyGroupLayout, setUserThreshold]);
+  }, [config, setUserThreshold]);
 
   const expand = useCallback((id: string) => {
     const entry = config[id];
@@ -252,14 +216,10 @@ export function usePanelManager(config: PanelConfig): PanelManager {
     collapsedRef.current[id] = false;
     setCollapsed(prev => ({ ...prev, [id]: false }));
 
-    if (entry.group === 'app-outer') {
-      const panelRef = panelRefs.current[id];
-      panelRef?.current?.expand();
-    } else {
-      animatePanels(entry.group);
-      applyGroupLayout(entry.group, collapsedRef.current);
-    }
-  }, [config, applyGroupLayout, setUserThreshold]);
+    // Animate and set pixel width
+    animateContainer(entry.group);
+    setWidths(prev => ({ ...prev, [id]: entry.maxPx ?? entry.minPx }));
+  }, [config, setUserThreshold]);
 
   // Auto-collapse/expand based on viewport width using greedy fill
   const autoResize = useCallback((widthPx: number) => {
@@ -281,88 +241,64 @@ export function usePanelManager(config: PanelConfig): PanelManager {
     // Greedy fill
     let usedSpace = CONTENT_MIN_PX;
     const shouldBeOpen: Record<string, boolean> = {};
+    const newWidths: Record<string, number> = {};
     for (const { id, entry, threshold } of panels) {
       const wantsOpen = widthPx >= threshold && threshold !== Infinity;
       const canFit = usedSpace + entry.minPx <= widthPx;
       shouldBeOpen[id] = wantsOpen && canFit;
-      if (shouldBeOpen[id]) usedSpace += entry.minPx;
+      if (shouldBeOpen[id]) {
+        // Allocate pixel width up to maxPx
+        const targetWidth = Math.min(entry.maxPx ?? entry.minPx, widthPx - usedSpace);
+        newWidths[id] = Math.max(targetWidth, entry.minPx);
+        usedSpace += entry.minPx;
+      }
     }
 
-    // Apply changes — track which groups changed
+    // Apply changes
     let changed = false;
-    const changedGroups = new Set<string>();
+    const animatedGroups = new Set<string>();
 
     for (const [id, entry] of Object.entries(config)) {
       const want = shouldBeOpen[id] ?? false;
       const isCurrentlyOpen = !collapsedRef.current[id];
       if (want !== isCurrentlyOpen) {
         collapsedRef.current[id] = !want;
-        if (!want) managerSetRef.current.add(id);
-        else managerSetRef.current.delete(id);
         changed = true;
-        changedGroups.add(entry.group);
-
-        // For app-outer panels, use panel.collapse()/expand() directly
-        if (entry.group === 'app-outer') {
-          animatePanels(entry.group);
-          const panelRef = panelRefs.current[id];
-          if (!want) {
-            panelRef?.current?.collapse();
-          } else {
-            panelRef?.current?.expand();
-          }
-        }
+        animatedGroups.add(entry.group);
       }
     }
 
     if (changed) {
-      // Apply layout for editor-area groups that changed
-      for (const groupId of changedGroups) {
-        if (groupId !== 'app-outer') {
-          animatePanels(groupId);
-          applyGroupLayout(groupId, collapsedRef.current);
-        }
+      // Animate all affected container groups
+      for (const group of animatedGroups) {
+        animateContainer(group);
       }
+      // Update widths for newly opened panels
+      setWidths(prev => {
+        const updated = { ...prev };
+        for (const [id, w] of Object.entries(newWidths)) {
+          updated[id] = w;
+        }
+        return updated;
+      });
       setCollapsed({ ...collapsedRef.current });
     }
-  }, [config, applyGroupLayout]);
+  }, [config]);
 
   const getDebugInfo = useCallback((): PanelDebugInfo => ({
     lastWidth: lastWidthRef.current,
     userThresholds: new Map(userThresholdRef.current),
-  }), []);
-
-  // Sync state from library resize events
-  const onPanelResize = useCallback((id: string, sizePct: number) => {
-    const entry = config[id];
-    if (!entry) return;
-
-    const isNowCollapsed = sizePct === 0;
-    const shouldBeCollapsed = collapsedRef.current[id] ?? false;
-
-    // Detect redistribution — panel was collapsed by manager action
-    // but library gave it space. Correct atomically.
-    if (shouldBeCollapsed && !isNowCollapsed && managerSetRef.current.has(id)) {
-      applyGroupLayout(entry.group, collapsedRef.current);
-      return;
-    }
-
-    // Normal resize — sync our state with what the library reports
-    if (collapsedRef.current[id] !== isNowCollapsed) {
-      collapsedRef.current[id] = isNowCollapsed;
-      managerSetRef.current.delete(id);
-      setCollapsed(prev => ({ ...prev, [id]: isNowCollapsed }));
-    }
-  }, [config, applyGroupLayout]);
+    widths: { ...widths },
+  }), [widths]);
 
   return {
     isCollapsed,
     toggle,
     expand,
     autoResize,
-    onPanelResize,
-    setPanelRef,
-    setGroupRef,
+    getWidth,
+    setWidth,
+    onDragEnd,
     collapsedState: collapsed,
     getDebugInfo,
   };

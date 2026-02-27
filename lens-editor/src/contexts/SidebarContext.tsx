@@ -12,11 +12,11 @@ const noopManager: PanelManager = {
   toggle: () => {},
   expand: () => {},
   autoResize: () => {},
-  onPanelResize: () => {},
-  setPanelRef: () => {},
-  setGroupRef: () => {},
+  getWidth: () => 0,
+  setWidth: () => {},
+  onDragEnd: () => {},
   collapsedState: {},
-  getDebugInfo: () => ({ lastWidth: 0, userThresholds: new Map() }),
+  getDebugInfo: () => ({ lastWidth: 0, userThresholds: new Map(), widths: {} }),
 };
 
 export const SidebarContext = createContext<SidebarContextValue>({

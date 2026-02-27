@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import type { PanelConfig, PanelManager } from '../hooks/usePanelManager';
 import { computeDefaultThresholds } from '../hooks/usePanelManager';
 
@@ -10,15 +10,6 @@ interface Props {
 /** Panel IDs in display order */
 const PANEL_IDS = ['left-sidebar', 'editor', 'comment-margin', 'right-sidebar', 'discussion'] as const;
 
-/** Map panel config IDs to DOM element IDs (the `id` prop on <Panel>) */
-const PANEL_DOM_ID: Record<string, string> = {
-  'left-sidebar': 'sidebar',
-  'editor': 'editor',
-  'comment-margin': 'comment-margin',
-  'right-sidebar': 'right-sidebar',
-  'discussion': 'discussion',
-};
-
 function formatThreshold(value: number | 'infinity' | undefined): string {
   if (value === 'infinity') return '\u221E';
   if (value === undefined) return '\u2014';
@@ -27,28 +18,6 @@ function formatThreshold(value: number | 'infinity' | undefined): string {
 
 export function PanelDebugOverlay({ config, manager }: Props) {
   const [isOpen, setIsOpen] = useState(false);
-  const [panelWidths, setPanelWidths] = useState<Record<string, number>>({});
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Poll DOM for panel pixel widths when overlay is open
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const measure = () => {
-      const widths: Record<string, number> = {};
-      for (const [id, domId] of Object.entries(PANEL_DOM_ID)) {
-        const el = document.getElementById(domId);
-        widths[id] = el?.offsetWidth ?? 0;
-      }
-      setPanelWidths(widths);
-    };
-
-    measure();
-    intervalRef.current = setInterval(measure, 200);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isOpen]);
 
   if (!isOpen) {
     return (
@@ -104,15 +73,18 @@ export function PanelDebugOverlay({ config, manager }: Props) {
             <tbody>
               {PANEL_IDS.map(id => {
                 const entry = config[id];
-                const width = panelWidths[id] ?? 0;
                 const isCollapsed = collapsedState[id] ?? false;
                 const userT = debugInfo.userThresholds.get(id);
                 const defaultT = defaults.get(id);
 
+                // All panels use pixel widths from debugInfo
+                const width = !entry
+                  ? 0 // editor panel — no config entry, width not tracked
+                  : isCollapsed ? 0 : (debugInfo.widths[id] ?? 0);
+
                 // Effective threshold
                 let effectiveT: string;
                 if (!entry) {
-                  // editor panel — no threshold
                   effectiveT = '\u2014';
                 } else if (userT === 'infinity') {
                   effectiveT = '\u221E';

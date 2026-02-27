@@ -351,7 +351,7 @@
   outline-offset: 1px;
 }
 
-/* Panel collapse/expand animation — only when explicitly triggered */
-.panels-animating > [data-panel] {
-  transition: flex-grow 200ms ease-out;
+/* Panel width animation — triggered on toggle/auto-resize */
+.sidebar-animating > div {
+  transition: width 200ms ease-out;
 }

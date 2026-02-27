@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
+import { ResizeHandle } from './components/Layout/ResizeHandle';
 import { AwarenessInitializer } from './components/AwarenessInitializer/AwarenessInitializer';
 import { DisconnectionModal } from './components/DisconnectionModal/DisconnectionModal';
 import { NavigationContext, useNavigation } from './contexts/NavigationContext';
@@ -24,11 +24,12 @@ import { usePanelManager, type PanelConfig } from './hooks/usePanelManager';
 import { useHeaderBreakpoints } from './hooks/useHeaderBreakpoints';
 
 // Panel configuration — single source of truth for all panel behavior
+// All panels use CSS flexbox with pixel widths.
 export const PANEL_CONFIG: PanelConfig = {
-  'left-sidebar':   { group: 'app-outer',   defaultSize: 18, minPx: 200, priority: 1 },
-  'right-sidebar':  { group: 'editor-area', defaultSize: 22, minPx: 200, priority: 2 },
-  'comment-margin': { group: 'editor-area', defaultSize: 16, minPx: 150, priority: 3 },
-  'discussion':     { group: 'editor-area', defaultSize: 20, minPx: 250, priority: 4 },
+  'left-sidebar':   { group: 'app-outer',   minPx: 200, maxPx: 250, priority: 1 },
+  'comment-margin': { group: 'editor-area', minPx: 150, maxPx: 250, priority: 3 },
+  'right-sidebar':  { group: 'editor-area', minPx: 200, maxPx: 250, priority: 2 },
+  'discussion':     { group: 'editor-area', minPx: 250, maxPx: 270, priority: 4 },
 };
 
 // VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
@@ -190,15 +191,9 @@ export function App() {
 function AuthenticatedApp({ role }: { role: UserRole }) {
   const navigate = useNavigate();
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
-  const sidebarRef = usePanelRef();
 
   // Unified panel manager — single source of truth for all panel collapse/expand
   const manager = usePanelManager(PANEL_CONFIG);
-
-  // Register the left sidebar panel ref with the manager
-  useEffect(() => {
-    manager.setPanelRef('left-sidebar', sidebarRef);
-  }, [manager.setPanelRef, sidebarRef]);
 
   // Use multi-folder metadata hook
   const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
@@ -209,12 +204,6 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const { ref: outerRef, width: outerWidth } = useContainerWidth();
   const { ref: headerRef, width: headerWidth } = useContainerWidth();
   const headerStage = useHeaderBreakpoints(headerWidth);
-
-  // Dynamic minSize as percentage
-  const LEFT_SIDEBAR_MIN_PX = 200;
-  const leftMinPercent = outerWidth > 0
-    ? Math.max((LEFT_SIDEBAR_MIN_PX / outerWidth) * 100, 1)
-    : 12;
 
   // Auto-collapse/expand panels based on viewport width
   useEffect(() => {
@@ -304,18 +293,29 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
                 <div id="header-discussion-toggle" className="flex" />
               </div>
             </header>
-            <Group id="app-outer" className="flex-1 min-h-0">
-              <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize={`${leftMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => manager.onPanelResize('left-sidebar', size.asPercentage)}>
+            <div id="app-outer" className="flex-1 flex min-h-0">
+              <div
+                id="sidebar"
+                className="overflow-hidden flex-shrink-0"
+                style={{ width: leftCollapsed ? 0 : manager.getWidth('left-sidebar') }}
+              >
                 <Sidebar />
-              </Panel>
-              <Separator disabled={leftCollapsed} className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
-              <Panel id="main-content" minSize="30%">
+              </div>
+              <ResizeHandle
+                orientation="vertical"
+                reverse
+                onDragStart={() => manager.getWidth('left-sidebar')}
+                onDrag={(size) => manager.setWidth('left-sidebar', size)}
+                onDragEnd={() => manager.onDragEnd('left-sidebar')}
+                disabled={leftCollapsed}
+              />
+              <div className="flex-1 min-w-0">
                 <Routes>
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
                 </Routes>
-              </Panel>
-            </Group>
+              </div>
+            </div>
           </div>
           <QuickSwitcher
             open={quickSwitcherOpen}

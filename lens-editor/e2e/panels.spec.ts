@@ -9,14 +9,14 @@ import { test, expect } from '@playwright/test';
 // The baseURL in playwright.config.ts should be the full share link URL,
 // or we navigate to it explicitly in beforeEach.
 
-// Panel selectors — react-resizable-panels renders id={panelId} on the DOM element
+// Panel selectors — all panels use custom CSS flexbox with pixel widths
 const PANELS = {
   leftSidebar: '#sidebar',
   rightSidebar: '#right-sidebar',
   commentMargin: '#comment-margin',
   discussion: '#discussion',
   editor: '#editor',
-  editorArea: '#editor-area',
+  editorArea: '#editor-area',  // now a plain CSS flexbox div
   appOuter: '#app-outer',
 };
 
