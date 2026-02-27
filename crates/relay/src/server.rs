@@ -1504,7 +1504,8 @@ impl Server {
             )
             .route("/webhook/reload", post(reload_webhook_config_endpoint))
             .route("/search", get(handle_search))
-            .route("/doc/move", post(handle_move_document));
+            .route("/doc/move", post(handle_move_document))
+            .route("/open/*path", get(handle_open_by_path));
 
         // Only register /mcp if MCP_API_KEY is set
         if let Some(ref key) = self.mcp_api_key {
@@ -2120,6 +2121,29 @@ async fn check_store_deprecated(
 /// Always returns a 200 OK response, as long as we are listening.
 async fn ready() -> Result<Json<Value>, AppError> {
     Ok(Json(json!({"ok": true})))
+}
+
+async fn handle_open_by_path(
+    State(server_state): State<Arc<Server>>,
+    Path(path): Path<String>,
+    request: Request,
+) -> Result<Response, AppError> {
+    match server_state.doc_resolver().resolve_path(&path) {
+        Some(info) => {
+            let short_uuid = &info.uuid[..8.min(info.uuid.len())];
+            let encoded_path = path.replace(' ', "-");
+            let mut redirect_url = format!("/{}/{}", short_uuid, encoded_path);
+            if let Some(query) = request.uri().query() {
+                redirect_url.push('?');
+                redirect_url.push_str(query);
+            }
+            Ok(axum::response::Redirect::temporary(&redirect_url).into_response())
+        }
+        None => Err(AppError(
+            StatusCode::NOT_FOUND,
+            anyhow!("No document found at path '{}'", path),
+        )),
+    }
 }
 
 async fn handle_search(

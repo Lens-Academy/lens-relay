@@ -92,6 +92,13 @@ cd lens-editor && npm run relay:setup
 cd lens-editor && npx tsx scripts/generate-share-link.ts --role edit --folder b0000001-0000-4000-8000-000000000001 --base-url http://dev.vps:5173
 ```
 
+**For production share links**, the token must be signed with the production secret. Without it, tokens are signed with a dev-only key and will be rejected with 401 "Invalid or expired share token":
+
+```bash
+SHARE_TOKEN_SECRET=$(ssh relay-prod 'grep SHARE_TOKEN_SECRET /root/lens-relay/.env | cut -d= -f2') \
+  npx tsx scripts/generate-share-link.ts --role edit --folder b0000001-0000-4000-8000-000000000001 --base-url https://editor.lensacademy.org
+```
+
 ## Running lens-editor
 
 ```bash
