@@ -1,6 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
-import { usePanelManager, computeDefaultThresholds, type PanelConfig } from './usePanelManager';
+import { usePanelManager, computeDefaultThresholds, EDITOR_MIN_PX, HANDLE_WIDTH, type PanelConfig } from './usePanelManager';
 
 // --- Test helpers ---
 
@@ -580,6 +580,59 @@ describe('usePanelManager', () => {
       expect(result.current.isCollapsed('right-sidebar')).toBe(false);
       // Width should be set to maxPx (250) since there's room
       expect(result.current.getWidth('right-sidebar')).toBe(250);
+    });
+  });
+
+  describe('setWidth clamps at available space', () => {
+    it('clamps editor-area panel to prevent overflow', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      // autoResize sets container width and opens panels with known widths
+      // left-sidebar=250, right-sidebar=250, comment-margin=250, discussion=collapsed
+      act(() => result.current.autoResize(1200));
+
+      // Try to set comment-margin to 800 (way more than available)
+      // leftSpace = 250 + 9 = 259, editorArea = 1200 - 259 = 941
+      // otherEditorArea (right-sidebar) = 250 + 9 = 259
+      // max = 941 - 250 - 259 - 9 = 423
+      act(() => result.current.setWidth('comment-margin', 800));
+      expect(result.current.getWidth('comment-margin')).toBe(423);
+    });
+
+    it('clamps left-sidebar to prevent overflow', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      act(() => result.current.autoResize(1200));
+
+      // Try to set left-sidebar to 900
+      // editorAreaSpace = (250+9) + (250+9) = 518 (comment + right visible)
+      // max = 1200 - 250 - 518 - 9 = 423
+      act(() => result.current.setWidth('left-sidebar', 900));
+      expect(result.current.getWidth('left-sidebar')).toBe(423);
+    });
+
+    it('allows growth within available space', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      act(() => result.current.autoResize(1200));
+
+      // 300 < max(373) — should be accepted as-is
+      act(() => result.current.setWidth('comment-margin', 300));
+      expect(result.current.getWidth('comment-margin')).toBe(300);
+    });
+
+    it('collapsed neighbors free up space', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      act(() => result.current.autoResize(1200));
+
+      // Collapse right-sidebar — frees its 250 + 9 = 259px
+      act(() => result.current.toggle('right-sidebar'));
+
+      // Now max for comment-margin = 941 - 250 - 0 - 9 = 682
+      // 500 < 682 — accepted
+      act(() => result.current.setWidth('comment-margin', 500));
+      expect(result.current.getWidth('comment-margin')).toBe(500);
     });
   });
 

@@ -42,6 +42,9 @@ export interface PanelManager {
   getDebugInfo: () => PanelDebugInfo;
 }
 
+export const EDITOR_MIN_PX = 250;  // matches EditorArea.tsx style={{ minWidth: 250 }}
+export const HANDLE_WIDTH = 9;     // matches ResizeHandle.tsx style={{ width: 9 }}
+
 const CONTENT_MIN_PX = 450;
 const OPEN_BUFFER = 150;
 const CLOSE_BUFFER_FIXED = 100;
@@ -138,9 +141,44 @@ export function usePanelManager(config: PanelConfig): PanelManager {
   const setWidth = useCallback((id: string, width: number): void => {
     const entry = config[id];
     if (!entry) return;
-    // During drag: only clamp at minPx (user can exceed maxPx soft limit)
-    const clamped = Math.max(width, entry.minPx);
-    setWidths(prev => ({ ...prev, [id]: clamped }));
+
+    setWidths(prev => {
+      const containerWidth = lastWidthRef.current;
+      let maxWidth = Infinity;
+
+      if (containerWidth > 0) {
+        if (entry.group === 'app-outer') {
+          // Left sidebar: max = container - editor min - visible editor-area panels - own handle
+          let editorAreaSpace = 0;
+          for (const [otherId, otherEntry] of Object.entries(config)) {
+            if (otherEntry.group === 'editor-area' && !collapsedRef.current[otherId]) {
+              editorAreaSpace += (prev[otherId] ?? 0) + HANDLE_WIDTH;
+            }
+          }
+          maxWidth = containerWidth - EDITOR_MIN_PX - editorAreaSpace - HANDLE_WIDTH;
+        } else {
+          // Editor-area panel: max = editorAreaWidth - editor min - other visible panels - own handle
+          let leftSpace = 0;
+          for (const [otherId, otherEntry] of Object.entries(config)) {
+            if (otherEntry.group === 'app-outer' && !collapsedRef.current[otherId]) {
+              leftSpace += (prev[otherId] ?? 0) + HANDLE_WIDTH;
+            }
+          }
+          const editorAreaWidth = containerWidth - leftSpace;
+
+          let otherEditorSpace = 0;
+          for (const [otherId, otherEntry] of Object.entries(config)) {
+            if (otherId !== id && otherEntry.group === 'editor-area' && !collapsedRef.current[otherId]) {
+              otherEditorSpace += (prev[otherId] ?? 0) + HANDLE_WIDTH;
+            }
+          }
+          maxWidth = editorAreaWidth - EDITOR_MIN_PX - otherEditorSpace - HANDLE_WIDTH;
+        }
+      }
+
+      const clamped = Math.max(entry.minPx, Math.min(width, maxWidth));
+      return { ...prev, [id]: clamped };
+    });
   }, [config]);
 
   const onDragEnd = useCallback((id: string): void => {

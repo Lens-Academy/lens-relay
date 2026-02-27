@@ -128,7 +128,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       {/* Editor + Sidebars container — CSS flexbox with pixel widths */}
       <div id="editor-area" className="flex-1 flex min-h-0">
         {/* Editor fills remaining space */}
-        <div id="editor" className="flex-1 flex flex-col min-w-0 bg-white" style={{ minWidth: 300 }}>
+        <div id="editor" className="flex-1 flex flex-col min-w-0 bg-white" style={{ minWidth: 250 }}>
           <div className="px-6 pt-5 pb-1">
             <DocumentTitle currentDocId={currentDocId} />
           </div>
