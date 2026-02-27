@@ -60,7 +60,7 @@ export function DiscussionPanel({ doc }: DiscussionPanelProps) {
       aria-label="Discussion"
     >
       {/* Header */}
-      <div className="px-3 py-2 border-b border-gray-200 flex items-center justify-between">
+      <div className="px-3 py-2 border-b border-[#a8aeb5] flex items-center justify-between">
         <h3 className="text-sm font-semibold text-gray-700">
           {channelName ? `#${channelName}` : 'Discussion'}
         </h3>
@@ -69,7 +69,7 @@ export function DiscussionPanel({ doc }: DiscussionPanelProps) {
 
       {/* Disconnected banner (SSE terminated but messages already loaded) */}
       {gatewayStatus === 'disconnected' && error === 'Connection lost' && (
-        <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+        <div className="px-3 py-2 bg-gray-50 border-b border-[#a8aeb5] flex items-center justify-between">
           <span className="text-xs text-gray-500">Connection lost</span>
           <button
             onClick={reconnect}
