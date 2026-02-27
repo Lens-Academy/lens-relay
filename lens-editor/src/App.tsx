@@ -24,7 +24,7 @@ import { usePanelManager, type PanelConfig } from './hooks/usePanelManager';
 import { useHeaderBreakpoints } from './hooks/useHeaderBreakpoints';
 
 // Panel configuration — single source of truth for all panel behavior
-const PANEL_CONFIG: PanelConfig = {
+export const PANEL_CONFIG: PanelConfig = {
   'left-sidebar':   { group: 'app-outer',   defaultSize: 18, minPx: 200, priority: 1 },
   'right-sidebar':  { group: 'editor-area', defaultSize: 22, minPx: 200, priority: 2 },
   'comment-margin': { group: 'editor-area', defaultSize: 16, minPx: 150, priority: 3 },

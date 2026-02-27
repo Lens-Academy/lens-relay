@@ -17,6 +17,11 @@ export interface PanelEntry {
 
 export type PanelConfig = Record<string, PanelEntry>;
 
+export interface PanelDebugInfo {
+  lastWidth: number;
+  userThresholds: Map<string, number | 'infinity'>;
+}
+
 export interface PanelManager {
   /** Whether a panel is currently collapsed */
   isCollapsed: (id: string) => boolean;
@@ -34,6 +39,8 @@ export interface PanelManager {
   setGroupRef: (groupId: string, ref: RefObject<GroupImperativeHandle | null>) => void;
   /** Get the collapsed state map (for rendering) */
   collapsedState: Record<string, boolean>;
+  /** Get debug info snapshot (viewport width, user thresholds) */
+  getDebugInfo: () => PanelDebugInfo;
 }
 
 const CONTENT_MIN_PX = 450;
@@ -320,6 +327,11 @@ export function usePanelManager(config: PanelConfig): PanelManager {
     }
   }, [config, applyGroupLayout]);
 
+  const getDebugInfo = useCallback((): PanelDebugInfo => ({
+    lastWidth: lastWidthRef.current,
+    userThresholds: new Map(userThresholdRef.current),
+  }), []);
+
   // Sync state from library resize events
   const onPanelResize = useCallback((id: string, sizePct: number) => {
     const entry = config[id];
@@ -352,5 +364,6 @@ export function usePanelManager(config: PanelConfig): PanelManager {
     setPanelRef,
     setGroupRef,
     collapsedState: collapsed,
+    getDebugInfo,
   };
 }

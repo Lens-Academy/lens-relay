@@ -16,6 +16,7 @@ const noopManager: PanelManager = {
   setPanelRef: () => {},
   setGroupRef: () => {},
   collapsedState: {},
+  getDebugInfo: () => ({ lastWidth: 0, userThresholds: new Map() }),
 };
 
 export const SidebarContext = createContext<SidebarContextValue>({

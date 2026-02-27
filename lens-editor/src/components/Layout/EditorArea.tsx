@@ -13,6 +13,7 @@ import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { CommentMargin } from '../CommentMargin';
 import { DebugYMapPanel } from '../DebugYMapPanel';
+import { PanelDebugOverlay } from '../PanelDebugOverlay';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
 import { useHasDiscussion } from '../DiscussionPanel/useHasDiscussion';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -21,7 +22,7 @@ import { useSidebar } from '../../contexts/SidebarContext';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
-import { RELAY_ID } from '../../App';
+import { RELAY_ID, PANEL_CONFIG } from '../../App';
 
 /**
  * Editor area component that lives INSIDE the RelayProvider key boundary.
@@ -127,6 +128,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           </OverflowMenu>
         ) : (
           <>
+            <PanelDebugOverlay config={PANEL_CONFIG} manager={manager} />
             <DebugYMapPanel />
             <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} />
             <SourceModeToggle editorView={editorView} />
