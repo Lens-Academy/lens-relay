@@ -584,7 +584,7 @@ describe('usePanelManager', () => {
   });
 
   describe('setWidth clamps at available space', () => {
-    it('clamps editor-area panel to prevent overflow', () => {
+    it('clamps editor-area panel to absoluteMax and shrinks neighbors', () => {
       const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
 
       // autoResize sets container width and opens panels with known widths
@@ -592,23 +592,27 @@ describe('usePanelManager', () => {
       act(() => result.current.autoResize(1200));
 
       // Try to set comment-margin to 800 (way more than available)
-      // leftSpace = 250 + 9 = 259, editorArea = 1200 - 259 = 941
-      // otherEditorArea (right-sidebar) = 250 + 9 = 259
-      // max = 941 - 250 - 259 - 9 = 423
+      // leftSpaceMin = 200+9 = 209, editorAreaMax = 1200-209 = 991
+      // absoluteMax = 991 - 250 - (200+9) - 9 = 523 (all neighbors at minPx)
       act(() => result.current.setWidth('comment-margin', 800));
-      expect(result.current.getWidth('comment-margin')).toBe(423);
+      expect(result.current.getWidth('comment-margin')).toBe(523);
+      // Both neighbors shrunk to minPx
+      expect(result.current.getWidth('left-sidebar')).toBe(200);
+      expect(result.current.getWidth('right-sidebar')).toBe(200);
     });
 
-    it('clamps left-sidebar to prevent overflow', () => {
+    it('clamps left-sidebar to absoluteMax and shrinks editor-area panels', () => {
       const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
 
       act(() => result.current.autoResize(1200));
 
       // Try to set left-sidebar to 900
-      // editorAreaSpace = (250+9) + (250+9) = 518 (comment + right visible)
-      // max = 1200 - 250 - 518 - 9 = 423
+      // absoluteMax = 1200 - 250 - (150+9) - (200+9) - 9 = 573 (neighbors at minPx)
       act(() => result.current.setWidth('left-sidebar', 900));
-      expect(result.current.getWidth('left-sidebar')).toBe(423);
+      expect(result.current.getWidth('left-sidebar')).toBe(573);
+      // Both editor-area neighbors shrunk to minPx
+      expect(result.current.getWidth('right-sidebar')).toBe(200);
+      expect(result.current.getWidth('comment-margin')).toBe(150);
     });
 
     it('allows growth within available space', () => {
@@ -633,6 +637,99 @@ describe('usePanelManager', () => {
       // 500 < 682 — accepted
       act(() => result.current.setWidth('comment-margin', 500));
       expect(result.current.getWidth('comment-margin')).toBe(500);
+    });
+  });
+
+  describe('setWidth eats into neighbors when editor is at minimum', () => {
+    it('shrinks biggest neighbor first', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      // autoResize(1200): left=250, right=250, comment=250, discussion=collapsed
+      act(() => result.current.autoResize(1200));
+
+      // Make right bigger so it's the clear biggest neighbor
+      act(() => result.current.setWidth('right-sidebar', 300));
+
+      // For comment-margin with right=300:
+      // leftSpace = 259, editorArea = 941
+      // softMax = 941 - 250 - (300+9) - 9 = 373
+      // absoluteMax = 941 - 250 - (200+9) - 9 = 473
+      // Set to 430: exceeds softMax(373), within absoluteMax(473). Need 57px.
+      // right (biggest, 300): canGive=100, take=57, right->243
+      act(() => result.current.setWidth('comment-margin', 430));
+      expect(result.current.getWidth('comment-margin')).toBe(430);
+      expect(result.current.getWidth('right-sidebar')).toBe(243);
+    });
+
+    it('stops at absoluteMax when neighbors fully shrunk', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      // autoResize(1200): left=250, right=250, comment=250, discussion=collapsed
+      act(() => result.current.autoResize(1200));
+
+      // softMax for comment = 423, absoluteMax = 523 (all neighbors at minPx)
+      // Set to 600: clamped to absoluteMax 523, left and right shrink to minPx
+      act(() => result.current.setWidth('comment-margin', 600));
+      expect(result.current.getWidth('comment-margin')).toBe(523);
+      expect(result.current.getWidth('left-sidebar')).toBe(200);
+      expect(result.current.getWidth('right-sidebar')).toBe(200);
+    });
+
+    it('no shrinking when within softMax', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      // autoResize(1200): left=250, right=250, comment=250, discussion=collapsed
+      act(() => result.current.autoResize(1200));
+
+      // softMax for comment = 423
+      // Set to 350: within softMax, no shrinking needed
+      act(() => result.current.setWidth('comment-margin', 350));
+      expect(result.current.getWidth('comment-margin')).toBe(350);
+      expect(result.current.getWidth('right-sidebar')).toBe(250);
+    });
+
+    it('left-sidebar growth eats into editor-area panels biggest-first', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      // autoResize(1200): left=250, right=250, comment=250, discussion=collapsed
+      act(() => result.current.autoResize(1200));
+
+      // Make right bigger so biggest-first ordering is testable
+      act(() => result.current.setWidth('right-sidebar', 300));
+
+      // For left-sidebar with right=300, comment=250:
+      // editorAreaSpaceCurrent = (250+9) + (300+9) = 568
+      // editorAreaSpaceMin = (150+9) + (200+9) = 368
+      // softMax = 1200 - 250 - 568 - 9 = 373
+      // absoluteMax = 1200 - 250 - 368 - 9 = 573
+      // Set to 450: exceeds softMax(373), within absoluteMax(573). Need 77px.
+      // right (biggest, 300): canGive=100, take=77, right->223. comment stays 250.
+      act(() => result.current.setWidth('left-sidebar', 450));
+      expect(result.current.getWidth('left-sidebar')).toBe(450);
+      expect(result.current.getWidth('right-sidebar')).toBe(223);
+      expect(result.current.getWidth('comment-margin')).toBe(250);
+    });
+
+    it('editor-area panel growth eats into left-sidebar', () => {
+      const { result } = renderHook(() => usePanelManager(DEFAULT_CONFIG));
+
+      // autoResize(1200): left=250, right=250, comment=250, discussion=collapsed
+      act(() => result.current.autoResize(1200));
+
+      // Shrink comment to minPx so only left-sidebar has room to give
+      act(() => result.current.setWidth('comment-margin', 150));
+
+      // For right-sidebar with left=250, comment=150:
+      // leftSpaceCurrent = 250+9 = 259, editorAreaCurrent = 1200-259 = 941
+      // softMax = 941 - 250 - (150+9) - 9 = 523
+      // leftSpaceMin = 200+9 = 209, editorAreaMax = 1200-209 = 991
+      // absoluteMax = 991 - 250 - (150+9) - 9 = 573
+      // Set to 550: exceeds softMax(523), within absoluteMax(573). Need 27px.
+      // left (biggest, 250): canGive=50, take=27, left->223
+      act(() => result.current.setWidth('right-sidebar', 550));
+      expect(result.current.getWidth('right-sidebar')).toBe(550);
+      expect(result.current.getWidth('left-sidebar')).toBe(223);
+      expect(result.current.getWidth('comment-margin')).toBe(150);
     });
   });
 

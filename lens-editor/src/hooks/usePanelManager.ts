@@ -144,40 +144,72 @@ export function usePanelManager(config: PanelConfig): PanelManager {
 
     setWidths(prev => {
       const containerWidth = lastWidthRef.current;
-      let maxWidth = Infinity;
 
-      if (containerWidth > 0) {
-        if (entry.group === 'app-outer') {
-          // Left sidebar: max = container - editor min - visible editor-area panels - own handle
-          let editorAreaSpace = 0;
-          for (const [otherId, otherEntry] of Object.entries(config)) {
-            if (otherEntry.group === 'editor-area' && !collapsedRef.current[otherId]) {
-              editorAreaSpace += (prev[otherId] ?? 0) + HANDLE_WIDTH;
-            }
-          }
-          maxWidth = containerWidth - EDITOR_MIN_PX - editorAreaSpace - HANDLE_WIDTH;
-        } else {
-          // Editor-area panel: max = editorAreaWidth - editor min - other visible panels - own handle
-          let leftSpace = 0;
-          for (const [otherId, otherEntry] of Object.entries(config)) {
-            if (otherEntry.group === 'app-outer' && !collapsedRef.current[otherId]) {
-              leftSpace += (prev[otherId] ?? 0) + HANDLE_WIDTH;
-            }
-          }
-          const editorAreaWidth = containerWidth - leftSpace;
-
-          let otherEditorSpace = 0;
-          for (const [otherId, otherEntry] of Object.entries(config)) {
-            if (otherId !== id && otherEntry.group === 'editor-area' && !collapsedRef.current[otherId]) {
-              otherEditorSpace += (prev[otherId] ?? 0) + HANDLE_WIDTH;
-            }
-          }
-          maxWidth = editorAreaWidth - EDITOR_MIN_PX - otherEditorSpace - HANDLE_WIDTH;
-        }
+      if (containerWidth <= 0) {
+        return { ...prev, [id]: Math.max(entry.minPx, width) };
       }
 
-      const clamped = Math.max(entry.minPx, Math.min(width, maxWidth));
-      return { ...prev, [id]: clamped };
+      // Collect shrinkable neighbors (excluding self, visible only)
+      // app-outer panels: shrink editor-area neighbors
+      // editor-area panels: shrink editor-area + app-outer neighbors
+      const shrinkable: { id: string; currentWidth: number; minPx: number }[] = [];
+      for (const [otherId, otherEntry] of Object.entries(config)) {
+        if (otherId === id || collapsedRef.current[otherId]) continue;
+        if (entry.group === 'app-outer' && otherEntry.group !== 'editor-area') continue;
+        shrinkable.push({ id: otherId, currentWidth: prev[otherId] ?? 0, minPx: otherEntry.minPx });
+      }
+
+      // Phase 1: Compute absoluteMax (neighbors at minPx) and softMax (neighbors at current widths)
+      let softMax: number;
+      let absoluteMax: number;
+
+      if (entry.group === 'app-outer') {
+        let spaceCurrent = 0;
+        let spaceMin = 0;
+        for (const n of shrinkable) {
+          spaceCurrent += n.currentWidth + HANDLE_WIDTH;
+          spaceMin += n.minPx + HANDLE_WIDTH;
+        }
+        softMax = containerWidth - EDITOR_MIN_PX - spaceCurrent - HANDLE_WIDTH;
+        absoluteMax = containerWidth - EDITOR_MIN_PX - spaceMin - HANDLE_WIDTH;
+      } else {
+        let leftSpaceCurrent = 0;
+        let leftSpaceMin = 0;
+        let otherEditorCurrent = 0;
+        let otherEditorMin = 0;
+        for (const n of shrinkable) {
+          if (config[n.id].group === 'app-outer') {
+            leftSpaceCurrent += n.currentWidth + HANDLE_WIDTH;
+            leftSpaceMin += n.minPx + HANDLE_WIDTH;
+          } else {
+            otherEditorCurrent += n.currentWidth + HANDLE_WIDTH;
+            otherEditorMin += n.minPx + HANDLE_WIDTH;
+          }
+        }
+        softMax = (containerWidth - leftSpaceCurrent) - EDITOR_MIN_PX - otherEditorCurrent - HANDLE_WIDTH;
+        absoluteMax = (containerWidth - leftSpaceMin) - EDITOR_MIN_PX - otherEditorMin - HANDLE_WIDTH;
+      }
+
+      const clamped = Math.max(entry.minPx, Math.min(width, absoluteMax));
+
+      // Phase 2: If within softMax, no neighbor shrinking needed
+      if (clamped <= softMax) {
+        return { ...prev, [id]: clamped };
+      }
+
+      // Shrink neighbors biggest-first to free space
+      let needed = clamped - softMax;
+      shrinkable.sort((a, b) => b.currentWidth - a.currentWidth);
+
+      const updated = { ...prev, [id]: clamped };
+      for (const n of shrinkable) {
+        if (needed <= 0) break;
+        const canGive = n.currentWidth - n.minPx;
+        const take = Math.min(canGive, needed);
+        updated[n.id] = n.currentWidth - take;
+        needed -= take;
+      }
+      return updated;
     });
   }, [config]);
 
