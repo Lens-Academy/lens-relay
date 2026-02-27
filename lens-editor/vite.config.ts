@@ -105,6 +105,19 @@ export default defineConfig(() => {
           rewrite: (path) => path.replace(/^\/ws\/relay/, ''),
           secure: !useLocalRelay,
         },
+        // Proxy /open/* path-based document resolution to relay-server
+        '/open': {
+          target: relayTarget,
+          changeOrigin: true,
+          secure: !useLocalRelay,
+          configure: (proxy) => {
+            if (relayServerToken) {
+              proxy.on('proxyReq', (proxyReq) => {
+                proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);
+              });
+            }
+          },
+        },
         // Proxy Discord bridge requests to sidecar
         '/api/discord': {
           target: `http://localhost:${bridgePort}`,
