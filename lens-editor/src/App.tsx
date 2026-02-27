@@ -308,7 +308,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               <Panel id="sidebar" panelRef={sidebarRef} defaultSize="18%" minSize={`${leftMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => manager.onPanelResize('left-sidebar', size.asPercentage)}>
                 <Sidebar />
               </Panel>
-              <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+              <Separator disabled={leftCollapsed} className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
               <Panel id="main-content" minSize="30%">
                 <Routes>
                   <Route path="/:docUuid/*" element={<DocumentView />} />

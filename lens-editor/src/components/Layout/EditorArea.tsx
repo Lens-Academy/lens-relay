@@ -97,6 +97,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const breadcrumbTarget = document.getElementById('header-breadcrumb');
   const portalTarget = document.getElementById('header-controls');
   const discussionToggleTarget = document.getElementById('header-discussion-toggle');
+  const rightCollapsed = manager.collapsedState['right-sidebar'] ?? false;
   const discussionCollapsed = manager.collapsedState['discussion'] ?? true;
 
   return (
@@ -188,7 +189,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </div>
           </Panel>
 
-          <Separator className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+          <Separator disabled={rightCollapsed} className="w-px bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
 
           {/* Right sidebar — vertical Group for ToC / Backlinks */}
           <Panel id="right-sidebar" order={2} panelRef={rightSidebarRef} defaultSize="18%" minSize={`${rightMinPercent}%`} collapsible collapsedSize="0%" onResize={(size) => manager.onPanelResize('right-sidebar', size.asPercentage)}>
@@ -211,7 +212,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
           {hasDiscussion && (
             <>
-              <Separator className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
+              <Separator disabled={discussionCollapsed} className="w-1 bg-gray-200 hover:bg-blue-400 focus:outline-none transition-colors cursor-col-resize" />
               <Panel
                 id="discussion"
                 order={3}
