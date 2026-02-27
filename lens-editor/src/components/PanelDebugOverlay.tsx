@@ -77,10 +77,24 @@ export function PanelDebugOverlay({ config, manager }: Props) {
                 const userT = debugInfo.userThresholds.get(id);
                 const defaultT = defaults.get(id);
 
-                // All panels use pixel widths from debugInfo
-                const width = !entry
-                  ? 0 // editor panel — no config entry, width not tracked
-                  : isCollapsed ? 0 : (debugInfo.widths[id] ?? 0);
+                let width: number;
+                if (id === 'editor') {
+                  // Editor is flex-1, not tracked — compute from container minus panels
+                  let leftSpace = 0;
+                  let editorAreaPanelSpace = 0;
+                  for (const [pid, pentry] of Object.entries(config)) {
+                    if (collapsedState[pid]) continue;
+                    if (pentry.group === 'app-outer') {
+                      leftSpace += (debugInfo.widths[pid] ?? 0) + 9; // HANDLE_WIDTH
+                    } else if (pentry.group === 'editor-area') {
+                      editorAreaPanelSpace += (debugInfo.widths[pid] ?? 0) + 9;
+                    }
+                  }
+                  const editorAreaWidth = debugInfo.lastWidth - leftSpace;
+                  width = Math.round(Math.max(0, editorAreaWidth - editorAreaPanelSpace - 9));
+                } else {
+                  width = !entry ? 0 : isCollapsed ? 0 : (debugInfo.widths[id] ?? 0);
+                }
 
                 // Effective threshold
                 let effectiveT: string;
@@ -99,7 +113,7 @@ export function PanelDebugOverlay({ config, manager }: Props) {
                 const stateLabel = !entry
                   ? '\u2014'
                   : isCollapsed
-                    ? 'collapsed'
+                    ? 'closed'
                     : 'open';
 
                 const stateColor = !entry
@@ -111,7 +125,7 @@ export function PanelDebugOverlay({ config, manager }: Props) {
                 return (
                   <tr key={id} className="border-t border-gray-800">
                     <td className="pr-3 py-0.5 text-gray-300">{id}</td>
-                    <td className="pr-3 py-0.5 text-right text-white">{width}px</td>
+                    <td className="pr-3 py-0.5 text-right text-white">{Math.round(width)}px</td>
                     <td className={`pr-3 py-0.5 ${stateColor}`}>{stateLabel}</td>
                     <td className="py-0.5 text-gray-400">
                       {entry ? (

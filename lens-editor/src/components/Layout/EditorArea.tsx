@@ -93,23 +93,25 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       })()}
       {/* Portal editor controls into global header */}
       {portalTarget && createPortal(
-        headerStage === 'overflow' ? (
-          <OverflowMenu>
-            <SuggestionModeToggle view={editorView} iconOnly />
-            <SourceModeToggle editorView={editorView} />
-            <PresencePanel />
-            <SyncStatus />
-          </OverflowMenu>
-        ) : (
-          <>
-            <PanelDebugOverlay config={PANEL_CONFIG} manager={manager} />
-            <DebugYMapPanel />
-            <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} />
-            <SourceModeToggle editorView={editorView} />
-            <PresencePanel />
-            <SyncStatus />
-          </>
-        ),
+        <>
+          <PanelDebugOverlay config={PANEL_CONFIG} manager={manager} />
+          {headerStage === 'overflow' ? (
+            <OverflowMenu>
+              <SuggestionModeToggle view={editorView} iconOnly />
+              <SourceModeToggle editorView={editorView} />
+              <PresencePanel />
+              <SyncStatus />
+            </OverflowMenu>
+          ) : (
+            <>
+              <DebugYMapPanel />
+              <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} />
+              <SourceModeToggle editorView={editorView} />
+              <PresencePanel />
+              <SyncStatus />
+            </>
+          )}
+        </>,
         portalTarget
       )}
       {/* Portal Discord toggle into global header — only when doc has discussion */}
