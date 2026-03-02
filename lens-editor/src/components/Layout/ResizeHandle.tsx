@@ -15,6 +15,8 @@ interface ResizeHandleProps {
    *  Default for vertical: dragging left increases size (handle on left of panel).
    *  Default for horizontal: dragging down increases size. */
   reverse?: boolean;
+  /** Called on double-click (e.g. to reset split to auto). */
+  onDoubleClick?: () => void;
 }
 
 const KEYBOARD_STEP = 10;
@@ -26,6 +28,7 @@ export function ResizeHandle({
   disabled,
   orientation = 'vertical',
   reverse = false,
+  onDoubleClick,
 }: ResizeHandleProps) {
   const ref = useRef<HTMLDivElement>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
@@ -122,6 +125,7 @@ export function ResizeHandle({
         style={{ width: 9 }}
         onPointerDown={handlePointerDown}
         onKeyDown={handleKeyDown}
+        onDoubleClick={onDoubleClick}
       >
         <div className="w-px h-full bg-gray-200 group-hover:bg-blue-400 transition-colors" />
       </div>
@@ -138,6 +142,7 @@ export function ResizeHandle({
       style={{ height: 9 }}
       onPointerDown={handlePointerDown}
       onKeyDown={handleKeyDown}
+      onDoubleClick={onDoubleClick}
     >
       <div className="h-px w-full bg-gray-200 group-hover:bg-blue-400 transition-colors" />
     </div>

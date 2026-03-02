@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
@@ -21,6 +21,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
+import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
 import { RELAY_ID, PANEL_CONFIG } from '../../App';
 
 /**
@@ -62,8 +63,23 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     setAddCommentTrigger(v => v + 1);
   }, [manager.expand]);
 
-  // Local state for ToC/Backlinks vertical split inside right sidebar
-  const [tocHeight, setTocHeight] = useState(200);
+  // Auto-split ToC/Backlinks vertical split inside right sidebar
+  const sidebarContainerRef = useRef<HTMLDivElement>(null);
+  const tocScrollRef = useRef<HTMLDivElement>(null);
+  const blScrollRef = useRef<HTMLDivElement>(null);
+  const [userOverride, setUserOverride] = useState<number | null>(null);
+
+  // Reset override when document changes
+  useEffect(() => setUserOverride(null), [currentDocId]);
+
+  const { topHeight: tocHeight, bottomHeight: blHeight } = useAutoSplitHeight({
+    containerRef: sidebarContainerRef,
+    topRef: tocScrollRef,
+    bottomRef: blScrollRef,
+    handleHeight: 9,
+    minHeight: 80,
+    userOverride,
+  });
 
   // Portal targets in the global header
   const breadcrumbTarget = document.getElementById('header-breadcrumb');
@@ -179,19 +195,21 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           disabled={rightCollapsed}
         />
         <div
+          ref={sidebarContainerRef}
           id="right-sidebar"
           className="overflow-hidden flex-shrink-0 bg-[#f6f6f6] flex flex-col"
           style={{ width: rightCollapsed ? 0 : manager.getWidth('right-sidebar') }}
         >
-          <div style={{ height: tocHeight, flexShrink: 0 }} className="overflow-y-auto">
+          <div ref={tocScrollRef} style={{ height: tocHeight, flexShrink: 0 }} className="overflow-y-auto">
             <TableOfContents view={editorView} stateVersion={stateVersion} />
           </div>
           <ResizeHandle
             orientation="horizontal"
             onDragStart={() => tocHeight}
-            onDrag={(size) => setTocHeight(Math.max(50, size))}
+            onDrag={(size) => setUserOverride(Math.max(50, size))}
+            onDoubleClick={() => setUserOverride(null)}
           />
-          <div className="flex-1 min-h-0 overflow-y-auto">
+          <div ref={blScrollRef} style={{ height: blHeight, flexShrink: 0 }} className="overflow-y-auto">
             <BacklinksPanel currentDocId={currentDocId} />
           </div>
         </div>
