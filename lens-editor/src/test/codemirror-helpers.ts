@@ -9,6 +9,7 @@ import type { WikilinkContext } from '../components/Editor/extensions/livePrevie
 import { criticMarkupExtension } from '../components/Editor/extensions/criticmarkup';
 import { tightMarkdownKeymap } from '../components/Editor/extensions/tightListEnter';
 import { checklistKeymap } from '../components/Editor/extensions/checklistToggle';
+import { markdownFormattingKeymap } from '../components/Editor/extensions/markdownFormatting';
 
 /**
  * Create an EditorView with live preview extension for testing.
@@ -201,5 +202,21 @@ export function pressEnter(view: EditorView): boolean {
  */
 export function pressCtrlL(view: EditorView): boolean {
   const binding = checklistKeymap.find((k) => k.key === 'Mod-l');
+  return binding?.run?.(view) ?? false;
+}
+
+/**
+ * Simulate pressing Ctrl+B (bold toggle) through the formatting keymap.
+ */
+export function pressCtrlB(view: EditorView): boolean {
+  const binding = markdownFormattingKeymap.find((k) => k.key === 'Mod-b');
+  return binding?.run?.(view) ?? false;
+}
+
+/**
+ * Simulate pressing Ctrl+I (italic toggle) through the formatting keymap.
+ */
+export function pressCtrlI(view: EditorView): boolean {
+  const binding = markdownFormattingKeymap.find((k) => k.key === 'Mod-i');
   return binding?.run?.(view) ?? false;
 }

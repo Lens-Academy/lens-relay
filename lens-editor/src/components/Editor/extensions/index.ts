@@ -21,3 +21,12 @@ export {
 } from './criticmarkup-context-menu';
 
 export { livePreview, toggleSourceMode, livePreviewCompartment } from './livePreview';
+
+export { emphasisPersistPlugin } from './emphasisPersist';
+
+export {
+  toggleInlineFormat,
+  toggleBold,
+  toggleItalic,
+  markdownFormattingKeymap,
+} from './markdownFormatting';

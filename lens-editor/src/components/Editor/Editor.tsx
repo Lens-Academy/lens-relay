@@ -20,11 +20,13 @@ import { TaskList } from '@lezer/markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
 import { tightMarkdownKeymap } from './extensions/tightListEnter';
 import { checklistKeymap } from './extensions/checklistToggle';
+import { markdownFormattingKeymap } from './extensions/markdownFormatting';
 import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged } from './extensions/livePreview';
+import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
 import { remoteCursorTheme } from './remoteCursorTheme';
@@ -269,8 +271,10 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onSynced, onNavig
           addKeymap: false,
         }),
         livePreview(wikilinkContextRef.current),
+        emphasisPersistPlugin,
         Prec.high(keymap.of(tightMarkdownKeymap)),
         Prec.high(keymap.of(checklistKeymap)),
+        Prec.high(keymap.of(markdownFormattingKeymap)),
         listIndentKeymap,
         yCollab(ytext, provider.awareness, { undoManager }),
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
