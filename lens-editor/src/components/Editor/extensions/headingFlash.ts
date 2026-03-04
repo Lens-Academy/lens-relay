@@ -8,6 +8,12 @@ import { StateEffect } from '@codemirror/state';
  */
 export const flashHeadingLine = StateEffect.define<number | null>();
 
+/**
+ * Persistent highlight that stays until user interacts with the editor.
+ * Used by #L{number} line links from external navigation.
+ */
+export const persistentHighlightLine = StateEffect.define<number | null>();
+
 const flashDeco = Decoration.line({ class: 'cm-heading-flash' });
 const flashOutDeco = Decoration.line({ class: 'cm-heading-flash cm-heading-flash-out' });
 
@@ -16,6 +22,7 @@ export const headingFlashPlugin = ViewPlugin.fromClass(
     decorations: DecorationSet = Decoration.none;
     private fadeTimer: ReturnType<typeof setTimeout> | null = null;
     private clearTimer: ReturnType<typeof setTimeout> | null = null;
+    private persistent = false;
     private view: EditorView;
 
     constructor(view: EditorView) {
@@ -27,6 +34,7 @@ export const headingFlashPlugin = ViewPlugin.fromClass(
         for (const e of tr.effects) {
           if (e.is(flashHeadingLine)) {
             this.clearTimers();
+            this.persistent = false;
 
             if (e.value === null) {
               this.decorations = Decoration.none;
@@ -48,6 +56,32 @@ export const headingFlashPlugin = ViewPlugin.fromClass(
               this.view.dispatch({ effects: flashHeadingLine.of(null) });
             }, 2000);
 
+            return;
+          }
+
+          if (e.is(persistentHighlightLine)) {
+            this.clearTimers();
+
+            if (e.value === null) {
+              this.decorations = Decoration.none;
+              this.persistent = false;
+              return;
+            }
+
+            const line = update.state.doc.lineAt(e.value);
+            this.decorations = Decoration.set([flashDeco.range(line.from)]);
+            this.persistent = true;
+            return;
+          }
+        }
+      }
+
+      // Clear persistent highlight on any user interaction
+      if (this.persistent) {
+        for (const tr of update.transactions) {
+          if (tr.isUserEvent('select') || tr.isUserEvent('input') || tr.isUserEvent('delete') || tr.isUserEvent('move')) {
+            this.decorations = Decoration.none;
+            this.persistent = false;
             return;
           }
         }

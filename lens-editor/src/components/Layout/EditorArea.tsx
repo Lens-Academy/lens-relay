@@ -21,6 +21,7 @@ import { useHasDiscussion } from '../DiscussionPanel/useHasDiscussion';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSidebar } from '../../contexts/SidebarContext';
+import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
@@ -83,6 +84,28 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       manager.expand('comment-margin');
     }
   }, [synced, editorView, manager]);
+
+  // Scroll to #L{number} line on initial load
+  useEffect(() => {
+    if (!synced || !editorView) return;
+    const match = window.location.hash.match(/^#L(\d+)$/i);
+    if (!match) return;
+    const lineNum = parseInt(match[1], 10);
+    if (lineNum < 1) return;
+    const doc = editorView.state.doc;
+    const clampedLine = Math.min(lineNum, doc.lines);
+    const line = doc.line(clampedLine);
+
+    editorView.dispatch({
+      selection: { anchor: line.from },
+      effects: [
+        EditorView.scrollIntoView(line.from, { y: 'center' }),
+        persistentHighlightLine.of(line.from),
+      ],
+    });
+
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, [synced, editorView]);
 
   // Auto-split ToC/Backlinks vertical split inside right sidebar
   const sidebarContainerRef = useRef<HTMLDivElement>(null);
