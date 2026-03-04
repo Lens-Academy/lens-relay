@@ -24,6 +24,8 @@ export { livePreview, toggleSourceMode, livePreviewCompartment } from './livePre
 
 export { emphasisPersistPlugin } from './emphasisPersist';
 
+export { headingFlashPlugin, flashHeadingLine } from './headingFlash';
+
 export {
   toggleInlineFormat,
   toggleBold,

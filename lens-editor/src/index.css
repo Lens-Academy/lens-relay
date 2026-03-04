@@ -295,6 +295,16 @@
   background-color: rgba(75, 85, 99, 0.08);
 }
 
+/* ToC heading flash highlight */
+.cm-heading-flash {
+  background-color: rgba(250, 204, 21, 0.25);
+  transition: background-color 0.5s ease-out;
+}
+
+.cm-heading-flash.cm-heading-flash-out {
+  background-color: transparent;
+}
+
 /* Comment margin cards */
 .comment-card {
   transition: top 200ms ease;

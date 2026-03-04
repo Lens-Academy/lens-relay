@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { StateEffect } from '@codemirror/state';
+import { flashHeadingLine } from '../Editor/extensions/headingFlash';
 import type { EditorState } from '@codemirror/state';
 
 export interface Heading {
@@ -85,10 +86,21 @@ export function useHeadings(view: EditorView | null): Heading[] {
  * Scroll to a heading position in the editor.
  */
 export function scrollToHeading(view: EditorView, heading: Heading) {
+  const scrollDOM = view.scrollDOM;
+  scrollDOM.style.scrollBehavior = 'smooth';
+
   view.dispatch({
     selection: { anchor: heading.from },
-    scrollIntoView: true,
+    effects: [
+      EditorView.scrollIntoView(heading.from, { y: 'center' }),
+      flashHeadingLine.of(heading.from),
+    ],
   });
+
+  setTimeout(() => {
+    scrollDOM.style.scrollBehavior = '';
+  }, 300);
+
   view.focus();
 }
 

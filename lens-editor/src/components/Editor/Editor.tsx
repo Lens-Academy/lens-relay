@@ -27,6 +27,7 @@ import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged } from './extensions/livePreview';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
+import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
 import { remoteCursorTheme } from './remoteCursorTheme';
@@ -272,6 +273,7 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onSynced, onNavig
         }),
         livePreview(wikilinkContextRef.current),
         emphasisPersistPlugin,
+        headingFlashPlugin,
         Prec.high(keymap.of(tightMarkdownKeymap)),
         Prec.high(keymap.of(checklistKeymap)),
         Prec.high(keymap.of(markdownFormattingKeymap)),
