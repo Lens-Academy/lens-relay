@@ -258,7 +258,6 @@ async fn search_worker(
                     &docs,
                     &search_index,
                     &filemeta_cache,
-                    &pending,
                 )
                 .await;
             } else {
@@ -355,7 +354,6 @@ async fn search_handle_folder_update(
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
     filemeta_cache: &DashMap<String, std::collections::HashMap<String, String>>,
-    pending: &DashMap<String, link_indexer::PendingEntry>,
 ) {
     // Build current uuid -> title map from filemeta
     let current_map: std::collections::HashMap<String, String> = {
@@ -415,14 +413,7 @@ async fn search_handle_folder_update(
                 // New or renamed — reindex content
                 let content_id = format!("{}-{}", relay_id, uuid);
                 if docs.contains_key(&content_id) {
-                    pending.insert(
-                        content_id.clone(),
-                        link_indexer::PendingEntry::new(tokio::time::Instant::now()),
-                    );
                     search_handle_content_update(&content_id, docs, search_index);
-                    // Remove pending entry so future edits trigger normal callback -> worker flow.
-                    // Without this, the callback's Entry::Occupied dedup suppresses all future sends.
-                    pending.remove(&content_id);
                 }
             }
         }

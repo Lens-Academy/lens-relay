@@ -420,8 +420,6 @@ fn index_content_into_folders_from_text(
         targets_per_folder[*fi].insert(uuid.clone());
     }
 
-    let all_new_targets: HashSet<&str> = resolved.iter().map(|(u, _)| u.as_str()).collect();
-
     // Diff-update backlinks_v0 on each folder doc
     for (fi, folder_doc) in folder_docs.iter().enumerate() {
         let new_targets = &targets_per_folder[fi];
@@ -440,7 +438,7 @@ fn index_content_into_folders_from_text(
 
         let all_keys: Vec<String> = backlinks.keys(&txn).map(|k| k.to_string()).collect();
         for key in all_keys {
-            if all_new_targets.contains(key.as_str()) {
+            if new_targets.contains(&key) {
                 continue;
             }
             let current: Vec<String> = read_backlinks_array(&backlinks, &txn, &key);
@@ -1946,6 +1944,56 @@ mod tests {
         assert_eq!(
             read_backlinks(&folder_a, "uuid-resources"),
             vec!["uuid-welcome"]
+        );
+    }
+
+    #[test]
+    fn stale_backlink_cleaned_after_file_moves_between_folders() {
+        // Setup: folder A has Welcome, folder B has Resources
+        let folder_a = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
+        set_folder_name(&folder_a, "Lens");
+        let folder_b = create_folder_doc(&[("/Resources.md", "uuid-resources")]);
+        set_folder_name(&folder_b, "Lens Edu");
+
+        // V1: Welcome links to Resources in folder B
+        let content_v1 = create_content_doc("See [[Lens Edu/Resources]].");
+        index_content_into_folders("uuid-welcome", &content_v1, &[&folder_a, &folder_b]).unwrap();
+        assert_eq!(
+            read_backlinks(&folder_b, "uuid-resources"),
+            vec!["uuid-welcome"],
+        );
+
+        // Simulate file move via CRDT sync (Obsidian user moves file between vaults).
+        // This bypasses move_document (which transfers backlinks itself) — the relay
+        // sees raw filemeta_v0 changes and must clean up stale backlinks during reindex.
+        {
+            let mut txn = folder_a.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String("uuid-resources".into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/Resources.md", Any::Map(map.into()));
+        }
+        {
+            let mut txn = folder_b.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            filemeta.remove(&mut txn, "/Resources.md");
+        }
+
+        // V2: Re-index Welcome — link now resolves to folder A
+        let content_v2 = create_content_doc("See [[Resources]].");
+        index_content_into_folders("uuid-welcome", &content_v2, &[&folder_a, &folder_b]).unwrap();
+
+        // Backlink should now be in folder A
+        assert_eq!(
+            read_backlinks(&folder_a, "uuid-resources"),
+            vec!["uuid-welcome"],
+        );
+        // Stale backlink in old folder B should be GONE
+        assert!(
+            read_backlinks(&folder_b, "uuid-resources").is_empty(),
+            "stale backlink in old folder should be cleaned after file move"
         );
     }
 
