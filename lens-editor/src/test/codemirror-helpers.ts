@@ -1,7 +1,7 @@
 import { EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
-import { TaskList } from '@lezer/markdown';
+import { Autolink, TaskList } from '@lezer/markdown';
 import { defaultKeymap } from '@codemirror/commands';
 import { WikilinkExtension } from '../components/Editor/extensions/wikilinkParser';
 import { livePreview } from '../components/Editor/extensions/livePreview';
@@ -24,7 +24,7 @@ export function createTestEditor(
     doc: content,
     selection: { anchor: cursorPos },
     extensions: [
-      markdown({ extensions: [WikilinkExtension, TaskList] }),
+      markdown({ extensions: [WikilinkExtension, TaskList, Autolink] }),
       livePreview(wikilinkContext),
     ],
   });

@@ -348,6 +348,49 @@ describe('livePreview - markdown links', () => {
   });
 });
 
+describe('livePreview - autolinks (bare URLs)', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  it('replaces bare URL with link widget when cursor is outside', () => {
+    const content = 'Visit https://example.com for more';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-link-widget')).toBe(true);
+  });
+
+  it('shows raw URL when cursor is on autolink', () => {
+    const content = 'Visit https://example.com for more';
+    // Cursor inside the URL
+    const { view, cleanup: c } = createTestEditor(content, 15);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-link-widget')).toBe(false);
+  });
+
+  it('replaces angle-bracket autolink with widget when cursor outside', () => {
+    const content = 'See <https://example.com> here';
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-link-widget')).toBe(true);
+  });
+
+  it('widget displays URL as text', () => {
+    const content = 'Visit https://example.com end';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const widgets = view.contentDOM.querySelectorAll('.cm-link-widget');
+    expect(widgets.length).toBe(1);
+    expect(widgets[0].textContent).toContain('https://example.com');
+  });
+});
+
 describe('livePreview - inline code', () => {
   let cleanup: () => void;
 

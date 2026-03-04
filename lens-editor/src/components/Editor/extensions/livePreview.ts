@@ -357,6 +357,27 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               }
             }
 
+            // Autolink (<url> syntax) and bare URL (https://... GFM autolink)
+            if (node.name === 'Autolink' || (node.name === 'URL' && node.node.parent?.name !== 'Autolink' && node.node.parent?.name !== 'Link')) {
+              if (!selectionIntersects(selection, node.from, node.to)) {
+                // For Autolink, extract URL from child; for bare URL, use node directly
+                const urlFrom = node.name === 'Autolink'
+                  ? node.node.getChild('URL')?.from ?? node.from
+                  : node.from;
+                const urlTo = node.name === 'Autolink'
+                  ? node.node.getChild('URL')?.to ?? node.to
+                  : node.to;
+                const url = view.state.doc.sliceString(urlFrom, urlTo);
+                decorations.push({
+                  from: node.from,
+                  to: node.to,
+                  deco: Decoration.replace({
+                    widget: new LinkWidget(url, url),
+                  }),
+                });
+              }
+            }
+
             // Wikilink: replace with clickable widget when cursor not on link
             if (node.name === 'Wikilink') {
               if (!selectionIntersects(selection, node.from, node.to)) {
