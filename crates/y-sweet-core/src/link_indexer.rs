@@ -1256,26 +1256,12 @@ impl LinkIndexer {
         //    Snapshot entries one folder at a time to avoid holding multiple locks.
         let folder_doc_ids = find_all_folder_docs(docs);
         let mut entries: Vec<VirtualEntry> = Vec::new();
-        for fid in &folder_doc_ids {
+        for (fi, fid) in folder_doc_ids.iter().enumerate() {
             if let Some(doc_ref) = docs.get(fid) {
                 let awareness = doc_ref.awareness();
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                let fname = read_folder_name(&guard.doc, "");
-                let txn = guard.doc.transact();
-                if let Some(filemeta) = txn.get_map("filemeta_v0") {
-                    for (path, value) in filemeta.iter(&txn) {
-                        if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
-                            let entry_type =
-                                extract_type_from_filemeta_entry(&value, &txn).unwrap_or_default();
-                            entries.push(VirtualEntry {
-                                virtual_path: format!("/{}{}", fname, path),
-                                entry_type,
-                                id: uuid,
-                                folder_idx: 0, // not needed for resolution
-                            });
-                        }
-                    }
-                }
+                let (_name, folder_entries) = snapshot_folder_entries(&guard.doc, fid, fi);
+                entries.extend(folder_entries);
             }
         }
 
