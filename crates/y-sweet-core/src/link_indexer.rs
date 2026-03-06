@@ -1471,7 +1471,7 @@ impl LinkIndexer {
 
     /// Server glue: unwraps DocWithSyncKv, delegates to core function.
     /// Resolves links across ALL loaded folder docs (cross-folder backlinks).
-    fn index_document(
+    pub(crate) fn index_document(
         &self,
         doc_id: &str,
         docs: &DashMap<String, DocWithSyncKv>,
@@ -1485,9 +1485,6 @@ impl LinkIndexer {
         }
 
         // Phase 1: Extract content text under a short-lived read lock.
-        // We must NOT hold a content read lock while taking folder write locks,
-        // because the content doc might also be a folder doc — holding read + write
-        // on the same std::sync::RwLock deadlocks.
         let markdown = {
             let content_ref = docs
                 .get(doc_id)
@@ -1510,31 +1507,52 @@ impl LinkIndexer {
             link_names
         );
 
-        // Phase 2: Take write locks on folder docs to resolve links and update backlinks.
-        let folder_refs: Vec<_> = folder_doc_ids
-            .iter()
-            .filter_map(|id| docs.get(id))
-            .collect();
-        let folder_awarenesses: Vec<_> = folder_refs.iter().map(|r| r.awareness()).collect();
-        let folder_guards: Vec<_> = folder_awarenesses
-            .iter()
-            .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
-            .collect();
-        let folder_doc_refs: Vec<&Doc> = folder_guards.iter().map(|g| &g.doc).collect();
+        // Phase 2: Snapshot folder metadata (read locks, one at a time).
+        // Each lock is held only long enough to read filemeta + folder name.
+        // Lock ordering: DashMap shard read -> awareness read/write. This matches
+        // the existing code so no new deadlock risk is introduced.
+        // DashMap guard is dropped before the next iteration.
+        let mut entries: Vec<VirtualEntry> = Vec::new();
+        for (fi, fid) in folder_doc_ids.iter().enumerate() {
+            let doc_ref = match docs.get(fid) {
+                Some(r) => r,
+                None => continue,
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let (_name, folder_entries) = snapshot_folder_entries(&guard.doc, fid, fi);
+            entries.extend(folder_entries);
+            // guard dropped here — read lock released before next folder
+        }
 
-        let folder_name_strings: Vec<String> = folder_doc_refs
-            .iter()
-            .zip(folder_doc_ids.iter())
-            .map(|(doc, id)| read_folder_name(doc, id))
-            .collect();
-        let folder_name_strs: Vec<&str> = folder_name_strings.iter().map(|s| s.as_str()).collect();
-        index_content_into_folders_from_text(
+        // Phase 3: Resolve links (pure computation, no locks).
+        let targets_per_folder =
+            compute_backlink_targets(doc_uuid, &link_names, &entries, folder_doc_ids.len());
+
+        tracing::info!(
+            "Doc {}: resolved {} links across {} folders",
             doc_uuid,
-            &markdown,
-            &link_names,
-            &folder_doc_refs,
-            &folder_name_strs,
-        )
+            link_names.len(),
+            folder_doc_ids.len()
+        );
+
+        // Phase 4: Write backlinks (write locks, one at a time).
+        // Each lock is held only for the duration of one folder's backlink update.
+        // Note: Folder state may have changed between Phase 2 and Phase 4, making
+        // snapshots stale. This is tolerable because the debounce/re-queue pipeline
+        // self-corrects: any concurrent folder change triggers a new indexing pass.
+        for (fi, fid) in folder_doc_ids.iter().enumerate() {
+            let doc_ref = match docs.get(fid) {
+                Some(r) => r,
+                None => continue,
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            apply_backlink_diff(&guard.doc, doc_uuid, &targets_per_folder[fi]);
+            // guard dropped here — write lock released before next folder
+        }
+
+        Ok(())
     }
 
     /// Reindex all backlinks by scanning every loaded document.
@@ -4569,5 +4587,75 @@ mod tests {
 
         let backlinks = read_backlinks(&folder_doc, "uuid-ideas");
         assert_eq!(backlinks, vec!["uuid-projects"]);
+    }
+
+    #[tokio::test]
+    async fn index_document_with_dashmap_and_awareness() {
+        use crate::doc_sync::DocWithSyncKv;
+
+        let relay_id = "cb696037-0f72-4e93-8717-4e433129d789";
+        let folder_uuid = "b0000001-0000-4000-8000-000000000001";
+        let notes_uuid = "a0000001-0000-4000-8000-000000000001";
+        let ideas_uuid = "a0000002-0000-4000-8000-000000000002";
+
+        let folder_id = format!("{}-{}", relay_id, folder_uuid);
+        let content_id = format!("{}-{}", relay_id, notes_uuid);
+
+        // Create DocWithSyncKv instances (store: None = in-memory only)
+        let folder_dswk = DocWithSyncKv::new(&folder_id, None, || {}, None)
+            .await
+            .unwrap();
+        let content_dswk = DocWithSyncKv::new(&content_id, None, || {}, None)
+            .await
+            .unwrap();
+
+        // Populate folder doc with filemeta
+        {
+            let awareness = folder_dswk.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let mut notes_meta = HashMap::new();
+            notes_meta.insert("id".to_string(), Any::String(notes_uuid.into()));
+            notes_meta.insert("type".to_string(), Any::String("markdown".into()));
+            filemeta.insert(&mut txn, "/Notes.md", Any::Map(notes_meta.into()));
+            let mut ideas_meta = HashMap::new();
+            ideas_meta.insert("id".to_string(), Any::String(ideas_uuid.into()));
+            ideas_meta.insert("type".to_string(), Any::String("markdown".into()));
+            filemeta.insert(&mut txn, "/Ideas.md", Any::Map(ideas_meta.into()));
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Lens".into()));
+        }
+
+        // Populate content doc with wikilinks
+        {
+            let awareness = content_dswk.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, "See [[Ideas]] for more");
+        }
+
+        // Insert into DashMap
+        let docs: DashMap<String, DocWithSyncKv> = DashMap::new();
+        docs.insert(folder_id.clone(), folder_dswk);
+        docs.insert(content_id.clone(), content_dswk);
+
+        // Call index_document
+        let (indexer, _rx) = LinkIndexer::new();
+        let folder_doc_ids = vec![folder_id.clone()];
+        let result = indexer.index_document(&content_id, &docs, &folder_doc_ids);
+        assert!(result.is_ok(), "index_document failed: {:?}", result.err());
+
+        // Verify backlinks written through awareness lock path
+        let folder_ref = docs.get(&folder_id).unwrap();
+        let awareness = folder_ref.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        let backlinks = txn
+            .get_map("backlinks_v0")
+            .expect("backlinks_v0 should exist");
+        let ideas_backlinks = read_backlinks_array(&backlinks, &txn, ideas_uuid);
+        assert_eq!(ideas_backlinks, vec![notes_uuid]);
     }
 }
