@@ -1451,6 +1451,9 @@ impl LinkIndexer {
                     }
                 }
                 self.mark_indexed(&doc_id);
+                // Yield to tokio scheduler between batch items to prevent
+                // monopolizing a worker thread during large batches.
+                tokio::task::yield_now().await;
             }
         }
     }
