@@ -345,6 +345,50 @@ pub fn compute_backlink_targets(
 }
 
 // ---------------------------------------------------------------------------
+// apply_backlink_diff
+// ---------------------------------------------------------------------------
+
+/// Apply a backlink diff to a single folder doc's backlinks_v0 map.
+///
+/// For `source_uuid`, ensures exactly `new_targets` are listed in backlinks.
+/// Adds source_uuid to targets that don't have it, removes from targets that
+/// are no longer linked. Preserves other sources' backlinks.
+pub fn apply_backlink_diff(folder_doc: &Doc, source_uuid: &str, new_targets: &HashSet<String>) {
+    let mut txn = folder_doc.transact_mut_with("link-indexer");
+    let backlinks = txn.get_or_insert_map("backlinks_v0");
+
+    // Add source to new targets
+    for target_uuid in new_targets {
+        let current: Vec<String> = read_backlinks_array(&backlinks, &txn, target_uuid);
+        if !current.contains(&source_uuid.to_string()) {
+            let mut updated = current;
+            updated.push(source_uuid.to_string());
+            let arr: Vec<Any> = updated.into_iter().map(|s| Any::String(s.into())).collect();
+            backlinks.insert(&mut txn, target_uuid.as_str(), arr);
+        }
+    }
+
+    // Remove source from targets no longer linked
+    let all_keys: Vec<String> = backlinks.keys(&txn).map(|k| k.to_string()).collect();
+    for key in all_keys {
+        if new_targets.contains(&key) {
+            continue;
+        }
+        let current: Vec<String> = read_backlinks_array(&backlinks, &txn, &key);
+        if current.contains(&source_uuid.to_string()) {
+            let updated: Vec<String> = current.into_iter().filter(|s| s != source_uuid).collect();
+            if updated.is_empty() {
+                backlinks.remove(&mut txn, &key);
+            } else {
+                let arr: Vec<Any> =
+                    updated.into_iter().map(|s| Any::String(s.into())).collect();
+                backlinks.insert(&mut txn, key.as_str(), arr);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Folder doc scanning helpers
 // ---------------------------------------------------------------------------
 
@@ -4453,5 +4497,77 @@ mod tests {
         let targets = compute_backlink_targets("uuid-notes", &[], &entries, 1);
         assert_eq!(targets.len(), 1);
         assert!(targets[0].is_empty());
+    }
+
+    // === apply_backlink_diff tests ===
+
+    #[test]
+    fn apply_backlink_diff_adds_new_targets() {
+        let folder_doc = create_folder_doc(&[
+            ("/Notes.md", "uuid-notes"),
+            ("/Ideas.md", "uuid-ideas"),
+        ]);
+
+        let mut targets = HashSet::new();
+        targets.insert("uuid-ideas".to_string());
+
+        apply_backlink_diff(&folder_doc, "uuid-notes", &targets);
+
+        let backlinks = read_backlinks(&folder_doc, "uuid-ideas");
+        assert_eq!(backlinks, vec!["uuid-notes"]);
+    }
+
+    #[test]
+    fn apply_backlink_diff_removes_stale_targets() {
+        let folder_doc = create_folder_doc(&[
+            ("/Notes.md", "uuid-notes"),
+            ("/Ideas.md", "uuid-ideas"),
+            ("/Other.md", "uuid-other"),
+        ]);
+
+        // First: add backlinks to both Ideas and Other
+        let mut targets1 = HashSet::new();
+        targets1.insert("uuid-ideas".to_string());
+        targets1.insert("uuid-other".to_string());
+        apply_backlink_diff(&folder_doc, "uuid-notes", &targets1);
+
+        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-notes"]);
+        assert_eq!(read_backlinks(&folder_doc, "uuid-other"), vec!["uuid-notes"]);
+
+        // Second: remove Other, keep Ideas
+        let mut targets2 = HashSet::new();
+        targets2.insert("uuid-ideas".to_string());
+        apply_backlink_diff(&folder_doc, "uuid-notes", &targets2);
+
+        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-notes"]);
+        assert!(read_backlinks(&folder_doc, "uuid-other").is_empty());
+    }
+
+    #[test]
+    fn apply_backlink_diff_preserves_other_sources() {
+        let folder_doc = create_folder_doc(&[
+            ("/Notes.md", "uuid-notes"),
+            ("/Projects.md", "uuid-projects"),
+            ("/Ideas.md", "uuid-ideas"),
+        ]);
+
+        // Two sources link to Ideas
+        let mut targets_notes = HashSet::new();
+        targets_notes.insert("uuid-ideas".to_string());
+        apply_backlink_diff(&folder_doc, "uuid-notes", &targets_notes);
+
+        let mut targets_projects = HashSet::new();
+        targets_projects.insert("uuid-ideas".to_string());
+        apply_backlink_diff(&folder_doc, "uuid-projects", &targets_projects);
+
+        let mut backlinks = read_backlinks(&folder_doc, "uuid-ideas");
+        backlinks.sort();
+        assert_eq!(backlinks, vec!["uuid-notes", "uuid-projects"]);
+
+        // Remove Notes' link — Projects should remain
+        apply_backlink_diff(&folder_doc, "uuid-notes", &HashSet::new());
+
+        let backlinks = read_backlinks(&folder_doc, "uuid-ideas");
+        assert_eq!(backlinks, vec!["uuid-projects"]);
     }
 }
