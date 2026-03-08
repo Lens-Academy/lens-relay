@@ -6,6 +6,20 @@ import type { TreeNode } from '../../lib/tree-utils';
 const DragTargetCtx = createContext<string | null>(null);
 export const useDragTarget = () => useContext(DragTargetCtx);
 
+/** Find the tree node ID whose docId matches the compound activeDocId. */
+function findNodeIdByDocId(nodes: TreeNode[], activeDocId: string): string | null {
+  for (const node of nodes) {
+    if (!node.isFolder && node.docId && activeDocId.endsWith(node.docId)) {
+      return node.id;
+    }
+    if (node.children) {
+      const found = findNodeIdByDocId(node.children, activeDocId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 /** Walk tree to find ancestor folder node IDs for a given docId. */
 function getAncestorFolderIds(nodes: TreeNode[], targetDocId: string): string[] {
   const ids: string[] = [];
@@ -84,6 +98,13 @@ export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileT
     const ancestorIds = getAncestorFolderIds(data, activeDocId);
     for (const id of ancestorIds) {
       treeRef.current.open(id);
+    }
+    // Scroll the active node into view after ancestors are expanded
+    const nodeId = findNodeIdByDocId(data, activeDocId);
+    if (nodeId) {
+      requestAnimationFrame(() => {
+        treeRef.current?.scrollTo(nodeId);
+      });
     }
   }, [activeDocId, data, openAll]);
 
