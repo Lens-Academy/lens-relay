@@ -15,7 +15,7 @@ import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { completionKeymap } from '@codemirror/autocomplete';
 import { lintKeymap, forceLinting } from '@codemirror/lint';
-import { harperLinter } from './extensions/harper';
+import { harperLinter, updateHarperFolder } from './extensions/harper';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { Autolink, TaskList } from '@lezer/markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
@@ -201,6 +201,11 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onSynced, onNavig
       effects: wikilinkMetadataChanged.of(undefined),
     });
   }, [metadata, onNavigate]);
+
+  // Update Harper folder gate when the active file changes
+  useEffect(() => {
+    updateHarperFolder(currentFilePath);
+  }, [currentFilePath]);
 
   // Track sync state for loading overlay
   useEffect(() => {

@@ -69,7 +69,18 @@ function suggestionLabel(lint: Lint, suggestion: ReturnType<Lint['suggestions']>
   return suggestion.get_replacement_text();
 }
 
+// Module-scoped folder path — updated from Editor.tsx when the active file changes.
+let currentFolder = '';
+
+/** Update the folder path used to gate Harper linting. */
+export function updateHarperFolder(path: string | undefined) {
+  currentFolder = path ?? '';
+}
+
 async function checkText(view: EditorView): Promise<Diagnostic[]> {
+  // Only lint documents inside the Lens Edu folder
+  if (!currentFolder.startsWith('/Lens Edu/')) return [];
+
   const text = view.state.doc.toString();
   if (text.trim().length === 0) return [];
 
