@@ -17,6 +17,9 @@ import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTo
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
+import { useDocConnection } from './hooks/useDocConnection';
+import { applySuggestionAction } from './lib/suggestion-actions';
+import type { SuggestionItem, FileSuggestions } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { useRecentFiles } from './hooks/useRecentFiles';
@@ -189,6 +192,43 @@ export function App() {
   return <AuthenticatedApp role={shareRole} />;
 }
 
+function ReviewPageWithActions({ folderIds, relayId }: { folderIds: string[]; relayId: string }) {
+  const { getOrConnect, disconnectAll } = useDocConnection();
+
+  useEffect(() => disconnectAll, [disconnectAll]);
+
+  const handleAction = async (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => {
+    const doc = await getOrConnect(docId);
+    applySuggestionAction(doc, suggestion, action);
+  };
+
+  const handleAcceptAllFile = async (file: FileSuggestions) => {
+    const doc = await getOrConnect(file.doc_id);
+    const sorted = [...file.suggestions].sort((a, b) => b.from - a.from);
+    for (const s of sorted) {
+      applySuggestionAction(doc, s, 'accept');
+    }
+  };
+
+  const handleRejectAllFile = async (file: FileSuggestions) => {
+    const doc = await getOrConnect(file.doc_id);
+    const sorted = [...file.suggestions].sort((a, b) => b.from - a.from);
+    for (const s of sorted) {
+      applySuggestionAction(doc, s, 'reject');
+    }
+  };
+
+  return (
+    <ReviewPage
+      folderIds={folderIds}
+      relayId={relayId}
+      onAction={handleAction}
+      onAcceptAllFile={handleAcceptAllFile}
+      onRejectAllFile={handleRejectAllFile}
+    />
+  );
+}
+
 function AuthenticatedApp({ role }: { role: UserRole }) {
   const navigate = useNavigate();
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
@@ -312,7 +352,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               />
               <div className="flex-1 min-w-0">
                 <Routes>
-                  <Route path="/review" element={<ReviewPage folderIds={FOLDERS.map(f => `${RELAY_ID}-${f.id}`)} relayId={RELAY_ID} />} />
+                  <Route path="/review" element={<ReviewPageWithActions folderIds={FOLDERS.map(f => `${RELAY_ID}-${f.id}`)} relayId={RELAY_ID} />} />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
                 </Routes>

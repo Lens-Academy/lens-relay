@@ -172,6 +172,33 @@ describe('Sidebar with multi-folder metadata', () => {
     windowOpen.mockRestore();
   });
 
+  it('renders Review Suggestions link', () => {
+    const metadata = {
+      '/Lens/Welcome.md': { id: 'welcome', type: 'markdown' as const, version: 0 },
+    };
+    const folderDocs = new Map<string, Y.Doc>([['Lens', new Y.Doc()]]);
+    const folderNames = ['Lens'];
+    const errors = new Map<string, Error>();
+
+    render(
+      <MemoryRouter initialEntries={['/c0000001']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs,
+            folderNames,
+            errors,
+            onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Review Suggestions')).toBeTruthy();
+  });
+
   it('creates document in correct folder when "+" is clicked', async () => {
     const user = userEvent.setup();
     const { createDocument: mockCreate } = await import('../../lib/relay-api');

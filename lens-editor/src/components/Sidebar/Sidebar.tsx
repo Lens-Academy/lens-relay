@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useDeferredValue, useMemo, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { SearchInput } from './SearchInput';
 import { SearchPanel } from './SearchPanel';
 import { FileTree } from './FileTree';
@@ -46,6 +46,9 @@ export function Sidebar() {
   const [moveTargetFolder, setMoveTargetFolder] = useState<string>('');
   const [moveError, setMoveError] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
+
+  // Navigation for review page link
+  const navigate = useNavigate();
 
   // Ref for Ctrl+K keyboard shortcut focus
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -337,6 +340,16 @@ export function Sidebar() {
             )}
           </>
         )}
+      </div>
+
+      {/* Review link */}
+      <div className="px-3 py-2 border-t border-gray-200">
+        <button
+          onClick={() => navigate('/review')}
+          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
+        >
+          Review Suggestions
+        </button>
       </div>
 
       {/* Delete confirmation dialog */}
