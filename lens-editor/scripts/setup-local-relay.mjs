@@ -70,7 +70,7 @@ This is a local development environment running against relay-server.
 ## Features
 
 - **Real-time collaboration** - Open multiple tabs to see sync in action
-- **Markdown editing** - Full CodeMirror 6 editor with live preview
+- **Markdown editing** - Full CodeMirror 6 editor with {++{"author":"AI","timestamp":1709900000000}@@powerful++} live preview
 - **Document management** - Create, rename, and delete documents
 
 ## Getting Started
@@ -83,7 +83,7 @@ You can also explore [[Notes/Ideas]] for project brainstorming.
 
 Try editing this document, then open another tab to see the changes sync!
 
-You can also create new documents using the "+ New Document" button in the sidebar.
+You can also create new documents using the {~~{"author":"AI","timestamp":1709900001000}@@"+ New Document" button~>sidebar's create button~~} in the sidebar.
 `,
       },
       {
@@ -99,7 +99,8 @@ You're running against a local relay-server, which means:
 
 1. Documents are stored in the filesystem (./data-local-ws${wsNum})
 2. No authentication is required
-3. Data persists across server restarts
+3. Data persists across server restarts{++{"author":"AI","timestamp":1709900010000}@@
+4. Changes are synced in real-time across all connected clients++}
 
 ## Creating Documents
 
@@ -107,7 +108,7 @@ Click "+ New Document" in the sidebar to create a new file.
 
 ## Wikilinks
 
-Try creating a [[Welcome]] link - it should navigate to the Welcome page!
+Try creating a [[Welcome]] link - it should {--{"author":"AI","timestamp":1709900011000}@@definitely --}navigate to the Welcome page!
 `,
       },
       {
@@ -174,7 +175,8 @@ This is a nested document in the Projects folder, a sibling to Notes.
 
 - [ ] Wikilink autocomplete with relative paths
 - [ ] Cross-folder link resolution
-- [ ] Document search improvements
+- [ ] {~~{"author":"Bob","timestamp":1709900020000}@@Document search improvements~>Full-text search across all documents~~}
+- [ ] {++{"author":"Bob","timestamp":1709900021000}@@Keyboard shortcuts for common actions++}
 
 ## Related
 
@@ -226,17 +228,23 @@ See [[Course Notes]] for detailed notes on each topic.
 ## Week 1: Introduction
 
 - Overview of collaborative editing
-- Y.js fundamentals
+- {~~{"author":"AI","timestamp":1709900030000}@@Y.js fundamentals~>Yjs fundamentals and API~~}
 
 ## Week 2: Real-time Sync
 
 - CRDTs explained
 - Conflict resolution
+- {++{"author":"AI","timestamp":1709900031000}@@Awareness protocol for cursor sharing++}
 
 ## Week 3: Building UIs
 
 - React integration
 - CodeMirror setup
+{--{"author":"Bob","timestamp":1709900032000}@@
+## Week 4: Advanced Topics
+
+- Performance optimization
+- Offline support--}
 `,
       },
       {

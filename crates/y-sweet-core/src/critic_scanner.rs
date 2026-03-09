@@ -26,6 +26,8 @@ pub struct Suggestion {
     pub raw_markup: String,
     pub context_before: String,
     pub context_after: String,
+    /// 1-based line number where the suggestion starts in the document.
+    pub line: usize,
 }
 
 static ADDITION_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -38,14 +40,85 @@ static SUBSTITUTION_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)\{~~(.*?)~>(.*?)~~\}").unwrap()
 });
 
-const CONTEXT_CHARS: usize = 50;
+/// Budget for context extraction. Newlines cost more to keep context compact.
+const CONTEXT_BUDGET: usize = 200;
+const NEWLINE_COST: usize = 50;
+
+/// Regex to clean up partial/broken CriticMarkup fragments at context boundaries.
+/// Matches partial opening/closing delimiters and leftover metadata.
+static PARTIAL_MARKUP_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?s)",
+        // Partial closing tags at start: ...content++} or ...content--} or ...content~~}
+        r"^[^{]*?(?:\+\+\}|--\}|~~\})",
+        r"|",
+        // Partial opening tags at end: {++content... or {--content... or {~~content...
+        r"(?:\{\+\+|\{--|\{~~)[^}]*$",
+    )).unwrap()
+});
+
+/// Strip CriticMarkup syntax from text, keeping just the readable content.
+/// Additions: keep added text. Deletions: keep deleted text. Substitutions: keep old text.
+/// Metadata (`{...}@@`) is stripped from all.
+fn strip_critic_markup(text: &str) -> String {
+    // Strip complete markup patterns first
+    let result = SUBSTITUTION_RE.replace_all(text, |caps: &regex::Captures| {
+        let raw_old = caps.get(1).unwrap().as_str();
+        let (_, _, old_content) = extract_metadata(raw_old);
+        let new_content = caps.get(2).unwrap().as_str();
+        format!("{}/{}", old_content, new_content)
+    });
+    let result = ADDITION_RE.replace_all(&result, |caps: &regex::Captures| {
+        let raw = caps.get(1).unwrap().as_str();
+        let (_, _, content) = extract_metadata(raw);
+        content.to_string()
+    });
+    let result = DELETION_RE.replace_all(&result, |caps: &regex::Captures| {
+        let raw = caps.get(1).unwrap().as_str();
+        let (_, _, content) = extract_metadata(raw);
+        content.to_string()
+    });
+    // Clean up partial/broken markup at boundaries
+    let result = PARTIAL_MARKUP_RE.replace_all(&result, "");
+    result.into_owned()
+}
+
+/// Walk backwards from `start` spending budget (newlines cost NEWLINE_COST, other chars cost 1).
+fn budget_scan_back(text: &str, start: usize) -> usize {
+    let mut budget = CONTEXT_BUDGET;
+    let mut pos = start;
+    for ch in text[..start].chars().rev() {
+        let cost = if ch == '\n' { NEWLINE_COST } else { 1 };
+        if cost > budget {
+            break;
+        }
+        budget -= cost;
+        pos -= ch.len_utf8();
+    }
+    pos
+}
+
+/// Walk forwards from `start` spending budget (newlines cost NEWLINE_COST, other chars cost 1).
+fn budget_scan_forward(text: &str, start: usize) -> usize {
+    let mut budget = CONTEXT_BUDGET;
+    let mut pos = start;
+    for ch in text[start..].chars() {
+        let cost = if ch == '\n' { NEWLINE_COST } else { 1 };
+        if cost > budget {
+            break;
+        }
+        budget -= cost;
+        pos += ch.len_utf8();
+    }
+    pos
+}
 
 fn extract_context(text: &str, from: usize, to: usize) -> (String, String) {
-    let before_start = text.floor_char_boundary(from.saturating_sub(CONTEXT_CHARS));
-    let after_end = text.ceil_char_boundary((to + CONTEXT_CHARS).min(text.len()));
-    let context_before = &text[before_start..from];
-    let context_after = &text[to..after_end];
-    (context_before.to_string(), context_after.to_string())
+    let before_start = budget_scan_back(text, from);
+    let after_end = budget_scan_forward(text, to);
+    let context_before = strip_critic_markup(&text[before_start..from]);
+    let context_after = strip_critic_markup(&text[to..after_end]);
+    (context_before, context_after)
 }
 
 fn extract_metadata(raw: &str) -> (Option<String>, Option<u64>, &str) {
@@ -71,6 +144,7 @@ pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
         let raw = &text[m.start() + 3..m.end() - 3]; // strip {++ and ++}
         let (author, timestamp, content) = extract_metadata(raw);
         let (ctx_before, ctx_after) = extract_context(text, m.start(), m.end());
+        let line = text[..m.start()].matches('\n').count() + 1;
         suggestions.push(Suggestion {
             suggestion_type: SuggestionType::Addition,
             content: content.to_string(),
@@ -83,6 +157,7 @@ pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
             raw_markup,
             context_before: ctx_before,
             context_after: ctx_after,
+            line,
         });
     }
 
@@ -91,6 +166,7 @@ pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
         let raw = &text[m.start() + 3..m.end() - 3]; // strip {-- and --}
         let (author, timestamp, content) = extract_metadata(raw);
         let (ctx_before, ctx_after) = extract_context(text, m.start(), m.end());
+        let line = text[..m.start()].matches('\n').count() + 1;
         suggestions.push(Suggestion {
             suggestion_type: SuggestionType::Deletion,
             content: content.to_string(),
@@ -103,6 +179,7 @@ pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
             raw_markup,
             context_before: ctx_before,
             context_after: ctx_after,
+            line,
         });
     }
 
@@ -113,6 +190,7 @@ pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
         let new_content = caps.get(2).unwrap().as_str();
         let (author, timestamp, old_content) = extract_metadata(raw_old);
         let (ctx_before, ctx_after) = extract_context(text, m.start(), m.end());
+        let line = text[..m.start()].matches('\n').count() + 1;
         suggestions.push(Suggestion {
             suggestion_type: SuggestionType::Substitution,
             content: format!("{}>{}", old_content, new_content),
@@ -125,6 +203,7 @@ pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
             raw_markup,
             context_before: ctx_before,
             context_after: ctx_after,
+            line,
         });
     }
 
@@ -208,11 +287,26 @@ mod tests {
 
     #[test]
     fn test_context_truncation() {
-        // Context should be truncated to ~50 chars
-        let long_before = "a".repeat(100);
+        // Context should be truncated to ~200 chars
+        let long_before = "a".repeat(300);
         let text = format!("{} {{++{{\"author\":\"AI\",\"timestamp\":1000}}@@added++}} after", long_before);
         let results = scan_suggestions(&text);
         assert_eq!(results.len(), 1);
-        assert!(results[0].context_before.len() <= 60); // some leeway for word boundary
+        assert!(results[0].context_before.len() <= 210);
+        assert!(results[0].context_before.len() >= 190);
+    }
+
+    #[test]
+    fn test_context_strips_critic_markup() {
+        // Context from neighboring suggestions should have markup stripped
+        let text = r#"{++{"author":"AI","timestamp":1000}@@first addition++} some text {--{"author":"AI","timestamp":2000}@@deleted part--} end"#;
+        let results = scan_suggestions(&text);
+        assert_eq!(results.len(), 2);
+        // The deletion's context_before should NOT contain {++...++} markup
+        assert!(!results[1].context_before.contains("{++"));
+        assert!(results[1].context_before.contains("first addition"));
+        // The addition's context_after should NOT contain {--...--} markup
+        assert!(!results[0].context_after.contains("{--"));
+        assert!(results[0].context_after.contains("deleted part"));
     }
 }

@@ -12,6 +12,7 @@ export interface SuggestionItem {
   raw_markup: string;
   context_before: string;
   context_after: string;
+  line: number;
 }
 
 export interface FileSuggestions {
@@ -34,13 +35,22 @@ export function useSuggestions(folderIds: string[]) {
     setError(null);
     try {
       const allFiles: FileSuggestions[] = [];
+      const errors: string[] = [];
       for (const folderId of folderIds) {
-        const res = await fetch(`/api/relay/suggestions?folder_id=${encodeURIComponent(folderId)}`);
-        if (!res.ok) throw new Error(`Failed to fetch suggestions for ${folderId}`);
-        const json: SuggestionsResponse = await res.json();
-        allFiles.push(...json.files);
+        try {
+          const res = await fetch(`/api/relay/suggestions?folder_id=${encodeURIComponent(folderId)}`);
+          if (!res.ok) {
+            errors.push(`Failed to fetch suggestions for ${folderId}`);
+            continue;
+          }
+          const json: SuggestionsResponse = await res.json();
+          allFiles.push(...json.files);
+        } catch {
+          errors.push(`Failed to fetch suggestions for ${folderId}`);
+        }
       }
       setData(allFiles);
+      setError(errors.length > 0 && allFiles.length === 0 ? errors.join('; ') : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
       setData([]);
