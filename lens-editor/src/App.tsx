@@ -192,7 +192,7 @@ export function App() {
   return <AuthenticatedApp role={shareRole} />;
 }
 
-function ReviewPageWithActions({ folderIds, relayId }: { folderIds: string[]; relayId: string }) {
+function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: string[]; folders: { id: string; name: string }[]; relayId: string }) {
   const { getOrConnect, disconnectAll } = useDocConnection();
 
   useEffect(() => disconnectAll, [disconnectAll]);
@@ -221,6 +221,7 @@ function ReviewPageWithActions({ folderIds, relayId }: { folderIds: string[]; re
   return (
     <ReviewPage
       folderIds={folderIds}
+      folders={folders}
       relayId={relayId}
       onAction={handleAction}
       onAcceptAllFile={handleAcceptAllFile}
@@ -352,7 +353,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               />
               <div className="flex-1 min-w-0">
                 <Routes>
-                  <Route path="/review" element={<ReviewPageWithActions folderIds={FOLDERS.map(f => `${RELAY_ID}-${f.id}`)} relayId={RELAY_ID} />} />
+                  <Route path="/review" element={<ReviewPageWithActions folderIds={FOLDERS.map(f => `${RELAY_ID}-${f.id}`)} folders={FOLDERS.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />} />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
                 </Routes>

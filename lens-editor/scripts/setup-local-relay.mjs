@@ -43,7 +43,27 @@ const RELAY_ID = 'a0000000-0000-4000-8000-000000000000';
 const FOLDER_1_ID = 'b0000001-0000-4000-8000-000000000001';
 const FOLDER_2_ID = 'b0000002-0000-4000-8000-000000000002';
 
-// Two test folders for multi-folder support testing
+// Dynamic timestamps relative to now, so time-based filtering is always testable.
+// Each label maps to a ms offset subtracted from Date.now().
+const NOW = Date.now();
+const MINUTES = 60_000;
+const HOURS = 3600_000;
+const DAYS = 86400_000;
+
+const T = {
+  recent:    NOW - 20 * MINUTES,  // 20 min ago  — within "Last hour"
+  recent2:   NOW - 45 * MINUTES,  // 45 min ago  — within "Last hour"
+  today:     NOW - 6 * HOURS,     // 6 hours ago — within "Last 24 hours"
+  today2:    NOW - 18 * HOURS,    // 18 hours ago — within "Last 24 hours"
+  thisWeek:  NOW - 3 * DAYS,      // 3 days ago  — within "Last week"
+  thisWeek2: NOW - 5 * DAYS,      // 5 days ago  — within "Last week"
+  old:       NOW - 30 * DAYS,     // 30 days ago — only in "All time"
+  old2:      NOW - 60 * DAYS,     // 60 days ago — only in "All time"
+};
+
+// Two test folders for multi-folder support testing.
+// Suggestions use a mix of authors (AI, Bob, Carol) and time buckets so that
+// every combination of the author / time / folder filters produces results.
 const TEST_FOLDERS = [
   {
     id: FOLDER_1_ID,
@@ -70,7 +90,7 @@ This is a local development environment running against relay-server.
 ## Features
 
 - **Real-time collaboration** - Open multiple tabs to see sync in action
-- **Markdown editing** - Full CodeMirror 6 editor with {++{"author":"AI","timestamp":1709900000000}@@powerful++} live preview
+- **Markdown editing** - Full CodeMirror 6 editor with {++{"author":"AI","timestamp":${T.recent}}@@powerful++} live preview
 - **Document management** - Create, rename, and delete documents
 
 ## Getting Started
@@ -83,7 +103,7 @@ You can also explore [[Notes/Ideas]] for project brainstorming.
 
 Try editing this document, then open another tab to see the changes sync!
 
-You can also create new documents using the {~~{"author":"AI","timestamp":1709900001000}@@"+ New Document" button~>sidebar's create button~~} in the sidebar.
+You can also create new documents using the {~~{"author":"Carol","timestamp":${T.today}}@@"+ New Document" button~>sidebar's create button~~} in the sidebar.
 `,
       },
       {
@@ -99,7 +119,7 @@ You're running against a local relay-server, which means:
 
 1. Documents are stored in the filesystem (./data-local-ws${wsNum})
 2. No authentication is required
-3. Data persists across server restarts{++{"author":"AI","timestamp":1709900010000}@@
+3. Data persists across server restarts{++{"author":"AI","timestamp":${T.recent2}}@@
 4. Changes are synced in real-time across all connected clients++}
 
 ## Creating Documents
@@ -108,7 +128,7 @@ Click "+ New Document" in the sidebar to create a new file.
 
 ## Wikilinks
 
-Try creating a [[Welcome]] link - it should {--{"author":"AI","timestamp":1709900011000}@@definitely --}navigate to the Welcome page!
+Try creating a [[Welcome]] link - it should {--{"author":"Bob","timestamp":${T.thisWeek}}@@definitely --}navigate to the Welcome page!
 `,
       },
       {
@@ -125,7 +145,8 @@ Check out [[../Welcome]] for an overview, or [[../Getting Started]] for setup in
 ## Todo
 
 - [ ] Test real-time sync between tabs
-- [ ] Try creating wikilinks
+- [ ] Try creating wikilinks{++{"author":"AI","timestamp":${T.today2}}@@
+- [ ] Verify suggestion filtering by author and time++}
 - [ ] Test document creation
 - [ ] Test document deletion
 `,
@@ -175,8 +196,8 @@ This is a nested document in the Projects folder, a sibling to Notes.
 
 - [ ] Wikilink autocomplete with relative paths
 - [ ] Cross-folder link resolution
-- [ ] {~~{"author":"Bob","timestamp":1709900020000}@@Document search improvements~>Full-text search across all documents~~}
-- [ ] {++{"author":"Bob","timestamp":1709900021000}@@Keyboard shortcuts for common actions++}
+- [ ] {~~{"author":"Bob","timestamp":${T.old}}@@Document search improvements~>Full-text search across all documents~~}
+- [ ] {++{"author":"Carol","timestamp":${T.recent}}@@Keyboard shortcuts for common actions++}
 
 ## Related
 
@@ -214,6 +235,11 @@ Each folder syncs independently with its own Y.Doc.
 ## Related
 
 See [[Syllabus]] for the course outline and [[Resources/Links]] for useful references.
+
+{++{"author":"AI","timestamp":${T.recent}}@@
+## New Section
+
+This section was recently suggested by AI.++}
 `,
       },
       {
@@ -228,19 +254,19 @@ See [[Course Notes]] for detailed notes on each topic.
 ## Week 1: Introduction
 
 - Overview of collaborative editing
-- {~~{"author":"AI","timestamp":1709900030000}@@Y.js fundamentals~>Yjs fundamentals and API~~}
+- {~~{"author":"AI","timestamp":${T.thisWeek2}}@@Y.js fundamentals~>Yjs fundamentals and API~~}
 
 ## Week 2: Real-time Sync
 
 - CRDTs explained
 - Conflict resolution
-- {++{"author":"AI","timestamp":1709900031000}@@Awareness protocol for cursor sharing++}
+- {++{"author":"Bob","timestamp":${T.today}}@@Awareness protocol for cursor sharing++}
 
 ## Week 3: Building UIs
 
 - React integration
 - CodeMirror setup
-{--{"author":"Bob","timestamp":1709900032000}@@
+{--{"author":"Carol","timestamp":${T.old2}}@@
 ## Week 4: Advanced Topics
 
 - Performance optimization
@@ -261,11 +287,13 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
 - [Y.js Docs](https://docs.yjs.dev/)
 - [Relay](https://relay.md/)
 - [CodeMirror](https://codemirror.net/)
+{++{"author":"Bob","timestamp":${T.thisWeek}}@@- [Y-Sweet](https://y-sweet.dev/) - Managed Yjs backend++}
 
 ## Tutorials
 
 - Getting started with CRDTs
 - Building collaborative apps
+{~~{"author":"AI","timestamp":${T.old}}@@- Advanced CRDT patterns~>- Advanced CRDT patterns and conflict resolution strategies~~}
 `,
       },
     ],

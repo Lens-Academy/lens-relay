@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSuggestions, type FileSuggestions, type SuggestionItem } from '../../hooks/useSuggestions';
 
@@ -43,8 +43,14 @@ function renderMarkdownInline(text: string): ReactNode {
   });
 }
 
+interface FolderInfo {
+  id: string;
+  name: string;
+}
+
 interface ReviewPageProps {
   folderIds: string[];
+  folders?: FolderInfo[];
   relayId?: string;
   onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
   onAcceptAllFile?: (file: FileSuggestions) => Promise<void>;
@@ -53,10 +59,268 @@ interface ReviewPageProps {
   onRejectAll?: () => Promise<void>;
 }
 
-export function ReviewPage({ folderIds, onAction, onAcceptAllFile, onRejectAllFile, onAcceptAll, onRejectAll }: ReviewPageProps) {
+const TIME_PRESETS = [
+  { value: 'all', label: 'All' },
+  { value: 'hour', label: '1h' },
+  { value: '24h', label: '24h' },
+  { value: 'week', label: '7d' },
+  { value: 'custom', label: 'Custom' },
+] as const;
+
+const TIME_THRESHOLDS: Record<string, number> = {
+  hour: 3600_000,
+  '24h': 86400_000,
+  week: 604800_000,
+  all: 0,
+};
+
+interface LocationEntry {
+  key: string;        // folderId or folderId:/prefix
+  label: string;      // display name
+  isSubfolder: boolean;
+  folderId: string;
+}
+
+function FilterBar({ authors, locations, authorFilter, timeFilter, customFrom, customTo, locationFilter, onAuthorToggle, onTimeFilter, onCustomFrom, onCustomTo, onLocationToggle, onClear }: {
+  authors: string[];
+  locations: LocationEntry[];
+  authorFilter: Set<string>;
+  timeFilter: string;
+  customFrom: string;
+  customTo: string;
+  locationFilter: Set<string>;
+  onAuthorToggle: (author: string) => void;
+  onTimeFilter: (value: string) => void;
+  onCustomFrom: (value: string) => void;
+  onCustomTo: (value: string) => void;
+  onLocationToggle: (key: string) => void;
+  onClear: () => void;
+}) {
+  const isActive = authorFilter.size > 0 || timeFilter !== 'all' || locationFilter.size > 0;
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 mb-4 text-xs">
+      {locations.length >= 2 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-gray-400 uppercase tracking-wide mr-0.5">Location</span>
+          {locations.map(loc => (
+            <button
+              key={loc.key}
+              onClick={() => onLocationToggle(loc.key)}
+              className={`px-2 py-0.5 rounded-full transition-colors ${
+                locationFilter.has(loc.key)
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              } ${loc.isSubfolder ? 'ml-1' : ''}`}
+            >
+              {loc.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {authors.length > 0 && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-gray-400 uppercase tracking-wide mr-0.5">Author</span>
+          {authors.map(a => (
+            <button
+              key={a}
+              onClick={() => onAuthorToggle(a)}
+              className={`px-2 py-0.5 rounded-full transition-colors ${
+                authorFilter.has(a)
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              }`}
+            >
+              {a}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-gray-400 uppercase tracking-wide mr-0.5">Time</span>
+        {TIME_PRESETS.map(p => (
+          <button
+            key={p.value}
+            onClick={() => onTimeFilter(p.value)}
+            className={`px-2 py-0.5 rounded-full transition-colors ${
+              timeFilter === p.value
+                ? 'bg-blue-100 text-blue-700'
+                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+        {timeFilter === 'custom' && (
+          <div className="flex items-center gap-1">
+            <input
+              type="datetime-local"
+              value={customFrom}
+              onChange={e => onCustomFrom(e.target.value)}
+              className="px-1.5 py-0.5 border border-gray-300 rounded text-xs bg-white text-gray-700"
+              placeholder="From"
+            />
+            <span className="text-gray-400">&mdash;</span>
+            <input
+              type="datetime-local"
+              value={customTo}
+              onChange={e => onCustomTo(e.target.value)}
+              className="px-1.5 py-0.5 border border-gray-300 rounded text-xs bg-white text-gray-700"
+              placeholder="To"
+            />
+          </div>
+        )}
+      </div>
+      {isActive && (
+        <button onClick={onClear} className="text-blue-600 hover:text-blue-800 ml-1">
+          Clear filters
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function ReviewPage({ folderIds, folders, onAction, onAcceptAllFile, onRejectAllFile, onAcceptAll, onRejectAll }: ReviewPageProps) {
   const { data, loading, error, refresh } = useSuggestions(folderIds);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const navigate = useNavigate();
+
+  // Filter state
+  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
+  const [timeFilter, setTimeFilter] = useState('all');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [locationFilter, setLocationFilter] = useState<Set<string>>(new Set());
+
+  const toggleSet = (prev: Set<string>, value: string) => {
+    const next = new Set(prev);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    return next;
+  };
+
+  // Map folder_id -> folder name for display
+  const folderNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (folders) {
+      for (const f of folders) map.set(f.id, f.name);
+    }
+    return map;
+  }, [folders]);
+
+  // Derive unique authors from data
+  const uniqueAuthors = useMemo(() => {
+    const authors = new Set<string>();
+    for (const file of data) {
+      for (const s of file.suggestions) {
+        if (s.author) authors.add(s.author);
+      }
+    }
+    return Array.from(authors).sort();
+  }, [data]);
+
+  // Derive location entries from data + folders
+  const locations = useMemo<LocationEntry[]>(() => {
+    if (!folders || folders.length < 2) return [];
+    const folderMap = new Map(folders.map(f => [f.id, f.name]));
+
+    // Collect prefixes per folder
+    const prefixesByFolder = new Map<string, Set<string>>();
+    for (const file of data) {
+      const folderId = file.folder_id;
+      if (!folderMap.has(folderId)) continue;
+      if (!prefixesByFolder.has(folderId)) prefixesByFolder.set(folderId, new Set());
+      const lastSlash = file.path.lastIndexOf('/');
+      if (lastSlash > 0) {
+        prefixesByFolder.get(folderId)!.add(file.path.slice(0, lastSlash));
+      }
+    }
+
+    const entries: LocationEntry[] = [];
+    for (const folder of folders) {
+      entries.push({
+        key: folder.id,
+        label: folder.name,
+        isSubfolder: false,
+        folderId: folder.id,
+      });
+      const prefixes = prefixesByFolder.get(folder.id);
+      if (prefixes && prefixes.size > 0) {
+        const sorted = Array.from(prefixes).sort();
+        for (const prefix of sorted) {
+          entries.push({
+            key: `${folder.id}:${prefix}`,
+            label: `${folder.name} / ${prefix.replace(/^\//, '')}`,
+            isSubfolder: true,
+            folderId: folder.id,
+          });
+        }
+      }
+    }
+    return entries;
+  }, [data, folders]);
+
+  // Filtering pipeline
+  const filteredData = useMemo(() => {
+    const now = Date.now();
+    const hasTimeFilter = timeFilter !== 'all';
+
+    let getTimeRange: () => [number, number];
+    if (timeFilter === 'custom') {
+      getTimeRange = () => [
+        customFrom ? new Date(customFrom).getTime() : 0,
+        customTo ? new Date(customTo).getTime() : Infinity,
+      ];
+    } else {
+      const threshold = now - (TIME_THRESHOLDS[timeFilter] ?? 0);
+      getTimeRange = () => [threshold, Infinity];
+    }
+
+    return data
+      .filter(file => {
+        if (locationFilter.size === 0) return true;
+        // Check if any selected location matches this file
+        if (locationFilter.has(file.folder_id)) return true;
+        // Check subfolder matches
+        for (const key of locationFilter) {
+          const colonIdx = key.indexOf(':');
+          if (colonIdx === -1) continue;
+          const folderId = key.slice(0, colonIdx);
+          const prefix = key.slice(colonIdx + 1);
+          if (file.folder_id === folderId && file.path.startsWith(prefix + '/')) return true;
+          // Also match files directly in the prefix directory
+          if (file.folder_id === folderId) {
+            const lastSlash = file.path.lastIndexOf('/');
+            const fileDir = lastSlash > 0 ? file.path.slice(0, lastSlash) : '';
+            if (fileDir === prefix) return true;
+          }
+        }
+        return false;
+      })
+      .map(file => {
+        if (authorFilter.size === 0 && !hasTimeFilter) return file;
+        const [fromTime, toTime] = getTimeRange();
+        const filtered = file.suggestions.filter(s => {
+          if (authorFilter.size > 0 && (!s.author || !authorFilter.has(s.author))) return false;
+          if (hasTimeFilter && (!s.timestamp || s.timestamp < fromTime || s.timestamp > toTime)) return false;
+          return true;
+        });
+        return { ...file, suggestions: filtered };
+      })
+      .filter(file => file.suggestions.length > 0);
+  }, [data, authorFilter, timeFilter, customFrom, customTo, locationFilter]);
+
+  const isFiltered = authorFilter.size > 0 || timeFilter !== 'all' || locationFilter.size > 0;
+  const totalFiltered = filteredData.reduce((sum, f) => sum + f.suggestions.length, 0);
+  const totalAll = data.reduce((sum, f) => sum + f.suggestions.length, 0);
+
+  const clearFilters = () => {
+    setAuthorFilter(new Set());
+    setTimeFilter('all');
+    setCustomFrom('');
+    setCustomTo('');
+    setLocationFilter(new Set());
+  };
 
   const toggleFile = (docId: string) => {
     setExpandedFiles(prev => {
@@ -67,13 +331,32 @@ export function ReviewPage({ folderIds, onAction, onAcceptAllFile, onRejectAllFi
     });
   };
 
-  const totalSuggestions = data.reduce((sum, f) => sum + f.suggestions.length, 0);
+  const expandAll = () => {
+    setExpandedFiles(new Set(filteredData.map(f => f.doc_id)));
+  };
+
+  const collapseAll = () => {
+    setExpandedFiles(new Set());
+  };
 
   const navigateToSuggestion = (docId: string, from: number) => {
     const uuid = docId.slice(-36);
     const shortUuid = uuid.slice(0, 8);
     navigate(`/${shortUuid}?pos=${from}`);
   };
+
+  // Global accept/reject operate on filtered data
+  const handleAcceptAllFiltered = onAcceptAllFile ? async () => {
+    for (const file of filteredData) {
+      await onAcceptAllFile(file);
+    }
+  } : onAcceptAll;
+
+  const handleRejectAllFiltered = onRejectAllFile ? async () => {
+    for (const file of filteredData) {
+      await onRejectAllFile(file);
+    }
+  } : onRejectAll;
 
   if (loading) {
     return <div className="p-8 text-gray-500">Scanning documents for suggestions...</div>;
@@ -99,47 +382,81 @@ export function ReviewPage({ folderIds, onAction, onAcceptAllFile, onRejectAllFi
           <div>
             <h1 className="text-xl font-semibold text-gray-900">Review Suggestions</h1>
             <p className="text-sm text-gray-500 mt-1">
-              {totalSuggestions} suggestion{totalSuggestions !== 1 ? 's' : ''} across {data.length} file{data.length !== 1 ? 's' : ''}
+              {isFiltered
+                ? `${totalFiltered} of ${totalAll} suggestion${totalAll !== 1 ? 's' : ''} across ${filteredData.length} of ${data.length} file${data.length !== 1 ? 's' : ''}`
+                : `${totalAll} suggestion${totalAll !== 1 ? 's' : ''} across ${data.length} file${data.length !== 1 ? 's' : ''}`
+              }
             </p>
           </div>
           <div className="flex gap-2">
-            {onAcceptAll && (
-              <button onClick={onAcceptAll} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700">
+            {handleAcceptAllFiltered && (
+              <button onClick={handleAcceptAllFiltered} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700">
                 Accept All
               </button>
             )}
-            {onRejectAll && (
-              <button onClick={onRejectAll} className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700">
+            {handleRejectAllFiltered && (
+              <button onClick={handleRejectAllFiltered} className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700">
                 Reject All
               </button>
             )}
+            <button onClick={expandAll} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">
+              Expand All
+            </button>
+            <button onClick={collapseAll} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">
+              Collapse All
+            </button>
             <button onClick={refresh} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">
               Refresh
             </button>
           </div>
         </div>
 
-        <div className="space-y-2">
-          {data.map(file => (
-            <FileSection
-              key={file.doc_id}
-              file={file}
-              expanded={expandedFiles.has(file.doc_id)}
-              onToggle={() => toggleFile(file.doc_id)}
-              onAction={onAction}
-              onAcceptAllFile={onAcceptAllFile}
-              onRejectAllFile={onRejectAllFile}
-              onNavigate={navigateToSuggestion}
-            />
-          ))}
-        </div>
+        <FilterBar
+          authors={uniqueAuthors}
+          locations={locations}
+          authorFilter={authorFilter}
+          timeFilter={timeFilter}
+          customFrom={customFrom}
+          customTo={customTo}
+          locationFilter={locationFilter}
+          onAuthorToggle={a => setAuthorFilter(prev => toggleSet(prev, a))}
+          onTimeFilter={setTimeFilter}
+          onCustomFrom={setCustomFrom}
+          onCustomTo={setCustomTo}
+          onLocationToggle={key => setLocationFilter(prev => toggleSet(prev, key))}
+          onClear={clearFilters}
+        />
+
+        {filteredData.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">
+            <p className="text-sm">No suggestions match the current filters.</p>
+            <button onClick={clearFilters} className="text-sm text-blue-600 hover:text-blue-800 mt-2">Clear filters</button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {filteredData.map(file => (
+              <FileSection
+                key={file.doc_id}
+                file={file}
+                folderName={folderNameMap.get(file.folder_id)}
+                expanded={expandedFiles.has(file.doc_id)}
+                onToggle={() => toggleFile(file.doc_id)}
+                onAction={onAction}
+                onAcceptAllFile={onAcceptAllFile}
+                onRejectAllFile={onRejectAllFile}
+                onNavigate={navigateToSuggestion}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function FileSection({ file, expanded, onToggle, onAction, onAcceptAllFile, onRejectAllFile, onNavigate }: {
+function FileSection({ file, folderName, expanded, onToggle, onAction, onAcceptAllFile, onRejectAllFile, onNavigate }: {
   file: FileSuggestions;
+  folderName?: string;
   expanded: boolean;
   onToggle: () => void;
   onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
@@ -172,7 +489,20 @@ function FileSection({ file, expanded, onToggle, onAction, onAcceptAllFile, onRe
       <div className="flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors">
         <button onClick={onToggle} className="flex items-center gap-3 flex-1">
           <span className="text-xs text-gray-400">{expanded ? '\u25BC' : '\u25B6'}</span>
-          <span className="font-medium text-gray-800">{file.path}</span>
+          <span className="font-medium">
+            {(() => {
+              const fullPath = folderName ? `${folderName}${file.path}` : file.path;
+              const segments = fullPath.split('/').filter(Boolean);
+              const filename = (segments.pop() || '').replace(/\.md$/i, '');
+              const parentPath = segments.join('/');
+              return (
+                <>
+                  {parentPath && <span className="text-gray-400 font-normal">{parentPath}/</span>}
+                  <span className="text-gray-800">{filename}</span>
+                </>
+              );
+            })()}
+          </span>
           <span className="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">
             {file.suggestions.length} suggestion{file.suggestions.length !== 1 ? 's' : ''}
           </span>

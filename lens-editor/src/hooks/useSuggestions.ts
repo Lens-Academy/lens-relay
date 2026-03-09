@@ -18,6 +18,7 @@ export interface SuggestionItem {
 export interface FileSuggestions {
   path: string;
   doc_id: string;
+  folder_id: string;
   suggestions: SuggestionItem[];
 }
 
@@ -44,7 +45,7 @@ export function useSuggestions(folderIds: string[]) {
             continue;
           }
           const json: SuggestionsResponse = await res.json();
-          allFiles.push(...json.files);
+          allFiles.push(...json.files.map(f => ({ ...f, folder_id: folderId })));
         } catch {
           errors.push(`Failed to fetch suggestions for ${folderId}`);
         }
