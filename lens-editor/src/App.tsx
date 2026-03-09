@@ -16,6 +16,7 @@ import type { UserRole } from './contexts/AuthContext';
 import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired } from './lib/auth-share';
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
+import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { useRecentFiles } from './hooks/useRecentFiles';
@@ -311,6 +312,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               />
               <div className="flex-1 min-w-0">
                 <Routes>
+                  <Route path="/review" element={<ReviewPage folderIds={FOLDERS.map(f => `${RELAY_ID}-${f.id}`)} relayId={RELAY_ID} />} />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
                 </Routes>
