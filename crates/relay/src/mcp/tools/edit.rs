@@ -515,4 +515,99 @@ mod tests {
             "The quick brown fox."
         );
     }
+
+    #[tokio::test]
+    async fn e01_two_edits_different_regions_coexist() {
+        use super::super::test_helpers::*;
+        let server = build_test_server(&[(
+            "/Doc.md", "uuid-doc",
+            "The quick brown fox jumps over the lazy dog.",
+        )]).await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        // Edit 1
+        execute(&server, &sid, &json!({
+            "file_path": "Lens/Doc.md", "old_string": "quick", "new_string": "fast", "session_id": sid,
+        })).await.unwrap();
+
+        // Re-read between edits (required for read-before-edit enforcement)
+        super::super::read::execute(&server, &sid, &json!({
+            "file_path": "Lens/Doc.md", "session_id": sid,
+        })).await.unwrap();
+
+        // Edit 2 — different region
+        execute(&server, &sid, &json!({
+            "file_path": "Lens/Doc.md", "old_string": "lazy", "new_string": "happy", "session_id": sid,
+        })).await.unwrap();
+
+        let raw = read_doc_content(&server, &doc_id);
+        let spans = super::super::critic_markup::parse(&raw);
+        assert_eq!(
+            super::super::critic_markup::accepted_view(&spans),
+            "The fast brown fox jumps over the happy dog."
+        );
+        assert_eq!(
+            super::super::critic_markup::base_view(&spans),
+            "The quick brown fox jumps over the lazy dog."
+        );
+    }
+
+    #[tokio::test]
+    async fn e02_triple_supersede_preserves_original_base() {
+        use super::super::test_helpers::*;
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "Say hello today.")]).await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        for (old, new) in [("hello", "world"), ("world", "earth"), ("earth", "mars")] {
+            execute(&server, &sid, &json!({
+                "file_path": "Lens/Doc.md", "old_string": old, "new_string": new, "session_id": sid,
+            })).await.unwrap();
+            // Re-read between edits
+            super::super::read::execute(&server, &sid, &json!({
+                "file_path": "Lens/Doc.md", "session_id": sid,
+            })).await.unwrap();
+        }
+
+        let raw = read_doc_content(&server, &doc_id);
+        let spans = super::super::critic_markup::parse(&raw);
+        assert_eq!(super::super::critic_markup::accepted_view(&spans), "Say mars today.");
+        assert_eq!(super::super::critic_markup::base_view(&spans), "Say hello today.");
+    }
+
+    #[tokio::test]
+    async fn e03_expanding_edit_supersedes_prior() {
+        use super::super::test_helpers::*;
+        let server = build_test_server(&[(
+            "/Doc.md", "uuid-doc", "The quick brown fox jumps over.",
+        )]).await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        // Small edit
+        execute(&server, &sid, &json!({
+            "file_path": "Lens/Doc.md", "old_string": "brown", "new_string": "red", "session_id": sid,
+        })).await.unwrap();
+
+        super::super::read::execute(&server, &sid, &json!({
+            "file_path": "Lens/Doc.md", "session_id": sid,
+        })).await.unwrap();
+
+        // Expanding edit that encompasses the first
+        execute(&server, &sid, &json!({
+            "file_path": "Lens/Doc.md", "old_string": "quick red fox", "new_string": "slow blue cat", "session_id": sid,
+        })).await.unwrap();
+
+        let raw = read_doc_content(&server, &doc_id);
+        let spans = super::super::critic_markup::parse(&raw);
+        assert_eq!(
+            super::super::critic_markup::accepted_view(&spans),
+            "The slow blue cat jumps over."
+        );
+        assert_eq!(
+            super::super::critic_markup::base_view(&spans),
+            "The quick brown fox jumps over."
+        );
+    }
 }
