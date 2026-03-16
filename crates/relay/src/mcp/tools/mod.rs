@@ -1,3 +1,4 @@
+pub mod create_doc;
 pub mod critic_diff;
 pub mod edit;
 pub mod get_links;
@@ -168,8 +169,31 @@ pub fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
-            "name": "move_document",
-            "description": "Move a document to a new path within the same folder or to a different folder. Automatically rewrites wikilinks in other documents that point to the moved file.",
+            "name": "create",
+            "description": "Create a new document at the specified path. The document is created immediately and syncs to all connected clients (including Obsidian).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["file_path", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path for the new document (e.g. 'Lens/NewDoc.md', 'Lens/Biology/Photosynthesis.md')"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Initial markdown content for the document. If omitted, the document starts with a minimal placeholder."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "move",
+            "description": "Move or rename a document. Automatically rewrites wikilinks in other documents that reference the moved file. Use for both renames (same folder, new filename) and cross-folder moves.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "new_path", "session_id"],
@@ -246,7 +270,11 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "move_document" => match move_doc::execute(server, arguments).await {
+        "create" => match create_doc::execute(server, arguments).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "move" => match move_doc::execute(server, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },

@@ -2133,6 +2133,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "y-sweet-core",
  "yrs",
  "yrs-kvstore",

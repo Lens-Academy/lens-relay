@@ -4,7 +4,7 @@ use std::sync::Arc;
 use y_sweet_core::link_indexer;
 use yrs::{Array, Map, ReadTxn, Transact};
 
-/// Execute the `move_document` tool: move a document to a new path within or across folders.
+/// Execute the `move` tool: move a document to a new path within or across folders.
 pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
     let file_path = arguments
         .get("file_path")
