@@ -3,6 +3,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use yrs::{GetString, ReadTxn, Text, Transact, WriteTxn};
 
+use super::critic_markup;
+
 /// Execute the `edit` tool: replace old_string with CriticMarkup-wrapped suggestion.
 ///
 /// The edit is wrapped in CriticMarkup format `{--old--}{++new++}` so human
@@ -70,8 +72,12 @@ pub async fn execute(
         }
     };
 
-    // 5. Find old_string and check uniqueness
-    let matches: Vec<usize> = content
+    // 5. Parse CriticMarkup and find old_string in accepted view
+    let raw_content = content; // rename for clarity
+    let spans = critic_markup::parse(&raw_content);
+    let accepted = critic_markup::accepted_view(&spans);
+
+    let matches: Vec<usize> = accepted
         .match_indices(old_string)
         .map(|(idx, _)| idx)
         .collect();
@@ -91,18 +97,22 @@ pub async fn execute(
         ));
     }
 
-    // 6. Build CriticMarkup replacement with metadata
-    let byte_offset = matches[0] as u32;
-    let old_len = old_string.len() as u32;
+    // 6. Build merged result (targeted replacement)
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_millis();
-    let meta_prefix = format!(r#"{{"author":"AI","timestamp":{}}}@@"#, timestamp);
-    let replacement =
-        super::critic_diff::smart_critic_markup(old_string, new_string, Some(&meta_prefix));
+        .as_millis() as u64;
 
-    // 7. Apply edit in write transaction with TOCTOU re-verify
+    let merge_result = critic_markup::merge_edit(
+        &raw_content, old_string, new_string, "AI", timestamp,
+    ).map_err(|e| format!("Error: {}", e))?;
+
+    // No-op check
+    if merge_result.raw_len == 0 && merge_result.replacement.is_empty() {
+        return Ok(format!("No changes needed for {}", file_path));
+    }
+
+    // 7. Apply targeted edit under write lock with TOCTOU re-verify
     {
         let doc_ref = server
             .docs()
@@ -113,18 +123,26 @@ pub async fn execute(
         let mut txn = guard.doc.transact_mut();
         let text = txn.get_or_insert_text("contents");
 
-        // Re-verify: check old_string still at expected offset
-        let current_content = text.get_string(&txn);
-        let actual_slice =
-            current_content.get(byte_offset as usize..(byte_offset + old_len) as usize);
-        if actual_slice != Some(old_string) {
+        // Re-verify: re-parse under lock, check accepted view still matches
+        let current_raw = text.get_string(&txn);
+        let current_spans = critic_markup::parse(&current_raw);
+        let current_accepted = critic_markup::accepted_view(&current_spans);
+        let match_start = matches[0];
+        let actual = current_accepted.get(match_start..match_start + old_string.len());
+        if actual != Some(old_string) {
             return Err(
                 "Document changed since last read. Please re-read and try again.".to_string(),
             );
         }
 
-        text.remove_range(&mut txn, byte_offset, old_len);
-        text.insert(&mut txn, byte_offset, &replacement);
+        // Recompute merge against current raw (in case of concurrent changes)
+        let final_merge = critic_markup::merge_edit(
+            &current_raw, old_string, new_string, "AI", timestamp,
+        ).map_err(|e| format!("Error: {}", e))?;
+
+        // Targeted replacement in Y.Doc
+        text.remove_range(&mut txn, final_merge.raw_offset as u32, final_merge.raw_len as u32);
+        text.insert(&mut txn, final_merge.raw_offset as u32, &final_merge.replacement);
     }
 
     // 8. Return success
@@ -466,6 +484,35 @@ mod tests {
             msg.to_lowercase().contains("criticmarkup") || msg.to_lowercase().contains("critic"),
             "Success message should mention CriticMarkup: {}",
             msg
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_supersedes_existing_suggestion() {
+        let server = build_test_server(&[(
+            "/Doc.md", "uuid-doc",
+            "The {--quick--}{++fast++} brown fox.",
+        )]).await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(&server, &sid, &json!({
+            "file_path": "Lens/Doc.md",
+            "old_string": "fast",
+            "new_string": "speedy",
+            "session_id": sid,
+        })).await;
+
+        assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
+        let raw = read_doc_content(&server, &doc_id);
+        let spans = critic_markup::parse(&raw);
+        assert_eq!(
+            critic_markup::accepted_view(&spans),
+            "The speedy brown fox."
+        );
+        assert_eq!(
+            critic_markup::base_view(&spans),
+            "The quick brown fox."
         );
     }
 }
