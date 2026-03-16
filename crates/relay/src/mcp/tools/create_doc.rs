@@ -100,7 +100,7 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
         .await
         .map_err(|e| format!("Failed to create content doc: {}", e))?;
 
-    // Write initial content to content doc's "contents" Y.Text
+    // Write initial content to content doc's "contents" Y.Text, wrapped in CriticMarkup
     {
         let doc_ref = docs
             .get(&full_doc_id)
@@ -109,7 +109,15 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
         let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
         let mut txn = guard.doc.transact_mut();
         let text = txn.get_or_insert_text("contents");
-        text.insert(&mut txn, 0, content);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let wrapped = format!(
+            "{{++{{\"author\":\"AI\",\"timestamp\":{}}}@@{}++}}",
+            timestamp, content
+        );
+        text.insert(&mut txn, 0, &wrapped);
     }
 
     // Write to folder doc: filemeta_v0 and legacy docs map
@@ -131,11 +139,7 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
 
         // legacy docs map
         let docs_map = txn.get_or_insert_map("docs");
-        docs_map.insert(
-            &mut txn,
-            &*in_folder_path,
-            Any::String(uuid.clone().into()),
-        );
+        docs_map.insert(&mut txn, &*in_folder_path, Any::String(uuid.clone().into()));
     }
 
     // Update doc_resolver

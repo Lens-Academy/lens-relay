@@ -1,5 +1,5 @@
-use similar::{ChangeTag, TextDiff};
 use serde_json::Value;
+use similar::{ChangeTag, TextDiff};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Span {
@@ -212,7 +212,11 @@ pub fn spans_covering_accepted_range(
             let overlap_end = range_end.min(span_end);
             let start_within = overlap_start - cursor;
             let len_within = overlap_end - overlap_start;
-            result.push(CoveredSpan { span_index: idx, start_within, len_within });
+            result.push(CoveredSpan {
+                span_index: idx,
+                start_within,
+                len_within,
+            });
         }
 
         cursor = span_end;
@@ -243,7 +247,11 @@ fn span_raw_length(raw: &str, span: &Span, raw_start: usize) -> usize {
             if raw_start >= raw.len() {
                 return 0;
             }
-            if raw_start + 2 < raw.len() && bytes[raw_start] == b'{' && bytes[raw_start + 1] == b'-' && bytes[raw_start + 2] == b'-' {
+            if raw_start + 2 < raw.len()
+                && bytes[raw_start] == b'{'
+                && bytes[raw_start + 1] == b'-'
+                && bytes[raw_start + 2] == b'-'
+            {
                 if let Some(del_close) = find_closing(raw, raw_start + 3, "--}") {
                     let after_del = del_close + 3;
                     if after_del + 2 < raw.len()
@@ -257,7 +265,11 @@ fn span_raw_length(raw: &str, span: &Span, raw_start: usize) -> usize {
                     }
                     return after_del - raw_start;
                 }
-            } else if raw_start + 2 < raw.len() && bytes[raw_start] == b'{' && bytes[raw_start + 1] == b'+' && bytes[raw_start + 2] == b'+' {
+            } else if raw_start + 2 < raw.len()
+                && bytes[raw_start] == b'{'
+                && bytes[raw_start + 1] == b'+'
+                && bytes[raw_start + 2] == b'+'
+            {
                 if let Some(close) = find_closing(raw, raw_start + 3, "++}") {
                     return close + 3 - raw_start;
                 }
@@ -309,13 +321,20 @@ pub fn merge_edit(
         return Err("old_string not found in accepted view".into());
     }
     if matches.len() > 1 {
-        return Err(format!("old_string not unique ({} occurrences)", matches.len()));
+        return Err(format!(
+            "old_string not unique ({} occurrences)",
+            matches.len()
+        ));
     }
     let match_offset = matches[0];
 
     // No-op
     if old_string == new_string {
-        return Ok(MergeResult { raw_offset: 0, raw_len: 0, replacement: String::new() });
+        return Ok(MergeResult {
+            raw_offset: 0,
+            raw_len: 0,
+            replacement: String::new(),
+        });
     }
 
     let raw_positions = compute_raw_positions(raw, &spans);
@@ -407,7 +426,9 @@ pub fn merge_edit(
                     is_suggestion: false,
                 });
             }
-            Span::Suggestion { deleted, inserted, .. } => {
+            Span::Suggestion {
+                deleted, inserted, ..
+            } => {
                 segments.push(MergeSegment {
                     accepted_text: inserted.clone(),
                     base_text: deleted.clone(),
@@ -467,14 +488,25 @@ pub fn merge_edit(
             let mut ins_text = String::new();
 
             loop {
-                if ci >= changes.len() { break; }
+                if ci >= changes.len() {
+                    break;
+                }
                 match changes[ci].tag() {
-                    ChangeTag::Delete => { del_text.push_str(changes[ci].value()); ci += 1; }
-                    ChangeTag::Insert => { ins_text.push_str(changes[ci].value()); ci += 1; }
+                    ChangeTag::Delete => {
+                        del_text.push_str(changes[ci].value());
+                        ci += 1;
+                    }
+                    ChangeTag::Insert => {
+                        ins_text.push_str(changes[ci].value());
+                        ci += 1;
+                    }
                     ChangeTag::Equal => {
                         let eq_val = changes[ci].value();
                         let is_trivial = eq_val.chars().all(|c| c == ' ');
-                        if is_trivial && ci + 1 < changes.len() && changes[ci + 1].tag() != ChangeTag::Equal {
+                        if is_trivial
+                            && ci + 1 < changes.len()
+                            && changes[ci + 1].tag() != ChangeTag::Equal
+                        {
                             del_text.push_str(eq_val);
                             ins_text.push_str(eq_val);
                             ci += 1;
@@ -517,11 +549,13 @@ pub fn merge_edit(
     // Find touched suggestion ranges
     let mut touched_ranges: Vec<(usize, usize)> = Vec::new();
     for (si, seg) in segments.iter().enumerate() {
-        if !seg.is_suggestion { continue; }
+        if !seg.is_suggestion {
+            continue;
+        }
         let (s_start, s_end) = seg_positions[si];
-        let is_touched = regions.iter().any(|r| {
-            r.is_change && r.old_start < s_end && (r.old_start + r.old_len) > s_start
-        });
+        let is_touched = regions
+            .iter()
+            .any(|r| r.is_change && r.old_start < s_end && (r.old_start + r.old_len) > s_start);
         if is_touched {
             touched_ranges.push((s_start, s_end));
         }
@@ -537,7 +571,9 @@ pub fn merge_edit(
         let r_end = r.old_start + r.old_len;
 
         // Check if this region (equal or change) is within a touched suggestion
-        let in_touched = touched_ranges.iter().any(|&(ts, te)| r_start < te && r_end > ts);
+        let in_touched = touched_ranges
+            .iter()
+            .any(|&(ts, te)| r_start < te && r_end > ts);
 
         if r.is_change || in_touched {
             // This should be part of a change region.
@@ -588,7 +624,12 @@ pub fn merge_edit(
     for r in &merged_regions {
         if !r.is_change {
             // Equal region: emit raw text from segments
-            replacement.push_str(&collect_raw_for_equal(&segments, &seg_positions, r.old_start, r.old_len));
+            replacement.push_str(&collect_raw_for_equal(
+                &segments,
+                &seg_positions,
+                r.old_start,
+                r.old_len,
+            ));
         } else {
             // Change region: collect base text, emit CriticMarkup
             let base = collect_base_for_change(&segments, &seg_positions, r.old_start, r.old_len);
@@ -601,7 +642,11 @@ pub fn merge_edit(
         }
     }
 
-    Ok(MergeResult { raw_offset, raw_len, replacement })
+    Ok(MergeResult {
+        raw_offset,
+        raw_len,
+        replacement,
+    })
 }
 
 /// For an equal diff region, emit the original raw text from segments.
@@ -611,14 +656,20 @@ fn collect_raw_for_equal(
     offset: usize,
     len: usize,
 ) -> String {
-    if len == 0 { return String::new(); }
+    if len == 0 {
+        return String::new();
+    }
     let mut result = String::new();
     let end = offset + len;
 
     for (si, seg) in segments.iter().enumerate() {
         let (seg_start, seg_end) = seg_positions[si];
-        if seg_start >= end { break; }
-        if seg_end <= offset { continue; }
+        if seg_start >= end {
+            break;
+        }
+        if seg_end <= offset {
+            continue;
+        }
 
         let ov_start = offset.max(seg_start) - seg_start;
         let ov_end = end.min(seg_end) - seg_start;
@@ -640,21 +691,34 @@ fn collect_raw_for_equal(
 /// Truncate text to "first three words ... last three words" if >10 words.
 fn truncate_side(text: &str) -> String {
     let words: Vec<&str> = text.split_whitespace().collect();
-    if words.len() <= 10 { return text.to_string(); }
-    format!("{} ... {}", words[..3].join(" "), words[words.len()-3..].join(" "))
+    if words.len() <= 10 {
+        return text.to_string();
+    }
+    format!(
+        "{} ... {}",
+        words[..3].join(" "),
+        words[words.len() - 3..].join(" ")
+    )
 }
 
 /// Format a timestamp as relative time.
 fn format_relative_time(timestamp_ms: u64) -> String {
     let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
         .as_millis() as u64;
     let diff_secs = now.saturating_sub(timestamp_ms) / 1000;
-    if diff_secs < 60 { format!("{}s ago", diff_secs) }
-    else if diff_secs < 3600 { format!("{}m ago", diff_secs / 60) }
-    else if diff_secs < 86400 { format!("{}h ago", diff_secs / 3600) }
-    else if diff_secs < 604800 { format!("{}d ago", diff_secs / 86400) }
-    else { format!("{}w ago", diff_secs / 604800) }
+    if diff_secs < 60 {
+        format!("{}s ago", diff_secs)
+    } else if diff_secs < 3600 {
+        format!("{}m ago", diff_secs / 60)
+    } else if diff_secs < 86400 {
+        format!("{}h ago", diff_secs / 3600)
+    } else if diff_secs < 604800 {
+        format!("{}d ago", diff_secs / 86400)
+    } else {
+        format!("{}w ago", diff_secs / 604800)
+    }
 }
 
 /// Render a CriticMarkup suggestion span as compact markup without metadata,
@@ -662,7 +726,9 @@ fn format_relative_time(timestamp_ms: u64) -> String {
 fn render_suggestion_compact(span: &Span) -> String {
     match span {
         Span::Plain(_) => String::new(),
-        Span::Suggestion { deleted, inserted, .. } => {
+        Span::Suggestion {
+            deleted, inserted, ..
+        } => {
             let del_part = if deleted.is_empty() {
                 String::new()
             } else {
@@ -701,7 +767,12 @@ pub fn render_pending_summary(spans: &[Span], accepted_content: &str) -> Option<
                     }
                 }
             }
-            Span::Suggestion { inserted, author, timestamp, .. } => {
+            Span::Suggestion {
+                inserted,
+                author,
+                timestamp,
+                ..
+            } => {
                 let compact = render_suggestion_compact(span);
                 entries.push((line_number, compact, author.clone(), *timestamp));
                 // Advance line counter by newlines in inserted text (accepted view contribution)
@@ -723,7 +794,10 @@ pub fn render_pending_summary(spans: &[Span], accepted_content: &str) -> Option<
         } else {
             String::new()
         };
-        out.push_str(&format!("  L{}: {} ({}){}\\n", line, markup, author, ts_str));
+        out.push_str(&format!(
+            "  L{}: {} ({}){}\\n",
+            line, markup, author, ts_str
+        ));
     }
 
     Some(out)
@@ -736,14 +810,20 @@ fn collect_base_for_change(
     offset: usize,
     len: usize,
 ) -> String {
-    if len == 0 { return String::new(); }
+    if len == 0 {
+        return String::new();
+    }
     let mut result = String::new();
     let end = offset + len;
 
     for (si, seg) in segments.iter().enumerate() {
         let (seg_start, seg_end) = seg_positions[si];
-        if seg_start >= end { break; }
-        if seg_end <= offset { continue; }
+        if seg_start >= end {
+            break;
+        }
+        if seg_end <= offset {
+            continue;
+        }
 
         let ov_start = offset.max(seg_start) - seg_start;
         let ov_end = end.min(seg_end) - seg_start;
@@ -773,7 +853,10 @@ mod tests {
             return raw.to_string();
         }
         let mut result = String::from(raw);
-        result.replace_range(edit.raw_offset..edit.raw_offset + edit.raw_len, &edit.replacement);
+        result.replace_range(
+            edit.raw_offset..edit.raw_offset + edit.raw_len,
+            &edit.replacement,
+        );
         result
     }
 
@@ -790,14 +873,19 @@ mod tests {
     #[test]
     fn a02_simple_substitution() {
         let spans = parse("The {--quick--}{++fast++} brown fox.");
-        assert_eq!(spans, vec![
-            Span::Plain("The ".into()),
-            Span::Suggestion {
-                deleted: "quick".into(), inserted: "fast".into(),
-                author: "Unknown".into(), timestamp: None,
-            },
-            Span::Plain(" brown fox.".into()),
-        ]);
+        assert_eq!(
+            spans,
+            vec![
+                Span::Plain("The ".into()),
+                Span::Suggestion {
+                    deleted: "quick".into(),
+                    inserted: "fast".into(),
+                    author: "Unknown".into(),
+                    timestamp: None,
+                },
+                Span::Plain(" brown fox.".into()),
+            ]
+        );
         assert_eq!(accepted_view(&spans), "The fast brown fox.");
         assert_eq!(base_view(&spans), "The quick brown fox.");
     }
@@ -806,14 +894,19 @@ mod tests {
     fn a03_substitution_with_metadata() {
         let raw = r#"The {--{"author":"AI","timestamp":1700000000000}@@quick--}{++{"author":"AI","timestamp":1700000000000}@@fast++} brown fox."#;
         let spans = parse(raw);
-        assert_eq!(spans, vec![
-            Span::Plain("The ".into()),
-            Span::Suggestion {
-                deleted: "quick".into(), inserted: "fast".into(),
-                author: "AI".into(), timestamp: Some(1700000000000),
-            },
-            Span::Plain(" brown fox.".into()),
-        ]);
+        assert_eq!(
+            spans,
+            vec![
+                Span::Plain("The ".into()),
+                Span::Suggestion {
+                    deleted: "quick".into(),
+                    inserted: "fast".into(),
+                    author: "AI".into(),
+                    timestamp: Some(1700000000000),
+                },
+                Span::Plain(" brown fox.".into()),
+            ]
+        );
         assert_eq!(accepted_view(&spans), "The fast brown fox.");
         assert_eq!(base_view(&spans), "The quick brown fox.");
     }
@@ -821,14 +914,19 @@ mod tests {
     #[test]
     fn a04_standalone_deletion() {
         let spans = parse("Hello {--beautiful --}world.");
-        assert_eq!(spans, vec![
-            Span::Plain("Hello ".into()),
-            Span::Suggestion {
-                deleted: "beautiful ".into(), inserted: "".into(),
-                author: "Unknown".into(), timestamp: None,
-            },
-            Span::Plain("world.".into()),
-        ]);
+        assert_eq!(
+            spans,
+            vec![
+                Span::Plain("Hello ".into()),
+                Span::Suggestion {
+                    deleted: "beautiful ".into(),
+                    inserted: "".into(),
+                    author: "Unknown".into(),
+                    timestamp: None,
+                },
+                Span::Plain("world.".into()),
+            ]
+        );
         assert_eq!(accepted_view(&spans), "Hello world.");
         assert_eq!(base_view(&spans), "Hello beautiful world.");
     }
@@ -836,14 +934,19 @@ mod tests {
     #[test]
     fn a05_standalone_insertion() {
         let spans = parse("Hello {++beautiful ++}world.");
-        assert_eq!(spans, vec![
-            Span::Plain("Hello ".into()),
-            Span::Suggestion {
-                deleted: "".into(), inserted: "beautiful ".into(),
-                author: "Unknown".into(), timestamp: None,
-            },
-            Span::Plain("world.".into()),
-        ]);
+        assert_eq!(
+            spans,
+            vec![
+                Span::Plain("Hello ".into()),
+                Span::Suggestion {
+                    deleted: "".into(),
+                    inserted: "beautiful ".into(),
+                    author: "Unknown".into(),
+                    timestamp: None,
+                },
+                Span::Plain("world.".into()),
+            ]
+        );
         assert_eq!(accepted_view(&spans), "Hello beautiful world.");
         assert_eq!(base_view(&spans), "Hello world.");
     }
@@ -861,8 +964,14 @@ mod tests {
     fn a07_multiline_suggestion() {
         let raw = "Line one.\n{--Line two.\nLine three.--}{++Replaced lines.++}\nLine four.";
         let spans = parse(raw);
-        assert_eq!(accepted_view(&spans), "Line one.\nReplaced lines.\nLine four.");
-        assert_eq!(base_view(&spans), "Line one.\nLine two.\nLine three.\nLine four.");
+        assert_eq!(
+            accepted_view(&spans),
+            "Line one.\nReplaced lines.\nLine four."
+        );
+        assert_eq!(
+            base_view(&spans),
+            "Line one.\nLine two.\nLine three.\nLine four."
+        );
     }
 
     #[test]
@@ -934,7 +1043,9 @@ mod tests {
         let spans = parse(raw);
         assert_eq!(accepted_view(&spans), "The fast fox.");
         match &spans[1] {
-            Span::Suggestion { author, timestamp, .. } => {
+            Span::Suggestion {
+                author, timestamp, ..
+            } => {
                 assert_eq!(author, "AI");
                 assert_eq!(*timestamp, Some(1700000000000));
             }
@@ -946,8 +1057,14 @@ mod tests {
     fn a17_code_blocks_with_markup_between() {
         let raw = "```\n{--code1--}\n```\n{--real--}{++actual++}\n```\n{++code2++}\n```";
         let spans = parse(raw);
-        assert_eq!(accepted_view(&spans), "```\n{--code1--}\n```\nactual\n```\n{++code2++}\n```");
-        assert_eq!(base_view(&spans), "```\n{--code1--}\n```\nreal\n```\n{++code2++}\n```");
+        assert_eq!(
+            accepted_view(&spans),
+            "```\n{--code1--}\n```\nactual\n```\n{++code2++}\n```"
+        );
+        assert_eq!(
+            base_view(&spans),
+            "```\n{--code1--}\n```\nreal\n```\n{++code2++}\n```"
+        );
     }
 
     #[test]
@@ -1041,7 +1158,10 @@ mod tests {
         let edit = merge_edit(raw, "quick brown", "slow red", "AI", 1700000000000).unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
-        assert_eq!(accepted_view(&spans), "The slow red fox jumps over the lazy dog.");
+        assert_eq!(
+            accepted_view(&spans),
+            "The slow red fox jumps over the lazy dog."
+        );
     }
 
     #[test]
@@ -1050,8 +1170,14 @@ mod tests {
         let edit = merge_edit(raw, "lazy dog", "happy cat", "AI", 1700000000000).unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
-        assert_eq!(accepted_view(&spans), "The fast brown fox jumps over the happy cat.");
-        assert_eq!(base_view(&spans), "The quick brown fox jumps over the lazy dog.");
+        assert_eq!(
+            accepted_view(&spans),
+            "The fast brown fox jumps over the happy cat."
+        );
+        assert_eq!(
+            base_view(&spans),
+            "The quick brown fox jumps over the lazy dog."
+        );
     }
 
     #[test]
@@ -1087,7 +1213,14 @@ mod tests {
     #[test]
     fn b06_supersede_and_extend_both() {
         let raw = "Hello {--world--}{++earth++} today.";
-        let edit = merge_edit(raw, "Hello earth today", "Greetings mars now", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "Hello earth today",
+            "Greetings mars now",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         assert_eq!(accepted_view(&spans), "Greetings mars now.");
@@ -1097,7 +1230,8 @@ mod tests {
     #[test]
     fn b07_span_multiple_suggestions() {
         let raw = "The {--quick--}{++fast++} brown {--fox--}{++cat++} jumps.";
-        let edit = merge_edit(raw, "fast brown cat", "speedy red dog", "AI", 1700000000000).unwrap();
+        let edit =
+            merge_edit(raw, "fast brown cat", "speedy red dog", "AI", 1700000000000).unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         assert_eq!(accepted_view(&spans), "The speedy red dog jumps.");
@@ -1137,17 +1271,34 @@ mod tests {
     #[test]
     fn b11_whole_doc_replace_few_changes() {
         let raw = "Alpha {--beta--}{++gamma++} delta epsilon {--zeta--}{++eta++} theta.";
-        let edit = merge_edit(raw, "Alpha gamma delta epsilon eta theta.", "Alpha gamma CHANGED epsilon eta MODIFIED.", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "Alpha gamma delta epsilon eta theta.",
+            "Alpha gamma CHANGED epsilon eta MODIFIED.",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
-        assert_eq!(accepted_view(&spans), "Alpha gamma CHANGED epsilon eta MODIFIED.");
+        assert_eq!(
+            accepted_view(&spans),
+            "Alpha gamma CHANGED epsilon eta MODIFIED."
+        );
         assert_eq!(base_view(&spans), "Alpha beta delta epsilon zeta theta.");
     }
 
     #[test]
     fn b12_whole_doc_replace_everything() {
         let raw = "The {--quick--}{++fast++} brown fox.";
-        let edit = merge_edit(raw, "The fast brown fox.", "Completely different content here.", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "The fast brown fox.",
+            "Completely different content here.",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         assert_eq!(accepted_view(&spans), "Completely different content here.");
@@ -1168,7 +1319,14 @@ mod tests {
     #[test]
     fn b14_overlaps_standalone_insertion() {
         let raw = "Hello {++beautiful ++}world today.";
-        let edit = merge_edit(raw, "beautiful world", "wonderful planet", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "beautiful world",
+            "wonderful planet",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         assert_eq!(accepted_view(&spans), "Hello wonderful planet today.");
@@ -1199,7 +1357,14 @@ mod tests {
     #[test]
     fn b17_pure_insertion() {
         let raw = "Hello world.";
-        let edit = merge_edit(raw, "Hello world", "Hello beautiful world", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "Hello world",
+            "Hello beautiful world",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         assert_eq!(accepted_view(&spans), "Hello beautiful world.");
@@ -1238,7 +1403,14 @@ mod tests {
     #[test]
     fn b21_insert_newline_paragraph_break() {
         let raw = "First sentence. Second sentence.";
-        let edit = merge_edit(raw, "First sentence. Second sentence.", "First sentence.\n\nSecond sentence.", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "First sentence. Second sentence.",
+            "First sentence.\n\nSecond sentence.",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         assert_eq!(accepted_view(&spans), "First sentence.\n\nSecond sentence.");
@@ -1247,7 +1419,14 @@ mod tests {
     #[test]
     fn b22_remove_newline_join_paragraphs() {
         let raw = "First paragraph.\n\nSecond paragraph.";
-        let edit = merge_edit(raw, "First paragraph.\n\nSecond paragraph.", "First paragraph. Second paragraph.", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "First paragraph.\n\nSecond paragraph.",
+            "First paragraph. Second paragraph.",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         assert_eq!(accepted_view(&spans), "First paragraph. Second paragraph.");
@@ -1256,7 +1435,14 @@ mod tests {
     #[test]
     fn b23_noop_edit_preserves_existing_suggestions() {
         let raw = "The {--quick--}{++fast++} brown fox.";
-        let edit = merge_edit(raw, "fast brown fox.", "fast brown fox.", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "fast brown fox.",
+            "fast brown fox.",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         assert_eq!(result, raw);
     }
@@ -1284,21 +1470,41 @@ mod tests {
     #[test]
     fn b26_diff_regions_overlap_different_suggestions() {
         let raw = "Alpha {--beta--}{++gamma++} delta epsilon {--zeta--}{++eta++} theta.";
-        let edit = merge_edit(raw, "Alpha gamma delta epsilon eta theta.", "Alpha GAMMA delta epsilon ETA theta.", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "Alpha gamma delta epsilon eta theta.",
+            "Alpha GAMMA delta epsilon ETA theta.",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
-        assert_eq!(accepted_view(&spans), "Alpha GAMMA delta epsilon ETA theta.");
+        assert_eq!(
+            accepted_view(&spans),
+            "Alpha GAMMA delta epsilon ETA theta."
+        );
         assert_eq!(base_view(&spans), "Alpha beta delta epsilon zeta theta.");
     }
 
     #[test]
     fn b27_ai_writes_criticmarkup_as_literal_content() {
         let raw = "CriticMarkup uses special syntax.";
-        let edit = merge_edit(raw, "CriticMarkup uses special syntax.", "CriticMarkup uses {--deleted--} and {++inserted++} syntax.", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "CriticMarkup uses special syntax.",
+            "CriticMarkup uses {--deleted--} and {++inserted++} syntax.",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         // The accepted view should contain the literal delimiters as content
-        assert_eq!(accepted_view(&spans), "CriticMarkup uses {--deleted--} and {++inserted++} syntax.");
+        assert_eq!(
+            accepted_view(&spans),
+            "CriticMarkup uses {--deleted--} and {++inserted++} syntax."
+        );
     }
 
     #[test]
@@ -1314,28 +1520,56 @@ mod tests {
     #[test]
     fn b29_three_separate_change_regions() {
         let raw = "The quick brown fox jumps over the lazy dog near the old barn.";
-        let edit = merge_edit(raw, "The quick brown fox jumps over the lazy dog near the old barn.", "The slow brown fox jumps over the happy dog near the new barn.", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "The quick brown fox jumps over the lazy dog near the old barn.",
+            "The slow brown fox jumps over the happy dog near the new barn.",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
-        assert_eq!(accepted_view(&spans), "The slow brown fox jumps over the happy dog near the new barn.");
-        let suggestion_count = spans.iter().filter(|s| matches!(s, Span::Suggestion { .. })).count();
-        assert!(suggestion_count >= 3, "Expected at least 3 suggestions, got {}", suggestion_count);
+        assert_eq!(
+            accepted_view(&spans),
+            "The slow brown fox jumps over the happy dog near the new barn."
+        );
+        let suggestion_count = spans
+            .iter()
+            .filter(|s| matches!(s, Span::Suggestion { .. }))
+            .count();
+        assert!(
+            suggestion_count >= 3,
+            "Expected at least 3 suggestions, got {}",
+            suggestion_count
+        );
     }
 
     #[test]
     fn b30_old_string_spans_suggestion_and_plain_text_duplicate() {
         let raw = "Say {--goodbye--}{++hello++} and then say hello again.";
-        let edit = merge_edit(raw, "hello and then say hello", "greetings and then say farewell", "AI", 1700000000000).unwrap();
+        let edit = merge_edit(
+            raw,
+            "hello and then say hello",
+            "greetings and then say farewell",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
-        assert_eq!(accepted_view(&spans), "Say greetings and then say farewell again.");
+        assert_eq!(
+            accepted_view(&spans),
+            "Say greetings and then say farewell again."
+        );
         assert_eq!(base_view(&spans), "Say goodbye and then say hello again.");
     }
 
     #[test]
     fn b31_edit_starts_at_exact_suggestion_boundary() {
         let raw = "Say {--hello--}{++goodbye++} friend.";
-        let edit = merge_edit(raw, "goodbye friend", "farewell buddy", "AI", 1700000000000).unwrap();
+        let edit =
+            merge_edit(raw, "goodbye friend", "farewell buddy", "AI", 1700000000000).unwrap();
         let result = apply_merge(raw, &edit);
         let spans = parse(&result);
         assert_eq!(accepted_view(&spans), "Say farewell buddy.");
@@ -1375,10 +1609,14 @@ mod tests {
     #[test]
     fn b07_exact_markup() {
         let raw = "The {--quick--}{++fast++} brown {--fox--}{++cat++} jumps.";
-        let edit = merge_edit(raw, "fast brown cat", "speedy red dog", "AI", 1700000000000).unwrap();
+        let edit =
+            merge_edit(raw, "fast brown cat", "speedy red dog", "AI", 1700000000000).unwrap();
         let result = apply_merge(raw, &edit);
         let clean = strip_metadata(&result);
-        assert_eq!(clean, "The {--quick brown fox--}{++speedy red dog++} jumps.");
+        assert_eq!(
+            clean,
+            "The {--quick brown fox--}{++speedy red dog++} jumps."
+        );
     }
 
     // --- Group C: render_pending_summary() ---
@@ -1423,7 +1661,8 @@ mod tests {
 
     #[test]
     fn c05_truncation_long_insertion() {
-        let raw = "{--old--}{++one two three four five six seven eight nine ten eleven twelve++} end.";
+        let raw =
+            "{--old--}{++one two three four five six seven eight nine ten eleven twelve++} end.";
         let spans = parse(raw);
         let accepted = accepted_view(&spans);
         let footer = render_pending_summary(&spans, &accepted).unwrap();

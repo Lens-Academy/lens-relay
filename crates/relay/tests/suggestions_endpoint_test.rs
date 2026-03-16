@@ -38,8 +38,14 @@ fn test_null_fields_serialized() {
     let text = "Hello {++plain text++} end";
     let suggestions = scan_suggestions(text);
     let json = serde_json::to_value(&suggestions[0]).unwrap();
-    assert!(json.get("author").is_some(), "author field should be present");
-    assert!(json.get("timestamp").is_some(), "timestamp field should be present");
+    assert!(
+        json.get("author").is_some(),
+        "author field should be present"
+    );
+    assert!(
+        json.get("timestamp").is_some(),
+        "timestamp field should be present"
+    );
     assert!(json["author"].is_null());
     assert!(json["timestamp"].is_null());
 }

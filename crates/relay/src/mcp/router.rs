@@ -441,10 +441,9 @@ mod tests {
             .update_folder_from_doc(&folder_doc_id, &folder_doc);
 
         // Create content DocWithSyncKv
-        let dwskv =
-            y_sweet_core::doc_sync::DocWithSyncKv::new(&content_doc_id, None, || (), None)
-                .await
-                .unwrap();
+        let dwskv = y_sweet_core::doc_sync::DocWithSyncKv::new(&content_doc_id, None, || (), None)
+            .await
+            .unwrap();
         {
             let awareness = dwskv.awareness();
             let mut guard = awareness.write().unwrap();
@@ -521,10 +520,9 @@ mod tests {
             .doc_resolver()
             .update_folder_from_doc(&folder_doc_id, &folder_doc);
 
-        let dwskv =
-            y_sweet_core::doc_sync::DocWithSyncKv::new(&content_doc_id, None, || (), None)
-                .await
-                .unwrap();
+        let dwskv = y_sweet_core::doc_sync::DocWithSyncKv::new(&content_doc_id, None, || (), None)
+            .await
+            .unwrap();
         {
             let awareness = dwskv.awareness();
             let mut guard = awareness.write().unwrap();

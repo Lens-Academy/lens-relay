@@ -380,8 +380,7 @@ pub fn apply_backlink_diff(folder_doc: &Doc, source_uuid: &str, new_targets: &Ha
             if updated.is_empty() {
                 backlinks.remove(&mut txn, &key);
             } else {
-                let arr: Vec<Any> =
-                    updated.into_iter().map(|s| Any::String(s.into())).collect();
+                let arr: Vec<Any> = updated.into_iter().map(|s| Any::String(s.into())).collect();
                 backlinks.insert(&mut txn, key.as_str(), arr);
             }
         }
@@ -1398,11 +1397,7 @@ impl LinkIndexer {
             // Same fix as search_worker — see server.rs comment for full explanation.
 
             // 3a. Snapshot pending keys (only DashMap shard locks, no external locks)
-            let snapshot: Vec<String> = self
-                .pending
-                .iter()
-                .map(|e| e.key().clone())
-                .collect();
+            let snapshot: Vec<String> = self.pending.iter().map(|e| e.key().clone()).collect();
             // Iterator dropped — all shard locks released.
 
             // 3b. Filter to ready (safe to acquire awareness locks now)
@@ -1783,7 +1778,8 @@ mod tests {
 
     #[test]
     fn snapshot_folder_entries_matches_build_virtual_entries() {
-        let folder1 = create_folder_doc(&[("/Notes.md", "uuid-notes"), ("/Ideas.md", "uuid-ideas")]);
+        let folder1 =
+            create_folder_doc(&[("/Notes.md", "uuid-notes"), ("/Ideas.md", "uuid-ideas")]);
         set_folder_name(&folder1, "Lens");
         let folder2 = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
         set_folder_name(&folder2, "Edu");
@@ -1804,9 +1800,15 @@ mod tests {
         assert_eq!(snapshot_entries.len(), batch_entries.len());
 
         // Same content (sort by id for deterministic comparison)
-        let mut snap_sorted: Vec<_> = snapshot_entries.iter().map(|e| (&e.id, &e.virtual_path, e.folder_idx)).collect();
+        let mut snap_sorted: Vec<_> = snapshot_entries
+            .iter()
+            .map(|e| (&e.id, &e.virtual_path, e.folder_idx))
+            .collect();
         snap_sorted.sort();
-        let mut batch_sorted: Vec<_> = batch_entries.iter().map(|e| (&e.id, &e.virtual_path, e.folder_idx)).collect();
+        let mut batch_sorted: Vec<_> = batch_entries
+            .iter()
+            .map(|e| (&e.id, &e.virtual_path, e.folder_idx))
+            .collect();
         batch_sorted.sort();
         assert_eq!(snap_sorted, batch_sorted);
     }
@@ -4507,14 +4509,12 @@ mod tests {
 
     #[test]
     fn compute_backlink_targets_empty_links() {
-        let entries = vec![
-            VirtualEntry {
-                virtual_path: "/Lens/Notes.md".to_string(),
-                entry_type: "markdown".to_string(),
-                id: "uuid-notes".to_string(),
-                folder_idx: 0,
-            },
-        ];
+        let entries = vec![VirtualEntry {
+            virtual_path: "/Lens/Notes.md".to_string(),
+            entry_type: "markdown".to_string(),
+            id: "uuid-notes".to_string(),
+            folder_idx: 0,
+        }];
 
         let targets = compute_backlink_targets("uuid-notes", &[], &entries, 1);
         assert_eq!(targets.len(), 1);
@@ -4525,10 +4525,8 @@ mod tests {
 
     #[test]
     fn apply_backlink_diff_adds_new_targets() {
-        let folder_doc = create_folder_doc(&[
-            ("/Notes.md", "uuid-notes"),
-            ("/Ideas.md", "uuid-ideas"),
-        ]);
+        let folder_doc =
+            create_folder_doc(&[("/Notes.md", "uuid-notes"), ("/Ideas.md", "uuid-ideas")]);
 
         let mut targets = HashSet::new();
         targets.insert("uuid-ideas".to_string());
@@ -4553,15 +4551,24 @@ mod tests {
         targets1.insert("uuid-other".to_string());
         apply_backlink_diff(&folder_doc, "uuid-notes", &targets1);
 
-        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-notes"]);
-        assert_eq!(read_backlinks(&folder_doc, "uuid-other"), vec!["uuid-notes"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-ideas"),
+            vec!["uuid-notes"]
+        );
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-other"),
+            vec!["uuid-notes"]
+        );
 
         // Second: remove Other, keep Ideas
         let mut targets2 = HashSet::new();
         targets2.insert("uuid-ideas".to_string());
         apply_backlink_diff(&folder_doc, "uuid-notes", &targets2);
 
-        assert_eq!(read_backlinks(&folder_doc, "uuid-ideas"), vec!["uuid-notes"]);
+        assert_eq!(
+            read_backlinks(&folder_doc, "uuid-ideas"),
+            vec!["uuid-notes"]
+        );
         assert!(read_backlinks(&folder_doc, "uuid-other").is_empty());
     }
 

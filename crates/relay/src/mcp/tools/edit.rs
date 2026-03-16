@@ -103,9 +103,9 @@ pub async fn execute(
         .unwrap()
         .as_millis() as u64;
 
-    let merge_result = critic_markup::merge_edit(
-        &raw_content, old_string, new_string, "AI", timestamp,
-    ).map_err(|e| format!("Error: {}", e))?;
+    let merge_result =
+        critic_markup::merge_edit(&raw_content, old_string, new_string, "AI", timestamp)
+            .map_err(|e| format!("Error: {}", e))?;
 
     // No-op check
     if merge_result.raw_len == 0 && merge_result.replacement.is_empty() {
@@ -136,13 +136,21 @@ pub async fn execute(
         }
 
         // Recompute merge against current raw (in case of concurrent changes)
-        let final_merge = critic_markup::merge_edit(
-            &current_raw, old_string, new_string, "AI", timestamp,
-        ).map_err(|e| format!("Error: {}", e))?;
+        let final_merge =
+            critic_markup::merge_edit(&current_raw, old_string, new_string, "AI", timestamp)
+                .map_err(|e| format!("Error: {}", e))?;
 
         // Targeted replacement in Y.Doc
-        text.remove_range(&mut txn, final_merge.raw_offset as u32, final_merge.raw_len as u32);
-        text.insert(&mut txn, final_merge.raw_offset as u32, &final_merge.replacement);
+        text.remove_range(
+            &mut txn,
+            final_merge.raw_offset as u32,
+            final_merge.raw_len as u32,
+        );
+        text.insert(
+            &mut txn,
+            final_merge.raw_offset as u32,
+            &final_merge.replacement,
+        );
     }
 
     // 8. Return success
@@ -155,8 +163,8 @@ pub async fn execute(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_helpers::*;
+    use super::*;
     use serde_json::json;
 
     // === Edit Tests ===
@@ -257,7 +265,8 @@ mod tests {
 
     #[tokio::test]
     async fn edit_old_string_not_unique() {
-        let server = build_test_server(&[("/Cats.md", "uuid-cats", "the cat sat on the cat")]).await;
+        let server =
+            build_test_server(&[("/Cats.md", "uuid-cats", "the cat sat on the cat")]).await;
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-cats");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -349,7 +358,8 @@ mod tests {
 
     #[tokio::test]
     async fn edit_preserves_surrounding_content() {
-        let server = build_test_server(&[("/Lines.md", "uuid-lines", "line 1\nline 2\nline 3")]).await;
+        let server =
+            build_test_server(&[("/Lines.md", "uuid-lines", "line 1\nline 2\nline 3")]).await;
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-lines");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -383,7 +393,8 @@ mod tests {
     #[tokio::test]
     async fn edit_multiline_old_string() {
         let server =
-            build_test_server(&[("/Multi.md", "uuid-multi", "line 1\nline 2\nline 3\nline 4")]).await;
+            build_test_server(&[("/Multi.md", "uuid-multi", "line 1\nline 2\nline 3\nline 4")])
+                .await;
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-multi");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -490,18 +501,25 @@ mod tests {
     #[tokio::test]
     async fn edit_supersedes_existing_suggestion() {
         let server = build_test_server(&[(
-            "/Doc.md", "uuid-doc",
+            "/Doc.md",
+            "uuid-doc",
             "The {--quick--}{++fast++} brown fox.",
-        )]).await;
+        )])
+        .await;
         let doc_id = format!("{}-uuid-doc", RELAY_ID);
         let sid = setup_session_with_read(&server, &doc_id);
 
-        let result = execute(&server, &sid, &json!({
-            "file_path": "Lens/Doc.md",
-            "old_string": "fast",
-            "new_string": "speedy",
-            "session_id": sid,
-        })).await;
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "fast",
+                "new_string": "speedy",
+                "session_id": sid,
+            }),
+        )
+        .await;
 
         assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
         let raw = read_doc_content(&server, &doc_id);
@@ -510,19 +528,18 @@ mod tests {
             critic_markup::accepted_view(&spans),
             "The speedy brown fox."
         );
-        assert_eq!(
-            critic_markup::base_view(&spans),
-            "The quick brown fox."
-        );
+        assert_eq!(critic_markup::base_view(&spans), "The quick brown fox.");
     }
 
     #[tokio::test]
     async fn e01_two_edits_different_regions_coexist() {
         use super::super::test_helpers::*;
         let server = build_test_server(&[(
-            "/Doc.md", "uuid-doc",
+            "/Doc.md",
+            "uuid-doc",
             "The quick brown fox jumps over the lazy dog.",
-        )]).await;
+        )])
+        .await;
         let doc_id = format!("{}-uuid-doc", RELAY_ID);
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -532,9 +549,15 @@ mod tests {
         })).await.unwrap();
 
         // Re-read between edits (required for read-before-edit enforcement)
-        super::super::read::execute(&server, &sid, &json!({
-            "file_path": "Lens/Doc.md", "session_id": sid,
-        })).await.unwrap();
+        super::super::read::execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md", "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
 
         // Edit 2 — different region
         execute(&server, &sid, &json!({
@@ -565,23 +588,34 @@ mod tests {
                 "file_path": "Lens/Doc.md", "old_string": old, "new_string": new, "session_id": sid,
             })).await.unwrap();
             // Re-read between edits
-            super::super::read::execute(&server, &sid, &json!({
-                "file_path": "Lens/Doc.md", "session_id": sid,
-            })).await.unwrap();
+            super::super::read::execute(
+                &server,
+                &sid,
+                &json!({
+                    "file_path": "Lens/Doc.md", "session_id": sid,
+                }),
+            )
+            .await
+            .unwrap();
         }
 
         let raw = read_doc_content(&server, &doc_id);
         let spans = super::super::critic_markup::parse(&raw);
-        assert_eq!(super::super::critic_markup::accepted_view(&spans), "Say mars today.");
-        assert_eq!(super::super::critic_markup::base_view(&spans), "Say hello today.");
+        assert_eq!(
+            super::super::critic_markup::accepted_view(&spans),
+            "Say mars today."
+        );
+        assert_eq!(
+            super::super::critic_markup::base_view(&spans),
+            "Say hello today."
+        );
     }
 
     #[tokio::test]
     async fn e03_expanding_edit_supersedes_prior() {
         use super::super::test_helpers::*;
-        let server = build_test_server(&[(
-            "/Doc.md", "uuid-doc", "The quick brown fox jumps over.",
-        )]).await;
+        let server =
+            build_test_server(&[("/Doc.md", "uuid-doc", "The quick brown fox jumps over.")]).await;
         let doc_id = format!("{}-uuid-doc", RELAY_ID);
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -590,9 +624,15 @@ mod tests {
             "file_path": "Lens/Doc.md", "old_string": "brown", "new_string": "red", "session_id": sid,
         })).await.unwrap();
 
-        super::super::read::execute(&server, &sid, &json!({
-            "file_path": "Lens/Doc.md", "session_id": sid,
-        })).await.unwrap();
+        super::super::read::execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md", "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
 
         // Expanding edit that encompasses the first
         execute(&server, &sid, &json!({

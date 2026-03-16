@@ -35,10 +35,7 @@ async fn create_folder_doc(doc_id: &str) -> DocWithSyncKv {
         let filemeta = txn.get_or_insert_map("filemeta_v0");
         let mut meta = std::collections::HashMap::new();
         meta.insert("id".to_string(), yrs::Any::String("uuid-content-1".into()));
-        meta.insert(
-            "type".to_string(),
-            yrs::Any::String("markdown".into()),
-        );
+        meta.insert("type".to_string(), yrs::Any::String("markdown".into()));
         meta.insert("version".to_string(), yrs::Any::Number(0.0));
         filemeta.insert(&mut txn, "/TestDoc.md", yrs::Any::Map(meta.into()));
     }
@@ -298,10 +295,7 @@ async fn find_all_folder_docs_with_concurrent_docs_dashmap_mutation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn concurrent_multi_awareness_lock_acquisition() {
     let done = Arc::new(AtomicBool::new(false));
-    watchdog(
-        done.clone(),
-        "concurrent_multi_awareness_lock_acquisition",
-    );
+    watchdog(done.clone(), "concurrent_multi_awareness_lock_acquisition");
 
     let docs: Arc<DashMap<String, DocWithSyncKv>> = Arc::new(DashMap::new());
     for i in 0..4 {
@@ -317,7 +311,8 @@ async fn concurrent_multi_awareness_lock_acquisition() {
     let task_a = tokio::spawn(async move {
         for _ in 0..ITERATIONS {
             // Collect IDs in arbitrary order (even indices first, then odd)
-            let mut ids: Vec<String> = (0..4).step_by(2)
+            let mut ids: Vec<String> = (0..4)
+                .step_by(2)
                 .chain((1..4).step_by(2))
                 .map(|i| format!("doc-{}", i))
                 .collect();
@@ -327,10 +322,7 @@ async fn concurrent_multi_awareness_lock_acquisition() {
                 .iter()
                 .filter_map(|id| docs_a.get(id).map(|r| r.value().awareness()))
                 .collect();
-            let _guards: Vec<_> = awareness_arcs
-                .iter()
-                .map(|a| a.write().unwrap())
-                .collect();
+            let _guards: Vec<_> = awareness_arcs.iter().map(|a| a.write().unwrap()).collect();
             drop(_guards);
             yield_now().await;
         }
@@ -340,20 +332,14 @@ async fn concurrent_multi_awareness_lock_acquisition() {
     // but sort doc IDs before locking (same fix as handle_move_document).
     let task_b = tokio::spawn(async move {
         for _ in 0..ITERATIONS {
-            let mut ids: Vec<String> = (0..4)
-                .rev()
-                .map(|i| format!("doc-{}", i))
-                .collect();
+            let mut ids: Vec<String> = (0..4).rev().map(|i| format!("doc-{}", i)).collect();
             // Sort before locking — the fix under test
             ids.sort();
             let awareness_arcs: Vec<_> = ids
                 .iter()
                 .filter_map(|id| docs_b.get(id).map(|r| r.value().awareness()))
                 .collect();
-            let _guards: Vec<_> = awareness_arcs
-                .iter()
-                .map(|a| a.write().unwrap())
-                .collect();
+            let _guards: Vec<_> = awareness_arcs.iter().map(|a| a.write().unwrap()).collect();
             drop(_guards);
             yield_now().await;
         }

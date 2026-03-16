@@ -30,15 +30,11 @@ pub struct Suggestion {
     pub line: usize,
 }
 
-static ADDITION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)\{\+\+(.*?)\+\+\}").unwrap()
-});
-static DELETION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)\{--(.*?)--\}").unwrap()
-});
-static SUBSTITUTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)\{~~(.*?)~>(.*?)~~\}").unwrap()
-});
+static ADDITION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)\{\+\+(.*?)\+\+\}").unwrap());
+static DELETION_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)\{--(.*?)--\}").unwrap());
+static SUBSTITUTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)\{~~(.*?)~>(.*?)~~\}").unwrap());
 
 /// Budget for context extraction. Newlines cost more to keep context compact.
 const CONTEXT_BUDGET: usize = 200;
@@ -54,7 +50,8 @@ static PARTIAL_MARKUP_RE: LazyLock<Regex> = LazyLock::new(|| {
         r"|",
         // Partial opening tags at end: {++content... or {--content... or {~~content...
         r"(?:\{\+\+|\{--|\{~~)[^}]*$",
-    )).unwrap()
+    ))
+    .unwrap()
 });
 
 /// Strip CriticMarkup syntax from text, keeping just the readable content.
@@ -126,7 +123,10 @@ fn extract_metadata(raw: &str) -> (Option<String>, Option<u64>, &str) {
         let meta_str = &raw[..sep_pos];
         if meta_str.starts_with('{') && meta_str.ends_with('}') {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(meta_str) {
-                let author = json.get("author").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let author = json
+                    .get("author")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 let timestamp = json.get("timestamp").and_then(|v| v.as_u64());
                 let content = &raw[sep_pos + 2..];
                 return (author, timestamp, content);
@@ -289,7 +289,10 @@ mod tests {
     fn test_context_truncation() {
         // Context should be truncated to ~200 chars
         let long_before = "a".repeat(300);
-        let text = format!("{} {{++{{\"author\":\"AI\",\"timestamp\":1000}}@@added++}} after", long_before);
+        let text = format!(
+            "{} {{++{{\"author\":\"AI\",\"timestamp\":1000}}@@added++}} after",
+            long_before
+        );
         let results = scan_suggestions(&text);
         assert_eq!(results.len(), 1);
         assert!(results[0].context_before.len() <= 210);

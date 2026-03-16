@@ -41,6 +41,7 @@ use y_sweet_core::{
         FileHistoryEntry, FileHistoryResponse, FileUploadUrlResponse, NewDocResponse,
     },
     auth::{Authenticator, ExpirationTimeEpochMillis, Permission, DEFAULT_EXPIRATION_SECONDS},
+    critic_scanner,
     doc_connection::DocConnection,
     doc_resolver::DocumentResolver,
     doc_sync::DocWithSyncKv,
@@ -48,7 +49,6 @@ use y_sweet_core::{
         DebouncedSyncProtocolEventSender, DocumentUpdatedEvent, EventDispatcher, EventEnvelope,
         EventSender, SyncProtocolEventSender, UnifiedEventDispatcher, WebhookSender,
     },
-    critic_scanner,
     link_indexer::{self, LinkIndexer},
     metrics::RelayMetrics,
     search_index::SearchIndex,
@@ -2275,7 +2275,10 @@ async fn handle_suggestions(
 
     // relay_id = first 36 chars of compound folder_id
     if folder_id.len() < 36 {
-        return Err(AppError(StatusCode::BAD_REQUEST, anyhow!("Invalid folder_id")));
+        return Err(AppError(
+            StatusCode::BAD_REQUEST,
+            anyhow!("Invalid folder_id"),
+        ));
     }
     let relay_id = &folder_id[..36];
 
