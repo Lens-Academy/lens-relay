@@ -1672,6 +1672,179 @@ mod tests {
         );
     }
 
+    #[test]
+    fn b34_prepend_to_start_of_suggestion_preserves_wrapping() {
+        // Mirror of b33: edit matches the beginning of a suggestion and prepends content.
+        let raw = "{++{\"author\":\"AI\",\"timestamp\":1700000000000}@@# Test File\n\nSome content here.++}";
+        let edit = merge_edit(
+            raw,
+            "# Test File",
+            "# Introduction\n\n# Test File",
+            "AI",
+            1700000060000,
+        )
+        .unwrap();
+        let result = apply_merge(raw, &edit);
+        let spans = parse(&result);
+
+        assert_eq!(
+            accepted_view(&spans),
+            "# Introduction\n\n# Test File\n\nSome content here."
+        );
+        // Base was empty (standalone insertion), should still be empty
+        assert_eq!(base_view(&spans), "");
+        // No plain text — everything in suggestions
+        let plain_count = spans.iter().filter(|s| matches!(s, Span::Plain(_))).count();
+        assert_eq!(
+            plain_count, 0,
+            "No plain text should exist. Got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn b35_edit_word_in_middle_of_suggestion_preserves_wrapping() {
+        // Edit one word inside a suggestion. The prefix and suffix of the suggestion
+        // are in equal regions and must preserve their CriticMarkup wrapping.
+        let raw = "{++{\"author\":\"AI\",\"timestamp\":1700000000000}@@The quick brown fox jumps over the lazy dog.++}";
+        let edit = merge_edit(
+            raw,
+            "The quick brown fox jumps over the lazy dog.",
+            "The quick brown fox leaps over the lazy dog.",
+            "AI",
+            1700000060000,
+        )
+        .unwrap();
+        let result = apply_merge(raw, &edit);
+        let spans = parse(&result);
+
+        assert_eq!(
+            accepted_view(&spans),
+            "The quick brown fox leaps over the lazy dog."
+        );
+        assert_eq!(base_view(&spans), "");
+        let plain_count = spans.iter().filter(|s| matches!(s, Span::Plain(_))).count();
+        assert_eq!(
+            plain_count, 0,
+            "No plain text should exist. Got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn b36_two_untouched_suggestions_in_covered_range() {
+        // Edit plain text between two suggestions. Both suggestions must preserve wrapping.
+        let raw = "Start {--old1--}{++new1++} middle text {--old2--}{++new2++} end.";
+        let edit = merge_edit(
+            raw,
+            "new1 middle text new2",
+            "new1 CHANGED text new2",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
+        let result = apply_merge(raw, &edit);
+        let spans = parse(&result);
+
+        assert_eq!(accepted_view(&spans), "Start new1 CHANGED text new2 end.");
+        // "middle" was plain text changed to "CHANGED", so base = "middle"
+        assert_eq!(base_view(&spans), "Start old1 middle text old2 end.");
+        // Both original suggestions should still be present (not promoted to plain)
+        assert!(
+            result.contains("{--old1--}") || result.contains("old1--}"),
+            "First suggestion should be preserved in raw: {}",
+            result
+        );
+        assert!(
+            result.contains("{--old2--}") || result.contains("old2--}"),
+            "Second suggestion should be preserved in raw: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn b37_create_then_edit_word_in_middle() {
+        // Simulates: LLM creates doc (all content in {++...++}), then edits one word.
+        // This is the most common LLM workflow that triggered the original bug.
+        let raw = "{++{\"author\":\"AI\",\"timestamp\":1700000000000}@@Photosynthesis is the process by which green plants convert sunlight into chemical energy for growth.++}";
+        let edit = merge_edit(
+            raw,
+            "Photosynthesis is the process by which green plants convert sunlight into chemical energy for growth.",
+            "Photosynthesis is the process by which all plants convert sunlight into stored energy for growth.",
+            "AI",
+            1700000060000,
+        )
+        .unwrap();
+        let result = apply_merge(raw, &edit);
+        let spans = parse(&result);
+
+        assert_eq!(
+            accepted_view(&spans),
+            "Photosynthesis is the process by which all plants convert sunlight into stored energy for growth."
+        );
+        // Base was empty (standalone insertion), should still be empty
+        assert_eq!(base_view(&spans), "");
+        let plain_count = spans.iter().filter(|s| matches!(s, Span::Plain(_))).count();
+        assert_eq!(
+            plain_count, 0,
+            "No plain text after editing a created doc. Got: {:?}",
+            spans
+        );
+    }
+
+    #[test]
+    fn b38_edit_straddling_suggestion_and_plain_text() {
+        // old_string starts in plain text and ends inside a suggestion's inserted text.
+        let raw = "Hello world {--old--}{++new++} rest of doc.";
+        let edit = merge_edit(
+            raw,
+            "world new rest",
+            "planet new remainder",
+            "AI",
+            1700000000000,
+        )
+        .unwrap();
+        let result = apply_merge(raw, &edit);
+        let spans = parse(&result);
+
+        assert_eq!(accepted_view(&spans), "Hello planet new remainder of doc.");
+        // "world" was plain text (base = "world"), "new" maps to suggestion (base = "old"),
+        // "rest" was plain text (base = "rest")
+        // "world"→"planet" change: base = "world"
+        // "new" is in equal region: suggestion preserved, base = "old"
+        // "rest"→"remainder" change: base = "rest"
+        assert_eq!(base_view(&spans), "Hello world old rest of doc.");
+    }
+
+    #[test]
+    #[test]
+    fn b39_content_with_criticmarkup_delimiters_in_created_doc() {
+        // KNOWN LIMITATION: When AI creates a doc containing literal CriticMarkup
+        // delimiters, and the content is wrapped in {++...++}, the parser's
+        // find_closing() matches the inner ++} before the outer one.
+        //
+        // Example: {++meta@@Use {--old--} and {++new++} text.++}
+        // Parser finds ++} at "new++}" instead of "text.++}"
+        //
+        // This is inherent to using simple string search for closing delimiters.
+        // A nesting-aware parser would fix this, but it's a rare edge case
+        // (LLM writing about CriticMarkup syntax in a newly created doc).
+        //
+        // For now, document the limitation rather than adding parser complexity.
+        let raw = "{++{\"author\":\"AI\",\"timestamp\":1700000000000}@@Use {--old--} for deletions and {++new++} for insertions.++}";
+        let spans = parse(raw);
+
+        // Due to the limitation, the parser sees:
+        // - {++...@@Use {--old--} for deletions and {++new++} as a suggestion
+        //   (closes at the inner ++})
+        // - " for insertions.++}" as plain text
+        // This is not ideal but documented behavior.
+        assert_eq!(
+            accepted_view(&spans),
+            "Use {--old--} for deletions and {++new for insertions.++}"
+        );
+    }
+
     // --- Group C: render_pending_summary() ---
 
     #[test]
