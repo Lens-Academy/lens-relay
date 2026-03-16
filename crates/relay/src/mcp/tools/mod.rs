@@ -7,6 +7,8 @@ pub mod glob;
 pub mod grep;
 pub mod move_doc;
 pub mod read;
+#[cfg(test)]
+pub(crate) mod test_helpers;
 
 use crate::server::Server;
 use serde_json::{json, Value};

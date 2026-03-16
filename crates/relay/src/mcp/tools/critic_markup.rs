@@ -637,6 +637,98 @@ fn collect_raw_for_equal(
     result
 }
 
+/// Truncate text to "first three words ... last three words" if >10 words.
+fn truncate_side(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() <= 10 { return text.to_string(); }
+    format!("{} ... {}", words[..3].join(" "), words[words.len()-3..].join(" "))
+}
+
+/// Format a timestamp as relative time.
+fn format_relative_time(timestamp_ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap()
+        .as_millis() as u64;
+    let diff_secs = now.saturating_sub(timestamp_ms) / 1000;
+    if diff_secs < 60 { format!("{}s ago", diff_secs) }
+    else if diff_secs < 3600 { format!("{}m ago", diff_secs / 60) }
+    else if diff_secs < 86400 { format!("{}h ago", diff_secs / 3600) }
+    else if diff_secs < 604800 { format!("{}d ago", diff_secs / 86400) }
+    else { format!("{}w ago", diff_secs / 604800) }
+}
+
+/// Render a CriticMarkup suggestion span as compact markup without metadata,
+/// applying truncation to long sides.
+fn render_suggestion_compact(span: &Span) -> String {
+    match span {
+        Span::Plain(_) => String::new(),
+        Span::Suggestion { deleted, inserted, .. } => {
+            let del_part = if deleted.is_empty() {
+                String::new()
+            } else {
+                format!("{{--{}--}}", truncate_side(deleted))
+            };
+            let ins_part = if inserted.is_empty() {
+                String::new()
+            } else {
+                format!("{{++{}++}}", truncate_side(inserted))
+            };
+            format!("{}{}", del_part, ins_part)
+        }
+    }
+}
+
+/// Render the pending suggestions footer for the read tool.
+/// Returns None if there are no suggestions.
+pub fn render_pending_summary(spans: &[Span], accepted_content: &str) -> Option<String> {
+    // Check if any Suggestion spans exist
+    let has_suggestions = spans.iter().any(|s| matches!(s, Span::Suggestion { .. }));
+    if !has_suggestions {
+        return None;
+    }
+
+    // Build a list of (line_number, compact_markup, author, timestamp) for each suggestion.
+    // We walk spans and track line position in the accepted view.
+    let mut line_number = 1usize; // 1-based
+    let mut entries: Vec<(usize, String, String, Option<u64>)> = Vec::new();
+
+    for span in spans {
+        match span {
+            Span::Plain(text) => {
+                for ch in text.chars() {
+                    if ch == '\n' {
+                        line_number += 1;
+                    }
+                }
+            }
+            Span::Suggestion { inserted, author, timestamp, .. } => {
+                let compact = render_suggestion_compact(span);
+                entries.push((line_number, compact, author.clone(), *timestamp));
+                // Advance line counter by newlines in inserted text (accepted view contribution)
+                for ch in inserted.chars() {
+                    if ch == '\n' {
+                        line_number += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = accepted_content; // used for context, not needed for line counting above
+
+    let mut out = String::from("[Pending suggestions]\n");
+    for (line, markup, author, ts) in entries {
+        let ts_str = if let Some(ms) = ts {
+            format!(" {}", format_relative_time(ms))
+        } else {
+            String::new()
+        };
+        out.push_str(&format!("  L{}: {} ({}){}\\n", line, markup, author, ts_str));
+    }
+
+    Some(out)
+}
+
 /// For a change diff region, collect base text from segments.
 fn collect_base_for_change(
     segments: &[MergeSegment],
@@ -1287,5 +1379,95 @@ mod tests {
         let result = apply_merge(raw, &edit);
         let clean = strip_metadata(&result);
         assert_eq!(clean, "The {--quick brown fox--}{++speedy red dog++} jumps.");
+    }
+
+    // --- Group C: render_pending_summary() ---
+
+    #[test]
+    fn c01_no_suggestions_no_footer() {
+        let raw = "Line one.\nLine two.\nLine three.";
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        assert!(render_pending_summary(&spans, &accepted).is_none());
+    }
+
+    #[test]
+    fn c02_single_suggestion_footer() {
+        let raw = "The {--quick--}{++fast++} brown fox.\nLine two.\nLine three.";
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("[Pending suggestions]"));
+        assert!(footer.contains("{--quick--}{++fast++}"));
+    }
+
+    #[test]
+    fn c03_multiple_lines_affected() {
+        let raw = "The {--quick--}{++fast++} brown fox.\nA normal line.\n{++New ++}content here.";
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("{--quick--}{++fast++}"));
+        assert!(footer.contains("{++New ++}"));
+        assert!(!footer.contains("normal line"));
+    }
+
+    #[test]
+    fn c04_truncation_long_deletion() {
+        let raw = "{--one two three four five six seven eight nine ten eleven twelve--}{++replacement++} end.";
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("one two three ... ten eleven twelve"));
+    }
+
+    #[test]
+    fn c05_truncation_long_insertion() {
+        let raw = "{--old--}{++one two three four five six seven eight nine ten eleven twelve++} end.";
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("one two three ... ten eleven twelve"));
+    }
+
+    #[test]
+    fn c06_short_sides_not_truncated() {
+        let raw = "{--one two three four five--}{++six seven eight nine ten++} end.";
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("{--one two three four five--}{++six seven eight nine ten++}"));
+    }
+
+    #[test]
+    fn c07_metadata_stripped_in_footer() {
+        let raw = r#"The {--{"author":"AI","timestamp":1700000000000}@@quick--}{++{"author":"AI","timestamp":1700000000000}@@fast++} fox."#;
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("{--quick--}{++fast++}"));
+        assert!(footer.contains("AI"));
+        assert!(!footer.contains("@@"));
+        assert!(!footer.contains("\"timestamp\""));
+    }
+
+    #[test]
+    fn c11_multiple_suggestions_same_line() {
+        let raw = "The {--quick--}{++fast++} brown {--fox--}{++cat++} jumps.";
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("{--quick--}{++fast++}"));
+        assert!(footer.contains("{--fox--}{++cat++}"));
+    }
+
+    #[test]
+    fn c12_unknown_author_no_timestamp() {
+        let raw = "The {--quick--}{++fast++} fox.";
+        let spans = parse(raw);
+        let accepted = accepted_view(&spans);
+        let footer = render_pending_summary(&spans, &accepted).unwrap();
+        assert!(footer.contains("Unknown"));
+        assert!(!footer.contains("ago"));
     }
 }
