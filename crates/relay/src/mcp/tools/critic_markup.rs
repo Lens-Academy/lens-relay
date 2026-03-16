@@ -195,6 +195,52 @@ pub fn accepted_view(spans: &[Span]) -> String {
     out
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoveredSpan {
+    pub span_index: usize,
+    /// Byte offset within this span's accepted-view contribution where coverage starts
+    pub start_within: usize,
+    /// Byte length of coverage within this span's accepted-view contribution
+    pub len_within: usize,
+}
+
+/// Given a byte offset and length in the accepted view, return which spans are covered.
+pub fn spans_covering_accepted_range(
+    spans: &[Span],
+    accepted_offset: usize,
+    accepted_len: usize,
+) -> Vec<CoveredSpan> {
+    if accepted_len == 0 {
+        return vec![];
+    }
+
+    let range_end = accepted_offset + accepted_len;
+    let mut result = Vec::new();
+    let mut cursor = 0usize;
+
+    for (idx, span) in spans.iter().enumerate() {
+        let contribution = match span {
+            Span::Plain(text) => text.len(),
+            Span::Suggestion { inserted, .. } => inserted.len(),
+        };
+
+        let span_end = cursor + contribution;
+
+        // Check overlap: [cursor, span_end) vs [accepted_offset, range_end)
+        if contribution > 0 && cursor < range_end && span_end > accepted_offset {
+            let overlap_start = accepted_offset.max(cursor);
+            let overlap_end = range_end.min(span_end);
+            let start_within = overlap_start - cursor;
+            let len_within = overlap_end - overlap_start;
+            result.push(CoveredSpan { span_index: idx, start_within, len_within });
+        }
+
+        cursor = span_end;
+    }
+
+    result
+}
+
 pub fn base_view(spans: &[Span]) -> String {
     let mut out = String::new();
     for span in spans {
@@ -396,5 +442,78 @@ mod tests {
         let spans = parse(raw);
         assert_eq!(accepted_view(&spans), "The admin@@example.com address.");
         assert_eq!(base_view(&spans), "The user@@example.com address.");
+    }
+
+    // --- Group D: spans_covering_accepted_range() ---
+
+    #[test]
+    fn d01_plain_text_identity() {
+        let spans = parse("Hello world.");
+        let covered = spans_covering_accepted_range(&spans, 6, 5);
+        assert_eq!(covered.len(), 1);
+        assert_eq!(covered[0].span_index, 0);
+    }
+
+    #[test]
+    fn d02_offset_in_suggestion_inserted() {
+        let spans = parse("Say {--hello--}{++goodbye++} today.");
+        // Accepted: "Say goodbye today." — offset 4 len 7 = "goodbye"
+        let covered = spans_covering_accepted_range(&spans, 4, 7);
+        assert_eq!(covered.len(), 1);
+        assert_eq!(covered[0].span_index, 1);
+    }
+
+    #[test]
+    fn d03_offset_spanning_plain_and_suggestion() {
+        let spans = parse("The {--quick--}{++fast++} brown.");
+        // Accepted: "The fast brown." — offset 2 len 7 = "e fast "
+        let covered = spans_covering_accepted_range(&spans, 2, 7);
+        assert_eq!(covered.len(), 3);
+        assert_eq!(covered[0].span_index, 0);
+        assert_eq!(covered[1].span_index, 1);
+        assert_eq!(covered[2].span_index, 2);
+    }
+
+    #[test]
+    fn d04_offset_in_plain_between_suggestions() {
+        let spans = parse("{--a--}{++x++} middle {--b--}{++y++}");
+        // Accepted: "x middle y" — offset 2 len 6 = "middle"
+        let covered = spans_covering_accepted_range(&spans, 2, 6);
+        assert_eq!(covered.len(), 1);
+        assert_eq!(covered[0].span_index, 1); // the plain " middle " span
+    }
+
+    #[test]
+    fn d05_zero_length_range() {
+        let spans = parse("Hello {--world--}{++earth++} today.");
+        let covered = spans_covering_accepted_range(&spans, 11, 0);
+        assert_eq!(covered.len(), 0);
+    }
+
+    #[test]
+    fn d06_range_covering_entire_document() {
+        let spans = parse("The {--quick--}{++fast++} brown {--fox--}{++cat++}.");
+        // Accepted: "The fast brown cat." = 19 chars
+        let covered = spans_covering_accepted_range(&spans, 0, 19);
+        assert_eq!(covered.len(), 5);
+    }
+
+    #[test]
+    fn d07_standalone_deletion_contributes_zero_chars() {
+        let spans = parse("Hello {--beautiful --}world.");
+        // Accepted: "Hello world." — offset 6 len 5 = "world"
+        // Deletion span contributes 0 chars, is skipped
+        let covered = spans_covering_accepted_range(&spans, 6, 5);
+        assert_eq!(covered.len(), 1);
+        assert_eq!(covered[0].span_index, 2); // the "world." plain span
+    }
+
+    #[test]
+    fn d08_exact_span_boundary() {
+        let spans = parse("ABC{--DEF--}{++GHI++}JKL");
+        // Accepted: "ABCGHIJKL" — offset 3 len 3 = "GHI"
+        let covered = spans_covering_accepted_range(&spans, 3, 3);
+        assert_eq!(covered.len(), 1);
+        assert_eq!(covered[0].span_index, 1);
     }
 }
