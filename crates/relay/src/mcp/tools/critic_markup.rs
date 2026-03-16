@@ -620,6 +620,8 @@ pub fn merge_edit(
 
     // Now walk merged regions and build replacement.
     let mut replacement = String::new();
+    let mut emitted_suggestions: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
 
     for r in &merged_regions {
         if !r.is_change {
@@ -629,6 +631,7 @@ pub fn merge_edit(
                 &seg_positions,
                 r.old_start,
                 r.old_len,
+                &mut emitted_suggestions,
             ));
         } else {
             // Change region: collect base text, emit CriticMarkup
@@ -650,11 +653,15 @@ pub fn merge_edit(
 }
 
 /// For an equal diff region, emit the original raw text from segments.
+/// `emitted_suggestions` tracks which suggestion segments have already been
+/// emitted (by index) to avoid double-emitting when multiple small equal
+/// regions cover parts of the same untouched suggestion.
 fn collect_raw_for_equal(
     segments: &[MergeSegment],
     seg_positions: &[(usize, usize)],
     offset: usize,
     len: usize,
+    emitted_suggestions: &mut std::collections::HashSet<usize>,
 ) -> String {
     if len == 0 {
         return String::new();
@@ -676,12 +683,15 @@ fn collect_raw_for_equal(
 
         if !seg.is_suggestion {
             result.push_str(&seg.raw_text[ov_start..ov_end]);
-        } else if ov_start == 0 && (ov_end - ov_start) == seg.accepted_text.len() {
-            // Fully covered suggestion: emit raw markup
-            result.push_str(&seg.raw_text);
+        } else if emitted_suggestions.contains(&si) {
+            // Already emitted this suggestion's raw markup from a previous
+            // equal region — skip to avoid double-emit.
         } else {
-            // Partial suggestion in equal region (shouldn't happen after merging)
-            result.push_str(&seg.accepted_text[ov_start..ov_end]);
+            // Untouched suggestion: emit full raw markup on first encounter.
+            // Multiple word-level equal regions may cover parts of this
+            // suggestion; we emit it once and skip subsequent overlaps.
+            result.push_str(&seg.raw_text);
+            emitted_suggestions.insert(si);
         }
     }
 
@@ -1616,6 +1626,49 @@ mod tests {
         assert_eq!(
             clean,
             "The {--quick brown fox--}{++speedy red dog++} jumps."
+        );
+    }
+
+    // --- Bug regression: append to end of suggestion loses wrapping ---
+
+    #[test]
+    fn b33_append_to_end_of_suggestion_preserves_wrapping() {
+        // Bug: when entire doc is a suggestion and you edit the end to append content,
+        // the original suggestion content gets "promoted" to plain text (loses wrapping)
+        // and only the new appended text gets wrapped.
+        let raw = "{++{\"author\":\"AI\",\"timestamp\":1700000000000}@@# Test File\n\nSome content.\n\nCreated: 2026-03-16++}";
+        let edit = merge_edit(
+            raw,
+            "Created: 2026-03-16",
+            "Created: 2026-03-16\n\n## More Testing\n\nAppended content here.",
+            "AI",
+            1700000060000,
+        )
+        .unwrap();
+        let result = apply_merge(raw, &edit);
+        let spans = parse(&result);
+
+        // Accepted view should show all content
+        assert_eq!(
+            accepted_view(&spans),
+            "# Test File\n\nSome content.\n\nCreated: 2026-03-16\n\n## More Testing\n\nAppended content here."
+        );
+
+        // Base view: the ORIGINAL base was empty (standalone insertion).
+        // The unchanged prefix "# Test File\n\nSome content.\n\n" is still inside
+        // the original suggestion, so base for that part is "" (empty).
+        // The "Created: 2026-03-16" part was edited — its base is also "" (from the
+        // original insertion's deleted side). The new appended text has no base.
+        // So base_view should be empty string (everything is insertions).
+        assert_eq!(base_view(&spans), "");
+
+        // The original content that wasn't edited should still be inside a suggestion,
+        // NOT promoted to plain text.
+        let plain_count = spans.iter().filter(|s| matches!(s, Span::Plain(_))).count();
+        assert_eq!(
+            plain_count, 0,
+            "No plain text should exist — everything should be in suggestions. Got: {:?}",
+            spans
         );
     }
 
