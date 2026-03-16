@@ -157,7 +157,18 @@ pub async fn execute(
         );
     }
 
-    // 8. Return success
+    // 8. Explicit persist for immediate durability
+    {
+        let doc_ref = server
+            .docs()
+            .get(&doc_info.doc_id)
+            .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
+        if let Err(e) = doc_ref.sync_kv().persist().await {
+            tracing::error!("Failed to persist edit for {}: {:?}", doc_info.doc_id, e);
+        }
+    }
+
+    // 9. Return success
     Ok(format!(
         "Edited {}: replaced {} characters with CriticMarkup suggestion for human review.",
         file_path,
