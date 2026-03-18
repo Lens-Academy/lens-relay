@@ -70,6 +70,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     setAddCommentTrigger(v => v + 1);
   }, [manager.expand]);
 
+  // Open comment margin when a comment badge is clicked
+  useEffect(() => {
+    if (!editorView) return;
+    const handler = () => manager.expand('comment-margin');
+    editorView.dom.addEventListener('comment-badge-focus', handler);
+    return () => editorView.dom.removeEventListener('comment-badge-focus', handler);
+  }, [editorView, manager.expand]);
+
   // Auto-collapse comment margin on notes without comments (after initial Y.Doc sync)
   const initialCommentCheckRef = useRef(false);
   useEffect(() => {

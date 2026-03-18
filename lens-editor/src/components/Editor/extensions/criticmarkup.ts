@@ -320,7 +320,11 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           const currentFocused = view.state.field(focusedThreadField);
           const threadFrom = parseInt(target.dataset.threadFrom ?? '', 10);
           if (!isNaN(threadFrom)) {
-            view.dispatch({ effects: focusCommentThread.of(currentFocused === threadFrom ? null : threadFrom) });
+            const focusing = currentFocused !== threadFrom;
+            view.dispatch({ effects: focusCommentThread.of(focusing ? threadFrom : null) });
+            if (focusing) {
+              view.dom.dispatchEvent(new CustomEvent('comment-badge-focus'));
+            }
           }
         }
       });
