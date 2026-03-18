@@ -385,10 +385,12 @@ pub(crate) fn search_handle_content_update(
 
     // Read Y.Text("contents") body
     let body = {
-        let Some(doc_ref) = docs.get(doc_id) else {
-            return;
-        };
-        let awareness = doc_ref.awareness();
+        let awareness = {
+            let Some(doc_ref) = docs.get(doc_id) else {
+                return;
+            };
+            doc_ref.awareness() // Arc clone
+        }; // DashMap shard lock released
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         match txn.get_text("contents") {
@@ -414,10 +416,12 @@ fn search_find_title_and_folder(
     let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
 
     for folder_doc_id in &folder_doc_ids {
-        let Some(doc_ref) = docs.get(folder_doc_id) else {
-            continue;
-        };
-        let awareness = doc_ref.awareness();
+        let awareness = {
+            let Some(doc_ref) = docs.get(folder_doc_id) else {
+                continue;
+            };
+            doc_ref.awareness() // Arc clone
+        }; // DashMap shard lock released
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         let Some(filemeta) = txn.get_map("filemeta_v0") else {
@@ -462,10 +466,12 @@ async fn search_handle_folder_update(
 ) {
     // Build current uuid -> title map from filemeta
     let current_map: std::collections::HashMap<String, String> = {
-        let Some(doc_ref) = docs.get(folder_doc_id) else {
-            return;
-        };
-        let awareness = doc_ref.awareness();
+        let awareness = {
+            let Some(doc_ref) = docs.get(folder_doc_id) else {
+                return;
+            };
+            doc_ref.awareness() // Arc clone
+        }; // DashMap shard lock released
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         let Some(filemeta) = txn.get_map("filemeta_v0") else {
@@ -837,10 +843,12 @@ impl Server {
         let mut available_folders: Vec<String> = Vec::new();
 
         for folder_doc_id in &folder_doc_ids {
-            let Some(doc_ref) = docs.get(folder_doc_id) else {
-                continue;
-            };
-            let awareness = doc_ref.awareness();
+            let awareness = {
+                let Some(doc_ref) = docs.get(folder_doc_id) else {
+                    continue;
+                };
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
             if name == folder_name {
@@ -859,12 +867,14 @@ impl Server {
 
         // 2. Check path doesn't already exist in filemeta_v0
         {
-            let Some(doc_ref) = docs.get(&folder_doc_id) else {
-                return Err(CreateDocumentError::Internal(
-                    "Folder doc not loaded".into(),
-                ));
-            };
-            let awareness = doc_ref.awareness();
+            let awareness = {
+                let Some(doc_ref) = docs.get(&folder_doc_id) else {
+                    return Err(CreateDocumentError::Internal(
+                        "Folder doc not loaded".into(),
+                    ));
+                };
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
             if let Some(filemeta) = txn.get_map("filemeta_v0") {
@@ -896,10 +906,12 @@ impl Server {
 
         // 5. Write initial CriticMarkup-wrapped content to content doc
         {
-            let doc_ref = docs.get(&full_doc_id).ok_or_else(|| {
-                CreateDocumentError::Internal("Content doc not loaded after creation".into())
-            })?;
-            let awareness = doc_ref.awareness();
+            let awareness = {
+                let doc_ref = docs.get(&full_doc_id).ok_or_else(|| {
+                    CreateDocumentError::Internal("Content doc not loaded after creation".into())
+                })?;
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
             let mut txn = guard.doc.transact_mut();
             let text = txn.get_or_insert_text("contents");
@@ -916,10 +928,12 @@ impl Server {
 
         // 6. Write folder metadata (filemeta_v0 + legacy docs map)
         {
-            let doc_ref = docs
-                .get(&folder_doc_id)
-                .ok_or_else(|| CreateDocumentError::Internal("Folder doc not loaded".into()))?;
-            let awareness = doc_ref.awareness();
+            let awareness = {
+                let doc_ref = docs.get(&folder_doc_id).ok_or_else(|| {
+                    CreateDocumentError::Internal("Folder doc not loaded".into())
+                })?;
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
             let mut txn = guard.doc.transact_mut_with("mcp");
 
@@ -969,13 +983,16 @@ impl Server {
 
         // 8. Explicit persist for immediate durability (content + folder docs)
         {
-            if let Some(doc_ref) = docs.get(&full_doc_id) {
-                if let Err(e) = doc_ref.sync_kv().persist().await {
+            let content_sync_kv = docs.get(&full_doc_id).map(|r| r.sync_kv());
+            let folder_sync_kv = docs.get(&folder_doc_id).map(|r| r.sync_kv());
+            // DashMap shard locks released; safe to .await
+            if let Some(sync_kv) = content_sync_kv {
+                if let Err(e) = sync_kv.persist().await {
                     tracing::error!("Failed to persist content doc {}: {:?}", full_doc_id, e);
                 }
             }
-            if let Some(doc_ref) = docs.get(&folder_doc_id) {
-                if let Err(e) = doc_ref.sync_kv().persist().await {
+            if let Some(sync_kv) = folder_sync_kv {
+                if let Err(e) = sync_kv.persist().await {
                     tracing::error!("Failed to persist folder doc {}: {:?}", folder_doc_id, e);
                 }
             }
@@ -1044,10 +1061,12 @@ impl Server {
             let mut folder_names: Vec<(String, String)> = Vec::new();
 
             for folder_doc_id in &folder_doc_ids {
-                let Some(doc_ref) = docs.get(folder_doc_id) else {
-                    continue;
-                };
-                let awareness = doc_ref.awareness();
+                let awareness = {
+                    let Some(doc_ref) = docs.get(folder_doc_id) else {
+                        continue;
+                    };
+                    doc_ref.awareness() // Arc clone
+                }; // DashMap shard lock released
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let folder_name =
                     y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
@@ -1093,12 +1112,14 @@ impl Server {
 
             // 4. Check if new_path already exists in target folder doc
             {
-                let Some(doc_ref) = docs.get(&target_folder_doc_id) else {
-                    return Err(MoveDocumentError::Internal(
-                        "Target folder doc not loaded".into(),
-                    ));
-                };
-                let awareness = doc_ref.awareness();
+                let awareness = {
+                    let Some(doc_ref) = docs.get(&target_folder_doc_id) else {
+                        return Err(MoveDocumentError::Internal(
+                            "Target folder doc not loaded".into(),
+                        ));
+                    };
+                    doc_ref.awareness() // Arc clone
+                }; // DashMap shard lock released
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let txn = guard.doc.transact();
                 if let Some(filemeta) = txn.get_map("filemeta_v0") {
@@ -1114,10 +1135,12 @@ impl Server {
             // 5. Collect only the needed content UUIDs: backlinkers + the moved doc itself.
             let mut needed_uuids: Vec<String> = vec![uuid.to_string()];
             for folder_doc_id in &folder_doc_ids {
-                let Some(doc_ref) = docs.get(folder_doc_id) else {
-                    continue;
-                };
-                let awareness = doc_ref.awareness();
+                let awareness = {
+                    let Some(doc_ref) = docs.get(folder_doc_id) else {
+                        continue;
+                    };
+                    doc_ref.awareness() // Arc clone
+                }; // DashMap shard lock released
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let txn = guard.doc.transact();
 
@@ -1167,16 +1190,40 @@ impl Server {
             }
         }
 
-        // Sync block 2: Acquire write locks and perform the move.
-        let (result, folder_sync_kvs, content_sync_kvs) = {
+        // Sync block 2: Clone Arcs out of DashMap, then acquire write locks.
+        // Phase 1: Extract awareness Arcs and sync_kv Arcs from DashMap refs.
+        let (folder_awareness, folder_sync_kvs, content_doc_ids, content_awareness, content_sync_kvs) = {
             let docs = &self.docs;
+
+            let (folder_awareness, folder_sync_kvs): (Vec<_>, Vec<_>) = folder_doc_ids
+                .iter()
+                .filter_map(|id| {
+                    let doc_ref = docs.get(id)?;
+                    Some((doc_ref.awareness(), doc_ref.sync_kv()))
+                })
+                .unzip();
+
+            let mut content_doc_ids: Vec<String> =
+                needed_uuids.iter().map(|u| to_content_id(u)).collect();
+            // Sort to ensure consistent lock ordering across concurrent calls,
+            // preventing ABBA deadlocks when acquiring awareness write locks.
+            content_doc_ids.sort();
+
+            let (content_awareness, content_sync_kvs): (Vec<_>, Vec<_>) = content_doc_ids
+                .iter()
+                .filter_map(|id| {
+                    let doc_ref = docs.get(id)?;
+                    Some((doc_ref.awareness(), doc_ref.sync_kv()))
+                })
+                .unzip();
+
+            (folder_awareness, folder_sync_kvs, content_doc_ids, content_awareness, content_sync_kvs)
+        }; // All DashMap shard locks released
+
+        // Phase 2: Acquire awareness write locks (no DashMap guards held).
+        let result = {
             let doc_resolver = self.doc_resolver.clone();
 
-            let folder_refs: Vec<_> = folder_doc_ids
-                .iter()
-                .filter_map(|id| docs.get(id))
-                .collect();
-            let folder_awareness: Vec<_> = folder_refs.iter().map(|r| r.awareness()).collect();
             let folder_guards: Vec<_> = folder_awareness
                 .iter()
                 .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
@@ -1204,16 +1251,6 @@ impl Server {
                     MoveDocumentError::Internal("Target folder doc not in folder list".into())
                 })?;
 
-            let mut content_doc_ids: Vec<String> =
-                needed_uuids.iter().map(|u| to_content_id(u)).collect();
-            // Sort to ensure consistent lock ordering across concurrent calls,
-            // preventing ABBA deadlocks when acquiring awareness write locks.
-            content_doc_ids.sort();
-            let content_refs: Vec<_> = content_doc_ids
-                .iter()
-                .filter_map(|id| docs.get(id))
-                .collect();
-            let content_awareness: Vec<_> = content_refs.iter().map(|r| r.awareness()).collect();
             let content_guards: Vec<_> = content_awareness
                 .iter()
                 .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
@@ -1222,13 +1259,13 @@ impl Server {
             let mut content_docs: std::collections::HashMap<String, &yrs::Doc> =
                 std::collections::HashMap::new();
             for (i, guard) in content_guards.iter().enumerate() {
-                let doc_id = content_refs[i].key();
+                let doc_id = &content_doc_ids[i];
                 if let Some((_r, u)) = link_indexer::parse_doc_id(doc_id) {
                     content_docs.insert(u.to_string(), &guard.doc);
                 }
             }
 
-            let result = link_indexer::move_document(
+            link_indexer::move_document(
                 uuid,
                 new_path,
                 folder_doc_refs[source_idx],
@@ -1238,14 +1275,8 @@ impl Server {
                 &doc_resolver,
                 &content_docs,
             )
-            .map_err(|e| MoveDocumentError::Internal(e.to_string()))?;
-
-            // Collect sync_kv arcs before guards are dropped at end of block
-            let folder_sync_kvs: Vec<_> = folder_refs.iter().map(|r| r.sync_kv()).collect();
-            let content_sync_kvs: Vec<_> = content_refs.iter().map(|r| r.sync_kv()).collect();
-
-            (result, folder_sync_kvs, content_sync_kvs)
-        }; // All DashMap refs, awareness guards, and write guards dropped here
+            .map_err(|e| MoveDocumentError::Internal(e.to_string()))?
+        }; // All awareness write guards dropped here
 
         // Persist all mutated folder docs and content docs
         for sync_kv in &folder_sync_kvs {
@@ -1727,13 +1758,15 @@ impl Server {
                 continue;
             };
 
-            let Some(doc_ref) = self.docs.get(folder_doc_id) else {
-                continue;
-            };
+            let (awareness, sync_kv) = {
+                let Some(doc_ref) = self.docs.get(folder_doc_id) else {
+                    continue;
+                };
+                (doc_ref.awareness(), doc_ref.sync_kv()) // Arc clones
+            }; // DashMap shard lock released
 
             // Read current name and compare
             let needs_update = {
-                let awareness = doc_ref.awareness();
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let current_name =
                     y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
@@ -1750,7 +1783,6 @@ impl Server {
 
             // Write the folder name
             {
-                let awareness = doc_ref.awareness();
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let mut txn = guard.doc.transact_mut();
                 let config_map = txn.get_or_insert_map("folder_config");
@@ -1762,7 +1794,7 @@ impl Server {
             }
 
             // Persist to storage
-            doc_ref.sync_kv().persist().await.map_err(|e| {
+            sync_kv.persist().await.map_err(|e| {
                 anyhow!(
                     "Failed to persist folder name for '{}': {:?}",
                     folder_config.name,
@@ -1829,10 +1861,12 @@ impl Server {
                 std::collections::HashMap::new();
 
             for folder_doc_id in &folder_doc_ids {
-                let Some(doc_ref) = self.docs.get(folder_doc_id) else {
-                    continue;
-                };
-                let awareness = doc_ref.awareness();
+                let awareness = {
+                    let Some(doc_ref) = self.docs.get(folder_doc_id) else {
+                        continue;
+                    };
+                    doc_ref.awareness() // Arc clone
+                }; // DashMap shard lock released
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let folder_name =
                     y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
@@ -1867,19 +1901,27 @@ impl Server {
             // For each UUID in the metadata map, find the content doc and index it
             for (uuid, (title, folder_name)) in &uuid_metadata {
                 // Try to find the content doc — it might be under any relay_id prefix
-                // Search through all loaded docs for one ending with this UUID
-                let mut body = String::new();
-                for entry in self.docs.iter() {
-                    if let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(entry.key()) {
-                        if doc_uuid == uuid {
-                            let awareness = entry.value().awareness();
-                            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                            let txn = guard.doc.transact();
-                            if let Some(text) = txn.get_text("contents") {
-                                body = text.get_string(&txn);
+                // Search through all loaded docs for one ending with this UUID.
+                // Clone the awareness Arc out of the DashMap iter to avoid holding
+                // shard locks across the awareness read lock.
+                let awareness = {
+                    let mut found = None;
+                    for entry in self.docs.iter() {
+                        if let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(entry.key()) {
+                            if doc_uuid == uuid {
+                                found = Some(entry.value().awareness());
+                                break;
                             }
-                            break;
                         }
+                    }
+                    found
+                }; // DashMap iter / shard locks released
+                let mut body = String::new();
+                if let Some(awareness) = awareness {
+                    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+                    let txn = guard.doc.transact();
+                    if let Some(text) = txn.get_text("contents") {
+                        body = text.get_string(&txn);
                     }
                 }
 
@@ -2859,10 +2901,12 @@ async fn handle_suggestions(
             continue;
         }
         let content = {
-            let Some(doc_ref) = server_state.docs.get(&doc_id) else {
-                continue;
-            };
-            let awareness = doc_ref.awareness();
+            let awareness = {
+                let Some(doc_ref) = server_state.docs.get(&doc_id) else {
+                    continue;
+                };
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
             match txn.get_text("contents") {

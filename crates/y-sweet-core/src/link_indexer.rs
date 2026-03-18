@@ -436,13 +436,16 @@ pub fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String
     let mut result: Vec<String> = keys
         .into_iter()
         .filter(|key| {
-            if let Some(doc_ref) = docs.get(key) {
-                let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                let txn = guard.doc.transact();
-                if let Some(filemeta) = txn.get_map("filemeta_v0") {
-                    return filemeta.len(&txn) > 0;
-                }
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let awareness = match docs.get(key) {
+                Some(doc_ref) => doc_ref.awareness(),
+                None => return false,
+            };
+            // Shard lock released; safe to acquire awareness lock.
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                return filemeta.len(&txn) > 0;
             }
             false
         })
@@ -454,8 +457,9 @@ pub fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String
 /// Check if a doc is a folder doc (has non-empty filemeta_v0).
 /// Returns the list of content doc UUIDs listed in filemeta_v0, or None.
 pub fn is_folder_doc(doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) -> Option<Vec<String>> {
-    let doc_ref = docs.get(doc_id)?;
-    let awareness = doc_ref.awareness();
+    // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+    let awareness = docs.get(doc_id)?.awareness();
+    // Shard lock released; safe to acquire awareness lock.
     let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
     let txn = guard.doc.transact();
     let filemeta = txn.get_map("filemeta_v0")?;
@@ -1268,10 +1272,14 @@ impl LinkIndexer {
     ) -> bool {
         // 1. Get the folder doc, detect renames, read folder name
         let (renames, folder_name) = {
-            let Some(doc_ref) = docs.get(folder_doc_id) else {
-                return false;
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let awareness = {
+                let Some(doc_ref) = docs.get(folder_doc_id) else {
+                    return false;
+                };
+                doc_ref.awareness()
             };
-            let awareness = doc_ref.awareness();
+            // Shard lock released; safe to acquire awareness lock.
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let renames = self.detect_renames(folder_doc_id, &guard.doc);
             let folder_name = read_folder_name(&guard.doc, "");
@@ -1298,12 +1306,15 @@ impl LinkIndexer {
         let folder_doc_ids = find_all_folder_docs(docs);
         let mut entries: Vec<VirtualEntry> = Vec::new();
         for (fi, fid) in folder_doc_ids.iter().enumerate() {
-            if let Some(doc_ref) = docs.get(fid) {
-                let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                let (_name, folder_entries) = snapshot_folder_entries(&guard.doc, fid, fi);
-                entries.extend(folder_entries);
-            }
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let awareness = match docs.get(fid) {
+                Some(doc_ref) => doc_ref.awareness(),
+                None => continue,
+            };
+            // Shard lock released; safe to acquire awareness lock.
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let (_name, folder_entries) = snapshot_folder_entries(&guard.doc, fid, fi);
+            entries.extend(folder_entries);
         }
 
         // 3. Patch virtual entries to reflect pre-rename state.
@@ -1324,10 +1335,14 @@ impl LinkIndexer {
             let old_virtual_path = format!("/{}{}", folder_name, rename.old_path);
 
             let source_uuids = {
-                let Some(doc_ref) = docs.get(folder_doc_id) else {
-                    continue;
+                // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+                let awareness = {
+                    let Some(doc_ref) = docs.get(folder_doc_id) else {
+                        continue;
+                    };
+                    doc_ref.awareness()
                 };
-                let awareness = doc_ref.awareness();
+                // Shard lock released; safe to acquire awareness lock.
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let txn = guard.doc.transact();
                 if let Some(backlinks) = txn.get_map("backlinks_v0") {
@@ -1357,20 +1372,24 @@ impl LinkIndexer {
             // 5. Update wikilinks in each source doc with resolution context
             for source_uuid in &source_uuids {
                 let content_doc_id = format!("{}-{}", relay_id, source_uuid);
-                let Some(content_ref) = docs.get(&content_doc_id) else {
-                    tracing::warn!(
-                        "Backlinker doc {} not loaded, skipping rename update",
-                        content_doc_id
-                    );
-                    continue;
+                // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+                let awareness = {
+                    let Some(content_ref) = docs.get(&content_doc_id) else {
+                        tracing::warn!(
+                            "Backlinker doc {} not loaded, skipping rename update",
+                            content_doc_id
+                        );
+                        continue;
+                    };
+                    content_ref.awareness()
                 };
+                // Shard lock released; safe to acquire awareness write lock.
 
                 let source_virtual_path = entries
                     .iter()
                     .find(|e| e.id == *source_uuid)
                     .map(|e| e.virtual_path.clone());
 
-                let awareness = content_ref.awareness();
                 let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
                 match update_wikilinks_in_doc_resolved(
                     &guard.doc,
@@ -1520,11 +1539,13 @@ impl LinkIndexer {
         }
 
         // Phase 1: Extract content text under a short-lived read lock.
+        // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
         let markdown = {
-            let content_ref = docs
+            let awareness = docs
                 .get(doc_id)
-                .ok_or_else(|| anyhow::anyhow!("Content doc not found: {}", doc_id))?;
-            let awareness = content_ref.awareness();
+                .ok_or_else(|| anyhow::anyhow!("Content doc not found: {}", doc_id))?
+                .awareness();
+            // Shard lock released; safe to acquire awareness lock.
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
             if let Some(contents) = txn.get_text("contents") {
@@ -1532,7 +1553,7 @@ impl LinkIndexer {
             } else {
                 return Ok(()); // No content, nothing to index
             }
-        }; // content read lock + DashMap guard dropped here
+        };
 
         let link_names = extract_wikilinks(&markdown);
         tracing::info!(
@@ -1544,20 +1565,18 @@ impl LinkIndexer {
 
         // Phase 2: Snapshot folder metadata (read locks, one at a time).
         // Each lock is held only long enough to read filemeta + folder name.
-        // Lock ordering: DashMap shard read -> awareness read/write. This matches
-        // the existing code so no new deadlock risk is introduced.
-        // DashMap guard is dropped before the next iteration.
+        // DashMap shard lock is released before acquiring awareness lock.
         let mut entries: Vec<VirtualEntry> = Vec::new();
         for (fi, fid) in folder_doc_ids.iter().enumerate() {
-            let doc_ref = match docs.get(fid) {
-                Some(r) => r,
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let awareness = match docs.get(fid) {
+                Some(r) => r.awareness(),
                 None => continue,
             };
-            let awareness = doc_ref.awareness();
+            // Shard lock released; safe to acquire awareness lock.
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let (_name, folder_entries) = snapshot_folder_entries(&guard.doc, fid, fi);
             entries.extend(folder_entries);
-            // guard dropped here — read lock released before next folder
         }
 
         // Phase 3: Resolve links (pure computation, no locks).
@@ -1577,14 +1596,14 @@ impl LinkIndexer {
         // snapshots stale. This is tolerable because the debounce/re-queue pipeline
         // self-corrects: any concurrent folder change triggers a new indexing pass.
         for (fi, fid) in folder_doc_ids.iter().enumerate() {
-            let doc_ref = match docs.get(fid) {
-                Some(r) => r,
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let awareness = match docs.get(fid) {
+                Some(r) => r.awareness(),
                 None => continue,
             };
-            let awareness = doc_ref.awareness();
+            // Shard lock released; safe to acquire awareness write lock.
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
             apply_backlink_diff(&guard.doc, doc_uuid, &targets_per_folder[fi]);
-            // guard dropped here — write lock released before next folder
         }
 
         Ok(())
@@ -1625,11 +1644,14 @@ impl LinkIndexer {
         // This prevents false renames on the first folder doc update after startup
         // (without a cached snapshot, detect_renames would have no baseline to diff against).
         for folder_doc_id in &folder_doc_ids {
-            if let Some(doc_ref) = docs.get(folder_doc_id) {
-                let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                self.detect_renames(folder_doc_id, &guard.doc);
-            }
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let awareness = match docs.get(folder_doc_id) {
+                Some(doc_ref) => doc_ref.awareness(),
+                None => continue,
+            };
+            // Shard lock released; safe to acquire awareness lock.
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            self.detect_renames(folder_doc_id, &guard.doc);
         }
         tracing::info!(
             "Seeded filemeta cache for {} folder docs",

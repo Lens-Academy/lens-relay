@@ -421,3 +421,168 @@ async fn combined_stress_test_multiple_code_paths() {
     task_c.await.expect("task_c panicked");
     done.store(true, Ordering::SeqCst);
 }
+
+// ============================================================================
+// Test 6: GC docs.remove() stalled by index_document() holding DashMap guard
+// across awareness.write()
+//
+// Production failure 2026-03-17: relay server hung for 12+ hours.
+// Last log: "GCing doc" (docs.remove()) — "Exiting gc_loop" never printed.
+//
+// Root cause: index_document() Phase 4 holds a DashMap shard READ lock
+// (via docs.get(folder_doc)) while calling awareness.write() on that folder.
+// docs.remove() needs a shard WRITE lock and blocks until ALL readers on
+// that shard release. With awareness.write() contended (writer starvation
+// under continuous readers on std::sync::RwLock), the shard lock is held
+// for an unbounded duration, blocking GC indefinitely.
+//
+// Note: DashMap uses a READER-PREFERRING RwLock (parking_lot_core), so
+// new shard readers can still get in. The stall comes from awareness's
+// std::sync::RwLock writer starvation: if readers continuously acquire
+// awareness.read(), the indexer's awareness.write() never completes,
+// and the DashMap shard read lock stays held the entire time.
+//
+// The fix: clone awareness Arc out of docs.get() and drop the DashMap guard
+// BEFORE calling awareness.write(). This decouples shard locking from
+// awareness locking, so GC's docs.remove() is never blocked by awareness
+// contention.
+//
+// This test forces the exact stall: reader holds awareness.read() for a
+// controlled duration while the indexer holds docs.get() across
+// awareness.write(). GC's docs.remove() is measured — it should complete
+// quickly regardless of awareness contention, but with the buggy pattern
+// it's blocked for the entire awareness contention window.
+// ============================================================================
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gc_remove_not_blocked_by_index_document_holding_dashmap_guard() {
+    use std::sync::{Condvar, Mutex};
+
+    let done = Arc::new(AtomicBool::new(false));
+    watchdog(
+        done.clone(),
+        "gc_remove_not_blocked_by_index_document_holding_dashmap_guard",
+    );
+
+    let docs: Arc<DashMap<String, DocWithSyncKv>> = Arc::new(DashMap::new());
+    let folder_id = "folder-doc-0".to_string();
+    docs.insert(folder_id.clone(), create_folder_doc(&folder_id).await);
+
+    let state = Arc::new((Mutex::new(0u32), Condvar::new()));
+
+    let docs_indexer = Arc::clone(&docs);
+    let docs_reader = Arc::clone(&docs);
+    let docs_gc = Arc::clone(&docs);
+    let fid_i = folder_id.clone();
+    let fid_r = folder_id.clone();
+    let fid_g = folder_id.clone();
+    let state_i = Arc::clone(&state);
+    let state_r = Arc::clone(&state);
+    let state_g = Arc::clone(&state);
+
+    // Awareness contention duration: how long the reader holds awareness.read()
+    // while the indexer is blocked on awareness.write() with the shard lock held.
+    // In production this can be minutes under continuous contention.
+    let contention_ms: u64 = 50;
+
+    // T1 (reader): hold awareness.read() for `contention_ms` to starve the writer.
+    let reader = std::thread::spawn(move || {
+        let awareness_arc = {
+            let doc_ref = docs_reader.get(&fid_r).expect("folder doc missing");
+            doc_ref.value().awareness()
+            // DashMap Ref dropped here — shard lock released
+        };
+        let _guard = awareness_arc.read().unwrap();
+
+        // Signal state=1: awareness.read() is held
+        {
+            let (lock, cvar) = &*state_r;
+            *lock.lock().unwrap() = 1;
+            cvar.notify_all();
+        }
+
+        // Hold awareness.read() for the contention window.
+        // This simulates continuous readers starving the writer.
+        std::thread::sleep(Duration::from_millis(contention_ms));
+        drop(_guard);
+    });
+
+    // T2 (indexer): the BUGGY pattern — docs.get() held across awareness.write()
+    let indexer = std::thread::spawn(move || {
+        // Wait for reader to hold awareness.read()
+        {
+            let (lock, cvar) = &*state_i;
+            let mut s = lock.lock().unwrap();
+            while *s < 1 {
+                s = cvar.wait(s).unwrap();
+            }
+        }
+
+        // *** FIXED PATTERN (link_indexer.rs:1580-1587): ***
+        // Clone awareness Arc, release shard lock, THEN acquire awareness.write()
+        let awareness = match docs_indexer.get(&fid_i) {
+            Some(doc_ref) => doc_ref.awareness(),
+            None => return,
+        };
+        // DashMap shard lock released here (doc_ref dropped)
+
+        // Signal state=2: we've accessed the DashMap (shard lock now released)
+        {
+            let (lock, cvar) = &*state_i;
+            *lock.lock().unwrap() = 2;
+            cvar.notify_all();
+        }
+
+        // awareness.write() blocks until reader releases awareness.read(),
+        // but the DashMap shard lock is NOT held during this wait.
+        let _guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+        drop(_guard);
+    });
+
+    // T3 (GC): measure how long docs.remove() takes.
+    // With buggy code: blocked for ~contention_ms (shard lock held by indexer)
+    // With fix: completes quickly (shard lock not held during awareness wait)
+    let gc = std::thread::spawn(move || {
+        // Wait for indexer to hold shard lock
+        {
+            let (lock, cvar) = &*state_g;
+            let mut s = lock.lock().unwrap();
+            while *s < 2 {
+                s = cvar.wait(s).unwrap();
+            }
+        }
+        // Small delay to ensure indexer is blocked on awareness.write()
+        std::thread::sleep(Duration::from_millis(2));
+
+        let start = std::time::Instant::now();
+        if let Some((k, v)) = docs_gc.remove(&fid_g) {
+            docs_gc.insert(k, v);
+        }
+        let gc_duration = start.elapsed();
+
+        gc_duration
+    });
+
+    reader.join().expect("reader panicked");
+    indexer.join().expect("indexer panicked");
+    let gc_duration = gc.join().expect("gc panicked");
+
+    // With the buggy pattern: GC is blocked for ~contention_ms because the
+    // indexer holds the shard lock while waiting for awareness.write().
+    // With the fix: GC completes in microseconds because the shard lock
+    // is released before awareness.write().
+    //
+    // Threshold: GC should complete in <10ms. If it takes >20ms, the
+    // indexer is holding the shard lock across the awareness wait.
+    let threshold_ms = 20;
+    assert!(
+        gc_duration.as_millis() < threshold_ms,
+        "GC docs.remove() took {:?} — expected <{}ms. \
+         The indexer is holding a DashMap shard lock across awareness.write(), \
+         blocking GC for the entire awareness contention window ({contention_ms}ms). \
+         Fix: clone awareness Arc out of docs.get() before calling awareness.write().",
+        gc_duration,
+        threshold_ms,
+    );
+
+    done.store(true, Ordering::SeqCst);
+}
