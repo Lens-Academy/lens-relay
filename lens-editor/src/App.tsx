@@ -91,7 +91,16 @@ function TokenExpired() {
         <div className="text-5xl mb-4">⏱️</div>
         <h1 className="text-2xl font-semibold text-gray-800 mb-2">Link Expired</h1>
         <p className="text-gray-500">
-          Your share link has expired. Please ask an admin for a new access link.
+          Your share link has expired. Check{' '}
+          <a
+            href="https://discord.com/channels/1440725236843806762/1464359318865448970"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-800 underline"
+          >
+            #lens-internal
+          </a>{' '}
+          for a current editing link.
         </p>
       </div>
     </div>
@@ -105,7 +114,16 @@ function TokenInvalid() {
         <div className="text-5xl mb-4">🔑</div>
         <h1 className="text-2xl font-semibold text-gray-800 mb-2">Access Link Invalid</h1>
         <p className="text-gray-500">
-          Your access link is no longer valid. Please ask an admin for a new access link.
+          Your access link is no longer valid. Check{' '}
+          <a
+            href="https://discord.com/channels/1440725236843806762/1464359318865448970"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:text-blue-800 underline"
+          >
+            #lens-internal
+          </a>{' '}
+          for a current editing link.
         </p>
       </div>
     </div>
