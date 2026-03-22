@@ -161,7 +161,8 @@ Edu content CI workflow files live in that repo (`.github/workflows/validate.yml
 
 ## Known Issues
 
-- **WebSocket FD leak** in relay-server (sockets accumulate in CLOSE-WAIT). Workaround: `--ulimit nofile=65536:524288` extends time-to-restart to ~39 days.
+- **Production relay hangs** — the relay-server occasionally stops accepting inbound connections while background tasks (GC, saves, webhooks) continue running. Do NOT assume the cause is FD/socket exhaustion; CLOSE-WAIT accumulation is normal and the server handles thousands of leaked FDs fine. Diagnose before restarting: check logs for deadlock signs (no new log output from tokio workers), thread states, and accept queue depth. Past confirmed causes include lock ordering deadlocks (see `docs/plans/2026-03-08-debounce-deadlock-fix.md`).
+- **WebSocket FD leak** in relay-server (sockets accumulate in CLOSE-WAIT). This is cosmetically ugly but NOT the cause of hangs. Workaround: `--ulimit nofile=65536:524288` provides headroom.
 
 ## Version Control
 
