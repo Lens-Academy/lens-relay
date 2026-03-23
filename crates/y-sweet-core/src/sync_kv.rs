@@ -776,4 +776,83 @@ mod test {
         // Old metadata should be gone
         assert_eq!(updated_metadata.get("doc_type"), None);
     }
+
+    /// A store that fails on set() to test error handling in persist().
+    #[derive(Default, Clone)]
+    struct FailingStore {
+        data: Arc<DashMap<String, Vec<u8>>>,
+        fail_on_set: Arc<AtomicBool>,
+    }
+
+    #[cfg_attr(not(feature = "single-threaded"), async_trait)]
+    #[cfg_attr(feature = "single-threaded", async_trait(?Send))]
+    impl Store for FailingStore {
+        async fn init(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+            Ok(self.data.get(key).map(|v| v.clone()))
+        }
+
+        async fn set(&self, key: &str, value: Vec<u8>) -> Result<()> {
+            if self.fail_on_set.load(Ordering::Relaxed) {
+                return Err(crate::store::StoreError::ConnectionError(
+                    "simulated R2 failure".to_string(),
+                ));
+            }
+            self.data.insert(key.to_owned(), value);
+            Ok(())
+        }
+
+        async fn remove(&self, key: &str) -> Result<()> {
+            self.data.remove(key);
+            Ok(())
+        }
+
+        async fn exists(&self, key: &str) -> Result<bool> {
+            Ok(self.data.contains_key(key))
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_persist_keeps_dirty_flag() {
+        let store = FailingStore::default();
+        store.fail_on_set.store(true, Ordering::Relaxed);
+
+        let c = CallbackCounter::default();
+        let sync_kv =
+            SyncKv::new(Some(Arc::new(Box::new(store.clone()))), "fail_test", c.callback())
+                .await
+                .unwrap();
+
+        // Make a change — this sets dirty=true
+        sync_kv.set(b"key", b"value");
+        assert!(sync_kv.dirty.load(Ordering::Relaxed), "should be dirty after set");
+        assert_eq!(c.count(), 1, "should have fired dirty callback");
+
+        // Persist should fail because store is failing
+        let result = sync_kv.persist().await;
+        assert!(result.is_err(), "persist should fail with FailingStore");
+
+        // dirty flag must remain true so the save loop retries
+        assert!(
+            sync_kv.dirty.load(Ordering::Relaxed),
+            "dirty flag must stay true after failed persist"
+        );
+
+        // A subsequent set should NOT fire the dirty callback again
+        // (dirty is already true, so mark_dirty should be a no-op)
+        sync_kv.set(b"key2", b"value2");
+        assert_eq!(c.count(), 1, "dirty callback should not fire again while already dirty");
+
+        // Now let the store succeed and verify persist works
+        store.fail_on_set.store(false, Ordering::Relaxed);
+        let result = sync_kv.persist().await;
+        assert!(result.is_ok(), "persist should succeed now");
+        assert!(
+            !sync_kv.dirty.load(Ordering::Relaxed),
+            "dirty flag should be false after successful persist"
+        );
+    }
 }

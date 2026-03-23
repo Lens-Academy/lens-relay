@@ -23,7 +23,10 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     io::Write,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        Arc, RwLock,
+    },
     time::Duration,
 };
 use tempfile::NamedTempFile;
@@ -566,6 +569,10 @@ pub struct Server {
     doc_resolver: Arc<DocumentResolver>,
     pub(crate) mcp_sessions: Arc<crate::mcp::session::SessionManager>,
     pub(crate) mcp_api_key: Option<String>,
+    /// Timestamp (epoch ms) of the most recent dirty signal from any doc.
+    last_dirty_signal: Arc<AtomicU64>,
+    /// Timestamp (epoch ms) of the most recent successful persist of any doc.
+    last_successful_persist: Arc<AtomicU64>,
 }
 
 /// Holds channel receivers for background workers.
@@ -693,6 +700,8 @@ impl Server {
             doc_resolver,
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key,
+            last_dirty_signal: Arc::new(AtomicU64::new(0)),
+            last_successful_persist: Arc::new(AtomicU64::new(0)),
         };
 
         let receivers = WorkerReceivers {
@@ -796,7 +805,67 @@ impl Server {
             }
         }
 
+        // Spawn persistence watchdog
+        {
+            let last_dirty = self.last_dirty_signal.clone();
+            let last_persist = self.last_successful_persist.clone();
+            let cancel = self.cancellation_token.clone();
+            tokio::spawn(async move {
+                Self::persistence_watchdog(last_dirty, last_persist, cancel).await;
+            });
+        }
+
         tracing::info!("Background workers started (link indexer, search index)");
+    }
+
+    /// Monitors persistence liveness. If documents have been marked dirty but no
+    /// successful persist has occurred within 10 minutes, initiates graceful shutdown.
+    async fn persistence_watchdog(
+        last_dirty: Arc<AtomicU64>,
+        last_persist: Arc<AtomicU64>,
+        cancellation_token: CancellationToken,
+    ) {
+        // Grace period for startup — don't trigger while docs are still loading
+        tokio::time::sleep(Duration::from_secs(120)).await;
+
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(60)) => {},
+                _ = cancellation_token.cancelled() => {
+                    tracing::info!("Persistence watchdog shutting down");
+                    return;
+                }
+            }
+
+            let dirty_ts = last_dirty.load(AtomicOrdering::Relaxed);
+            let persist_ts = last_persist.load(AtomicOrdering::Relaxed);
+
+            // Only trigger if a dirty signal has occurred more recently than
+            // the last successful persist (meaning changes are pending)
+            if dirty_ts > persist_ts {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                let stale_ms = now_ms.saturating_sub(persist_ts);
+
+                if stale_ms > 10 * 60 * 1000 {
+                    tracing::error!(
+                        stale_secs = stale_ms / 1000,
+                        last_dirty_ms = dirty_ts,
+                        last_persist_ms = persist_ts,
+                        "Persistence stalled for {}s while docs are dirty — initiating shutdown",
+                        stale_ms / 1000
+                    );
+                    cancellation_token.cancel();
+
+                    // Hard timeout if graceful shutdown hangs
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    tracing::error!("Graceful shutdown timed out — forcing exit");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 
     /// Get the DocumentResolver for path-to-UUID resolution.
@@ -1600,11 +1669,29 @@ impl Server {
             }
         };
 
+        let last_dirty_for_callback = self.last_dirty_signal.clone();
         let dwskv = DocWithSyncKv::new(
             doc_id,
             self.store.clone(),
             move || {
-                let _ = send.try_send(());
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                last_dirty_for_callback.store(now_ms, AtomicOrdering::Relaxed);
+                if let Err(e) = send.try_send(()) {
+                    match e {
+                        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                            tracing::error!(
+                                "Dirty signal channel closed — persistence worker is dead"
+                            );
+                        }
+                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                            // Normal: signals coalesce when channel is full. The persistence
+                            // worker will pick up the dirty state on its next cycle.
+                        }
+                    }
+                }
             },
             event_callback,
         )
@@ -1628,6 +1715,7 @@ impl Server {
             let cancellation_token = self.cancellation_token.clone();
 
             // Spawn a task to save the document to the store when it changes.
+            let last_persist = self.last_successful_persist.clone();
             self.doc_worker_tracker.spawn(
                 Self::doc_persistence_worker(
                     recv,
@@ -1635,6 +1723,7 @@ impl Server {
                     checkpoint_freq,
                     doc_id.clone(),
                     cancellation_token.clone(),
+                    last_persist,
                 )
                 .instrument(span!(Level::INFO, "save_loop", doc_id=?doc_id)),
             );
@@ -1991,8 +2080,10 @@ impl Server {
         checkpoint_freq: Duration,
         doc_id: String,
         cancellation_token: CancellationToken,
+        last_successful_persist: Arc<AtomicU64>,
     ) {
         let mut last_save = std::time::Instant::now();
+        let mut consecutive_failures: u32 = 0;
 
         loop {
             let is_done = tokio::select! {
@@ -2029,8 +2120,25 @@ impl Server {
             }
             tracing::info!("Persisting.");
             if let Err(e) = sync_kv.persist().await {
-                tracing::error!(?e, "Error persisting.");
+                consecutive_failures += 1;
+                if consecutive_failures >= 10 {
+                    tracing::error!(?e, consecutive_failures, "Persist failing repeatedly for {}", doc_id);
+                } else {
+                    tracing::error!(?e, "Error persisting.");
+                }
             } else {
+                if consecutive_failures > 0 {
+                    tracing::info!(
+                        "Persist succeeded after {} consecutive failures",
+                        consecutive_failures
+                    );
+                }
+                consecutive_failures = 0;
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                last_successful_persist.store(now_ms, AtomicOrdering::Relaxed);
                 tracing::info!("Done persisting.");
             }
             last_save = std::time::Instant::now();

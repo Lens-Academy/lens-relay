@@ -101,6 +101,8 @@ SHARE_TOKEN_SECRET=$(ssh relay-prod 'grep SHARE_TOKEN_SECRET /root/lens-relay/.e
 
 ## Running lens-editor
 
+**Always start both the relay server and the Vite dev server together.** When asked to start one, start the other too.
+
 ```bash
 cd lens-editor && npm install && npm run dev:local
 ```

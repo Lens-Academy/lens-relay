@@ -143,7 +143,10 @@ impl S3Store {
 
         let bucket = Bucket::new(endpoint, path_style, config.bucket, config.region)
             .expect("Url has a valid scheme and host");
-        let client = Client::new();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("Failed to build HTTP client");
 
         S3Store {
             bucket,
