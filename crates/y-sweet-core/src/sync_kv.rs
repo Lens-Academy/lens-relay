@@ -175,15 +175,24 @@ impl SyncKv {
     }
 
     fn mark_dirty(&self) {
-        if !self.dirty.load(Ordering::Relaxed) {
-            self.dirty.store(true, Ordering::Relaxed);
-            (self.dirty_callback)();
-        }
+        self.dirty.store(true, Ordering::Relaxed);
+        // Always fire the callback, even if already dirty. The callback uses
+        // try_send() on a bounded channel which naturally coalesces redundant
+        // signals. Without this, updates arriving during the async persist
+        // window are silently lost: mark_dirty() would be a no-op (dirty is
+        // still true), then persist() clears the flag, and no future signal
+        // is ever sent for those updates.
+        (self.dirty_callback)();
     }
 
     pub async fn persist(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(store) = &self.store {
             let now = current_timestamp_ms();
+
+            // Clear dirty BEFORE serializing, so any update that arrives after
+            // this point will re-set it and fire the callback. This closes the
+            // race window where updates during the async write were lost.
+            self.dirty.store(false, Ordering::Relaxed);
 
             let snapshot = {
                 let data = self.data.lock().unwrap();
@@ -198,14 +207,24 @@ impl SyncKv {
                 };
 
                 let mut buffer = Vec::new();
-                ciborium::ser::into_writer(&y_data, &mut buffer)?;
+                if let Err(e) = ciborium::ser::into_writer(&y_data, &mut buffer) {
+                    self.dirty.store(true, Ordering::Relaxed);
+                    (self.dirty_callback)();
+                    return Err(e.into());
+                }
                 buffer
             };
 
             tracing::info!(size=?snapshot.len(), "Persisting CBOR snapshot");
-            store.set(&self.key, snapshot).await?;
+            if let Err(e) = store.set(&self.key, snapshot).await {
+                // Re-set dirty and fire callback so the persistence worker retries
+                self.dirty.store(true, Ordering::Relaxed);
+                (self.dirty_callback)();
+                return Err(e.into());
+            }
+        } else {
+            self.dirty.store(false, Ordering::Relaxed);
         }
-        self.dirty.store(false, Ordering::Relaxed);
         Ok(())
     }
 
@@ -424,8 +443,10 @@ mod test {
 
         sync_kv.set(b"abc", b"def");
 
-        // We should not receive a dirty callback.
-        assert_eq!(c.count(), 1);
+        // We should receive another dirty callback — the callback fires on
+        // every mutation to ensure updates during async persist windows are
+        // never lost. The channel coalesces redundant signals via try_send.
+        assert_eq!(c.count(), 2);
     }
 
     #[tokio::test]
@@ -847,14 +868,11 @@ mod test {
             "dirty flag must stay true after failed persist"
         );
 
-        // A subsequent set should NOT fire the dirty callback again
-        // (dirty is already true, so mark_dirty should be a no-op)
+        // A subsequent set fires the callback again (always fires to prevent
+        // lost-wakeup race condition). Count is 3: initial set + failed persist
+        // retry callback + this set.
         sync_kv.set(b"key2", b"value2");
-        assert_eq!(
-            c.count(),
-            1,
-            "dirty callback should not fire again while already dirty"
-        );
+        assert_eq!(c.count(), 3, "dirty callback should fire on every mutation");
 
         // Now let the store succeed and verify persist works
         store.fail_on_set.store(false, Ordering::Relaxed);
@@ -863,6 +881,125 @@ mod test {
         assert!(
             !sync_kv.dirty.load(Ordering::Relaxed),
             "dirty flag should be false after successful persist"
+        );
+    }
+
+    /// A store that can pause during set() to simulate slow R2 writes.
+    /// When `slow` is false, behaves like MemoryStore. When `slow` is true,
+    /// signals `write_started` and waits for `write_resume` before completing.
+    #[derive(Clone)]
+    struct SlowStore {
+        data: Arc<DashMap<String, Vec<u8>>>,
+        slow: Arc<AtomicBool>,
+        write_started: Arc<tokio::sync::Notify>,
+        write_resume: Arc<tokio::sync::Notify>,
+    }
+
+    impl SlowStore {
+        fn new() -> Self {
+            Self {
+                data: Arc::new(DashMap::new()),
+                slow: Arc::new(AtomicBool::new(false)),
+                write_started: Arc::new(tokio::sync::Notify::new()),
+                write_resume: Arc::new(tokio::sync::Notify::new()),
+            }
+        }
+    }
+
+    #[cfg_attr(not(feature = "single-threaded"), async_trait)]
+    #[cfg_attr(feature = "single-threaded", async_trait(?Send))]
+    impl Store for SlowStore {
+        async fn init(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+            Ok(self.data.get(key).map(|v| v.clone()))
+        }
+
+        async fn set(&self, key: &str, value: Vec<u8>) -> Result<()> {
+            if self.slow.load(Ordering::Relaxed) {
+                self.write_started.notify_one();
+                self.write_resume.notified().await;
+            }
+            self.data.insert(key.to_owned(), value);
+            Ok(())
+        }
+
+        async fn remove(&self, key: &str) -> Result<()> {
+            self.data.remove(key);
+            Ok(())
+        }
+
+        async fn exists(&self, key: &str) -> Result<bool> {
+            Ok(self.data.contains_key(key))
+        }
+    }
+
+    /// Demonstrates the lost-wakeup race condition:
+    /// If an update arrives while persist() is writing to the store (after
+    /// serializing the snapshot but before clearing the dirty flag), that
+    /// update is written to the in-memory BTreeMap but never persisted —
+    /// because mark_dirty() is a no-op when dirty is already true, and
+    /// persist() then clears the flag without knowing about the new data.
+    #[tokio::test]
+    async fn update_during_persist_is_not_lost() {
+        let store = SlowStore::new();
+
+        // Create SyncKv with fast store (no delays during construction)
+        let sync_kv = Arc::new(
+            SyncKv::new(Some(Arc::new(Box::new(store.clone()))), "race_test", || ())
+                .await
+                .unwrap(),
+        );
+
+        // Write initial data and persist cleanly
+        sync_kv.set(b"key1", b"initial");
+        sync_kv.persist().await.unwrap();
+
+        // Now enable slow mode for the race
+        store.slow.store(true, Ordering::Relaxed);
+
+        // Make a change
+        sync_kv.set(b"key1", b"value_v1");
+
+        // Start persist in background — it serializes the snapshot (capturing
+        // "value_v1"), then pauses inside store.set() waiting for write_resume
+        let sync_kv_for_persist = sync_kv.clone();
+        let persist_handle = tokio::spawn(async move {
+            sync_kv_for_persist.persist().await.unwrap();
+        });
+
+        // Wait for persist to reach store.set() (snapshot serialized, data lock released)
+        store.write_started.notified().await;
+
+        // While persist is in-flight, write a NEW value to the BTreeMap.
+        // The data lock is available (persist released it after serializing).
+        // mark_dirty() sees dirty=true and is a no-op — no callback fires.
+        sync_kv.set(b"key1", b"value_v2");
+
+        // Let persist finish — writes snapshot that was serialized before
+        // "value_v2" was written (so it contains "value_v1")
+        store.write_resume.notify_one();
+        persist_handle.await.unwrap();
+
+        // With the fix: dirty was re-set by mark_dirty() during the write,
+        // so the persistence worker would call persist() again. Simulate that:
+        if sync_kv.dirty.load(Ordering::Relaxed) {
+            store.slow.store(false, Ordering::Relaxed);
+            sync_kv.persist().await.unwrap();
+        }
+
+        // Simulate restart: reload from store
+        store.slow.store(false, Ordering::Relaxed);
+        let reloaded = SyncKv::new(Some(Arc::new(Box::new(store.clone()))), "race_test", || ())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            reloaded.get(b"key1"),
+            Some(b"value_v2".to_vec()),
+            "update written during persist window must survive a reload from store"
         );
     }
 }

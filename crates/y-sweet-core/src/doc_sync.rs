@@ -51,6 +51,15 @@ impl DocWithSyncKv {
             let webhook_callback = webhook_callback.clone();
             let doc_key = key.to_string();
             doc.observe_update_v1(move |txn, event| {
+                let origin = txn
+                    .origin()
+                    .map(|o| String::from_utf8_lossy(o.as_ref()).to_string());
+                tracing::debug!(
+                    doc = %doc_key,
+                    update_len = event.update.len(),
+                    origin = ?origin,
+                    "observe_update_v1 fired"
+                );
                 if let Err(e) = sync_kv.push_update(DOC_NAME, &event.update) {
                     tracing::error!("Failed to push update for {}: {:?}", doc_key, e);
                     return;
