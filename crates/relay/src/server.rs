@@ -998,9 +998,9 @@ impl Server {
         // 6. Write folder metadata (filemeta_v0 + legacy docs map)
         {
             let awareness = {
-                let doc_ref = docs.get(&folder_doc_id).ok_or_else(|| {
-                    CreateDocumentError::Internal("Folder doc not loaded".into())
-                })?;
+                let doc_ref = docs
+                    .get(&folder_doc_id)
+                    .ok_or_else(|| CreateDocumentError::Internal("Folder doc not loaded".into()))?;
                 doc_ref.awareness() // Arc clone
             }; // DashMap shard lock released
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
@@ -1261,7 +1261,13 @@ impl Server {
 
         // Sync block 2: Clone Arcs out of DashMap, then acquire write locks.
         // Phase 1: Extract awareness Arcs and sync_kv Arcs from DashMap refs.
-        let (folder_awareness, folder_sync_kvs, content_doc_ids, content_awareness, content_sync_kvs) = {
+        let (
+            folder_awareness,
+            folder_sync_kvs,
+            content_doc_ids,
+            content_awareness,
+            content_sync_kvs,
+        ) = {
             let docs = &self.docs;
 
             let (folder_awareness, folder_sync_kvs): (Vec<_>, Vec<_>) = folder_doc_ids
@@ -1286,7 +1292,13 @@ impl Server {
                 })
                 .unzip();
 
-            (folder_awareness, folder_sync_kvs, content_doc_ids, content_awareness, content_sync_kvs)
+            (
+                folder_awareness,
+                folder_sync_kvs,
+                content_doc_ids,
+                content_awareness,
+                content_sync_kvs,
+            )
         }; // All DashMap shard locks released
 
         // Phase 2: Acquire awareness write locks (no DashMap guards held).
@@ -1440,6 +1452,8 @@ impl Server {
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key: None,
+            last_dirty_signal: Arc::new(AtomicU64::new(0)),
+            last_successful_persist: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -1996,7 +2010,8 @@ impl Server {
                 let awareness = {
                     let mut found = None;
                     for entry in self.docs.iter() {
-                        if let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(entry.key()) {
+                        if let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(entry.key())
+                        {
                             if doc_uuid == uuid {
                                 found = Some(entry.value().awareness());
                                 break;
@@ -2122,7 +2137,12 @@ impl Server {
             if let Err(e) = sync_kv.persist().await {
                 consecutive_failures += 1;
                 if consecutive_failures >= 10 {
-                    tracing::error!(?e, consecutive_failures, "Persist failing repeatedly for {}", doc_id);
+                    tracing::error!(
+                        ?e,
+                        consecutive_failures,
+                        "Persist failing repeatedly for {}",
+                        doc_id
+                    );
                 } else {
                     tracing::error!(?e, "Error persisting.");
                 }

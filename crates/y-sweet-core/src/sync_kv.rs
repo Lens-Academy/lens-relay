@@ -821,14 +821,20 @@ mod test {
         store.fail_on_set.store(true, Ordering::Relaxed);
 
         let c = CallbackCounter::default();
-        let sync_kv =
-            SyncKv::new(Some(Arc::new(Box::new(store.clone()))), "fail_test", c.callback())
-                .await
-                .unwrap();
+        let sync_kv = SyncKv::new(
+            Some(Arc::new(Box::new(store.clone()))),
+            "fail_test",
+            c.callback(),
+        )
+        .await
+        .unwrap();
 
         // Make a change — this sets dirty=true
         sync_kv.set(b"key", b"value");
-        assert!(sync_kv.dirty.load(Ordering::Relaxed), "should be dirty after set");
+        assert!(
+            sync_kv.dirty.load(Ordering::Relaxed),
+            "should be dirty after set"
+        );
         assert_eq!(c.count(), 1, "should have fired dirty callback");
 
         // Persist should fail because store is failing
@@ -844,7 +850,11 @@ mod test {
         // A subsequent set should NOT fire the dirty callback again
         // (dirty is already true, so mark_dirty should be a no-op)
         sync_kv.set(b"key2", b"value2");
-        assert_eq!(c.count(), 1, "dirty callback should not fire again while already dirty");
+        assert_eq!(
+            c.count(),
+            1,
+            "dirty callback should not fire again while already dirty"
+        );
 
         // Now let the store succeed and verify persist works
         store.fail_on_set.store(false, Ordering::Relaxed);
