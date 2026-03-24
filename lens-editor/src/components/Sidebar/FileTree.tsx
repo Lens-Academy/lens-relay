@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, createContext, useContext } from 'react';
 import { Tree, TreeApi, type NodeApi } from 'react-arborist';
 import { FileTreeNode } from './FileTreeNode';
+import { StickyScrollOverlay } from './StickyScrollOverlay';
 import type { TreeNode } from '../../lib/tree-utils';
 
 const DragTargetCtx = createContext<string | null>(null);
@@ -52,6 +53,8 @@ export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileT
   const tooltipRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<TreeApi<TreeNode>>();
   const clearTimer = useRef<ReturnType<typeof setTimeout>>();
+  // Force re-render once tree API is available for StickyScrollOverlay
+  const [treeMounted, setTreeMounted] = useState(false);
 
   // Dynamic height: measure container to feed react-arborist's required pixel height
   const containerRef = useRef<HTMLDivElement>(null);
@@ -132,8 +135,22 @@ export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileT
     }
   }, []);
 
+  // Signal when tree API becomes available (runs until mounted)
+  useEffect(() => {
+    if (!treeMounted && treeRef.current) {
+      setTreeMounted(true);
+      // Fix stacking context: react-arborist's scroll container uses
+      // will-change:transform which creates a stacking context that paints
+      // over our sticky overlay. Force it to a lower z-index.
+      const scrollEl = treeRef.current.listEl.current;
+      if (scrollEl) {
+        scrollEl.style.zIndex = '0';
+      }
+    }
+  });
+
   return (
-    <div className="h-full" ref={containerRef} onDragEnd={clearDragTarget} onDrop={clearDragTarget} onDragOver={handleDragOver}>
+    <div className="h-full relative" ref={containerRef} onDragEnd={clearDragTarget} onDrop={clearDragTarget} onDragOver={handleDragOver}>
       {dragTarget && (
         <div
           ref={tooltipRef}
@@ -185,6 +202,7 @@ export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileT
         {FileTreeNode}
       </Tree>
       </DragTargetCtx.Provider>
+      {treeRef.current && <StickyScrollOverlay treeApi={treeRef.current} />}
     </div>
   );
 }
