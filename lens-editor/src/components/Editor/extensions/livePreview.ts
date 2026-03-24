@@ -667,7 +667,7 @@ export function livePreview(context?: WikilinkContext) {
   }
   return [
     drawSelection(), // Required for proper cursor with hidden content
-    livePreviewCompartment.of([livePreviewPlugin, livePreviewTheme]),
+    livePreviewCompartment.of([livePreviewPlugin, obsidianCommentPlugin, livePreviewTheme]),
   ];
 }
 
@@ -678,6 +678,50 @@ export function livePreview(context?: WikilinkContext) {
 export function updateWikilinkContext(context: WikilinkContext | undefined) {
   wikilinkContext = context ?? null;
 }
+
+/**
+ * Obsidian %%comment%% plugin — greys out %%...%% ranges (single and multi-line).
+ * Uses regex scanning since %% syntax is not in the Lezer markdown grammar.
+ */
+const obsidianCommentPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = this.buildDecorations(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = this.buildDecorations(update.view);
+      }
+    }
+
+    buildDecorations(view: EditorView): DecorationSet {
+      const builder = new RangeSetBuilder<Decoration>();
+      const deco = Decoration.mark({ class: 'cm-obsidian-comment' });
+      const matches: Array<{ from: number; to: number }> = [];
+
+      for (const { from, to } of view.visibleRanges) {
+        const text = view.state.doc.sliceString(from, to);
+        const re = /%%[\s\S]*?%%/g;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          matches.push({ from: from + m.index, to: from + m.index + m[0].length });
+        }
+      }
+
+      matches.sort((a, b) => a.from - b.from);
+      for (const { from, to } of matches) {
+        builder.add(from, to, deco);
+      }
+      return builder.finish();
+    }
+  },
+  {
+    decorations: (v) => v.decorations,
+  }
+);
 
 /**
  * Source-mode heading plugin — applies heading size classes
@@ -738,7 +782,7 @@ export function toggleSourceMode(view: EditorView, sourceMode: boolean) {
   view.dispatch({
     effects: [
       livePreviewCompartment.reconfigure(
-        sourceMode ? [sourceHeadingPlugin, livePreviewTheme] : [livePreviewPlugin, livePreviewTheme]
+        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, livePreviewTheme] : [livePreviewPlugin, obsidianCommentPlugin, livePreviewTheme]
       ),
       criticMarkupCompartment.reconfigure(
         sourceMode ? criticMarkupSourcePlugin : criticMarkupPlugin

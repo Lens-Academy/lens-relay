@@ -230,6 +230,11 @@
   text-decoration: line-through;
 }
 
+/* Obsidian %%comment%% styling */
+.cm-obsidian-comment {
+  color: #9ca3af;
+}
+
 /* Table of Contents panel */
 .toc-panel {
   font-size: 0.875rem;
