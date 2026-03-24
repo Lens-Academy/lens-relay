@@ -69,6 +69,13 @@ function mockEmpty() {
   }));
 }
 
+// Helper: find the file header button by the rendered filename (path without .md)
+function getFileHeader() {
+  // The filename "Test" is rendered in a span inside a button; get the button
+  const filenameSpan = screen.getByText('Test');
+  return filenameSpan.closest('button')!;
+}
+
 describe('ReviewPage', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -81,33 +88,37 @@ describe('ReviewPage', () => {
     it('renders file with suggestion count', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      expect(screen.getByText('Notes/Test.md')).toBeTruthy();
+      // Path renders as "Notes/" + "Test" (.md stripped)
+      expect(screen.getByText('Test')).toBeTruthy();
       expect(screen.getAllByText(/1 suggestion/).length).toBeGreaterThanOrEqual(1);
     });
 
     it('shows suggestion content when file is expanded', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      fireEvent.click(screen.getByText('Notes/Test.md'));
+      // First file is auto-expanded
       expect(screen.getByText('new text')).toBeTruthy();
     });
 
     it('shows author badge', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      fireEvent.click(screen.getByText('Notes/Test.md'));
-      expect(screen.getByText('AI')).toBeTruthy();
+      // First file is auto-expanded; "AI" appears in both filter bar and suggestion badge
+      expect(screen.getAllByText('AI').length).toBeGreaterThanOrEqual(2);
     });
 
     it('toggles file expansion on click', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      const fileHeader = screen.getByText('Notes/Test.md');
+      const fileHeader = getFileHeader();
+      // First file is auto-expanded on initial load
+      expect(screen.getByText('new text')).toBeTruthy();
+      // Click to collapse
+      fireEvent.click(fileHeader);
       expect(screen.queryByText('new text')).toBeNull();
+      // Click to expand again
       fireEvent.click(fileHeader);
       expect(screen.getByText('new text')).toBeTruthy();
-      fireEvent.click(fileHeader);
-      expect(screen.queryByText('new text')).toBeNull();
     });
   });
 

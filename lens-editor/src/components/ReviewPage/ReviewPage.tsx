@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSuggestions, type FileSuggestions, type SuggestionItem } from '../../hooks/useSuggestions';
 
@@ -42,6 +42,11 @@ function renderMarkdownInline(text: string): ReactNode {
     );
   });
 }
+
+const MemoMarkdown = memo(function MemoMarkdown({ text, className }: { text: string; className?: string }) {
+  const rendered = renderMarkdownInline(text);
+  return className ? <span className={className}>{rendered}</span> : <span>{rendered}</span>;
+});
 
 interface FolderInfo {
   id: string;
@@ -479,14 +484,14 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
     setLocationFilter(new Set());
   };
 
-  const toggleFile = (docId: string) => {
+  const toggleFile = useCallback((docId: string) => {
     setExpandedFiles(prev => {
       const next = new Set(prev);
       if (next.has(docId)) next.delete(docId);
       else next.add(docId);
       return next;
     });
-  };
+  }, []);
 
   const expandAll = () => {
     setExpandedFiles(new Set(filteredData.map(f => f.doc_id)));
@@ -496,7 +501,7 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
     setExpandedFiles(new Set());
   };
 
-  const navigateToSuggestion = (docId: string, from: number, e?: React.MouseEvent) => {
+  const navigateToSuggestion = useCallback((docId: string, from: number, e?: React.MouseEvent) => {
     const uuid = docId.slice(-36);
     const shortUuid = uuid.slice(0, 8);
     const path = `/${shortUuid}?pos=${from}`;
@@ -505,7 +510,7 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
     } else {
       navigate(path);
     }
-  };
+  }, [navigate]);
 
   // Global accept/reject operate on filtered data
   const handleAcceptAllFiltered = onAction ? async () => {
@@ -609,7 +614,7 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
                   file={file}
                   folderName={folderNameMap.get(file.folder_id)}
                   expanded={expandedFiles.has(file.doc_id)}
-                  onToggle={() => toggleFile(file.doc_id)}
+                  onToggle={toggleFile}
                   onAction={onAction}
                   onNavigate={navigateToSuggestion}
                 />
@@ -660,22 +665,24 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
   );
 }
 
-function FileSection({ file, folderName, expanded, onToggle, onAction, onNavigate }: {
+const FileSection = memo(function FileSection({ file, folderName, expanded, onToggle, onAction, onNavigate }: {
   file: FileSuggestions;
   folderName?: string;
   expanded: boolean;
-  onToggle: () => void;
+  onToggle: (docId: string) => void;
   onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
   onNavigate: (docId: string, from: number, e?: React.MouseEvent) => void;
 }) {
   type ResolvedStatus = 'accepted' | 'rejected' | 'not-found';
   const [resolvedMap, setResolvedMap] = useState<Record<number, ResolvedStatus>>({});
 
-  const setResolved = (index: number, status: ResolvedStatus) => {
+  const setResolved = useCallback((index: number, status: ResolvedStatus) => {
     setResolvedMap(prev => ({ ...prev, [index]: status }));
-  };
+  }, []);
 
-  const handleAcceptAll = async () => {
+  const handleToggle = useCallback(() => onToggle(file.doc_id), [onToggle, file.doc_id]);
+
+  const handleAcceptAll = useCallback(async () => {
     if (!onAction) return;
     for (let i = 0; i < file.suggestions.length; i++) {
       if (resolvedMap[i]) continue;
@@ -686,9 +693,9 @@ function FileSection({ file, folderName, expanded, onToggle, onAction, onNavigat
         setResolved(i, 'not-found');
       }
     }
-  };
+  }, [onAction, file.doc_id, file.suggestions, resolvedMap, setResolved]);
 
-  const handleRejectAll = async () => {
+  const handleRejectAll = useCallback(async () => {
     if (!onAction) return;
     for (let i = 0; i < file.suggestions.length; i++) {
       if (resolvedMap[i]) continue;
@@ -699,12 +706,12 @@ function FileSection({ file, folderName, expanded, onToggle, onAction, onNavigat
         setResolved(i, 'not-found');
       }
     }
-  };
+  }, [onAction, file.doc_id, file.suggestions, resolvedMap, setResolved]);
 
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
       <div className="flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors">
-        <button onClick={onToggle} className="flex items-center gap-3 flex-1">
+        <button onClick={handleToggle} className="flex items-center gap-3 flex-1">
           <svg className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
           <span className="font-medium">
             {(() => {
@@ -739,33 +746,49 @@ function FileSection({ file, folderName, expanded, onToggle, onAction, onNavigat
           </div>
         )}
       </div>
-      <div className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
-        <div className="overflow-hidden">
-          <div className="divide-y divide-gray-200">
-            {file.suggestions.map((s, i) => (
-              <SuggestionRow
-                key={i}
-                suggestion={s}
-                resolved={resolvedMap[i] ?? null}
-                onAccept={onAction ? async () => { try { await onAction(file.doc_id, s, 'accept'); setResolved(i, 'accepted'); } catch { setResolved(i, 'not-found'); } } : undefined}
-                onReject={onAction ? async () => { try { await onAction(file.doc_id, s, 'reject'); setResolved(i, 'rejected'); } catch { setResolved(i, 'not-found'); } } : undefined}
-                onNavigate={(e) => onNavigate(file.doc_id, s.from, e)}
-              />
-            ))}
-          </div>
+      {expanded && (
+        <div className="divide-y divide-gray-200">
+          {file.suggestions.map((s, i) => (
+            <SuggestionRow
+              key={i}
+              docId={file.doc_id}
+              suggestion={s}
+              index={i}
+              resolved={resolvedMap[i] ?? null}
+              onAction={onAction}
+              onResolved={setResolved}
+              onNavigate={onNavigate}
+            />
+          ))}
         </div>
-      </div>
+      )}
     </div>
   );
-}
+});
 
-function SuggestionRow({ suggestion, resolved, onAccept, onReject, onNavigate }: {
+const SuggestionRow = memo(function SuggestionRow({ docId, suggestion, index, resolved, onAction, onResolved, onNavigate }: {
+  docId: string;
   suggestion: SuggestionItem;
+  index: number;
   resolved: 'accepted' | 'rejected' | 'not-found' | null;
-  onAccept?: () => void;
-  onReject?: () => void;
-  onNavigate: (e: React.MouseEvent) => void;
+  onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
+  onResolved: (index: number, status: 'accepted' | 'rejected' | 'not-found') => void;
+  onNavigate: (docId: string, from: number, e?: React.MouseEvent) => void;
 }) {
+  const handleAccept = useCallback(async () => {
+    if (!onAction) return;
+    try { await onAction(docId, suggestion, 'accept'); onResolved(index, 'accepted'); } catch { onResolved(index, 'not-found'); }
+  }, [onAction, docId, suggestion, index, onResolved]);
+
+  const handleReject = useCallback(async () => {
+    if (!onAction) return;
+    try { await onAction(docId, suggestion, 'reject'); onResolved(index, 'rejected'); } catch { onResolved(index, 'not-found'); }
+  }, [onAction, docId, suggestion, index, onResolved]);
+
+  const handleNavigate = useCallback((e: React.MouseEvent) => {
+    onNavigate(docId, suggestion.from, e);
+  }, [onNavigate, docId, suggestion.from]);
+
   return (
     <div className={`px-4 py-3 transition-colors duration-300 ${resolved ? 'bg-gray-50' : ''}`}>
       <div className="flex items-center gap-2 mb-2">
@@ -792,37 +815,37 @@ function SuggestionRow({ suggestion, resolved, onAccept, onReject, onNavigate }:
           )}
         </div>
         <div className="flex gap-1 shrink-0">
-          {!resolved && onAccept && (
-            <button onClick={onAccept} title="Accept" className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded border border-green-200">
+          {!resolved && onAction && (
+            <button onClick={handleAccept} title="Accept" className="px-2 py-1 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded border border-green-200">
               Accept
             </button>
           )}
-          {!resolved && onReject && (
-            <button onClick={onReject} title="Reject" className="px-2 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded border border-red-200">
+          {!resolved && onAction && (
+            <button onClick={handleReject} title="Reject" className="px-2 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded border border-red-200">
               Reject
             </button>
           )}
-          <button onClick={onNavigate} title="Open in editor" className="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded border border-gray-200">
+          <button onClick={handleNavigate} title="Open in editor" className="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded border border-gray-200">
             Open
           </button>
         </div>
       </div>
-      <button onClick={onNavigate} className={`w-full text-left hover:bg-gray-50 rounded p-2 -m-1 transition-colors ${resolved ? 'opacity-50' : ''}`} title="Open in editor">
+      <button onClick={handleNavigate} className={`w-full text-left hover:bg-gray-50 rounded p-2 -m-1 transition-colors ${resolved ? 'opacity-50' : ''}`} title="Open in editor">
         <div className="text-sm leading-relaxed">
-          <span className="text-gray-500">{renderMarkdownInline(suggestion.context_before)}</span>
+          <MemoMarkdown text={suggestion.context_before} className="text-gray-500" />
           {suggestion.type === 'substitution' ? (
             <>
-              <span className="bg-red-100 text-red-800 line-through decoration-red-400">{renderMarkdownInline(suggestion.old_content ?? '')}</span>
-              <span className="bg-green-100 text-green-800">{renderMarkdownInline(suggestion.new_content ?? '')}</span>
+              <MemoMarkdown text={suggestion.old_content ?? ''} className="bg-red-100 text-red-800 line-through decoration-red-400" />
+              <MemoMarkdown text={suggestion.new_content ?? ''} className="bg-green-100 text-green-800" />
             </>
           ) : suggestion.type === 'deletion' ? (
-            <span className="bg-red-100 text-red-800 line-through decoration-red-400">{renderMarkdownInline(suggestion.content)}</span>
+            <MemoMarkdown text={suggestion.content} className="bg-red-100 text-red-800 line-through decoration-red-400" />
           ) : (
-            <span className="bg-green-100 text-green-800">{renderMarkdownInline(suggestion.content)}</span>
+            <MemoMarkdown text={suggestion.content} className="bg-green-100 text-green-800" />
           )}
-          <span className="text-gray-500">{renderMarkdownInline(suggestion.context_after)}</span>
+          <MemoMarkdown text={suggestion.context_after} className="text-gray-500" />
         </div>
       </button>
     </div>
   );
-}
+});
