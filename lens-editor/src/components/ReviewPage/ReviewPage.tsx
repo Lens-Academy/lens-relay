@@ -2,6 +2,14 @@ import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSuggestions, type FileSuggestions, type SuggestionItem } from '../../hooks/useSuggestions';
 
+/** Set browser tab title to "Review" while this page is mounted */
+function usePageTitle() {
+  useEffect(() => {
+    document.title = 'Review';
+    return () => { document.title = 'Editor'; };
+  }, []);
+}
+
 /** Lightweight inline markdown renderer for context text.
  *  Handles: newlines, headers (as bold), **bold**, *italic*, _italic_ */
 function renderMarkdownInline(text: string): ReactNode {
@@ -337,6 +345,7 @@ function FilterBar({ authors, locations, authorFilter, timeRange, locationFilter
 }
 
 export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onRejectAll }: ReviewPageProps) {
+  usePageTitle();
   const { data, loading, error, refresh } = useSuggestions(folderIds);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const autoExpandedRef = useRef(false);
