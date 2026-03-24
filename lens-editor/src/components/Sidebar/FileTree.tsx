@@ -53,7 +53,7 @@ export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileT
   const tooltipRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<TreeApi<TreeNode>>();
   const clearTimer = useRef<ReturnType<typeof setTimeout>>();
-  // Force re-render once tree API is available for StickyScrollOverlay
+  // Force re-render once tree API is available so StickyScrollOverlay gets treeApi
   const [treeMounted, setTreeMounted] = useState(false);
 
   // Dynamic height: measure container to feed react-arborist's required pixel height
