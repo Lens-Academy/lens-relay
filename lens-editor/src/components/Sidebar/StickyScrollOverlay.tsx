@@ -70,17 +70,32 @@ function computeStickyHeaders(
 
   if (edgeIndex < visibleNodes.length && edgeIndex !== topIndex) {
     const edgeAncestors = getAncestorFolders(visibleNodes[edgeIndex]);
-    if (edgeAncestors.length > baseAncestors.length) {
-      const extended = [...baseAncestors];
-      for (let i = baseAncestors.length; i < edgeAncestors.length && i < MAX_STICKY_DEPTH; i++) {
-        const candidate = edgeAncestors[i];
-        const headerPos = (candidate.rowIndex ?? 0) * ROW_HEIGHT;
-        if (headerPos < edgeScrollPos) {
-          extended.push(candidate);
-        }
+    const merged = [...baseAncestors];
+
+    for (let i = 0; i < Math.max(merged.length, edgeAncestors.length) && i < MAX_STICKY_DEPTH; i++) {
+      if (i >= edgeAncestors.length) break;
+
+      const edgeAnc = edgeAncestors[i];
+
+      // Same ancestor at this depth — keep it
+      if (i < merged.length && merged[i].id === edgeAnc.id) continue;
+
+      // Different ancestor (sibling replacement) or deeper ancestor (new level).
+      // Only add/replace if its header has scrolled past the overlay edge.
+      const headerPos = (edgeAnc.rowIndex ?? 0) * ROW_HEIGHT;
+      if (headerPos >= edgeScrollPos) break;
+
+      // Replace from this depth onward with edge ancestors
+      merged.length = i;
+      for (let j = i; j < edgeAncestors.length && j < MAX_STICKY_DEPTH; j++) {
+        const deeperPos = (edgeAncestors[j].rowIndex ?? 0) * ROW_HEIGHT;
+        if (deeperPos >= edgeScrollPos) break;
+        merged.push(edgeAncestors[j]);
       }
-      ancestors = extended;
+      break;
     }
+
+    ancestors = merged;
   }
 
   if (ancestors.length === 0) return [];
