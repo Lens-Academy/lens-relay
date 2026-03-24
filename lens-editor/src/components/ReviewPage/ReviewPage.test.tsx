@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const mockRefresh = vi.fn();
+const recentTimestamp = Date.now() - 60_000; // 1 minute ago — within default 1h filter
 
 // Default mock: loaded data with one file
 function mockLoaded() {
@@ -19,10 +20,10 @@ function mockLoaded() {
               old_content: null,
               new_content: null,
               author: 'AI',
-              timestamp: 1709900000000,
+              timestamp: recentTimestamp,
               from: 10,
               to: 50,
-              raw_markup: '{++{"author":"AI","timestamp":1709900000000}@@new text++}',
+              raw_markup: `{++{"author":"AI","timestamp":${recentTimestamp}}@@new text++}`,
               context_before: 'before ',
               context_after: ' after',
             },
@@ -81,33 +82,36 @@ describe('ReviewPage', () => {
     it('renders file with suggestion count', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      expect(screen.getByText('Notes/Test.md')).toBeTruthy();
+      expect(screen.getByText('Test')).toBeTruthy();
       expect(screen.getAllByText(/1 suggestion/).length).toBeGreaterThanOrEqual(1);
     });
 
     it('shows suggestion content when file is expanded', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      fireEvent.click(screen.getByText('Notes/Test.md'));
+      fireEvent.click(screen.getByText('Test'));
       expect(screen.getByText('new text')).toBeTruthy();
     });
 
     it('shows author badge', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      fireEvent.click(screen.getByText('Notes/Test.md'));
-      expect(screen.getByText('AI')).toBeTruthy();
+      fireEvent.click(screen.getByText('Test'));
+      // "AI (MCP)" appears in both the filter bar and the suggestion badge
+      expect(screen.getAllByText('AI (MCP)').length).toBeGreaterThanOrEqual(2);
     });
 
     it('toggles file expansion on click', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      const fileHeader = screen.getByText('Notes/Test.md');
-      expect(screen.queryByText('new text')).toBeNull();
+      const fileHeader = screen.getByText('Test');
+      // File is auto-expanded; collapse uses CSS grid-rows-[0fr], content stays in DOM
+      const getGrid = () => screen.getByText('new text').closest('.grid');
+      expect(getGrid()?.className).toContain('grid-rows-[1fr]');
       fireEvent.click(fileHeader);
-      expect(screen.getByText('new text')).toBeTruthy();
+      expect(getGrid()?.className).toContain('grid-rows-[0fr]');
       fireEvent.click(fileHeader);
-      expect(screen.queryByText('new text')).toBeNull();
+      expect(getGrid()?.className).toContain('grid-rows-[1fr]');
     });
   });
 

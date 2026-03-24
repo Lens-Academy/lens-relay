@@ -43,6 +43,12 @@ function renderMarkdownInline(text: string): ReactNode {
   });
 }
 
+/** Display-friendly author name (data stores "AI", UI shows "AI (MCP)"). */
+function displayAuthor(author: string): string {
+  if (author === 'AI') return 'AI (MCP)';
+  return author;
+}
+
 interface FolderInfo {
   id: string;
   name: string;
@@ -256,7 +262,7 @@ function FilterBar({ authors, locations, authorFilter, timeRange, locationFilter
                   : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
               }`}
             >
-              {a}
+              {displayAuthor(a)}
             </button>
           ))}
         </div>
@@ -337,8 +343,8 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
   const navigate = useNavigate();
 
   // Filter state
-  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
-  const [timeRange, setTimeRange] = useState<TimeRange>({ mode: 'all', fromAgo: Infinity, toAgo: 0, customFrom: '', customTo: '' });
+  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set(['AI']));
+  const [timeRange, setTimeRange] = useState<TimeRange>({ mode: 'range', fromAgo: 3600_000, toAgo: 0, customFrom: '', customTo: '' });
   const [locationFilter, setLocationFilter] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<'accept' | 'reject' | null>(null);
 
@@ -785,7 +791,7 @@ function SuggestionRow({ suggestion, resolved, onAccept, onReject, onNavigate }:
             <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${resolved ? 'text-gray-400 bg-gray-100' : 'text-gray-500 bg-gray-100'}`}>L{suggestion.line}</span>
           )}
           {suggestion.author && (
-            <span className={`text-xs px-1.5 py-0.5 rounded ${resolved ? 'text-gray-400 bg-gray-100' : 'text-gray-500 bg-gray-100'}`}>{suggestion.author}</span>
+            <span className={`text-xs px-1.5 py-0.5 rounded ${resolved ? 'text-gray-400 bg-gray-100' : 'text-gray-500 bg-gray-100'}`}>{displayAuthor(suggestion.author)}</span>
           )}
           {suggestion.timestamp && (
             <span className={`text-xs ${resolved ? 'text-gray-300' : 'text-gray-400'}`}>{new Date(suggestion.timestamp).toLocaleString()}</span>
