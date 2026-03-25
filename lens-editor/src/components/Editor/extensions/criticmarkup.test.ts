@@ -608,6 +608,82 @@ describe('CriticMarkup Extension', () => {
     });
   });
 
+  describe('Adjacent Deletion+Addition Pairs', () => {
+    it('shows a single merged button for adjacent deletion+addition', () => {
+      // {--old--}{++new++} — cursor in the deletion
+      const doc = 'hello {--old--}{++new++} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        doc,
+        10 // cursor inside deletion
+      );
+      cleanup = c;
+
+      const buttons = view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons');
+      expect(buttons.length).toBe(1);
+    });
+
+    it('shows merged button when cursor is in the addition part', () => {
+      const doc = 'hello {--old--}{++new++} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        doc,
+        19 // cursor inside addition
+      );
+      cleanup = c;
+
+      const buttons = view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons');
+      expect(buttons.length).toBe(1);
+    });
+
+    it('accept on merged pair removes deletion and keeps addition', () => {
+      const doc = 'hello {--old--}{++new++} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        doc,
+        10 // cursor inside deletion
+      );
+      cleanup = c;
+
+      const acceptBtn = view.contentDOM.querySelector('.cm-criticmarkup-accept') as HTMLButtonElement;
+      expect(acceptBtn).not.toBeNull();
+      acceptBtn.click();
+
+      expect(view.state.doc.toString()).toBe('hello new end');
+    });
+
+    it('reject on merged pair keeps deletion content and removes addition', () => {
+      const doc = 'hello {--old--}{++new++} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        doc,
+        10 // cursor inside deletion
+      );
+      cleanup = c;
+
+      const rejectBtn = view.contentDOM.querySelector('.cm-criticmarkup-reject') as HTMLButtonElement;
+      expect(rejectBtn).not.toBeNull();
+      rejectBtn.click();
+
+      expect(view.state.doc.toString()).toBe('hello old end');
+    });
+
+    it('non-adjacent deletion and addition still get separate buttons', () => {
+      // Space between them — not adjacent
+      const doc = 'hello {--old--} {++new++} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        doc,
+        10 // cursor inside deletion
+      );
+      cleanup = c;
+
+      const buttons = view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons');
+      // Only one button visible (cursor is only in the deletion)
+      expect(buttons.length).toBe(1);
+
+      // Move cursor to addition
+      view.dispatch({ selection: { anchor: 21 } });
+      const buttons2 = view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons');
+      expect(buttons2.length).toBe(1);
+    });
+  });
+
   describe('Source Mode Integration', () => {
     it('hides CriticMarkup decorations when source mode is ON', () => {
       const { view, cleanup: c } = createCriticMarkupEditorWithSourceMode(

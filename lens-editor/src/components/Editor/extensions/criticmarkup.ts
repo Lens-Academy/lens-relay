@@ -186,7 +186,8 @@ class CursorAnchorWidget extends WidgetType {
 class AcceptRejectWidget extends WidgetType {
   constructor(
     private rangeFrom: number,
-    private rangeTo: number
+    private rangeTo: number,
+    private merged: boolean = false
   ) {
     super();
   }
@@ -196,6 +197,7 @@ class AcceptRejectWidget extends WidgetType {
     container.className = 'cm-criticmarkup-buttons';
     container.dataset.rangeFrom = String(this.rangeFrom);
     container.dataset.rangeTo = String(this.rangeTo);
+    if (this.merged) container.dataset.merged = '1';
 
     const acceptBtn = document.createElement('button');
     acceptBtn.className = 'cm-criticmarkup-accept';
@@ -216,8 +218,7 @@ class AcceptRejectWidget extends WidgetType {
   }
 
   eq(other: AcceptRejectWidget): boolean {
-    // Widgets are equal if they represent the same range
-    return this.rangeFrom === other.rangeFrom && this.rangeTo === other.rangeTo;
+    return this.rangeFrom === other.rangeFrom && this.rangeTo === other.rangeTo && this.merged === other.merged;
   }
 
   ignoreEvent(): boolean {
@@ -304,16 +305,36 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
             // Restore the selection so bulk accept works
             view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
             this.savedSelection = null;
+          } else {
+            // For merged adjacent pairs, set selection spanning both ranges
+            const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
+            if (container?.dataset.merged) {
+              const from = parseInt(container.dataset.rangeFrom!, 10);
+              const to = parseInt(container.dataset.rangeTo!, 10);
+              view.dispatch({ selection: { anchor: from, head: to } });
+            }
           }
           acceptChangeAtCursor(view);
+          // Collapse selection to cursor so no text remains selected after the operation
+          view.dispatch({ selection: { anchor: view.state.selection.main.head } });
         } else if (target.classList.contains('cm-criticmarkup-reject')) {
           e.preventDefault();
           e.stopPropagation();
           if (this.savedSelection) {
             view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
             this.savedSelection = null;
+          } else {
+            // For merged adjacent pairs, set selection spanning both ranges
+            const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
+            if (container?.dataset.merged) {
+              const from = parseInt(container.dataset.rangeFrom!, 10);
+              const to = parseInt(container.dataset.rangeTo!, 10);
+              view.dispatch({ selection: { anchor: from, head: to } });
+            }
           }
           rejectChangeAtCursor(view);
+          // Collapse selection to cursor so no text remains selected after the operation
+          view.dispatch({ selection: { anchor: view.state.selection.main.head } });
         } else if (target.classList.contains('cm-comment-badge')) {
           e.preventDefault();
           e.stopPropagation();
@@ -407,7 +428,22 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         });
       }
 
-      for (const range of ranges) {
+      // Pre-compute adjacent deletion+addition pairs for merged accept/reject buttons.
+      // When a deletion ends exactly where an addition begins, they form a logical
+      // substitution that should have a single button covering both ranges.
+      const adjacentPairEnd = new Set<number>();   // indices of additions that are part of a pair
+      const adjacentPairStart = new Set<number>(); // indices of deletions that are part of a pair
+      for (let i = 0; i < ranges.length - 1; i++) {
+        const curr = ranges[i];
+        const next = ranges[i + 1];
+        if (curr.type === 'deletion' && next.type === 'addition' && curr.to === next.from) {
+          adjacentPairStart.add(i);
+          adjacentPairEnd.add(i + 1);
+        }
+      }
+
+      for (let ri = 0; ri < ranges.length; ri++) {
+        const range = ranges[ri];
         const className = TYPE_CLASSES[range.type];
         const cursorInside = selectionIntersects(selection, range.from, range.to);
 
@@ -517,14 +553,37 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         // When cursor is inside, show accept/reject buttons and ensure cursor visibility
         // Skip per-range buttons when bulk widget is shown
         if (cursorInside && !isBulkSelection) {
-          decorations.push({
-            from: range.contentTo,
-            to: range.contentTo,
-            deco: Decoration.widget({
-              widget: new AcceptRejectWidget(range.from, range.to),
-              side: 1, // After the content
-            }),
-          });
+          // Adjacent deletion+addition pairs: show a single merged button.
+          // The deletion (pair start) suppresses its button; the addition (pair end)
+          // shows a button spanning both ranges. If cursor is in the deletion,
+          // we also need to show the merged button on the addition.
+          const isPairStart = adjacentPairStart.has(ri);
+          const isPairEnd = adjacentPairEnd.has(ri);
+
+          if (!isPairStart) {
+            // Normal range or pair-end addition: show button here
+            const widgetFrom = isPairEnd ? ranges[ri - 1].from : range.from;
+            decorations.push({
+              from: range.contentTo,
+              to: range.contentTo,
+              deco: Decoration.widget({
+                widget: new AcceptRejectWidget(widgetFrom, range.to, isPairEnd),
+                side: 1, // After the content
+              }),
+            });
+          } else {
+            // Pair-start deletion with cursor inside: show merged button at the
+            // end of the paired addition (next range)
+            const pairedAddition = ranges[ri + 1];
+            decorations.push({
+              from: pairedAddition.contentTo,
+              to: pairedAddition.contentTo,
+              deco: Decoration.widget({
+                widget: new AcceptRejectWidget(range.from, pairedAddition.to, true),
+                side: 1,
+              }),
+            });
+          }
 
           // If cursor is on a line where all text is hidden syntax (delimiter lines),
           // add a zero-width space widget so the cursor has proper height
@@ -543,6 +602,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
               }),
             });
           }
+        } else if (!cursorInside && !isBulkSelection) {
+          // Check if this is the addition part of a pair where cursor is in the deletion
+          // (handled by the deletion's branch above — skip to avoid duplicate)
         }
       }
 
