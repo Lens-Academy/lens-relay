@@ -2,6 +2,14 @@ import { useState, useEffect, useRef, useMemo, useCallback, memo, type ReactNode
 import { useNavigate } from 'react-router-dom';
 import { useSuggestions, type FileSuggestions, type SuggestionItem } from '../../hooks/useSuggestions';
 
+/** Set browser tab title to "Review" while this page is mounted */
+function usePageTitle() {
+  useEffect(() => {
+    document.title = 'Review';
+    return () => { document.title = 'Editor'; };
+  }, []);
+}
+
 /** Lightweight inline markdown renderer for context text.
  *  Handles: newlines, headers (as bold), **bold**, *italic*, _italic_ */
 function renderMarkdownInline(text: string): ReactNode {
@@ -48,6 +56,11 @@ const MemoMarkdown = memo(function MemoMarkdown({ text, className }: { text: str
   return className ? <span className={className}>{rendered}</span> : <span>{rendered}</span>;
 });
 
+/** Display-friendly author name (data stores "AI", UI shows "AI (MCP)"). */
+function displayAuthor(author: string): string {
+  if (author === 'AI') return 'AI (MCP)';
+  return author;
+}
 interface FolderInfo {
   id: string;
   name: string;
@@ -261,7 +274,7 @@ function FilterBar({ authors, locations, authorFilter, timeRange, locationFilter
                   : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
               }`}
             >
-              {a}
+              {displayAuthor(a)}
             </button>
           ))}
         </div>
@@ -336,14 +349,15 @@ function FilterBar({ authors, locations, authorFilter, timeRange, locationFilter
 }
 
 export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onRejectAll }: ReviewPageProps) {
+  usePageTitle();
   const { data, loading, error, refresh } = useSuggestions(folderIds);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const autoExpandedRef = useRef(false);
   const navigate = useNavigate();
 
   // Filter state
-  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
-  const [timeRange, setTimeRange] = useState<TimeRange>({ mode: 'all', fromAgo: Infinity, toAgo: 0, customFrom: '', customTo: '' });
+  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set(['AI']));
+  const [timeRange, setTimeRange] = useState<TimeRange>({ mode: 'range', fromAgo: 3600_000, toAgo: 0, customFrom: '', customTo: '' });
   const [locationFilter, setLocationFilter] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<'accept' | 'reject' | null>(null);
 
@@ -808,7 +822,7 @@ const SuggestionRow = memo(function SuggestionRow({ docId, suggestion, index, re
             <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${resolved ? 'text-gray-400 bg-gray-100' : 'text-gray-500 bg-gray-100'}`}>L{suggestion.line}</span>
           )}
           {suggestion.author && (
-            <span className={`text-xs px-1.5 py-0.5 rounded ${resolved ? 'text-gray-400 bg-gray-100' : 'text-gray-500 bg-gray-100'}`}>{suggestion.author}</span>
+            <span className={`text-xs px-1.5 py-0.5 rounded ${resolved ? 'text-gray-400 bg-gray-100' : 'text-gray-500 bg-gray-100'}`}>{displayAuthor(suggestion.author)}</span>
           )}
           {suggestion.timestamp && (
             <span className={`text-xs ${resolved ? 'text-gray-300' : 'text-gray-400'}`}>{new Date(suggestion.timestamp).toLocaleString()}</span>

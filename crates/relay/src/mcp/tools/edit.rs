@@ -5,6 +5,109 @@ use yrs::{GetString, ReadTxn, Text, Transact, WriteTxn};
 
 use super::critic_markup;
 
+/// Normalize typographic/smart quotes to ASCII equivalents.
+/// Handles: curly double quotes (\u{201C}, \u{201D}) → "
+///          curly single quotes (\u{201A}, \u{2019}) → '
+fn normalize_quotes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\u{201C}' | '\u{201D}' => out.push('"'),
+            '\u{2018}' | '\u{2019}' => out.push('\''),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Map a byte offset in a quote-normalized string back to the byte offset in
+/// the original (un-normalized) string. Both strings have the same char count
+/// but different byte lengths when smart quotes are present.
+fn map_norm_offset_to_original(original: &str, norm_offset: usize) -> usize {
+    let mut orig_bytes = 0usize;
+    let mut norm_bytes = 0usize;
+    for ch in original.chars() {
+        if norm_bytes >= norm_offset {
+            break;
+        }
+        orig_bytes += ch.len_utf8();
+        let norm_ch = match ch {
+            '\u{201C}' | '\u{201D}' => '"',
+            '\u{2018}' | '\u{2019}' => '\'',
+            _ => ch,
+        };
+        norm_bytes += norm_ch.len_utf8();
+    }
+    orig_bytes
+}
+
+/// Find `old_string` in `accepted` with exact match, falling back to
+/// quote-normalized matching if no exact match exists.
+///
+/// Returns `(match_byte_offset_in_accepted, effective_old_string)` where
+/// `effective_old_string` is the actual text from `accepted` (preserving
+/// smart quotes) that the AI's `old_string` matched against.
+fn find_old_string_in_accepted<'a>(
+    accepted: &'a str,
+    old_string: &str,
+    file_path: &str,
+) -> Result<(usize, String), String> {
+    // Try exact match first
+    let exact: Vec<usize> = accepted
+        .match_indices(old_string)
+        .map(|(i, _)| i)
+        .collect();
+
+    match exact.len() {
+        1 => return Ok((exact[0], old_string.to_string())),
+        n if n > 1 => {
+            return Err(format!(
+                "Error: old_string is not unique in {} ({} occurrences found). \
+                 Include more surrounding context to make it unique.",
+                file_path, n
+            ));
+        }
+        _ => {} // 0 matches — fall through to normalized matching
+    }
+
+    // Fallback: normalize smart quotes → straight quotes in both strings
+    let norm_accepted = normalize_quotes(accepted);
+    let norm_old = normalize_quotes(old_string);
+
+    // If normalization didn't change anything, no point re-matching
+    if norm_accepted == *accepted {
+        return Err(format!(
+            "Error: old_string not found in {}. Make sure it matches exactly.",
+            file_path
+        ));
+    }
+
+    let norm_matches: Vec<usize> = norm_accepted
+        .match_indices(&norm_old)
+        .map(|(i, _)| i)
+        .collect();
+
+    match norm_matches.len() {
+        0 => Err(format!(
+            "Error: old_string not found in {}. Make sure it matches exactly.",
+            file_path
+        )),
+        1 => {
+            // Map normalized byte offsets back to original accepted string
+            let orig_start = map_norm_offset_to_original(accepted, norm_matches[0]);
+            let orig_end =
+                map_norm_offset_to_original(accepted, norm_matches[0] + norm_old.len());
+            let actual_text = accepted[orig_start..orig_end].to_string();
+            Ok((orig_start, actual_text))
+        }
+        n => Err(format!(
+            "Error: old_string is not unique in {} ({} occurrences found). \
+             Include more surrounding context to make it unique.",
+            file_path, n
+        )),
+    }
+}
+
 /// Execute the `edit` tool: replace old_string with CriticMarkup-wrapped suggestion.
 ///
 /// The edit is wrapped in CriticMarkup format `{--old--}{++new++}` so human
@@ -40,7 +143,7 @@ pub async fn execute(
         .resolve_path(file_path)
         .ok_or_else(|| format!("Error: Document not found: {}", file_path))?;
 
-    // 3. Check read-before-edit: session must have read this document first
+    // 4. Check read-before-edit: session must have read this document first
     {
         let session = server
             .mcp_sessions
@@ -55,13 +158,13 @@ pub async fn execute(
         // Drop session guard before accessing Y.Doc
     }
 
-    // 4. Reload from storage if GC evicted the doc
+    // 5. Reload from storage if GC evicted the doc
     server
         .ensure_doc_loaded(&doc_info.doc_id)
         .await
         .map_err(|e| format!("Error: Failed to load document {}: {}", file_path, e))?;
 
-    // 5. Read content and find old_string
+    // 6. Read content and find old_string (with smart-quote normalization fallback)
     let content = {
         let doc_ref = server
             .docs()
@@ -76,39 +179,24 @@ pub async fn execute(
         }
     };
 
-    // 5. Parse CriticMarkup and find old_string in accepted view
-    let raw_content = content; // rename for clarity
+    let raw_content = content;
     let spans = critic_markup::parse(&raw_content);
     let accepted = critic_markup::accepted_view(&spans);
 
-    let matches: Vec<usize> = accepted
-        .match_indices(old_string)
-        .map(|(idx, _)| idx)
-        .collect();
+    // Find old_string with quote-normalization fallback. effective_old is the
+    // actual text from the document (may contain smart quotes even though the
+    // AI sent straight quotes).
+    let (match_start, effective_old) =
+        find_old_string_in_accepted(&accepted, old_string, file_path)?;
 
-    if matches.is_empty() {
-        return Err(format!(
-            "Error: old_string not found in {}. Make sure it matches exactly.",
-            file_path
-        ));
-    }
-
-    if matches.len() > 1 {
-        return Err(format!(
-            "Error: old_string is not unique in {} ({} occurrences found). Include more surrounding context to make it unique.",
-            file_path,
-            matches.len()
-        ));
-    }
-
-    // 6. Build merged result (targeted replacement)
+    // 7. Build merged result (targeted replacement)
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
 
     let merge_result =
-        critic_markup::merge_edit(&raw_content, old_string, new_string, "AI", timestamp)
+        critic_markup::merge_edit(&raw_content, &effective_old, new_string, "AI", timestamp)
             .map_err(|e| format!("Error: {}", e))?;
 
     // No-op check
@@ -116,7 +204,7 @@ pub async fn execute(
         return Ok(format!("No changes needed for {}", file_path));
     }
 
-    // 7. Apply targeted edit under write lock with TOCTOU re-verify
+    // 8. Apply targeted edit under write lock with TOCTOU re-verify
     {
         let doc_ref = server
             .docs()
@@ -131,18 +219,23 @@ pub async fn execute(
         let current_raw = text.get_string(&txn);
         let current_spans = critic_markup::parse(&current_raw);
         let current_accepted = critic_markup::accepted_view(&current_spans);
-        let match_start = matches[0];
-        let actual = current_accepted.get(match_start..match_start + old_string.len());
-        if actual != Some(old_string) {
+        let actual =
+            current_accepted.get(match_start..match_start + effective_old.len());
+        if actual != Some(&effective_old) {
             return Err(
                 "Document changed since last read. Please re-read and try again.".to_string(),
             );
         }
 
         // Recompute merge against current raw (in case of concurrent changes)
-        let final_merge =
-            critic_markup::merge_edit(&current_raw, old_string, new_string, "AI", timestamp)
-                .map_err(|e| format!("Error: {}", e))?;
+        let final_merge = critic_markup::merge_edit(
+            &current_raw,
+            &effective_old,
+            new_string,
+            "AI",
+            timestamp,
+        )
+        .map_err(|e| format!("Error: {}", e))?;
 
         // Targeted replacement in Y.Doc
         text.remove_range(
@@ -157,7 +250,7 @@ pub async fn execute(
         );
     }
 
-    // 8. Explicit persist for immediate durability
+    // 9. Explicit persist for immediate durability
     {
         let doc_ref = server
             .docs()
@@ -168,11 +261,11 @@ pub async fn execute(
         }
     }
 
-    // 9. Return success
+    // 10. Return success
     Ok(format!(
         "Edited {}: replaced {} characters with CriticMarkup suggestion for human review.",
         file_path,
-        old_string.len()
+        effective_old.len()
     ))
 }
 
@@ -663,6 +756,79 @@ mod tests {
         assert_eq!(
             super::super::critic_markup::base_view(&spans),
             "The quick brown fox jumps over."
+        );
+    }
+
+    // === Smart quote normalization tests ===
+
+    #[tokio::test]
+    async fn edit_smart_double_quotes_matched_by_straight_quotes() {
+        // Document contains smart/curly double quotes (U+201C, U+201D)
+        let server = build_test_server(&[(
+            "/Quotes.md",
+            "uuid-quotes",
+            "He said \u{201c}hello\u{201d} to everyone",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-quotes");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        // AI sends straight quotes in old_string (common LLM behavior)
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Quotes.md",
+                "old_string": "said \"hello\" to",
+                "new_string": "said \"goodbye\" to"
+            }),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "edit should match smart quotes when AI sends straight quotes, got: {:?}",
+            result
+        );
+
+        let raw = read_doc_content(&server, &doc_id);
+        let spans = critic_markup::parse(&raw);
+        let accepted = critic_markup::accepted_view(&spans);
+        assert!(
+            accepted.contains("goodbye"),
+            "accepted view should contain the replacement: {}",
+            accepted
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_smart_single_quotes_matched_by_straight_quotes() {
+        // Document contains smart/curly single quotes (U+2018, U+2019)
+        let server = build_test_server(&[(
+            "/Quotes.md",
+            "uuid-quotes",
+            "It\u{2019}s a nice day, isn\u{2019}t it",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-quotes");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        // AI sends straight apostrophe
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Quotes.md",
+                "old_string": "It's a nice day",
+                "new_string": "It's a beautiful day"
+            }),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "edit should match smart single quotes when AI sends straight quotes, got: {:?}",
+            result
         );
     }
 }

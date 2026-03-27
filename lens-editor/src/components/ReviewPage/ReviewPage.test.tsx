@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const mockRefresh = vi.fn();
+const recentTimestamp = Date.now() - 60_000; // 1 minute ago — within default 1h filter
 
 // Default mock: loaded data with one file
 function mockLoaded() {
@@ -19,10 +20,10 @@ function mockLoaded() {
               old_content: null,
               new_content: null,
               author: 'AI',
-              timestamp: 1709900000000,
+              timestamp: recentTimestamp,
               from: 10,
               to: 50,
-              raw_markup: '{++{"author":"AI","timestamp":1709900000000}@@new text++}',
+              raw_markup: `{++{"author":"AI","timestamp":${recentTimestamp}}@@new text++}`,
               context_before: 'before ',
               context_after: ' after',
             },
@@ -103,8 +104,8 @@ describe('ReviewPage', () => {
     it('shows author badge', async () => {
       const { ReviewPage } = await import('./ReviewPage');
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
-      // First file is auto-expanded; "AI" appears in both filter bar and suggestion badge
-      expect(screen.getAllByText('AI').length).toBeGreaterThanOrEqual(2);
+      // First file is auto-expanded; "AI (MCP)" appears in both filter bar and suggestion badge
+      expect(screen.getAllByText('AI (MCP)').length).toBeGreaterThanOrEqual(2);
     });
 
     it('toggles file expansion on click', async () => {
