@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
-import { StateEffect } from '@codemirror/state';
+import { StateEffect, Compartment } from '@codemirror/state';
 import { flashHeadingLine } from '../Editor/extensions/headingFlash';
 import type { EditorState } from '@codemirror/state';
 
@@ -138,6 +138,9 @@ export function normalizeHeadingLevels(headings: Heading[]): NormalizedHeading[]
  */
 export function useActiveHeading(view: EditorView | null, headings: Heading[]): number {
   const [activeIndex, setActiveIndex] = useState(-1);
+  const compartmentRef = useRef<Compartment | null>(null);
+  const installedRef = useRef(false);
+  const installedViewRef = useRef<EditorView | null>(null);
 
   const updateActive = useCallback(() => {
     if (!view || headings.length === 0) {
@@ -171,18 +174,23 @@ export function useActiveHeading(view: EditorView | null, headings: Heading[]): 
     // Initial computation
     updateActive();
 
-    // Listen for selection/cursor changes via EditorView update listener
-    const extension = EditorView.updateListener.of((update) => {
+    const listener = EditorView.updateListener.of((update) => {
       if (update.selectionSet) {
         updateActive();
       }
     });
 
-    // Dispatch a reconfigure to add the listener
-    view.dispatch({ effects: StateEffect.appendConfig.of(extension) });
-
-    // No clean way to remove a dynamically added extension, but the effect
-    // is idempotent (setActiveIndex with same value is a no-op)
+    if (!installedRef.current || installedViewRef.current !== view) {
+      // First install or view changed: create compartment and append it
+      const compartment = new Compartment();
+      compartmentRef.current = compartment;
+      installedViewRef.current = view;
+      view.dispatch({ effects: StateEffect.appendConfig.of(compartment.of(listener)) });
+      installedRef.current = true;
+    } else if (compartmentRef.current) {
+      // Subsequent updates (same view): reconfigure the compartment (replaces the listener)
+      view.dispatch({ effects: compartmentRef.current.reconfigure(listener) });
+    }
   }, [view, updateActive]);
 
   return activeIndex;

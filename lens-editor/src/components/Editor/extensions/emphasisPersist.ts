@@ -93,7 +93,9 @@ export const emphasisPersistPlugin = ViewPlugin.fromClass(
             this.ghostTimer = null;
           }, 400);
         } else {
-          this.decorations = Decoration.none;
+          if (this.decorations !== Decoration.none) {
+            this.decorations = Decoration.none;
+          }
           if (this.ghostTimer) {
             clearTimeout(this.ghostTimer);
             this.ghostTimer = null;
@@ -101,7 +103,9 @@ export const emphasisPersistPlugin = ViewPlugin.fromClass(
           this.prevRanges = currentRanges;
         }
       } else {
-        this.decorations = Decoration.none;
+        if (this.decorations !== Decoration.none) {
+          this.decorations = Decoration.none;
+        }
         if (this.ghostTimer) {
           clearTimeout(this.ghostTimer);
           this.ghostTimer = null;

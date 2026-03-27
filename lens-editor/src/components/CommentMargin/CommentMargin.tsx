@@ -58,14 +58,20 @@ export function CommentMargin({
     prevTriggerRef.current = addCommentTrigger;
   }, [addCommentTrigger, view, mapper]);
 
-  // Scroll sync: mirror editor's scrollTop
+  // Scroll sync: mirror editor's scrollTop (debounced to align with paint)
   useEffect(() => {
     const scrollDOM = view.scrollDOM;
     const container = containerRef.current;
     if (!container) return;
 
+    let rafId: number | null = null;
+
     const handleScroll = () => {
-      container.scrollTop = scrollDOM.scrollTop;
+      if (rafId !== null) return; // Already scheduled
+      rafId = requestAnimationFrame(() => {
+        container.scrollTop = scrollDOM.scrollTop;
+        rafId = null;
+      });
     };
 
     scrollDOM.addEventListener('scroll', handleScroll);
@@ -74,6 +80,7 @@ export function CommentMargin({
 
     return () => {
       scrollDOM.removeEventListener('scroll', handleScroll);
+      if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [view]);
 

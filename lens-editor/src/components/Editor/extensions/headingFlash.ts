@@ -14,6 +14,9 @@ export const flashHeadingLine = StateEffect.define<number | null>();
  */
 export const persistentHighlightLine = StateEffect.define<number | null>();
 
+/** Internal effect to transition flash → fade-out */
+const flashFadeOut = StateEffect.define<void>();
+
 const flashDeco = Decoration.line({ class: 'cm-heading-flash' });
 const flashOutDeco = Decoration.line({ class: 'cm-heading-flash cm-heading-flash-out' });
 
@@ -44,11 +47,9 @@ export const headingFlashPlugin = ViewPlugin.fromClass(
             const line = update.state.doc.lineAt(e.value);
             this.decorations = Decoration.set([flashDeco.range(line.from)]);
 
-            // After 1.5s, swap to fade-out class to trigger CSS transition
+            // After 1.5s, dispatch fade-out through CM6's update cycle
             this.fadeTimer = setTimeout(() => {
-              this.decorations = Decoration.set([flashOutDeco.range(line.from)]);
-              // Force a measure/draw cycle so CM picks up the new decoration
-              this.view.requestMeasure();
+              this.view.dispatch({ effects: flashFadeOut.of(undefined) });
             }, 1500);
 
             // After 2s total, remove entirely
@@ -56,6 +57,18 @@ export const headingFlashPlugin = ViewPlugin.fromClass(
               this.view.dispatch({ effects: flashHeadingLine.of(null) });
             }, 2000);
 
+            return;
+          }
+
+          if (e.is(flashFadeOut) && this.decorations !== Decoration.none) {
+            // Transition existing flash decoration to fade-out class.
+            // The fadeTimer has already fired (that's how we got here).
+            // The clearTimer (2s total) is still pending and will
+            // dispatch flashHeadingLine.of(null) for final removal.
+            const iter = this.decorations.iter();
+            if (iter.value) {
+              this.decorations = Decoration.set([flashOutDeco.range(iter.from)]);
+            }
             return;
           }
 

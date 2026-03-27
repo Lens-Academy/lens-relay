@@ -352,7 +352,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      if (update.docChanged || update.selectionSet) {
         this.decorations = this.buildDecorations(update.view);
         return;
       }

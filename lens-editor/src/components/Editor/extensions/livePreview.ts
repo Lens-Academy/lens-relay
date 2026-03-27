@@ -164,11 +164,17 @@ class LinkWidget extends WidgetType {
 class ImageWidget extends WidgetType {
   private alt: string;
   private url: string;
+  private view: EditorView;
 
-  constructor(alt: string, url: string) {
+  constructor(alt: string, url: string, view: EditorView) {
     super();
     this.alt = alt;
     this.url = url;
+    this.view = view;
+  }
+
+  get estimatedHeight(): number {
+    return 150;
   }
 
   toDOM(): HTMLElement {
@@ -200,6 +206,7 @@ class ImageWidget extends WidgetType {
     img.onload = () => {
       placeholder.remove();
       img.style.display = '';
+      this.view.requestMeasure();
     };
     img.onerror = () => {
       placeholder.remove();
@@ -209,6 +216,7 @@ class ImageWidget extends WidgetType {
       fallback.className = 'cm-image-fallback';
       fallback.textContent = `Image not found: ${this.alt || this.url}`;
       container.appendChild(fallback);
+      this.view.requestMeasure();
     };
 
     container.appendChild(img);
@@ -242,16 +250,12 @@ class BulletWidget extends WidgetType {
  */
 class CheckboxWidget extends WidgetType {
   private checked: boolean;
-  private view: EditorView;
-  private markerFrom: number;
-  private markerTo: number;
+  private onToggle: () => void;
 
-  constructor(checked: boolean, view: EditorView, markerFrom: number, markerTo: number) {
+  constructor(checked: boolean, onToggle: () => void) {
     super();
     this.checked = checked;
-    this.view = view;
-    this.markerFrom = markerFrom;
-    this.markerTo = markerTo;
+    this.onToggle = onToggle;
   }
 
   toDOM(): HTMLElement {
@@ -261,18 +265,13 @@ class CheckboxWidget extends WidgetType {
     input.checked = this.checked;
     input.onclick = (e) => {
       e.preventDefault();
-      const newText = this.checked ? '[ ]' : '[x]';
-      this.view.dispatch({
-        changes: { from: this.markerFrom, to: this.markerTo, insert: newText },
-      });
+      this.onToggle();
     };
     return input;
   }
 
   eq(other: CheckboxWidget): boolean {
-    return this.checked === other.checked
-      && this.markerFrom === other.markerFrom
-      && this.markerTo === other.markerTo;
+    return this.checked === other.checked;
   }
 }
 
@@ -308,12 +307,15 @@ const livePreviewPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      // Rebuild on doc change, viewport change, selection change, OR metadata change
+      const metadataChanged = update.transactions.some(
+        tr => tr.effects.some(e => e.is(wikilinkMetadataChanged))
+      );
+
       if (
         update.docChanged ||
         update.viewportChanged ||
         update.selectionSet ||
-        update.transactions.some(tr => tr.effects.some(e => e.is(wikilinkMetadataChanged)))
+        metadataChanged
       ) {
         this.decorations = this.buildDecorations(update.view);
       }
@@ -430,7 +432,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     from: node.from,
                     to: node.to,
                     deco: Decoration.replace({
-                      widget: new ImageWidget(match[1], match[2]),
+                      widget: new ImageWidget(match[1], match[2], view),
                     }),
                   });
                 }
@@ -599,12 +601,19 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               if (!selectionIntersects(selection, replaceFrom, node.to)) {
                 const markerText = view.state.doc.sliceString(node.from, node.to);
                 const isChecked = markerText !== '[ ]';
+                const capturedFrom = node.from;
+                const capturedTo = node.to;
 
                 decorations.push({
                   from: replaceFrom,
                   to: replaceTo,
                   deco: Decoration.replace({
-                    widget: new CheckboxWidget(isChecked, view, node.from, node.to),
+                    widget: new CheckboxWidget(isChecked, () => {
+                      const newText = isChecked ? '[ ]' : '[x]';
+                      view.dispatch({
+                        changes: { from: capturedFrom, to: capturedTo, insert: newText },
+                      });
+                    }),
                   }),
                 });
 
