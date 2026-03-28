@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_eight_tools() {
+    async fn tools_list_returns_nine_tools() {
         let server = test_server();
         let req = make_request(json!(3), "tools/list", None);
 
@@ -283,7 +283,7 @@ mod tests {
         let result = resp.result.unwrap();
         assert!(result["tools"].is_array());
         let tools_arr = result["tools"].as_array().unwrap();
-        assert_eq!(tools_arr.len(), 8);
+        assert_eq!(tools_arr.len(), 9);
 
         // Verify tool names
         let names: Vec<&str> = tools_arr
@@ -298,6 +298,7 @@ mod tests {
         assert!(names.contains(&"edit"));
         assert!(names.contains(&"create"));
         assert!(names.contains(&"move"));
+        assert!(names.contains(&"search"));
     }
 
     #[tokio::test]

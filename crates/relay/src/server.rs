@@ -883,6 +883,12 @@ impl Server {
         &self.search_index
     }
 
+    /// Whether the search index has finished its initial build.
+    pub fn search_is_ready(&self) -> bool {
+        self.search_ready
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Get the link indexer, if enabled.
     pub fn link_indexer(&self) -> &Option<Arc<LinkIndexer>> {
         &self.link_indexer
@@ -1455,6 +1461,38 @@ impl Server {
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// Create a minimal Server for testing with a search index.
+    #[cfg(test)]
+    pub fn new_for_test_with_search(search_index: Arc<SearchIndex>) -> Arc<Self> {
+        let server = Arc::new(Self {
+            docs: Arc::new(DashMap::new()),
+            doc_worker_tracker: TaskTracker::new(),
+            store: None,
+            checkpoint_freq: Duration::from_secs(60),
+            authenticator: None,
+            url: None,
+            allowed_hosts: Vec::new(),
+            cancellation_token: CancellationToken::new(),
+            doc_gc: std::sync::atomic::AtomicBool::new(false),
+            event_dispatcher: None,
+            sync_protocol_event_sender: Arc::new(
+                y_sweet_core::event::SyncProtocolEventSender::new(),
+            ),
+            metrics: RelayMetrics::new().expect("metrics init should not fail in tests"),
+            link_indexer: None,
+            search_index: Some(search_index),
+            search_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            search_tx: None,
+            search_pending: None,
+            doc_resolver: Arc::new(DocumentResolver::new()),
+            mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
+            mcp_api_key: None,
+            last_dirty_signal: Arc::new(AtomicU64::new(0)),
+            last_successful_persist: Arc::new(AtomicU64::new(0)),
+        });
+        server
     }
 
     pub async fn doc_exists(&self, doc_id: &str) -> bool {

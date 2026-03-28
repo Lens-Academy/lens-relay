@@ -7,6 +7,7 @@ pub mod glob;
 pub mod grep;
 pub mod move_doc;
 pub mod read;
+pub mod search;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
@@ -221,6 +222,29 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "search",
+            "description": "Full-text search across the knowledge base using ranked relevance (BM25). Returns results sorted by relevance with snippets. Supports phrase search with quotes. Use this for natural-language queries; use grep for exact regex pattern matching.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query. Supports multiple terms (AND semantics) and phrase search with quotes."
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of results to return (default 20, max 100)."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
+                    }
+                }
+            }
+        }),
     ]
 }
 
@@ -278,6 +302,10 @@ pub async fn dispatch_tool(
             Err(msg) => tool_error(&msg),
         },
         "move" => match move_doc::execute(server, arguments).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "search" => match search::execute(server, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
