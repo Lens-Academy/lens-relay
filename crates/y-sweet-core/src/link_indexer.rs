@@ -114,6 +114,29 @@ pub fn extract_type_from_filemeta_entry(value: &Out, txn: &impl ReadTxn) -> Opti
     }
 }
 
+/// Extract the "hash" field from a filemeta_v0 entry value (blob files only).
+///
+/// Parallel to `extract_id_from_filemeta_entry`. Handles both `Out::YMap` and `Out::Any(Any::Map)`.
+pub fn extract_hash_from_filemeta_entry(value: &Out, txn: &impl ReadTxn) -> Option<String> {
+    match value {
+        Out::YMap(meta_map) => {
+            if let Some(Out::Any(Any::String(ref h))) = meta_map.get(txn, "hash") {
+                Some(h.to_string())
+            } else {
+                None
+            }
+        }
+        Out::Any(Any::Map(ref map)) => {
+            if let Some(Any::String(ref h)) = map.get("hash") {
+                Some(h.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Ensure all ancestor folder entries exist in filemeta_v0 and the legacy docs map.
 ///
 /// For a path like "/Projects/Alpha/Document.md", creates entries for
@@ -776,6 +799,7 @@ pub fn move_document(
         } else {
             format!("{}-{}", relay_id, uuid)
         },
+        hash: None,
     };
     doc_resolver.upsert_doc(uuid, &new_full_path, doc_info);
 

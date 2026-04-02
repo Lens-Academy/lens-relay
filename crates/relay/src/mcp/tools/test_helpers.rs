@@ -90,6 +90,102 @@ pub(crate) fn setup_session_no_reads(server: &Arc<Server>) -> String {
     sid
 }
 
+/// Build a test server with a blob file in the store and filemeta entry with hash.
+///
+/// `path` should be like "/data.json" (the in-folder path with leading slash).
+/// `uuid` is the document UUID. `content` is the blob content to store.
+pub(crate) async fn build_blob_test_server_with_file(
+    path: &str,
+    uuid: &str,
+    content: &str,
+) -> Arc<Server> {
+    use async_trait::async_trait;
+    use dashmap::DashMap;
+    use sha2::{Digest, Sha256};
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+    use y_sweet_core::store::Result as StoreResult;
+    use y_sweet_core::store::Store;
+
+    struct MemoryStore {
+        data: Arc<DashMap<String, Vec<u8>>>,
+    }
+
+    #[async_trait]
+    impl Store for MemoryStore {
+        async fn init(&self) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn get(&self, key: &str) -> StoreResult<Option<Vec<u8>>> {
+            Ok(self.data.get(key).map(|v| v.clone()))
+        }
+        async fn set(&self, key: &str, value: Vec<u8>) -> StoreResult<()> {
+            self.data.insert(key.to_owned(), value);
+            Ok(())
+        }
+        async fn remove(&self, key: &str) -> StoreResult<()> {
+            self.data.remove(key);
+            Ok(())
+        }
+        async fn exists(&self, key: &str) -> StoreResult<bool> {
+            Ok(self.data.contains_key(key))
+        }
+    }
+
+    // Compute hash
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+
+    let doc_id = format!("{}-{}", RELAY_ID, uuid);
+
+    // Create store and write blob
+    let store_data: Arc<DashMap<String, Vec<u8>>> = Arc::new(DashMap::new());
+    let blob_key = format!("files/{}/{}", doc_id, hash);
+    store_data.insert(blob_key, content.as_bytes().to_vec());
+
+    let server = Arc::new(
+        Server::new_without_workers(
+            Some(Box::new(MemoryStore {
+                data: store_data,
+            })),
+            Duration::from_secs(60),
+            None,
+            None,
+            Vec::new(),
+            CancellationToken::new(),
+            false,
+            None,
+        )
+        .await
+        .expect("server creation should succeed"),
+    );
+
+    // Create folder doc with filemeta entry including hash
+    let folder_doc = {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String(uuid.into()));
+            map.insert("type".to_string(), Any::String("file".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            map.insert("hash".to_string(), Any::String(hash.into()));
+            filemeta.insert(&mut txn, path, Any::Map(map.into()));
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Lens".into()));
+        }
+        doc
+    };
+
+    server
+        .doc_resolver()
+        .update_folder_from_doc(&folder0_id(), &folder_doc);
+
+    server
+}
+
 /// Read the Y.Doc content back for verification.
 pub(crate) fn read_doc_content(server: &Arc<Server>, doc_id: &str) -> String {
     let doc_ref = server.docs().get(doc_id).expect("doc should exist");
