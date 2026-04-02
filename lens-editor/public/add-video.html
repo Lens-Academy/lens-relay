@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Add Video to Lens</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 600px;
+      margin: 60px auto;
+      padding: 0 20px;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      line-height: 1.6;
+    }
+    h1 { color: #fff; }
+    .bookmarklet-link {
+      display: inline-block;
+      background: #4361ee;
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-size: 16px;
+      font-weight: 500;
+      margin: 20px 0;
+      cursor: grab;
+    }
+    .bookmarklet-link:hover { background: #3a56d4; }
+    .step {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 12px 0;
+    }
+    .step-num {
+      display: inline-block;
+      background: #4361ee;
+      color: white;
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 28px;
+      font-weight: bold;
+      margin-right: 8px;
+    }
+    code {
+      background: #0f0f23;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .note {
+      background: #2a1a0e;
+      border-left: 3px solid #f0ad4e;
+      padding: 12px;
+      border-radius: 4px;
+      margin: 16px 0;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Add Video to Lens</h1>
+  <p>Add YouTube video transcripts to the Lens library with one click.</p>
+
+  <h2>Install</h2>
+  <p>Drag this button to your bookmarks bar:</p>
+
+  <a class="bookmarklet-link" id="bookmarklet-drag">Add to Lens</a>
+
+  <div class="note">
+    If your bookmarks bar is hidden, press <code>Ctrl+Shift+B</code> (Windows/Linux) or <code>Cmd+Shift+B</code> (Mac) to show it.
+  </div>
+
+  <h2>Usage</h2>
+
+  <div class="step">
+    <span class="step-num">1</span>
+    Go to any YouTube page (a video, your homepage, etc.)
+  </div>
+
+  <div class="step">
+    <span class="step-num">2</span>
+    Click the <strong>"Add to Lens"</strong> bookmark in your bookmarks bar
+  </div>
+
+  <div class="step">
+    <span class="step-num">3</span>
+    A panel opens on the right. Paste one or more YouTube video URLs (one per line), or leave it pre-filled with the current video.
+  </div>
+
+  <div class="step">
+    <span class="step-num">4</span>
+    Click <strong>"Fetch Transcripts"</strong> &mdash; the bookmarklet extracts transcripts with word-level timestamps directly from YouTube.
+  </div>
+
+  <div class="step">
+    <span class="step-num">5</span>
+    Review the results, then click <strong>"Send to Lens"</strong> to queue them for processing.
+  </div>
+
+  <div class="note">
+    <strong>Prototype note:</strong> The "Send to Lens" button currently shows a summary instead of actually sending. The server endpoint hasn't been built yet.
+  </div>
+
+  <script>
+    // Build bookmarklet href from the external JS file
+    fetch('/add-video-bookmarklet.js')
+      .then(r => r.text())
+      .then(js => {
+        const link = document.getElementById('bookmarklet-drag');
+        link.href = 'javascript:' + encodeURIComponent(js);
+      });
+  </script>
+</body>
+</html>
