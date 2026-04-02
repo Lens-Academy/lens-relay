@@ -320,18 +320,35 @@ void function() {
       };
     });
 
-    var totalSize = JSON.stringify(payload).length;
-    var summary = results.map(function(r) {
-      return '- ' + r.title + ' (' + r.channel + '): ' + r.word_event_count + ' segments';
-    }).join('\n');
+    // POST to the add-video endpoint
+    // Use the configured server URL (production: editor.lensacademy.org)
+    var serverUrl = 'https://editor.lensacademy.org/api/add-video';
 
-    alert(
-      'Prototype: would POST ' + results.length + ' transcript(s) to server.\n\n' +
-      'Payload size: ' + (totalSize / 1024).toFixed(0) + ' KB\n\n' +
-      summary
-    );
-
-    btn.textContent = 'Send ' + results.length + ' transcript' + (results.length > 1 ? 's' : '') + ' to Lens';
-    btn.disabled = false;
+    fetch(serverUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videos: payload })
+    })
+    .then(function(resp) {
+      if (!resp.ok) throw new Error('Server returned ' + resp.status);
+      return resp.json();
+    })
+    .then(function(data) {
+      btn.textContent = 'Sent!';
+      btn.style.background = '#5cb85c';
+      // Show links to relay docs
+      var statusDiv = document.getElementById('lens-av-status');
+      var linksHtml = data.jobs.map(function(j) {
+        return '<div style="margin-top:8px;font-size:13px;">' +
+          '<a href="' + (j.relay_url || '#') + '" target="_blank" style="color:#4ecdc4;">' +
+          j.title + ' - View in Lens</a></div>';
+      }).join('');
+      statusDiv.innerHTML += safeHTML(linksHtml);
+    })
+    .catch(function(err) {
+      btn.textContent = 'Failed: ' + err.message;
+      btn.style.background = '#d9534f';
+      btn.disabled = false;
+    });
   };
 }();
