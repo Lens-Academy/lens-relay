@@ -5,6 +5,9 @@ import { getRequestListener } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createAuthHandler, AuthError } from './auth-middleware.ts';
 import { discordRoutes, initDiscordGateway } from './discord/routes.ts';
+import { createAddVideoRoutes } from './add-video/routes.ts';
+import { JobQueue } from './add-video/queue.ts';
+import { processVideo } from './add-video/pipeline.ts';
 
 const relayUrl = process.env.RELAY_URL || 'http://relay-server:8080';
 const relayServerToken = process.env.RELAY_SERVER_TOKEN;
@@ -47,6 +50,10 @@ app.post('/api/auth/token', async (c) => {
 
 // Mount discord routes under /api/discord
 app.route('/api/discord', discordRoutes);
+
+// Add video transcript pipeline
+const addVideoQueue = new JobQueue({ processJob: processVideo });
+app.route('/api/add-video', createAddVideoRoutes(addVideoQueue));
 
 // Static files from Vite build output
 app.use('/*', serveStatic({ root: './dist' }));
