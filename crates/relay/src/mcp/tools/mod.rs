@@ -174,7 +174,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "create",
-            "description": "Create a new document at the specified path. The document is created immediately and syncs to all connected clients (including Obsidian).",
+            "description": "Create a new document or file at the specified path. Supports .md (markdown) and .json files.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -182,11 +182,11 @@ pub fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path for the new document (e.g. 'Lens/NewDoc.md', 'Lens/Biology/Photosynthesis.md')"
+                        "description": "Path for the new file (e.g. 'Lens/NewDoc.md', 'Lens Edu/data.json')"
                     },
                     "content": {
                         "type": "string",
-                        "description": "Initial markdown content for the document. If omitted, the document starts with a minimal placeholder."
+                        "description": "Initial content. For markdown: wrapped in CriticMarkup. For JSON: raw content stored as-is."
                     },
                     "session_id": {
                         "type": "string",

@@ -186,6 +186,101 @@ pub(crate) async fn build_blob_test_server_with_file(
     server
 }
 
+/// Build a test server with a store and a loaded folder doc (for create_blob_file tests).
+///
+/// The server has:
+/// - An in-memory store (required for blob writes)
+/// - A folder Y.Doc loaded into `server.docs()` with folder_config name "Lens"
+///   and empty filemeta_v0/docs maps
+/// - The folder doc registered in the resolver
+pub(crate) async fn build_blob_test_server_with_folder() -> Arc<Server> {
+    use async_trait::async_trait;
+    use dashmap::DashMap;
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+    use y_sweet_core::store::Result as StoreResult;
+    use y_sweet_core::store::Store;
+
+    struct MemoryStore {
+        data: Arc<DashMap<String, Vec<u8>>>,
+    }
+
+    #[async_trait]
+    impl Store for MemoryStore {
+        async fn init(&self) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn get(&self, key: &str) -> StoreResult<Option<Vec<u8>>> {
+            Ok(self.data.get(key).map(|v| v.clone()))
+        }
+        async fn set(&self, key: &str, value: Vec<u8>) -> StoreResult<()> {
+            self.data.insert(key.to_owned(), value);
+            Ok(())
+        }
+        async fn remove(&self, key: &str) -> StoreResult<()> {
+            self.data.remove(key);
+            Ok(())
+        }
+        async fn exists(&self, key: &str) -> StoreResult<bool> {
+            Ok(self.data.contains_key(key))
+        }
+    }
+
+    let store = MemoryStore {
+        data: Arc::new(DashMap::new()),
+    };
+    let server = Arc::new(
+        Server::new_without_workers(
+            Some(Box::new(store)),
+            Duration::from_secs(60),
+            None,
+            None,
+            Vec::new(),
+            CancellationToken::new(),
+            false,
+            None,
+        )
+        .await
+        .expect("server creation should succeed"),
+    );
+
+    // Create and load folder DocWithSyncKv
+    let folder_doc_id = folder0_id();
+    let dwskv = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
+        .await
+        .expect("Failed to create folder DocWithSyncKv");
+
+    // Set folder_config name and initialize filemeta_v0/docs maps
+    {
+        let awareness = dwskv.awareness();
+        let mut guard = awareness.write().unwrap();
+        let mut txn = guard.doc.transact_mut();
+        let config = txn.get_or_insert_map("folder_config");
+        config.insert(&mut txn, "name", Any::String("Lens".into()));
+        // Initialize maps; add root "/" folder entry so find_all_folder_docs detects this
+        let filemeta = txn.get_or_insert_map("filemeta_v0");
+        let mut root_map = HashMap::new();
+        root_map.insert("type".to_string(), Any::String("folder".into()));
+        filemeta.insert(&mut txn, "/", Any::Map(root_map.into()));
+        txn.get_or_insert_map("docs");
+    }
+
+    // Insert into server docs
+    server.docs().insert(folder_doc_id.clone(), dwskv);
+
+    // Update resolver from the folder doc
+    {
+        let doc_ref = server.docs().get(&folder_doc_id).unwrap();
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap();
+        server
+            .doc_resolver()
+            .update_folder_from_doc(&folder_doc_id, &guard.doc);
+    }
+
+    server
+}
+
 /// Read the Y.Doc content back for verification.
 pub(crate) fn read_doc_content(server: &Arc<Server>, doc_id: &str) -> String {
     let doc_ref = server.docs().get(doc_id).expect("doc should exist");
