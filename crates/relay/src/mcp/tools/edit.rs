@@ -133,9 +133,13 @@ pub async fn execute(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: new_string".to_string())?;
 
-    // 2. Reject if AI included CriticMarkup in its input
+    // 2. Reject if AI included CriticMarkup suggestion syntax in its input
+    //    (comment delimiters {>> <<} are allowed — AI can read and write comments)
     super::critic_markup::reject_if_contains_markup(old_string, "old_string")?;
     super::critic_markup::reject_if_contains_markup(new_string, "new_string")?;
+
+    // 2b. Validate comment preservation: non-AI comments must be kept intact
+    super::critic_markup::validate_comment_preservation(old_string, new_string)?;
 
     // 3. Resolve document path to doc_id
     let doc_info = server
@@ -830,5 +834,118 @@ mod tests {
             "edit should match smart single quotes when AI sends straight quotes, got: {:?}",
             result
         );
+    }
+
+    // === Comment-aware edit tests ===
+
+    #[tokio::test]
+    async fn edit_around_comment_preserves_it() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "uuid-doc",
+            "Hello {>>nice point<<} world",
+        )])
+        .await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "Hello {>>nice point<<} world",
+                "new_string": "Goodbye {>>nice point<<} world"
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "edit around comment should succeed, got: {:?}", result);
+        let raw = read_doc_content(&server, &doc_id);
+        assert!(raw.contains("{>>nice point<<}"), "Comment should be preserved: {}", raw);
+        let spans = critic_markup::parse(&raw);
+        assert_eq!(
+            critic_markup::accepted_view(&spans),
+            "Goodbye {>>nice point<<} world"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_removing_non_ai_comment() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "uuid-doc",
+            "Hello {>>human note<<} world",
+        )])
+        .await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "Hello {>>human note<<} world",
+                "new_string": "Hello world"
+            }),
+        )
+        .await;
+
+        assert!(result.is_err(), "should reject removing non-AI comment");
+        let err = result.unwrap_err();
+        assert!(err.contains("comment"), "Error should mention comment: {}", err);
+    }
+
+    #[tokio::test]
+    async fn edit_allows_removing_ai_comment() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "uuid-doc",
+            r#"Hello {>>{"author":"AI"}@@note<<} world"#,
+        )])
+        .await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": r#"Hello {>>{"author":"AI"}@@note<<} world"#,
+                "new_string": "Hello world"
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "removing AI comment should succeed, got: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn edit_allows_adding_comment() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "uuid-doc",
+            "Hello world",
+        )])
+        .await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "Hello world",
+                "new_string": r#"Hello{>>{"author":"AI"}@@observation<<} world"#
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "adding comment should succeed, got: {:?}", result);
+        let raw = read_doc_content(&server, &doc_id);
+        assert!(raw.contains("observation"), "Comment should be in doc: {}", raw);
     }
 }

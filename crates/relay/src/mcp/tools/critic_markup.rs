@@ -12,13 +12,15 @@ pub enum Span {
     },
 }
 
-const CRITIC_DELIMITERS: &[&str] = &[
-    "{--", "--}", "{++", "++}", "{~~", "~~}", "{==", "==}", "{>>", "<<}",
+/// Suggestion-only delimiters (excludes comment delimiters which AI is allowed to use).
+const SUGGESTION_DELIMITERS: &[&str] = &[
+    "{--", "--}", "{++", "++}", "{~~", "~~}", "{==", "==}",
 ];
 
-/// Check if text contains CriticMarkup delimiters. Returns an error message if found.
+/// Check if text contains CriticMarkup suggestion delimiters. Returns an error message if found.
+/// Comment delimiters (`{>>`, `<<}`) are allowed — AI can read and write comments.
 pub fn reject_if_contains_markup(text: &str, param_name: &str) -> Result<(), String> {
-    for delim in CRITIC_DELIMITERS {
+    for delim in SUGGESTION_DELIMITERS {
         if text.contains(delim) {
             return Err(format!(
                 "Error: {} contains CriticMarkup syntax '{}'. Do not include CriticMarkup in your input — the system handles suggestion wrapping automatically.",
@@ -26,6 +28,71 @@ pub fn reject_if_contains_markup(text: &str, param_name: &str) -> Result<(), Str
             ));
         }
     }
+    Ok(())
+}
+
+/// Information about a comment extracted from text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommentInfo {
+    pub content: String,
+    pub author: String,
+    pub from: usize,
+    pub to: usize,
+    pub full_match: String,
+}
+
+/// Extract all `{>>...<<}` comment blocks from text, with their content, author, and positions.
+pub fn extract_comments(text: &str) -> Vec<CommentInfo> {
+    let mut comments = Vec::new();
+    let mut search_from = 0;
+
+    while let Some(open) = text[search_from..].find("{>>") {
+        let abs_open = search_from + open;
+        if let Some(close_offset) = text[abs_open + 3..].find("<<}") {
+            let abs_close = abs_open + 3 + close_offset + 3; // include "<<}"
+            let inner = &text[abs_open + 3..abs_close - 3];
+            let (content, author, _ts) = extract_metadata(inner);
+            comments.push(CommentInfo {
+                content: content.to_string(),
+                author,
+                from: abs_open,
+                to: abs_close,
+                full_match: text[abs_open..abs_close].to_string(),
+            });
+            search_from = abs_close;
+        } else {
+            break;
+        }
+    }
+
+    comments
+}
+
+/// Validate that non-AI comments from `old_str` are preserved in `new_str`.
+/// AI-authored comments (author == "AI") can be modified or removed.
+/// New comments in `new_str` are allowed.
+/// Compares `full_match` (not just content) to prevent metadata reattribution.
+pub fn validate_comment_preservation(old_str: &str, new_str: &str) -> Result<(), String> {
+    let old_comments = extract_comments(old_str);
+    let new_comments = extract_comments(new_str);
+
+    for old_comment in &old_comments {
+        if old_comment.author == "AI" {
+            continue; // AI comments can be modified/removed
+        }
+
+        // Non-AI comment must appear in new_str with identical markup
+        let preserved = new_comments
+            .iter()
+            .any(|nc| nc.full_match == old_comment.full_match);
+        if !preserved {
+            return Err(format!(
+                "Error: Cannot remove or modify non-AI comment: \"{}\". Only AI-authored comments can be changed.",
+                old_comment.content
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -2002,5 +2069,154 @@ mod tests {
             spans,
             vec![Span::Plain("```\n✅ emoji in code\n```".to_string())]
         );
+    }
+
+    // --- Comment-aware edits ---
+
+    #[test]
+    fn reject_markup_allows_comment_delimiters() {
+        // Comment delimiters should be allowed through
+        assert!(reject_if_contains_markup("text {>>comment<<} here", "old_string").is_ok());
+        assert!(reject_if_contains_markup("text {>>new comment<<}", "new_string").is_ok());
+        // Suggestion delimiters still rejected
+        assert!(reject_if_contains_markup("{--deleted--}", "old_string").is_err());
+        assert!(reject_if_contains_markup("{++inserted++}", "new_string").is_err());
+    }
+
+    #[test]
+    fn extract_comments_basic() {
+        let comments = extract_comments("Hello {>>note<<} world");
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].content, "note");
+        assert_eq!(comments[0].author, "Unknown");
+        assert_eq!(comments[0].full_match, "{>>note<<}");
+    }
+
+    #[test]
+    fn extract_comments_with_metadata() {
+        let text = r#"Hello {>>{"author":"AI","timestamp":123}@@observation<<} world"#;
+        let comments = extract_comments(text);
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].content, "observation");
+        assert_eq!(comments[0].author, "AI");
+    }
+
+    #[test]
+    fn extract_comments_multiple() {
+        let text = "A {>>first<<} B {>>second<<} C";
+        let comments = extract_comments(text);
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].content, "first");
+        assert_eq!(comments[1].content, "second");
+    }
+
+    #[test]
+    fn extract_comments_none() {
+        let comments = extract_comments("Hello world, no comments");
+        assert_eq!(comments.len(), 0);
+    }
+
+    #[test]
+    fn validate_comments_preserved_ok() {
+        // Same comment in both → OK
+        let result = validate_comment_preservation(
+            "Hello {>>note<<} world",
+            "Goodbye {>>note<<} world",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_comments_non_ai_removed_rejected() {
+        // Non-AI comment removed → rejected
+        let result = validate_comment_preservation(
+            "Hello {>>note<<} world",
+            "Hello world",
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("comment"));
+    }
+
+    #[test]
+    fn validate_comments_non_ai_modified_rejected() {
+        // Non-AI comment content changed → rejected
+        let result = validate_comment_preservation(
+            "Hello {>>note<<} world",
+            "Hello {>>different<<} world",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_comments_ai_removed_ok() {
+        // AI comment removed → OK
+        let result = validate_comment_preservation(
+            r#"Hello {>>{"author":"AI"}@@note<<} world"#,
+            "Hello world",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_comments_ai_modified_ok() {
+        // AI comment modified → OK
+        let result = validate_comment_preservation(
+            r#"Hello {>>{"author":"AI"}@@note<<} world"#,
+            r#"Hello {>>{"author":"AI"}@@updated<<} world"#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_comments_new_comment_added_ok() {
+        // New comment added → OK
+        let result = validate_comment_preservation(
+            "Hello world",
+            r#"Hello {>>{"author":"AI"}@@observation<<} world"#,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_comments_no_metadata_treated_as_non_ai() {
+        // Comment without metadata is protected (non-AI)
+        let result = validate_comment_preservation(
+            "Hello {>>note<<} world",
+            "Hello world",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn merge_edit_around_comment() {
+        // Editing text that spans a comment should preserve the comment
+        let raw = "Hello {>>nice<<} world";
+        let result = merge_edit(raw, "Hello {>>nice<<} world", "Goodbye {>>nice<<} world", "AI", 100).unwrap();
+        let final_raw = apply_merge(raw, &result);
+        let final_raw_stripped = strip_metadata(&final_raw);
+        // Comment should be preserved, only Hello→Goodbye changed
+        assert!(final_raw_stripped.contains("{>>nice<<}"), "Comment should be preserved: {}", final_raw_stripped);
+        assert!(final_raw_stripped.contains("{--Hello--}") || final_raw_stripped.contains("{--Hello --}"),
+            "Should have deletion of Hello: {}", final_raw_stripped);
+        assert!(final_raw_stripped.contains("{++Goodbye"), "Should have insertion of Goodbye: {}", final_raw_stripped);
+    }
+
+    #[test]
+    fn validate_comments_reattribution_blocked() {
+        // AI tries to reattribute a bare (non-AI) comment by adding AI metadata
+        // while keeping the same content. full_match comparison blocks this.
+        let result = validate_comment_preservation(
+            "Hello {>>note<<} world",
+            r#"Hello {>>{"author":"AI"}@@note<<} world"#,
+        );
+        assert!(result.is_err(), "reattribution should be rejected");
+    }
+
+    #[test]
+    fn extract_comments_empty_comment() {
+        let comments = extract_comments("text {>><<} here");
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].content, "");
+        assert_eq!(comments[0].author, "Unknown");
     }
 }
