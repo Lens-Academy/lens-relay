@@ -161,27 +161,38 @@ pub(crate) async fn build_blob_test_server_with_file(
         .expect("server creation should succeed"),
     );
 
-    // Create folder doc with filemeta entry including hash
-    let folder_doc = {
-        let doc = Doc::new();
-        {
-            let mut txn = doc.transact_mut();
-            let filemeta = txn.get_or_insert_map("filemeta_v0");
-            let mut map = HashMap::new();
-            map.insert("id".to_string(), Any::String(uuid.into()));
-            map.insert("type".to_string(), Any::String("file".into()));
-            map.insert("version".to_string(), Any::Number(0.0));
-            map.insert("hash".to_string(), Any::String(hash.into()));
-            filemeta.insert(&mut txn, path, Any::Map(map.into()));
-            let config = txn.get_or_insert_map("folder_config");
-            config.insert(&mut txn, "name", Any::String("Lens".into()));
-        }
-        doc
-    };
+    // Create and load folder DocWithSyncKv with filemeta entry including hash
+    let folder_doc_id = folder0_id();
+    let dwskv = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
+        .await
+        .expect("Failed to create folder DocWithSyncKv");
 
-    server
-        .doc_resolver()
-        .update_folder_from_doc(&folder0_id(), &folder_doc);
+    {
+        let awareness = dwskv.awareness();
+        let mut guard = awareness.write().unwrap();
+        let mut txn = guard.doc.transact_mut();
+        let filemeta = txn.get_or_insert_map("filemeta_v0");
+        let mut map = HashMap::new();
+        map.insert("id".to_string(), Any::String(uuid.into()));
+        map.insert("type".to_string(), Any::String("file".into()));
+        map.insert("version".to_string(), Any::Number(0.0));
+        map.insert("hash".to_string(), Any::String(hash.into()));
+        filemeta.insert(&mut txn, path, Any::Map(map.into()));
+        let config = txn.get_or_insert_map("folder_config");
+        config.insert(&mut txn, "name", Any::String("Lens".into()));
+    }
+
+    server.docs().insert(folder_doc_id.clone(), dwskv);
+
+    // Update resolver from the loaded folder doc
+    {
+        let doc_ref = server.docs().get(&folder_doc_id).unwrap();
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap();
+        server
+            .doc_resolver()
+            .update_folder_from_doc(&folder_doc_id, &guard.doc);
+    }
 
     server
 }

@@ -1094,6 +1094,72 @@ impl Server {
         })
     }
 
+    /// Update the hash field in filemeta_v0 for an existing blob file.
+    ///
+    /// This removes the old `Any::Map` entry and re-inserts it with the updated hash,
+    /// since `Any::Map` entries are opaque and cannot be mutated in place.
+    pub async fn update_blob_hash(
+        &self,
+        folder_doc_id: &str,
+        file_path: &str,
+        new_hash: &str,
+    ) -> std::result::Result<(), String> {
+        // Extract in_folder_path: strip folder name prefix to get "/data.json"
+        let slash_pos = file_path.find('/').ok_or("Invalid file path")?;
+        let in_folder_path = &file_path[slash_pos..];
+
+        // Update filemeta in a scoped block so borrows are released before persist
+        {
+            let awareness = {
+                let doc_ref = self
+                    .docs()
+                    .get(folder_doc_id)
+                    .ok_or("Folder doc not loaded")?;
+                doc_ref.awareness()
+            };
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard.doc.transact_mut_with("mcp");
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+
+            // Read the existing Any::Map entry, update hash, and re-insert
+            if let Some(yrs::Out::Any(yrs::Any::Map(old_map))) =
+                filemeta.get(&txn, in_folder_path)
+            {
+                let mut new_map = std::collections::HashMap::new();
+                for (k, v) in old_map.iter() {
+                    if k == "hash" {
+                        new_map.insert(k.to_string(), yrs::Any::String(new_hash.into()));
+                    } else {
+                        new_map.insert(k.to_string(), v.clone());
+                    }
+                }
+                filemeta.insert(
+                    &mut txn,
+                    in_folder_path,
+                    yrs::Any::Map(new_map.into()),
+                );
+            } else {
+                return Err(format!("Filemeta entry not found for {}", in_folder_path));
+            }
+        }
+
+        // Persist folder doc
+        {
+            let folder_sync_kv = self.docs().get(folder_doc_id).map(|r| r.sync_kv());
+            if let Some(sync_kv) = folder_sync_kv {
+                if let Err(e) = sync_kv.persist().await {
+                    tracing::error!(
+                        "Failed to persist folder doc {}: {:?}",
+                        folder_doc_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create a new blob (non-Y.Doc) file at the specified path within a folder.
     ///
     /// Unlike `create_document`, this does NOT create a Y.Doc or wrap content in
