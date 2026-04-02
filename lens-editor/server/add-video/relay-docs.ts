@@ -1,6 +1,6 @@
 function getRelayConfig() {
   const url = process.env.RELAY_URL || 'http://relay-server:8080';
-  const mcpKey = process.env.MCP_API_KEY || '';
+  const mcpKey = process.env.RELAY_SERVER_TOKEN || '';
   return { url, mcpKey };
 }
 

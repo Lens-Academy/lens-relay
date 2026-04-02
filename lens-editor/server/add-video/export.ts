@@ -25,14 +25,18 @@ interface MarkdownParams {
   body: string;
 }
 
+function yamlQuote(s: string): string {
+  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
 /** Generate markdown with YAML frontmatter */
 export function generateMarkdown(params: MarkdownParams): string {
   const frontmatter = [
     '---',
-    `title: "${params.title}"`,
-    `channel: "${params.channel}"`,
-    `url: "${params.url}"`,
-    `video_id: "${params.video_id}"`,
+    `title: ${yamlQuote(params.title)}`,
+    `channel: ${yamlQuote(params.channel)}`,
+    `url: ${yamlQuote(params.url)}`,
+    `video_id: ${yamlQuote(params.video_id)}`,
     '---',
   ].join('\n');
 

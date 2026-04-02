@@ -12,6 +12,19 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
       return c.json({ error: 'videos array is required and must not be empty' }, 400);
     }
 
+    // Validate each video payload
+    for (const video of body.videos) {
+      if (!video.video_id || !video.title || !video.channel || !video.url) {
+        return c.json({ error: 'Each video must have video_id, title, channel, and url' }, 400);
+      }
+      if (video.transcript_type !== 'word_level' && video.transcript_type !== 'sentence_level') {
+        return c.json({ error: 'transcript_type must be "word_level" or "sentence_level"' }, 400);
+      }
+      if (!video.transcript_raw?.events || !Array.isArray(video.transcript_raw.events)) {
+        return c.json({ error: 'transcript_raw must have an events array' }, 400);
+      }
+    }
+
     const jobs = body.videos.map((video) => queue.add(video));
 
     return c.json({
