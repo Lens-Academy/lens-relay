@@ -39,7 +39,7 @@ export async function processVideo(
       channel: job.channel,
       url: job.url,
       video_id: job.video_id,
-      body: `*This transcript is being processing. Please check back shortly.*\n\nQueued at: ${job.created_at}`,
+      body: `*This transcript is being processed. Please check back shortly.*\n\nQueued at: ${job.created_at}`,
     });
     await createRelayDoc(mdPath, placeholderContent);
     job.relay_url = mdPath;

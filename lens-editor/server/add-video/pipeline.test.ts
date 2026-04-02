@@ -83,7 +83,7 @@ describe('processVideo', () => {
 
     expect(mockRelayDocs.createRelayDoc).toHaveBeenCalledWith(
       expect.stringContaining('Lens Edu/video_transcripts/'),
-      expect.stringContaining('processing')
+      expect.stringContaining('processed')
     );
   });
 
