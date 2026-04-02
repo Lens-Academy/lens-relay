@@ -1,3 +1,4 @@
+pub mod blob;
 pub mod create_doc;
 pub mod critic_diff;
 pub mod critic_markup;

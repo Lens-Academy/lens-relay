@@ -883,6 +883,11 @@ impl Server {
         &self.search_index
     }
 
+    /// Get the backing store, if configured.
+    pub fn store(&self) -> &Option<Arc<Box<dyn Store>>> {
+        &self.store
+    }
+
     /// Get the link indexer, if enabled.
     pub fn link_indexer(&self) -> &Option<Arc<LinkIndexer>> {
         &self.link_indexer
