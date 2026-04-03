@@ -36,7 +36,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate } = useNavigation();
-  const { canWrite } = useAuth();
+  const { canWrite, canEdit } = useAuth();
   const { manager, headerStage } = useSidebar();
   const hasDiscussion = useHasDiscussion();
   const [addCommentTrigger, setAddCommentTrigger] = useState(0);
@@ -208,6 +208,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <div className="flex-1 min-h-0">
             <Editor
               readOnly={!canWrite}
+              canAcceptReject={canEdit}
               onEditorReady={handleEditorReady}
               onDocChange={handleDocChange}
               onSynced={handleSynced}

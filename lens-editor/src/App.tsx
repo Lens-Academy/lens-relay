@@ -11,7 +11,7 @@ import { DisplayNameProvider } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 import { SidebarContext } from './contexts/SidebarContext';
 import { useMultiFolderMetadata, type FolderConfig } from './hooks/useMultiFolderMetadata';
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
 import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired, decodeFolderFromToken, isAllFoldersToken } from './lib/auth-share';
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
@@ -234,28 +234,35 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
 
 /**
  * Smart default redirect: picks the first available doc from accessible folders.
- * Falls back to hardcoded DEFAULT_DOC_UUID for all-folders tokens or while loading.
+ * For all-folders tokens, uses the hardcoded default immediately.
+ * For folder-scoped tokens, waits for metadata to load, then picks the first doc.
  */
 function DefaultRedirect() {
   const { metadata } = useNavigation();
+  const { isAllFolders } = useAuth();
   const metaEntries = Object.values(metadata);
 
-  // If metadata hasn't loaded yet, try the hardcoded default (optimistic — works for all-folders tokens)
+  // All-folders tokens can use the hardcoded default immediately
+  if (isAllFolders) {
+    return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
+  }
+
+  // Folder-scoped: wait for metadata before redirecting (avoid 403 on wrong folder's doc)
   if (metaEntries.length === 0) {
-    return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
+    return (
+      <main className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Loading...</div>
+      </main>
+    );
   }
 
-  // If the hardcoded default is in accessible metadata, use it
-  if (metaEntries.some(m => m.id.startsWith(DEFAULT_DOC_UUID))) {
-    return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
-  }
-
-  // Hardcoded default not accessible — pick first available doc
+  // Pick first available doc from accessible metadata
   const firstDoc = metaEntries.find(m => m.id);
   if (firstDoc) {
     return <Navigate to={`/${firstDoc.id.slice(0, 8)}`} replace />;
   }
 
+  // Fallback (shouldn't happen — folder has no docs)
   return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
 }
 
