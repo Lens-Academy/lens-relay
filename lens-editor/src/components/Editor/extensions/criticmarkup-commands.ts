@@ -1,6 +1,6 @@
 // src/components/Editor/extensions/criticmarkup-commands.ts
 import type { EditorView, KeyBinding } from '@codemirror/view';
-import { criticMarkupField } from './criticmarkup';
+import { criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
 import type { CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 /**
@@ -130,10 +130,16 @@ export function rejectChangeAtCursor(view: EditorView): boolean {
 export const criticMarkupKeymap: KeyBinding[] = [
   {
     key: 'Mod-Enter',
-    run: acceptChangeAtCursor,
+    run: (view) => {
+      if (!view.state.facet(canAcceptRejectFacet)) return false;
+      return acceptChangeAtCursor(view);
+    },
   },
   {
     key: 'Mod-Backspace',
-    run: rejectChangeAtCursor,
+    run: (view) => {
+      if (!view.state.facet(canAcceptRejectFacet)) return false;
+      return rejectChangeAtCursor(view);
+    },
   },
 ];

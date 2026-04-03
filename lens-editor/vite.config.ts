@@ -36,6 +36,61 @@ export default defineConfig(() => {
   console.log(`[vite] Discord bridge port ${bridgePort}`);
 
   /**
+   * Vite plugin that validates share tokens on /api/relay/ proxy requests.
+   * Ensures browser requests carry a valid X-Share-Token before being forwarded
+   * to the relay server with the injected server auth token.
+   */
+  function relayProxyAuthPlugin(): Plugin {
+    return {
+      name: 'relay-proxy-auth',
+      configureServer(server) {
+        // Validate share token on /api/relay/ proxy requests
+        server.middlewares.use('/api/relay', async (req, res, next) => {
+          const { validateProxyToken, checkProxyAccess } = await import('./server/relay-proxy-auth.ts');
+
+          const shareToken = req.headers['x-share-token'] as string | undefined;
+          const auth = validateProxyToken(shareToken);
+          if (!auth) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid or expired share token' }));
+            return;
+          }
+
+          const fullUrl = req.url || '/';
+          const queryIdx = fullUrl.indexOf('?');
+          const pathOnly = queryIdx >= 0 ? fullUrl.slice(0, queryIdx) : fullUrl;
+          const query = queryIdx >= 0 ? fullUrl.slice(queryIdx + 1) : '';
+          const access = checkProxyAccess(req.method || 'GET', pathOnly, query, auth);
+          if (!access.allowed) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: access.reason || 'Access denied' }));
+            return;
+          }
+
+          delete req.headers['x-share-token'];
+          next();
+        });
+
+        // Validate share token on /open/ proxy requests (path-based document resolution)
+        server.middlewares.use('/open', async (req, res, next) => {
+          const { validateProxyToken } = await import('./server/relay-proxy-auth.ts');
+
+          const shareToken = req.headers['x-share-token'] as string | undefined;
+          const auth = validateProxyToken(shareToken);
+          if (!auth) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid or expired share token' }));
+            return;
+          }
+
+          delete req.headers['x-share-token'];
+          next();
+        });
+      },
+    };
+  }
+
+  /**
    * Vite plugin that adds /api/auth/token endpoint for share token validation.
    * This is dev-only — configureServer only runs in `vite dev`, not production builds.
    */
@@ -198,7 +253,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), shareTokenAuthPlugin(), addVideoPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

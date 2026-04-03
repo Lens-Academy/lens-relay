@@ -39,7 +39,14 @@ export function useSuggestions(folderIds: string[]) {
       const errors: string[] = [];
       for (const folderId of folderIds) {
         try {
-          const res = await fetch(`/api/relay/suggestions?folder_id=${encodeURIComponent(folderId)}`);
+          const res = await fetch(`/api/relay/suggestions?folder_id=${encodeURIComponent(folderId)}`, {
+            headers: (() => {
+              const h: Record<string, string> = {};
+              const token = localStorage.getItem('lens-share-token');
+              if (token) h['X-Share-Token'] = token;
+              return h;
+            })(),
+          });
           if (!res.ok) {
             errors.push(`Failed to fetch suggestions for ${folderId}`);
             continue;

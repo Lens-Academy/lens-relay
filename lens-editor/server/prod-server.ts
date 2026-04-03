@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { getRequestListener } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { createAuthHandler, AuthError } from './auth-middleware.ts';
+import { validateProxyToken, checkProxyAccess } from './relay-proxy-auth.ts';
 import { discordRoutes, initDiscordGateway } from './discord/routes.ts';
 import { createAddVideoRoutes } from './add-video/routes.ts';
 import { JobQueue } from './add-video/queue.ts';
@@ -67,16 +68,48 @@ const server = http.createServer((req, res) => {
   const url = req.url || '/';
 
   if (url.startsWith('/api/relay/') || url === '/api/relay') {
-    req.url = url.replace(/^\/api\/relay/, '') || '/';
+    // Validate share token from X-Share-Token header
+    const shareToken = req.headers['x-share-token'] as string | undefined;
+    const auth = validateProxyToken(shareToken);
+    if (!auth) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid or expired share token' }));
+      return;
+    }
+
+    // Check folder-scoped access for this endpoint
+    const relayPath = url.replace(/^\/api\/relay/, '') || '/';
+    const queryIdx = relayPath.indexOf('?');
+    const pathOnly = queryIdx >= 0 ? relayPath.slice(0, queryIdx) : relayPath;
+    const query = queryIdx >= 0 ? relayPath.slice(queryIdx + 1) : '';
+    const access = checkProxyAccess(req.method || 'GET', pathOnly, query, auth);
+    if (!access.allowed) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: access.reason || 'Access denied' }));
+      return;
+    }
+
+    req.url = relayPath;
     if (relayServerToken) {
       req.headers['authorization'] = `Bearer ${relayServerToken}`;
     }
+    // Remove share token header before proxying to relay
+    delete req.headers['x-share-token'];
     proxy.web(req, res, { target: relayUrl, changeOrigin: true });
   } else if (url.startsWith('/open/')) {
     // Proxy /open/* path-based document resolution to relay-server
+    // Requires valid share token (prevents unauthenticated path probing)
+    const shareToken = req.headers['x-share-token'] as string | undefined;
+    const auth = validateProxyToken(shareToken);
+    if (!auth) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid or expired share token' }));
+      return;
+    }
     if (relayServerToken) {
       req.headers['authorization'] = `Bearer ${relayServerToken}`;
     }
+    delete req.headers['x-share-token'];
     proxy.web(req, res, { target: relayUrl, changeOrigin: true });
   } else {
     honoListener(req, res);

@@ -28,6 +28,12 @@ describe('auth-middleware', () => {
 
   it('should return clientToken and role for valid edit token', async () => {
     const token = signShareToken(validPayload);
+    // Folder lookup mock
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ folderUuid: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e' }),
+    });
+    // Relay auth mock
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -48,6 +54,12 @@ describe('auth-middleware', () => {
   it('should request read-only relay token for view role', async () => {
     const viewPayload: ShareTokenPayload = { ...validPayload, role: 'view' };
     const token = signShareToken(viewPayload);
+    // Folder lookup mock
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ folderUuid: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e' }),
+    });
+    // Relay auth mock
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -62,7 +74,7 @@ describe('auth-middleware', () => {
     expect(result.role).toBe('view');
     expect(result.clientToken.authorization).toBe('read-only');
 
-    // Verify relay was called with read-only
+    // Verify relay was called with read-only (second fetch call)
     expect(mockFetch).toHaveBeenCalledWith(
       'http://localhost:8190/doc/doc123/auth',
       expect.objectContaining({
@@ -74,6 +86,12 @@ describe('auth-middleware', () => {
   it('should request full relay token for suggest role', async () => {
     const suggestPayload: ShareTokenPayload = { ...validPayload, role: 'suggest' };
     const token = signShareToken(suggestPayload);
+    // Folder lookup mock
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ folderUuid: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e' }),
+    });
+    // Relay auth mock
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -98,6 +116,12 @@ describe('auth-middleware', () => {
 
   it('should throw AuthError 502 when relay returns error', async () => {
     const token = signShareToken(validPayload);
+    // Folder lookup mock
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ folderUuid: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e' }),
+    });
+    // Relay auth mock (error)
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
@@ -109,6 +133,12 @@ describe('auth-middleware', () => {
 
   it('should include Authorization header when relayServerToken is set', async () => {
     const token = signShareToken(validPayload);
+    // Folder lookup mock
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ folderUuid: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e' }),
+    });
+    // Relay auth mock
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ url: '', docId: '', token: '' }),
@@ -128,6 +158,12 @@ describe('auth-middleware', () => {
 
   it('should call the correct relay URL for the given docId', async () => {
     const token = signShareToken(validPayload);
+    // Folder lookup mock
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ folderUuid: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e' }),
+    });
+    // Relay auth mock
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ url: '', docId: '', token: '' }),
@@ -139,5 +175,100 @@ describe('auth-middleware', () => {
       'http://localhost:8190/doc/my-specific-doc-id/auth',
       expect.any(Object),
     );
+  });
+
+  const ALL_FOLDERS_SENTINEL = '00000000-0000-0000-0000-000000000000';
+  const FOLDER_A = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
+  const FOLDER_B = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
+
+  describe('folder scope enforcement', () => {
+    it('should allow access when doc is in token folder', async () => {
+      const token = signShareToken({ role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+
+      // First call: folder lookup returns matching folder
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ folderUuid: FOLDER_A }),
+      });
+      // Second call: relay auth proxy
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ url: 'ws://localhost:8190/d/doc123/ws', docId: 'doc123', token: 'relay-token' }),
+      });
+
+      const result = await handler({ token, docId: 'doc123' });
+      expect(result.role).toBe('edit');
+
+      // Verify folder lookup was called
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8190/doc/doc123/folder',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer test-server-token' }),
+        }),
+      );
+    });
+
+    it('should reject access when doc is in different folder', async () => {
+      const token = signShareToken({ role: 'suggest', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+
+      // Folder lookup returns a different folder
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ folderUuid: FOLDER_B }),
+      });
+
+      await expect(handler({ token, docId: 'doc-in-folder-b' }))
+        .rejects.toThrow(AuthError);
+    });
+
+    it('should reject access when folder lookup returns 404', async () => {
+      const token = signShareToken({ role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+
+      await expect(handler({ token, docId: 'unknown-doc' }))
+        .rejects.toThrow(AuthError);
+    });
+
+    it('should allow access to folder doc itself with matching folder-scoped token', async () => {
+      // Bug: folder-scoped token accessing its OWN folder doc (for metadata sync)
+      // The folder doc ID format is "relay_id-folder_uuid" — same as the token's folder.
+      // The folder lookup returns 404 because folder docs aren't content docs,
+      // but this should be allowed since the doc IS the folder the token authorizes.
+      const token = signShareToken({ role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+
+      // Folder lookup returns 404 — folder doc is not a content doc
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      // Relay auth mock (should be reached if folder doc access is allowed)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ url: 'ws://localhost:8190/d/folder-doc/ws', docId: 'folder-doc', token: 'relay-token' }),
+      });
+
+      // docId ends with the token's folder UUID — this IS the folder doc
+      const folderDocId = `relay-id-${FOLDER_A}`;
+      const result = await handler({ token, docId: folderDocId });
+      expect(result.role).toBe('edit');
+    });
+
+    it('should bypass folder check for all-folders sentinel token', async () => {
+      const token = signShareToken({ role: 'edit', folder: ALL_FOLDERS_SENTINEL, expiry: Math.floor(Date.now() / 1000) + 3600 });
+
+      // Only one fetch call: relay auth proxy (no folder lookup)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ url: 'ws://localhost:8190/d/doc123/ws', docId: 'doc123', token: 'relay-token' }),
+      });
+
+      const result = await handler({ token, docId: 'doc123' });
+      expect(result.role).toBe('edit');
+
+      // Verify only ONE fetch was made (relay auth, not folder lookup)
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8190/doc/doc123/auth',
+        expect.any(Object),
+      );
+    });
   });
 });

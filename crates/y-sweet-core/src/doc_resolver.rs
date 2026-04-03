@@ -138,6 +138,17 @@ impl DocumentResolver {
         self.uuid_to_path.get(uuid).map(|r| r.value().clone())
     }
 
+    /// Get the folder UUID for a content document UUID.
+    ///
+    /// Returns the folder portion of the folder_doc_id (i.e., the part after
+    /// the relay_id dash). Returns None if the UUID is not in any folder.
+    pub fn folder_uuid_for_doc(&self, uuid: &str) -> Option<String> {
+        let path = self.uuid_to_path.get(uuid)?;
+        let info = self.path_to_doc.get(path.value())?;
+        // folder_doc_id format: "relay_id-folder_uuid"
+        parse_doc_id(&info.folder_doc_id).map(|(_, folder_uuid)| folder_uuid.to_string())
+    }
+
     /// Get all registered document paths (for glob matching).
     pub fn all_paths(&self) -> Vec<String> {
         self.path_to_doc.iter().map(|r| r.key().clone()).collect()
@@ -616,6 +627,31 @@ mod tests {
     }
 
     // === rebuild clears old entries ===
+
+    // === folder_uuid_for_doc tests ===
+
+    #[test]
+    fn folder_uuid_for_doc_returns_correct_folder() {
+        let folder0 = create_folder_doc(&[("/Photosynthesis.md", "uuid-photo")]);
+        set_folder_name(&folder0, "Lens");
+        let folder1 = create_folder_doc(&[("/Welcome.md", "uuid-welcome")]);
+        set_folder_name(&folder1, "Lens Edu");
+
+        let resolver = build_resolver(&[(&folder0_id(), &folder0), (&folder1_id(), &folder1)]);
+
+        // uuid-photo is in folder0 (Lens), whose folder UUID is FOLDER0_UUID
+        assert_eq!(
+            resolver.folder_uuid_for_doc("uuid-photo"),
+            Some(FOLDER0_UUID.to_string()),
+        );
+        // uuid-welcome is in folder1 (Lens Edu), whose folder UUID is FOLDER1_UUID
+        assert_eq!(
+            resolver.folder_uuid_for_doc("uuid-welcome"),
+            Some(FOLDER1_UUID.to_string()),
+        );
+        // unknown uuid
+        assert_eq!(resolver.folder_uuid_for_doc("nonexistent"), None);
+    }
 
     #[test]
     fn rebuild_clears_stale_entries() {

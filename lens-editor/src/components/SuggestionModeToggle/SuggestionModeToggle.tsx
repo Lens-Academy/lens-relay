@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { EditorView } from '@codemirror/view';
 import {
   toggleSuggestionMode,
@@ -25,7 +25,7 @@ function SuggestIcon() {
   );
 }
 
-// Eye icon for "Viewing" mode (Heroicons Mini eye)
+// Eye icon for "Read-Only" mode (Heroicons Mini eye)
 function ViewIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
@@ -39,6 +39,8 @@ interface SuggestionModeToggleProps {
   view: EditorView | null;
   /** When true, show icons instead of text labels */
   iconOnly?: boolean;
+  /** Controlled suggestion mode state (from EditorArea's updateListener) */
+  isSuggestionMode: boolean;
 }
 
 /**
@@ -46,17 +48,10 @@ interface SuggestionModeToggleProps {
  *
  * - For 'edit' role: Full toggle between Editing and Suggesting modes
  * - For 'suggest' role: Locked into Suggesting mode (shows badge instead of toggle)
- * - For 'view' role: Locked "Viewing" badge (no editing capabilities)
+ * - For 'view' role: Locked "Read-Only" badge (no editing capabilities)
  */
-export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeToggleProps) {
+export function SuggestionModeToggle({ view, iconOnly = false, isSuggestionMode }: SuggestionModeToggleProps) {
   const { role, canEdit } = useAuth();
-  const [isSuggestionMode, setIsSuggestionMode] = useState(false);
-
-  // Sync local state with editor state when view changes
-  useEffect(() => {
-    if (!view) return;
-    setIsSuggestionMode(view.state.field(suggestionModeField));
-  }, [view]);
 
   // Force suggestion mode ON for suggest-only users
   useEffect(() => {
@@ -66,15 +61,14 @@ export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeT
       view.dispatch({
         effects: toggleSuggestionMode.of(true),
       });
-      setIsSuggestionMode(true);
     }
   }, [view, role]);
 
   // View-only users: show locked badge
   if (role === 'view') {
     return (
-      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-100 text-red-800" title="Viewing">
-        {iconOnly ? <ViewIcon /> : 'Viewing'}
+      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-100 text-red-800" title="Read-Only">
+        {iconOnly ? <ViewIcon /> : 'Read-Only'}
       </span>
     );
   }
@@ -82,8 +76,8 @@ export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeT
   // Suggest-only users: show locked badge
   if (role === 'suggest') {
     return (
-      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-amber-100 text-amber-800" title="Suggesting">
-        {iconOnly ? <SuggestIcon /> : 'Suggesting'}
+      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-amber-100 text-amber-800" title="Suggest + Comment Only">
+        {iconOnly ? <SuggestIcon /> : 'Suggest + Comment Only'}
       </span>
     );
   }
@@ -92,7 +86,6 @@ export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeT
   const handleChange = (value: SegmentedValue) => {
     if (!view) return;
     const newSuggestionMode = value === 'left';
-    setIsSuggestionMode(newSuggestionMode);
     view.dispatch({
       effects: toggleSuggestionMode.of(newSuggestionMode),
     });

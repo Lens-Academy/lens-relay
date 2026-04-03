@@ -26,7 +26,7 @@ import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
-import { livePreview, updateWikilinkContext, wikilinkMetadataChanged } from './extensions/livePreview';
+import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment } from './extensions/livePreview';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
@@ -49,6 +49,7 @@ const listIndentKeymap = keymap.of([
 
 interface EditorProps {
   readOnly?: boolean;
+  canAcceptReject?: boolean;
   onEditorReady?: (view: EditorView) => void;
   onDocChange?: () => void;
   onSynced?: () => void;
@@ -96,7 +97,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, metadata, currentFilePath }: EditorProps) {
+export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, metadata, currentFilePath }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -297,6 +298,7 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onSynced, onNavig
           addKeymap: false,
         }),
         livePreview(wikilinkContextRef.current),
+        sourceReadOnlyCompartment.of([]),
         emphasisPersistPlugin,
         headingFlashPlugin,
         Prec.high(keymap.of(tightMarkdownKeymap)),
@@ -306,7 +308,7 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onSynced, onNavig
         yCollab(ytext, provider.awareness, { undoManager }),
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         remoteCursorTheme,
-        criticMarkupExtension(),
+        criticMarkupExtension({ canAcceptReject }),
         harperLinter,
         Prec.highest(keymap.of([{
           key: 'Mod-Shift-m',
@@ -379,7 +381,7 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onSynced, onNavig
     };
   // Note: wikilinkContext is NOT a dependency - we update it via updateWikilinkContext()
   // to avoid recreating the editor (which would lose Y.Text sync state)
-  }, [ydoc, provider, onEditorReady, onDocChange, readOnly]);
+  }, [ydoc, provider, onEditorReady, onDocChange, readOnly, canAcceptReject]);
 
   return (
     <div className="relative h-full w-full">

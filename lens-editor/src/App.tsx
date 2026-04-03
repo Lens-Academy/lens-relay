@@ -11,9 +11,9 @@ import { DisplayNameProvider } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 import { SidebarContext } from './contexts/SidebarContext';
 import { useMultiFolderMetadata, type FolderConfig } from './hooks/useMultiFolderMetadata';
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
-import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired } from './lib/auth-share';
+import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired, decodeFolderFromToken, isAllFoldersToken } from './lib/auth-share';
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
@@ -67,6 +67,8 @@ const DEFAULT_DOC_UUID = (USE_LOCAL_RELAY && !USE_LOCAL_R2) ? 'c0000001' : '76c3
 const shareToken = getShareTokenFromUrl();
 const shareRole: UserRole | null = shareToken ? decodeRoleFromToken(shareToken) : null;
 const shareExpired: boolean = shareToken ? isTokenExpired(shareToken) : false;
+const shareFolderUuid: string | null = shareToken ? decodeFolderFromToken(shareToken) : null;
+const shareIsAllFolders: boolean = shareFolderUuid ? isAllFoldersToken(shareFolderUuid) : false;
 
 // Store share token for all relay auth calls, then strip from URL bar
 if (shareToken) {
@@ -225,7 +227,7 @@ export function App() {
   if (authError) {
     return <TokenInvalid />;
   }
-  return <AuthenticatedApp role={shareRole} />;
+  return <AuthenticatedApp role={shareRole} folderUuid={shareFolderUuid} isAllFolders={shareIsAllFolders} />;
 }
 
 function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: string[]; folders: { id: string; name: string }[]; relayId: string }) {
@@ -248,16 +250,49 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
   );
 }
 
-function AuthenticatedApp({ role }: { role: UserRole }) {
+/**
+ * Landing page shown when no document is selected.
+ * For all-folders tokens, redirects to the hardcoded default doc.
+ * For folder-scoped tokens, shows a prompt to select a file.
+ */
+function DefaultLanding() {
+  const { isAllFolders } = useAuth();
+
+  // All-folders tokens can use the hardcoded default immediately
+  if (isAllFolders) {
+    return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
+  }
+
+  // Folder-scoped: show landing page instead of guessing a doc
+  return (
+    <main className="flex-1 flex items-center justify-center bg-gray-50 pt-32">
+      <div className="text-center max-w-md px-6">
+        <h1 className="text-xl font-semibold text-gray-800 mb-3">Select a document</h1>
+        <p className="text-gray-500">
+          Choose a file from the sidebar, or press{' '}
+          <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+O</kbd>
+          {' '}to open the quick switcher.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean }) {
   const navigate = useNavigate();
+
+  // Filter folders based on token scope
+  const accessibleFolders = isAllFolders
+    ? FOLDERS
+    : FOLDERS.filter(f => f.id === folderUuid);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
 
   // Unified panel manager — single source of truth for all panel collapse/expand
   const manager = usePanelManager(PANEL_CONFIG);
 
   // Use multi-folder metadata hook
-  const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
-  const folderNames = FOLDERS.map(f => f.name);
+  const { metadata, folderDocs, errors } = useMultiFolderMetadata(accessibleFolders);
+  const folderNames = accessibleFolders.map(f => f.name);
   const { recentFiles, pushRecent } = useRecentFiles();
   const justCreatedRef = useRef(false);
 
@@ -302,7 +337,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const commentMarginCollapsed = collapsedState['comment-margin'] ?? false;
 
   return (
-    <AuthProvider role={role}>
+    <AuthProvider role={role} folderUuid={folderUuid} isAllFolders={isAllFolders}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
         <SidebarContext.Provider value={{ manager, headerStage }}>
@@ -371,9 +406,13 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               />
               <div className="flex-1 min-w-0">
                 <Routes>
-                  <Route path="/review" element={<ReviewPageWithActions folderIds={FOLDERS.map(f => `${RELAY_ID}-${f.id}`)} folders={FOLDERS.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />} />
+                  <Route path="/review" element={
+                    role === 'edit' && isAllFolders
+                      ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
+                      : <DefaultLanding />
+                  } />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
-                  <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
+                  <Route path="/" element={<DefaultLanding />} />
                 </Routes>
               </div>
             </div>

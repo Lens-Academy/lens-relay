@@ -1,5 +1,6 @@
 // src/components/Editor/extensions/criticmarkup.ts
 import {
+  Facet,
   StateField,
   StateEffect,
   RangeSetBuilder,
@@ -19,6 +20,11 @@ import {
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
 import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
 import { parse, parseThreads, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+
+/** Facet controlling whether accept/reject buttons are shown. Defaults to true. */
+export const canAcceptRejectFacet = Facet.define<boolean, boolean>({
+  combine: (values) => values.length > 0 ? values[0] : true,
+});
 
 // Author context - can be set externally
 let currentAuthor = 'anonymous';
@@ -416,8 +422,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         ? ranges.filter(r => r.from < sel.to && r.to > sel.from)
         : [];
       const isBulkSelection = bulkRanges.length > 1;
+      const canAcceptReject = view.state.facet(canAcceptRejectFacet);
 
-      if (isBulkSelection) {
+      if (isBulkSelection && canAcceptReject) {
         decorations.push({
           from: sel.to,
           to: sel.to,
@@ -551,8 +558,8 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         }
 
         // When cursor is inside, show accept/reject buttons and ensure cursor visibility
-        // Skip per-range buttons when bulk widget is shown
-        if (cursorInside && !isBulkSelection) {
+        // Skip per-range buttons when bulk widget is shown or accept/reject is disabled
+        if (cursorInside && !isBulkSelection && canAcceptReject) {
           // Adjacent deletion+addition pairs: show a single merged button.
           // The deletion (pair start) suppresses its button; the addition (pair end)
           // shows a button spanning both ranges. If cursor is in the deletion,
@@ -703,8 +710,9 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
         ? ranges.filter(r => r.from < sel.to && r.to > sel.from)
         : [];
       const isBulkSelection = bulkRanges.length > 1;
+      const canAcceptReject = view.state.facet(canAcceptRejectFacet);
 
-      if (isBulkSelection) {
+      if (isBulkSelection && canAcceptReject) {
         decorations.push({
           from: sel.to,
           to: sel.to,
@@ -723,7 +731,7 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
           deco: Decoration.mark({ class: TYPE_CLASSES[range.type] }),
         });
 
-        if (selectionIntersects(selection, range.from, range.to) && !isBulkSelection) {
+        if (selectionIntersects(selection, range.from, range.to) && !isBulkSelection && canAcceptReject) {
           decorations.push({
             from: range.contentTo,
             to: range.contentTo,
@@ -1035,8 +1043,14 @@ export const criticMarkupCompartment = new Compartment();
  * - Mod-Enter: Accept change at cursor
  * - Mod-Backspace: Reject change at cursor
  */
-export function criticMarkupExtension() {
+interface CriticMarkupOptions {
+  canAcceptReject?: boolean;
+}
+
+export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
+  const { canAcceptReject = true } = options;
   return [
+    canAcceptRejectFacet.of(canAcceptReject),
     criticMarkupField,
     suggestionModeField,
     focusedThreadField,

@@ -70,3 +70,30 @@ export function decodeRoleFromToken(token: string): UserRole | null {
     return null;
   }
 }
+
+const ALL_FOLDERS_SENTINEL = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * Decode the folder UUID from a compact binary share token (no signature verification).
+ * Token format: base64url(role:1 + uuid:16 + expiry:4 + hmac:8)
+ * UUID is bytes 1-16.
+ */
+export function decodeFolderFromToken(token: string): string | null {
+  try {
+    const bytes = base64urlToBytes(token);
+    if (bytes.length < 17) return null;
+    const hex = Array.from(bytes.slice(1, 17))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if a folder UUID is the all-folders sentinel (grants access to all folders).
+ */
+export function isAllFoldersToken(folderUuid: string): boolean {
+  return folderUuid === ALL_FOLDERS_SENTINEL;
+}

@@ -729,6 +729,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 export const livePreviewCompartment = new Compartment();
 
 /**
+ * Compartment for making the editor read-only when source mode + suggestion mode are both active
+ */
+export const sourceReadOnlyCompartment = new Compartment();
+
+/**
  * Theme for live preview (empty since styles are in index.css,
  * but kept as a placeholder for consistency with the compartment pattern)
  */
