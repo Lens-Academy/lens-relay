@@ -43,6 +43,7 @@ export default defineConfig(() => {
     return {
       name: 'relay-proxy-auth',
       configureServer(server) {
+        // Validate share token on /api/relay/ proxy requests
         server.middlewares.use('/api/relay', async (req, res, next) => {
           const { validateProxyToken, checkProxyAccess } = await import('./server/relay-proxy-auth.ts');
 
@@ -62,6 +63,22 @@ export default defineConfig(() => {
           if (!access.allowed) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: access.reason || 'Access denied' }));
+            return;
+          }
+
+          delete req.headers['x-share-token'];
+          next();
+        });
+
+        // Validate share token on /open/ proxy requests (path-based document resolution)
+        server.middlewares.use('/open', async (req, res, next) => {
+          const { validateProxyToken } = await import('./server/relay-proxy-auth.ts');
+
+          const shareToken = req.headers['x-share-token'] as string | undefined;
+          const auth = validateProxyToken(shareToken);
+          if (!auth) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid or expired share token' }));
             return;
           }
 

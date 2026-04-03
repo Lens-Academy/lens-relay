@@ -52,7 +52,12 @@ export function checkProxyAccess(
   if (method === 'GET' && path === '/suggestions') {
     const params = new URLSearchParams(query);
     const requestedFolders = params.getAll('folder_id');
-    const allMatch = requestedFolders.every(fid => fid.includes(folder));
+    // Must specify at least one folder, and all must match the token's folder
+    // (compound folder_id format: "relay_id-folder_uuid")
+    if (requestedFolders.length === 0) {
+      return { allowed: false, reason: 'Suggestions require folder_id parameter' };
+    }
+    const allMatch = requestedFolders.every(fid => fid.endsWith('-' + folder));
     if (!allMatch) {
       return { allowed: false, reason: 'Suggestions access denied for this folder' };
     }

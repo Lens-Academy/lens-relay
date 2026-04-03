@@ -73,6 +73,11 @@ describe('checkProxyAccess', () => {
     expect(result.allowed).toBe(false);
   });
 
+  it('folder-scoped token blocks /suggestions without folder_id', () => {
+    const result = checkProxyAccess('GET', '/suggestions', '', scopedAuth);
+    expect(result.allowed).toBe(false);
+  });
+
   it('folder-scoped token blocks unknown endpoints', () => {
     expect(checkProxyAccess('DELETE', '/doc/abc/something', '', scopedAuth).allowed).toBe(false);
   });
