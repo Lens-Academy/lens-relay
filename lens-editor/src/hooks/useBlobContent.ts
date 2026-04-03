@@ -59,7 +59,7 @@ export function useBlobContent(
             throw new Error(`Failed to get download URL: ${downloadUrlResponse.status}`);
           }
 
-          const { download_url } = await downloadUrlResponse.json();
+          const { downloadUrl: download_url } = await downloadUrlResponse.json();
 
           // Step 2: Fetch the actual blob content.
           // The download URL may be a presigned R2 URL (cross-origin, no CORS issue
