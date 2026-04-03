@@ -12,7 +12,7 @@ import { runClaude } from './claude';
 import { createRelayDoc, updateRelayDoc } from './relay-docs';
 
 const WORK_BASE = '/tmp/transcripts';
-const RELAY_FOLDER = 'Lens Edu/video_transcripts';
+const RELAY_FOLDER = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
 const TIMEOUT_MS = 300_000; // 5 minutes
 // Timestamps saved locally (relay MCP create tool only accepts .md files)
 const TIMESTAMPS_DIR = '/tmp/transcripts/timestamps';

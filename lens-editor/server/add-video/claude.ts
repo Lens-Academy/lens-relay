@@ -22,10 +22,9 @@ export function buildPrompt(workDir: string): string {
 7. Preserve the meaning exactly.`;
 }
 
-/** Build CLI arguments for claude --bare */
+/** Build CLI arguments for claude -p */
 export function buildClaudeArgs(workDir: string): string[] {
   return [
-    '--bare',
     '-p',
     buildPrompt(workDir),
     '--allowedTools',

@@ -158,16 +158,22 @@ export async function updateRelayDoc(
     transportSessionId
   );
 
-  // Extract actual content from read result (format: "linenum\tcontent")
+  // Extract actual content from read result (format: "     1\tcontent")
   const readContent = readResult.result as {
     content?: Array<{ type: string; text: string }>;
   };
   const rawText = readContent?.content?.[0]?.text || '';
-  // Strip line number prefixes (e.g., "1\tline content\n2\tnext line")
-  const actualContent = rawText
-    .split('\n')
-    .map((line) => line.replace(/^\d+\t/, ''))
-    .join('\n');
+  // Strip line number prefixes and trailing metadata (pending suggestions etc.)
+  const lines = rawText.split('\n');
+  const contentLines: string[] = [];
+  for (const line of lines) {
+    // Match lines starting with optional spaces + digits + tab
+    const match = line.match(/^\s*\d+\t(.*)/);
+    if (match) {
+      contentLines.push(match[1]);
+    }
+  }
+  const actualContent = contentLines.join('\n');
 
   // Edit using actual content as old_string (handles CRDT drift)
   await mcpRequest(

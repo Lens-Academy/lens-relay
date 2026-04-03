@@ -14,7 +14,7 @@ describe('buildPrompt', () => {
 describe('buildClaudeArgs', () => {
   it('returns correct CLI arguments', () => {
     const args = buildClaudeArgs('/tmp/transcripts/abc123');
-    expect(args).toContain('--bare');
+    expect(args).not.toContain('--bare');
     expect(args).toContain('-p');
     expect(args).toContain('--allowedTools');
     expect(args.join(' ')).toContain('Read');
