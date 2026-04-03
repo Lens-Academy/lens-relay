@@ -26,7 +26,7 @@ import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
-import { livePreview, updateWikilinkContext, wikilinkMetadataChanged } from './extensions/livePreview';
+import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment } from './extensions/livePreview';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
@@ -296,6 +296,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           addKeymap: false,
         }),
         livePreview(wikilinkContextRef.current),
+        sourceReadOnlyCompartment.of([]),
         emphasisPersistPlugin,
         headingFlashPlugin,
         Prec.high(keymap.of(tightMarkdownKeymap)),

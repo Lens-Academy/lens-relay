@@ -1,7 +1,9 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
-import { criticMarkupField } from '../Editor/extensions/criticmarkup';
+import { EditorState, StateEffect } from '@codemirror/state';
+import { criticMarkupField, suggestionModeField } from '../Editor/extensions/criticmarkup';
+import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
 import { parseThreads } from '../../lib/criticmarkup-parser';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
@@ -41,6 +43,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const hasDiscussion = useHasDiscussion();
   const [addCommentTrigger, setAddCommentTrigger] = useState(0);
   const [synced, setSynced] = useState(false);
+  const [isSourceMode, setIsSourceMode] = useState(false);
+  const [isSuggestionMode, setIsSuggestionMode] = useState(false);
 
   // Derive current file path from doc ID for wikilink resolution
   const currentFilePath = useMemo(() => {
@@ -69,6 +73,31 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     manager.expand('comment-margin');
     setAddCommentTrigger(v => v + 1);
   }, [manager.expand]);
+
+  // Track suggestion mode from editor state
+  useEffect(() => {
+    if (!editorView) return;
+    setIsSuggestionMode(editorView.state.field(suggestionModeField));
+    const listener = EditorView.updateListener.of((update) => {
+      if (update.state.field(suggestionModeField) !== update.startState.field(suggestionModeField)) {
+        setIsSuggestionMode(update.state.field(suggestionModeField));
+      }
+    });
+    editorView.dispatch({ effects: StateEffect.appendConfig.of(listener) });
+  }, [editorView]);
+
+  // Make editor read-only when both source mode and suggestion mode are active
+  useEffect(() => {
+    if (!editorView) return;
+    const shouldBeReadOnly = isSourceMode && isSuggestionMode;
+    editorView.dispatch({
+      effects: sourceReadOnlyCompartment.reconfigure(
+        shouldBeReadOnly
+          ? [EditorView.editable.of(false), EditorState.readOnly.of(true)]
+          : []
+      ),
+    });
+  }, [editorView, isSourceMode, isSuggestionMode]);
 
   // Open comment margin when a comment badge is clicked
   useEffect(() => {
@@ -166,7 +195,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           {headerStage === 'overflow' ? (
             <OverflowMenu>
               <SuggestionModeToggle view={editorView} iconOnly />
-              <SourceModeToggle editorView={editorView} />
+              <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <PresencePanel />
               <SyncStatus />
             </OverflowMenu>
@@ -174,7 +203,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             <>
               <DebugYMapPanel />
               <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} />
-              <SourceModeToggle editorView={editorView} />
+              <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <PresencePanel />
               <SyncStatus />
             </>

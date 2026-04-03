@@ -1,10 +1,11 @@
-import { useState } from 'react';
 import { EditorView } from '@codemirror/view';
 import { toggleSourceMode } from '../Editor/extensions/livePreview';
 import { SegmentedToggle, type SegmentedValue } from '../SegmentedToggle';
 
 interface SourceModeToggleProps {
   editorView: EditorView | null;
+  isSourceMode: boolean;
+  onSourceModeChange: (sourceMode: boolean) => void;
 }
 
 // Eye icon (Heroicons Mini) - represents formatted/preview view
@@ -50,13 +51,11 @@ function SourceIcon() {
  * - Live Preview: Markdown renders with formatting (headings sized, syntax hidden)
  * - Source: Shows all raw markdown syntax
  */
-export function SourceModeToggle({ editorView }: SourceModeToggleProps) {
-  const [isSourceMode, setIsSourceMode] = useState(false);
-
+export function SourceModeToggle({ editorView, isSourceMode, onSourceModeChange }: SourceModeToggleProps) {
   const handleChange = (value: SegmentedValue) => {
     if (!editorView) return;
     const newSourceMode = value === 'left';
-    setIsSourceMode(newSourceMode);
+    onSourceModeChange(newSourceMode);
     toggleSourceMode(editorView, newSourceMode);
   };
 
