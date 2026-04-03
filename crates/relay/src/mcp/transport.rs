@@ -8,15 +8,17 @@ use axum::{
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::debug;
+use y_sweet_core::share_token::{decode_mcp_key, McpAccess};
 
 use super::jsonrpc::{self, parse_message, JsonRpcMessage, JsonRpcResponse, PARSE_ERROR};
 use super::router;
 use crate::server::Server;
 
 /// Middleware that validates Bearer token auth for MCP endpoints.
+/// Decodes the token via `decode_mcp_key()` and inserts `McpAccess` into request extensions.
 pub async fn mcp_auth_middleware(
-    State(expected_key): State<String>,
-    req: axum::extract::Request,
+    State(server): State<Arc<Server>>,
+    mut req: axum::extract::Request,
     next: Next,
 ) -> Response {
     let auth_header = req
@@ -27,10 +29,16 @@ pub async fn mcp_auth_middleware(
     match auth_header {
         Some(value) if value.starts_with("Bearer ") => {
             let token = &value["Bearer ".len()..];
-            if token == expected_key {
-                next.run(req).await
-            } else {
-                StatusCode::UNAUTHORIZED.into_response()
+            match decode_mcp_key(
+                token,
+                server.share_token_secret.as_deref(),
+                server.mcp_api_key.as_deref(),
+            ) {
+                Some(access) => {
+                    req.extensions_mut().insert(access);
+                    next.run(req).await
+                }
+                None => StatusCode::UNAUTHORIZED.into_response(),
             }
         }
         _ => StatusCode::UNAUTHORIZED.into_response(),
@@ -40,6 +48,17 @@ pub async fn mcp_auth_middleware(
 /// Handle POST /mcp — JSON-RPC messages (requests and notifications).
 pub async fn handle_mcp_post(
     State(server): State<Arc<Server>>,
+    axum::Extension(access): axum::Extension<McpAccess>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    handle_mcp_post_inner(server, access, headers, body).await
+}
+
+/// Shared implementation for POST /mcp with a resolved McpAccess.
+async fn handle_mcp_post_inner(
+    server: Arc<Server>,
+    access: McpAccess,
     headers: HeaderMap,
     body: String,
 ) -> Response {
@@ -89,7 +108,8 @@ pub async fn handle_mcp_post(
 
             if req.method == "initialize" {
                 // Initialize does not require an existing session
-                let (resp, new_session_id) = router::dispatch_request(&server, None, &req).await;
+                let (resp, new_session_id) =
+                    router::dispatch_request(&server, None, &req, &access).await;
 
                 let mut response = (StatusCode::OK, Json(resp)).into_response();
 
@@ -136,7 +156,7 @@ pub async fn handle_mcp_post(
                         .into_response();
                 }
 
-                let (resp, _) = router::dispatch_request(&server, Some(&sid), &req).await;
+                let (resp, _) = router::dispatch_request(&server, Some(&sid), &req, &access).await;
 
                 (StatusCode::OK, Json(resp)).into_response()
             }
@@ -169,12 +189,14 @@ pub async fn handle_mcp_delete(State(server): State<Arc<Server>>, headers: Heade
 
 // --- Path-key variants: /mcp/:key validates key from URL path ---
 
-/// Validate the API key from the URL path. Returns 401 on mismatch.
-fn validate_path_key(server: &Server, key: &str) -> Option<Response> {
-    match &server.mcp_api_key {
-        Some(expected) if key == expected => None,
-        _ => Some(StatusCode::UNAUTHORIZED.into_response()),
-    }
+/// Decode the API key from the URL path into McpAccess. Returns Err(401) on failure.
+fn decode_path_key(server: &Server, key: &str) -> Result<McpAccess, Response> {
+    decode_mcp_key(
+        key,
+        server.share_token_secret.as_deref(),
+        server.mcp_api_key.as_deref(),
+    )
+    .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())
 }
 
 /// Handle POST /mcp/:key — same as handle_mcp_post but auth via URL path.
@@ -184,10 +206,11 @@ pub async fn handle_mcp_post_with_key(
     headers: HeaderMap,
     body: String,
 ) -> Response {
-    if let Some(err) = validate_path_key(&server, &key) {
-        return err;
-    }
-    handle_mcp_post(State(server), headers, body).await
+    let access = match decode_path_key(&server, &key) {
+        Ok(a) => a,
+        Err(err) => return err,
+    };
+    handle_mcp_post_inner(server, access, headers, body).await
 }
 
 /// Handle GET /mcp/:key
@@ -195,7 +218,7 @@ pub async fn handle_mcp_get_with_key(
     State(server): State<Arc<Server>>,
     Path(key): Path<String>,
 ) -> Response {
-    if let Some(err) = validate_path_key(&server, &key) {
+    if let Err(err) = decode_path_key(&server, &key) {
         return err;
     }
     handle_mcp_get().await.into_response()
@@ -207,7 +230,7 @@ pub async fn handle_mcp_delete_with_key(
     Path(key): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(err) = validate_path_key(&server, &key) {
+    if let Err(err) = decode_path_key(&server, &key) {
         return err;
     }
     handle_mcp_delete(State(server), headers).await

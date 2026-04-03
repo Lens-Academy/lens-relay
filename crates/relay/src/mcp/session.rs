@@ -2,6 +2,7 @@ use dashmap::DashMap;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::time::Instant;
+use y_sweet_core::share_token::McpAccess;
 
 /// Maximum session age before cleanup. Sessions from clients that never
 /// send DELETE (e.g. Claude.ai) are purged after this duration.
@@ -15,6 +16,7 @@ pub struct McpSession {
     pub created_at: Instant,
     pub last_activity: Instant,
     pub read_docs: HashSet<String>,
+    pub access: McpAccess,
 }
 
 pub struct SessionManager {
@@ -29,7 +31,7 @@ impl SessionManager {
     }
 
     /// Create a new session, returning the session ID.
-    pub fn create_session(&self, protocol_version: String, client_info: Option<Value>) -> String {
+    pub fn create_session(&self, protocol_version: String, client_info: Option<Value>, access: McpAccess) -> String {
         self.cleanup_stale(SESSION_TTL);
         let session_id = nanoid::nanoid!(8);
         let now = Instant::now();
@@ -41,6 +43,7 @@ impl SessionManager {
             created_at: now,
             last_activity: now,
             read_docs: HashSet::new(),
+            access,
         };
         self.sessions.insert(session_id.clone(), session);
         session_id
@@ -91,25 +94,29 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn default_access() -> McpAccess {
+        McpAccess { writable: true, folder_uuid: None, folder_name: None }
+    }
+
     #[test]
     fn create_session_returns_32_char_id() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None);
+        let id = mgr.create_session("2025-03-26".into(), None, default_access());
         assert_eq!(id.len(), 8);
     }
 
     #[test]
     fn two_sessions_have_different_ids() {
         let mgr = SessionManager::new();
-        let id1 = mgr.create_session("2025-03-26".into(), None);
-        let id2 = mgr.create_session("2025-03-26".into(), None);
+        let id1 = mgr.create_session("2025-03-26".into(), None, default_access());
+        let id2 = mgr.create_session("2025-03-26".into(), None, default_access());
         assert_ne!(id1, id2);
     }
 
     #[test]
     fn get_session_valid_id() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), Some(json!({"name": "test"})));
+        let id = mgr.create_session("2025-03-26".into(), Some(json!({"name": "test"})), default_access());
         let session = mgr.get_session(&id).expect("session should exist");
         assert_eq!(session.session_id, id);
         assert_eq!(session.protocol_version, "2025-03-26");
@@ -126,7 +133,7 @@ mod tests {
     #[test]
     fn mark_initialized_sets_flag() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None);
+        let id = mgr.create_session("2025-03-26".into(), None, default_access());
 
         assert!(!mgr.get_session(&id).unwrap().initialized);
         assert!(mgr.mark_initialized(&id));
@@ -142,7 +149,7 @@ mod tests {
     #[test]
     fn remove_session_makes_it_inaccessible() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None);
+        let id = mgr.create_session("2025-03-26".into(), None, default_access());
         assert!(mgr.get_session(&id).is_some());
         assert!(mgr.remove_session(&id));
         assert!(mgr.get_session(&id).is_none());
@@ -157,7 +164,7 @@ mod tests {
     #[test]
     fn read_docs_starts_empty() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None);
+        let id = mgr.create_session("2025-03-26".into(), None, default_access());
         let session = mgr.get_session(&id).unwrap();
         assert!(session.read_docs.is_empty());
     }
@@ -165,7 +172,7 @@ mod tests {
     #[test]
     fn read_docs_can_be_modified() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None);
+        let id = mgr.create_session("2025-03-26".into(), None, default_access());
 
         // Insert a doc_id via get_session_mut
         {
@@ -182,7 +189,7 @@ mod tests {
     #[test]
     fn cleanup_stale_removes_old_sessions() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None);
+        let id = mgr.create_session("2025-03-26".into(), None, default_access());
 
         // Session exists
         assert!(mgr.get_session(&id).is_some());
@@ -196,7 +203,7 @@ mod tests {
     #[test]
     fn cleanup_stale_keeps_fresh_sessions() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None);
+        let id = mgr.create_session("2025-03-26".into(), None, default_access());
 
         // Cleanup with 1 hour keeps the just-created session
         mgr.cleanup_stale(std::time::Duration::from_secs(3600));

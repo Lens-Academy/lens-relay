@@ -15,6 +15,7 @@ pub(crate) mod test_helpers;
 use crate::server::Server;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use y_sweet_core::share_token::McpAccess;
 
 /// Return tool definitions for MCP tools/list response.
 pub fn tool_definitions() -> Vec<Value> {
@@ -255,6 +256,7 @@ pub async fn dispatch_tool(
     transport_session_id: &str,
     name: &str,
     arguments: &Value,
+    _access: &McpAccess,
 ) -> Value {
     // create_session returns the transport session_id — no argument validation needed
     if name == "create_session" {
