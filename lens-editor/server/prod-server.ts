@@ -98,18 +98,12 @@ const server = http.createServer((req, res) => {
     proxy.web(req, res, { target: relayUrl, changeOrigin: true });
   } else if (url.startsWith('/open/')) {
     // Proxy /open/* path-based document resolution to relay-server
-    // Requires valid share token (prevents unauthenticated path probing)
-    const shareToken = req.headers['x-share-token'] as string | undefined;
-    const auth = validateProxyToken(shareToken);
-    if (!auth) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Invalid or expired share token' }));
-      return;
-    }
+    // No share token required — this is a direct browser navigation.
+    // The relay server resolves the path to a doc ID; the SPA then
+    // uses the user's own share token from localStorage for doc access.
     if (relayServerToken) {
       req.headers['authorization'] = `Bearer ${relayServerToken}`;
     }
-    delete req.headers['x-share-token'];
     proxy.web(req, res, { target: relayUrl, changeOrigin: true });
   } else {
     honoListener(req, res);
