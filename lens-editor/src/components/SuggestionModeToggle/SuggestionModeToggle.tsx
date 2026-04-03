@@ -76,8 +76,8 @@ export function SuggestionModeToggle({ view, iconOnly = false, isSuggestionMode 
   // Suggest-only users: show locked badge
   if (role === 'suggest') {
     return (
-      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-amber-100 text-amber-800" title="Suggesting">
-        {iconOnly ? <SuggestIcon /> : 'Suggesting'}
+      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-amber-100 text-amber-800" title="Suggest + Comment">
+        {iconOnly ? <SuggestIcon /> : 'Suggest + Comment'}
       </span>
     );
   }
