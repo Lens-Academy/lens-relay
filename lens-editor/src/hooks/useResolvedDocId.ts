@@ -48,7 +48,14 @@ export function useResolvedDocId(
 
     let cancelled = false;
 
-    fetch(`/api/relay/doc/resolve/${compoundId}`)
+    fetch(`/api/relay/doc/resolve/${compoundId}`, {
+      headers: (() => {
+        const h: Record<string, string> = {};
+        const token = localStorage.getItem('lens-share-token');
+        if (token) h['X-Share-Token'] = token;
+        return h;
+      })(),
+    })
       .then((res) => {
         if (!res.ok) return null;
         return res.json();

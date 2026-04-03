@@ -64,7 +64,7 @@ describe('useResolvedDocId', () => {
       expect(result.current).toBe(FULL_COMPOUND);
     });
 
-    expect(mockFetch).toHaveBeenCalledWith(`/api/relay/doc/resolve/${SHORT_COMPOUND}`);
+    expect(mockFetch).toHaveBeenCalledWith(`/api/relay/doc/resolve/${SHORT_COMPOUND}`, expect.objectContaining({ headers: expect.any(Object) }));
   });
 
   it('returns null when server resolution fails', async () => {

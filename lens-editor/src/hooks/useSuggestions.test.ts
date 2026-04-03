@@ -35,7 +35,7 @@ describe('useSuggestions', () => {
 
     expect(result.current.data).toHaveLength(1);
     expect(result.current.data[0].path).toBe('Notes/Test.md');
-    expect(mockFetch).toHaveBeenCalledWith('/api/relay/suggestions?folder_id=folder-1');
+    expect(mockFetch).toHaveBeenCalledWith('/api/relay/suggestions?folder_id=folder-1', expect.objectContaining({ headers: expect.any(Object) }));
   });
 
   it('aggregates suggestions across multiple folders', async () => {

@@ -8,6 +8,24 @@ import { RELAY_ID } from '../App';
 // the source of Y.js changes and avoid processing its own updates
 const LENS_EDITOR_ORIGIN = 'lens-editor';
 
+/**
+ * Get share token for relay proxy auth.
+ * Uses the same token stored by auth-share.ts in localStorage.
+ */
+function getShareToken(): string | null {
+  return localStorage.getItem('lens-share-token');
+}
+
+/** Build headers that include the share token for proxy auth. */
+function relayHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  const token = getShareToken();
+  if (token) {
+    headers['X-Share-Token'] = token;
+  }
+  return headers;
+}
+
 // Debug logging helper — gated to dev builds only
 function debug(operation: string, ...args: unknown[]) {
   if (import.meta.env.DEV) {
@@ -38,7 +56,7 @@ function generateUUID(): string {
 async function createDocumentOnServer(docId: string): Promise<void> {
   const response = await fetch('/api/relay/doc/new', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: relayHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ docId }),
   });
 
@@ -320,7 +338,7 @@ export async function moveDocument(
 
   const response = await fetch('/api/relay/doc/move', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: relayHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
 
@@ -340,7 +358,7 @@ export async function searchDocuments(
   signal?: AbortSignal
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q: query, limit: String(limit) });
-  const response = await fetch(`/api/relay/search?${params}`, { signal });
+  const response = await fetch(`/api/relay/search?${params}`, { signal, headers: relayHeaders() });
   if (!response.ok) {
     throw new Error(`Search failed: ${response.status}`);
   }
