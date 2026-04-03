@@ -3,6 +3,7 @@ import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 
 // Extract workspace number from directory name (e.g., "lens-editor-ws2" → 2)
 // or parent directory (e.g., "ws2/lens-editor" → 2).
@@ -109,6 +110,7 @@ export default defineConfig(() => {
 
             // req.url is stripped of the /api/add-video prefix by Vite middleware
             const subPath = req.url || '/';
+            console.log(`[add-video] ${req.method} /api/add-video${subPath}`);
 
             if (req.method === 'GET' && subPath === '/status') {
               res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -155,7 +157,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), shareTokenAuthPlugin(), addVideoPlugin()],
+    plugins: [react(), tailwindcss(), basicSsl(), shareTokenAuthPlugin(), addVideoPlugin()],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

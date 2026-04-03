@@ -111,7 +111,7 @@
       .then(r => r.text())
       .then(js => {
         // Replace placeholder with the origin of the install page
-        js = js.replace('__LENS_SERVER_URL__', location.origin);
+        js = js.replaceAll('__LENS_SERVER_URL__', location.origin);
         const link = document.getElementById('bookmarklet-drag');
         link.href = 'javascript:' + encodeURIComponent(js);
       });
