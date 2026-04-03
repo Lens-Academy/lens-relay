@@ -34,6 +34,8 @@ export function buildClaudeArgs(workDir: string): string[] {
     '30',
     '--max-budget-usd',
     '2.00',
+    '--model',
+    'sonnet',
     '--output-format',
     'json',
   ];
