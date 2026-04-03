@@ -41,16 +41,16 @@ export function useBlobContent(
           }
           text = await response.text();
         } else {
-          // Production: use relay's presigned download URLs
+          // Production: proxy through /api/relay to avoid CORS.
+          // The proxy injects the server token, so we just need the share token.
+          const shareToken = localStorage.getItem('lens-share-token') || '';
           const authDocId = folderDocId || docId;
-          const clientToken = await getClientToken(authDocId);
-          const baseUrl = clientToken.baseUrl;
-          const token = clientToken.token;
 
+          // Step 1: Get presigned download URL via proxy
           const downloadUrlResponse = await fetch(
-            `${baseUrl}/f/${docId}/download-url?hash=${hash}`,
+            `/api/relay/d/${authDocId}/f/${docId}/download-url?hash=${hash}`,
             {
-              headers: token ? { Authorization: `Bearer ${token}` } : {},
+              headers: { 'X-Share-Token': shareToken },
             }
           );
 
@@ -59,6 +59,10 @@ export function useBlobContent(
           }
 
           const { download_url } = await downloadUrlResponse.json();
+
+          // Step 2: Fetch the actual blob content.
+          // The download URL may be a presigned R2 URL (cross-origin, no CORS issue
+          // since presigned URLs allow anonymous access) or a local relay endpoint.
           const contentResponse = await fetch(download_url);
           if (!contentResponse.ok) {
             throw new Error(`Failed to download blob: ${contentResponse.status}`);
