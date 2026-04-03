@@ -36,7 +36,7 @@ export function BlobDocumentView({ docId, hash, folderDocId, fileName }: BlobDoc
           </div>
           <div className="mx-6 border-b border-gray-200" />
           <div className="mx-6 mt-2 px-3 py-1.5 text-xs text-amber-700 bg-amber-50 rounded-md border border-amber-200">
-            JSON is read-only in Lens Editor. Edit via MCP tools.
+            JSON is read-only in Lens Editor. Edit via Lens Relay MCP.
           </div>
         </div>
       )}
