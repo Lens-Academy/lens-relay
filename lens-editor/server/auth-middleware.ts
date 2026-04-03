@@ -41,12 +41,17 @@ export function createAuthHandler(config: AuthHandlerConfig) {
       });
 
       if (!folderRes.ok) {
-        throw new AuthError(403, 'Access denied: document not found');
-      }
-
-      const { folderUuid } = await folderRes.json() as { folderUuid: string };
-      if (folderUuid !== payload.folder) {
-        throw new AuthError(403, 'Access denied: document is not in your authorized folder');
+        // Allow access to the folder doc itself (format: relay_id-folder_uuid).
+        // Folder docs aren't content docs so the lookup returns 404, but a token
+        // scoped to this folder should access its own folder doc (for metadata sync).
+        if (!docId.endsWith('-' + payload.folder)) {
+          throw new AuthError(403, 'Access denied: document not found');
+        }
+      } else {
+        const { folderUuid } = await folderRes.json() as { folderUuid: string };
+        if (folderUuid !== payload.folder) {
+          throw new AuthError(403, 'Access denied: document is not in your authorized folder');
+        }
       }
     }
 
