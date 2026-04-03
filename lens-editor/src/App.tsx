@@ -247,7 +247,7 @@ function DefaultLanding() {
 
   // Folder-scoped: show landing page instead of guessing a doc
   return (
-    <main className="flex-1 flex items-center justify-center bg-gray-50">
+    <main className="flex-1 flex items-center justify-center bg-gray-50 pt-32">
       <div className="text-center max-w-md px-6">
         <h1 className="text-xl font-semibold text-gray-800 mb-3">Select a document</h1>
         <p className="text-gray-500">
