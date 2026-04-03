@@ -18,23 +18,12 @@ const TIMEOUT_MS = 900_000; // 15 minutes (a 7K word transcript takes ~10 min)
 /**
  * Estimate processing time in minutes based on word count.
  * Based on real-world data: 7K words ≈ 10 min with Sonnet.
- * Chunked transcripts (>10K words) process in parallel batches of 3,
- * so time doesn't scale linearly.
+ * Chunked transcripts (>10K words) process chunks sequentially
+ * (for fair session sharing), so time scales linearly with chunks.
  */
 function estimateProcessingTime(wordCount: number): number {
   const WORDS_PER_MINUTE = 700; // ~7K words in 10 min
-  const CHUNK_THRESHOLD = 10_000;
-  const CHUNK_SIZE = 5_000;
-  const MAX_CONCURRENT = 3;
-
-  if (wordCount <= CHUNK_THRESHOLD) {
-    return Math.max(1, Math.ceil(wordCount / WORDS_PER_MINUTE));
-  }
-  // Chunked: total time = (number of batches) * (time per chunk)
-  const numChunks = Math.ceil(wordCount / CHUNK_SIZE);
-  const numBatches = Math.ceil(numChunks / MAX_CONCURRENT);
-  const timePerChunk = Math.ceil(CHUNK_SIZE / WORDS_PER_MINUTE);
-  return numBatches * timePerChunk;
+  return Math.max(1, Math.ceil(wordCount / WORDS_PER_MINUTE));
 }
 
 export async function processVideo(
