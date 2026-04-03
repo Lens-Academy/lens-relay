@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { claudeSessionPool } from './queue';
 
 // Transcripts longer than this are split into chunks and processed in parallel
 const CHUNK_WORD_THRESHOLD = 10_000;
@@ -47,11 +48,12 @@ export function buildClaudeArgs(workDir: string): string[] {
   ];
 }
 
-/** Spawn Claude Code and wait for completion. Returns exit code. */
-export function spawnClaude(
+/** Spawn Claude Code and wait for completion. Acquires a session from the global pool. */
+export async function spawnClaude(
   workDir: string,
   timeoutMs: number
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  await claudeSessionPool.acquire();
   return new Promise((resolve, reject) => {
     const args = buildClaudeArgs(workDir);
     const proc = spawn('claude', args, {
@@ -71,16 +73,19 @@ export function spawnClaude(
 
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
+      claudeSessionPool.release();
       reject(new Error(`Claude timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
     proc.on('close', (code) => {
       clearTimeout(timer);
+      claudeSessionPool.release();
       resolve({ exitCode: code ?? 1, stdout, stderr });
     });
 
     proc.on('error', (err) => {
       clearTimeout(timer);
+      claudeSessionPool.release();
       reject(err);
     });
   });
@@ -140,16 +145,11 @@ export async function runClaude(
     chunkDirs.push(chunkDir);
   }
 
-  // Process chunks with limited concurrency (each claude process uses ~300MB RAM)
-  const MAX_CONCURRENT = 2;
-  const results: { exitCode: number; stdout: string; stderr: string }[] = [];
-  for (let i = 0; i < chunkDirs.length; i += MAX_CONCURRENT) {
-    const batch = chunkDirs.slice(i, i + MAX_CONCURRENT);
-    const batchResults = await Promise.all(
-      batch.map((dir) => spawnClaude(dir, timeoutMs))
-    );
-    results.push(...batchResults);
-  }
+  // Process all chunks concurrently — the global session pool limits
+  // how many Claude processes run at once (max 3 across all videos)
+  const results = await Promise.all(
+    chunkDirs.map((dir) => spawnClaude(dir, timeoutMs))
+  );
 
   // Check for failures
   const failed = results.find((r) => r.exitCode !== 0);

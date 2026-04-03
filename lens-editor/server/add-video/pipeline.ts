@@ -15,6 +15,28 @@ const WORK_BASE = '/tmp/transcripts';
 const RELAY_FOLDER = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
 const TIMEOUT_MS = 900_000; // 15 minutes (a 7K word transcript takes ~10 min)
 
+/**
+ * Estimate processing time in minutes based on word count.
+ * Based on real-world data: 7K words ≈ 10 min with Sonnet.
+ * Chunked transcripts (>10K words) process in parallel batches of 3,
+ * so time doesn't scale linearly.
+ */
+function estimateProcessingTime(wordCount: number): number {
+  const WORDS_PER_MINUTE = 700; // ~7K words in 10 min
+  const CHUNK_THRESHOLD = 10_000;
+  const CHUNK_SIZE = 5_000;
+  const MAX_CONCURRENT = 3;
+
+  if (wordCount <= CHUNK_THRESHOLD) {
+    return Math.max(1, Math.ceil(wordCount / WORDS_PER_MINUTE));
+  }
+  // Chunked: total time = (number of batches) * (time per chunk)
+  const numChunks = Math.ceil(wordCount / CHUNK_SIZE);
+  const numBatches = Math.ceil(numChunks / MAX_CONCURRENT);
+  const timePerChunk = Math.ceil(CHUNK_SIZE / WORDS_PER_MINUTE);
+  return numBatches * timePerChunk;
+}
+
 export async function processVideo(
   job: Job & { payload: VideoPayload }
 ): Promise<void> {
@@ -37,13 +59,24 @@ export async function processVideo(
     const plainText = toPlainText(job.payload.transcript_raw);
     await fs.writeFile(path.join(workDir, 'raw.txt'), plainText);
 
-    // 2. Create placeholder doc in Relay
+    // 2. Create placeholder doc in Relay with time estimate
+    const wordCount = plainText.split(/\s+/).length;
+    const estimateMin = estimateProcessingTime(wordCount);
+    const placeholderBody = [
+      `*This transcript is being processed.*`,
+      ``,
+      `**${wordCount.toLocaleString()} words** — estimated processing time: **~${estimateMin} minutes**.`,
+      ``,
+      `If you submitted multiple videos, they share a pool of 3 concurrent sessions and will be processed as capacity allows.`,
+      ``,
+      `Queued at: ${new Date(job.created_at).toLocaleString()}`,
+    ].join('\n');
     const placeholderContent = generateMarkdown({
       title: job.title,
       channel: job.channel,
       url: job.url,
       video_id: job.video_id,
-      body: `*This transcript is being processed. Please check back shortly.*\n\nQueued at: ${job.created_at}`,
+      body: placeholderBody,
     });
     await createRelayDoc(mdPath, placeholderContent);
 

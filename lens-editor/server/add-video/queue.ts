@@ -8,7 +8,7 @@ interface QueueOptions {
 export class JobQueue {
   private jobs: Map<string, Job & { payload: VideoPayload }> = new Map();
   private pending: string[] = [];
-  private processing = false;
+  private activeCount = 0;
   private processJob: QueueOptions['processJob'];
 
   constructor(options: QueueOptions) {
@@ -48,28 +48,91 @@ export class JobQueue {
     );
   }
 
-  private async drain(): Promise<void> {
-    if (this.processing) return;
-    this.processing = true;
+  /** Number of jobs currently processing */
+  get processing(): number {
+    return this.activeCount;
+  }
 
-    while (this.pending.length > 0) {
+  /** Number of jobs waiting in queue */
+  get queued(): number {
+    return this.pending.length;
+  }
+
+  private async drain(): Promise<void> {
+    // Launch jobs concurrently, limited by the Claude session semaphore.
+    // Each job acquires its own sessions from the shared pool.
+    while (this.pending.length > 0 && claudeSessionPool.available > 0) {
       const id = this.pending.shift()!;
       const job = this.jobs.get(id)!;
 
       job.status = 'processing';
       job.updated_at = new Date().toISOString();
+      this.activeCount++;
 
-      try {
-        await this.processJob(job);
-        job.status = 'done';
-      } catch (err) {
-        job.status = 'failed';
-        job.error = err instanceof Error ? err.message : String(err);
-      }
-
-      job.updated_at = new Date().toISOString();
+      // Fire and forget — don't await, so multiple jobs can start
+      this.runJob(job).then(() => {
+        this.activeCount--;
+        // Try to drain more jobs when one finishes
+        this.drain();
+      });
     }
+  }
 
-    this.processing = false;
+  private async runJob(
+    job: Job & { payload: VideoPayload }
+  ): Promise<void> {
+    try {
+      await this.processJob(job);
+      job.status = 'done';
+    } catch (err) {
+      job.status = 'failed';
+      job.error = err instanceof Error ? err.message : String(err);
+    }
+    job.updated_at = new Date().toISOString();
   }
 }
+
+/**
+ * Semaphore for limiting concurrent Claude CLI processes.
+ * Shared between chunked processing (within one video) and
+ * concurrent video processing (across multiple videos).
+ * Each claude process uses ~300MB RAM.
+ */
+class ClaudeSessionPool {
+  private maxConcurrent: number;
+  private active = 0;
+  private waiters: Array<() => void> = [];
+
+  constructor(maxConcurrent: number) {
+    this.maxConcurrent = maxConcurrent;
+  }
+
+  get available(): number {
+    return this.maxConcurrent - this.active;
+  }
+
+  async acquire(): Promise<void> {
+    if (this.active < this.maxConcurrent) {
+      this.active++;
+      return;
+    }
+    // Wait for a slot to free up
+    return new Promise<void>((resolve) => {
+      this.waiters.push(() => {
+        this.active++;
+        resolve();
+      });
+    });
+  }
+
+  release(): void {
+    this.active--;
+    if (this.waiters.length > 0) {
+      const next = this.waiters.shift()!;
+      next();
+    }
+  }
+}
+
+/** Global pool: max 3 concurrent Claude CLI processes */
+export const claudeSessionPool = new ClaudeSessionPool(3);
