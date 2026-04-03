@@ -25,7 +25,7 @@ function SuggestIcon() {
   );
 }
 
-// Eye icon for "Viewing" mode (Heroicons Mini eye)
+// Eye icon for "Read-Only" mode (Heroicons Mini eye)
 function ViewIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
@@ -46,7 +46,7 @@ interface SuggestionModeToggleProps {
  *
  * - For 'edit' role: Full toggle between Editing and Suggesting modes
  * - For 'suggest' role: Locked into Suggesting mode (shows badge instead of toggle)
- * - For 'view' role: Locked "Viewing" badge (no editing capabilities)
+ * - For 'view' role: Locked "Read-Only" badge (no editing capabilities)
  */
 export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeToggleProps) {
   const { role, canEdit } = useAuth();
@@ -73,8 +73,8 @@ export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeT
   // View-only users: show locked badge
   if (role === 'view') {
     return (
-      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-100 text-red-800" title="Viewing">
-        {iconOnly ? <ViewIcon /> : 'Viewing'}
+      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-100 text-red-800" title="Read-Only">
+        {iconOnly ? <ViewIcon /> : 'Read-Only'}
       </span>
     );
   }
