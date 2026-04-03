@@ -360,7 +360,11 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; 
               />
               <div className="flex-1 min-w-0">
                 <Routes>
-                  <Route path="/review" element={<ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />} />
+                  <Route path="/review" element={
+                    role === 'edit' && isAllFolders
+                      ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
+                      : <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />
+                  } />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
                 </Routes>
