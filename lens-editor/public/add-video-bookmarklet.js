@@ -337,14 +337,19 @@ void function() {
     .then(function(data) {
       btn.textContent = 'Sent!';
       btn.style.background = '#5cb85c';
-      // Show links to relay docs
+      // Show links to relay docs (use DOM APIs to avoid XSS from video titles)
       var statusDiv = document.getElementById('lens-av-status');
-      var linksHtml = data.jobs.map(function(j) {
-        return '<div style="margin-top:8px;font-size:13px;">' +
-          '<a href="' + (j.relay_url || '#') + '" target="_blank" style="color:#4ecdc4;">' +
-          j.title + ' - View in Lens</a></div>';
-      }).join('');
-      statusDiv.innerHTML += safeHTML(linksHtml);
+      data.jobs.forEach(function(j) {
+        var div = document.createElement('div');
+        div.style.cssText = 'margin-top:8px;font-size:13px;';
+        var link = document.createElement('a');
+        link.href = j.relay_url || '#';
+        link.target = '_blank';
+        link.style.color = '#4ecdc4';
+        link.textContent = j.title + ' - View in Lens';
+        div.appendChild(link);
+        statusDiv.appendChild(div);
+      });
     })
     .catch(function(err) {
       btn.textContent = 'Failed: ' + err.message;

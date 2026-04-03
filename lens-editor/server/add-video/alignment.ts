@@ -135,10 +135,19 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
  * - Inserted words: interpolate timestamps between surrounding words
  * - Deleted words: skip
  */
+// Max words before falling back to proportional timestamp assignment.
+// LCS DP table is O(m*n) memory; 5000*5000 = 200MB which is acceptable.
+const MAX_LCS_WORDS = 5000;
+
 export function alignWords(
   original: TimestampedWord[],
   corrected: string[]
 ): TimestampedWord[] {
+  // For very long transcripts, skip LCS and assign timestamps proportionally
+  if (original.length > MAX_LCS_WORDS || corrected.length > MAX_LCS_WORDS) {
+    return assignProportionalTimestamps(original, corrected);
+  }
+
   const origNorm = original.map((w) => normalize(w.text));
   const corrNorm = corrected.map((w) => normalize(w));
 
@@ -214,4 +223,24 @@ export function alignWords(
   }
 
   return result;
+}
+
+/**
+ * Fallback for long transcripts: assign timestamps proportionally
+ * based on position in the corrected text relative to the original timeline.
+ */
+function assignProportionalTimestamps(
+  original: TimestampedWord[],
+  corrected: string[]
+): TimestampedWord[] {
+  if (original.length === 0 || corrected.length === 0) return [];
+
+  const startTime = original[0].start;
+  const endTime = original[original.length - 1].start;
+  const duration = endTime - startTime || 1;
+
+  return corrected.map((text, i) => ({
+    text,
+    start: startTime + (i / corrected.length) * duration,
+  }));
 }

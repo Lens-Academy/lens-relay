@@ -23,8 +23,9 @@ export async function processVideo(
   const mdPath = `${RELAY_FOLDER}/${filenameBase}.md`;
   const jsonPath = `${RELAY_FOLDER}/${filenameBase}.timestamps.json`;
 
-  // Set relay_url immediately so it's available in the queued response
-  job.relay_url = mdPath;
+  // Set relay_url to a resolvable editor URL
+  const editorBase = process.env.EDITOR_BASE_URL || 'https://editor.lensacademy.org';
+  job.relay_url = `${editorBase}/open/${encodeURI(mdPath)}`;
 
   try {
     // 1. Create work directory and write raw files
