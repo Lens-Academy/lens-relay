@@ -501,6 +501,119 @@ describe('livePreview - bullet lists', () => {
   });
 });
 
+describe('livePreview - Obsidian bullet compatibility', () => {
+  // Obsidian rules:
+  // - Indent 0: always starts a new bullet list
+  // - Indent > 0: only valid if the previous non-blank line is itself a bullet
+  // - Max indent jump of +1 from the previous bullet's indent
+  // - Blank lines are completely ignored (don't reset context)
+  // - Non-blank non-bullet lines reset the context entirely
+  //
+  // Tests use tabs for indentation (Obsidian's format).
+
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  // --- Should render as bullets ---
+
+  it('indent 0 always renders as bullet', () => {
+    const { view, cleanup: c } = createTestEditor('- hello\n\nend', 10);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(1);
+  });
+
+  it('valid +1 indent chain renders both bullets', () => {
+    const { view, cleanup: c } = createTestEditor('- outer\n\t- inner\n\nend', 18);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+
+  it('deep valid chain (+1 at each level) renders all bullets', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\t- b\n\t\t- c\n\t\t\t- d\n\nend', 26);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(4);
+  });
+
+  it('blank lines between bullets do not break the chain', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\n\t- b\n\nend', 12);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+
+  it('many blank lines between bullets do not break the chain', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\n\n\n\t- b\n\nend', 14);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+
+  it('dedent is allowed (going back to lower indent)', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\t- b\n- c\n\nend', 14);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(3);
+  });
+
+  it('dedent then re-indent renders all bullets', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\t- b\n\t\t- c\n\t- d\n- e\n\nend', 26);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(5);
+  });
+
+  // --- Should NOT render as bullets ---
+
+  it('indented bullet after non-bullet text does not render', () => {
+    const { view, cleanup: c } = createTestEditor('hello\n\t- item\n\nend', 16);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(0);
+  });
+
+  it('indented bullet after non-bullet text with blank line does not render', () => {
+    const { view, cleanup: c } = createTestEditor('hello\n\n\t- item\n\nend', 17);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(0);
+  });
+
+  it('indent jump > 1 from previous bullet does not render deeper bullet', () => {
+    const { view, cleanup: c } = createTestEditor('- a\n\t\t\t- b\n\nend', 14);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(1);
+  });
+
+  it('non-bullet text breaks the chain', () => {
+    const { view, cleanup: c } = createTestEditor('- a\nhello\n\t- b\n\nend', 17);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(1);
+  });
+
+  it('non-bullet text breaks chain even with blank lines after', () => {
+    const { view, cleanup: c } = createTestEditor('- a\nhello\n\n\t- b\n\nend', 18);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(1);
+  });
+
+  it('deep indent after non-bullet text does not render (lezer false positive)', () => {
+    const { view, cleanup: c } = createTestEditor('some text\n\n\t\t\t\t- deep\n\nend', 23);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(0);
+  });
+
+  // --- Mixed scenarios ---
+
+  it('chain broken then new list starts at indent 0', () => {
+    const { view, cleanup: c } = createTestEditor('- a\nhello\n- b\n\t- c\n\nend', 21);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(3);
+  });
+
+  it('multiple independent lists separated by text', () => {
+    const { view, cleanup: c } = createTestEditor('- first\n\nsome text\n\n- second\n\nend', 30);
+    cleanup = c;
+    expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+});
+
 describe('livePreview - fenced code blocks', () => {
   let cleanup: () => void;
 

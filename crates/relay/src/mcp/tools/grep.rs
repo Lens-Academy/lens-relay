@@ -75,7 +75,7 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
             None => continue,
         };
 
-        let content = match read_doc_content(server, &doc_info.doc_id).await {
+        let content = match read_doc_content(server, &doc_info.doc_id, path).await {
             Some(c) => c,
             None => continue,
         };
@@ -182,8 +182,19 @@ fn build_context_ranges(
     ranges
 }
 
-/// Read Y.Doc text content for a given doc_id.
-async fn read_doc_content(server: &Arc<Server>, doc_id: &str) -> Option<String> {
+/// Read document content for a given doc_id.
+///
+/// For blob files (e.g. `.json`), reads from the store using the file hash.
+/// For markdown files, reads Y.Text from the Y.Doc.
+async fn read_doc_content(server: &Arc<Server>, doc_id: &str, path: &str) -> Option<String> {
+    // Blob files: read from store
+    if super::blob::is_blob_file(path) {
+        let hash = server.doc_resolver().get_file_hash(path)?;
+        let data = super::blob::read_blob(server, doc_id, &hash).await.ok()?;
+        return String::from_utf8(data).ok();
+    }
+
+    // Markdown: read Y.Text (existing behavior)
     server.ensure_doc_loaded(doc_id).await.ok()?;
     let doc_ref = server.docs().get(doc_id)?;
     let awareness = doc_ref.awareness();
@@ -620,5 +631,55 @@ mod tests {
         assert_eq!(lines.len(), 2, "Should match 2 files");
         // Should be sorted alphabetically
         assert!(lines[0] < lines[1], "Results should be sorted: {:?}", lines);
+    }
+
+    // === Blob Tests ===
+
+    #[tokio::test]
+    async fn grep_searches_blob_files() {
+        use crate::mcp::tools::test_helpers;
+        let server = test_helpers::build_blob_test_server_with_file(
+            "/data.json",
+            "uuid-json",
+            r#"{"searchable": "found_me"}"#,
+        )
+        .await;
+
+        let result = execute(
+            &server,
+            &json!({"pattern": "found_me", "output_mode": "files_with_matches"}),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result.contains("data.json"),
+            "Should find match in JSON blob: {}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_blob_no_match() {
+        use crate::mcp::tools::test_helpers;
+        let server = test_helpers::build_blob_test_server_with_file(
+            "/data.json",
+            "uuid-json",
+            r#"{"key": "value"}"#,
+        )
+        .await;
+
+        let result = execute(
+            &server,
+            &json!({"pattern": "nonexistent", "output_mode": "content"}),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result.contains("No matches"),
+            "Should find no matches: {}",
+            result
+        );
     }
 }

@@ -156,8 +156,49 @@ export default defineConfig(() => {
     };
   }
 
+  /**
+   * Dev-only plugin to serve blob files directly from the filesystem store.
+   * In production, blobs are served via presigned R2 URLs. In local dev with
+   * a filesystem store, we serve them directly to avoid auth complexity.
+   */
+  function blobServePlugin(): Plugin {
+    const storePath = '/tmp/lens-relay-local-store';
+    return {
+      name: 'blob-serve',
+      configureServer(server) {
+        // GET /api/blob/:docId/:hash → read from filesystem store
+        server.middlewares.use('/api/blob/', async (req, res) => {
+          if (req.method !== 'GET') {
+            res.writeHead(405);
+            res.end();
+            return;
+          }
+          const { readFile } = await import('fs/promises');
+          // URL is /api/blob/{docId}/{hash}
+          const parts = (req.url || '').split('/').filter(Boolean);
+          if (parts.length < 2) {
+            res.writeHead(400);
+            res.end('Missing docId/hash');
+            return;
+          }
+          const docId = parts[0];
+          const hash = parts[1].split('?')[0]; // strip query params
+          const filePath = path.join(storePath, 'files', docId, hash);
+          try {
+            const data = await readFile(filePath);
+            res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+            res.end(data);
+          } catch {
+            res.writeHead(404);
+            res.end('Blob not found');
+          }
+        });
+      },
+    };
+  }
+
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), shareTokenAuthPlugin(), addVideoPlugin()],
+    plugins: [react(), tailwindcss(), basicSsl(), shareTokenAuthPlugin(), addVideoPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

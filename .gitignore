@@ -11,4 +11,5 @@ CLAUDE.local.md
 *.local-r2.toml
 auth.local.env
 .env
+__pycache__/
 ~

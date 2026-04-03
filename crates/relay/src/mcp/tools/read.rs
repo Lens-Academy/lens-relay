@@ -1,3 +1,4 @@
+use super::blob;
 use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
@@ -30,6 +31,25 @@ pub async fn execute(
         .doc_resolver()
         .resolve_path(file_path)
         .ok_or_else(|| format!("Error: Document not found: {}", file_path))?;
+
+    // Check if this is a blob file — read from store instead of Y.Text
+    if blob::is_blob_file(file_path) {
+        let hash = doc_info
+            .hash
+            .as_ref()
+            .ok_or_else(|| format!("Error: No file hash for blob: {}", file_path))?;
+
+        let data = blob::read_blob(server, &doc_info.doc_id, hash).await?;
+        let content = String::from_utf8(data)
+            .map_err(|_| format!("Error: {} is not valid UTF-8", file_path))?;
+
+        // Record as read for edit enforcement
+        if let Some(mut session) = server.mcp_sessions.get_session_mut(session_id) {
+            session.read_docs.insert(doc_info.doc_id.clone());
+        }
+
+        return Ok(format_cat_n(&content, offset, limit));
+    }
 
     // Reload from storage if GC evicted the doc
     server
@@ -394,5 +414,51 @@ mod tests {
             "read should return the persisted content, got: {}",
             content
         );
+    }
+}
+
+#[cfg(test)]
+mod blob_read_tests {
+    use super::*;
+    use crate::mcp::tools::test_helpers::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn read_json_file_returns_blob_content() {
+        let server =
+            build_blob_test_server_with_file("/data.json", "uuid-json", r#"{"key": "value"}"#)
+                .await;
+        let sid = setup_session_no_reads(&server);
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/data.json", "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(result.contains(r#""key": "value""#));
+        assert!(result.contains("1\t")); // cat -n format
+    }
+
+    #[tokio::test]
+    async fn read_json_records_doc_as_read() {
+        let server =
+            build_blob_test_server_with_file("/data.json", "uuid-json", r#"{"key": "value"}"#)
+                .await;
+        let sid = setup_session_no_reads(&server);
+        let doc_id = format!("{}-uuid-json", RELAY_ID);
+        execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/data.json", "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+        let session = server.mcp_sessions.get_session(&sid).unwrap();
+        assert!(session.read_docs.contains(&doc_id));
     }
 }

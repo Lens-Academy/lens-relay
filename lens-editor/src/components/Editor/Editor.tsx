@@ -10,7 +10,7 @@ import {
 } from '@codemirror/view';
 import { EditorState, Prec } from '@codemirror/state';
 import { defaultKeymap } from '@codemirror/commands';
-import { indentOnInput, syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldKeymap } from '@codemirror/language';
+import { indentOnInput, indentUnit, syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldKeymap } from '@codemirror/language';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { completionKeymap } from '@codemirror/autocomplete';
@@ -267,7 +267,9 @@ export function Editor({ readOnly, onEditorReady, onDocChange, onSynced, onNavig
       extensions: [
         // Read-only mode for view-only users
         ...(readOnly ? [EditorView.editable.of(false), EditorState.readOnly.of(true)] : []),
-        // Core editing
+        // Core editing — tab indentation matches Obsidian default
+        indentUnit.of("\t"),
+        EditorState.tabSize.of(4),
         highlightSpecialChars(),
         drawSelection(),
         dropCursor(),

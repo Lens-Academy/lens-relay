@@ -326,7 +326,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       const selection = view.state.selection;
 
       // Track decorations to sort them (required for RangeSetBuilder)
-      const decorations: Array<{ from: number; to: number; deco: Decoration }> =
+      let decorations: Array<{ from: number; to: number; deco: Decoration }> =
         [];
 
       // Iterate syntax tree within visible ranges only (performance)
@@ -632,6 +632,79 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             }
           },
         });
+      }
+
+      // Obsidian-compatible bullet validation.
+      // Lezer's list parser doesn't match Obsidian's rules: it may render bullets
+      // that Obsidian wouldn't (e.g. indented `- ` after blank line + non-bullet text)
+      // and miss bullets Obsidian would render (indent jumps from a valid bullet).
+      //
+      // Obsidian rules:
+      // - Indent 0: always starts a new bullet list
+      // - Indent > 0: only valid if the previous non-blank line is a bullet
+      // - Max indent jump of +1 from the previous bullet's indent
+      // - Blank lines are ignored; non-blank non-bullet lines reset context
+      const lezerBulletDecos = new Map<number, number>();
+      decorations.forEach((d, idx) => {
+        if ('widget' in (d.deco as any).spec && (d.deco as any).spec.widget instanceof BulletWidget) {
+          lezerBulletDecos.set(view.state.doc.lineAt(d.from).number, idx);
+        }
+      });
+
+      const doc = view.state.doc;
+      const removeDeco = new Set<number>();
+
+      for (const { from, to } of view.visibleRanges) {
+        for (let pos = from; pos <= to; ) {
+          const line = doc.lineAt(pos);
+          pos = line.to + 1;
+
+          const match = line.text.match(/^(\t*)- /);
+          if (!match) continue;
+
+          // Skip task list items (handled by checklist code)
+          if (/^(\t*)- \[[ x]\] /i.test(line.text)) continue;
+
+          const indent = match[1].length;
+          const hasLezerBullet = lezerBulletDecos.has(line.number);
+
+          // Indent 0: always valid
+          if (indent === 0) {
+            if (!hasLezerBullet && !selectionIntersects(selection, line.from, line.from + 2)) {
+              decorations.push({ from: line.from, to: line.from + 2,
+                deco: Decoration.replace({ widget: new BulletWidget() }) });
+            }
+            continue;
+          }
+
+          // Indent > 0: find previous non-blank line, check if it's a bullet
+          let valid = false;
+          const minLookback = Math.max(1, line.number - 100);
+          for (let prev = line.number - 1; prev >= minLookback; prev--) {
+            const prevLine = doc.line(prev);
+            if (prevLine.text.trim() === '') continue;
+            const prevMatch = prevLine.text.match(/^(\t*)- /);
+            if (!prevMatch) break; // non-bullet non-blank → invalid
+            valid = indent <= prevMatch[1].length + 1;
+            break;
+          }
+
+          if (valid) {
+            if (!hasLezerBullet) {
+              const dashFrom = line.from + indent;
+              if (!selectionIntersects(selection, dashFrom, dashFrom + 2)) {
+                decorations.push({ from: dashFrom, to: dashFrom + 2,
+                  deco: Decoration.replace({ widget: new BulletWidget() }) });
+              }
+            }
+          } else if (hasLezerBullet) {
+            removeDeco.add(lezerBulletDecos.get(line.number)!);
+          }
+        }
+      }
+
+      if (removeDeco.size > 0) {
+        decorations = decorations.filter((_, i) => !removeDeco.has(i));
       }
 
       // Sort decorations by position (required for RangeSetBuilder)

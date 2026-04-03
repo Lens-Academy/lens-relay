@@ -166,6 +166,31 @@ Edu content CI workflow files live in that repo (`.github/workflows/validate.yml
 - **Production relay hangs** — the relay-server occasionally stops accepting inbound connections while background tasks (GC, saves, webhooks) continue running. Do NOT assume the cause is FD/socket exhaustion; CLOSE-WAIT accumulation is normal and the server handles thousands of leaked FDs fine. Diagnose before restarting: check logs for deadlock signs (no new log output from tokio workers), thread states, and accept queue depth. Past confirmed causes include lock ordering deadlocks (see `docs/plans/2026-03-08-debounce-deadlock-fix.md`).
 - **WebSocket FD leak** in relay-server (sockets accumulate in CLOSE-WAIT). This is cosmetically ugly but NOT the cause of hangs. Workaround: `--ulimit nofile=65536:524288` provides headroom.
 
+## Regression Detector
+
+Detects content regressions in relay-synced GitHub repos — files whose content reverted to a previous state due to sync errors, merge conflicts, or accidents.
+
+```bash
+# Check lens-folder-relay (last 7 days, default 60-minute minimum gap)
+python3 scripts/detect-regressions.py ~/code/lens-folder-relay
+
+# Check with longer lookback
+python3 scripts/detect-regressions.py ~/code/lens-folder-relay --days 90
+
+# JSON output for programmatic use
+python3 scripts/detect-regressions.py ~/code/lens-folder-relay --output json
+
+# Show all reversions including short undo/redo (noisy)
+python3 scripts/detect-regressions.py ~/code/lens-folder-relay --min-gap 0
+
+# Only show reversions spanning 24+ hours
+python3 scripts/detect-regressions.py ~/code/lens-folder-relay --min-gap 1440
+```
+
+Three detectors: exact reversion (blob hash match), near-exact reversion (line-set similarity ≥90%), and full wipe (content replaced with near-empty). The `--min-gap` flag (default: 60 minutes) filters out short-lived undo/redo cycles that are normal editing.
+
+Fetch the repos before running: `cd ~/code/lens-folder-relay && git fetch origin main`
+
 ## Version Control
 
 This repo uses non-colocated jj. See `~/.claude/jj.md` for workflow reference.

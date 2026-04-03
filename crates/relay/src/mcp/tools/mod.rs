@@ -1,3 +1,4 @@
+pub mod blob;
 pub mod create_doc;
 pub mod critic_diff;
 pub mod critic_markup;
@@ -7,6 +8,7 @@ pub mod glob;
 pub mod grep;
 pub mod move_doc;
 pub mod read;
+pub mod search;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
@@ -146,7 +148,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "edit",
-            "description": "Edit a document by replacing old_string with new_string. The change is wrapped in CriticMarkup ({--old--}{++new++}) for human review. You must read the document first.",
+            "description": "Edit a document by replacing old_string with new_string. For markdown: wrapped in CriticMarkup for human review. For JSON: direct text replacement. You must read the document first.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "old_string", "new_string", "session_id"],
@@ -173,7 +175,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "create",
-            "description": "Create a new document at the specified path. The document is created immediately and syncs to all connected clients (including Obsidian).",
+            "description": "Create a new document or file at the specified path. Supports .md (markdown) and .json files.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -181,11 +183,11 @@ pub fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path for the new document (e.g. 'Lens/NewDoc.md', 'Lens/Biology/Photosynthesis.md')"
+                        "description": "Path for the new file (e.g. 'Lens/NewDoc.md', 'Lens Edu/data.json')"
                     },
                     "content": {
                         "type": "string",
-                        "description": "Initial markdown content for the document. If omitted, the document starts with a minimal placeholder."
+                        "description": "Initial content. For markdown: wrapped in CriticMarkup. For JSON: raw content stored as-is."
                     },
                     "session_id": {
                         "type": "string",
@@ -213,6 +215,29 @@ pub fn tool_definitions() -> Vec<Value> {
                     "target_folder": {
                         "type": "string",
                         "description": "Target folder for cross-folder moves (e.g. 'Lens Edu'). Omit to stay in the same folder."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "search",
+            "description": "Full-text search across the knowledge base using ranked relevance (BM25). Returns results sorted by relevance with snippets. Supports phrase search with quotes. Use this for natural-language queries; use grep for exact regex pattern matching.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query. Supports multiple terms (AND semantics) and phrase search with quotes."
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of results to return (default 20, max 100)."
                     },
                     "session_id": {
                         "type": "string",
@@ -281,6 +306,10 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
+        "search" => match search::execute(server, arguments).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
         _ => tool_error(&format!("Unknown tool: {}", name)),
     }
 }
@@ -309,4 +338,122 @@ fn tool_error(msg: &str) -> Value {
         ],
         "isError": true
     })
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::{create_doc, edit, glob, grep, read};
+    use super::test_helpers::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn json_file_create_read_edit_roundtrip() {
+        let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
+
+        // 1. Create JSON file
+        let create_result = create_doc::execute(
+            &server,
+            &json!({
+                "file_path": "Lens/config.json",
+                "content": r#"{"version": 1, "name": "test"}"#,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            create_result.contains("Created"),
+            "Create result: {}",
+            create_result
+        );
+
+        // 2. Glob finds it
+        let glob_result = glob::execute(
+            &server,
+            &json!({
+                "pattern": "**/*.json",
+                "session_id": sid,
+            }),
+        )
+        .unwrap();
+        assert!(
+            glob_result.contains("config.json"),
+            "Glob should find JSON: {}",
+            glob_result
+        );
+
+        // 3. Read it (also marks as read for edit)
+        let read_result = read::execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/config.json",
+                "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            read_result.contains(r#""version": 1"#),
+            "Read should contain version: {}",
+            read_result
+        );
+
+        // 4. Edit it
+        let edit_result = edit::execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/config.json",
+                "old_string": r#""version": 1"#,
+                "new_string": r#""version": 2"#,
+                "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            edit_result.contains("Edited"),
+            "Edit result: {}",
+            edit_result
+        );
+
+        // 5. Read again to verify edit persisted
+        let read_result2 = read::execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/config.json",
+                "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            read_result2.contains(r#""version": 2"#),
+            "Should have v2: {}",
+            read_result2
+        );
+        assert!(
+            !read_result2.contains(r#""version": 1"#),
+            "Should not have v1: {}",
+            read_result2
+        );
+
+        // 6. Grep finds content
+        let grep_result = grep::execute(
+            &server,
+            &json!({
+                "pattern": "test",
+                "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            grep_result.contains("config.json"),
+            "Grep should find: {}",
+            grep_result
+        );
+    }
 }

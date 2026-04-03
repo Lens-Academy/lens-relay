@@ -883,6 +883,17 @@ impl Server {
         &self.search_index
     }
 
+    /// Get the backing store, if configured.
+    pub fn store(&self) -> &Option<Arc<Box<dyn Store>>> {
+        &self.store
+    }
+
+    /// Whether the search index has finished its initial build.
+    pub fn search_is_ready(&self) -> bool {
+        self.search_ready
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// Get the link indexer, if enabled.
     pub fn link_indexer(&self) -> &Option<Arc<LinkIndexer>> {
         &self.link_indexer
@@ -1047,6 +1058,7 @@ impl Server {
                 folder_doc_id: folder_doc_id.clone(),
                 folder_name: folder_name.to_string(),
                 doc_id: full_doc_id.clone(),
+                hash: None,
             },
         );
 
@@ -1413,6 +1425,230 @@ impl Server {
         );
 
         Ok(())
+    }
+
+    /// Update the hash field in filemeta_v0 for an existing blob file.
+    ///
+    /// This removes the old `Any::Map` entry and re-inserts it with the updated hash,
+    /// since `Any::Map` entries are opaque and cannot be mutated in place.
+    pub async fn update_blob_hash(
+        &self,
+        folder_doc_id: &str,
+        file_path: &str,
+        new_hash: &str,
+    ) -> std::result::Result<(), String> {
+        // Extract in_folder_path: strip folder name prefix to get "/data.json"
+        let slash_pos = file_path.find('/').ok_or("Invalid file path")?;
+        let in_folder_path = &file_path[slash_pos..];
+
+        // Update filemeta in a scoped block so borrows are released before persist
+        {
+            let awareness = {
+                let doc_ref = self
+                    .docs()
+                    .get(folder_doc_id)
+                    .ok_or("Folder doc not loaded")?;
+                doc_ref.awareness()
+            };
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard.doc.transact_mut_with("mcp");
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+
+            // Read the existing Any::Map entry, update hash, and re-insert
+            if let Some(yrs::Out::Any(yrs::Any::Map(old_map))) =
+                filemeta.get(&txn, in_folder_path)
+            {
+                let mut new_map = std::collections::HashMap::new();
+                for (k, v) in old_map.iter() {
+                    if k == "hash" {
+                        new_map.insert(k.to_string(), yrs::Any::String(new_hash.into()));
+                    } else {
+                        new_map.insert(k.to_string(), v.clone());
+                    }
+                }
+                filemeta.insert(
+                    &mut txn,
+                    in_folder_path,
+                    yrs::Any::Map(new_map.into()),
+                );
+            } else {
+                return Err(format!("Filemeta entry not found for {}", in_folder_path));
+            }
+        }
+
+        // Persist folder doc
+        {
+            let folder_sync_kv = self.docs().get(folder_doc_id).map(|r| r.sync_kv());
+            if let Some(sync_kv) = folder_sync_kv {
+                if let Err(e) = sync_kv.persist().await {
+                    tracing::error!(
+                        "Failed to persist folder doc {}: {:?}",
+                        folder_doc_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Create a new blob (non-Y.Doc) file at the specified path within a folder.
+    ///
+    /// Unlike `create_document`, this does NOT create a Y.Doc or wrap content in
+    /// CriticMarkup. Instead it writes raw bytes to the object store and records a
+    /// "file" entry (with hash) in filemeta_v0. The file is NOT added to the legacy
+    /// "docs" map (only markdown documents go there for Obsidian compatibility).
+    pub async fn create_blob_file(
+        &self,
+        folder_name: &str,
+        in_folder_path: &str,
+        data: &[u8],
+    ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
+        // 1. Find folder doc (same logic as create_document)
+        let docs = self.docs();
+        let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
+        if folder_doc_ids.is_empty() {
+            return Err(CreateDocumentError::NotFound(
+                "No folder documents found".into(),
+            ));
+        }
+
+        let mut folder_match: Option<String> = None;
+        let mut available_folders: Vec<String> = Vec::new();
+
+        for folder_doc_id in &folder_doc_ids {
+            let awareness = {
+                let Some(doc_ref) = docs.get(folder_doc_id) else {
+                    continue;
+                };
+                doc_ref.awareness()
+            };
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+            if name == folder_name {
+                folder_match = Some(folder_doc_id.clone());
+                break;
+            }
+            available_folders.push(name);
+        }
+
+        let folder_doc_id = folder_match.ok_or_else(|| {
+            CreateDocumentError::NotFound(format!(
+                "Folder '{}' not found. Available: {:?}",
+                folder_name, available_folders
+            ))
+        })?;
+
+        // 2. Check path doesn't already exist
+        {
+            let awareness = {
+                let Some(doc_ref) = docs.get(&folder_doc_id) else {
+                    return Err(CreateDocumentError::Internal(
+                        "Folder doc not loaded".into(),
+                    ));
+                };
+                doc_ref.awareness()
+            };
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                if filemeta.get(&txn, in_folder_path).is_some() {
+                    return Err(CreateDocumentError::Conflict(format!(
+                        "Path '{}' already exists in folder '{}'",
+                        in_folder_path, folder_name
+                    )));
+                }
+            }
+        }
+
+        // 3. Generate UUID and compute full_doc_id
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let relay_id = link_indexer::parse_doc_id(&folder_doc_id)
+            .map(|(r, _)| r.to_string())
+            .unwrap_or_default();
+        let full_doc_id = if relay_id.is_empty() {
+            uuid.clone()
+        } else {
+            format!("{}-{}", relay_id, uuid)
+        };
+
+        // 4. Write blob to store
+        let store = self
+            .store()
+            .as_ref()
+            .ok_or_else(|| CreateDocumentError::Internal("No store configured".to_string()))?;
+        let hash = crate::mcp::tools::blob::sha256_hex(data);
+        let key = format!("files/{}/{}", full_doc_id, hash);
+        store
+            .set(&key, data.to_vec())
+            .await
+            .map_err(|e| CreateDocumentError::Internal(format!("Store write error: {}", e)))?;
+
+        // 5. Update filemeta_v0 (type "file" with hash, no legacy docs entry)
+        {
+            let awareness = {
+                let doc_ref = docs.get(&folder_doc_id).ok_or_else(|| {
+                    CreateDocumentError::Internal("Folder doc not loaded".into())
+                })?;
+                doc_ref.awareness()
+            };
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard.doc.transact_mut_with("mcp");
+
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let docs_map = txn.get_or_insert_map("docs");
+
+            link_indexer::ensure_ancestor_folders(&filemeta, &docs_map, &mut txn, in_folder_path);
+
+            let mut map = std::collections::HashMap::new();
+            map.insert("id".to_string(), yrs::Any::String(uuid.clone().into()));
+            map.insert("type".to_string(), yrs::Any::String("file".into()));
+            map.insert("version".to_string(), yrs::Any::Number(0.0));
+            map.insert("hash".to_string(), yrs::Any::String(hash.clone().into()));
+            filemeta.insert(&mut txn, in_folder_path, yrs::Any::Map(map.into()));
+            // Note: do NOT add to legacy "docs" map — only markdown docs go there
+        }
+
+        // 6. Update doc_resolver
+        let file_path = format!("{}{}", folder_name, in_folder_path);
+        self.doc_resolver().upsert_doc(
+            &uuid,
+            &file_path,
+            y_sweet_core::doc_resolver::DocInfo {
+                uuid: uuid.clone(),
+                relay_id: relay_id.clone(),
+                folder_doc_id: folder_doc_id.clone(),
+                folder_name: folder_name.to_string(),
+                doc_id: full_doc_id.clone(),
+                hash: Some(hash),
+            },
+        );
+
+        // 7. Persist folder doc
+        {
+            let folder_sync_kv = docs.get(&folder_doc_id).map(|r| r.sync_kv());
+            if let Some(sync_kv) = folder_sync_kv {
+                if let Err(e) = sync_kv.persist().await {
+                    tracing::error!("Failed to persist folder doc {}: {:?}", folder_doc_id, e);
+                }
+            }
+        }
+
+        tracing::info!(
+            "Blob file created: {} at {}{} (doc_id: {})",
+            uuid,
+            folder_name,
+            in_folder_path,
+            full_doc_id,
+        );
+
+        Ok(CreateDocumentResult {
+            uuid,
+            full_doc_id,
+            folder_name: folder_name.to_string(),
+            in_folder_path: in_folder_path.to_string(),
+        })
     }
 
     /// Move a document to a new path within or across folders.
@@ -1782,6 +2018,38 @@ impl Server {
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// Create a minimal Server for testing with a search index.
+    #[cfg(test)]
+    pub fn new_for_test_with_search(search_index: Arc<SearchIndex>) -> Arc<Self> {
+        let server = Arc::new(Self {
+            docs: Arc::new(DashMap::new()),
+            doc_worker_tracker: TaskTracker::new(),
+            store: None,
+            checkpoint_freq: Duration::from_secs(60),
+            authenticator: None,
+            url: None,
+            allowed_hosts: Vec::new(),
+            cancellation_token: CancellationToken::new(),
+            doc_gc: std::sync::atomic::AtomicBool::new(false),
+            event_dispatcher: None,
+            sync_protocol_event_sender: Arc::new(
+                y_sweet_core::event::SyncProtocolEventSender::new(),
+            ),
+            metrics: RelayMetrics::new().expect("metrics init should not fail in tests"),
+            link_indexer: None,
+            search_index: Some(search_index),
+            search_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            search_tx: None,
+            search_pending: None,
+            doc_resolver: Arc::new(DocumentResolver::new()),
+            mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
+            mcp_api_key: None,
+            last_dirty_signal: Arc::new(AtomicU64::new(0)),
+            last_successful_persist: Arc::new(AtomicU64::new(0)),
+        });
+        server
     }
 
     pub async fn doc_exists(&self, doc_id: &str) -> bool {
@@ -2656,6 +2924,13 @@ impl Server {
                             .layer(DefaultBodyLimit::max(100 * 1024 * 1024)), // 100MB for file uploads
                     )
                     .route("/f/:doc_id/download", get(handle_file_download));
+            }
+        }
+
+        // Unauthenticated blob read — local dev only (no auth key configured)
+        if self.authenticator.is_none() {
+            if let Some(_store) = &self.store {
+                router = router.route("/blob/:doc_id/:hash", get(handle_blob_read));
             }
         }
 
@@ -5531,4 +5806,32 @@ async fn handle_file_download(
             anyhow!("Invalid permission type"),
         ))
     }
+}
+
+/// Unauthenticated blob read — only registered when no auth key is configured (local dev).
+/// Reads file content directly from the store by doc_id and hash.
+async fn handle_blob_read(
+    State(server_state): State<Arc<Server>>,
+    Path((doc_id, hash)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let store = server_state.store().as_ref().ok_or_else(|| {
+        AppError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            anyhow!("No store configured"),
+        )
+    })?;
+
+    let key = format!("files/{}/{}", doc_id, hash);
+    let data = store
+        .get(&key)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, anyhow!("Blob not found")))?;
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/octet-stream")
+        .header("content-length", data.len())
+        .body(axum::body::Body::from(data))
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?)
 }

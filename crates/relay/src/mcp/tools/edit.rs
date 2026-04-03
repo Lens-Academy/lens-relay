@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use yrs::{GetString, ReadTxn, Text, Transact, WriteTxn};
 
+use super::blob;
 use super::critic_markup;
 
 /// Normalize typographic/smart quotes to ASCII equivalents.
@@ -133,9 +134,13 @@ pub async fn execute(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: new_string".to_string())?;
 
-    // 2. Reject if AI included CriticMarkup in its input
+    // 2. Reject if AI included CriticMarkup suggestion syntax in its input
+    //    (comment delimiters {>> <<} are allowed — AI can read and write comments)
     super::critic_markup::reject_if_contains_markup(old_string, "old_string")?;
     super::critic_markup::reject_if_contains_markup(new_string, "new_string")?;
+
+    // 2b. Validate comment preservation: non-AI comments must be kept intact
+    super::critic_markup::validate_comment_preservation(old_string, new_string)?;
 
     // 3. Resolve document path to doc_id
     let doc_info = server
@@ -156,6 +161,11 @@ pub async fn execute(
             ));
         }
         // Drop session guard before accessing Y.Doc
+    }
+
+    // Blob edit path (e.g. .json) — direct text replacement, no CriticMarkup
+    if blob::is_blob_file(file_path) {
+        return edit_blob_file(server, &doc_info, file_path, old_string, new_string).await;
     }
 
     // 5. Reload from storage if GC evicted the doc
@@ -266,6 +276,63 @@ pub async fn execute(
         "Edited {}: replaced {} characters with CriticMarkup suggestion for human review.",
         file_path,
         effective_old.len()
+    ))
+}
+
+/// Edit a blob file (e.g. .json) by direct text replacement — no CriticMarkup wrapping.
+async fn edit_blob_file(
+    server: &Arc<Server>,
+    doc_info: &y_sweet_core::doc_resolver::DocInfo,
+    file_path: &str,
+    old_string: &str,
+    new_string: &str,
+) -> Result<String, String> {
+    // 1. Read current blob content
+    let hash = doc_info
+        .hash
+        .as_ref()
+        .ok_or_else(|| format!("Error: No file hash for blob: {}", file_path))?;
+    let data = blob::read_blob(server, &doc_info.doc_id, hash).await?;
+    let content = String::from_utf8(data)
+        .map_err(|_| format!("Error: {} is not valid UTF-8", file_path))?;
+
+    // 2. Find old_string (must be unique)
+    let matches: Vec<usize> = content.match_indices(old_string).map(|(i, _)| i).collect();
+    match matches.len() {
+        0 => {
+            return Err(format!(
+                "Error: old_string not found in {}. Make sure it matches exactly.",
+                file_path
+            ))
+        }
+        1 => {}
+        n => {
+            return Err(format!(
+                "Error: old_string is not unique in {} ({} occurrences). Include more context.",
+                file_path, n
+            ))
+        }
+    }
+
+    // 3. Apply replacement
+    let new_content = content.replacen(old_string, new_string, 1);
+
+    // 4. Write new blob to store
+    let new_hash = blob::write_blob(server, &doc_info.doc_id, new_content.as_bytes()).await?;
+
+    // 5. Update hash in filemeta_v0 Y.Doc
+    server
+        .update_blob_hash(&doc_info.folder_doc_id, file_path, &new_hash)
+        .await
+        .map_err(|e| format!("Error updating filemeta: {}", e))?;
+
+    // 6. Update hash in doc_resolver cache
+    server.doc_resolver().update_hash(file_path, &new_hash);
+
+    Ok(format!(
+        "Edited {}: replaced {} characters.",
+        file_path,
+        old_string.len()
     ))
 }
 
@@ -830,5 +897,244 @@ mod tests {
             "edit should match smart single quotes when AI sends straight quotes, got: {:?}",
             result
         );
+    }
+
+    // === Comment-aware edit tests ===
+
+    #[tokio::test]
+    async fn edit_around_comment_preserves_it() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "uuid-doc",
+            "Hello {>>nice point<<} world",
+        )])
+        .await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "Hello {>>nice point<<} world",
+                "new_string": "Goodbye {>>nice point<<} world"
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "edit around comment should succeed, got: {:?}", result);
+        let raw = read_doc_content(&server, &doc_id);
+        assert!(raw.contains("{>>nice point<<}"), "Comment should be preserved: {}", raw);
+        let spans = critic_markup::parse(&raw);
+        assert_eq!(
+            critic_markup::accepted_view(&spans),
+            "Goodbye {>>nice point<<} world"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_removing_non_ai_comment() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "uuid-doc",
+            "Hello {>>human note<<} world",
+        )])
+        .await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "Hello {>>human note<<} world",
+                "new_string": "Hello world"
+            }),
+        )
+        .await;
+
+        assert!(result.is_err(), "should reject removing non-AI comment");
+        let err = result.unwrap_err();
+        assert!(err.contains("comment"), "Error should mention comment: {}", err);
+    }
+
+    #[tokio::test]
+    async fn edit_allows_removing_ai_comment() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "uuid-doc",
+            r#"Hello {>>{"author":"AI"}@@note<<} world"#,
+        )])
+        .await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": r#"Hello {>>{"author":"AI"}@@note<<} world"#,
+                "new_string": "Hello world"
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "removing AI comment should succeed, got: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn edit_allows_adding_comment() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "uuid-doc",
+            "Hello world",
+        )])
+        .await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "Hello world",
+                "new_string": r#"Hello{>>{"author":"AI"}@@observation<<} world"#
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "adding comment should succeed, got: {:?}", result);
+        let raw = read_doc_content(&server, &doc_id);
+        assert!(raw.contains("observation"), "Comment should be in doc: {}", raw);
+    }
+}
+
+#[cfg(test)]
+mod blob_edit_tests {
+    use super::*;
+    use crate::mcp::tools::blob;
+    use crate::mcp::tools::test_helpers::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn edit_json_replaces_text() {
+        let server = build_blob_test_server_with_file(
+            "/data.json",
+            "uuid-json",
+            r#"{"key": "old_value"}"#,
+        )
+        .await;
+        let sid = setup_session_with_read(&server, &format!("{}-uuid-json", RELAY_ID));
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/data.json",
+                "old_string": "old_value",
+                "new_string": "new_value",
+                "session_id": sid,
+            }),
+        )
+        .await;
+        assert!(result.is_ok(), "Edit should succeed: {:?}", result.err());
+
+        // Read back and verify
+        let new_hash = server
+            .doc_resolver()
+            .get_file_hash("Lens/data.json")
+            .unwrap();
+        let doc_info = server.doc_resolver().resolve_path("Lens/data.json").unwrap();
+        let data = blob::read_blob(&server, &doc_info.doc_id, &new_hash)
+            .await
+            .unwrap();
+        let content = String::from_utf8(data).unwrap();
+        assert_eq!(content, r#"{"key": "new_value"}"#);
+    }
+
+    #[tokio::test]
+    async fn edit_json_requires_read_first() {
+        let server = build_blob_test_server_with_file(
+            "/data.json",
+            "uuid-json",
+            r#"{"key": "value"}"#,
+        )
+        .await;
+        let sid = setup_session_no_reads(&server);
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/data.json",
+                "old_string": "value",
+                "new_string": "changed",
+                "session_id": sid,
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must read"));
+    }
+
+    #[tokio::test]
+    async fn edit_json_no_criticmarkup() {
+        let server = build_blob_test_server_with_file(
+            "/data.json",
+            "uuid-json",
+            r#"{"key": "value"}"#,
+        )
+        .await;
+        let sid = setup_session_with_read(&server, &format!("{}-uuid-json", RELAY_ID));
+        execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/data.json",
+                "old_string": "value",
+                "new_string": "changed",
+                "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let new_hash = server
+            .doc_resolver()
+            .get_file_hash("Lens/data.json")
+            .unwrap();
+        let doc_info = server.doc_resolver().resolve_path("Lens/data.json").unwrap();
+        let data = blob::read_blob(&server, &doc_info.doc_id, &new_hash)
+            .await
+            .unwrap();
+        let content = String::from_utf8(data).unwrap();
+        assert!(!content.contains("{++"));
+        assert!(!content.contains("{--"));
+    }
+
+    #[tokio::test]
+    async fn edit_json_old_string_not_found() {
+        let server = build_blob_test_server_with_file(
+            "/data.json",
+            "uuid-json",
+            r#"{"key": "value"}"#,
+        )
+        .await;
+        let sid = setup_session_with_read(&server, &format!("{}-uuid-json", RELAY_ID));
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/data.json",
+                "old_string": "nonexistent",
+                "new_string": "changed",
+                "session_id": sid,
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
     }
 }

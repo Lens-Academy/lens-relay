@@ -21,6 +21,8 @@ import { useDocConnection } from './hooks/useDocConnection';
 import { applySuggestionAction } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
+import { BlobDocumentView } from './components/BlobViewer';
+import { findPathByUuid } from './lib/uuid-to-path';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { useContainerWidth } from './hooks/useContainerWidth';
@@ -171,6 +173,12 @@ function DocumentView() {
     }
   }, [metadata, activeDocId, docUuid, splatPath, navigate]);
 
+  // Check if this is a blob file (e.g. .json) — must be before early returns
+  const uuid = activeDocId ? activeDocId.slice(RELAY_ID.length + 1) : null;
+  const filePath = uuid ? findPathByUuid(uuid, metadata) : null;
+  const fileEntry = filePath ? metadata[filePath] : null;
+  const isBlobFile = fileEntry?.type === 'file' && filePath?.endsWith('.json');
+
   if (!docUuid) return <DocumentNotFound />;
 
   // Show loading while resolving short UUID on cold page load
@@ -180,6 +188,16 @@ function DocumentView() {
         <div className="text-sm text-gray-500">Loading document...</div>
       </main>
     );
+  }
+
+  // Blob files (JSON) — render read-only viewer, no Y.Doc sync needed
+  if (isBlobFile && fileEntry?.hash && filePath) {
+    const fileName = filePath.split('/').pop() ?? undefined;
+    // Derive folder doc ID from file path: first non-empty segment is folder name
+    const folderName = filePath.split('/').filter(Boolean)[0];
+    const folderConfig = FOLDERS.find(f => f.name === folderName);
+    const folderDocId = folderConfig ? `${RELAY_ID}-${folderConfig.id}` : '';
+    return <BlobDocumentView docId={activeDocId} hash={fileEntry.hash} folderDocId={folderDocId} fileName={fileName} />;
   }
 
   return (

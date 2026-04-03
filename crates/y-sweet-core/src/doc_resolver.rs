@@ -1,5 +1,8 @@
 use crate::doc_sync::DocWithSyncKv;
-use crate::link_indexer::{extract_id_from_filemeta_entry, find_all_folder_docs, parse_doc_id};
+use crate::link_indexer::{
+    extract_hash_from_filemeta_entry, extract_id_from_filemeta_entry, find_all_folder_docs,
+    parse_doc_id,
+};
 use dashmap::DashMap;
 use yrs::{Any, Doc, Map, Out, ReadTxn, Transact};
 
@@ -12,6 +15,8 @@ pub struct DocInfo {
     pub folder_name: String,
     /// Full internal doc_id: "{relay_id}-{uuid}"
     pub doc_id: String,
+    /// SHA-256 hash for blob files (e.g. .json); None for Y.Text docs.
+    pub hash: Option<String>,
 }
 
 /// Read the folder display name from a folder doc's `folder_config` Y.Map.
@@ -92,6 +97,7 @@ impl DocumentResolver {
 
         for (path, value) in filemeta.iter(&txn) {
             if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
+                let hash = extract_hash_from_filemeta_entry(&value, &txn);
                 // Strip leading "/" from filemeta path, prepend folder name
                 let path_str: &str = &path;
                 let stripped = path_str.strip_prefix('/').unwrap_or(path_str);
@@ -104,6 +110,7 @@ impl DocumentResolver {
                     folder_doc_id: folder_doc_id.to_string(),
                     folder_name: folder_name.to_string(),
                     doc_id,
+                    hash,
                 };
 
                 self.uuid_to_path.insert(uuid, full_path.clone());
@@ -184,6 +191,18 @@ impl DocumentResolver {
         }
         self.uuid_to_path.insert(uuid.to_string(), path.to_string());
         self.path_to_doc.insert(path.to_string(), info);
+    }
+
+    /// Get the file hash for a blob document at the given path.
+    pub fn get_file_hash(&self, path: &str) -> Option<String> {
+        self.resolve_path(path).and_then(|info| info.hash)
+    }
+
+    /// Update the hash for a blob document at the given path.
+    pub fn update_hash(&self, path: &str, new_hash: &str) {
+        if let Some(mut info) = self.path_to_doc.get_mut(path) {
+            info.hash = Some(new_hash.to_string());
+        }
     }
 
     /// Remove a single document from both maps by uuid.
@@ -452,6 +471,7 @@ mod tests {
             folder_doc_id: folder0_id(),
             folder_name: "Lens".to_string(),
             doc_id: format!("{}-uuid-photo", RELAY_ID),
+            hash: None,
         };
         resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", info);
 
@@ -474,6 +494,7 @@ mod tests {
             folder_doc_id: folder0_id(),
             folder_name: "Lens".to_string(),
             doc_id: format!("{}-uuid-photo", RELAY_ID),
+            hash: None,
         };
         resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", info1);
 
@@ -484,6 +505,7 @@ mod tests {
             folder_doc_id: folder0_id(),
             folder_name: "Lens".to_string(),
             doc_id: format!("{}-uuid-photo", RELAY_ID),
+            hash: None,
         };
         resolver.upsert_doc("uuid-photo", "Lens/Biology/Photosynthesis.md", info2);
 
@@ -515,6 +537,7 @@ mod tests {
             folder_doc_id: folder0_id(),
             folder_name: "Lens".to_string(),
             doc_id: format!("{}-uuid-photo", RELAY_ID),
+            hash: None,
         };
         resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", make_info());
         resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", make_info());
@@ -535,6 +558,7 @@ mod tests {
             folder_doc_id: folder0_id(),
             folder_name: "Lens".to_string(),
             doc_id: format!("{}-uuid-photo", RELAY_ID),
+            hash: None,
         };
         resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", info);
         assert!(resolver.resolve_path("Lens/Photosynthesis.md").is_some());
@@ -563,6 +587,7 @@ mod tests {
             folder_doc_id: folder0_id(),
             folder_name: "Lens".to_string(),
             doc_id: format!("{}-uuid-photo", RELAY_ID),
+            hash: None,
         };
         resolver.upsert_doc("uuid-photo", "Lens/Photosynthesis.md", info);
         resolver.remove_doc("uuid-photo");
@@ -579,6 +604,7 @@ mod tests {
             folder_doc_id: folder0_id(),
             folder_name: "Lens".to_string(),
             doc_id: format!("{}-uuid-ideas", RELAY_ID),
+            hash: None,
         };
         resolver.upsert_doc("uuid-ideas", "Lens/Notes/Ideas.md", info);
 

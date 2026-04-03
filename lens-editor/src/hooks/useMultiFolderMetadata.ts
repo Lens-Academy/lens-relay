@@ -77,7 +77,10 @@ export function useMultiFolderMetadata(folders: FolderConfig[]): UseMultiFolderM
       const extractMetadata = (): FolderMetadata => {
         const entries: FolderMetadata = {};
         filemeta.forEach((value, key) => {
-          entries[key] = value;
+          // Entries may be plain objects or Y.Maps (e.g. blob files added via Y.Map API).
+          // Normalize to plain objects so downstream code can access .id, .type etc.
+          const v = value as any;
+          entries[key] = (typeof v?.toJSON === 'function') ? v.toJSON() as FileMetadata : value;
         });
         return entries;
       };
