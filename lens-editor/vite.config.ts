@@ -76,8 +76,46 @@ export default defineConfig(() => {
     };
   }
 
+  /**
+   * Vite plugin that adds /api/add-video endpoints for transcript processing.
+   * Dev-only — configureServer only runs in `vite dev`.
+   */
+  function addVideoPlugin(): Plugin {
+    return {
+      name: 'add-video-api',
+      configureServer(server) {
+        server.middlewares.use('/api/add-video', async (req, res) => {
+          try {
+            const { createAddVideoRoutes } = await import('./server/add-video/routes.ts');
+            const { JobQueue } = await import('./server/add-video/queue.ts');
+            const { processVideo } = await import('./server/add-video/pipeline.ts');
+
+            // Lazily create a singleton queue (persists across HMR)
+            const global_ = globalThis as any;
+            if (!global_.__addVideoQueue) {
+              global_.__addVideoQueue = new JobQueue({ processJob: processVideo });
+            }
+
+            const { getRequestListener } = await import('@hono/node-server');
+            const { Hono } = await import('hono');
+            const app = new Hono();
+            app.route('/api/add-video', createAddVideoRoutes(global_.__addVideoQueue));
+
+            const listener = getRequestListener(app.fetch);
+            // Restore the full URL (Vite strips the prefix for middlewares)
+            req.url = '/api/add-video' + (req.url || '');
+            listener(req, res);
+          } catch (error: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: error.message }));
+          }
+        });
+      },
+    };
+  }
+
   return {
-    plugins: [react(), tailwindcss(), shareTokenAuthPlugin()],
+    plugins: [react(), tailwindcss(), shareTokenAuthPlugin(), addVideoPlugin()],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

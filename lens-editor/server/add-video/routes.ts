@@ -1,9 +1,17 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import type { JobQueue } from './queue';
 import type { VideoPayload } from './types';
 
 export function createAddVideoRoutes(queue: JobQueue): Hono {
   const router = new Hono();
+
+  // CORS: bookmarklet runs on youtube.com and POSTs cross-origin
+  router.use('/*', cors({
+    origin: '*',
+    allowMethods: ['GET', 'POST'],
+    allowHeaders: ['Content-Type'],
+  }));
 
   router.post('/', async (c) => {
     const body = await c.req.json<{ videos?: VideoPayload[] }>();

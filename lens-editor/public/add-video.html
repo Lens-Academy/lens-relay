@@ -106,10 +106,12 @@
   </div>
 
   <script>
-    // Build bookmarklet href from the external JS file
+    // Build bookmarklet href from the external JS file, injecting this server's origin
     fetch('/add-video-bookmarklet.js')
       .then(r => r.text())
       .then(js => {
+        // Replace placeholder with the origin of the install page
+        js = js.replace('__LENS_SERVER_URL__', location.origin);
         const link = document.getElementById('bookmarklet-drag');
         link.href = 'javascript:' + encodeURIComponent(js);
       });

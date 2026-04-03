@@ -321,8 +321,8 @@ void function() {
     });
 
     // POST to the add-video endpoint
-    // Use the configured server URL (production: editor.lensacademy.org)
-    var serverUrl = 'https://editor.lensacademy.org/api/add-video';
+    // __LENS_SERVER_URL__ is replaced by the install page with the actual origin
+    var serverUrl = '__LENS_SERVER_URL__/api/add-video';
 
     fetch(serverUrl, {
       method: 'POST',
