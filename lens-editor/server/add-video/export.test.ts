@@ -55,10 +55,16 @@ describe('generateMarkdown', () => {
 });
 
 describe('generateFilenameBase', () => {
-  it('generates lowercase hyphenated filename', () => {
+  it('generates lowercase hyphenated filename without video_id', () => {
     expect(
       generateFilenameBase('Computerphile', 'AI Self Improvement - Computerphile')
     ).toBe('computerphile-ai-self-improvement');
+  });
+
+  it('appends video_id when provided', () => {
+    expect(
+      generateFilenameBase('Computerphile', 'AI Self Improvement - Computerphile', 'abc123')
+    ).toBe('computerphile-ai-self-improvement-abc123');
   });
 
   it('strips special characters', () => {

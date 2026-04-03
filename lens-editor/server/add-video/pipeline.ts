@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Job, VideoPayload } from './types';
-import { extractWords, toPlainText } from './transcript';
+import { extractWords, toPlainText, flattenToWords } from './transcript';
 import { alignWords } from './alignment';
 import {
   generateMarkdown,
@@ -14,14 +14,18 @@ import { createRelayDoc, updateRelayDoc } from './relay-docs';
 const WORK_BASE = '/tmp/transcripts';
 const RELAY_FOLDER = 'Lens Edu/video_transcripts';
 const TIMEOUT_MS = 300_000; // 5 minutes
+// Timestamps saved locally (relay MCP create tool only accepts .md files)
+const TIMESTAMPS_DIR = '/tmp/transcripts/timestamps';
 
 export async function processVideo(
   job: Job & { payload: VideoPayload }
 ): Promise<void> {
   const workDir = path.join(WORK_BASE, job.id);
-  const filenameBase = generateFilenameBase(job.channel, job.title);
+  const filenameBase = generateFilenameBase(job.channel, job.title, job.video_id);
   const mdPath = `${RELAY_FOLDER}/${filenameBase}.md`;
-  const jsonPath = `${RELAY_FOLDER}/${filenameBase}.timestamps.json`;
+
+  // Set relay_url immediately so it's available in the queued response
+  job.relay_url = mdPath;
 
   try {
     // 1. Create work directory and write raw files
@@ -42,7 +46,6 @@ export async function processVideo(
       body: `*This transcript is being processed. Please check back shortly.*\n\nQueued at: ${job.created_at}`,
     });
     await createRelayDoc(mdPath, placeholderContent);
-    job.relay_url = mdPath;
 
     // 3. Run Claude for formatting
     const result = await runClaude(workDir, TIMEOUT_MS);
@@ -59,7 +62,10 @@ export async function processVideo(
     );
 
     // 5. Align timestamps
-    const originalWords = extractWords(job.payload.transcript_raw);
+    // Flatten multi-word entries (sentence-level) into individual words for alignment
+    const originalWords = flattenToWords(
+      extractWords(job.payload.transcript_raw)
+    );
     const correctedWords = correctedText.trim().split(/\s+/);
     const aligned = alignWords(originalWords, correctedWords);
 
@@ -76,10 +82,14 @@ export async function processVideo(
     // 7. Update placeholder with final markdown
     await updateRelayDoc(mdPath, placeholderContent, finalMd);
 
-    // 8. Create timestamps JSON
-    await createRelayDoc(jsonPath, JSON.stringify(timestamps, null, 2));
+    // 8. Save timestamps locally (relay create tool only accepts .md)
+    await fs.mkdir(TIMESTAMPS_DIR, { recursive: true });
+    await fs.writeFile(
+      path.join(TIMESTAMPS_DIR, `${filenameBase}.timestamps.json`),
+      JSON.stringify(timestamps, null, 2)
+    );
   } finally {
-    // 9. Clean up
+    // 9. Clean up work directory (but not timestamps)
     await fs.rm(workDir, { recursive: true }).catch(() => {});
   }
 }

@@ -72,3 +72,19 @@ export function toPlainText(
 
   return paragraphs.join('\n\n');
 }
+
+/**
+ * Flatten multi-word entries into individual words for alignment.
+ * Sentence-level transcripts have entries like "Hello everyone welcome back"
+ * which need to be split into individual words, all sharing the same timestamp.
+ */
+export function flattenToWords(entries: TimestampedWord[]): TimestampedWord[] {
+  const result: TimestampedWord[] = [];
+  for (const entry of entries) {
+    const words = entry.text.split(/\s+/).filter((w) => w);
+    for (const word of words) {
+      result.push({ text: word, start: entry.start });
+    }
+  }
+  return result;
+}

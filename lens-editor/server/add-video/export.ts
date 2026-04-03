@@ -43,10 +43,11 @@ export function generateMarkdown(params: MarkdownParams): string {
   return frontmatter + '\n\n' + params.body + '\n';
 }
 
-/** Generate filename base: lowercase, hyphenated, no special chars */
+/** Generate filename base: lowercase, hyphenated, no special chars, with video_id for uniqueness */
 export function generateFilenameBase(
   channel: string,
-  title: string
+  title: string,
+  videoId?: string
 ): string {
   // Remove channel name suffix from title if present
   const channelSuffix = new RegExp(
@@ -66,6 +67,11 @@ export function generateFilenameBase(
     .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
+
+  // Append video_id for uniqueness (handles non-ASCII title collisions)
+  if (videoId) {
+    filename = `${filename}-${videoId}`;
+  }
 
   return filename;
 }

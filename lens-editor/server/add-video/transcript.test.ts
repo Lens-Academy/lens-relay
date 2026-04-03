@@ -3,6 +3,7 @@ import {
   extractWords,
   isWordLevel,
   toPlainText,
+  flattenToWords,
 } from './transcript';
 import type { TranscriptRaw } from './types';
 
@@ -119,5 +120,30 @@ describe('toPlainText', () => {
     expect(text).toBe(
       'The stamp collecting machine we talked about last time is a physical impossibility'
     );
+  });
+});
+
+describe('flattenToWords', () => {
+  it('splits multi-word entries into individual words with same timestamp', () => {
+    const words = flattenToWords([
+      { text: 'hello world', start: 0.5 },
+      { text: 'goodbye', start: 2.0 },
+    ]);
+    expect(words).toEqual([
+      { text: 'hello', start: 0.5 },
+      { text: 'world', start: 0.5 },
+      { text: 'goodbye', start: 2.0 },
+    ]);
+  });
+
+  it('passes through single-word entries unchanged', () => {
+    const words = flattenToWords([
+      { text: 'hello', start: 0.0 },
+      { text: 'world', start: 1.0 },
+    ]);
+    expect(words).toEqual([
+      { text: 'hello', start: 0.0 },
+      { text: 'world', start: 1.0 },
+    ]);
   });
 });

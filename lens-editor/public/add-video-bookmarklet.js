@@ -4,15 +4,16 @@ void function() {
     return;
   }
 
-  // YouTube enforces Trusted Types - create a policy to allow our script
-  let policy;
-  if (window.trustedTypes && window.trustedTypes.createPolicy) {
+  // YouTube enforces Trusted Types - reuse cached policy or create new one
+  var policy = window.__lensBmPolicy;
+  if (!policy && window.trustedTypes && window.trustedTypes.createPolicy) {
     try {
       policy = window.trustedTypes.createPolicy('lens-bm', {
         createHTML: function(s) { return s; }
       });
+      window.__lensBmPolicy = policy;
     } catch(e) {
-      // Policy might already exist from a previous click
+      // Policy already exists but we lost the reference — shouldn't happen with caching
     }
   }
 
