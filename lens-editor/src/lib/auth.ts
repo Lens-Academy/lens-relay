@@ -71,7 +71,7 @@ export async function getClientToken(docId: string): Promise<ClientToken> {
   });
 
   if (!response.ok) {
-    if (response.status === 401 && !_authErrorFired && _onAuthError) {
+    if ((response.status === 401 || response.status === 403) && !_authErrorFired && _onAuthError) {
       _authErrorFired = true;
       _onAuthError();
     }

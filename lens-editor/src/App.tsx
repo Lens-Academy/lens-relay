@@ -232,6 +232,33 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
   );
 }
 
+/**
+ * Smart default redirect: picks the first available doc from accessible folders.
+ * Falls back to hardcoded DEFAULT_DOC_UUID for all-folders tokens or while loading.
+ */
+function DefaultRedirect() {
+  const { metadata } = useNavigation();
+  const metaEntries = Object.values(metadata);
+
+  // If metadata hasn't loaded yet, try the hardcoded default (optimistic — works for all-folders tokens)
+  if (metaEntries.length === 0) {
+    return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
+  }
+
+  // If the hardcoded default is in accessible metadata, use it
+  if (metaEntries.some(m => m.id.startsWith(DEFAULT_DOC_UUID))) {
+    return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
+  }
+
+  // Hardcoded default not accessible — pick first available doc
+  const firstDoc = metaEntries.find(m => m.id);
+  if (firstDoc) {
+    return <Navigate to={`/${firstDoc.id.slice(0, 8)}`} replace />;
+  }
+
+  return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
+}
+
 function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean }) {
   const navigate = useNavigate();
 
@@ -363,10 +390,10 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; 
                   <Route path="/review" element={
                     role === 'edit' && isAllFolders
                       ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
-                      : <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />
+                      : <DefaultRedirect />
                   } />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
-                  <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
+                  <Route path="/" element={<DefaultRedirect />} />
                 </Routes>
               </div>
             </div>
