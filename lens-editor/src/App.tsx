@@ -13,7 +13,7 @@ import { SidebarContext } from './contexts/SidebarContext';
 import { useMultiFolderMetadata, type FolderConfig } from './hooks/useMultiFolderMetadata';
 import { AuthProvider } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
-import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired } from './lib/auth-share';
+import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired, decodeFolderFromToken, isAllFoldersToken } from './lib/auth-share';
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
@@ -65,6 +65,8 @@ const DEFAULT_DOC_UUID = (USE_LOCAL_RELAY && !USE_LOCAL_R2) ? 'c0000001' : '76c3
 const shareToken = getShareTokenFromUrl();
 const shareRole: UserRole | null = shareToken ? decodeRoleFromToken(shareToken) : null;
 const shareExpired: boolean = shareToken ? isTokenExpired(shareToken) : false;
+const shareFolderUuid: string | null = shareToken ? decodeFolderFromToken(shareToken) : null;
+const shareIsAllFolders: boolean = shareFolderUuid ? isAllFoldersToken(shareFolderUuid) : false;
 
 // Store share token for all relay auth calls, then strip from URL bar
 if (shareToken) {
@@ -207,7 +209,7 @@ export function App() {
   if (authError) {
     return <TokenInvalid />;
   }
-  return <AuthenticatedApp role={shareRole} />;
+  return <AuthenticatedApp role={shareRole} folderUuid={shareFolderUuid} isAllFolders={shareIsAllFolders} />;
 }
 
 function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: string[]; folders: { id: string; name: string }[]; relayId: string }) {
@@ -230,16 +232,21 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
   );
 }
 
-function AuthenticatedApp({ role }: { role: UserRole }) {
+function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean }) {
   const navigate = useNavigate();
+
+  // Filter folders based on token scope
+  const accessibleFolders = isAllFolders
+    ? FOLDERS
+    : FOLDERS.filter(f => f.id === folderUuid);
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
 
   // Unified panel manager — single source of truth for all panel collapse/expand
   const manager = usePanelManager(PANEL_CONFIG);
 
   // Use multi-folder metadata hook
-  const { metadata, folderDocs, errors } = useMultiFolderMetadata(FOLDERS);
-  const folderNames = FOLDERS.map(f => f.name);
+  const { metadata, folderDocs, errors } = useMultiFolderMetadata(accessibleFolders);
+  const folderNames = accessibleFolders.map(f => f.name);
   const { recentFiles, pushRecent } = useRecentFiles();
   const justCreatedRef = useRef(false);
 
@@ -284,7 +291,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
   const commentMarginCollapsed = collapsedState['comment-margin'] ?? false;
 
   return (
-    <AuthProvider role={role}>
+    <AuthProvider role={role} folderUuid={folderUuid} isAllFolders={isAllFolders}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
         <SidebarContext.Provider value={{ manager, headerStage }}>
@@ -353,7 +360,7 @@ function AuthenticatedApp({ role }: { role: UserRole }) {
               />
               <div className="flex-1 min-w-0">
                 <Routes>
-                  <Route path="/review" element={<ReviewPageWithActions folderIds={FOLDERS.map(f => `${RELAY_ID}-${f.id}`)} folders={FOLDERS.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />} />
+                  <Route path="/review" element={<ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />} />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<Navigate to={`/${DEFAULT_DOC_UUID}`} replace />} />
                 </Routes>
