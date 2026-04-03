@@ -191,9 +191,13 @@ function DocumentView() {
   }
 
   // Blob files (JSON) — render read-only viewer, no Y.Doc sync needed
-  if (isBlobFile && fileEntry?.hash) {
-    const fileName = filePath?.split('/').pop() ?? undefined;
-    return <BlobDocumentView docId={activeDocId} hash={fileEntry.hash} fileName={fileName} />;
+  if (isBlobFile && fileEntry?.hash && filePath) {
+    const fileName = filePath.split('/').pop() ?? undefined;
+    // Derive folder doc ID from file path: first non-empty segment is folder name
+    const folderName = filePath.split('/').filter(Boolean)[0];
+    const folderConfig = FOLDERS.find(f => f.name === folderName);
+    const folderDocId = folderConfig ? `${RELAY_ID}-${folderConfig.id}` : '';
+    return <BlobDocumentView docId={activeDocId} hash={fileEntry.hash} folderDocId={folderDocId} fileName={fileName} />;
   }
 
   return (

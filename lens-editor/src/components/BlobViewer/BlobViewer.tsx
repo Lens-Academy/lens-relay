@@ -72,7 +72,7 @@ export function BlobViewer({ content }: BlobViewerProps) {
   }, [content]);
 
   return (
-    <div className="h-full w-full">
+    <div className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" />
     </div>
   );

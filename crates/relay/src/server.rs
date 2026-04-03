@@ -2561,6 +2561,13 @@ impl Server {
             }
         }
 
+        // Unauthenticated blob read — local dev only (no auth key configured)
+        if self.authenticator.is_none() {
+            if let Some(_store) = &self.store {
+                router = router.route("/blob/:doc_id/:hash", get(handle_blob_read));
+            }
+        }
+
         router
             .layer(DefaultBodyLimit::max(10 * 1024 * 1024)) // 10MB default
             .with_state(self.clone())
@@ -5371,4 +5378,32 @@ async fn handle_file_download(
             anyhow!("Invalid permission type"),
         ))
     }
+}
+
+/// Unauthenticated blob read — only registered when no auth key is configured (local dev).
+/// Reads file content directly from the store by doc_id and hash.
+async fn handle_blob_read(
+    State(server_state): State<Arc<Server>>,
+    Path((doc_id, hash)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let store = server_state.store().as_ref().ok_or_else(|| {
+        AppError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            anyhow!("No store configured"),
+        )
+    })?;
+
+    let key = format!("files/{}/{}", doc_id, hash);
+    let data = store
+        .get(&key)
+        .await
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?
+        .ok_or_else(|| AppError(StatusCode::NOT_FOUND, anyhow!("Blob not found")))?;
+
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/octet-stream")
+        .header("content-length", data.len())
+        .body(axum::body::Body::from(data))
+        .map_err(|e| AppError(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?)
 }
