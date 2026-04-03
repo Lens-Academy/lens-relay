@@ -2259,6 +2259,7 @@ impl Server {
             .route("/doc/ws/:doc_id", get(handle_socket_upgrade_deprecated))
             .route("/doc/new", post(new_doc))
             .route("/doc/:doc_id/auth", post(auth_doc))
+            .route("/doc/:doc_id/folder", get(get_doc_folder))
             .route("/doc/resolve/:prefix", get(resolve_doc))
             .route("/doc/:doc_id/as-update", get(get_doc_as_update_deprecated))
             .route("/doc/:doc_id/update", post(update_doc_deprecated))
@@ -3342,6 +3343,27 @@ async fn resolve_doc(
         None => Err(AppError(
             StatusCode::NOT_FOUND,
             anyhow!("No unique doc matching prefix '{}'", prefix),
+        )),
+    }
+}
+
+async fn get_doc_folder(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Path(doc_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    // Extract the UUID portion from compound doc_id (relay_id-uuid)
+    let uuid = link_indexer::parse_doc_id(&doc_id)
+        .map(|(_, uuid)| uuid)
+        .ok_or_else(|| AppError(StatusCode::BAD_REQUEST, anyhow!("Invalid doc_id format")))?;
+
+    match server_state.doc_resolver().folder_uuid_for_doc(uuid) {
+        Some(folder_uuid) => Ok(Json(serde_json::json!({ "folderUuid": folder_uuid }))),
+        None => Err(AppError(
+            StatusCode::NOT_FOUND,
+            anyhow!("Document not found in any folder"),
         )),
     }
 }
