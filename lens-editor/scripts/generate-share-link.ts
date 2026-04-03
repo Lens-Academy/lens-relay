@@ -10,6 +10,8 @@ import { signShareToken } from '../server/share-token.ts';
 import type { ShareTokenPayload } from '../server/share-token.ts';
 import type { UserRole } from '../shared/types.ts';
 
+const ALL_FOLDERS_SENTINEL = '00000000-0000-0000-0000-000000000000';
+
 function parseExpiry(expiresStr: string): number {
   const now = Math.floor(Date.now() / 1000);
   const match = expiresStr.match(/^(\d+)(h|d|w)$/);
@@ -26,13 +28,14 @@ function printUsage() {
 
 Options:
   --role <edit|suggest|view>  Access level (required)
-  --folder <id>               Folder ID (required)
+  --folder <id>               Folder ID (required unless --all-folders)
+  --all-folders               Grant access to all folders
   --expires <duration>         Token lifetime: e.g. "24h", "7d", "2w" (default: "7d")
   --base-url <url>            Base URL for the editor (default: http://localhost:5173)
 
 Examples:
-  npx tsx scripts/generate-share-link.ts --role edit --folder fbd5eb54-73cc-41b0-ac28-2b93d3b4244e
-  npx tsx scripts/generate-share-link.ts --role suggest --folder fbd5eb54-73cc-41b0-ac28-2b93d3b4244e --expires 24h
+  npx tsx scripts/generate-share-link.ts --role edit --all-folders
+  npx tsx scripts/generate-share-link.ts --role suggest --folder ea4015da-24af-4d9d-ac49-8c902cb17121
   npx tsx scripts/generate-share-link.ts --role view --folder fbd5eb54-73cc-41b0-ac28-2b93d3b4244e --base-url https://editor.example.com`);
 }
 
@@ -50,7 +53,8 @@ function getArg(name: string): string | undefined {
 }
 
 const role = getArg('--role') as UserRole | undefined;
-const folder = getArg('--folder');
+const allFolders = args.includes('--all-folders');
+const folder = allFolders ? ALL_FOLDERS_SENTINEL : getArg('--folder');
 const expires = getArg('--expires') || '7d';
 const baseUrl = getArg('--base-url') || 'http://localhost:5173';
 
@@ -61,7 +65,7 @@ if (!role || !['edit', 'suggest', 'view'].includes(role)) {
 }
 
 if (!folder) {
-  console.error('Error: --folder is required');
+  console.error('Error: --folder or --all-folders is required');
   printUsage();
   process.exit(1);
 }
@@ -78,7 +82,7 @@ const url = `${baseUrl}/?t=${token}`;
 console.log(`\nShare Link Generated`);
 console.log(`${'─'.repeat(50)}`);
 console.log(`Role:    ${role}`);
-console.log(`Folder:  ${folder}`);
+console.log(`Folder:  ${folder === ALL_FOLDERS_SENTINEL ? 'All folders' : folder}`);
 console.log(`Expires: ${new Date(payload.expiry * 1000).toISOString()}`);
 console.log(`Token:   ${token} (${token.length} chars)`);
 console.log(`\nURL:\n${url}\n`);
