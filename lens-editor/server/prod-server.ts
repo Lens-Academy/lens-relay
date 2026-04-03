@@ -56,6 +56,20 @@ app.route('/api/discord', discordRoutes);
 const addVideoQueue = new JobQueue({ processJob: processVideo });
 app.route('/api/add-video', createAddVideoRoutes(addVideoQueue));
 
+// Blob content proxy — fetches presigned R2 URLs server-side to avoid CORS
+app.get('/api/blob-fetch', async (c) => {
+  const url = c.req.query('url');
+  if (!url) return c.json({ error: 'url parameter required' }, 400);
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) return c.text(`Upstream error: ${resp.status}`, 502);
+    const body = await resp.text();
+    return c.text(body);
+  } catch (err) {
+    return c.text(`Fetch failed: ${err}`, 502);
+  }
+});
+
 // Static files from Vite build output
 app.use('/*', serveStatic({ root: './dist' }));
 // SPA fallback

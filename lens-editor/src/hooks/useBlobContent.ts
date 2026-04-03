@@ -61,10 +61,8 @@ export function useBlobContent(
 
           const { downloadUrl: download_url } = await downloadUrlResponse.json();
 
-          // Step 2: Fetch the actual blob content.
-          // The download URL may be a presigned R2 URL (cross-origin, no CORS issue
-          // since presigned URLs allow anonymous access) or a local relay endpoint.
-          const contentResponse = await fetch(download_url);
+          // Step 2: Fetch blob content via server-side proxy to avoid R2 CORS issues
+          const contentResponse = await fetch(`/api/blob-fetch?url=${encodeURIComponent(download_url)}`);
           if (!contentResponse.ok) {
             throw new Error(`Failed to download blob: ${contentResponse.status}`);
           }
