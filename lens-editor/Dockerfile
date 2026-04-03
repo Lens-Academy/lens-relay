@@ -10,6 +10,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
+RUN npm install -g @anthropic-ai/claude-code
 COPY --from=builder /app/dist ./dist
 COPY server/ ./server/
 COPY shared/ ./shared/
