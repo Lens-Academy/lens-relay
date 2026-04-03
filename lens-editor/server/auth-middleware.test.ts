@@ -230,6 +230,27 @@ describe('auth-middleware', () => {
         .rejects.toThrow(AuthError);
     });
 
+    it('should allow access to folder doc itself with matching folder-scoped token', async () => {
+      // Bug: folder-scoped token accessing its OWN folder doc (for metadata sync)
+      // The folder doc ID format is "relay_id-folder_uuid" — same as the token's folder.
+      // The folder lookup returns 404 because folder docs aren't content docs,
+      // but this should be allowed since the doc IS the folder the token authorizes.
+      const token = signShareToken({ role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+
+      // Folder lookup returns 404 — folder doc is not a content doc
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+      // Relay auth mock (should be reached if folder doc access is allowed)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ url: 'ws://localhost:8190/d/folder-doc/ws', docId: 'folder-doc', token: 'relay-token' }),
+      });
+
+      // docId ends with the token's folder UUID — this IS the folder doc
+      const folderDocId = `relay-id-${FOLDER_A}`;
+      const result = await handler({ token, docId: folderDocId });
+      expect(result.role).toBe('edit');
+    });
+
     it('should bypass folder check for all-folders sentinel token', async () => {
       const token = signShareToken({ role: 'edit', folder: ALL_FOLDERS_SENTINEL, expiry: Math.floor(Date.now() / 1000) + 3600 });
 
