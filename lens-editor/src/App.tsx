@@ -252,18 +252,9 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
 
 /**
  * Landing page shown when no document is selected.
- * For all-folders tokens, redirects to the hardcoded default doc.
- * For folder-scoped tokens, shows a prompt to select a file.
+ * Shows a prompt to select a file from the sidebar or quick switcher.
  */
 function DefaultLanding() {
-  const { isAllFolders } = useAuth();
-
-  // All-folders tokens can use the hardcoded default immediately
-  if (isAllFolders) {
-    return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
-  }
-
-  // Folder-scoped: show landing page instead of guessing a doc
   return (
     <main className="flex-1 flex items-center justify-center bg-gray-50 pt-32">
       <div className="text-center max-w-md px-6">
