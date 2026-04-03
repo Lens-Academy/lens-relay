@@ -233,37 +233,31 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
 }
 
 /**
- * Smart default redirect: picks the first available doc from accessible folders.
- * For all-folders tokens, uses the hardcoded default immediately.
- * For folder-scoped tokens, waits for metadata to load, then picks the first doc.
+ * Landing page shown when no document is selected.
+ * For all-folders tokens, redirects to the hardcoded default doc.
+ * For folder-scoped tokens, shows a prompt to select a file.
  */
-function DefaultRedirect() {
-  const { metadata } = useNavigation();
+function DefaultLanding() {
   const { isAllFolders } = useAuth();
-  const metaEntries = Object.values(metadata);
 
   // All-folders tokens can use the hardcoded default immediately
   if (isAllFolders) {
     return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
   }
 
-  // Folder-scoped: wait for metadata before redirecting (avoid 403 on wrong folder's doc)
-  if (metaEntries.length === 0) {
-    return (
-      <main className="flex-1 flex items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-500">Loading...</div>
-      </main>
-    );
-  }
-
-  // Pick first available doc from accessible metadata
-  const firstDoc = metaEntries.find(m => m.id);
-  if (firstDoc) {
-    return <Navigate to={`/${firstDoc.id.slice(0, 8)}`} replace />;
-  }
-
-  // Fallback (shouldn't happen — folder has no docs)
-  return <Navigate to={`/${DEFAULT_DOC_UUID}`} replace />;
+  // Folder-scoped: show landing page instead of guessing a doc
+  return (
+    <main className="flex-1 flex items-center justify-center bg-gray-50">
+      <div className="text-center max-w-md px-6">
+        <h1 className="text-xl font-semibold text-gray-800 mb-3">Select a document</h1>
+        <p className="text-gray-500">
+          Choose a file from the sidebar, or press{' '}
+          <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+O</kbd>
+          {' '}to open the quick switcher.
+        </p>
+      </div>
+    </main>
+  );
 }
 
 function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean }) {
@@ -397,10 +391,10 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; 
                   <Route path="/review" element={
                     role === 'edit' && isAllFolders
                       ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
-                      : <DefaultRedirect />
+                      : <DefaultLanding />
                   } />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
-                  <Route path="/" element={<DefaultRedirect />} />
+                  <Route path="/" element={<DefaultLanding />} />
                 </Routes>
               </div>
             </div>
