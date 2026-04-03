@@ -876,6 +876,20 @@ impl Server {
         &self.doc_resolver
     }
 
+    /// Resolve a folder UUID to its display name by finding any document in that folder.
+    pub fn folder_name_for_uuid(&self, folder_uuid: &str) -> Option<String> {
+        for path in self.doc_resolver().all_paths() {
+            if let Some(info) = self.doc_resolver().resolve_path(&path) {
+                if let Some((_, fid)) = link_indexer::parse_doc_id(&info.folder_doc_id) {
+                    if fid == folder_uuid {
+                        return Some(info.folder_name.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Get the DashMap of all loaded documents.
     pub fn docs(&self) -> &Arc<DashMap<String, DocWithSyncKv>> {
         &self.docs

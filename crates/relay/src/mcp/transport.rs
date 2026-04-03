@@ -97,6 +97,20 @@ async fn handle_mcp_post_inner(
     let session_id = extract_session_id(&headers);
     let sessions = &server.mcp_sessions;
 
+    // Resolve folder_name from UUID if not already set
+    let access = if access.folder_name.is_none() {
+        if let Some(ref uuid) = access.folder_uuid {
+            McpAccess {
+                folder_name: server.folder_name_for_uuid(uuid),
+                ..access
+            }
+        } else {
+            access
+        }
+    } else {
+        access
+    };
+
     match message {
         JsonRpcMessage::Notification(notif) => {
             debug!(method = %notif.method, "MCP notification received");

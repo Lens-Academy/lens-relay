@@ -121,6 +121,16 @@ fn handle_initialize(
         "MCP initialize request"
     );
 
+    let description = match (&access.folder_name, access.writable) {
+        (Some(name), true) => format!("Lens Relay MCP — full read/write access to {}", name),
+        (Some(name), false) => format!(
+            "Lens Relay MCP — read-only access to {}. You can search, read, and browse documents but cannot edit, create, or move them.",
+            name
+        ),
+        (None, true) => "Lens Relay MCP — full read/write access to all folders".to_string(),
+        (None, false) => "Lens Relay MCP — read-only access to all folders. You can search, read, and browse documents but cannot edit, create, or move them.".to_string(),
+    };
+
     let session_id = sessions.create_session(negotiated_version.clone(), client_info, access);
 
     let response = success_response(
@@ -132,7 +142,8 @@ fn handle_initialize(
             },
             "serverInfo": {
                 "name": "lens-relay",
-                "version": env!("CARGO_PKG_VERSION")
+                "version": env!("CARGO_PKG_VERSION"),
+                "description": description
             }
         }),
     );
