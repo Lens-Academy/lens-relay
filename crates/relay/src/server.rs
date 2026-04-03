@@ -1047,6 +1047,7 @@ impl Server {
                 folder_doc_id: folder_doc_id.clone(),
                 folder_name: folder_name.to_string(),
                 doc_id: full_doc_id.clone(),
+                hash: None,
             },
         );
 
