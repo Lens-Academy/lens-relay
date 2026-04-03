@@ -1047,7 +1047,6 @@ impl Server {
                 folder_doc_id: folder_doc_id.clone(),
                 folder_name: folder_name.to_string(),
                 doc_id: full_doc_id.clone(),
-                hash: None,
             },
         );
 
@@ -1087,6 +1086,333 @@ impl Server {
             folder_name: folder_name.to_string(),
             in_folder_path: in_folder_path.to_string(),
         })
+    }
+
+    /// Create a document with direct content write (no CriticMarkup wrapping).
+    /// Used by internal HTTP API for programmatic document creation.
+    /// Accepts any file extension; uses "file" type for non-.md, "markdown" for .md.
+    pub async fn create_document_direct(
+        &self,
+        folder_name: &str,
+        in_folder_path: &str,
+        content: &str,
+    ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
+        // 1. Find all folder docs, match folder_name
+        let docs = self.docs();
+        let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
+        if folder_doc_ids.is_empty() {
+            return Err(CreateDocumentError::NotFound(
+                "No folder documents found".into(),
+            ));
+        }
+
+        let mut folder_match: Option<String> = None;
+        let mut available_folders: Vec<String> = Vec::new();
+
+        for folder_doc_id in &folder_doc_ids {
+            let awareness = {
+                let Some(doc_ref) = docs.get(folder_doc_id) else {
+                    continue;
+                };
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+            if name == folder_name {
+                folder_match = Some(folder_doc_id.clone());
+            }
+            available_folders.push(name);
+        }
+
+        let folder_doc_id = folder_match.ok_or_else(|| {
+            CreateDocumentError::NotFound(format!(
+                "Unknown folder '{}'. Available folders: {}",
+                folder_name,
+                available_folders.join(", ")
+            ))
+        })?;
+
+        // 2. Check path doesn't already exist in filemeta_v0
+        {
+            let awareness = {
+                let Some(doc_ref) = docs.get(&folder_doc_id) else {
+                    return Err(CreateDocumentError::Internal(
+                        "Folder doc not loaded".into(),
+                    ));
+                };
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                if filemeta.get(&txn, in_folder_path).is_some() {
+                    return Err(CreateDocumentError::Conflict(format!(
+                        "Path '{}' already exists in folder '{}'",
+                        in_folder_path, folder_name
+                    )));
+                }
+            }
+        }
+
+        // 3. Generate UUID v4 and compute full_doc_id
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let relay_id = link_indexer::parse_doc_id(&folder_doc_id)
+            .map(|(r, _)| r.to_string())
+            .unwrap_or_default();
+
+        let full_doc_id = if relay_id.is_empty() {
+            uuid.clone()
+        } else {
+            format!("{}-{}", relay_id, uuid)
+        };
+
+        // 4. Create content doc on server
+        self.get_or_create_doc(&full_doc_id).await.map_err(|e| {
+            CreateDocumentError::Internal(format!("Failed to create content doc: {}", e))
+        })?;
+
+        // 5. Write content directly (no CriticMarkup wrapping)
+        {
+            let awareness = {
+                let doc_ref = docs.get(&full_doc_id).ok_or_else(|| {
+                    CreateDocumentError::Internal("Content doc not loaded after creation".into())
+                })?;
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, content);
+        }
+
+        // 6. Write folder metadata (filemeta_v0; legacy docs map only for markdown)
+        let file_type = if in_folder_path.ends_with(".md") {
+            "markdown"
+        } else {
+            "file"
+        };
+        {
+            let awareness = {
+                let doc_ref = docs
+                    .get(&folder_doc_id)
+                    .ok_or_else(|| CreateDocumentError::Internal("Folder doc not loaded".into()))?;
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard.doc.transact_mut_with("api");
+
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let docs_map = txn.get_or_insert_map("docs");
+
+            // Create intermediate folder entries for nested paths
+            let ancestors_created = link_indexer::ensure_ancestor_folders(
+                &filemeta,
+                &docs_map,
+                &mut txn,
+                in_folder_path,
+            );
+            if ancestors_created > 0 {
+                tracing::info!(
+                    "Created {} ancestor folder entries for path {}",
+                    ancestors_created,
+                    in_folder_path
+                );
+            }
+
+            let mut map = std::collections::HashMap::new();
+            map.insert("id".to_string(), yrs::Any::String(uuid.clone().into()));
+            map.insert(
+                "type".to_string(),
+                yrs::Any::String(file_type.into()),
+            );
+            map.insert("version".to_string(), yrs::Any::Number(0.0));
+            filemeta.insert(&mut txn, in_folder_path, yrs::Any::Map(map.into()));
+            // Only write legacy docs map for markdown files (Obsidian compat)
+            if file_type == "markdown" {
+                docs_map.insert(
+                    &mut txn,
+                    in_folder_path,
+                    yrs::Any::String(uuid.clone().into()),
+                );
+            }
+        }
+
+        // 7. Update doc_resolver
+        let file_path = format!("{}{}", folder_name, in_folder_path);
+        self.doc_resolver().upsert_doc(
+            &uuid,
+            &file_path,
+            y_sweet_core::doc_resolver::DocInfo {
+                uuid: uuid.clone(),
+                relay_id: relay_id.clone(),
+                folder_doc_id: folder_doc_id.clone(),
+                folder_name: folder_name.to_string(),
+                doc_id: full_doc_id.clone(),
+            },
+        );
+
+        // 8. Explicit persist for immediate durability (content + folder docs)
+        {
+            let content_sync_kv = docs.get(&full_doc_id).map(|r| r.sync_kv());
+            let folder_sync_kv = docs.get(&folder_doc_id).map(|r| r.sync_kv());
+            // DashMap shard locks released; safe to .await
+            if let Some(sync_kv) = content_sync_kv {
+                if let Err(e) = sync_kv.persist().await {
+                    tracing::error!("Failed to persist content doc {}: {:?}", full_doc_id, e);
+                }
+            }
+            if let Some(sync_kv) = folder_sync_kv {
+                if let Err(e) = sync_kv.persist().await {
+                    tracing::error!("Failed to persist folder doc {}: {:?}", folder_doc_id, e);
+                }
+            }
+        }
+
+        // 9. Update search index
+        if let Some(ref search_index) = self.search_index {
+            search_handle_content_update(&full_doc_id, &self.docs, search_index);
+        }
+
+        tracing::info!(
+            "Document created (direct): {} at {}{} (doc_id: {}, type: {})",
+            uuid,
+            folder_name,
+            in_folder_path,
+            full_doc_id,
+            file_type,
+        );
+
+        Ok(CreateDocumentResult {
+            uuid,
+            full_doc_id,
+            folder_name: folder_name.to_string(),
+            in_folder_path: in_folder_path.to_string(),
+        })
+    }
+
+    /// Replace the full content of an existing document's Y.Text.
+    /// Used for programmatic content updates (no CriticMarkup, no diff).
+    pub async fn write_document_content(
+        &self,
+        folder_name: &str,
+        in_folder_path: &str,
+        content: &str,
+    ) -> std::result::Result<(), CreateDocumentError> {
+        // 1. Find the folder doc
+        let docs = self.docs();
+        let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
+        if folder_doc_ids.is_empty() {
+            return Err(CreateDocumentError::NotFound(
+                "No folder documents found".into(),
+            ));
+        }
+
+        let mut folder_match: Option<String> = None;
+        for folder_doc_id in &folder_doc_ids {
+            let awareness = {
+                let Some(doc_ref) = docs.get(folder_doc_id) else {
+                    continue;
+                };
+                doc_ref.awareness()
+            }; // DashMap shard lock released
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+            if name == folder_name {
+                folder_match = Some(folder_doc_id.clone());
+                break;
+            }
+        }
+
+        let folder_doc_id = folder_match.ok_or_else(|| {
+            CreateDocumentError::NotFound(format!("Unknown folder '{}'", folder_name))
+        })?;
+
+        // 2. Look up doc_id from filemeta_v0
+        let uuid = {
+            let awareness = {
+                let Some(doc_ref) = docs.get(&folder_doc_id) else {
+                    return Err(CreateDocumentError::Internal("Folder doc not loaded".into()));
+                };
+                doc_ref.awareness()
+            }; // DashMap shard lock released
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            let filemeta = txn.get_map("filemeta_v0").ok_or_else(|| {
+                CreateDocumentError::NotFound(format!(
+                    "Path '{}' not found in folder '{}'",
+                    in_folder_path, folder_name
+                ))
+            })?;
+            let value = filemeta.get(&txn, in_folder_path).ok_or_else(|| {
+                CreateDocumentError::NotFound(format!(
+                    "Path '{}' not found in folder '{}'",
+                    in_folder_path, folder_name
+                ))
+            })?;
+            link_indexer::extract_id_from_filemeta_entry(&value, &txn).ok_or_else(|| {
+                CreateDocumentError::Internal(format!(
+                    "Could not extract doc id for path '{}'",
+                    in_folder_path
+                ))
+            })?
+        };
+
+        // 3. Compute full_doc_id
+        let relay_id = link_indexer::parse_doc_id(&folder_doc_id)
+            .map(|(r, _)| r.to_string())
+            .unwrap_or_default();
+        let full_doc_id = if relay_id.is_empty() {
+            uuid.clone()
+        } else {
+            format!("{}-{}", relay_id, uuid)
+        };
+
+        // Ensure the content doc is loaded
+        self.ensure_doc_loaded(&full_doc_id).await.map_err(|e| {
+            CreateDocumentError::Internal(format!("Failed to load content doc: {}", e))
+        })?;
+
+        // 4. Clear Y.Text and write new content
+        {
+            let awareness = {
+                let doc_ref = docs.get(&full_doc_id).ok_or_else(|| {
+                    CreateDocumentError::Internal("Content doc not loaded".into())
+                })?;
+                doc_ref.awareness()
+            }; // DashMap shard lock released
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard.doc.transact_mut_with("api");
+            let text = txn.get_or_insert_text("contents");
+            let len = text.len(&txn);
+            if len > 0 {
+                text.remove_range(&mut txn, 0, len);
+            }
+            text.insert(&mut txn, 0, content);
+        }
+
+        // 5. Persist
+        {
+            let sync_kv = docs.get(&full_doc_id).map(|r| r.sync_kv());
+            if let Some(sync_kv) = sync_kv {
+                if let Err(e) = sync_kv.persist().await {
+                    tracing::error!("Failed to persist content doc {}: {:?}", full_doc_id, e);
+                }
+            }
+        }
+
+        // 6. Update search index
+        if let Some(ref search_index) = self.search_index {
+            search_handle_content_update(&full_doc_id, &self.docs, search_index);
+        }
+
+        tracing::info!(
+            "Document content updated (direct): {}{} (doc_id: {})",
+            folder_name,
+            in_folder_path,
+            full_doc_id,
+        );
+
+        Ok(())
     }
 
     /// Move a document to a new path within or across folders.
@@ -2273,6 +2599,7 @@ impl Server {
             .route("/webhook/reload", post(reload_webhook_config_endpoint))
             .route("/search", get(handle_search))
             .route("/doc/move", post(handle_move_document))
+            .route("/doc/upsert", post(handle_upsert_document))
             .route("/open/*path", get(handle_open_by_path))
             .route("/suggestions", get(handle_suggestions));
 
@@ -3082,6 +3409,68 @@ async fn handle_move_document(
         new_folder: result.new_folder_name,
         links_rewritten: result.links_rewritten,
     }))
+}
+
+/// POST /doc/upsert
+/// Creates a document if it doesn't exist, or replaces its content if it does.
+/// No CriticMarkup wrapping — content is written directly to Y.Text.
+/// Accepts any file extension; uses "file" type for non-.md, "markdown" for .md.
+#[derive(Deserialize)]
+struct UpsertDocRequest {
+    folder: String,
+    path: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct UpsertDocResponse {
+    doc_id: String,
+    path: String,
+    created: bool,
+}
+
+async fn handle_upsert_document(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Json(body): Json<UpsertDocRequest>,
+) -> Result<Json<UpsertDocResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    // Ensure path starts with /
+    let path = if body.path.starts_with('/') {
+        body.path.clone()
+    } else {
+        format!("/{}", body.path)
+    };
+
+    match server_state
+        .create_document_direct(&body.folder, &path, &body.content)
+        .await
+    {
+        Ok(result) => Ok(Json(UpsertDocResponse {
+            doc_id: result.full_doc_id,
+            path: format!("{}{}", body.folder, path),
+            created: true,
+        })),
+        Err(CreateDocumentError::Conflict(_)) => {
+            // Already exists — update content instead
+            server_state
+                .write_document_content(&body.folder, &path, &body.content)
+                .await
+                .map_err(|e| {
+                    AppError(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))
+                })?;
+            Ok(Json(UpsertDocResponse {
+                doc_id: String::new(),
+                path: format!("{}{}", body.folder, path),
+                created: false,
+            }))
+        }
+        Err(CreateDocumentError::NotFound(msg)) => {
+            Err(AppError(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
+        }
+        Err(e) => Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))),
+    }
 }
 
 async fn new_doc(
