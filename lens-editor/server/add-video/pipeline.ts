@@ -83,6 +83,17 @@ export async function processVideo(
 
     // 8. Create timestamps JSON in Relay
     await createRelayDoc(jsonPath, JSON.stringify(timestamps, null, 2));
+  } catch (err) {
+    // Update placeholder to show failure
+    const failedContent = generateMarkdown({
+      title: job.title,
+      channel: job.channel,
+      url: job.url,
+      video_id: job.video_id,
+      body: `*Transcript processing failed.* You can resubmit this video from the Add Video page.\n\nFailed at: ${new Date().toISOString()}`,
+    });
+    await updateRelayDoc(mdPath, '', failedContent).catch(() => {});
+    throw err;
   } finally {
     // 9. Clean up work directory
     await fs.rm(workDir, { recursive: true }).catch(() => {});

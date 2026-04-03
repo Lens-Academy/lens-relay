@@ -7,8 +7,8 @@ export function buildPrompt(workDir: string): string {
 1. Read the file ${workDir}/raw.txt
 2. Format it with:
    - Proper punctuation (periods, commas, question marks)
-   - capitalization of sentence starts and proper nouns
-   - Paragraph breaks at topic or speaker changes
+   - Capitalization of sentence starts and proper nouns
+   - Paragraph breaks at natural topic boundaries (use blank lines)
 3. Fix transcription errors:
    - Homophones: "there" → "their"
    - Similar sounds: "deep earning" → "deep learning"
@@ -17,9 +17,10 @@ export function buildPrompt(workDir: string): string {
    - Names and acronyms: fix obvious misspellings
    - Only fix if a reasonable person would recognize what was meant
 4. Write the result to ${workDir}/corrected.txt
-5. Do NOT add any content that wasn't in the original transcript.
-6. Do NOT remove content unless it's a filler word (uh, um).
-7. Preserve the meaning exactly.`;
+5. The output must be PLAIN TEXT only — no markdown formatting, no headers, no bullet points, no bold/italic markers.
+6. Do NOT add any content that wasn't in the original transcript.
+7. Do NOT remove content unless it's a filler word (uh, um, like, you know).
+8. Preserve the meaning exactly.`;
 }
 
 /** Build CLI arguments for claude -p */

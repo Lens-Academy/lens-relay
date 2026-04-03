@@ -7,7 +7,7 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('/tmp/transcripts/abc123/raw.txt');
     expect(prompt).toContain('corrected.txt');
     expect(prompt).toContain('punctuation');
-    expect(prompt).toContain('capitalization');
+    expect(prompt).toContain('Capitalization');
   });
 });
 
