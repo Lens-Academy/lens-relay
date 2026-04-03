@@ -2,8 +2,9 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
 import { EditorState, StateEffect } from '@codemirror/state';
-import { criticMarkupField, suggestionModeField } from '../Editor/extensions/criticmarkup';
-import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
+import { criticMarkupField, suggestionModeField, toggleSuggestionMode } from '../Editor/extensions/criticmarkup';
+import { toggleSourceMode, sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
+import { SourceSuggestionBanner } from '../SourceSuggestionBanner/SourceSuggestionBanner';
 import { parseThreads } from '../../lib/criticmarkup-parser';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
@@ -73,6 +74,17 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     manager.expand('comment-margin');
     setAddCommentTrigger(v => v + 1);
   }, [manager.expand]);
+
+  const handleSwitchToPreview = useCallback(() => {
+    if (!editorView) return;
+    setIsSourceMode(false);
+    toggleSourceMode(editorView, false);
+  }, [editorView]);
+
+  const handleSwitchToEditing = useCallback(() => {
+    if (!editorView) return;
+    editorView.dispatch({ effects: toggleSuggestionMode.of(false) });
+  }, [editorView]);
 
   // Track suggestion mode from editor state
   useEffect(() => {
@@ -234,6 +246,12 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </div>
             <div className="mx-6 border-b border-gray-200" />
           </div>
+          {isSourceMode && isSuggestionMode && (
+            <SourceSuggestionBanner
+              onSwitchToPreview={handleSwitchToPreview}
+              onSwitchToEditing={handleSwitchToEditing}
+            />
+          )}
           <div className="flex-1 min-h-0">
             <Editor
               readOnly={!canWrite}
