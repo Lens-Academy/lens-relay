@@ -27,7 +27,13 @@ pub async fn dispatch_request(
             (resp, Some(sid))
         }
         "ping" => (handle_ping(request.id.clone()), None),
-        "tools/list" => (handle_tools_list(request.id.clone()), None),
+        "tools/list" => {
+            let writable = session_id
+                .and_then(|sid| sessions.get_session(sid))
+                .map(|s| s.access.writable)
+                .unwrap_or(true);
+            (handle_tools_list(request.id.clone(), writable), None)
+        }
         "tools/call" => {
             if let Err(err_resp) = validate_session(sessions, session_id, &request.id) {
                 return (err_resp, None);
@@ -138,8 +144,8 @@ fn handle_ping(id: Value) -> JsonRpcResponse {
     success_response(id, json!({}))
 }
 
-fn handle_tools_list(id: Value) -> JsonRpcResponse {
-    let definitions = tools::tool_definitions();
+fn handle_tools_list(id: Value, writable: bool) -> JsonRpcResponse {
+    let definitions = tools::tool_definitions(writable);
     success_response(id, json!({ "tools": definitions }))
 }
 
@@ -615,6 +621,118 @@ mod tests {
             edit_result["isError"], false,
             "edit tool should succeed: {}",
             edit_result["content"][0]["text"]
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_list_readonly_hides_write_tools() {
+        use y_sweet_core::share_token::McpAccess;
+
+        let server = test_server();
+        let readonly_access = McpAccess {
+            writable: false,
+            folder_uuid: None,
+            folder_name: None,
+        };
+        let sid = server.mcp_sessions.create_session(
+            "2025-03-26".into(),
+            None,
+            readonly_access.clone(),
+        );
+        server.mcp_sessions.mark_initialized(&sid);
+
+        let req = make_request(json!(50), "tools/list", None);
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req, &readonly_access).await;
+
+        let result = resp.result.unwrap();
+        let tools_arr = result["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools_arr
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+
+        // Should have read tools
+        assert!(names.contains(&"read"));
+        assert!(names.contains(&"glob"));
+        assert!(names.contains(&"grep"));
+        assert!(names.contains(&"get_links"));
+        assert!(names.contains(&"search"));
+        assert!(names.contains(&"create_session"));
+
+        // Should NOT have write tools
+        assert!(
+            !names.contains(&"edit"),
+            "read-only should not see edit, got: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"create"),
+            "read-only should not see create, got: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"move"),
+            "read-only should not see move, got: {:?}",
+            names
+        );
+    }
+
+    #[tokio::test]
+    async fn folder_scoped_tool_rejects_wrong_folder() {
+        use std::collections::HashMap;
+        use y_sweet_core::share_token::McpAccess;
+        use yrs::{Any, Doc, Map, Transact, WriteTxn};
+
+        let server = test_server();
+
+        // Set up folder doc with a doc in "Lens"
+        let relay_id = "cb696037-0f72-4e93-8717-4e433129d789";
+        let folder_uuid = "aaaa0000-0000-0000-0000-000000000000";
+        let folder_doc_id = format!("{}-{}", relay_id, folder_uuid);
+
+        let folder_doc = Doc::new();
+        {
+            let mut txn = folder_doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String("uuid-scope-test".into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/Test.md", Any::Map(map.into()));
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Lens".into()));
+        }
+        server
+            .doc_resolver()
+            .update_folder_from_doc(&folder_doc_id, &folder_doc);
+
+        // Create session scoped to "Lens Edu" (different folder)
+        let scoped_access = McpAccess {
+            writable: true,
+            folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
+            folder_name: Some("Lens Edu".to_string()),
+        };
+        let sid = server.mcp_sessions.create_session(
+            "2025-03-26".into(),
+            None,
+            scoped_access.clone(),
+        );
+        server.mcp_sessions.mark_initialized(&sid);
+
+        // Try to read a doc in "Lens" -- should be rejected
+        let req = make_request(
+            json!(51),
+            "tools/call",
+            Some(json!({"name": "read", "arguments": {"file_path": "Lens/Test.md", "session_id": &sid}})),
+        );
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req, &scoped_access).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], true, "should deny access: {:?}", result);
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("Access denied"),
+            "should deny access: {}",
+            text
         );
     }
 
