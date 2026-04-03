@@ -81,30 +81,70 @@ export default defineConfig(() => {
    * Dev-only — configureServer only runs in `vite dev`.
    */
   function addVideoPlugin(): Plugin {
+    let queue: any = null;
+
     return {
       name: 'add-video-api',
       configureServer(server) {
+        // POST /api/add-video
         server.middlewares.use('/api/add-video', async (req, res) => {
-          try {
-            const { createAddVideoRoutes } = await import('./server/add-video/routes.ts');
-            const { JobQueue } = await import('./server/add-video/queue.ts');
-            const { processVideo } = await import('./server/add-video/pipeline.ts');
+          // Set CORS headers for cross-origin bookmarklet requests
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+          res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-            // Lazily create a singleton queue (persists across HMR)
-            const global_ = globalThis as any;
-            if (!global_.__addVideoQueue) {
-              global_.__addVideoQueue = new JobQueue({ processJob: processVideo });
+          if (req.method === 'OPTIONS') {
+            res.writeHead(204);
+            res.end();
+            return;
+          }
+
+          try {
+            // Lazy init queue
+            if (!queue) {
+              const { JobQueue } = await import('./server/add-video/queue.ts');
+              const { processVideo } = await import('./server/add-video/pipeline.ts');
+              queue = new JobQueue({ processJob: processVideo });
             }
 
-            const { getRequestListener } = await import('@hono/node-server');
-            const { Hono } = await import('hono');
-            const app = new Hono();
-            app.route('/api/add-video', createAddVideoRoutes(global_.__addVideoQueue));
+            // req.url is stripped of the /api/add-video prefix by Vite middleware
+            const subPath = req.url || '/';
 
-            const listener = getRequestListener(app.fetch);
-            // Restore the full URL (Vite strips the prefix for middlewares)
-            req.url = '/api/add-video' + (req.url || '');
-            listener(req, res);
+            if (req.method === 'GET' && subPath === '/status') {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ jobs: queue.status() }));
+              return;
+            }
+
+            if (req.method === 'POST' && (subPath === '/' || subPath === '')) {
+              const chunks: Buffer[] = [];
+              for await (const chunk of req) {
+                chunks.push(chunk as Buffer);
+              }
+              const body = JSON.parse(Buffer.concat(chunks).toString());
+
+              if (!body.videos || !Array.isArray(body.videos) || body.videos.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'videos array is required and must not be empty' }));
+                return;
+              }
+
+              const jobs = body.videos.map((video: any) => queue.add(video));
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jobs: jobs.map((j: any) => ({
+                  id: j.id,
+                  video_id: j.video_id,
+                  title: j.title,
+                  status: j.status,
+                  relay_url: j.relay_url,
+                })),
+              }));
+              return;
+            }
+
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Not found' }));
           } catch (error: any) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: error.message }));
