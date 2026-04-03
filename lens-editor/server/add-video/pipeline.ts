@@ -14,8 +14,6 @@ import { createRelayDoc, updateRelayDoc } from './relay-docs';
 const WORK_BASE = '/tmp/transcripts';
 const RELAY_FOLDER = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
 const TIMEOUT_MS = 300_000; // 5 minutes
-// Timestamps saved locally (relay MCP create tool only accepts .md files)
-const TIMESTAMPS_DIR = '/tmp/transcripts/timestamps';
 
 export async function processVideo(
   job: Job & { payload: VideoPayload }
@@ -23,6 +21,7 @@ export async function processVideo(
   const workDir = path.join(WORK_BASE, job.id);
   const filenameBase = generateFilenameBase(job.channel, job.title, job.video_id);
   const mdPath = `${RELAY_FOLDER}/${filenameBase}.md`;
+  const jsonPath = `${RELAY_FOLDER}/${filenameBase}.timestamps.json`;
 
   // Set relay_url immediately so it's available in the queued response
   job.relay_url = mdPath;
@@ -82,14 +81,10 @@ export async function processVideo(
     // 7. Update placeholder with final markdown
     await updateRelayDoc(mdPath, placeholderContent, finalMd);
 
-    // 8. Save timestamps locally (relay create tool only accepts .md)
-    await fs.mkdir(TIMESTAMPS_DIR, { recursive: true });
-    await fs.writeFile(
-      path.join(TIMESTAMPS_DIR, `${filenameBase}.timestamps.json`),
-      JSON.stringify(timestamps, null, 2)
-    );
+    // 8. Create timestamps JSON in Relay
+    await createRelayDoc(jsonPath, JSON.stringify(timestamps, null, 2));
   } finally {
-    // 9. Clean up work directory (but not timestamps)
+    // 9. Clean up work directory
     await fs.rm(workDir, { recursive: true }).catch(() => {});
   }
 }

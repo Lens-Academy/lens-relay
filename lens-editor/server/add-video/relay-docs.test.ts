@@ -10,122 +10,60 @@ beforeEach(() => {
   mockFetch.mockReset();
 });
 
-/** Mock the 3-step session establishment: initialize, notify, create_session */
-function mockSessionEstablishment() {
-  // 1. initialize → returns session ID in header
+function mockUpsertSuccess(created: boolean) {
   mockFetch.mockResolvedValueOnce({
     ok: true,
-    headers: new Headers({ 'mcp-session-id': 'transport-123' }),
     json: async () => ({
-      jsonrpc: '2.0',
-      id: 1,
-      result: { protocolVersion: '2025-03-26' },
-    }),
-  });
-  // 2. notifications/initialized → no response body needed
-  mockFetch.mockResolvedValueOnce({
-    ok: true,
-    headers: new Headers(),
-    json: async () => ({}),
-  });
-  // 3. create_session tool → returns session_id
-  mockFetch.mockResolvedValueOnce({
-    ok: true,
-    headers: new Headers({ 'mcp-session-id': 'transport-123' }),
-    json: async () => ({
-      jsonrpc: '2.0',
-      id: 2,
-      result: { content: [{ type: 'text', text: 'session-abc' }] },
+      doc_id: 'test-doc-id',
+      path: 'Lens Edu/video_transcripts/test.md',
+      created,
     }),
   });
 }
 
 describe('createRelayDoc', () => {
-  it('establishes session then calls create tool with session_id', async () => {
-    mockSessionEstablishment();
-    // 4. create tool
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ 'mcp-session-id': 'transport-123' }),
-      json: async () => ({
-        jsonrpc: '2.0',
-        id: 3,
-        result: {
-          content: [
-            { type: 'text', text: 'Created Lens Edu/video_transcripts/test.md' },
-          ],
-        },
-      }),
-    });
+  it('calls POST /doc/upsert with folder and path', async () => {
+    mockUpsertSuccess(true);
 
     await createRelayDoc('Lens Edu/video_transcripts/test.md', '# Hello');
 
-    // 4 calls: initialize, notify, create_session, create
-    expect(mockFetch).toHaveBeenCalledTimes(4);
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe('http://localhost:8090/doc/upsert');
+    expect(opts.method).toBe('POST');
+    expect(opts.headers.Authorization).toBe('Bearer test-token');
 
-    // Verify initialize
-    const initBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(initBody.method).toBe('initialize');
-    expect(initBody.id).toBeDefined();
+    const body = JSON.parse(opts.body);
+    expect(body.folder).toBe('Lens Edu');
+    expect(body.path).toBe('/video_transcripts/test.md');
+    expect(body.content).toBe('# Hello');
+  });
 
-    // Verify notification has no id
-    const notifyBody = JSON.parse(mockFetch.mock.calls[1][1].body);
-    expect(notifyBody.method).toBe('notifications/initialized');
-    expect(notifyBody.id).toBeUndefined();
+  it('works with .json files', async () => {
+    mockUpsertSuccess(true);
 
-    // Verify create_session
-    const csBody = JSON.parse(mockFetch.mock.calls[2][1].body);
-    expect(csBody.method).toBe('tools/call');
-    expect(csBody.params.name).toBe('create_session');
-
-    // Verify create tool includes session_id
-    const createBody = JSON.parse(mockFetch.mock.calls[3][1].body);
-    expect(createBody.method).toBe('tools/call');
-    expect(createBody.params.name).toBe('create');
-    expect(createBody.params.arguments.file_path).toBe(
-      'Lens Edu/video_transcripts/test.md'
+    await createRelayDoc(
+      'Lens Edu/video_transcripts/test.timestamps.json',
+      '[{"text":"hello","start":"0:00.00"}]'
     );
-    expect(createBody.params.arguments.session_id).toBe('session-abc');
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.path).toBe('/video_transcripts/test.timestamps.json');
   });
 });
 
 describe('updateRelayDoc', () => {
-  it('establishes session, reads actual content, then edits', async () => {
-    mockSessionEstablishment();
-    // 4. read tool
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ 'mcp-session-id': 'transport-123' }),
-      json: async () => ({
-        jsonrpc: '2.0',
-        id: 4,
-        result: { content: [{ type: 'text', text: '1\tOld content' }] },
-      }),
-    });
-    // 5. edit tool
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers({ 'mcp-session-id': 'transport-123' }),
-      json: async () => ({
-        jsonrpc: '2.0',
-        id: 5,
-        result: { content: [{ type: 'text', text: 'Edited' }] },
-      }),
-    });
+  it('calls POST /doc/upsert with new content (ignores oldContent)', async () => {
+    mockUpsertSuccess(false);
 
     await updateRelayDoc(
       'Lens Edu/video_transcripts/test.md',
-      'Expected content',
+      'Old content',
       'New content'
     );
 
-    // 5 calls: initialize, notify, create_session, read, edit
-    expect(mockFetch).toHaveBeenCalledTimes(5);
-
-    // Verify edit uses actual read content (not the expected oldContent param)
-    const editBody = JSON.parse(mockFetch.mock.calls[4][1].body);
-    expect(editBody.params.arguments.old_string).toBe('Old content');
-    expect(editBody.params.arguments.new_string).toBe('New content');
-    expect(editBody.params.arguments.session_id).toBe('session-abc');
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.content).toBe('New content');
   });
 });
