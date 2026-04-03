@@ -33,7 +33,7 @@ export function buildClaudeArgs(workDir: string): string[] {
     '--max-turns',
     '30',
     '--max-budget-usd',
-    '1.00',
+    '2.00',
     '--output-format',
     'json',
   ];

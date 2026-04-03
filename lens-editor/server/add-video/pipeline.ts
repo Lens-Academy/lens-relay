@@ -13,7 +13,7 @@ import { createRelayDoc, updateRelayDoc } from './relay-docs';
 
 const WORK_BASE = '/tmp/transcripts';
 const RELAY_FOLDER = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
-const TIMEOUT_MS = 300_000; // 5 minutes
+const TIMEOUT_MS = 900_000; // 15 minutes (a 7K word transcript takes ~10 min)
 
 export async function processVideo(
   job: Job & { payload: VideoPayload }
