@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken } from './auth-share';
+import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, decodeFolderFromToken, isAllFoldersToken } from './auth-share';
 
 /** Build a fake binary token: base64url(roleByte + 16 padding bytes + 4 expiry bytes + 8 sig bytes) */
 function makeFakeBinaryToken(roleByte: number): string {
@@ -8,6 +8,20 @@ function makeFakeBinaryToken(roleByte: number): string {
   // Fill rest with arbitrary data (doesn't matter for role decode)
   for (let i = 1; i < 29; i++) bytes[i] = i;
   // base64url encode
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+/** Build a fake binary token with a specific folder UUID */
+function makeFakeTokenWithFolder(roleByte: number, folderUuid: string): string {
+  const bytes = new Uint8Array(29);
+  bytes[0] = roleByte;
+  const hex = folderUuid.replace(/-/g, '');
+  for (let i = 0; i < 16; i++) {
+    bytes[1 + i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  for (let i = 17; i < 29; i++) bytes[i] = i;
   let binary = '';
   for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -91,5 +105,41 @@ describe('auth-share', () => {
     it('should return null for garbage input', () => {
       expect(decodeRoleFromToken('not-valid-base64!!')).toBeNull();
     });
+  });
+});
+
+describe('decodeFolderFromToken', () => {
+  it('should decode folder UUID from token', () => {
+    const folder = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
+    const token = makeFakeTokenWithFolder(1, folder);
+    expect(decodeFolderFromToken(token)).toBe(folder);
+  });
+
+  it('should decode all-folders sentinel', () => {
+    const sentinel = '00000000-0000-0000-0000-000000000000';
+    const token = makeFakeTokenWithFolder(1, sentinel);
+    expect(decodeFolderFromToken(token)).toBe(sentinel);
+  });
+
+  it('should return null for empty string', () => {
+    expect(decodeFolderFromToken('')).toBeNull();
+  });
+
+  it('should return null for too-short token', () => {
+    const bytes = new Uint8Array(10);
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    const token = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    expect(decodeFolderFromToken(token)).toBeNull();
+  });
+});
+
+describe('isAllFoldersToken', () => {
+  it('should return true for all-zeros UUID', () => {
+    expect(isAllFoldersToken('00000000-0000-0000-0000-000000000000')).toBe(true);
+  });
+
+  it('should return false for a real folder UUID', () => {
+    expect(isAllFoldersToken('fbd5eb54-73cc-41b0-ac28-2b93d3b4244e')).toBe(false);
   });
 });
