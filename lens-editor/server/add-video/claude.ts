@@ -140,10 +140,16 @@ export async function runClaude(
     chunkDirs.push(chunkDir);
   }
 
-  // Process all chunks in parallel
-  const results = await Promise.all(
-    chunkDirs.map((dir) => spawnClaude(dir, timeoutMs))
-  );
+  // Process chunks with limited concurrency (each claude process uses ~300MB RAM)
+  const MAX_CONCURRENT = 2;
+  const results: { exitCode: number; stdout: string; stderr: string }[] = [];
+  for (let i = 0; i < chunkDirs.length; i += MAX_CONCURRENT) {
+    const batch = chunkDirs.slice(i, i + MAX_CONCURRENT);
+    const batchResults = await Promise.all(
+      batch.map((dir) => spawnClaude(dir, timeoutMs))
+    );
+    results.push(...batchResults);
+  }
 
   // Check for failures
   const failed = results.find((r) => r.exitCode !== 0);
