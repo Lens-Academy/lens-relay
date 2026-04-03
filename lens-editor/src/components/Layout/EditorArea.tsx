@@ -192,7 +192,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       {/* Portal editor controls into global header */}
       {portalTarget && createPortal(
         <>
-          <PanelDebugOverlay config={PANEL_CONFIG} manager={manager} />
+          {/* <PanelDebugOverlay config={PANEL_CONFIG} manager={manager} /> */}
           {headerStage === 'overflow' ? (
             <OverflowMenu>
               <SuggestionModeToggle view={editorView} iconOnly isSuggestionMode={isSuggestionMode} />
@@ -202,7 +202,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </OverflowMenu>
           ) : (
             <>
-              <DebugYMapPanel />
+              {/* <DebugYMapPanel /> */}
               <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <PresencePanel />
