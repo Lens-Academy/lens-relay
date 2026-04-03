@@ -206,7 +206,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <PanelDebugOverlay config={PANEL_CONFIG} manager={manager} />
           {headerStage === 'overflow' ? (
             <OverflowMenu>
-              <SuggestionModeToggle view={editorView} iconOnly />
+              <SuggestionModeToggle view={editorView} iconOnly isSuggestionMode={isSuggestionMode} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <PresencePanel />
               <SyncStatus />
@@ -214,7 +214,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           ) : (
             <>
               <DebugYMapPanel />
-              <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} />
+              <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <PresencePanel />
               <SyncStatus />

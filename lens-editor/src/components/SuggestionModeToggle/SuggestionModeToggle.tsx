@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { EditorView } from '@codemirror/view';
 import {
   toggleSuggestionMode,
@@ -39,6 +39,8 @@ interface SuggestionModeToggleProps {
   view: EditorView | null;
   /** When true, show icons instead of text labels */
   iconOnly?: boolean;
+  /** Controlled suggestion mode state (from EditorArea's updateListener) */
+  isSuggestionMode: boolean;
 }
 
 /**
@@ -48,15 +50,8 @@ interface SuggestionModeToggleProps {
  * - For 'suggest' role: Locked into Suggesting mode (shows badge instead of toggle)
  * - For 'view' role: Locked "Read-Only" badge (no editing capabilities)
  */
-export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeToggleProps) {
+export function SuggestionModeToggle({ view, iconOnly = false, isSuggestionMode }: SuggestionModeToggleProps) {
   const { role, canEdit } = useAuth();
-  const [isSuggestionMode, setIsSuggestionMode] = useState(false);
-
-  // Sync local state with editor state when view changes
-  useEffect(() => {
-    if (!view) return;
-    setIsSuggestionMode(view.state.field(suggestionModeField));
-  }, [view]);
 
   // Force suggestion mode ON for suggest-only users
   useEffect(() => {
@@ -66,7 +61,6 @@ export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeT
       view.dispatch({
         effects: toggleSuggestionMode.of(true),
       });
-      setIsSuggestionMode(true);
     }
   }, [view, role]);
 
@@ -92,7 +86,6 @@ export function SuggestionModeToggle({ view, iconOnly = false }: SuggestionModeT
   const handleChange = (value: SegmentedValue) => {
     if (!view) return;
     const newSuggestionMode = value === 'left';
-    setIsSuggestionMode(newSuggestionMode);
     view.dispatch({
       effects: toggleSuggestionMode.of(newSuggestionMode),
     });
