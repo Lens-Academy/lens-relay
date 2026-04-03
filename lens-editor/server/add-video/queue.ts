@@ -59,9 +59,10 @@ export class JobQueue {
   }
 
   private async drain(): Promise<void> {
-    // Launch jobs concurrently, limited by the Claude session semaphore.
-    // Each job acquires its own sessions from the shared pool.
-    while (this.pending.length > 0 && claudeSessionPool.available > 0) {
+    // Start all pending jobs immediately. Each job creates its placeholder
+    // right away, then waits for a Claude session from the global pool.
+    // The session pool (not the queue) controls concurrency.
+    while (this.pending.length > 0) {
       const id = this.pending.shift()!;
       const job = this.jobs.get(id)!;
 
@@ -72,8 +73,6 @@ export class JobQueue {
       // Fire and forget — don't await, so multiple jobs can start
       this.runJob(job).then(() => {
         this.activeCount--;
-        // Try to drain more jobs when one finishes
-        this.drain();
       });
     }
   }

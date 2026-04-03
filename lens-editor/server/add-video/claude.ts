@@ -145,21 +145,16 @@ export async function runClaude(
     chunkDirs.push(chunkDir);
   }
 
-  // Process all chunks concurrently — the global session pool limits
-  // how many Claude processes run at once (max 3 across all videos)
-  const results = await Promise.all(
-    chunkDirs.map((dir) => spawnClaude(dir, timeoutMs))
-  );
-
-  // Check for failures
-  const failed = results.find((r) => r.exitCode !== 0);
-  if (failed) {
-    return failed;
-  }
-
-  // Concatenate corrected chunks
+  // Process chunks sequentially — each acquires/releases a session from the
+  // global pool, allowing other videos' chunks to interleave fairly.
+  // With Promise.all, a 6-chunk video would hold all 3 waiter slots,
+  // starving short videos submitted in the meantime.
   const correctedParts: string[] = [];
   for (const dir of chunkDirs) {
+    const result = await spawnClaude(dir, timeoutMs);
+    if (result.exitCode !== 0) {
+      return result;
+    }
     const corrected = await fs.readFile(
       path.join(dir, 'corrected.txt'),
       'utf-8'
