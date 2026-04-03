@@ -2,7 +2,12 @@ use crate::server::Server;
 use std::collections::HashMap;
 use std::sync::Arc;
 use y_sweet_core::doc_sync::DocWithSyncKv;
+use y_sweet_core::share_token::McpAccess;
 use yrs::{Any, Doc, GetString, Map, ReadTxn, Text, Transact, WriteTxn};
+
+fn default_access() -> McpAccess {
+    McpAccess { writable: true, folder_uuid: None, folder_name: None }
+}
 
 pub(crate) const RELAY_ID: &str = "cb696037-0f72-4e93-8717-4e433129d789";
 pub(crate) const FOLDER0_UUID: &str = "aaaa0000-0000-0000-0000-000000000000";
@@ -73,7 +78,7 @@ pub(crate) async fn build_test_server(entries: &[(&str, &str, &str)]) -> Arc<Ser
 pub(crate) fn setup_session_with_read(server: &Arc<Server>, doc_id: &str) -> String {
     let sid = server
         .mcp_sessions
-        .create_session("2025-03-26".into(), None);
+        .create_session("2025-03-26".into(), None, default_access());
     server.mcp_sessions.mark_initialized(&sid);
     if let Some(mut session) = server.mcp_sessions.get_session_mut(&sid) {
         session.read_docs.insert(doc_id.to_string());
@@ -85,7 +90,7 @@ pub(crate) fn setup_session_with_read(server: &Arc<Server>, doc_id: &str) -> Str
 pub(crate) fn setup_session_no_reads(server: &Arc<Server>) -> String {
     let sid = server
         .mcp_sessions
-        .create_session("2025-03-26".into(), None);
+        .create_session("2025-03-26".into(), None, default_access());
     server.mcp_sessions.mark_initialized(&sid);
     sid
 }

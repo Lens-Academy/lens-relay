@@ -569,6 +569,7 @@ pub struct Server {
     doc_resolver: Arc<DocumentResolver>,
     pub(crate) mcp_sessions: Arc<crate::mcp::session::SessionManager>,
     pub(crate) mcp_api_key: Option<String>,
+    pub(crate) share_token_secret: Option<String>,
     /// Timestamp (epoch ms) of the most recent dirty signal from any doc.
     last_dirty_signal: Arc<AtomicU64>,
     /// Timestamp (epoch ms) of the most recent successful persist of any doc.
@@ -673,10 +674,11 @@ impl Server {
             };
 
         let mcp_api_key = std::env::var("MCP_API_KEY").ok();
-        if mcp_api_key.is_some() {
-            tracing::info!("MCP endpoint enabled (MCP_API_KEY is set)");
+        let share_token_secret = std::env::var("SHARE_TOKEN_SECRET").ok();
+        if mcp_api_key.is_some() || share_token_secret.is_some() {
+            tracing::info!("MCP endpoint enabled (MCP_API_KEY or SHARE_TOKEN_SECRET is set)");
         } else {
-            tracing::info!("MCP endpoint disabled (MCP_API_KEY not set)");
+            tracing::info!("MCP endpoint disabled (neither MCP_API_KEY nor SHARE_TOKEN_SECRET set)");
         }
 
         let server = Self {
@@ -700,6 +702,7 @@ impl Server {
             doc_resolver,
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key,
+            share_token_secret,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
         };
@@ -871,6 +874,20 @@ impl Server {
     /// Get the DocumentResolver for path-to-UUID resolution.
     pub fn doc_resolver(&self) -> &Arc<DocumentResolver> {
         &self.doc_resolver
+    }
+
+    /// Resolve a folder UUID to its display name by finding any document in that folder.
+    pub fn folder_name_for_uuid(&self, folder_uuid: &str) -> Option<String> {
+        for path in self.doc_resolver().all_paths() {
+            if let Some(info) = self.doc_resolver().resolve_path(&path) {
+                if let Some((_, fid)) = link_indexer::parse_doc_id(&info.folder_doc_id) {
+                    if fid == folder_uuid {
+                        return Some(info.folder_name.clone());
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Get the DashMap of all loaded documents.
@@ -2016,6 +2033,7 @@ impl Server {
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key: None,
+            share_token_secret: None,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
         })
@@ -2047,6 +2065,7 @@ impl Server {
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key: None,
+            share_token_secret: None,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
         });
@@ -2873,8 +2892,8 @@ impl Server {
             .route("/open/*path", get(handle_open_by_path))
             .route("/suggestions", get(handle_suggestions));
 
-        // Only register /mcp if MCP_API_KEY is set
-        if let Some(ref key) = self.mcp_api_key {
+        // Register /mcp if MCP_API_KEY or SHARE_TOKEN_SECRET is set
+        if self.mcp_api_key.is_some() || self.share_token_secret.is_some() {
             // Bearer auth: POST/GET/DELETE /mcp (for Claude Code / .mcp.json)
             let bearer_routes = Router::new()
                 .route(
@@ -2884,7 +2903,7 @@ impl Server {
                         .delete(crate::mcp::transport::handle_mcp_delete),
                 )
                 .layer(middleware::from_fn_with_state(
-                    key.clone(),
+                    self.clone(),
                     crate::mcp::transport::mcp_auth_middleware,
                 ));
 

@@ -11,6 +11,7 @@ pub mod link_indexer;
 pub mod link_parser;
 pub mod metrics;
 pub mod search_index;
+pub mod share_token;
 pub mod store;
 pub mod sync;
 pub mod sync_kv;

@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::debug;
+use y_sweet_core::share_token::McpAccess;
 
 use super::jsonrpc::{
     error_response, success_response, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
@@ -16,27 +17,40 @@ pub async fn dispatch_request(
     server: &Arc<Server>,
     session_id: Option<&str>,
     request: &JsonRpcRequest,
+    access: &McpAccess,
 ) -> (JsonRpcResponse, Option<String>) {
     let sessions = &server.mcp_sessions;
     match request.method.as_str() {
         "initialize" => {
             let (resp, sid) =
-                handle_initialize(sessions, request.id.clone(), request.params.as_ref());
+                handle_initialize(sessions, request.id.clone(), request.params.as_ref(), access.clone());
             (resp, Some(sid))
         }
         "ping" => (handle_ping(request.id.clone()), None),
-        "tools/list" => (handle_tools_list(request.id.clone()), None),
+        "tools/list" => {
+            let writable = session_id
+                .and_then(|sid| sessions.get_session(sid))
+                .map(|s| s.access.writable)
+                .unwrap_or(true);
+            (handle_tools_list(request.id.clone(), writable), None)
+        }
         "tools/call" => {
             if let Err(err_resp) = validate_session(sessions, session_id, &request.id) {
                 return (err_resp, None);
             }
-            // session_id is Some(&str) here since validate_session passed
+            let sid = session_id.unwrap();
+            // Use the session's stored access (set at initialize time)
+            let session_access = sessions
+                .get_session(sid)
+                .map(|s| s.access.clone())
+                .unwrap_or_else(|| McpAccess { writable: true, folder_uuid: None, folder_name: None });
             (
                 handle_tools_call(
                     server,
-                    session_id.unwrap(),
+                    sid,
                     request.id.clone(),
                     request.params.as_ref(),
+                    &session_access,
                 )
                 .await,
                 None,
@@ -88,6 +102,7 @@ fn handle_initialize(
     sessions: &SessionManager,
     id: Value,
     params: Option<&Value>,
+    access: McpAccess,
 ) -> (JsonRpcResponse, String) {
     let protocol_version = params
         .and_then(|p| p.get("protocolVersion"))
@@ -106,7 +121,17 @@ fn handle_initialize(
         "MCP initialize request"
     );
 
-    let session_id = sessions.create_session(negotiated_version.clone(), client_info);
+    let description = match (&access.folder_name, access.writable) {
+        (Some(name), true) => format!("Lens Relay MCP — full read/write access to {}", name),
+        (Some(name), false) => format!(
+            "Lens Relay MCP — read-only access to {}. You can search, read, and browse documents but cannot edit, create, or move them.",
+            name
+        ),
+        (None, true) => "Lens Relay MCP — full read/write access to all folders".to_string(),
+        (None, false) => "Lens Relay MCP — read-only access to all folders. You can search, read, and browse documents but cannot edit, create, or move them.".to_string(),
+    };
+
+    let session_id = sessions.create_session(negotiated_version.clone(), client_info, access);
 
     let response = success_response(
         id,
@@ -117,7 +142,8 @@ fn handle_initialize(
             },
             "serverInfo": {
                 "name": "lens-relay",
-                "version": env!("CARGO_PKG_VERSION")
+                "version": env!("CARGO_PKG_VERSION"),
+                "description": description
             }
         }),
     );
@@ -129,8 +155,8 @@ fn handle_ping(id: Value) -> JsonRpcResponse {
     success_response(id, json!({}))
 }
 
-fn handle_tools_list(id: Value) -> JsonRpcResponse {
-    let definitions = tools::tool_definitions();
+fn handle_tools_list(id: Value, writable: bool) -> JsonRpcResponse {
+    let definitions = tools::tool_definitions(writable);
     success_response(id, json!({ "tools": definitions }))
 }
 
@@ -139,6 +165,7 @@ async fn handle_tools_call(
     session_id: &str,
     id: Value,
     params: Option<&Value>,
+    access: &McpAccess,
 ) -> JsonRpcResponse {
     let (name, arguments) = match params {
         Some(p) => {
@@ -149,12 +176,12 @@ async fn handle_tools_call(
         None => {
             return success_response(
                 id,
-                tools::dispatch_tool(server, session_id, "", &json!({})).await,
+                tools::dispatch_tool(server, session_id, "", &json!({}), access).await,
             );
         }
     };
 
-    let result = tools::dispatch_tool(server, session_id, &name, &arguments).await;
+    let result = tools::dispatch_tool(server, session_id, &name, &arguments, access).await;
     success_response(id, result)
 }
 
@@ -195,6 +222,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn default_access() -> McpAccess {
+        McpAccess { writable: true, folder_uuid: None, folder_name: None }
+    }
+
     fn make_request(id: Value, method: &str, params: Option<Value>) -> JsonRpcRequest {
         JsonRpcRequest {
             jsonrpc: "2.0".into(),
@@ -229,7 +260,7 @@ mod tests {
             })),
         );
 
-        let (resp, new_session_id) = dispatch_request(&server, None, &req).await;
+        let (resp, new_session_id) = dispatch_request(&server, None, &req, &default_access()).await;
 
         // Should return a new session ID
         let sid = new_session_id.expect("initialize should return session ID");
@@ -255,7 +286,7 @@ mod tests {
         let server = test_server();
         let req = make_request(json!(2), "ping", None);
 
-        let (resp, new_session_id) = dispatch_request(&server, None, &req).await;
+        let (resp, new_session_id) = dispatch_request(&server, None, &req, &default_access()).await;
 
         assert!(new_session_id.is_none());
         assert_eq!(resp.id, json!(2));
@@ -271,10 +302,10 @@ mod tests {
         // Create and initialize a session
         let sid = server
             .mcp_sessions
-            .create_session("2025-03-26".into(), None);
+            .create_session("2025-03-26".into(), None, default_access());
         server.mcp_sessions.mark_initialized(&sid);
 
-        let (resp, new_session_id) = dispatch_request(&server, Some(&sid), &req).await;
+        let (resp, new_session_id) = dispatch_request(&server, Some(&sid), &req, &default_access()).await;
 
         assert!(new_session_id.is_none());
         assert_eq!(resp.id, json!(3));
@@ -310,7 +341,7 @@ mod tests {
             Some(json!({"name": "read", "arguments": {"file_path": "test"}})),
         );
 
-        let (resp, _) = dispatch_request(&server, None, &req).await;
+        let (resp, _) = dispatch_request(&server, None, &req, &default_access()).await;
 
         assert!(resp.result.is_none());
         let err = resp.error.expect("should have error");
@@ -327,7 +358,7 @@ mod tests {
         let server = test_server();
         let sid = server
             .mcp_sessions
-            .create_session("2025-03-26".into(), None);
+            .create_session("2025-03-26".into(), None, default_access());
         server.mcp_sessions.mark_initialized(&sid);
 
         let req = make_request(
@@ -336,7 +367,7 @@ mod tests {
             Some(json!({"name": "nonexistent_tool", "arguments": {"session_id": &sid}})),
         );
 
-        let (resp, _) = dispatch_request(&server, Some(&sid), &req).await;
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req, &default_access()).await;
 
         // Should be a successful JSON-RPC response with isError in the result
         assert!(resp.error.is_none());
@@ -351,7 +382,7 @@ mod tests {
         let server = test_server();
         let req = make_request(json!(6), "foo/bar", None);
 
-        let (resp, new_session_id) = dispatch_request(&server, None, &req).await;
+        let (resp, new_session_id) = dispatch_request(&server, None, &req, &default_access()).await;
 
         assert!(new_session_id.is_none());
         assert!(resp.result.is_none());
@@ -364,7 +395,7 @@ mod tests {
     fn notifications_initialized_marks_session() {
         let server = test_server();
         let sessions = &server.mcp_sessions;
-        let sid = sessions.create_session("2025-03-26".into(), None);
+        let sid = sessions.create_session("2025-03-26".into(), None, default_access());
         assert!(!sessions.get_session(&sid).unwrap().initialized);
 
         let notif = make_notification("notifications/initialized", None);
@@ -387,7 +418,7 @@ mod tests {
         let server = test_server();
         let sid = server
             .mcp_sessions
-            .create_session("2025-03-26".into(), None);
+            .create_session("2025-03-26".into(), None, default_access());
         // Not calling mark_initialized -- session exists but is not initialized
 
         let req = make_request(
@@ -396,7 +427,7 @@ mod tests {
             Some(json!({"name": "read", "arguments": {}})),
         );
 
-        let (resp, _) = dispatch_request(&server, Some(&sid), &req).await;
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req, &default_access()).await;
 
         assert!(resp.result.is_none());
         let err = resp.error.expect("should have error");
@@ -457,7 +488,7 @@ mod tests {
         // Create and initialize a session
         let sid = server
             .mcp_sessions
-            .create_session("2025-03-26".into(), None);
+            .create_session("2025-03-26".into(), None, default_access());
         server.mcp_sessions.mark_initialized(&sid);
 
         // Verify read_docs is empty before read
@@ -474,7 +505,7 @@ mod tests {
                 json!({"name": "read", "arguments": {"file_path": "Lens/TestDoc.md", "session_id": &sid}}),
             ),
         );
-        let (resp, _) = dispatch_request(&server, Some(&sid), &req).await;
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req, &default_access()).await;
         assert!(resp.error.is_none(), "read should succeed");
 
         // Verify read_docs now contains the doc_id
@@ -536,7 +567,7 @@ mod tests {
         // Create and initialize transport session
         let transport_sid = server
             .mcp_sessions
-            .create_session("2025-03-26".into(), None);
+            .create_session("2025-03-26".into(), None, default_access());
         server.mcp_sessions.mark_initialized(&transport_sid);
 
         // Step 1: Call create_session to get a session_id
@@ -545,7 +576,7 @@ mod tests {
             "tools/call",
             Some(json!({"name": "create_session", "arguments": {}})),
         );
-        let (create_resp, _) = dispatch_request(&server, Some(&transport_sid), &create_req).await;
+        let (create_resp, _) = dispatch_request(&server, Some(&transport_sid), &create_req, &default_access()).await;
         assert!(create_resp.error.is_none(), "create_session should succeed");
         let create_result = create_resp.result.unwrap();
         let session_id = create_result["content"][0]["text"].as_str().unwrap();
@@ -558,7 +589,7 @@ mod tests {
                 json!({"name": "read", "arguments": {"file_path": "Lens/EditTest.md", "session_id": session_id}}),
             ),
         );
-        let (read_resp, _) = dispatch_request(&server, Some(&transport_sid), &read_req).await;
+        let (read_resp, _) = dispatch_request(&server, Some(&transport_sid), &read_req, &default_access()).await;
         assert!(read_resp.error.is_none(), "read should succeed");
 
         // Verify read response does NOT contain [session: ...] anymore
@@ -573,7 +604,7 @@ mod tests {
         // Step 3: Call edit tool with same session_id, using a DIFFERENT transport session
         let transport_sid2 = server
             .mcp_sessions
-            .create_session("2025-03-26".into(), None);
+            .create_session("2025-03-26".into(), None, default_access());
         server.mcp_sessions.mark_initialized(&transport_sid2);
 
         let edit_req = make_request(
@@ -590,7 +621,7 @@ mod tests {
             })),
         );
 
-        let (edit_resp, _) = dispatch_request(&server, Some(&transport_sid2), &edit_req).await;
+        let (edit_resp, _) = dispatch_request(&server, Some(&transport_sid2), &edit_req, &default_access()).await;
         assert!(
             edit_resp.error.is_none(),
             "edit should succeed at protocol level"
@@ -605,13 +636,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tools_list_readonly_hides_write_tools() {
+        use y_sweet_core::share_token::McpAccess;
+
+        let server = test_server();
+        let readonly_access = McpAccess {
+            writable: false,
+            folder_uuid: None,
+            folder_name: None,
+        };
+        let sid = server.mcp_sessions.create_session(
+            "2025-03-26".into(),
+            None,
+            readonly_access.clone(),
+        );
+        server.mcp_sessions.mark_initialized(&sid);
+
+        let req = make_request(json!(50), "tools/list", None);
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req, &readonly_access).await;
+
+        let result = resp.result.unwrap();
+        let tools_arr = result["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools_arr
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+
+        // Should have read tools
+        assert!(names.contains(&"read"));
+        assert!(names.contains(&"glob"));
+        assert!(names.contains(&"grep"));
+        assert!(names.contains(&"get_links"));
+        assert!(names.contains(&"search"));
+        assert!(names.contains(&"create_session"));
+
+        // Should NOT have write tools
+        assert!(
+            !names.contains(&"edit"),
+            "read-only should not see edit, got: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"create"),
+            "read-only should not see create, got: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"move"),
+            "read-only should not see move, got: {:?}",
+            names
+        );
+    }
+
+    #[tokio::test]
+    async fn folder_scoped_tool_rejects_wrong_folder() {
+        use std::collections::HashMap;
+        use y_sweet_core::share_token::McpAccess;
+        use yrs::{Any, Doc, Map, Transact, WriteTxn};
+
+        let server = test_server();
+
+        // Set up folder doc with a doc in "Lens"
+        let relay_id = "cb696037-0f72-4e93-8717-4e433129d789";
+        let folder_uuid = "aaaa0000-0000-0000-0000-000000000000";
+        let folder_doc_id = format!("{}-{}", relay_id, folder_uuid);
+
+        let folder_doc = Doc::new();
+        {
+            let mut txn = folder_doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String("uuid-scope-test".into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/Test.md", Any::Map(map.into()));
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Lens".into()));
+        }
+        server
+            .doc_resolver()
+            .update_folder_from_doc(&folder_doc_id, &folder_doc);
+
+        // Create session scoped to "Lens Edu" (different folder)
+        let scoped_access = McpAccess {
+            writable: true,
+            folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
+            folder_name: Some("Lens Edu".to_string()),
+        };
+        let sid = server.mcp_sessions.create_session(
+            "2025-03-26".into(),
+            None,
+            scoped_access.clone(),
+        );
+        server.mcp_sessions.mark_initialized(&sid);
+
+        // Try to read a doc in "Lens" -- should be rejected
+        let req = make_request(
+            json!(51),
+            "tools/call",
+            Some(json!({"name": "read", "arguments": {"file_path": "Lens/Test.md", "session_id": &sid}})),
+        );
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req, &scoped_access).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["isError"], true, "should deny access: {:?}", result);
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("Access denied"),
+            "should deny access: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
     async fn create_session_returns_session_id() {
         let server = test_server();
 
         // Create and initialize transport session
         let sid = server
             .mcp_sessions
-            .create_session("2025-03-26".into(), None);
+            .create_session("2025-03-26".into(), None, default_access());
         server.mcp_sessions.mark_initialized(&sid);
 
         let req = make_request(
@@ -620,7 +763,7 @@ mod tests {
             Some(json!({"name": "create_session", "arguments": {}})),
         );
 
-        let (resp, _) = dispatch_request(&server, Some(&sid), &req).await;
+        let (resp, _) = dispatch_request(&server, Some(&sid), &req, &default_access()).await;
         assert!(resp.error.is_none(), "create_session should succeed");
 
         let result = resp.result.unwrap();

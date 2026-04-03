@@ -15,10 +15,12 @@ pub(crate) mod test_helpers;
 use crate::server::Server;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use y_sweet_core::share_token::McpAccess;
 
 /// Return tool definitions for MCP tools/list response.
-pub fn tool_definitions() -> Vec<Value> {
-    vec![
+/// When `writable` is false, write tools (edit, create, move) are excluded.
+pub fn tool_definitions(writable: bool) -> Vec<Value> {
+    let mut tools = vec![
         json!({
             "name": "create_session",
             "description": "Create a session for this conversation. Call this once before using other tools. Returns a session_id that must be passed to all subsequent tool calls.",
@@ -147,6 +149,32 @@ pub fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "search",
+            "description": "Full-text search across the knowledge base using ranked relevance (BM25). Returns results sorted by relevance with snippets. Supports phrase search with quotes. Use this for natural-language queries; use grep for exact regex pattern matching.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query. Supports multiple terms (AND semantics) and phrase search with quotes."
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Maximum number of results to return (default 20, max 100)."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID from create_session. Required for all tool calls."
+                    }
+                }
+            }
+        }),
+    ];
+
+    if writable {
+        tools.push(json!({
             "name": "edit",
             "description": "Edit a document by replacing old_string with new_string. For markdown: wrapped in CriticMarkup for human review. For JSON: direct text replacement. You must read the document first.",
             "inputSchema": {
@@ -172,8 +200,8 @@ pub fn tool_definitions() -> Vec<Value> {
                     }
                 }
             }
-        }),
-        json!({
+        }));
+        tools.push(json!({
             "name": "create",
             "description": "Create a new document or file at the specified path. Supports .md (markdown) and .json files.",
             "inputSchema": {
@@ -195,8 +223,8 @@ pub fn tool_definitions() -> Vec<Value> {
                     }
                 }
             }
-        }),
-        json!({
+        }));
+        tools.push(json!({
             "name": "move",
             "description": "Move or rename a document. Automatically rewrites wikilinks in other documents that reference the moved file. Use for both renames (same folder, new filename) and cross-folder moves.",
             "inputSchema": {
@@ -222,31 +250,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     }
                 }
             }
-        }),
-        json!({
-            "name": "search",
-            "description": "Full-text search across the knowledge base using ranked relevance (BM25). Returns results sorted by relevance with snippets. Supports phrase search with quotes. Use this for natural-language queries; use grep for exact regex pattern matching.",
-            "inputSchema": {
-                "type": "object",
-                "required": ["query", "session_id"],
-                "additionalProperties": false,
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query. Supports multiple terms (AND semantics) and phrase search with quotes."
-                    },
-                    "limit": {
-                        "type": "number",
-                        "description": "Maximum number of results to return (default 20, max 100)."
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
-                    }
-                }
-            }
-        }),
-    ]
+        }));
+    }
+
+    tools
 }
 
 /// Dispatch a tool call to the correct handler and wrap result in MCP CallToolResult format.
@@ -255,6 +262,7 @@ pub async fn dispatch_tool(
     transport_session_id: &str,
     name: &str,
     arguments: &Value,
+    access: &McpAccess,
 ) -> Value {
     // create_session returns the transport session_id — no argument validation needed
     if name == "create_session" {
@@ -269,6 +277,46 @@ pub async fn dispatch_tool(
 
     if server.mcp_sessions.get_session(session_id).is_none() {
         return tool_error("Invalid session_id. Call create_session to get a valid session.");
+    }
+
+    // Defense-in-depth: block write tools for read-only access
+    if !access.writable && matches!(name, "edit" | "create" | "move") {
+        return tool_error("Access denied: read-only access. Cannot use write tools.");
+    }
+
+    // Folder scope check: restrict tools to the allowed folder
+    if let Some(ref allowed_folder) = access.folder_name {
+        // Check file_path argument
+        if let Some(file_path) = arguments.get("file_path").and_then(|v| v.as_str()) {
+            if !file_path.starts_with(&format!("{}/", allowed_folder))
+                && file_path != *allowed_folder
+            {
+                return tool_error(&format!(
+                    "Access denied: this key only has access to '{}'. Requested path: '{}'",
+                    allowed_folder, file_path
+                ));
+            }
+        }
+        // Check path argument (glob/grep scope)
+        if let Some(path) = arguments.get("path").and_then(|v| v.as_str()) {
+            if !path.starts_with(&format!("{}/", allowed_folder)) && path != *allowed_folder {
+                return tool_error(&format!(
+                    "Access denied: this key only has access to '{}'.",
+                    allowed_folder
+                ));
+            }
+        }
+        // Check target_folder for move tool
+        if name == "move" {
+            if let Some(target_folder) = arguments.get("target_folder").and_then(|v| v.as_str()) {
+                if target_folder != *allowed_folder {
+                    return tool_error(&format!(
+                        "Access denied: cannot move to '{}'. This key only has access to '{}'.",
+                        target_folder, allowed_folder
+                    ));
+                }
+            }
+        }
     }
 
     // Lazy rebuild: if the resolver has no entries but docs exist, trigger a rebuild.
