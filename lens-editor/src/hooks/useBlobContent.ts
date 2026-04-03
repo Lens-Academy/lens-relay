@@ -47,8 +47,9 @@ export function useBlobContent(
           const authDocId = folderDocId || docId;
 
           // Step 1: Get presigned download URL via proxy
+          // Relay route is /f/:doc_id/download-url (server token from proxy handles auth)
           const downloadUrlResponse = await fetch(
-            `/api/relay/d/${authDocId}/f/${docId}/download-url?hash=${hash}`,
+            `/api/relay/f/${docId}/download-url?hash=${hash}`,
             {
               headers: { 'X-Share-Token': shareToken },
             }
