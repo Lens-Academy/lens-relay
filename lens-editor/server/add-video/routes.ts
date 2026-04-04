@@ -2,6 +2,10 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { JobQueue } from './queue';
 import type { VideoPayload } from './types';
+import { verifyShareToken, signShareToken } from '../share-token';
+
+const EDU_FOLDER = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
+const ALL_FOLDERS = '00000000-0000-0000-0000-000000000000';
 
 export function createAddVideoRoutes(queue: JobQueue): Hono {
   const router = new Hono();
@@ -10,8 +14,70 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
   router.use('/*', cors({
     origin: '*',
     allowMethods: ['GET', 'POST'],
-    allowHeaders: ['Content-Type'],
+    allowHeaders: ['Content-Type', 'Authorization'],
   }));
+
+  // install-token: exchanges a share-purpose token for an add-video token
+  // Registered BEFORE the add-video auth middleware so it uses different auth rules
+  router.post('/install-token', async (c) => {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Authorization header required' }, 401);
+    }
+    const payload = verifyShareToken(authHeader.slice(7));
+    if (!payload) {
+      return c.json({ error: 'Invalid or expired token' }, 401);
+    }
+    if (payload.purpose !== 'share') {
+      return c.json({ error: 'Share token required' }, 403);
+    }
+    if (payload.role !== 'edit') {
+      return c.json({ error: 'Edit access required' }, 403);
+    }
+    if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {
+      return c.json({ error: 'Access denied: wrong folder scope' }, 403);
+    }
+
+    const addVideoToken = signShareToken({
+      purpose: 'add-video',
+      role: 'edit',
+      folder: EDU_FOLDER,
+      expiry: payload.expiry,
+    });
+
+    return c.json({ token: addVideoToken });
+  });
+
+  // Auth middleware for add-video routes (skips /install-token)
+  router.use('/*', async (c, next) => {
+    if (c.req.path.endsWith('/install-token')) {
+      return next();
+    }
+
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Authorization header required' }, 401);
+    }
+
+    const payload = verifyShareToken(authHeader.slice(7));
+    if (!payload) {
+      return c.json({ error: 'Invalid or expired token' }, 401);
+    }
+
+    if (payload.purpose !== 'add-video') {
+      return c.json({ error: 'Add-video token required' }, 403);
+    }
+
+    if (payload.role !== 'edit') {
+      return c.json({ error: 'Edit access required' }, 403);
+    }
+
+    if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {
+      return c.json({ error: 'Access denied: wrong folder scope' }, 403);
+    }
+
+    return next();
+  });
 
   router.post('/', async (c) => {
     const body = await c.req.json<{ videos?: VideoPayload[] }>();

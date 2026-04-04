@@ -4,6 +4,8 @@ void function() {
     return;
   }
 
+  var addVideoToken = '__LENS_ADD_VIDEO_TOKEN__';
+
   // YouTube enforces Trusted Types - reuse cached policy or create new one
   var policy = window.__lensBmPolicy;
   if (!policy && window.trustedTypes && window.trustedTypes.createPolicy) {
@@ -327,7 +329,10 @@ void function() {
 
     fetch(serverUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + addVideoToken
+      },
       body: JSON.stringify({ videos: payload })
     })
     .then(function(resp) {

@@ -30,6 +30,7 @@ Options:
   --role <edit|suggest|view>  Access level (required)
   --folder <id>               Folder ID (required unless --all-folders)
   --all-folders               Grant access to all folders
+  --purpose <share|add-video>  Token purpose (default: "share")
   --expires <duration>         Token lifetime: e.g. "24h", "7d", "2w" (default: "7d")
   --base-url <url>            Base URL for the editor (default: http://localhost:5173)
 
@@ -55,6 +56,7 @@ function getArg(name: string): string | undefined {
 const role = getArg('--role') as UserRole | undefined;
 const allFolders = args.includes('--all-folders');
 const folder = allFolders ? ALL_FOLDERS_SENTINEL : getArg('--folder');
+const purpose = (getArg('--purpose') || 'share') as 'share' | 'add-video';
 const expires = getArg('--expires') || '7d';
 const baseUrl = getArg('--base-url') || 'http://localhost:5173';
 
@@ -70,7 +72,14 @@ if (!folder) {
   process.exit(1);
 }
 
+if (!['share', 'add-video'].includes(purpose)) {
+  console.error('Error: --purpose must be "share" or "add-video"');
+  printUsage();
+  process.exit(1);
+}
+
 const payload: ShareTokenPayload = {
+  purpose,
   role,
   folder,
   expiry: parseExpiry(expires),
@@ -81,6 +90,7 @@ const url = `${baseUrl}/?t=${token}`;
 
 console.log(`\nShare Link Generated`);
 console.log(`${'─'.repeat(50)}`);
+console.log(`Purpose: ${purpose}`);
 console.log(`Role:    ${role}`);
 console.log(`Folder:  ${folder === ALL_FOLDERS_SENTINEL ? 'All folders' : folder}`);
 console.log(`Expires: ${new Date(payload.expiry * 1000).toISOString()}`);
