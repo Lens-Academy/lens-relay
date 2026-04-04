@@ -17,6 +17,7 @@ import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTo
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
+import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
 import { useDocConnection } from './hooks/useDocConnection';
 import { applySuggestionAction } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
@@ -239,7 +240,7 @@ export function App() {
   if (authError) {
     return <TokenInvalid />;
   }
-  return <AuthenticatedApp role={shareRole} folderUuid={shareFolderUuid} isAllFolders={shareIsAllFolders} />;
+  return <AuthenticatedApp role={shareRole} folderUuid={shareFolderUuid} isAllFolders={shareIsAllFolders} shareToken={shareToken} />;
 }
 
 function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: string[]; folders: { id: string; name: string }[]; relayId: string }) {
@@ -326,7 +327,7 @@ function DefaultLanding() {
   );
 }
 
-function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean }) {
+function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean; shareToken: string }) {
   const navigate = useNavigate();
 
   // Filter folders based on token scope
@@ -457,6 +458,11 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders }: { role: UserRole; 
                   <Route path="/review" element={
                     role === 'edit' && isAllFolders
                       ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
+                      : <DefaultLanding />
+                  } />
+                  <Route path="/add-video" element={
+                    role === 'edit' && (isAllFolders || folderUuid === 'ea4015da-24af-4d9d-ac49-8c902cb17121')
+                      ? <AddVideoPage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
