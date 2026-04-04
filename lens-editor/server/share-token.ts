@@ -1,7 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { UserRole } from '../shared/types.ts';
 
+export type TokenPurpose = 'share' | 'add-video';
+
 export interface ShareTokenPayload {
+  purpose: TokenPurpose;
   role: UserRole;
   folder: string;   // UUID string
   expiry: number;    // unix seconds
@@ -18,10 +21,13 @@ function getSecret(): string {
   return DEV_SECRET;
 }
 
+const PURPOSE_TO_BYTE: Record<TokenPurpose, number> = { 'share': 0, 'add-video': 1 };
+const BYTE_TO_PURPOSE: Record<number, TokenPurpose> = { 0: 'share', 1: 'add-video' };
+
 const ROLE_TO_BYTE: Record<UserRole, number> = { edit: 1, suggest: 2, view: 3 };
 const BYTE_TO_ROLE: Record<number, UserRole> = { 1: 'edit', 2: 'suggest', 3: 'view' };
 
-const PAYLOAD_LEN = 21;  // 1 role + 16 uuid + 4 expiry
+const PAYLOAD_LEN = 22;  // 1 purpose + 1 role + 16 uuid + 4 expiry
 const SIG_LEN = 8;       // truncated HMAC-SHA256
 
 /** Pack UUID string "xxxxxxxx-xxxx-..." into 16 raw bytes */
@@ -37,24 +43,27 @@ function bytesToUuid(buf: Buffer): string {
 
 function packPayload(payload: ShareTokenPayload): Buffer {
   const buf = Buffer.alloc(PAYLOAD_LEN);
-  buf[0] = ROLE_TO_BYTE[payload.role];
-  uuidToBytes(payload.folder).copy(buf, 1);
-  buf.writeUInt32BE(payload.expiry, 17);
+  buf[0] = PURPOSE_TO_BYTE[payload.purpose];
+  buf[1] = ROLE_TO_BYTE[payload.role];
+  uuidToBytes(payload.folder).copy(buf, 2);
+  buf.writeUInt32BE(payload.expiry, 18);
   return buf;
 }
 
 function unpackPayload(buf: Buffer): ShareTokenPayload | null {
   if (buf.length < PAYLOAD_LEN) return null;
-  const role = BYTE_TO_ROLE[buf[0]];
+  const purpose = BYTE_TO_PURPOSE[buf[0]];
+  if (purpose === undefined) return null;
+  const role = BYTE_TO_ROLE[buf[1]];
   if (!role) return null;
-  const folder = bytesToUuid(buf.subarray(1, 17));
-  const expiry = buf.readUInt32BE(17);
-  return { role, folder, expiry };
+  const folder = bytesToUuid(buf.subarray(2, 18));
+  const expiry = buf.readUInt32BE(18);
+  return { purpose, role, folder, expiry };
 }
 
 /**
- * Sign a share token. Returns a compact base64url string (~39 chars).
- * Format: base64url(role:1 + uuid:16 + expiry:4 + hmac:8)
+ * Sign a share token. Returns a compact base64url string (~40 chars).
+ * Format: base64url(purpose:1 + role:1 + uuid:16 + expiry:4 + hmac:8)
  */
 export function signShareToken(payload: ShareTokenPayload): string {
   const secret = getSecret();

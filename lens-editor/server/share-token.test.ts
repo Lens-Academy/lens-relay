@@ -4,6 +4,7 @@ import type { ShareTokenPayload } from './share-token.ts';
 
 describe('share-token', () => {
   const validPayload: ShareTokenPayload = {
+    purpose: 'share',
     role: 'edit',
     folder: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e',
     expiry: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
@@ -16,9 +17,9 @@ describe('share-token', () => {
       expect(result).toEqual(validPayload);
     });
 
-    it('should produce a compact token (~39 chars)', () => {
+    it('should produce a compact token (~40 chars)', () => {
       const token = signShareToken(validPayload);
-      // 29 bytes base64url → ceil(29*4/3) = 39 chars
+      // 30 bytes base64url → ceil(30*4/3) = 40 chars
       expect(token.length).toBeLessThanOrEqual(40);
     });
 
@@ -61,6 +62,34 @@ describe('share-token', () => {
         expect(result?.role).toBe(role);
       }
     });
+
+    it('should sign and verify an add-video purpose token', () => {
+      const payload: ShareTokenPayload = {
+        purpose: 'add-video',
+        role: 'edit',
+        folder: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e',
+        expiry: Math.floor(Date.now() / 1000) + 3600,
+      };
+      const token = signShareToken(payload);
+      const result = verifyShareToken(token);
+      expect(result).toEqual(payload);
+      expect(result?.purpose).toBe('add-video');
+    });
+
+    it('should handle both purposes', () => {
+      for (const purpose of ['share', 'add-video'] as const) {
+        const payload: ShareTokenPayload = { ...validPayload, purpose };
+        const token = signShareToken(payload);
+        const result = verifyShareToken(token);
+        expect(result?.purpose).toBe(purpose);
+      }
+    });
+
+    it('share and add-video tokens produce different strings', () => {
+      const shareToken = signShareToken({ ...validPayload, purpose: 'share' });
+      const addVideoToken = signShareToken({ ...validPayload, purpose: 'add-video' });
+      expect(shareToken).not.toBe(addVideoToken);
+    });
   });
 
   describe('decodeShareTokenPayload', () => {
@@ -83,6 +112,19 @@ describe('share-token', () => {
 
     it('should return null for malformed token', () => {
       expect(decodeShareTokenPayload('garbage')).toBeNull();
+    });
+
+    it('should return purpose field from decoded payload', () => {
+      const token = signShareToken(validPayload);
+      const payload = decodeShareTokenPayload(token);
+      expect(payload?.purpose).toBe('share');
+    });
+
+    it('should return purpose field for add-video token', () => {
+      const addVideoPayload: ShareTokenPayload = { ...validPayload, purpose: 'add-video' };
+      const token = signShareToken(addVideoPayload);
+      const payload = decodeShareTokenPayload(token);
+      expect(payload?.purpose).toBe('add-video');
     });
   });
 
