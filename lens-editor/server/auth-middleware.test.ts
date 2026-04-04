@@ -17,6 +17,7 @@ describe('auth-middleware', () => {
 
   // Must use a valid UUID for binary packing
   const validPayload: ShareTokenPayload = {
+    purpose: 'share',
     role: 'edit',
     folder: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e',
     expiry: Math.floor(Date.now() / 1000) + 3600,
@@ -183,7 +184,7 @@ describe('auth-middleware', () => {
 
   describe('folder scope enforcement', () => {
     it('should allow access when doc is in token folder', async () => {
-      const token = signShareToken({ role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+      const token = signShareToken({ purpose: 'share', role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
 
       // First call: folder lookup returns matching folder
       mockFetch.mockResolvedValueOnce({
@@ -209,7 +210,7 @@ describe('auth-middleware', () => {
     });
 
     it('should reject access when doc is in different folder', async () => {
-      const token = signShareToken({ role: 'suggest', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+      const token = signShareToken({ purpose: 'share', role: 'suggest', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
 
       // Folder lookup returns a different folder
       mockFetch.mockResolvedValueOnce({
@@ -222,7 +223,7 @@ describe('auth-middleware', () => {
     });
 
     it('should reject access when folder lookup returns 404', async () => {
-      const token = signShareToken({ role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+      const token = signShareToken({ purpose: 'share', role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
 
       mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
 
@@ -235,7 +236,7 @@ describe('auth-middleware', () => {
       // The folder doc ID format is "relay_id-folder_uuid" — same as the token's folder.
       // The folder lookup returns 404 because folder docs aren't content docs,
       // but this should be allowed since the doc IS the folder the token authorizes.
-      const token = signShareToken({ role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+      const token = signShareToken({ purpose: 'share', role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
 
       // Folder lookup returns 404 — folder doc is not a content doc
       mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
@@ -252,7 +253,7 @@ describe('auth-middleware', () => {
     });
 
     it('should bypass folder check for all-folders sentinel token', async () => {
-      const token = signShareToken({ role: 'edit', folder: ALL_FOLDERS_SENTINEL, expiry: Math.floor(Date.now() / 1000) + 3600 });
+      const token = signShareToken({ purpose: 'share', role: 'edit', folder: ALL_FOLDERS_SENTINEL, expiry: Math.floor(Date.now() / 1000) + 3600 });
 
       // Only one fetch call: relay auth proxy (no folder lookup)
       mockFetch.mockResolvedValueOnce({

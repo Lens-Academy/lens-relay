@@ -9,14 +9,14 @@ const RELAY_ID = 'cb696037-0f72-4e93-8717-4e433129d789';
 
 function makeAuth(folder: string): ProxyAuthResult {
   return {
-    payload: { role: 'edit', folder, expiry: Math.floor(Date.now() / 1000) + 3600 },
+    payload: { purpose: 'share' as const, role: 'edit' as const, folder, expiry: Math.floor(Date.now() / 1000) + 3600 },
     isAllFolders: folder === ALL_FOLDERS,
   };
 }
 
 describe('validateProxyToken', () => {
   it('returns payload for valid token', () => {
-    const token = signShareToken({ role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
+    const token = signShareToken({ purpose: 'share', role: 'edit', folder: FOLDER_A, expiry: Math.floor(Date.now() / 1000) + 3600 });
     const result = validateProxyToken(token);
     expect(result).not.toBeNull();
     expect(result!.payload.folder).toBe(FOLDER_A);
@@ -30,7 +30,7 @@ describe('validateProxyToken', () => {
   });
 
   it('detects all-folders sentinel', () => {
-    const token = signShareToken({ role: 'edit', folder: ALL_FOLDERS, expiry: Math.floor(Date.now() / 1000) + 3600 });
+    const token = signShareToken({ purpose: 'share', role: 'edit', folder: ALL_FOLDERS, expiry: Math.floor(Date.now() / 1000) + 3600 });
     const result = validateProxyToken(token);
     expect(result!.isAllFolders).toBe(true);
   });

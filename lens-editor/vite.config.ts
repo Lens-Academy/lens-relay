@@ -147,7 +147,7 @@ export default defineConfig(() => {
           // Set CORS headers for cross-origin bookmarklet requests
           res.setHeader('Access-Control-Allow-Origin', '*');
           res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+          res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
           if (req.method === 'OPTIONS') {
             res.writeHead(204);
@@ -166,6 +166,54 @@ export default defineConfig(() => {
             // req.url is stripped of the /api/add-video prefix by Vite middleware
             const subPath = req.url || '/';
             console.log(`[add-video] ${req.method} /api/add-video${subPath}`);
+
+            const EDU_FOLDER = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
+            const ALL_FOLDERS = '00000000-0000-0000-0000-000000000000';
+            const { verifyShareToken, signShareToken } = await import('./server/share-token.ts');
+
+            // Install-token endpoint: mint add-video token from share token
+            if (req.method === 'POST' && subPath === '/install-token') {
+              const authHeader = req.headers.authorization;
+              if (!authHeader?.startsWith('Bearer ')) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authorization header required' }));
+                return;
+              }
+              const payload = verifyShareToken(authHeader.slice(7));
+              if (!payload || payload.purpose !== 'share' || payload.role !== 'edit') {
+                res.writeHead(403, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Edit share token required' }));
+                return;
+              }
+              if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {
+                res.writeHead(403, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Access denied: wrong folder scope' }));
+                return;
+              }
+              const addVideoToken = signShareToken({
+                purpose: 'add-video',
+                role: 'edit',
+                folder: EDU_FOLDER,
+                expiry: payload.expiry,
+              });
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ token: addVideoToken }));
+              return;
+            }
+
+            // Auth check for other endpoints (POST / and GET /status)
+            const authHeader = req.headers.authorization;
+            if (!authHeader?.startsWith('Bearer ')) {
+              res.writeHead(401, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Authorization header required' }));
+              return;
+            }
+            const authPayload = verifyShareToken(authHeader.slice(7));
+            if (!authPayload || authPayload.purpose !== 'add-video' || authPayload.role !== 'edit') {
+              res.writeHead(403, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Valid add-video token required' }));
+              return;
+            }
 
             if (req.method === 'GET' && subPath === '/status') {
               res.writeHead(200, { 'Content-Type': 'application/json' });
