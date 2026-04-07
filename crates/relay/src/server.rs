@@ -2903,6 +2903,7 @@ impl Server {
             .route("/doc/move", post(handle_move_document))
             .route("/doc/upsert", post(handle_upsert_document))
             .route("/doc/check", post(handle_check_documents))
+            .route("/doc/check-video-ids", post(handle_check_video_ids))
             .route("/open/*path", get(handle_open_by_path))
             .route("/suggestions", get(handle_suggestions));
 
@@ -3881,6 +3882,88 @@ async fn handle_check_documents(
     }
 
     Ok(Json(CheckDocsResponse { exists }))
+}
+
+#[derive(Deserialize)]
+struct CheckVideoIdsRequest {
+    folder: String,
+    subfolder: Option<String>,
+    video_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CheckVideoIdsResponse {
+    found: std::collections::HashMap<String, Option<String>>,
+}
+
+async fn handle_check_video_ids(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Json(body): Json<CheckVideoIdsRequest>,
+) -> Result<Json<CheckVideoIdsResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    let prefix = match &body.subfolder {
+        Some(sub) => format!("{}/{}/", body.folder, sub),
+        None => format!("{}/", body.folder),
+    };
+
+    let all_paths = server_state.doc_resolver().all_paths();
+    let matching_paths: Vec<String> = all_paths
+        .into_iter()
+        .filter(|p| p.starts_with(&prefix) && p.ends_with(".md"))
+        .collect();
+
+    let mut found: std::collections::HashMap<String, Option<String>> =
+        body.video_ids.iter().map(|id| (id.clone(), None)).collect();
+
+    for path in &matching_paths {
+        if found.values().all(|v| v.is_some()) {
+            break;
+        }
+
+        let doc_id = match server_state.doc_resolver().resolve_path(path) {
+            Some(doc_info) => doc_info.doc_id,
+            None => continue,
+        };
+
+        if server_state.ensure_doc_loaded(&doc_id).await.is_err() {
+            continue;
+        }
+
+        let content = {
+            let doc_ref = match server_state.docs().get(&doc_id) {
+                Some(r) => r,
+                None => continue,
+            };
+            let awareness = doc_ref.awareness();
+            drop(doc_ref);
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            let full = txn
+                .get_text("contents")
+                .map(|t| t.get_string(&txn))
+                .unwrap_or_default();
+            if full.len() > 500 {
+                full[..500].to_string()
+            } else {
+                full
+            }
+        };
+
+        let rel_path = format!("/{}", &path[body.folder.len()..].trim_start_matches('/'));
+
+        for (video_id, slot) in found.iter_mut() {
+            if slot.is_none() {
+                let needle = format!("watch?v={}", video_id);
+                if content.contains(&needle) {
+                    *slot = Some(rel_path.clone());
+                }
+            }
+        }
+    }
+
+    Ok(Json(CheckVideoIdsResponse { found }))
 }
 
 async fn new_doc(
