@@ -3,6 +3,8 @@ import { cors } from 'hono/cors';
 import type { JobQueue } from './queue';
 import type { VideoPayload } from './types';
 import { verifyShareToken, signShareToken } from '../share-token';
+import { generateFilenameBase } from './export';
+import { checkRelayDocsExist } from './relay-docs';
 
 const EDU_FOLDER = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
 const ALL_FOLDERS = '00000000-0000-0000-0000-000000000000';
@@ -99,17 +101,56 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
       }
     }
 
-    const jobs = body.videos.map((video) => queue.add(video));
+    // Check for existing documents on the relay
+    const relayFolder = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
+    const editorBase = process.env.EDITOR_BASE_URL || 'https://editor.lensacademy.org';
 
-    return c.json({
-      jobs: jobs.map((j) => ({
-        id: j.id,
-        video_id: j.video_id,
-        title: j.title,
-        status: j.status,
-        relay_url: j.relay_url,
-      })),
+    const pathsByVideo = body.videos.map((video) => {
+      const filenameBase = generateFilenameBase(video.channel, video.title, video.video_id);
+      return `${relayFolder}/${filenameBase}.md`;
     });
+
+    let existsMap: Record<string, boolean> = {};
+    try {
+      existsMap = await checkRelayDocsExist(pathsByVideo);
+    } catch (err) {
+      // If the relay is unreachable, log and proceed (don't block on check failure)
+      console.error('Duplicate check failed, proceeding without check:', err);
+    }
+
+    // Partition into queued vs already_exists
+    const results: Array<{
+      video_id: string;
+      title: string;
+      status: 'queued' | 'already_exists';
+      id?: string;
+      relay_url: string;
+    }> = [];
+
+    for (let i = 0; i < body.videos.length; i++) {
+      const video = body.videos[i];
+      const mdPath = pathsByVideo[i];
+
+      if (existsMap[mdPath]) {
+        results.push({
+          video_id: video.video_id,
+          title: video.title,
+          status: 'already_exists',
+          relay_url: `${editorBase}/open/${encodeURI(mdPath)}`,
+        });
+      } else {
+        const job = queue.add(video);
+        results.push({
+          video_id: job.video_id,
+          title: job.title,
+          status: 'queued',
+          id: job.id,
+          relay_url: job.relay_url!,
+        });
+      }
+    }
+
+    return c.json({ results });
   });
 
   router.get('/status', (c) => {
