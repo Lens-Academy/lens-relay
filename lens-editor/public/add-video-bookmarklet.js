@@ -340,21 +340,55 @@ void function() {
       return resp.json();
     })
     .then(function(data) {
-      btn.textContent = 'Sent!';
-      btn.style.background = '#5cb85c';
-      // Show links to relay docs (use DOM APIs to avoid XSS from video titles)
+      var queued = 0;
+      var dupes = 0;
       var statusDiv = document.getElementById('lens-av-status');
-      data.jobs.forEach(function(j) {
+      statusDiv.innerHTML = safeHTML('');
+
+      (data.results || data.jobs || []).forEach(function(r) {
         var div = document.createElement('div');
-        div.style.cssText = 'margin-top:8px;font-size:13px;';
-        var link = document.createElement('a');
-        link.href = j.relay_url || '#';
-        link.target = '_blank';
-        link.style.color = '#4ecdc4';
-        link.textContent = j.title + ' - View in Lens';
-        div.appendChild(link);
+        div.className = 'lens-av-job ' + (r.status === 'already_exists' ? 'error' : 'done');
+        var titleEl = document.createElement('div');
+        titleEl.className = 'lens-av-job-title';
+        titleEl.textContent = r.title;
+        div.appendChild(titleEl);
+
+        var detailEl = document.createElement('div');
+        detailEl.className = 'lens-av-job-detail';
+
+        if (r.status === 'already_exists') {
+          detailEl.textContent = 'Already exists — ';
+          var link = document.createElement('a');
+          link.href = r.relay_url || '#';
+          link.target = '_blank';
+          link.style.color = '#4ecdc4';
+          link.textContent = 'open in Lens';
+          detailEl.appendChild(link);
+          dupes++;
+        } else {
+          detailEl.textContent = 'Queued — ';
+          var link = document.createElement('a');
+          link.href = r.relay_url || '#';
+          link.target = '_blank';
+          link.style.color = '#4ecdc4';
+          link.textContent = 'view in Lens';
+          detailEl.appendChild(link);
+          queued++;
+        }
+        div.appendChild(detailEl);
         statusDiv.appendChild(div);
       });
+
+      if (dupes > 0 && queued === 0) {
+        btn.textContent = 'All videos already exist';
+        btn.style.background = '#f0ad4e';
+      } else if (dupes > 0) {
+        btn.textContent = 'Sent ' + queued + ', ' + dupes + ' already existed';
+        btn.style.background = '#f0ad4e';
+      } else {
+        btn.textContent = 'Sent!';
+        btn.style.background = '#5cb85c';
+      }
     })
     .catch(function(err) {
       btn.textContent = 'Failed: ' + err.message;
