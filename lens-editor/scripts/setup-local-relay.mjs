@@ -157,7 +157,15 @@ Check out [[../Welcome]] for an overview, or [[../Getting Started]] for setup in
         type: 'markdown',
         version: 0,
         content: `---
+title: Discord Integration
 discussion: https://discord.com/channels/1443369661847834688/1443369662560735264
+tags: [discord, integration, collaboration]
+status: active
+author: Luc
+created: 2025-11-15
+modified: 2026-03-22
+slug: discord-integration
+platform_url: https://lensacademy.org/docs/discord
 ---
 # Discord Integration
 

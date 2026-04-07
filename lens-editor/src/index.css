@@ -230,6 +230,92 @@
   text-decoration: line-through;
 }
 
+/* Frontmatter — bar (collapsed state + expanded header) */
+.cm-frontmatter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background-color: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-frontmatter-bar:hover {
+  background-color: #f3f4f6;
+}
+
+.cm-frontmatter-chevron {
+  color: #9ca3af;
+  font-size: 11px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.cm-frontmatter-chevron-open {
+  transform: rotate(90deg);
+}
+
+.cm-frontmatter-label {
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Frontmatter — expanded header (widget above raw text) */
+.cm-frontmatter-header {
+  border-radius: 6px 6px 0 0;
+  border-bottom: none;
+}
+
+/* Frontmatter — expanded line decorations on raw text */
+.cm-frontmatter-line {
+  background-color: #f9fafb;
+  font-size: 13px;
+  /* Reset CM's default .cm-line left padding so all frontmatter lines
+     align at 0; key-value lines override with inline padding for wrapping */
+  padding-left: 0 !important;
+  /* Override any markdown styling within frontmatter */
+  font-weight: normal !important;
+  font-style: normal !important;
+  text-decoration: none !important;
+}
+
+/* Kill bold/italic/underline on all children within frontmatter lines */
+.cm-frontmatter-line span {
+  font-weight: normal !important;
+  font-style: normal !important;
+  text-decoration: none !important;
+}
+
+.cm-frontmatter-line-first {
+  border-top: 1px solid #e5e7eb;
+}
+
+.cm-frontmatter-line-last {
+  border-bottom: 1px solid #e5e7eb;
+  border-radius: 0 0 6px 6px;
+}
+
+/* Hide --- delimiters */
+.cm-frontmatter-delimiter {
+  font-size: 0;
+}
+
+
+/* Key name and incomplete key (no colon yet) */
+.cm-frontmatter-key,
+.cm-frontmatter-key-incomplete {
+  color: #6b7280;
+}
+
+/* Colon + space */
+.cm-frontmatter-colon {
+  color: #d1d5db;
+}
+
 /* Obsidian %%comment%% styling */
 .cm-obsidian-comment {
   color: #9ca3af;

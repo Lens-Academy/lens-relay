@@ -25,6 +25,7 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin } from './criticmarkup';
+import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateEffect } from '@codemirror/state';
@@ -754,7 +755,8 @@ export function livePreview(context?: WikilinkContext) {
   }
   return [
     drawSelection(), // Required for proper cursor with hidden content
-    livePreviewCompartment.of([livePreviewPlugin, obsidianCommentPlugin, livePreviewTheme]),
+    frontmatterField, // StateField outside compartment (survives source mode toggle)
+    livePreviewCompartment.of([livePreviewPlugin, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];
 }
 
@@ -869,11 +871,12 @@ export function toggleSourceMode(view: EditorView, sourceMode: boolean) {
   view.dispatch({
     effects: [
       livePreviewCompartment.reconfigure(
-        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, livePreviewTheme] : [livePreviewPlugin, obsidianCommentPlugin, livePreviewTheme]
+        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, frontmatterSourcePlugin, livePreviewTheme] : [livePreviewPlugin, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]
       ),
       criticMarkupCompartment.reconfigure(
         sourceMode ? criticMarkupSourcePlugin : criticMarkupPlugin
       ),
+      setFrontmatterEnabled.of(!sourceMode),
     ],
   });
 }
