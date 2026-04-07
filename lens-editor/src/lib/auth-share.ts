@@ -2,14 +2,39 @@ import type { UserRole } from '../contexts/AuthContext';
 
 const SESSION_KEY = 'lens-share-token';
 
+/** Role byte values: 1=edit, 2=suggest, 3=view. Lower = higher privilege. */
+function roleLevel(token: string): number {
+  try {
+    const bytes = base64urlToBytes(token);
+    if (bytes.length < 2) return Infinity;
+    return bytes[1];
+  } catch {
+    return Infinity;
+  }
+}
+
+/**
+ * Replace the stored token only if the new token has strictly higher
+ * privilege, or the existing token is expired/malformed.
+ */
+function shouldReplaceToken(existing: string, incoming: string): boolean {
+  if (isTokenExpired(existing)) return true;
+  return roleLevel(incoming) < roleLevel(existing);
+}
+
 /**
  * Read the share token from the URL query parameter ?t=,
  * falling back to localStorage (survives page refresh).
+ * If the stored token has equal or higher privilege, keep it.
  */
 export function getShareTokenFromUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
   const fromUrl = params.get('t');
   if (fromUrl) {
+    const existing = localStorage.getItem(SESSION_KEY);
+    if (existing && !shouldReplaceToken(existing, fromUrl)) {
+      return existing;
+    }
     localStorage.setItem(SESSION_KEY, fromUrl);
     return fromUrl;
   }
