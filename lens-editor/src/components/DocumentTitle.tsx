@@ -127,7 +127,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
         onChange={(e) => setValue(e.target.value)}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
-        className="flex-1 text-3xl font-bold text-gray-900 bg-transparent border-none outline-none
+        className="flex-1 min-w-0 text-3xl font-bold text-gray-900 bg-transparent border-none outline-none
                    placeholder-gray-400 caret-gray-900"
         placeholder="Untitled"
         spellCheck={false}
