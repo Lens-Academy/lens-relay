@@ -3752,33 +3752,57 @@ async fn handle_upsert_document(
         format!("/{}", body.path)
     };
 
-    match server_state
-        .create_document_direct(&body.folder, &path, &body.content)
-        .await
-    {
-        Ok(result) => Ok(Json(UpsertDocResponse {
-            doc_id: result.full_doc_id,
-            path: format!("{}{}", body.folder, path),
-            created: true,
-        })),
-        Err(CreateDocumentError::Conflict(_)) => {
-            // Already exists — update content instead
-            server_state
-                .write_document_content(&body.folder, &path, &body.content)
-                .await
-                .map_err(|e| {
-                    AppError(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))
-                })?;
-            Ok(Json(UpsertDocResponse {
-                doc_id: String::new(),
+    let is_blob = path.to_ascii_lowercase().ends_with(".json");
+
+    if is_blob {
+        // JSON files → blob storage (create-only, no updates)
+        match server_state
+            .create_blob_file(&body.folder, &path, body.content.as_bytes())
+            .await
+        {
+            Ok(result) => Ok(Json(UpsertDocResponse {
+                doc_id: result.full_doc_id,
                 path: format!("{}{}", body.folder, path),
-                created: false,
-            }))
+                created: true,
+            })),
+            Err(CreateDocumentError::Conflict(msg)) => {
+                Err(AppError(StatusCode::CONFLICT, anyhow!("{}", msg)))
+            }
+            Err(CreateDocumentError::NotFound(msg)) => {
+                Err(AppError(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
+            }
+            Err(e) => Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))),
         }
-        Err(CreateDocumentError::NotFound(msg)) => {
-            Err(AppError(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
+    } else {
+        // Markdown/other → Y.Doc (existing behavior with upsert semantics)
+        match server_state
+            .create_document_direct(&body.folder, &path, &body.content)
+            .await
+        {
+            Ok(result) => Ok(Json(UpsertDocResponse {
+                doc_id: result.full_doc_id,
+                path: format!("{}{}", body.folder, path),
+                created: true,
+            })),
+            Err(CreateDocumentError::Conflict(_)) => {
+                // Already exists — update content instead
+                server_state
+                    .write_document_content(&body.folder, &path, &body.content)
+                    .await
+                    .map_err(|e| {
+                        AppError(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))
+                    })?;
+                Ok(Json(UpsertDocResponse {
+                    doc_id: String::new(),
+                    path: format!("{}{}", body.folder, path),
+                    created: false,
+                }))
+            }
+            Err(CreateDocumentError::NotFound(msg)) => {
+                Err(AppError(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
+            }
+            Err(e) => Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))),
         }
-        Err(e) => Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))),
     }
 }
 
