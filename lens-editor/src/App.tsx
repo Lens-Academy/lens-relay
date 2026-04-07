@@ -23,8 +23,6 @@ import { applySuggestionAction } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { BlobDocumentView } from './components/BlobViewer';
-import { BlobViewer } from './components/BlobViewer/BlobViewer';
-import { useYDoc } from '@y-sweet/react';
 import { findPathByUuid } from './lib/uuid-to-path';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { useRecentFiles } from './hooks/useRecentFiles';
@@ -178,11 +176,10 @@ function DocumentView() {
     }
   }, [metadata, activeDocId, docUuid, splatPath, navigate]);
 
-  // Check if this is a JSON file — must be before early returns
+  // Check if this is a blob file — must be before early returns
   const uuid = activeDocId ? activeDocId.slice(RELAY_ID.length + 1) : null;
   const filePath = uuid ? findPathByUuid(uuid, metadata) : null;
   const fileEntry = filePath ? metadata[filePath] : null;
-  const isJsonFile = !!filePath?.endsWith('.json');
   const isBlobFile = fileEntry?.type === 'file' && fileEntry?.hash;
 
   if (!docUuid) return <DocumentNotFound />;
@@ -203,16 +200,6 @@ function DocumentView() {
     const folderConfig = FOLDERS.find(f => f.name === folderName);
     const folderDocId = folderConfig ? `${RELAY_ID}-${folderConfig.id}` : '';
     return <BlobDocumentView docId={activeDocId} hash={fileEntry.hash} folderDocId={folderDocId} fileName={fileName} />;
-  }
-
-  // JSON files stored as Y.Text (created via /doc/upsert) — sync Y.Doc but render read-only
-  if (isJsonFile) {
-    const fileName = filePath?.split('/').pop() ?? undefined;
-    return (
-      <RelayProvider key={activeDocId} docId={activeDocId}>
-        <JsonDocumentView fileName={fileName} />
-      </RelayProvider>
-    );
   }
 
   return (
@@ -260,51 +247,6 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
       relayId={relayId}
       onAction={handleAction}
     />
-  );
-}
-
-/**
- * Read-only viewer for JSON files stored as Y.Text content docs.
- * Must be rendered inside a RelayProvider.
- */
-function JsonDocumentView({ fileName }: { fileName?: string }) {
-  const doc = useYDoc();
-  const [content, setContent] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!doc) return;
-    const text = doc.getText('contents');
-    // Read initial content
-    const val = text.toString();
-    if (val) setContent(val);
-    // Listen for sync updates
-    const observer = () => setContent(text.toString());
-    text.observe(observer);
-    return () => text.unobserve(observer);
-  }, [doc]);
-
-  if (content === null) {
-    return (
-      <main className="flex-1 flex items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-500">Loading file...</div>
-      </main>
-    );
-  }
-
-  return (
-    <main className="h-full flex flex-col min-h-0 bg-white">
-      {fileName && (
-        <div className="max-w-[700px] mx-auto w-full">
-          <div className="px-6 pt-5 pb-1">
-            <h1 className="text-lg font-semibold text-gray-900">{fileName}</h1>
-          </div>
-          <div className="mx-6 border-b border-gray-200" />
-        </div>
-      )}
-      <div className="flex-1 min-h-0 relative">
-        <BlobViewer content={content} fileName={fileName} />
-      </div>
-    </main>
   );
 }
 
