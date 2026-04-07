@@ -150,7 +150,7 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
       }
     }
 
-    return c.json({ results });
+    return c.json({ results, jobs: results });
   });
 
   router.get('/status', (c) => {
