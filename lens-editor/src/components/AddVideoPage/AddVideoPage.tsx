@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 export function AddVideoPage({ shareToken }: { shareToken: string }) {
   const [bookmarkletHref, setBookmarkletHref] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const linkRef = useRef<HTMLAnchorElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +42,13 @@ export function AddVideoPage({ shareToken }: { shareToken: string }) {
     return () => { cancelled = true; };
   }, [shareToken]);
 
+  // Set href directly on DOM to bypass React's javascript: URL sanitization
+  useEffect(() => {
+    if (linkRef.current && bookmarkletHref) {
+      linkRef.current.setAttribute('href', bookmarkletHref);
+    }
+  }, [bookmarkletHref]);
+
   useEffect(() => {
     document.title = 'Add Video to Lens';
     return () => { document.title = 'Editor'; };
@@ -61,7 +69,8 @@ export function AddVideoPage({ shareToken }: { shareToken: string }) {
           </div>
         ) : bookmarkletHref ? (
           <a
-            href={bookmarkletHref}
+            ref={linkRef}
+            href="#"
             style={{
               display: 'inline-block',
               background: '#4361ee',
