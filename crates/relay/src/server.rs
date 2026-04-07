@@ -2902,6 +2902,7 @@ impl Server {
             .route("/search", get(handle_search))
             .route("/doc/move", post(handle_move_document))
             .route("/doc/upsert", post(handle_upsert_document))
+            .route("/doc/check", post(handle_check_documents))
             .route("/open/*path", get(handle_open_by_path))
             .route("/suggestions", get(handle_suggestions));
 
@@ -3804,6 +3805,82 @@ async fn handle_upsert_document(
             Err(e) => Err(AppError(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))),
         }
     }
+}
+
+#[derive(Deserialize)]
+struct CheckDocsRequest {
+    folder: String,
+    paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CheckDocsResponse {
+    exists: std::collections::HashMap<String, bool>,
+}
+
+async fn handle_check_documents(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Json(body): Json<CheckDocsRequest>,
+) -> Result<Json<CheckDocsResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    let docs = server_state.docs();
+    let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
+
+    // Find the matching folder doc
+    let mut folder_doc_id: Option<String> = None;
+    for fid in &folder_doc_ids {
+        let awareness = {
+            let Some(doc_ref) = docs.get(fid) else {
+                continue;
+            };
+            doc_ref.awareness()
+        };
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, fid);
+        if name == body.folder {
+            folder_doc_id = Some(fid.clone());
+            break;
+        }
+    }
+
+    let Some(folder_doc_id) = folder_doc_id else {
+        return Err(AppError(
+            StatusCode::NOT_FOUND,
+            anyhow!("Unknown folder '{}'", body.folder),
+        ));
+    };
+
+    // Read filemeta_v0 once, check all paths
+    let awareness = {
+        let Some(doc_ref) = docs.get(&folder_doc_id) else {
+            return Err(AppError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                anyhow!("Folder doc not loaded"),
+            ));
+        };
+        doc_ref.awareness()
+    };
+    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+    let txn = guard.doc.transact();
+
+    let mut exists = std::collections::HashMap::new();
+    let filemeta = txn.get_map("filemeta_v0");
+    for path in &body.paths {
+        let normalized = if path.starts_with('/') {
+            path.clone()
+        } else {
+            format!("/{}", path)
+        };
+        let found = filemeta
+            .as_ref()
+            .map(|fm| fm.get(&txn, normalized.as_str()).is_some())
+            .unwrap_or(false);
+        exists.insert(path.clone(), found);
+    }
+
+    Ok(Json(CheckDocsResponse { exists }))
 }
 
 async fn new_doc(
