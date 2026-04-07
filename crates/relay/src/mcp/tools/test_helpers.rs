@@ -182,6 +182,19 @@ pub(crate) async fn build_blob_test_server_with_file(
         map.insert("type".to_string(), Any::String("file".into()));
         map.insert("version".to_string(), Any::Number(0.0));
         map.insert("hash".to_string(), Any::String(hash.into()));
+        map.insert(
+            "mimetype".to_string(),
+            Any::String("application/json".into()),
+        );
+        map.insert(
+            "synctime".to_string(),
+            Any::Number(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as f64,
+            ),
+        );
         filemeta.insert(&mut txn, path, Any::Map(map.into()));
         let config = txn.get_or_insert_map("folder_config");
         config.insert(&mut txn, "name", Any::String("Lens".into()));

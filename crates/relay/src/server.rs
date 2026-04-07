@@ -1624,6 +1624,19 @@ impl Server {
             map.insert("type".to_string(), yrs::Any::String("file".into()));
             map.insert("version".to_string(), yrs::Any::Number(0.0));
             map.insert("hash".to_string(), yrs::Any::String(hash.clone().into()));
+            map.insert(
+                "mimetype".to_string(),
+                yrs::Any::String("application/json".into()),
+            );
+            map.insert(
+                "synctime".to_string(),
+                yrs::Any::Number(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as f64,
+                ),
+            );
             filemeta.insert(&mut txn, in_folder_path, yrs::Any::Map(map.into()));
             // Note: do NOT add to legacy "docs" map — only markdown docs go there
         }
