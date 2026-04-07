@@ -357,25 +357,21 @@ void function() {
         detailEl.className = 'lens-av-job-detail';
 
         if (r.status === 'already_exists') {
-          detailEl.textContent = 'Already exists — ';
-          var link = document.createElement('a');
-          link.href = r.relay_url || '#';
-          link.target = '_blank';
-          link.style.color = '#4ecdc4';
-          link.textContent = 'open in Lens';
-          detailEl.appendChild(link);
+          detailEl.textContent = 'Already exists';
           dupes++;
         } else {
-          detailEl.textContent = 'Queued — ';
-          var link = document.createElement('a');
-          link.href = r.relay_url || '#';
-          link.target = '_blank';
-          link.style.color = '#4ecdc4';
-          link.textContent = 'view in Lens';
-          detailEl.appendChild(link);
+          detailEl.textContent = 'Queued for processing';
           queued++;
         }
         div.appendChild(detailEl);
+
+        var linkBtn = document.createElement('a');
+        linkBtn.href = r.relay_url || '#';
+        linkBtn.target = '_blank';
+        linkBtn.style.cssText = 'display:block;text-align:center;background:#4361ee;color:#fff;' +
+          'padding:8px 12px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:500;margin-top:8px;';
+        linkBtn.textContent = r.status === 'already_exists' ? 'Open in Lens Editor' : 'View in Lens Editor';
+        div.appendChild(linkBtn);
         statusDiv.appendChild(div);
       });
 
