@@ -50,6 +50,21 @@ describe('createRelayDoc', () => {
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.path).toBe('/video_transcripts/test.timestamps.json');
   });
+
+  it('throws on 409 conflict for .json files', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      text: async () => 'Path already exists',
+    });
+
+    await expect(
+      createRelayDoc(
+        'Lens Edu/video_transcripts/test.timestamps.json',
+        '[{"text":"hello","start":"0:00.00"}]'
+      )
+    ).rejects.toThrow('Relay upsert failed: 409');
+  });
 });
 
 describe('updateRelayDoc', () => {
