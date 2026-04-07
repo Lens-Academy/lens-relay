@@ -103,3 +103,38 @@ export async function checkRelayDocsExist(
   }
   return result;
 }
+
+/**
+ * Check which video IDs already have documents on the relay.
+ * Searches document frontmatter for YouTube URLs containing each video ID.
+ * Returns a map of video_id → matched relative path (or null if not found).
+ */
+export async function checkRelayVideoIds(
+  videoIds: string[]
+): Promise<Record<string, string | null>> {
+  if (videoIds.length === 0) return {};
+
+  const { url, token } = getRelayConfig();
+
+  const relayFolder = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
+  const slashIdx = relayFolder.indexOf('/');
+  const folder = slashIdx !== -1 ? relayFolder.slice(0, slashIdx) : relayFolder;
+  const subfolder = slashIdx !== -1 ? relayFolder.slice(slashIdx + 1) : undefined;
+
+  const resp = await fetch(`${url}/doc/check-video-ids`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ folder, subfolder, video_ids: videoIds }),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Relay check-video-ids failed: ${resp.status} ${text}`);
+  }
+
+  const data = (await resp.json()) as { found: Record<string, string | null> };
+  return data.found;
+}

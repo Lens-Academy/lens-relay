@@ -3,8 +3,7 @@ import { cors } from 'hono/cors';
 import type { JobQueue } from './queue';
 import type { VideoPayload } from './types';
 import { verifyShareToken, signShareToken } from '../share-token';
-import { generateFilenameBase } from './export';
-import { checkRelayDocsExist } from './relay-docs';
+import { checkRelayVideoIds } from './relay-docs';
 
 const EDU_FOLDER = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
 const ALL_FOLDERS = '00000000-0000-0000-0000-000000000000';
@@ -101,18 +100,14 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
       }
     }
 
-    // Check for existing documents on the relay
-    const relayFolder = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
+    // Check for existing videos on the relay by video ID
     const editorBase = process.env.EDITOR_BASE_URL || 'https://editor.lensacademy.org';
+    const relayFolder = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
 
-    const pathsByVideo = body.videos.map((video) => {
-      const filenameBase = generateFilenameBase(video.channel, video.title, video.video_id);
-      return `${relayFolder}/${filenameBase}.md`;
-    });
-
-    let existsMap: Record<string, boolean> = {};
+    const videoIds = body.videos.map((v) => v.video_id);
+    let foundMap: Record<string, string | null> = {};
     try {
-      existsMap = await checkRelayDocsExist(pathsByVideo);
+      foundMap = await checkRelayVideoIds(videoIds);
     } catch (err) {
       // If the relay is unreachable, log and proceed (don't block on check failure)
       console.error('Duplicate check failed, proceeding without check:', err);
@@ -127,16 +122,14 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
       relay_url: string;
     }> = [];
 
-    for (let i = 0; i < body.videos.length; i++) {
-      const video = body.videos[i];
-      const mdPath = pathsByVideo[i];
-
-      if (existsMap[mdPath]) {
+    for (const video of body.videos) {
+      const existingPath = foundMap[video.video_id];
+      if (existingPath) {
         results.push({
           video_id: video.video_id,
           title: video.title,
           status: 'already_exists',
-          relay_url: `${editorBase}/open/${encodeURI(mdPath)}`,
+          relay_url: `${editorBase}/open/${encodeURI(relayFolder.split('/')[0] + existingPath)}`,
         });
       } else {
         const job = queue.add(video);
