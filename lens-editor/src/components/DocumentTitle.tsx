@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useYDoc } from '@y-sweet/react';
 import { useNavigation } from '../contexts/NavigationContext';
 import { findPathByUuid } from '../lib/uuid-to-path';
 import { getOriginalPath, getFolderNameFromPath } from '../lib/multi-folder-utils';
 import { moveDocument } from '../lib/relay-api';
 import { getPlatformUrl } from '../lib/platform-url';
+import { extractFrontmatter } from '../lib/frontmatter';
 import { RELAY_ID } from '../App';
 
 interface DocumentTitleProps {
@@ -91,10 +93,28 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
     }
   };
 
+  // Read frontmatter slug from the document's Y.Text (needed for modules)
+  const ydoc = useYDoc();
+  const [frontmatterSlug, setFrontmatterSlug] = useState<string | undefined>();
+
+  useEffect(() => {
+    const ytext = ydoc.getText('contents');
+
+    function parse() {
+      const fm = extractFrontmatter(ytext.toString());
+      const slug = fm?.slug;
+      setFrontmatterSlug(typeof slug === 'string' && slug.trim() ? slug.trim() : undefined);
+    }
+
+    parse();
+    ytext.observe(parse);
+    return () => { ytext.unobserve(parse); };
+  }, [ydoc]);
+
   // Derive platform URL from the original (unprefixed) path
   const folderName = path ? getFolderNameFromPath(path, folderNames) : null;
   const originalPath = path && folderName ? getOriginalPath(path, folderName) : null;
-  const platformUrl = originalPath ? getPlatformUrl(originalPath) : null;
+  const platformUrl = originalPath ? getPlatformUrl(originalPath, frontmatterSlug) : null;
 
   if (!path) return null;
 

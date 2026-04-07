@@ -14,9 +14,25 @@ describe('getPlatformUrl', () => {
     );
   });
 
-  test('returns module URL for files in /modules/', () => {
-    expect(getPlatformUrl('/modules/Intro to Physics.md')).toBe(
+  test('returns module URL when frontmatter slug is provided', () => {
+    expect(getPlatformUrl('/modules/Intro to Physics.md', 'intro-to-physics')).toBe(
       'https://staging.lensacademy.org/module/intro-to-physics'
+    );
+  });
+
+  test('returns null for modules without frontmatter slug', () => {
+    expect(getPlatformUrl('/modules/Intro to Physics.md')).toBeNull();
+  });
+
+  test('articles ignore frontmatter slug and use filename', () => {
+    expect(getPlatformUrl('/articles/My Article.md', 'ignored-slug')).toBe(
+      'https://staging.lensacademy.org/article/my-article'
+    );
+  });
+
+  test('lenses ignore frontmatter slug and use filename', () => {
+    expect(getPlatformUrl('/Lenses/Some Lens.md', 'ignored-slug')).toBe(
+      'https://staging.lensacademy.org/lens/some-lens'
     );
   });
 
@@ -41,8 +57,8 @@ describe('getPlatformUrl', () => {
   });
 
   test('collapses multiple spaces/hyphens into single hyphen', () => {
-    expect(getPlatformUrl('/modules/Some  --  Module.md')).toBe(
-      'https://staging.lensacademy.org/module/some-module'
+    expect(getPlatformUrl('/Lenses/Some  --  Lens.md')).toBe(
+      'https://staging.lensacademy.org/lens/some-lens'
     );
   });
 

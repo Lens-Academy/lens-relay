@@ -24,17 +24,25 @@ function fileNameToSlug(fileName: string): string {
 
 /**
  * Derive the Lens Platform URL for a relay document path.
+ * Articles and lenses derive slugs from filenames.
+ * Modules require an explicit frontmatter slug — returns null without one.
+ *
  * @param originalPath - The path within the relay folder (e.g., "/articles/My Article.md")
+ * @param frontmatterSlug - Optional slug from the document's YAML frontmatter (used for modules)
  * @returns Platform URL or null if the path doesn't map to a known content type
  */
-export function getPlatformUrl(originalPath: string): string | null {
-  // Path format: /folder/rest... — extract the first segment
+export function getPlatformUrl(originalPath: string, frontmatterSlug?: string): string | null {
   const segments = originalPath.split('/').filter(Boolean);
   if (segments.length < 2) return null;
 
   const folder = segments[0];
   const urlPrefix = CONTENT_TYPE_MAP[folder];
   if (!urlPrefix) return null;
+
+  if (folder === 'modules') {
+    if (!frontmatterSlug) return null;
+    return `${PLATFORM_BASE}/${urlPrefix}/${frontmatterSlug}`;
+  }
 
   const slug = fileNameToSlug(segments[segments.length - 1]);
   return `${PLATFORM_BASE}/${urlPrefix}/${slug}`;
