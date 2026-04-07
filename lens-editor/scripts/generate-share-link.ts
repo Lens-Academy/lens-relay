@@ -31,7 +31,7 @@ Options:
   --folder <id>               Folder ID (required unless --all-folders)
   --all-folders               Grant access to all folders
   --purpose <share|add-video>  Token purpose (default: "share")
-  --expires <duration>         Token lifetime: e.g. "24h", "7d", "2w" (default: "7d")
+  --expires <duration>         Token lifetime: e.g. "24h", "7d", "2w" (default: "14d")
   --base-url <url>            Base URL for the editor (default: http://localhost:5173)
 
 Examples:
@@ -57,7 +57,7 @@ const role = getArg('--role') as UserRole | undefined;
 const allFolders = args.includes('--all-folders');
 const folder = allFolders ? ALL_FOLDERS_SENTINEL : getArg('--folder');
 const purpose = (getArg('--purpose') || 'share') as 'share' | 'add-video';
-const expires = getArg('--expires') || '7d';
+const expires = getArg('--expires') || '14d';
 const baseUrl = getArg('--base-url') || 'http://localhost:5173';
 
 if (!role || !['edit', 'suggest', 'view'].includes(role)) {

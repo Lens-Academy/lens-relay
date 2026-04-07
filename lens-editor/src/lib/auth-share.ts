@@ -27,6 +27,7 @@ export function stripShareTokenFromUrl(): void {
   window.history.replaceState({}, '', url.pathname + url.search + url.hash);
 }
 
+const BYTE_TO_PURPOSE: Record<number, string> = { 0: 'share', 1: 'add-video' };
 const BYTE_TO_ROLE: Record<number, UserRole> = { 1: 'edit', 2: 'suggest', 3: 'view' };
 
 /** base64url decode to Uint8Array (browser-compatible, no Buffer) */
@@ -40,32 +41,47 @@ function base64urlToBytes(str: string): Uint8Array {
 }
 
 /**
- * Decode the role from a compact binary share token (no signature verification).
- * Token format: base64url(role:1 + uuid:16 + expiry:4 + hmac:8)
- * Role is the first byte: 1=edit, 2=suggest, 3=view.
+ * Decode the purpose from a compact binary share token (no signature verification).
+ * Token format: base64url(purpose:1 + role:1 + uuid:16 + expiry:4 + hmac:8)
+ * Purpose is byte 0: 0='share', 1='add-video'.
  */
+export function decodePurposeFromToken(token: string): string | null {
+  try {
+    const bytes = base64urlToBytes(token);
+    if (bytes.length < 1) return null;
+    return BYTE_TO_PURPOSE[bytes[0]] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Check if a compact binary share token has expired.
- * Token format: base64url(role:1 + uuid:16 + expiry:4 + hmac:8)
- * Expiry is a big-endian uint32 at byte offset 17.
+ * Token format: base64url(purpose:1 + role:1 + uuid:16 + expiry:4 + hmac:8)
+ * Expiry is a big-endian uint32 at byte offset 18.
  */
 export function isTokenExpired(token: string): boolean {
   try {
     const bytes = base64urlToBytes(token);
-    if (bytes.length < 21) return true; // too short to contain expiry
+    if (bytes.length < 22) return true; // too short to contain expiry
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const expiry = view.getUint32(17, false); // big-endian
+    const expiry = view.getUint32(18, false); // big-endian
     return expiry < Math.floor(Date.now() / 1000);
   } catch {
     return true; // malformed → treat as expired
   }
 }
 
+/**
+ * Decode the role from a compact binary share token (no signature verification).
+ * Token format: base64url(purpose:1 + role:1 + uuid:16 + expiry:4 + hmac:8)
+ * Role is byte 1: 1=edit, 2=suggest, 3=view.
+ */
 export function decodeRoleFromToken(token: string): UserRole | null {
   try {
     const bytes = base64urlToBytes(token);
-    if (bytes.length < 1) return null;
-    return BYTE_TO_ROLE[bytes[0]] ?? null;
+    if (bytes.length < 2) return null;
+    return BYTE_TO_ROLE[bytes[1]] ?? null;
   } catch {
     return null;
   }
@@ -75,14 +91,14 @@ const ALL_FOLDERS_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
 /**
  * Decode the folder UUID from a compact binary share token (no signature verification).
- * Token format: base64url(role:1 + uuid:16 + expiry:4 + hmac:8)
- * UUID is bytes 1-16.
+ * Token format: base64url(purpose:1 + role:1 + uuid:16 + expiry:4 + hmac:8)
+ * UUID is bytes 2-17.
  */
 export function decodeFolderFromToken(token: string): string | null {
   try {
     const bytes = base64urlToBytes(token);
-    if (bytes.length < 17) return null;
-    const hex = Array.from(bytes.slice(1, 17))
+    if (bytes.length < 18) return null;
+    const hex = Array.from(bytes.slice(2, 18))
       .map(b => b.toString(16).padStart(2, '0'))
       .join('');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
