@@ -1,18 +1,19 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-import type { Job, VideoPayload } from './types';
-import { extractWords, toPlainText, flattenToWords } from './transcript';
-import { alignWords } from './alignment';
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import type { Job, VideoPayload } from "./types";
+import { extractWords, toPlainText, flattenToWords } from "./transcript";
+import { alignWords } from "./alignment";
 import {
   generateMarkdown,
   generateTimestampsJson,
   generateFilenameBase,
-} from './export';
-import { runClaude } from './claude';
-import { createRelayDoc, updateRelayDoc } from './relay-docs';
+} from "./export";
+import { runClaude } from "./claude";
+import { createRelayDoc, updateRelayDoc } from "./relay-docs";
 
-const WORK_BASE = '/tmp/transcripts';
-const RELAY_FOLDER = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
+const WORK_BASE = "/tmp/transcripts";
+const RELAY_FOLDER =
+  process.env.RELAY_TRANSCRIPT_FOLDER || "Lens Edu/video_transcripts";
 const TIMEOUT_MS = 1_200_000; // 20 minutes
 
 /**
@@ -35,15 +36,16 @@ function estimateProcessingTime(wordCount: number): number {
 }
 
 export async function processVideo(
-  job: Job & { payload: VideoPayload }
+  job: Job & { payload: VideoPayload },
 ): Promise<void> {
   const workDir = path.join(WORK_BASE, job.id);
-  const filenameBase = generateFilenameBase(job.channel, job.title, job.video_id);
+  const filenameBase = generateFilenameBase(job.channel, job.title);
   const mdPath = `${RELAY_FOLDER}/${filenameBase}.md`;
   const jsonPath = `${RELAY_FOLDER}/${filenameBase}.timestamps.json`;
 
   // Set relay_url to a resolvable editor URL
-  const editorBase = process.env.EDITOR_BASE_URL || 'https://editor.lensacademy.org';
+  const editorBase =
+    process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
   job.relay_url = `${editorBase}/open/${encodeURI(mdPath)}`;
 
   try {
@@ -51,11 +53,11 @@ export async function processVideo(
     // 1. Create work directory and write raw files
     await fs.mkdir(workDir, { recursive: true });
     await fs.writeFile(
-      path.join(workDir, 'raw.json'),
-      JSON.stringify(job.payload.transcript_raw, null, 2)
+      path.join(workDir, "raw.json"),
+      JSON.stringify(job.payload.transcript_raw, null, 2),
     );
     const plainText = toPlainText(job.payload.transcript_raw);
-    await fs.writeFile(path.join(workDir, 'raw.txt'), plainText);
+    await fs.writeFile(path.join(workDir, "raw.txt"), plainText);
 
     // 2. Create placeholder doc in Relay with time estimate
     const wordCount = plainText.split(/\s+/).length;
@@ -68,12 +70,11 @@ export async function processVideo(
       `If you submitted multiple videos, they share a pool of 3 concurrent sessions and will be processed as capacity allows.`,
       ``,
       `Queued at: ${new Date(job.created_at).toLocaleString()}`,
-    ].join('\n');
+    ].join("\n");
     const placeholderContent = generateMarkdown({
       title: job.title,
       channel: job.channel,
       url: job.url,
-      video_id: job.video_id,
       body: placeholderBody,
     });
     await createRelayDoc(mdPath, placeholderContent);
@@ -83,21 +84,21 @@ export async function processVideo(
     const result = await runClaude(workDir, TIMEOUT_MS);
     if (result.exitCode !== 0) {
       throw new Error(
-        `Claude exited with code ${result.exitCode}: ${result.stderr.slice(0, 500)}`
+        `Claude exited with code ${result.exitCode}: ${result.stderr.slice(0, 500)}`,
       );
     }
 
     console.log(`[add-video] Claude finished (exit ${result.exitCode})`);
     // 4. Read corrected text
     const correctedText = await fs.readFile(
-      path.join(workDir, 'corrected.txt'),
-      'utf-8'
+      path.join(workDir, "corrected.txt"),
+      "utf-8",
     );
 
     // 5. Align timestamps
     // Flatten multi-word entries (sentence-level) into individual words for alignment
     const originalWords = flattenToWords(
-      extractWords(job.payload.transcript_raw)
+      extractWords(job.payload.transcript_raw),
     );
     const correctedWords = correctedText.trim().split(/\s+/);
     const aligned = alignWords(originalWords, correctedWords);
@@ -107,7 +108,6 @@ export async function processVideo(
       title: job.title,
       channel: job.channel,
       url: job.url,
-      video_id: job.video_id,
       body: correctedText.trim(),
     });
     const timestamps = generateTimestampsJson(aligned);
@@ -123,10 +123,9 @@ export async function processVideo(
       title: job.title,
       channel: job.channel,
       url: job.url,
-      video_id: job.video_id,
       body: `*Transcript processing failed.* You can resubmit this video from the Add Video page.\n\nFailed at: ${new Date().toISOString()}`,
     });
-    await updateRelayDoc(mdPath, '', failedContent).catch(() => {});
+    await updateRelayDoc(mdPath, "", failedContent).catch(() => {});
     throw err;
   } finally {
     // 9. Clean up work directory

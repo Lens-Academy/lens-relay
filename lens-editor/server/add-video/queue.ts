@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import type { Job, VideoPayload } from './types';
-import { generateFilenameBase } from './export';
+import { randomUUID } from "node:crypto";
+import type { Job, VideoPayload } from "./types";
+import { generateFilenameBase } from "./export";
 
 interface QueueOptions {
   processJob: (job: Job & { payload: VideoPayload }) => Promise<void>;
@@ -10,7 +10,7 @@ export class JobQueue {
   private jobs: Map<string, Job & { payload: VideoPayload }> = new Map();
   private pending: string[] = [];
   private activeCount = 0;
-  private processJob: QueueOptions['processJob'];
+  private processJob: QueueOptions["processJob"];
 
   constructor(options: QueueOptions) {
     this.processJob = options.processJob;
@@ -19,9 +19,11 @@ export class JobQueue {
   add(payload: VideoPayload): Job {
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
-    const editorBase = process.env.EDITOR_BASE_URL || 'https://editor.lensacademy.org';
-    const relayFolder = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
-    const filenameBase = generateFilenameBase(payload.channel, payload.title, payload.video_id);
+    const editorBase =
+      process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
+    const relayFolder =
+      process.env.RELAY_TRANSCRIPT_FOLDER || "Lens Edu/video_transcripts";
+    const filenameBase = generateFilenameBase(payload.channel, payload.title);
     const mdPath = `${relayFolder}/${filenameBase}.md`;
 
     const job: Job & { payload: VideoPayload } = {
@@ -31,7 +33,7 @@ export class JobQueue {
       channel: payload.channel,
       url: payload.url,
       transcript_type: payload.transcript_type,
-      status: 'queued',
+      status: "queued",
       relay_url: `${editorBase}/open/${encodeURI(mdPath)}`,
       created_at: now,
       updated_at: now,
@@ -50,9 +52,7 @@ export class JobQueue {
   }
 
   status(): Job[] {
-    return Array.from(this.jobs.values()).map(
-      ({ payload: _, ...job }) => job
-    );
+    return Array.from(this.jobs.values()).map(({ payload: _, ...job }) => job);
   }
 
   /** Number of jobs currently processing */
@@ -73,7 +73,7 @@ export class JobQueue {
       const id = this.pending.shift()!;
       const job = this.jobs.get(id)!;
 
-      job.status = 'processing';
+      job.status = "processing";
       job.updated_at = new Date().toISOString();
       this.activeCount++;
 
@@ -84,17 +84,19 @@ export class JobQueue {
     }
   }
 
-  private async runJob(
-    job: Job & { payload: VideoPayload }
-  ): Promise<void> {
+  private async runJob(job: Job & { payload: VideoPayload }): Promise<void> {
     try {
       await this.processJob(job);
-      job.status = 'done';
-      console.log(`[add-video] Job ${job.id} done: "${job.title}" (${job.video_id})`);
+      job.status = "done";
+      console.log(
+        `[add-video] Job ${job.id} done: "${job.title}" (${job.video_id})`,
+      );
     } catch (err) {
-      job.status = 'failed';
+      job.status = "failed";
       job.error = err instanceof Error ? err.message : String(err);
-      console.error(`[add-video] Job ${job.id} failed: "${job.title}" (${job.video_id})`);
+      console.error(
+        `[add-video] Job ${job.id} failed: "${job.title}" (${job.video_id})`,
+      );
       console.error(`[add-video]   Error: ${job.error}`);
     }
     job.updated_at = new Date().toISOString();
