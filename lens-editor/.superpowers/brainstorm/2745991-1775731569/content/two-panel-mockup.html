@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lens Edu Editor — Two Panel Layout</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f1f5f9; color: #1e293b; }
+
+  .top-bar {
+    background: #1e293b; color: white; padding: 8px 20px;
+    display: flex; align-items: center; gap: 12px; font-size: 13px;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .top-bar .breadcrumb { color: #94a3b8; }
+  .top-bar .breadcrumb span { color: white; font-weight: 600; }
+
+  .panels {
+    display: flex; height: calc(100vh - 36px); overflow: hidden;
+  }
+
+  .panel {
+    overflow-y: auto; padding: 16px;
+  }
+  .panel-left {
+    width: 38%; border-right: 2px solid #e2e8f0; background: #ffffff;
+  }
+  .panel-right {
+    width: 62%; background: #fafbfc;
+  }
+
+  .panel-header {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px;
+    color: #64748b; font-weight: 600; margin-bottom: 12px;
+    padding-bottom: 8px; border-bottom: 1px solid #e2e8f0;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel-header .doc-badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 3px;
+    text-transform: none; letter-spacing: 0; font-weight: 500;
+  }
+
+  /* Section cards */
+  .section-card {
+    padding: 10px 14px; margin-bottom: 6px; border-radius: 6px;
+    border: 1px solid #e2e8f0; background: white; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .section-card:hover { border-color: #93c5fd; background: #f8fafc; }
+  .section-card.active { border-color: #3b82f6; border-width: 2px; background: #eff6ff; }
+
+  .badge {
+    font-size: 10px; padding: 2px 7px; border-radius: 3px;
+    font-weight: 600; display: inline-block; margin-bottom: 4px;
+  }
+  .badge-module { background: #f3e8ff; color: #7c3aed; }
+  .badge-lo { background: #fef3c7; color: #92400e; }
+  .badge-lens-ref { background: #dbeafe; color: #1e40af; }
+  .badge-text { background: #e0e7ff; color: #3730a3; }
+  .badge-chat { background: #dcfce7; color: #166534; }
+  .badge-excerpt { background: #fef3c7; color: #92400e; }
+  .badge-test { background: #fee2e2; color: #991b1b; }
+  .badge-frontmatter { background: #f1f5f9; color: #475569; }
+
+  .section-label { font-size: 13px; font-weight: 500; color: #334155; }
+  .section-preview { font-size: 12px; color: #64748b; margin-top: 4px; line-height: 1.5; }
+  .section-meta { font-size: 11px; color: #94a3b8; margin-top: 3px; font-family: monospace; }
+
+  /* Nesting for LOs under module */
+  .nested { margin-left: 16px; border-left: 2px solid #e2e8f0; padding-left: 12px; }
+  .nested-2 { margin-left: 16px; border-left: 2px solid #fde68a; padding-left: 12px; }
+
+  /* LO block */
+  .lo-block {
+    margin-bottom: 12px; padding: 10px 14px;
+    border-radius: 6px; border: 1px solid #fde68a; background: #fffef5;
+  }
+  .lo-block.active { border-color: #f59e0b; border-width: 2px; }
+
+  .lo-title { font-size: 12px; font-weight: 600; color: #92400e; margin-bottom: 6px; }
+  .lo-text { font-size: 12px; color: #78716c; line-height: 1.5; font-style: italic; }
+
+  /* Lens reference in LO */
+  .lens-ref {
+    padding: 6px 10px; margin-top: 6px; border-radius: 4px;
+    border: 1px solid #bfdbfe; background: #eff6ff; cursor: pointer;
+    display: flex; align-items: center; gap: 6px; transition: all 0.15s;
+  }
+  .lens-ref:hover { border-color: #3b82f6; background: #dbeafe; }
+  .lens-ref.active { border-color: #3b82f6; border-width: 2px; background: #dbeafe; }
+  .lens-ref-name { font-size: 12px; color: #1e40af; font-weight: 500; }
+  .lens-ref-arrow { color: #93c5fd; font-size: 14px; margin-left: auto; }
+
+  /* Right panel: lens content */
+  .lens-header {
+    padding: 14px 16px; background: white; border-radius: 8px;
+    border: 1px solid #e2e8f0; margin-bottom: 12px;
+  }
+  .lens-title { font-size: 15px; font-weight: 600; color: #1e293b; }
+  .lens-tldr { font-size: 12px; color: #64748b; margin-top: 6px; line-height: 1.5;
+    background: #f8fafc; padding: 8px 10px; border-radius: 4px; border-left: 3px solid #3b82f6; }
+
+  .lens-section {
+    padding: 12px 16px; background: white; border-radius: 8px;
+    border: 1px solid #e2e8f0; margin-bottom: 8px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .lens-section:hover { border-color: #93c5fd; }
+
+  /* Expanded article excerpt */
+  .excerpt-expanded {
+    background: white; border-radius: 8px; border: 1px solid #fde68a;
+    margin-bottom: 8px; overflow: hidden;
+  }
+  .excerpt-header {
+    padding: 12px 16px; border-bottom: 1px solid #fef3c7; background: #fffef5;
+  }
+  .excerpt-meta {
+    font-size: 11px; color: #92400e; font-family: monospace;
+    background: #fef9c3; padding: 6px 8px; border-radius: 4px; margin-top: 6px;
+  }
+  .article-inline {
+    padding: 12px 16px;
+  }
+  .article-inline-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: #92400e; font-weight: 600; margin-bottom: 8px;
+  }
+  .article-context {
+    font-size: 12px; color: #b0b0b0; line-height: 1.7; padding: 6px 0;
+  }
+  .article-highlight {
+    font-size: 13px; color: #1e293b; line-height: 1.7;
+    padding: 10px 12px; background: #fef9c3; border-left: 3px solid #eab308;
+    border-radius: 0 6px 6px 0; margin: 6px 0;
+  }
+
+  /* Empty state */
+  .empty-state {
+    display: flex; align-items: center; justify-content: center;
+    height: 200px; color: #94a3b8; font-size: 13px;
+    border: 2px dashed #e2e8f0; border-radius: 8px;
+  }
+
+  /* Divider label */
+  .divider-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px;
+    color: #94a3b8; margin: 12px 0 8px 0; font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="breadcrumb">Course: IABIED Book Club &rsaquo; <span>Module: Feedback Loops</span></div>
+</div>
+
+<div class="panels">
+  <!-- LEFT PANEL: Module + Learning Outcomes -->
+  <div class="panel panel-left">
+    <div class="panel-header">
+      <span>Module Structure</span>
+      <span class="doc-badge" style="background:#f3e8ff;color:#7c3aed;">feedback-loops.md</span>
+    </div>
+
+    <!-- Module frontmatter -->
+    <div class="section-card" style="opacity: 0.7;">
+      <span class="badge badge-frontmatter">frontmatter</span>
+      <div class="section-meta">slug: feedback-loops &bull; id: 393739ba...</div>
+    </div>
+
+    <!-- Page: Welcome -->
+    <div class="section-card">
+      <span class="badge badge-module">Page</span>
+      <div class="section-label">Welcome</div>
+    </div>
+
+    <!-- Text section -->
+    <div class="nested">
+      <div class="section-card">
+        <span class="badge badge-text">Text</span>
+        <div class="section-preview">Much of the world is dominated by positive feedback loops. The first bit of grain that was left over and got re-planted sparked the agricultural revolution...</div>
+      </div>
+    </div>
+
+    <!-- LO 1: Feedback cycles create discontinuity -->
+    <div class="lo-block active">
+      <div class="lo-title">Learning Outcome</div>
+      <div class="lo-text">(no learning-outcome text defined)</div>
+
+      <div class="divider-label">Test</div>
+      <div class="section-card" style="margin-bottom: 4px;">
+        <span class="badge badge-test">Test</span>
+        <div class="section-preview" style="color: #94a3b8; font-style: italic;">(empty)</div>
+      </div>
+
+      <div class="divider-label">Lenses</div>
+      <div class="lens-ref active">
+        <span class="badge badge-lens-ref" style="margin: 0;">Lens</span>
+        <span class="lens-ref-name">Cascades and Cycles</span>
+        <span class="lens-ref-arrow">&rarr;</span>
+      </div>
+      <div class="lens-ref" style="margin-top: 4px;">
+        <span class="badge badge-lens-ref" style="margin: 0;">Lens</span>
+        <span class="lens-ref-name">Speculations concerning the first ultraintelligent machine</span>
+        <span class="lens-ref-arrow">&rarr;</span>
+      </div>
+    </div>
+
+    <!-- LO 2: Fizzle or Foom -->
+    <div class="lo-block">
+      <div class="lo-title">Learning Outcome</div>
+      <div class="lo-text">(no learning-outcome text defined)</div>
+
+      <div class="divider-label">Test</div>
+      <div class="section-card" style="margin-bottom: 4px;">
+        <span class="badge badge-test">Test</span>
+        <div class="section-preview" style="color: #94a3b8; font-style: italic;">(empty)</div>
+      </div>
+
+      <div class="divider-label">Lenses</div>
+      <div class="lens-ref">
+        <span class="badge badge-lens-ref" style="margin: 0;">Lens</span>
+        <span class="lens-ref-name">Singularity, intelligence explosion, and hard takeoff</span>
+        <span class="lens-ref-arrow">&rarr;</span>
+      </div>
+      <div class="lens-ref" style="margin-top: 4px;">
+        <span class="badge badge-lens-ref" style="margin: 0;">Lens</span>
+        <span class="lens-ref-name">Recursion Magic</span>
+        <span class="lens-ref-arrow">&rarr;</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL: Lens content (Cascades and Cycles selected) -->
+  <div class="panel panel-right">
+    <div class="panel-header">
+      <span>Lens Content</span>
+      <span class="doc-badge" style="background:#dbeafe;color:#1e40af;">Cascades and Cycles.md</span>
+    </div>
+
+    <!-- Lens header -->
+    <div class="lens-header">
+      <div class="lens-title">Cascades, Cycles, Insight...</div>
+      <div class="lens-tldr">Writing didn't just help us keep records — it triggered a wave of civilizational breakthroughs, each one making the next more likely. A single neutron can split an atom, releasing neutrons that split more. This article introduces two patterns of positive feedback and asks whether intelligence could work the same way.</div>
+    </div>
+
+    <!-- Article reference -->
+    <div class="lens-section" style="border-left: 3px solid #f59e0b;">
+      <span class="badge badge-excerpt">Article</span>
+      <div class="section-label">yudkowsky-cascades-cycles-insight</div>
+      <div class="section-meta">source:: [[../articles/yudkowsky-cascades-cycles-insight]]</div>
+    </div>
+
+    <!-- Text section -->
+    <div class="lens-section">
+      <span class="badge badge-text">Text</span>
+      <div class="section-preview">Cybernetics is the study of systems whose output is used as their input: Successful investment produces funds which can then be invested again. There are negative feedback systems which hold themselves in equilibrium and positive feedback systems which multiply their output at each step...</div>
+    </div>
+
+    <!-- Article-excerpt EXPANDED -->
+    <div class="excerpt-expanded">
+      <div class="excerpt-header">
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span class="badge badge-excerpt" style="margin:0;">Article-excerpt</span>
+          <span style="font-size: 12px; color: #64748b;">from article</span>
+          <span style="font-size: 11px; color: #94a3b8; margin-left: auto; cursor: pointer;">collapse &uarr;</span>
+        </div>
+        <div class="excerpt-meta">
+          from:: "Cascades are when"<br>
+          to:: "neutron multiplication factor?_"
+        </div>
+      </div>
+      <div class="article-inline">
+        <div class="article-inline-label">Article: yudkowsky-cascades-cycles-insight</div>
+        <div class="article-context">...The importance of this extended metaphor will become clear shortly...</div>
+        <div class="article-highlight">
+          <strong>Cascades are when</strong> one development leads probabilistically to another development in a related field. The development of writing led to the development of mathematics, astronomy, and systematic law — each of which, in turn, opened up further possibilities. A cascade doesn't require that the original cause be recycled; it just means that breakthroughs make other breakthroughs more likely.<br><br>
+          ...<br><br>
+          A cycle, by contrast, is a process that produces some excess of a quantity that can be fed back into the same process. The canonical example is neutron multiplication in fissile materials: each fission event releases neutrons that can trigger further fissions. The key parameter is the <em>neutron multiplication factor?</em>
+        </div>
+        <div class="article-context">...Good provides an extremely thought-provoking analysis of what would happen if...</div>
+      </div>
+    </div>
+
+    <!-- Text section (discussion question) -->
+    <div class="lens-section">
+      <span class="badge badge-text">Text</span>
+      <div class="section-preview">What are the properties that make something a cycle rather than a cascade? Can you think of cycles that could form with regards to general intelligence?</div>
+    </div>
+
+    <!-- Chat section -->
+    <div class="lens-section">
+      <span class="badge badge-chat">Chat</span>
+      <div class="section-label">Discussion on Cycles</div>
+      <div class="section-preview" style="font-style: italic;">instructions:: TLDR of what the user just read: An article that explains positive feedback loops especially with regards to civilisational competence...</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

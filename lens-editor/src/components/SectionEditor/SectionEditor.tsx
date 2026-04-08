@@ -1,14 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { EditorView } from 'codemirror';
-import { keymap, drawSelection } from '@codemirror/view';
-import { EditorState } from '@codemirror/state';
-import { defaultKeymap } from '@codemirror/commands';
-import { indentUnit, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import type { EditorView } from 'codemirror';
 import { useYDoc, useYjsProvider } from '@y-sweet/react';
 import { parseSections } from './parseSections';
-import { ySectionSync, ySectionUndoManagerKeymap } from './y-section-sync';
-import { remoteCursorTheme } from '../Editor/remoteCursorTheme';
+import { createSectionEditorView } from './createSectionEditorView';
 import { SectionCard } from './SectionCard';
 
 interface SectionEditorProps {
@@ -62,40 +56,11 @@ export function SectionEditor({ onOpenInEditor }: SectionEditorProps) {
     const section = currentSections[activeIndex];
     if (!section) return;
 
-    // Trim trailing newlines so CM doesn't show an empty editable line
-    // that would allow typing at the start of the next section's header
-    const fullText = ytext.toString();
-    let editTo = section.to;
-    while (editTo > section.from && fullText[editTo - 1] === '\n') {
-      editTo--;
-    }
-    const sectionText = fullText.slice(section.from, editTo);
-
-    const view = new EditorView({
-      state: EditorState.create({
-        doc: sectionText,
-        extensions: [
-          indentUnit.of('\t'),
-          EditorState.tabSize.of(4),
-          drawSelection(),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-          ySectionUndoManagerKeymap,
-          keymap.of(defaultKeymap),
-          markdown({ base: markdownLanguage, addKeymap: false }),
-          ySectionSync(ytext, section.from, editTo, { awareness: provider.awareness }),
-          remoteCursorTheme,
-          EditorView.lineWrapping,
-          EditorView.theme({
-            '&': { fontSize: '14px', outline: 'none' },
-            '&.cm-focused': { outline: 'none' },
-            '.cm-scroller': {
-              fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-            },
-            '.cm-content': { padding: '12px 16px' },
-            '.cm-gutters': { display: 'none' },
-          }),
-        ],
-      }),
+    const view = createSectionEditorView({
+      ytext,
+      sectionFrom: section.from,
+      sectionTo: section.to,
+      awareness: provider.awareness,
       parent: mountRef.current,
     });
 

@@ -89,6 +89,30 @@ describe('y-section-sync', () => {
       // X should appear at Y.Text pos 6 (before the \n\n)
       expect(ytext.toString()).toBe('AAABBBX\n\nCCC');
     });
+
+    it('replace in CM maps to correct Y.Text range', () => {
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      // Replace "BB" (CM pos 0..2) with "XYZ"
+      view.dispatch({ changes: { from: 0, to: 2, insert: 'XYZ' } });
+      expect(ytext.toString()).toBe('AAAXYZBCCC');
+    });
+
+    it('multi-change CM transaction applies both changes at correct Y.Text positions', () => {
+      // "AAABBBCCC" section [3,6) = "BBB"
+      // Replace B at CM pos 0 with X, and B at CM pos 2 with Y (two disjoint changes)
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+
+      view.dispatch({
+        changes: [
+          { from: 0, to: 1, insert: 'X' },
+          { from: 2, to: 3, insert: 'Y' },
+        ],
+      });
+
+      // Both substitutions should land at correct absolute positions
+      expect(ytext.toString()).toBe('AAAXBYCCC');
+      expect(view.state.doc.toString()).toBe('XBY');
+    });
   });
 
   describe('Y.Text → CM', () => {
@@ -172,9 +196,66 @@ describe('y-section-sync', () => {
       expect(conf.sectionFrom).toBe(3);
       expect(conf.sectionTo).toBe(6);
     });
+
+    it('external delete entirely within section', () => {
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      ytext.delete(4, 1); // Delete middle B → "AAABBCCC"
+      expect(view.state.doc.toString()).toBe('BB');
+      const conf = view.state.facet(ySectionSyncFacet);
+      expect(conf.sectionTo).toBe(5);
+    });
+
+    it('external delete spanning section end clips correctly', () => {
+      // "AAABBBCCC" section [3,6), delete [4,8) = "BBCC" (4 chars)
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      ytext.delete(4, 4); // Delete "BBCC"
+      // Result: "AAA" + "B" + "C" = "AAABC"
+      expect(ytext.toString()).toBe('AAABC');
+      // Only "B" (index 3 in original) remains in section, rest was deleted
+      expect(view.state.doc.toString()).toBe('B');
+    });
+
+    it('external delete entirely before section shifts offsets', () => {
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      ytext.delete(0, 2); // Delete "AA" → "ABBBCCC"
+      expect(view.state.doc.toString()).toBe('BBB');
+      const conf = view.state.facet(ySectionSyncFacet);
+      expect(conf.sectionFrom).toBe(1);
+      expect(conf.sectionTo).toBe(4);
+    });
+
+    it('external delete starting at exact sectionTo does not affect section', () => {
+      // "AAABBBCCC" section [3,6), delete starting at pos 6 (sectionTo)
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      ytext.delete(6, 2); // Delete "CC" → "AAABBBC"
+      expect(view.state.doc.toString()).toBe('BBB');
+      const conf = view.state.facet(ySectionSyncFacet);
+      expect(conf.sectionFrom).toBe(3);
+      expect(conf.sectionTo).toBe(6);
+    });
   });
 
   describe('consistency', () => {
+    it('multiple sequential CM edits maintain consistency', () => {
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      const conf = view.state.facet(ySectionSyncFacet);
+
+      // Edit 1: insert
+      view.dispatch({ changes: { from: 0, insert: 'X' } });
+      expect(ytext.toString().slice(conf.sectionFrom, conf.sectionTo))
+        .toBe(view.state.doc.toString());
+
+      // Edit 2: delete
+      view.dispatch({ changes: { from: 1, to: 3 } });
+      expect(ytext.toString().slice(conf.sectionFrom, conf.sectionTo))
+        .toBe(view.state.doc.toString());
+
+      // Edit 3: replace
+      view.dispatch({ changes: { from: 0, to: 1, insert: 'YZ' } });
+      expect(ytext.toString().slice(conf.sectionFrom, conf.sectionTo))
+        .toBe(view.state.doc.toString());
+    });
+
     it('offset consistency after interleaved local/remote edits', () => {
       const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
       const conf = view.state.facet(ySectionSyncFacet);
@@ -223,6 +304,30 @@ describe('y-section-sync', () => {
       // CM should revert
       expect(view.state.doc.toString()).toBe('BBB');
       expect(ytext.toString()).toBe('AAABBBCCC');
+    });
+
+    it('redo after undo restores content', () => {
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      const conf = view.state.facet(ySectionSyncFacet);
+
+      view.dispatch({ changes: { from: 1, insert: 'X' } });
+      expect(view.state.doc.toString()).toBe('BXBB');
+
+      conf.undoManager.undo();
+      expect(view.state.doc.toString()).toBe('BBB');
+
+      conf.undoManager.redo();
+      expect(view.state.doc.toString()).toBe('BXBB');
+      expect(ytext.toString()).toBe('AAABXBBCCC');
+    });
+
+    it('undo with empty stack is a no-op', () => {
+      const { view } = tracked(setup('AAABBBCCC', 3, 6));
+      const conf = view.state.facet(ySectionSyncFacet);
+
+      const result = conf.undoManager.undo();
+      expect(result).toBeNull();
+      expect(view.state.doc.toString()).toBe('BBB');
     });
   });
 });

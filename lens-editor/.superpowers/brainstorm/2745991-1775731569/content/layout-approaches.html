@@ -1,0 +1,36 @@
+<h2>Lens Editor: Layout Approaches</h2>
+<p class="subtitle">Two-panel power-user layout for reviewing/editing lenses alongside source articles</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Fixed Split: Lens | Article</h3>
+      <p>Left panel shows the lens document sections (Text, Chat, Article-excerpt) as editable cards. Right panel shows the full source article with the excerpt range highlighted. Panels are independent scrollable columns with a draggable divider.</p>
+      <p><strong>Pros:</strong> Simple mental model. Both always visible. Easy to cross-reference.</p>
+      <p><strong>Cons:</strong> When a lens references multiple articles, you'd need to switch the right panel or open tabs.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Contextual Split: Sections drive the right panel</h3>
+      <p>Left panel shows lens sections as a vertical list. When you click/focus an Article-excerpt section, the right panel loads that specific article with the excerpt highlighted. When you focus a Text or Chat section, the right panel shows a preview or stays on the last article. The right panel is <em>reactive</em> to left-panel focus.</p>
+      <p><strong>Pros:</strong> Automatically shows the right context. Handles multi-article lenses naturally.</p>
+      <p><strong>Cons:</strong> Right panel content shifts as you navigate — could be disorienting.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Inline Expansion: Article embedded under excerpt</h3>
+      <p>Single-column view. Each lens section is a card. Article-excerpt cards expand inline to show the referenced article text below the excerpt metadata, with the excerpt range highlighted. No separate panel — the article content is <em>nested</em> inside the lens flow.</p>
+      <p><strong>Pros:</strong> No panel management. Content flows naturally. Works well on smaller screens.</p>
+      <p><strong>Cons:</strong> Can't see article and distant lens section simultaneously. Less "power user" feel.</p>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top: 2rem;">My recommendation: <strong>B (Contextual Split)</strong> — it handles the multi-article case cleanly and keeps both the lens structure and source content visible at all times. The reactive right panel matches how you'd naturally read: "I'm looking at this excerpt, show me where it comes from."</p>

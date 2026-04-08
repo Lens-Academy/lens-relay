@@ -1,0 +1,101 @@
+<h2>Inline Expansion: Lens Section Flow</h2>
+<p class="subtitle">Single-column layout — Article-excerpt sections expand to show source text inline</p>
+
+<div class="mockup">
+  <div class="mockup-header">Lens: AI Control</div>
+  <div class="mockup-body" style="padding: 0; background: #f8f9fa;">
+
+    <!-- Lens header / frontmatter -->
+    <div style="padding: 16px 20px; border-bottom: 1px solid #e2e8f0; background: white;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+        <span style="font-size: 11px; padding: 2px 8px; background: #dbeafe; color: #1e40af; border-radius: 4px; font-weight: 500;">lens</span>
+        <span style="font-size: 11px; color: #94a3b8;">63342128-7725-...</span>
+      </div>
+      <div style="font-size: 13px; color: #475569; line-height: 1.5; background: #f1f5f9; padding: 10px 12px; border-radius: 6px; border-left: 3px solid #3b82f6;">
+        <strong>tldr:</strong> If we can't guarantee an AI's goals align with ours, maybe we can build a cage strong enough that it doesn't matter...
+      </div>
+    </div>
+
+    <!-- Text section 1 -->
+    <div style="padding: 16px 20px; border-bottom: 1px solid #e2e8f0; background: white; cursor: pointer;" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
+      <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+        <span style="font-size: 11px; padding: 2px 8px; background: #e0e7ff; color: #3730a3; border-radius: 4px; font-weight: 500;">Text</span>
+      </div>
+      <div style="font-size: 13px; color: #334155; line-height: 1.6;">
+        This module examines methods for the safe operation of systems that we cannot yet fully align with human values. <strong>AI Control</strong> is a safety strategy that focuses on safely using potentially dangerous or misaligned AI models through rigorous monitoring and containment...
+      </div>
+    </div>
+
+    <!-- Article-excerpt section - COLLAPSED -->
+    <div style="padding: 16px 20px; border-bottom: 1px solid #e2e8f0; background: white;">
+      <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+        <span style="font-size: 11px; padding: 2px 8px; background: #fef3c7; color: #92400e; border-radius: 4px; font-weight: 500;">Article-excerpt</span>
+        <span style="font-size: 12px; color: #64748b;">from article: "carlsmith-ai-for-ai-safety"</span>
+        <span style="font-size: 11px; color: #94a3b8; margin-left: auto;">collapsed &darr;</span>
+      </div>
+      <div style="font-size: 12px; color: #64748b; font-family: monospace; background: #fffbeb; padding: 8px 10px; border-radius: 4px;">
+        from:: "*(Audio version*..."<br>
+        to:: "...a few options in this respect"
+      </div>
+    </div>
+
+    <!-- Article-excerpt section - EXPANDED -->
+    <div style="padding: 0; border-bottom: 1px solid #e2e8f0; background: white;">
+      <div style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9;">
+        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+          <span style="font-size: 11px; padding: 2px 8px; background: #fef3c7; color: #92400e; border-radius: 4px; font-weight: 500;">Article-excerpt</span>
+          <span style="font-size: 12px; color: #64748b;">from article: "carlsmith-ai-for-ai-safety"</span>
+          <span style="font-size: 11px; color: #94a3b8; margin-left: auto;">expanded &uarr;</span>
+        </div>
+        <div style="font-size: 12px; color: #64748b; font-family: monospace; background: #fffbeb; padding: 8px 10px; border-radius: 4px;">
+          from:: "2.1 A tale of two feedback loops"<br>
+          to:: "...restraint enough to hold off"
+        </div>
+      </div>
+      <!-- Expanded article content -->
+      <div style="padding: 4px 20px 16px 20px; background: #fffef5;">
+        <div style="font-size: 11px; text-transform: uppercase; color: #92400e; font-weight: 600; margin-bottom: 8px; letter-spacing: 0.5px;">Source article text (excerpt range highlighted)</div>
+        <div style="font-size: 13px; color: #94a3b8; line-height: 1.6; padding: 8px 0; border-bottom: 1px dashed #e2e8f0;">
+          ...preceding context from the article that is outside the excerpt range...
+        </div>
+        <div style="font-size: 13px; color: #1e293b; line-height: 1.6; padding: 12px; background: #fef9c3; border-left: 3px solid #eab308; border-radius: 0 6px 6px 0; margin: 8px 0;">
+          <strong style="color: #854d0e;">2.1 A tale of two feedback loops</strong><br><br>
+          There's a feedback loop between AI capabilities and AI safety. As AI gets more capable, it can help with safety research — but it also becomes harder to control. The key question is whether safety research can stay ahead of capabilities research...<br><br>
+          ...restraint enough to hold off on pushing the capability frontier when necessary).
+        </div>
+        <div style="font-size: 13px; color: #94a3b8; line-height: 1.6; padding: 8px 0;">
+          ...following context from the article that is outside the excerpt range...
+        </div>
+      </div>
+    </div>
+
+    <!-- Text section 2 (discussion question) -->
+    <div style="padding: 16px 20px; border-bottom: 1px solid #e2e8f0; background: white; cursor: pointer;" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
+      <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+        <span style="font-size: 11px; padding: 2px 8px; background: #e0e7ff; color: #3730a3; border-radius: 4px; font-weight: 500;">Text</span>
+      </div>
+      <div style="font-size: 13px; color: #334155; line-height: 1.6;">
+        Ask the AI Tutor any questions you may have:
+      </div>
+    </div>
+
+    <!-- Chat section -->
+    <div style="padding: 16px 20px; background: white; cursor: pointer;" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='white'">
+      <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
+        <span style="font-size: 11px; padding: 2px 8px; background: #dcfce7; color: #166534; border-radius: 4px; font-weight: 500;">Chat</span>
+      </div>
+      <div style="font-size: 13px; color: #64748b; line-height: 1.6; font-style: italic;">
+        instructions:: Help the user understand this article, or help them with other questions they have.
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top: 1.5rem;">Key interactions:</p>
+<ul style="font-size: 14px; color: #475569; line-height: 1.8;">
+  <li><strong>Click any section</strong> &rarr; opens inline CM editor (existing behavior from section editor)</li>
+  <li><strong>Article-excerpt toggle</strong> &rarr; expands/collapses to show source article text with excerpt range highlighted in yellow</li>
+  <li><strong>Highlighted excerpt</strong> &rarr; shown with yellow background + left border; surrounding article context shown dimmed</li>
+  <li><strong>Both excerpt metadata AND article text</strong> are editable when expanded</li>
+</ul>
