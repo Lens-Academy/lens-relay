@@ -321,6 +321,23 @@
   color: #374151;
 }
 
+/* List item with wrong indentation (must be exactly 2 spaces before dash) */
+.cm-frontmatter-bad-indent {
+  color: #dc2626;
+  text-decoration: wavy underline #dc2626;
+  text-underline-offset: 3px;
+}
+
+/* Frontmatter error tooltip */
+.cm-frontmatter-tooltip {
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+}
+
 /* Obsidian %%comment%% styling */
 .cm-obsidian-comment {
   color: #9ca3af;

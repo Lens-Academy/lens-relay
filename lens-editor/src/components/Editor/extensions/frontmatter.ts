@@ -16,8 +16,9 @@ import {
   EditorView,
   Decoration,
   WidgetType,
+  hoverTooltip,
 } from '@codemirror/view';
-import type { DecorationSet } from '@codemirror/view';
+import type { DecorationSet, Tooltip } from '@codemirror/view';
 import { StateField, StateEffect, EditorSelection } from '@codemirror/state';
 import type { StateCommand } from '@codemirror/state';
 
@@ -39,7 +40,8 @@ function detectFrontmatter(doc: { line(n: number): { from: number; to: number; t
     if (line.text.trim() === '---') {
       let keyCount = 0;
       for (let k = 2; k < ln; k++) {
-        if (/^\S+:/.test(doc.line(k).text)) keyCount++;
+        const t = doc.line(k).text;
+        if (/^\S+\s*:/.test(t) && !/^-\s/.test(t)) keyCount++;
       }
       return { from: firstLine.from, to: line.to, keyCount };
     }
@@ -241,14 +243,28 @@ const frontmatterExpandedPlugin = ViewPlugin.fromClass(
       let lastValueIndentPx = 0; // track value column for continuation lines
       for (let ln = startLine.number + 1; ln < endLine.number; ln++) {
         const line = doc.line(ln);
-        const keyMatch = line.text.match(/^(\S+):\s*/);
-        if (keyMatch) {
+        const keyMatch = line.text.match(/^(\S+)\s*:\s*/);
+        const isDashLine = /^-\s/.test(line.text); // "- foo" = misindented list item, not a key
+        if (isDashLine) {
+          if (lastValueIndentPx > 0) {
+            decos.push({
+              from: line.from, to: line.from,
+              deco: Decoration.line({
+                attributes: { style: `padding-left: ${lastValueIndentPx}px !important` },
+              }),
+            });
+          }
+          decos.push({
+            from: line.from, to: line.to,
+            deco: Decoration.mark({ class: 'cm-frontmatter-bad-indent' }),
+          });
+        } else if (keyMatch) {
           const keyLen = keyMatch[1].length;
           const colonPos = line.from + keyLen;
           const colonEnd = line.from + keyMatch[0].length;
           const keyTextPx = measureTextWidth(keyMatch[1], view.contentDOM);
           const spacerPx = Math.max(0, Math.round(targetPx - keyTextPx));
-          const colonPx = measureTextWidth(keyMatch[0].slice(keyLen), view.contentDOM);
+          const colonPx = measureTextWidth(': ', view.contentDOM);
           const wrapIndent = Math.round(targetPx + colonPx);
           lastValueIndentPx = wrapIndent;
 
@@ -282,6 +298,7 @@ const frontmatterExpandedPlugin = ViewPlugin.fromClass(
         } else if (line.text.match(/^\s/) && lastValueIndentPx > 0) {
           // Indented continuation line (YAML list items, multi-line values)
           // No text-indent — just shift the whole line to the value column
+          const badIndent = /^\s*- /.test(line.text) && !/^ {2}- /.test(line.text);
           decos.push({
             from: line.from, to: line.from,
             deco: Decoration.line({
@@ -290,7 +307,9 @@ const frontmatterExpandedPlugin = ViewPlugin.fromClass(
           });
           decos.push({
             from: line.from, to: line.to,
-            deco: Decoration.mark({ class: 'cm-frontmatter-value-continuation' }),
+            deco: Decoration.mark({
+              class: badIndent ? 'cm-frontmatter-bad-indent' : 'cm-frontmatter-value-continuation',
+            }),
           });
         } else if (line.text.length > 0) {
           lastValueIndentPx = 0;
@@ -349,7 +368,7 @@ const frontmatterSourcePlugin = ViewPlugin.fromClass(
 
 // ── Enter handler for YAML lists ─────────────────────────────────
 
-const frontmatterListContinue: StateCommand = ({ state, dispatch }) => {
+const frontmatterEnter: StateCommand = ({ state, dispatch }) => {
   const fm = state.field(frontmatterField);
   if (fm.collapsed || !fm.enabled || !fm.range) return false;
 
@@ -358,26 +377,37 @@ const frontmatterListContinue: StateCommand = ({ state, dispatch }) => {
 
   const line = state.doc.lineAt(pos);
   const listMatch = line.text.match(/^(\s+- )/);
-  if (!listMatch) return false;
 
-  const prefix = listMatch[1]; // e.g. "  - "
+  if (listMatch) {
+    const prefix = listMatch[1]; // e.g. "  - "
 
-  // Empty list item (just "  - ") — remove marker, exit list
-  if (/^\s+-\s*$/.test(line.text)) {
-    const prevLineEnd = line.from > 0 ? line.from - 1 : line.from;
+    // Empty list item (just "  - ") — remove marker, exit list
+    if (/^\s+-\s*$/.test(line.text)) {
+      const prevLineEnd = line.from > 0 ? line.from - 1 : line.from;
+      dispatch(state.update({
+        changes: { from: prevLineEnd, to: line.to, insert: '\n' },
+        selection: EditorSelection.cursor(prevLineEnd + 1),
+        scrollIntoView: true,
+        userEvent: 'input',
+      }));
+      return true;
+    }
+
+    // Continue list — insert newline + same prefix
     dispatch(state.update({
-      changes: { from: prevLineEnd, to: line.to, insert: '\n' },
-      selection: EditorSelection.cursor(prevLineEnd + 1),
+      changes: { from: pos, insert: '\n' + prefix },
+      selection: EditorSelection.cursor(pos + 1 + prefix.length),
       scrollIntoView: true,
       userEvent: 'input',
     }));
     return true;
   }
 
-  // Continue list — insert newline + same prefix
+  // Non-list line inside frontmatter — plain newline
+  // (prevents markdown Enter handler from misinterpreting frontmatter content)
   dispatch(state.update({
-    changes: { from: pos, insert: '\n' + prefix },
-    selection: EditorSelection.cursor(pos + 1 + prefix.length),
+    changes: { from: pos, insert: '\n' },
+    selection: EditorSelection.cursor(pos + 1),
     scrollIntoView: true,
     userEvent: 'input',
   }));
@@ -385,10 +415,53 @@ const frontmatterListContinue: StateCommand = ({ state, dispatch }) => {
 };
 
 export const frontmatterKeymap = [
-  { key: 'Enter' as const, run: frontmatterListContinue },
+  { key: 'Enter' as const, run: frontmatterEnter },
 ];
+
+// ── Hover tooltips for frontmatter errors ────────────────────────
+
+const frontmatterHover = hoverTooltip((view, pos): Tooltip | null => {
+  const fm = view.state.field(frontmatterField);
+  if (fm.collapsed || !fm.enabled || !fm.range) return null;
+  if (pos < fm.range.from || pos > fm.range.to) return null;
+
+  const line = view.state.doc.lineAt(pos);
+
+  // Dash at column 0 — misindented list item
+  if (/^-\s/.test(line.text)) {
+    return {
+      pos: line.from,
+      end: line.to,
+      above: true,
+      create: () => {
+        const dom = document.createElement('div');
+        dom.className = 'cm-frontmatter-tooltip';
+        dom.textContent = 'List items must be indented with 2 spaces: "  - value". This can be easier to see in source editing mode';
+        return { dom };
+      },
+    };
+  }
+
+  // Indented list item with wrong indentation
+  if (/^\s*-\s/.test(line.text) && !/^ {2}- /.test(line.text)) {
+    const spaces = line.text.match(/^(\s*)/)?.[1].length ?? 0;
+    return {
+      pos: line.from,
+      end: line.to,
+      above: true,
+      create: () => {
+        const dom = document.createElement('div');
+        dom.className = 'cm-frontmatter-tooltip';
+        dom.textContent = `List items need exactly 2 spaces before the dash (found ${spaces}). This can be easier to see in source editing mode`;
+        return { dom };
+      },
+    };
+  }
+
+  return null;
+});
 
 // ── Exports ───────────────────────────────────────────────────────
 
 export { frontmatterField, frontmatterSourcePlugin };
-export const frontmatterPlugin = [frontmatterExpandedPlugin];
+export const frontmatterPlugin = [frontmatterExpandedPlugin, frontmatterHover];
