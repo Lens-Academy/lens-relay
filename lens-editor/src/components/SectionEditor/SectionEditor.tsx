@@ -62,7 +62,14 @@ export function SectionEditor({ onOpenInEditor }: SectionEditorProps) {
     const section = currentSections[activeIndex];
     if (!section) return;
 
-    const sectionText = ytext.toString().slice(section.from, section.to);
+    // Trim trailing newlines so CM doesn't show an empty editable line
+    // that would allow typing at the start of the next section's header
+    const fullText = ytext.toString();
+    let editTo = section.to;
+    while (editTo > section.from && fullText[editTo - 1] === '\n') {
+      editTo--;
+    }
+    const sectionText = fullText.slice(section.from, editTo);
 
     const view = new EditorView({
       state: EditorState.create({
@@ -72,10 +79,10 @@ export function SectionEditor({ onOpenInEditor }: SectionEditorProps) {
           EditorState.tabSize.of(4),
           drawSelection(),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-          keymap.of(defaultKeymap),
           ySectionUndoManagerKeymap,
+          keymap.of(defaultKeymap),
           markdown({ base: markdownLanguage, addKeymap: false }),
-          ySectionSync(ytext, section.from, section.to, { awareness: provider.awareness }),
+          ySectionSync(ytext, section.from, editTo, { awareness: provider.awareness }),
           remoteCursorTheme,
           EditorView.lineWrapping,
           EditorView.theme({

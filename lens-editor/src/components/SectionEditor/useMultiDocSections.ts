@@ -72,13 +72,13 @@ export function useMultiDocSections(compoundDocIds: string[]): {
   }, [uniqueIds.join(',')]);
 
   const rebuildSections = useCallback(() => {
-    const docSectionsArr = [...docStates.entries()].map(([docId, state], i) => ({
-      docIndex: i,
+    const docSectionsArr = [...docStates.entries()].map(([docId, state]) => ({
+      docIndex: uniqueIds.indexOf(docId),
       compoundDocId: docId,
       sections: parseSections(state.ytext.toString()),
     }));
     setSections(interleaveSections(docSectionsArr));
-  }, [docStates]);
+  }, [docStates, uniqueIds.join(',')]);
 
   // Observe all Y.Texts
   useEffect(() => {

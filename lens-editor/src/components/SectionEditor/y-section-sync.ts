@@ -346,7 +346,7 @@ function sectionRedo(view: EditorView): boolean {
 }
 
 export const ySectionUndoManagerKeymap = keymap.of([
-  { key: 'Mod-z', run: sectionUndo },
-  { key: 'Mod-y', run: sectionRedo },
-  { key: 'Mod-Shift-z', run: sectionRedo },
+  { key: 'Mod-z', run: sectionUndo, preventDefault: true },
+  { key: 'Mod-y', run: sectionRedo, preventDefault: true },
+  { key: 'Mod-Shift-z', run: sectionRedo, preventDefault: true },
 ]);

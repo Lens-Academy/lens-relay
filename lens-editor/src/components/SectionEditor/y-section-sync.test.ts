@@ -3,7 +3,7 @@ import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import { ySectionSync, ySectionSyncAnnotation, ySectionSyncFacet } from './y-section-sync';
+import { ySectionSync, ySectionSyncAnnotation, ySectionSyncFacet, ySectionUndoManagerKeymap } from './y-section-sync';
 
 // Helper: create a Y.Doc with a Y.Text pre-filled with `text`,
 // and an EditorView syncing [sectionFrom, sectionTo).
@@ -74,6 +74,20 @@ describe('y-section-sync', () => {
 
       // The Y.Text should remain "AAABXBBCCC" — no feedback loop
       expect(ytext.toString()).toBe('AAABXBBCCC');
+    });
+
+    it('insert at end of trimmed section stays before trailing newlines', () => {
+      // Simulate trimmed section: "AAABBB\n\nCCC" with editTo=6 (after trimming \n\n)
+      // CM contains "AAABBB", user types at end
+      const { ytext, view } = tracked(setup('AAABBB\n\nCCC', 0, 6));
+
+      expect(view.state.doc.toString()).toBe('AAABBB');
+
+      // Insert at end of CM
+      view.dispatch({ changes: { from: 6, insert: 'X' } });
+
+      // X should appear at Y.Text pos 6 (before the \n\n)
+      expect(ytext.toString()).toBe('AAABBBX\n\nCCC');
     });
   });
 
@@ -190,6 +204,25 @@ describe('y-section-sync', () => {
       ytext.delete(conf.sectionTo + 1, 1);
       expect(ytext.toString().slice(conf.sectionFrom, conf.sectionTo))
         .toBe(view.state.doc.toString());
+    });
+  });
+
+  describe('undo/redo', () => {
+    it('undo reverts CM content after local edit', () => {
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      const conf = view.state.facet(ySectionSyncFacet);
+
+      // Type something
+      view.dispatch({ changes: { from: 1, insert: 'X' } });
+      expect(view.state.doc.toString()).toBe('BXBB');
+      expect(ytext.toString()).toBe('AAABXBBCCC');
+
+      // Undo via UndoManager
+      conf.undoManager.undo();
+
+      // CM should revert
+      expect(view.state.doc.toString()).toBe('BBB');
+      expect(ytext.toString()).toBe('AAABBBCCC');
     });
   });
 });

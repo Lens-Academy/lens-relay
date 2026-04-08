@@ -18,7 +18,7 @@ import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
-import { SectionEditor } from './components/SectionEditor';
+import { MultiDocSectionEditor } from './components/SectionEditor';
 import { useDocConnection } from './hooks/useDocConnection';
 import { applySuggestionAction } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
@@ -149,38 +149,54 @@ function DocumentNotFound() {
 }
 
 /**
- * Section editor view — reads docUuid from URL, wraps SectionEditor with RelayProvider.
+ * Multi-document section editor view — reads `+`-separated docUuids from URL.
+ * Single doc URLs still work (no `+` = array of one).
  */
-function SectionEditorView() {
+function MultiDocSectionEditorView() {
   const { docUuid } = useParams<{ docUuid: string }>();
   const { metadata } = useNavigation();
   const navigate = useNavigate();
 
-  const shortCompoundId = docUuid ? `${RELAY_ID}-${docUuid}` : '';
-  const activeDocId = useResolvedDocId(shortCompoundId, metadata);
-
   if (!docUuid) {
     return (
       <main className="flex-1 flex items-center justify-center bg-gray-50">
-        <p className="text-gray-500">Provide a document UUID: /section-editor/:docUuid</p>
+        <p className="text-gray-500">Provide document UUID(s): /section-editor/:doc1 or /section-editor/:doc1+:doc2</p>
       </main>
     );
   }
 
-  if (!activeDocId) {
+  const docUuids = docUuid.split('+');
+
+  // Resolve each UUID to a full compound doc ID
+  // Can't use useResolvedDocId in a loop (hooks rule), so resolve inline from metadata
+  const resolvedIds = docUuids.map(uuid => {
+    const shortCompoundId = `${RELAY_ID}-${uuid}`;
+    // Full-length: 73 chars (36 relay + 1 dash + 36 doc)
+    if (shortCompoundId.length >= 73) return shortCompoundId;
+    // Short: prefix match against metadata
+    const docPrefix = shortCompoundId.slice(37);
+    for (const meta of Object.values(metadata)) {
+      if (meta.id.startsWith(docPrefix)) {
+        return `${RELAY_ID}-${meta.id}`;
+      }
+    }
+    return null;
+  });
+
+  const allResolved = resolvedIds.every(id => id != null);
+
+  if (!allResolved) {
     return (
       <main className="flex-1 flex items-center justify-center bg-gray-50">
-        <div className="text-sm text-gray-500">Resolving document...</div>
+        <div className="text-sm text-gray-500">Resolving documents...</div>
       </main>
     );
   }
 
-  return (
-    <RelayProvider key={activeDocId} docId={activeDocId}>
-      <AwarenessInitializer />
-      <SectionEditor onOpenInEditor={() => navigate(`/${docUuid}`)} />
-    </RelayProvider>
-  );
+  return <MultiDocSectionEditor
+    compoundDocIds={resolvedIds as string[]}
+    onOpenInEditor={(docUuid) => navigate(`/${docUuid}`)}
+  />;
 }
 
 /**
@@ -443,7 +459,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                       ? <AddVideoPage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
-                  <Route path="/section-editor/:docUuid" element={<SectionEditorView />} />
+                  <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<DefaultLanding />} />
                 </Routes>

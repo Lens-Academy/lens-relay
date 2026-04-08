@@ -17,34 +17,55 @@ interface MultiDocSectionEditorProps {
   onOpenInEditor?: (docUuid: string) => void;
 }
 
-export function MultiDocSectionEditor({ compoundDocIds, docLabels, onOpenInEditor }: MultiDocSectionEditorProps) {
+export function MultiDocSectionEditor({ compoundDocIds, docLabels }: MultiDocSectionEditorProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const { sections, synced, docStates } = useMultiDocSections(compoundDocIds);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
+  // Snapshot the section info when user clicks — so the CM creation effect
+  // doesn't depend on `sections` (which changes on every Y.Text edit).
+  const activeSectionRef = useRef<{ compoundDocId: string; from: number; to: number } | null>(null);
+
+  const activate = useCallback((i: number) => {
+    const section = sections[i];
+    if (section) {
+      activeSectionRef.current = {
+        compoundDocId: section.compoundDocId,
+        from: section.from,
+        to: section.to,
+      };
+    }
+    setActiveIndex(i);
+  }, [sections]);
+
   // Create/destroy CM when activeIndex changes
+  // Does NOT depend on `sections` — uses activeSectionRef snapshot instead
   useEffect(() => {
     if (viewRef.current) {
       viewRef.current.destroy();
       viewRef.current = null;
     }
-    if (activeIndex === null || !mountRef.current) return;
+    if (activeIndex === null || !mountRef.current || !activeSectionRef.current) return;
 
-    const section = sections[activeIndex];
-    if (!section) return;
-
-    const state = docStates.get(section.compoundDocId);
+    const { compoundDocId, from, to } = activeSectionRef.current;
+    const state = docStates.get(compoundDocId);
     if (!state) return;
 
     const { ytext, awareness } = state;
 
     // Re-parse to get fresh offsets
     const freshSections = parseSections(ytext.toString());
-    const freshSection = freshSections.find(s => s.from === section.from && s.to === section.to);
+    const freshSection = freshSections.find(s => s.from === from && s.to === to);
     if (!freshSection) return;
 
-    const sectionText = ytext.toString().slice(freshSection.from, freshSection.to);
+    // Trim trailing newlines so CM doesn't show an empty editable line
+    const fullText = ytext.toString();
+    let editTo = freshSection.to;
+    while (editTo > freshSection.from && fullText[editTo - 1] === '\n') {
+      editTo--;
+    }
+    const sectionText = fullText.slice(freshSection.from, editTo);
 
     const view = new EditorView({
       state: EditorState.create({
@@ -54,10 +75,10 @@ export function MultiDocSectionEditor({ compoundDocIds, docLabels, onOpenInEdito
           EditorState.tabSize.of(4),
           drawSelection(),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-          keymap.of(defaultKeymap),
           ySectionUndoManagerKeymap,
+          keymap.of(defaultKeymap),
           markdown({ base: markdownLanguage, addKeymap: false }),
-          ySectionSync(ytext, freshSection.from, freshSection.to, { awareness }),
+          ySectionSync(ytext, freshSection.from, editTo, { awareness }),
           remoteCursorTheme,
           EditorView.lineWrapping,
           EditorView.theme({
@@ -81,7 +102,8 @@ export function MultiDocSectionEditor({ compoundDocIds, docLabels, onOpenInEdito
       view.destroy();
       viewRef.current = null;
     };
-  }, [activeIndex, sections, docStates]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndex]);
 
   const deactivate = useCallback(() => setActiveIndex(null), []);
 
@@ -109,7 +131,7 @@ export function MultiDocSectionEditor({ compoundDocIds, docLabels, onOpenInEdito
 
         <div className="space-y-3">
           {sections.map((section, i) => (
-            <div key={`${section.compoundDocId}-${section.from}`}>
+            <div key={`${section.compoundDocId}-${section.docIndex}-${i}`}>
               {activeIndex === i ? (
                 <div className="rounded-lg border-2 border-blue-400 bg-white overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
@@ -135,7 +157,7 @@ export function MultiDocSectionEditor({ compoundDocIds, docLabels, onOpenInEdito
               ) : (
                 <SectionCard
                   section={section}
-                  onClick={() => setActiveIndex(i)}
+                  onClick={() => activate(i)}
                   docLabel={docLabels?.[section.docIndex] ?? `Doc ${section.docIndex + 1}`}
                   docIndex={section.docIndex}
                 />
