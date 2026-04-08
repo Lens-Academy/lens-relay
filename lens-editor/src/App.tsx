@@ -177,6 +177,7 @@ function SectionEditorView() {
 
   return (
     <RelayProvider key={activeDocId} docId={activeDocId}>
+      <AwarenessInitializer />
       <SectionEditor onOpenInEditor={() => navigate(`/${docUuid}`)} />
     </RelayProvider>
   );

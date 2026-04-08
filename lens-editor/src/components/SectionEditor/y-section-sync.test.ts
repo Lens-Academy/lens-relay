@@ -1,12 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import * as Y from 'yjs';
+import { Awareness } from 'y-protocols/awareness';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { ySectionSync, ySectionSyncAnnotation, ySectionSyncFacet } from './y-section-sync';
 
 // Helper: create a Y.Doc with a Y.Text pre-filled with `text`,
 // and an EditorView syncing [sectionFrom, sectionTo).
-function setup(fullText: string, sectionFrom: number, sectionTo: number) {
+function setup(fullText: string, sectionFrom: number, sectionTo: number, opts?: { awareness?: Awareness }) {
   const ydoc = new Y.Doc();
   const ytext = ydoc.getText('contents');
   ytext.insert(0, fullText);
@@ -16,10 +17,10 @@ function setup(fullText: string, sectionFrom: number, sectionTo: number) {
   const state = EditorState.create({
     doc: sectionContent,
     extensions: [
-      ySectionSync(ytext, sectionFrom, sectionTo),
+      ySectionSync(ytext, sectionFrom, sectionTo, opts),
     ],
   });
-  const view = new EditorView({ state });
+  const view = new EditorView({ state, parent: document.body });
 
   return { ydoc, ytext, view };
 }
@@ -190,5 +191,66 @@ describe('y-section-sync', () => {
       expect(ytext.toString().slice(conf.sectionFrom, conf.sectionTo))
         .toBe(view.state.doc.toString());
     });
+  });
+});
+
+describe('y-section-sync: awareness/cursors', () => {
+  it('broadcasts local cursor position with sectionFrom offset', () => {
+    const doc = new Y.Doc();
+    const yt = doc.getText('contents');
+    yt.insert(0, 'AAABBBCCC');
+    const aw = new Awareness(doc);
+
+    const state = EditorState.create({
+      doc: 'BBB',
+      extensions: [ySectionSync(yt, 3, 6, { awareness: aw })],
+    });
+    const v = new EditorView({ state, parent: document.body });
+    views.push(v);
+
+    // Place cursor at CM position 2 and focus
+    v.focus();
+    v.dispatch({ selection: { anchor: 2 } });
+    v.dispatch({});
+
+    const localState = aw.getLocalState();
+    expect(localState).not.toBeNull();
+    expect(localState!.cursor).toBeDefined();
+
+    // Resolve anchor relative position to absolute
+    const anchor = Y.createAbsolutePositionFromRelativePosition(
+      Y.createRelativePositionFromJSON(localState!.cursor.anchor),
+      doc,
+    );
+    expect(anchor).not.toBeNull();
+    // CM pos 2 + sectionFrom 3 = Y.Text pos 5
+    expect(anchor!.index).toBe(5);
+  });
+
+  it('clears cursor when awareness cursor is set to null', () => {
+    const doc = new Y.Doc();
+    const yt = doc.getText('contents');
+    yt.insert(0, 'AAABBBCCC');
+    const aw = new Awareness(doc);
+
+    const state = EditorState.create({
+      doc: 'BBB',
+      extensions: [ySectionSync(yt, 3, 6, { awareness: aw })],
+    });
+    const v = new EditorView({ state, parent: document.body });
+    views.push(v);
+
+    // Focus and place cursor
+    v.focus();
+    v.dispatch({ selection: { anchor: 1 } });
+    v.dispatch({});
+
+    expect(aw.getLocalState()!.cursor).toBeDefined();
+
+    // Manually clear cursor (simulating blur behavior)
+    aw.setLocalStateField('cursor', null);
+
+    const localState = aw.getLocalState();
+    expect(localState!.cursor).toBeNull();
   });
 });

@@ -8,6 +8,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { useYDoc, useYjsProvider } from '@y-sweet/react';
 import { parseSections, type Section } from './parseSections';
 import { ySectionSync, ySectionUndoManagerKeymap } from './y-section-sync';
+import { remoteCursorTheme } from '../Editor/remoteCursorTheme';
 
 interface SectionEditorProps {
   onOpenInEditor?: () => void;
@@ -103,7 +104,8 @@ export function SectionEditor({ onOpenInEditor }: SectionEditorProps) {
           keymap.of(defaultKeymap),
           ySectionUndoManagerKeymap,
           markdown({ base: markdownLanguage, addKeymap: false }),
-          ySectionSync(ytext, section.from, section.to),
+          ySectionSync(ytext, section.from, section.to, { awareness: provider.awareness }),
+          remoteCursorTheme,
           EditorView.lineWrapping,
           EditorView.theme({
             '&': { fontSize: '14px', outline: 'none' },
