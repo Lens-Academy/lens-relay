@@ -3,16 +3,21 @@ import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
 import { getClientToken } from '../lib/auth';
 
+export interface DocConnection {
+  doc: Y.Doc;
+  provider: YSweetProvider;
+}
+
 /**
  * Manages temporary Y.Doc connections for applying suggestion actions
  * from the review page (outside the normal editor context).
  */
 export function useDocConnection() {
-  const connections = useRef<Map<string, { doc: Y.Doc; provider: YSweetProvider }>>(new Map());
+  const connections = useRef<Map<string, DocConnection>>(new Map());
 
-  const getOrConnect = useCallback(async (docId: string): Promise<Y.Doc> => {
+  const getOrConnect = useCallback(async (docId: string): Promise<DocConnection> => {
     const existing = connections.current.get(docId);
-    if (existing) return existing.doc;
+    if (existing) return existing;
 
     const doc = new Y.Doc();
     const authEndpoint = () => getClientToken(docId);
@@ -24,8 +29,9 @@ export function useDocConnection() {
       provider.on('connection-error', (err: Error) => { clearTimeout(timeout); reject(err); });
     });
 
-    connections.current.set(docId, { doc, provider });
-    return doc;
+    const connection: DocConnection = { doc, provider };
+    connections.current.set(docId, connection);
+    return connection;
   }, []);
 
   const disconnect = useCallback((docId: string) => {

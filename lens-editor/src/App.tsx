@@ -272,7 +272,7 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
   useEffect(() => disconnectAll, [disconnectAll]);
 
   const handleAction = async (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => {
-    const doc = await getOrConnect(docId);
+    const { doc } = await getOrConnect(docId);
     applySuggestionAction(doc, suggestion, action);
   };
 
