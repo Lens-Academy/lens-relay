@@ -9,7 +9,7 @@ import { interleaveSections, type MultiDocSection } from './interleaveSections';
 
 const USER_COLORS = ['#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA', '#00ACC1'];
 
-interface DocState {
+export interface DocState {
   doc: Y.Doc;
   provider: YSweetProvider;
   ytext: Y.Text;
@@ -20,6 +20,7 @@ export function useMultiDocSections(compoundDocIds: string[]): {
   sections: MultiDocSection[];
   synced: boolean;
   errors: Map<string, Error>;
+  docStates: Map<string, DocState>;
 } {
   const { getOrConnect, disconnectAll } = useDocConnection();
   const { displayName } = useDisplayName();
@@ -101,5 +102,5 @@ export function useMultiDocSections(compoundDocIds: string[]): {
     return () => disconnectAll();
   }, [disconnectAll]);
 
-  return { sections, synced, errors };
+  return { sections, synced, errors, docStates };
 }
