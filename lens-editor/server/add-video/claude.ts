@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { claudeSessionPool } from './queue';
 
 // Transcripts longer than this are split into chunks and processed in parallel
-const CHUNK_WORD_THRESHOLD = 10_000;
+const CHUNK_WORD_THRESHOLD = 6_000;
 const CHUNK_TARGET_WORDS = 5_000;
 
 /** Build the formatting prompt for Claude */

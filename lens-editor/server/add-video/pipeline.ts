@@ -13,7 +13,7 @@ import { createRelayDoc, updateRelayDoc } from './relay-docs';
 
 const WORK_BASE = '/tmp/transcripts';
 const RELAY_FOLDER = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
-const TIMEOUT_MS = 900_000; // 15 minutes (a 7K word transcript takes ~10 min)
+const TIMEOUT_MS = 1_200_000; // 20 minutes
 
 /**
  * Estimate processing time in minutes based on word count.
