@@ -18,6 +18,7 @@ import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
+import { SectionEditor } from './components/SectionEditor';
 import { useDocConnection } from './hooks/useDocConnection';
 import { applySuggestionAction } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
@@ -144,6 +145,40 @@ function DocumentNotFound() {
         <a href="/" className="text-blue-600 hover:text-blue-800 underline">Go to default document</a>
       </div>
     </main>
+  );
+}
+
+/**
+ * Section editor view — reads docUuid from URL, wraps SectionEditor with RelayProvider.
+ */
+function SectionEditorView() {
+  const { docUuid } = useParams<{ docUuid: string }>();
+  const { metadata } = useNavigation();
+  const navigate = useNavigate();
+
+  const shortCompoundId = docUuid ? `${RELAY_ID}-${docUuid}` : '';
+  const activeDocId = useResolvedDocId(shortCompoundId, metadata);
+
+  if (!docUuid) {
+    return (
+      <main className="flex-1 flex items-center justify-center bg-gray-50">
+        <p className="text-gray-500">Provide a document UUID: /section-editor/:docUuid</p>
+      </main>
+    );
+  }
+
+  if (!activeDocId) {
+    return (
+      <main className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Resolving document...</div>
+      </main>
+    );
+  }
+
+  return (
+    <RelayProvider key={activeDocId} docId={activeDocId}>
+      <SectionEditor onOpenInEditor={() => navigate(`/${docUuid}`)} />
+    </RelayProvider>
   );
 }
 
@@ -407,6 +442,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                       ? <AddVideoPage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
+                  <Route path="/section-editor/:docUuid" element={<SectionEditorView />} />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<DefaultLanding />} />
                 </Routes>
