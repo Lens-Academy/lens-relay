@@ -21,6 +21,7 @@ import { Autolink, TaskList } from '@lezer/markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
 import { tightMarkdownKeymap } from './extensions/tightListEnter';
 import { checklistKeymap } from './extensions/checklistToggle';
+import { frontmatterKeymap } from './extensions/frontmatter';
 import { markdownFormattingKeymap } from './extensions/markdownFormatting';
 import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
@@ -301,6 +302,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         sourceReadOnlyCompartment.of([]),
         emphasisPersistPlugin,
         headingFlashPlugin,
+        Prec.high(keymap.of(frontmatterKeymap)),
         Prec.high(keymap.of(tightMarkdownKeymap)),
         Prec.high(keymap.of(checklistKeymap)),
         Prec.high(keymap.of(markdownFormattingKeymap)),

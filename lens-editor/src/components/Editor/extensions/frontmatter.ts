@@ -18,7 +18,8 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import type { DecorationSet } from '@codemirror/view';
-import { StateField, StateEffect } from '@codemirror/state';
+import { StateField, StateEffect, EditorSelection } from '@codemirror/state';
+import type { StateCommand } from '@codemirror/state';
 
 // ── Frontmatter detection ─────────────────────────────────────────
 
@@ -38,7 +39,7 @@ function detectFrontmatter(doc: { line(n: number): { from: number; to: number; t
     if (line.text.trim() === '---') {
       let keyCount = 0;
       for (let k = 2; k < ln; k++) {
-        if (/^\S.*:/.test(doc.line(k).text)) keyCount++;
+        if (/^\S+:/.test(doc.line(k).text)) keyCount++;
       }
       return { from: firstLine.from, to: line.to, keyCount };
     }
@@ -237,9 +238,10 @@ const frontmatterExpandedPlugin = ViewPlugin.fromClass(
       }
 
       // Body lines
+      let lastValueIndentPx = 0; // track value column for continuation lines
       for (let ln = startLine.number + 1; ln < endLine.number; ln++) {
         const line = doc.line(ln);
-        const keyMatch = line.text.match(/^(\S[^:]*):\s*/);
+        const keyMatch = line.text.match(/^(\S+):\s*/);
         if (keyMatch) {
           const keyLen = keyMatch[1].length;
           const colonPos = line.from + keyLen;
@@ -248,6 +250,7 @@ const frontmatterExpandedPlugin = ViewPlugin.fromClass(
           const spacerPx = Math.max(0, Math.round(targetPx - keyTextPx));
           const colonPx = measureTextWidth(keyMatch[0].slice(keyLen), view.contentDOM);
           const wrapIndent = Math.round(targetPx + colonPx);
+          lastValueIndentPx = wrapIndent;
 
           // Hanging indent for value wrapping — wrapped lines align with value start (after colon)
           decos.push({
@@ -276,7 +279,21 @@ const frontmatterExpandedPlugin = ViewPlugin.fromClass(
             from: colonPos, to: colonEnd,
             deco: Decoration.mark({ class: 'cm-frontmatter-colon' }),
           });
+        } else if (line.text.match(/^\s/) && lastValueIndentPx > 0) {
+          // Indented continuation line (YAML list items, multi-line values)
+          // No text-indent — just shift the whole line to the value column
+          decos.push({
+            from: line.from, to: line.from,
+            deco: Decoration.line({
+              attributes: { style: `padding-left: ${lastValueIndentPx}px !important` },
+            }),
+          });
+          decos.push({
+            from: line.from, to: line.to,
+            deco: Decoration.mark({ class: 'cm-frontmatter-value-continuation' }),
+          });
         } else if (line.text.length > 0) {
+          lastValueIndentPx = 0;
           decos.push({
             from: line.from, to: line.to,
             deco: Decoration.mark({ class: 'cm-frontmatter-key-incomplete' }),
@@ -329,6 +346,47 @@ const frontmatterSourcePlugin = ViewPlugin.fromClass(
   },
   { decorations: (v) => v.decorations }
 );
+
+// ── Enter handler for YAML lists ─────────────────────────────────
+
+const frontmatterListContinue: StateCommand = ({ state, dispatch }) => {
+  const fm = state.field(frontmatterField);
+  if (fm.collapsed || !fm.enabled || !fm.range) return false;
+
+  const pos = state.selection.main.head;
+  if (pos < fm.range.from || pos > fm.range.to) return false;
+
+  const line = state.doc.lineAt(pos);
+  const listMatch = line.text.match(/^(\s+- )/);
+  if (!listMatch) return false;
+
+  const prefix = listMatch[1]; // e.g. "  - "
+
+  // Empty list item (just "  - ") — remove marker, exit list
+  if (/^\s+-\s*$/.test(line.text)) {
+    const prevLineEnd = line.from > 0 ? line.from - 1 : line.from;
+    dispatch(state.update({
+      changes: { from: prevLineEnd, to: line.to, insert: '\n' },
+      selection: EditorSelection.cursor(prevLineEnd + 1),
+      scrollIntoView: true,
+      userEvent: 'input',
+    }));
+    return true;
+  }
+
+  // Continue list — insert newline + same prefix
+  dispatch(state.update({
+    changes: { from: pos, insert: '\n' + prefix },
+    selection: EditorSelection.cursor(pos + 1 + prefix.length),
+    scrollIntoView: true,
+    userEvent: 'input',
+  }));
+  return true;
+};
+
+export const frontmatterKeymap = [
+  { key: 'Enter' as const, run: frontmatterListContinue },
+];
 
 // ── Exports ───────────────────────────────────────────────────────
 

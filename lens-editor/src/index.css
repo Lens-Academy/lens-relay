@@ -316,6 +316,11 @@
   color: #d1d5db;
 }
 
+/* Continuation lines (YAML lists, multi-line values) */
+.cm-frontmatter-value-continuation {
+  color: #374151;
+}
+
 /* Obsidian %%comment%% styling */
 .cm-obsidian-comment {
   color: #9ca3af;
