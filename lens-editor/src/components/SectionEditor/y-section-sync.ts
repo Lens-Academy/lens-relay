@@ -34,7 +34,7 @@ export class YSectionSyncConfig {
     this.sectionTo = sectionTo;
     this.undoManager = new Y.UndoManager(ytext, {
       // Only track changes within our section origin
-      trackedOrigins: new Set([YSectionSyncConfig]),
+      trackedOrigins: new Set([this]),
     });
   }
 }
@@ -64,7 +64,7 @@ class YSectionSyncPluginValue {
 
     this._observer = (event, tr) => {
       // Skip if this transaction originated from our CM → Y.Text path
-      if (tr.origin === YSectionSyncConfig) {
+      if (tr.origin === this.conf) {
         return;
       }
 
@@ -163,7 +163,7 @@ class YSectionSyncPluginValue {
         adj += insertText.length - (toA - fromA);
       });
       conf.sectionTo += adj;
-    }, YSectionSyncConfig);
+    }, conf);
   }
 
   destroy() {
@@ -191,14 +191,12 @@ export function ySectionSync(
 
 function sectionUndo(view: EditorView): boolean {
   const conf = view.state.facet(ySectionSyncFacet);
-  conf.undoManager.undo();
-  return true;
+  return conf.undoManager.undo() != null;
 }
 
 function sectionRedo(view: EditorView): boolean {
   const conf = view.state.facet(ySectionSyncFacet);
-  conf.undoManager.redo();
-  return true;
+  return conf.undoManager.redo() != null;
 }
 
 export const ySectionUndoManagerKeymap = keymap.of([
