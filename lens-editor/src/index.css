@@ -272,7 +272,7 @@
 
 /* Frontmatter — expanded line decorations on raw text */
 .cm-frontmatter-line {
-  background-color: #f9fafb;
+  background-color: rgba(249, 250, 251, 0.85);
   font-size: 13px;
   /* Reset CM's default .cm-line left padding so all frontmatter lines
      align at 0; key-value lines override with inline padding for wrapping */
