@@ -47,6 +47,7 @@ export async function processVideo(
   job.relay_url = `${editorBase}/open/${encodeURI(mdPath)}`;
 
   try {
+    console.log(`[add-video] Processing "${job.title}" (${job.video_id})`);
     // 1. Create work directory and write raw files
     await fs.mkdir(workDir, { recursive: true });
     await fs.writeFile(
@@ -78,6 +79,7 @@ export async function processVideo(
     await createRelayDoc(mdPath, placeholderContent);
 
     // 3. Run Claude for formatting
+    console.log(`[add-video] Running Claude on ${wordCount} words...`);
     const result = await runClaude(workDir, TIMEOUT_MS);
     if (result.exitCode !== 0) {
       throw new Error(
@@ -85,6 +87,7 @@ export async function processVideo(
       );
     }
 
+    console.log(`[add-video] Claude finished (exit ${result.exitCode})`);
     // 4. Read corrected text
     const correctedText = await fs.readFile(
       path.join(workDir, 'corrected.txt'),

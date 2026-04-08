@@ -90,9 +90,12 @@ export class JobQueue {
     try {
       await this.processJob(job);
       job.status = 'done';
+      console.log(`[add-video] Job ${job.id} done: "${job.title}" (${job.video_id})`);
     } catch (err) {
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : String(err);
+      console.error(`[add-video] Job ${job.id} failed: "${job.title}" (${job.video_id})`);
+      console.error(`[add-video]   Error: ${job.error}`);
     }
     job.updated_at = new Date().toISOString();
   }
