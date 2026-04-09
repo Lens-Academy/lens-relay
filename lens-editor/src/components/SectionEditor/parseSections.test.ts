@@ -152,4 +152,97 @@ describe('parseSections', () => {
     expect(sections[0].type).toBe('module-ref');
     expect(sections[1].type).toBe('meeting-ref');
   });
+
+  it('classifies submodule headers', () => {
+    const text = '# Submodule: Welcome\nContent\n# Submodule: Testing\nMore';
+    const sections = parseSections(text);
+    expect(sections.map(s => s.type)).toEqual(['submodule', 'submodule']);
+    expect(sections[0].label).toBe('Welcome');
+    expect(sections[1].label).toBe('Testing');
+  });
+
+  it('classifies page headers at different levels', () => {
+    const text = '# Page: Welcome\nContent\n## Page: Details\nMore';
+    const sections = parseSections(text);
+    expect(sections.map(s => s.type)).toEqual(['page', 'page']);
+    expect(sections[0].label).toBe('Welcome');
+  });
+
+  it('classifies question sections', () => {
+    const text = '#### Question\ncontent:: What is AI?';
+    const sections = parseSections(text);
+    expect(sections[0].type).toBe('question');
+  });
+
+  it('classifies video-excerpt sections', () => {
+    const text = '#### Video-excerpt\nto:: 14:49';
+    const sections = parseSections(text);
+    expect(sections[0].type).toBe('video-excerpt');
+  });
+
+  it('classifies article-excerpt sections', () => {
+    const text = '#### Article-excerpt\nfrom:: "start"\nto:: "end"';
+    const sections = parseSections(text);
+    expect(sections[0].type).toBe('article-excerpt');
+  });
+
+  it('classifies ## Text and ## Chat at non-#### levels', () => {
+    const text = '## Text\ncontent:: Hello\n## Chat\ninstructions:: Help';
+    const sections = parseSections(text);
+    expect(sections.map(s => s.type)).toEqual(['text', 'chat']);
+  });
+
+  it('classifies ### Text in modules', () => {
+    const text = '### Text\ncontent:: Some framing text';
+    const sections = parseSections(text);
+    expect(sections[0].type).toBe('text');
+  });
+
+  it('handles CriticMarkup-wrapped Chat headers', () => {
+    const text = '#### {--{"author":"AI","timestamp":123}@@Chat: Old Title--}{++{"author":"AI","timestamp":123}@@Chat++}\ninstructions:: Help';
+    const sections = parseSections(text);
+    expect(sections[0].type).toBe('chat');
+    expect(sections[0].label).toBe('Chat');
+  });
+
+  it('classifies ### Article: and ### Video: as article-ref and video-ref', () => {
+    const text = '### Article: Some Article\nsource:: [[../articles/foo]]\n### Video: Some Video\nsource:: [[../video_transcripts/bar]]';
+    const sections = parseSections(text);
+    expect(sections.map(s => s.type)).toEqual(['article-ref', 'video-ref']);
+    expect(sections[0].label).toBe('Some Article');
+    expect(sections[1].label).toBe('Some Video');
+  });
+
+  it('classifies mixed edu sections in a lens', () => {
+    const text = [
+      '### Article: Some Article',
+      'source:: [[../articles/foo]]',
+      '#### Text',
+      'content:: Framing text',
+      '#### Article-excerpt',
+      'from:: "start"',
+      'to:: "end"',
+      '#### Chat',
+      'instructions:: Help the user',
+    ].join('\n');
+    const sections = parseSections(text);
+    expect(sections.map(s => s.type)).toEqual([
+      'article-ref', 'text', 'article-excerpt', 'chat',
+    ]);
+  });
+
+  it('classifies mixed edu sections in a module', () => {
+    const text = [
+      '# Submodule: Welcome',
+      '## Page: Intro',
+      '### Text',
+      'content:: Hello',
+      '# Learning Outcome:',
+      'source:: ![[../LO/Test]]',
+    ].join('\n');
+    const sections = parseSections(text);
+    expect(sections.map(s => s.type)).toEqual([
+      'submodule', 'page', 'text', 'lo-ref',
+    ]);
+  });
 });

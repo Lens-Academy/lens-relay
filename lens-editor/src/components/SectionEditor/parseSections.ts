@@ -126,13 +126,21 @@ export function parseSections(text: string): Section[] {
 }
 
 function classifyHeader(title: string, level: number): string {
-  const lower = title.toLowerCase().replace(/:$/, '').trim();
+  const cleaned = stripCriticMarkup(title);
+  const lower = cleaned.toLowerCase().replace(/:$/, '').trim();
 
-  if (level === 4) {
-    if (lower === 'video') return 'video';
-    if (lower === 'text') return 'text';
-    if (lower === 'chat') return 'chat';
-  }
+  // These types can appear at any heading level (##, ###, ####)
+  if (lower === 'video') return 'video';
+  if (lower === 'video-excerpt') return 'video-excerpt';
+  if (lower === 'article-excerpt') return 'article-excerpt';
+  if (lower === 'text') return 'text';
+  if (lower === 'chat' || lower.startsWith('chat')) return 'chat';
+  if (lower === 'question') return 'question';
+
+  if (lower.startsWith('submodule')) return 'submodule';
+  if (lower.startsWith('page')) return 'page';
+  if (lower.startsWith('article')) return 'article-ref';
+  if (lower.startsWith('video')) return 'video-ref';
   if (lower.startsWith('lens')) return 'lens-ref';
   if (lower.startsWith('test')) return 'test-ref';
   if (lower.startsWith('learning outcome')) return 'lo-ref';
@@ -142,15 +150,28 @@ function classifyHeader(title: string, level: number): string {
   return 'heading';
 }
 
-function cleanLabel(title: string, level: number): string {
-  const lower = title.toLowerCase().replace(/:$/, '').trim();
+function stripCriticMarkup(text: string): string {
+  let result = text.replace(/\{--[\s\S]*?--\}/g, '');
+  result = result.replace(/\{\+\+([\s\S]*?)\+\+\}/g, '$1');
+  result = result.replace(/^.*?@@/, '');
+  return result.trim() || text;
+}
 
-  if (level === 4) {
-    if (lower === 'video') return 'Video';
-    if (lower === 'text') return 'Text';
-    if (lower === 'chat') return 'Chat Instructions';
+function cleanLabel(title: string, level: number): string {
+  const cleaned = stripCriticMarkup(title);
+  const lower = cleaned.toLowerCase().replace(/:$/, '').trim();
+
+  if (lower === 'video') return 'Video';
+  if (lower === 'video-excerpt') return 'Video Excerpt';
+  if (lower === 'article-excerpt') return 'Article Excerpt';
+  if (lower === 'text') return 'Text';
+  if (lower === 'chat' || lower.startsWith('chat')) return cleaned.replace(/:$/, '').trim();
+  if (lower === 'question') return 'Question';
+
+  const colonIndex = cleaned.indexOf(':');
+  if (colonIndex !== -1 && ['submodule', 'page', 'article', 'video'].includes(lower.split(':')[0].trim())) {
+    return cleaned.slice(colonIndex + 1).trim();
   }
 
-  // For reference sections like "# Lens:" or "## Test:", show the full title
-  return title.replace(/:$/, '').trim();
+  return cleaned.replace(/:$/, '').trim();
 }
