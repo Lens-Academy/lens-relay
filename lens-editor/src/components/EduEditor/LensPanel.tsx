@@ -9,6 +9,7 @@ import { useDocConnection } from '../../hooks/useDocConnection';
 import { PowerToolbar } from './PowerToolbar';
 import { TutorInstructions } from './TutorInstructions';
 import { ArticleEmbed } from './ArticleEmbed';
+import { VideoExcerptEmbed } from './VideoExcerptEmbed';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { RELAY_ID } from '../../lib/constants';
 import * as Y from 'yjs';
@@ -227,25 +228,43 @@ export function LensPanel({ lensDocId, lensName }: LensPanelProps) {
           );
         }
 
-        // Video-excerpt section (placeholder for Task 8)
+        // Video-excerpt section
         if (section.type === 'video-excerpt') {
-          const from = fields.get('from') ?? '';
-          const to = fields.get('to') ?? '';
+          const from = fields.get('from') ?? undefined;
+          const to = fields.get('to') ?? undefined;
+
+          // Find video source from nearest preceding video-ref heading
+          let videoSource = '';
+          for (let j = i - 1; j >= 0; j--) {
+            if (sections[j].type === 'video-ref') {
+              const headingFields = parseFields(sections[j].content);
+              const src = headingFields.get('source');
+              if (src) {
+                videoSource = src.trim();
+                break;
+              }
+            }
+          }
+
+          if (!videoSource) {
+            return (
+              <div key={i} className="mb-7 p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
+                Video-excerpt has no video source:: in a preceding heading
+              </div>
+            );
+          }
+
+          const lensUuid = lensDocId.slice(RELAY_ID.length + 1);
+          const lensPath = Object.entries(metadata).find(([, m]) => m.id === lensUuid)?.[0] ?? '';
+
           return (
-            <div key={i} className="mb-7 rounded-xl border border-[rgba(184,112,24,0.15)] overflow-hidden shadow-[0_1px_4px_0_rgba(0,0,0,0.06)]"
-              style={{ background: 'rgba(184, 112, 24, 0.04)' }}>
-              <div className="px-6 py-4 border-b border-[rgba(184,112,24,0.1)]">
-                <div style={{ fontFamily: "'Newsreader', serif", fontSize: '20px', fontWeight: 600, color: '#1a1a1a' }}>
-                  Video Excerpt
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  {from && `from: ${from}`} {to && `to: ${to}`}
-                </div>
-              </div>
-              <div className="px-6 py-4 text-sm text-gray-400 italic">
-                Video transcript excerpt — expand to view
-              </div>
-            </div>
+            <VideoExcerptEmbed
+              key={i}
+              fromTime={from}
+              toTime={to}
+              videoSourceWikilink={videoSource}
+              lensSourcePath={lensPath}
+            />
           );
         }
 
