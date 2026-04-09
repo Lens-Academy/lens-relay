@@ -36,10 +36,10 @@ import { useHeaderBreakpoints } from './hooks/useHeaderBreakpoints';
 // Panel configuration — single source of truth for all panel behavior
 // All panels use CSS flexbox with pixel widths.
 export const PANEL_CONFIG: PanelConfig = {
-  'left-sidebar':   { group: 'app-outer',   minPx: 200, maxPx: 250, priority: 1 },
-  'comment-margin': { group: 'editor-area', minPx: 150, maxPx: 250, priority: 3 },
-  'right-sidebar':  { group: 'editor-area', minPx: 200, maxPx: 250, priority: 2 },
-  'discussion':     { group: 'editor-area', minPx: 250, maxPx: 270, priority: 4 },
+  'left-sidebar':   { group: 'app-outer',   minPx: 200, priority: 1 },
+  'comment-margin': { group: 'editor-area', minPx: 150, priority: 3 },
+  'right-sidebar':  { group: 'editor-area', minPx: 200, priority: 2 },
+  'discussion':     { group: 'editor-area', minPx: 250, priority: 4 },
 };
 
 // Re-export for consumers that import from App (backwards compat)
