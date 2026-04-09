@@ -40,7 +40,7 @@ Markdown heading levels and labels map to section types:
 | `### Text` / `#### Text` | `text` | Authored content with `content::` |
 | `### Chat` / `#### Chat` | `chat` | Tutor instructions with `instructions::` |
 | `#### Article-excerpt` | `article-excerpt` | References article via `source::` with `from::`/`to::` |
-| `#### Video` | `video` | Video embed |
+| `#### Video-excerpt` | `video-excerpt` | Video transcript excerpt with `from::`/`to::` timestamps |
 | `#### Question` | `question` | Assessment question |
 
 ### Multi-document connections
@@ -51,6 +51,7 @@ The editor connects to multiple Y.Docs simultaneously:
 2. **Learning Outcome docs** — connected on demand when an LO reference is expanded. The `source::` wikilink in the module resolves to the LO's relay doc UUID. The LO's content (Test section, Submodule/Lens references) is parsed and shown nested under the LO in the left panel.
 3. **Lens doc** — connected when a lens is selected. Drives the right panel.
 4. **Article docs** — connected on demand when an article-excerpt is expanded in the right panel. The lens's `source::` wikilink resolves to the article's relay doc UUID.
+5. **Video transcript docs** — connected on demand when a video-excerpt is expanded. The lens's `source::` wikilink resolves to the transcript's relay doc UUID. The companion `.timestamps.json` must also be fetched (from the relay as a separate doc, or bundled as metadata).
 
 All connections use the existing `useDocConnection` hook which caches and reuses Y.Doc connections.
 
@@ -64,7 +65,7 @@ Wikilinks like `[[../Lenses/Cascades and Cycles]]` and transclusions like `![[..
 
 ### Excerpt range resolution
 
-Article-excerpt sections use `from::` and `to::` fields containing partial text strings:
+**Article excerpts** use `from::` and `to::` fields containing partial text strings:
 
 ```
 from:: "Cascades are when"
@@ -77,6 +78,32 @@ To find the highlighted range in the article text:
 - Excerpt range is `[fromIndex, toIndex + toValue.length]`
 - If `from::` is empty (`""`), start at 0
 - If `to::` is empty or missing, go to end of document
+
+**Video excerpts** use `from::` and `to::` fields containing timestamps:
+
+```
+#### Video-excerpt
+to:: 14:49
+```
+
+Video transcripts live as separate relay docs (e.g., `video_transcripts/kurzgesagt-ai-humanitys-final-invention.md`) with companion `.timestamps.json` files containing word-level timing data:
+
+```json
+[
+  { "text": "Humans", "start": "0:00.40" },
+  { "text": "rule", "start": "0:00.88" },
+  ...
+]
+```
+
+To extract the excerpt text:
+1. Parse `from::` and `to::` as timestamps (`M:SS`, `MM:SS`, `H:MM:SS`, `M:SS.ms` formats) into seconds
+2. Load the `.timestamps.json` for the video transcript
+3. Filter entries whose `start` falls in `[fromSeconds, toSeconds]`
+4. Join the filtered words with spaces to produce the excerpt text
+5. If `from::` is missing, start at 0; if `to::` is missing, go to end
+
+The video is not rendered — only the transcript excerpt text is shown, styled the same as article excerpts.
 
 ## Right panel rendering
 
@@ -108,7 +135,7 @@ The right panel renders the selected lens in a style matching the production pla
 
 **Chat sections** (`#### Chat`): Green card (`background: #f0fdf4`, `border: 1px solid #bbf7d0`). Shows the `instructions::` content rendered as formatted text with headers, bullet lists, etc. No chat UI rendering. Editable on click.
 
-**Video sections** (`#### Video`): Same treatment as article-excerpt but resolves to video transcript doc instead.
+**Video-excerpt sections** (`#### Video-excerpt`): Rendered as an embed card (same styling as article embeds). Header shows video title and channel. Body shows the transcript excerpt text extracted via timestamp matching (see "Excerpt range resolution" above). Editable — clicking opens CM editor for the transcript doc, scoped to the text range corresponding to the timestamp range. No video playback UI.
 
 **Question sections** (`#### Question`): Show the question content and any assessment instructions. Rendered as a card, editable.
 
@@ -172,7 +199,7 @@ LensEduEditor (top-level route component)
 │   │   ├── ArticleEmbed (Article-excerpt, with excerpt + expand)
 │   │   ├── TutorInstructions (Chat sections)
 │   │   ├── QuestionCard (Question sections)
-│   │   └── VideoEmbed (Video sections)
+│   │   └── VideoExcerptEmbed (Video-excerpt, transcript text via timestamps)
 │   └── (inline CM editors when sections are clicked)
 └── useDocConnection (manages all Y.Doc connections)
 ```
@@ -198,6 +225,30 @@ The module doc UUID is the entry point. LO and Lens doc UUIDs are resolved from 
 - **Feedback mode** — the toolbar shows it but it's not in v1 scope
 - **Raw mode** — the toolbar shows it but it's not in v1 scope (existing section editor covers this)
 
+## Shared code: lens-content-processor
+
+The `lens-content-processor` package (`/lens-platform/content_processor/`) is a standalone TypeScript library with only `yaml` as a runtime dependency. It already implements:
+
+- **Section parsing** (`src/parser/sections.ts`): heading-delimited section classification with type-specific validation
+- **Wikilink parsing** (`src/parser/wikilink.ts`): `parseWikilink()` for `[[...]]` and `![[...]]` syntax, path resolution, fuzzy matching
+- **Article excerpt extraction** (`src/bundler/article.ts`): `extractArticleExcerpt()` with case-insensitive text anchor matching, ambiguity protection (errors on 0 or >1 matches)
+- **Video timestamp processing** (`src/bundler/video.ts`): `extractVideoExcerpt()` with word-level timestamp filtering, `parseTimestamp()` for all time formats
+- **Lens/module/LO parsing** (`src/parser/`): field extraction (`content::`, `instructions::`, `from::`, `to::`, `source::`, etc.)
+
+**Reuse strategy:** Import individual pure functions from `lens-content-processor` as a dependency (symlink or npm workspace). We do NOT run the full `processContent()` pipeline — that's a batch tool that ingests the entire vault. Instead, we call leaf-level functions on demand, triggered by Y.Text changes, for real-time (<1s) updates when users edit `from::`/`to::` markers or wikilinks:
+
+| Need | Content processor function | Notes |
+|---|---|---|
+| Parse wikilinks | `parseWikilink()` | Returns `{ path, display, isEmbed }` |
+| Extract article excerpt | `extractArticleExcerpt()` | Returns `{ content, startIndex, endIndex }` |
+| Extract video excerpt | `extractVideoExcerpt()` | Needs transcript + timestamps.json |
+| Parse timestamps | `parseTimestamp()` | Handles all formats, returns seconds |
+| Parse section fields | `parseSections()` | Different from our `parseSections` — theirs is higher-level, ours handles Y.Text ranges |
+
+**What we still need separately:** Our `parseSections` (in `lens-editor`) operates on raw text and returns `[from, to)` character ranges for Y.Text slicing. The content processor's `parseSections` is higher-level (returns structured objects without character offsets). We keep our range-based parser for CM editor binding, but delegate field parsing, wikilink resolution, and excerpt extraction to the content processor.
+
+**Browser compatibility:** The content processor uses Node's `path` module for wikilink resolution. This needs a polyfill or thin wrapper for browser use (Vite can handle `path` via `path-browserify`). The rest of the code is pure string processing.
+
 ## Key risks and decisions
 
 1. **Document resolution performance:** Expanding an LO connects to a new Y.Doc. If a module has many LOs (like Existing Approaches with 1 LO containing 5 submodules × 3-4 lenses each), we should connect lazily — only when the user expands an LO or clicks a lens. `useDocConnection` already caches connections.
@@ -207,3 +258,5 @@ The module doc UUID is the entry point. LO and Lens doc UUIDs are resolved from 
 3. **Wikilink resolution:** The `source::` fields use both `[[...]]` and `![[...]]` syntax. The `!` prefix means transclusion (embed content) vs. link. For our purposes both resolve the same way — we connect to the referenced doc and parse its content.
 
 4. **Large modules:** The "Existing Approaches" module has 1 LO with 5 submodules containing ~18 lenses total. The left panel needs to be collapsible so it doesn't become overwhelming. Default state: submodules collapsed, expand on click.
+
+5. **Video timestamps.json access:** The `.timestamps.json` files are separate documents in the relay vault (not part of the video transcript Y.Doc). They need to be fetched alongside the transcript. Options: (a) store them as a separate relay doc and connect via `useDocConnection`, (b) fetch them via the relay's file download API, or (c) embed the timestamp data in the transcript doc's metadata. Option (b) is simplest — the relay already serves raw file downloads. The content processor's `extractVideoExcerpt()` accepts the timestamps array as a parameter, so we just need to fetch and pass it.
