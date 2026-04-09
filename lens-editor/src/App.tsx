@@ -10,7 +10,7 @@ import { NavigationContext, useNavigation } from './contexts/NavigationContext';
 import { DisplayNameProvider } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 import { SidebarContext } from './contexts/SidebarContext';
-import { useMultiFolderMetadata, type FolderConfig } from './hooks/useMultiFolderMetadata';
+import { useMultiFolderMetadata } from './hooks/useMultiFolderMetadata';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
 import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired, decodeFolderFromToken, isAllFoldersToken } from './lib/auth-share';
@@ -27,6 +27,8 @@ import { BlobDocumentView } from './components/BlobViewer';
 import { findPathByUuid } from './lib/uuid-to-path';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { useRecentFiles } from './hooks/useRecentFiles';
+import { RELAY_ID, FOLDERS, DEFAULT_DOC_UUID } from './lib/constants';
+import { EduEditor } from './components/EduEditor/EduEditor';
 import { useContainerWidth } from './hooks/useContainerWidth';
 import { usePanelManager, type PanelConfig } from './hooks/usePanelManager';
 import { useHeaderBreakpoints } from './hooks/useHeaderBreakpoints';
@@ -40,30 +42,9 @@ export const PANEL_CONFIG: PanelConfig = {
   'discussion':     { group: 'editor-area', minPx: 250, maxPx: 270, priority: 4 },
 };
 
-// VITE_LOCAL_RELAY=true routes requests to a local relay-server via Vite proxy
-const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
-
-// Use R2 (production) data with local relay? Set VITE_LOCAL_R2=true
-const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
-
-// Relay server ID — switches between production and local test IDs
-export const RELAY_ID = (USE_LOCAL_RELAY && !USE_LOCAL_R2)
-  ? 'a0000000-0000-4000-8000-000000000000'
-  : 'cb696037-0f72-4e93-8717-4e433129d789';
-
-// Folder configuration
-const FOLDERS: FolderConfig[] = (USE_LOCAL_RELAY && !USE_LOCAL_R2)
-  ? [
-      { id: 'b0000001-0000-4000-8000-000000000001', name: 'Relay Folder 1' },
-      { id: 'b0000002-0000-4000-8000-000000000002', name: 'Relay Folder 2' },
-    ]
-  : [
-      { id: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e', name: 'Lens' },
-      { id: 'ea4015da-24af-4d9d-ac49-8c902cb17121', name: 'Lens Edu' },
-    ];
-
-// Default document short UUID (first 8 chars — used only in URL redirect)
-const DEFAULT_DOC_UUID = (USE_LOCAL_RELAY && !USE_LOCAL_R2) ? 'c0000001' : '76c3e654';
+// Re-export for consumers that import from App (backwards compat)
+export { RELAY_ID, FOLDERS, DEFAULT_DOC_UUID } from './lib/constants';
+export type { FolderConfig } from './hooks/useMultiFolderMetadata';
 
 // Read share token from URL once at module load (before React renders)
 const shareToken = getShareTokenFromUrl();
@@ -263,6 +244,47 @@ function DocumentView() {
   );
 }
 
+function EduEditorView() {
+  const { docUuid } = useParams<{ docUuid: string }>();
+  const { metadata } = useNavigation();
+
+  if (!docUuid) {
+    return (
+      <main className="flex-1 flex items-center justify-center bg-gray-50">
+        <p className="text-gray-500">Provide a module UUID: /edu/:moduleDocId</p>
+      </main>
+    );
+  }
+
+  const shortCompoundId = `${RELAY_ID}-${docUuid}`;
+  let resolvedId: string | null = null;
+
+  if (shortCompoundId.length >= 73) {
+    resolvedId = shortCompoundId;
+  } else {
+    const docPrefix = shortCompoundId.slice(37);
+    for (const meta of Object.values(metadata)) {
+      if (meta.id.startsWith(docPrefix)) {
+        resolvedId = `${RELAY_ID}-${meta.id}`;
+        break;
+      }
+    }
+  }
+
+  if (!resolvedId) {
+    return (
+      <main className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Resolving module document...</div>
+      </main>
+    );
+  }
+
+  const docUuidFull = resolvedId.slice(RELAY_ID.length + 1);
+  const sourcePath = Object.entries(metadata).find(([, m]) => m.id === docUuidFull)?.[0] ?? '';
+
+  return <EduEditor moduleDocId={resolvedId} sourcePath={sourcePath} />;
+}
+
 export function App() {
   const [authError, setAuthError] = useState(false);
 
@@ -459,6 +481,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                       ? <AddVideoPage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
+                  <Route path="/edu/:docUuid" element={<EduEditorView />} />
                   <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<DefaultLanding />} />
