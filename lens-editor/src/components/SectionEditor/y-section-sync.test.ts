@@ -172,29 +172,30 @@ describe('y-section-sync', () => {
       expect(conf.sectionTo).toBe(3);
     });
 
-    it('external insert at exact sectionFrom boundary shifts offsets', () => {
+    it('external insert at exact sectionFrom boundary goes into section', () => {
       const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
 
       ytext.insert(3, 'ZZ'); // Insert at exact boundary
 
-      // Treat as outside → shifts offsets
-      expect(view.state.doc.toString()).toBe('BBB');
+      // Inclusive boundary: insert at sectionFrom goes into CM
+      expect(view.state.doc.toString()).toBe('ZZBBB');
 
       const conf = view.state.facet(ySectionSyncFacet);
-      expect(conf.sectionFrom).toBe(5);
+      expect(conf.sectionFrom).toBe(3);
       expect(conf.sectionTo).toBe(8);
     });
 
-    it('external insert at exact sectionTo boundary does not affect CM', () => {
+    it('external insert at exact sectionTo boundary goes into section', () => {
       const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
 
       ytext.insert(6, 'ZZ'); // Insert at exact sectionTo
 
-      expect(view.state.doc.toString()).toBe('BBB');
+      // Inclusive boundary: insert at sectionTo appends to CM
+      expect(view.state.doc.toString()).toBe('BBBZZ');
 
       const conf = view.state.facet(ySectionSyncFacet);
       expect(conf.sectionFrom).toBe(3);
-      expect(conf.sectionTo).toBe(6);
+      expect(conf.sectionTo).toBe(8);
     });
 
     it('external delete entirely within section', () => {
@@ -321,6 +322,36 @@ describe('y-section-sync', () => {
       expect(ytext.toString()).toBe('AAABXBBCCC');
     });
 
+    it('undo of delete at section start updates CM view', () => {
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      const conf = view.state.facet(ySectionSyncFacet);
+
+      // Delete at CM position 0 (= Y.Text sectionFrom boundary)
+      view.dispatch({ changes: { from: 0, to: 2 } });
+      expect(view.state.doc.toString()).toBe('B');
+      expect(ytext.toString()).toBe('AAABCCC');
+
+      // Undo should restore deleted text in both Y.Text AND CM
+      conf.undoManager.undo();
+      expect(ytext.toString()).toBe('AAABBBCCC');
+      expect(view.state.doc.toString()).toBe('BBB');
+    });
+
+    it('undo of delete at section end updates CM view', () => {
+      const { ytext, view } = tracked(setup('AAABBBCCC', 3, 6));
+      const conf = view.state.facet(ySectionSyncFacet);
+
+      // Delete at end of section
+      view.dispatch({ changes: { from: 1, to: 3 } });
+      expect(view.state.doc.toString()).toBe('B');
+      expect(ytext.toString()).toBe('AAABCCC');
+
+      // Undo
+      conf.undoManager.undo();
+      expect(ytext.toString()).toBe('AAABBBCCC');
+      expect(view.state.doc.toString()).toBe('BBB');
+    });
+
     it('undo with empty stack is a no-op', () => {
       const { view } = tracked(setup('AAABBBCCC', 3, 6));
       const conf = view.state.facet(ySectionSyncFacet);
@@ -390,5 +421,105 @@ describe('y-section-sync: awareness/cursors', () => {
 
     const localState = aw.getLocalState();
     expect(localState!.cursor).toBeNull();
+  });
+
+  it('cursor position stays correct after local edits', () => {
+    const doc = new Y.Doc();
+    const yt = doc.getText('contents');
+    yt.insert(0, 'AAABBBCCC');
+    const aw = new Awareness(doc);
+
+    const state = EditorState.create({
+      doc: 'BBB',
+      extensions: [ySectionSync(yt, 3, 6, { awareness: aw })],
+    });
+    const v = new EditorView({ state, parent: document.body });
+    views.push(v);
+
+    v.focus();
+
+    // Type "XX" at CM position 1
+    v.dispatch({ changes: { from: 1, insert: 'XX' } });
+    expect(v.state.doc.toString()).toBe('BXXBB');
+    expect(yt.toString()).toBe('AAABXXBBCCC');
+
+    // Place cursor at CM position 3 (after "XX")
+    v.dispatch({ selection: { anchor: 3 } });
+    v.dispatch({});
+
+    const localState = aw.getLocalState();
+    const anchor = Y.createAbsolutePositionFromRelativePosition(
+      Y.createRelativePositionFromJSON(localState!.cursor.anchor),
+      doc,
+    );
+    // CM pos 3 + sectionFrom 3 = Y.Text pos 6
+    expect(anchor!.index).toBe(6);
+  });
+
+  it('cursor position stays correct after external insert before section', () => {
+    const doc = new Y.Doc();
+    const yt = doc.getText('contents');
+    yt.insert(0, 'AAABBBCCC');
+    const aw = new Awareness(doc);
+
+    const state = EditorState.create({
+      doc: 'BBB',
+      extensions: [ySectionSync(yt, 3, 6, { awareness: aw })],
+    });
+    const v = new EditorView({ state, parent: document.body });
+    views.push(v);
+
+    v.focus();
+
+    // External insert before section
+    yt.insert(0, 'ZZ');
+    // sectionFrom should now be 5, sectionTo 8
+    expect(yt.toString()).toBe('ZZAAABBBCCC');
+
+    // Place cursor at CM position 1
+    v.dispatch({ selection: { anchor: 1 } });
+    v.dispatch({});
+
+    const localState = aw.getLocalState();
+    const anchor = Y.createAbsolutePositionFromRelativePosition(
+      Y.createRelativePositionFromJSON(localState!.cursor.anchor),
+      doc,
+    );
+    // CM pos 1 + sectionFrom 5 = Y.Text pos 6
+    expect(anchor!.index).toBe(6);
+  });
+
+  it('cursor position stays correct after external insert at sectionFrom', () => {
+    const doc = new Y.Doc();
+    const yt = doc.getText('contents');
+    yt.insert(0, 'AAABBBCCC');
+    const aw = new Awareness(doc);
+
+    const state = EditorState.create({
+      doc: 'BBB',
+      extensions: [ySectionSync(yt, 3, 6, { awareness: aw })],
+    });
+    const v = new EditorView({ state, parent: document.body });
+    views.push(v);
+
+    v.focus();
+
+    // External insert at exact sectionFrom (now goes into section with inclusive boundaries)
+    yt.insert(3, 'ZZ');
+    // With inclusive boundaries: insert goes into CM, sectionFrom stays 3, sectionTo becomes 8
+    expect(v.state.doc.toString()).toBe('ZZBBB');
+    expect(yt.toString()).toBe('AAAZZBBBCCC');
+
+    // Place cursor at CM position 4 (on second B)
+    v.dispatch({ selection: { anchor: 4 } });
+    v.dispatch({});
+
+    const localState = aw.getLocalState();
+    const anchor = Y.createAbsolutePositionFromRelativePosition(
+      Y.createRelativePositionFromJSON(localState!.cursor.anchor),
+      doc,
+    );
+    // CM pos 4 + sectionFrom 3 = Y.Text pos 7
+    expect(anchor!.index).toBe(7);
   });
 });

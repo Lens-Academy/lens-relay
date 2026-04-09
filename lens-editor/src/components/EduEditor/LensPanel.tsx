@@ -123,22 +123,6 @@ export function LensPanel({ lensDocId, lensName }: LensPanelProps) {
         // Text section
         if (section.type === 'text') {
           const content = fields.get('content') ?? '';
-          const isQuestion = content.trim().length < 500 && content.trim().endsWith('?');
-
-          if (isQuestion) {
-            return (
-              <div key={i} className="mb-7 relative group cursor-pointer hover:outline hover:outline-2 hover:outline-blue-300/30 hover:outline-offset-1 rounded-lg"
-                onClick={() => setEditingIndex(i)}>
-                <div className="absolute -top-2 -right-2 bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                  click to edit
-                </div>
-                <div className="p-4 bg-white rounded-lg border border-[#e8e5df]" style={{ fontFamily: "'Newsreader', serif", fontSize: '17px', fontStyle: 'italic', lineHeight: 1.6, color: '#44403c' }}>
-                  {content}
-                </div>
-              </div>
-            );
-          }
-
           return (
             <div key={i} className="mb-7 relative group cursor-pointer hover:outline hover:outline-2 hover:outline-blue-300/30 hover:outline-offset-1 rounded-md"
               onClick={() => setEditingIndex(i)}>
@@ -165,7 +149,50 @@ export function LensPanel({ lensDocId, lensName }: LensPanelProps) {
           );
         }
 
-        // Article-excerpt section
+        // Article segment (new format: #### Article with source/from/to inline)
+        // Source inherits from previous article segment if not specified
+        if (section.type === 'article') {
+          let articleSource = fields.get('source')?.trim();
+          const from = fields.get('from') ?? undefined;
+          const to = fields.get('to') ?? undefined;
+
+          // Source inheritance: find source from previous article segment
+          if (!articleSource) {
+            for (let j = i - 1; j >= 0; j--) {
+              if (sections[j].type === 'article') {
+                const prevFields = parseFields(sections[j].content);
+                const src = prevFields.get('source')?.trim();
+                if (src) {
+                  articleSource = src;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (!articleSource) {
+            return (
+              <div key={i} className="mb-7 p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
+                Article segment missing source:: field (no preceding article to inherit from)
+              </div>
+            );
+          }
+
+          const lensUuid = lensDocId.slice(RELAY_ID.length + 1);
+          const lensPath = Object.entries(metadata).find(([, m]) => m.id === lensUuid)?.[0] ?? '';
+
+          return (
+            <ArticleEmbed
+              key={i}
+              fromAnchor={from}
+              toAnchor={to}
+              articleSourceWikilink={articleSource}
+              lensSourcePath={lensPath}
+            />
+          );
+        }
+
+        // Legacy article-excerpt section (old format: separate from article-ref heading)
         if (section.type === 'article-excerpt') {
           const from = fields.get('from') ?? undefined;
           const to = fields.get('to') ?? undefined;

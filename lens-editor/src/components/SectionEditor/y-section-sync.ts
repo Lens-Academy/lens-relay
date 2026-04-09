@@ -117,17 +117,18 @@ class YSectionSyncPluginValue {
             typeof d.insert === 'string' ? d.insert : '';
           const insertLen = insertText.length;
 
-          if (pos > this.conf.sectionFrom && pos < this.conf.sectionTo) {
-            // Insert within section
+          if (pos >= this.conf.sectionFrom && pos <= this.conf.sectionTo) {
+            // Insert within section (inclusive boundaries so undo of
+            // deletes at section start/end correctly updates the view)
             const cmPos = pos - this.conf.sectionFrom;
             changes.push({ from: cmPos, to: cmPos, insert: insertText });
             this.conf.sectionTo += insertLen;
-          } else if (pos <= this.conf.sectionFrom) {
-            // Insert before or at section start → shift offsets
+          } else if (pos < this.conf.sectionFrom) {
+            // Insert before section → shift offsets
             this.conf.sectionFrom += insertLen;
             this.conf.sectionTo += insertLen;
           }
-          // Insert at sectionTo or after → ignore
+          // Insert after sectionTo → ignore
           // Note: insert does NOT advance pos
         }
       }

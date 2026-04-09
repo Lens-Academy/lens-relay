@@ -133,6 +133,7 @@ function classifyHeader(title: string, level: number): string {
   if (lower === 'video') return 'video';
   if (lower === 'video-excerpt') return 'video-excerpt';
   if (lower === 'article-excerpt') return 'article-excerpt';
+  if (lower === 'article') return 'article';
   if (lower === 'text') return 'text';
   if (lower === 'chat' || lower.startsWith('chat')) return 'chat';
   if (lower === 'question') return 'question';
@@ -164,6 +165,7 @@ function cleanLabel(title: string, level: number): string {
   if (lower === 'video') return 'Video';
   if (lower === 'video-excerpt') return 'Video Excerpt';
   if (lower === 'article-excerpt') return 'Article Excerpt';
+  if (lower === 'article') return 'Article';
   if (lower === 'text') return 'Text';
   if (lower === 'chat' || lower.startsWith('chat')) return cleaned.replace(/:$/, '').trim();
   if (lower === 'question') return 'Question';
