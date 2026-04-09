@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { parseSections } from '../SectionEditor/parseSections';
 import type { Section } from '../SectionEditor/parseSections';
+import { ModulePanel } from './ModulePanel';
 
 interface EduEditorProps {
   moduleDocId: string;
@@ -50,9 +51,8 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
     setSelectedLensName(name);
   }, []);
 
-  // Suppress unused variable warnings — these will be used in Tasks 5-6
-  void sourcePath;
-  void handleSelectLens;
+  // Suppress unused variable warning — will be used in Task 6
+  void selectedLensName;
 
   if (!synced) {
     return (
@@ -69,10 +69,12 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
         <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-3 pb-2 border-b border-gray-200">
           Module Structure
         </div>
-        <div className="text-sm text-gray-500">
-          {moduleSections.length} sections loaded
-        </div>
-        {/* ModulePanel goes here in Task 5 */}
+        <ModulePanel
+          sections={moduleSections}
+          sourcePath={sourcePath ?? ''}
+          onSelectLens={handleSelectLens}
+          activeLensDocId={selectedLensDocId}
+        />
       </div>
 
       {/* Right panel: Lens content */}
