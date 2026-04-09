@@ -71,6 +71,28 @@ describe('resolveWikilinkToUuid', () => {
     expect(uuid).toBe('ghi-789');
   });
 
+  it('resolves when metadata keys have leading slash', () => {
+    const slashMetadata: Record<string, { id: string }> = {
+      '/Relay Folder 1/Learning Outcomes/Some LO.md': { id: 'slash-456' },
+      '/Relay Folder 1/Lenses/AI Control.md': { id: 'slash-789' },
+    };
+    const uuid = resolveWikilinkToUuid(
+      '![[../Learning Outcomes/Some LO]]',
+      '/Relay Folder 1/modules/feedback-loops.md',
+      slashMetadata
+    );
+    expect(uuid).toBe('slash-456');
+  });
+
+  it('resolves when sourcePath has leading slash but metadata does not', () => {
+    const uuid = resolveWikilinkToUuid(
+      '[[../Lenses/AI Control]]',
+      '/Lens Edu/modules/feedback-loops.md',
+      metadata
+    );
+    expect(uuid).toBe('abc-123');
+  });
+
   it('returns null for malformed wikilink', () => {
     const uuid = resolveWikilinkToUuid(
       'not a wikilink',

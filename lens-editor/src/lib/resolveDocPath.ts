@@ -1,4 +1,17 @@
-import { parseWikilink } from 'lens-content-processor/dist/parser/wikilink.js';
+/**
+ * Parse a wikilink string into its components.
+ * Handles [[path]], [[path|display]], ![[path]], ![[path|display]].
+ * Browser-compatible — no Node dependencies.
+ */
+function parseWikilink(text: string): { path: string; display?: string; isEmbed?: boolean } | null {
+  const match = text.match(/^(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+  if (!match) return null;
+  return {
+    path: match[2].trim(),
+    display: match[3]?.trim(),
+    isEmbed: match[1] === '!',
+  };
+}
 
 /**
  * Resolve a relative path against a source file's directory.
@@ -36,10 +49,19 @@ export function resolveWikilinkToUuid(
 
   const resolved = resolveRelativePath(parsed.path, sourceFile);
 
-  if (metadata[resolved]) return metadata[resolved].id;
+  // Try all combinations: with/without leading /, with/without .md extension
+  const candidates = [
+    resolved,
+    resolved + '.md',
+    '/' + resolved,
+    '/' + resolved + '.md',
+    resolved.replace(/^\//, ''),
+    resolved.replace(/^\//, '') + '.md',
+  ];
 
-  const withMd = resolved + '.md';
-  if (metadata[withMd]) return metadata[withMd].id;
+  for (const candidate of candidates) {
+    if (metadata[candidate]) return metadata[candidate].id;
+  }
 
   return null;
 }
