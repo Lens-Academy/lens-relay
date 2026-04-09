@@ -19,6 +19,8 @@ function roleLevel(token: string): number {
  */
 function shouldReplaceToken(existing: string, incoming: string): boolean {
   if (isTokenExpired(existing)) return true;
+  // Different folder → always accept (user clicked a new link)
+  if (decodeFolderFromToken(existing) !== decodeFolderFromToken(incoming)) return true;
   return roleLevel(incoming) < roleLevel(existing);
 }
 

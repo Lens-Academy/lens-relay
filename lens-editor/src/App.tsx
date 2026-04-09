@@ -59,6 +59,11 @@ if (shareToken) {
   stripShareTokenFromUrl();
 }
 
+function clearTokenAndReload() {
+  localStorage.removeItem('lens-share-token');
+  window.location.reload();
+}
+
 function AccessDenied() {
   return (
     <div className="h-screen flex items-center justify-center bg-gray-50">
@@ -89,29 +94,57 @@ function TokenExpired() {
           </a>{' '}
           for a current editing link.
         </p>
+        <button
+          onClick={clearTokenAndReload}
+          className="mt-4 text-sm text-blue-600 hover:text-blue-800 underline"
+        >
+          Clear saved link and try again
+        </button>
       </div>
     </div>
   );
 }
 
 function TokenInvalid() {
+  const folderName = FOLDERS.find(f => f.id === shareFolderUuid)?.name;
   return (
     <div className="h-screen flex items-center justify-center bg-gray-50">
       <div className="text-center max-w-md px-6">
         <div className="text-5xl mb-4">🔑</div>
-        <h1 className="text-2xl font-semibold text-gray-800 mb-2">Access Link Invalid</h1>
-        <p className="text-gray-500">
-          Your access link is no longer valid. Check{' '}
-          <a
-            href="https://discord.com/channels/1440725236843806762/1464359318865448970"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:text-blue-800 underline"
-          >
-            #lens-internal
-          </a>{' '}
-          for a current editing link.
-        </p>
+        {folderName ? (
+          <>
+            <h1 className="text-2xl font-semibold text-gray-800 mb-2">Wrong Folder</h1>
+            <p className="text-gray-500">
+              Your access link is for <strong>{folderName}</strong>, which doesn't include this document.
+            </p>
+            <a href="/" className="mt-4 inline-block text-sm text-blue-600 hover:text-blue-800 underline">
+              Go to {folderName}
+            </a>
+          </>
+        ) : (
+          <>
+            <h1 className="text-2xl font-semibold text-gray-800 mb-2">Access Link Invalid</h1>
+            <p className="text-gray-500">
+              Your access link is no longer valid. Check{' '}
+              <a
+                href="https://discord.com/channels/1440725236843806762/1464359318865448970"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 underline"
+              >
+                #lens-internal
+              </a>{' '}
+              for a current editing link.
+            </p>
+          </>
+        )}
+        <br />
+        <button
+          onClick={clearTokenAndReload}
+          className="mt-2 text-sm text-gray-400 hover:text-gray-600 underline"
+        >
+          Clear saved link and try again
+        </button>
       </div>
     </div>
   );
