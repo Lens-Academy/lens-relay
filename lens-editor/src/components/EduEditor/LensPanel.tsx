@@ -1,11 +1,10 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import type { EditorView } from 'codemirror';
 import type { Section } from '../SectionEditor/parseSections';
 import { parseSections } from '../SectionEditor/parseSections';
 import { parseFields, parseFrontmatterFields } from '../../lib/parseFields';
-import { createSectionEditorView } from '../SectionEditor/createSectionEditorView';
 import { useDocConnection } from '../../hooks/useDocConnection';
+import { useSectionEditor } from '../../hooks/useSectionEditor';
 import { PowerToolbar } from './PowerToolbar';
 import { TutorInstructions } from './TutorInstructions';
 import { ArticleEmbed } from './ArticleEmbed';
@@ -27,8 +26,17 @@ export function LensPanel({ lensDocId, lensName }: LensPanelProps) {
   const [frontmatter, setFrontmatter] = useState<Map<string, string>>(new Map());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const ytextRef = useRef<Y.Text | null>(null);
-  const viewRef = useRef<EditorView | null>(null);
-  const mountRef = useRef<HTMLDivElement>(null);
+
+  const activeSection = editingIndex !== null
+    ? parseSections(ytextRef.current?.toString() ?? '')[editingIndex] ?? null
+    : null;
+
+  const { mountRef } = useSectionEditor({
+    ytext: ytextRef.current,
+    sectionFrom: activeSection?.from ?? 0,
+    sectionTo: activeSection?.to ?? 0,
+    active: editingIndex !== null,
+  });
 
   // Connect to lens doc
   useEffect(() => {
@@ -71,37 +79,6 @@ export function LensPanel({ lensDocId, lensName }: LensPanelProps) {
     };
   }, [lensDocId, getOrConnect]);
 
-  // Create/destroy CM editor when editingIndex changes
-  useEffect(() => {
-    if (viewRef.current) {
-      viewRef.current.destroy();
-      viewRef.current = null;
-    }
-    if (editingIndex === null || !mountRef.current || !ytextRef.current) return;
-
-    const ytext = ytextRef.current;
-    const freshSections = parseSections(ytext.toString());
-    const section = freshSections[editingIndex];
-    if (!section) return;
-
-    const view = createSectionEditorView({
-      ytext,
-      sectionFrom: section.from,
-      sectionTo: section.to,
-      parent: mountRef.current,
-    });
-
-    viewRef.current = view;
-    requestAnimationFrame(() => view.focus());
-
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
-  }, [editingIndex]);
-
-  const deactivate = useCallback(() => setEditingIndex(null), []);
-
   if (!synced) {
     return (
       <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
@@ -133,7 +110,7 @@ export function LensPanel({ lensDocId, lensName }: LensPanelProps) {
             <div key={i} className="mb-7 rounded-lg border-2 border-blue-400 bg-white overflow-hidden">
               <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
                 <span className="font-medium text-sm text-blue-700">{section.label}</span>
-                <button onClick={deactivate}
+                <button onClick={() => setEditingIndex(null)}
                   className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">
                   Done
                 </button>

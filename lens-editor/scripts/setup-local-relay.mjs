@@ -18,6 +18,7 @@
  *   npm run relay:setup
  */
 
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as Y from 'yjs';
@@ -308,6 +309,38 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
   },
 ];
 
+// Lens Edu test documents — real content from lens-edu-relay repo.
+// Read file content at setup time; returns null if file not found.
+function readEduFile(relativePath) {
+  // lens-edu-relay lives at ~/code/lens-edu-relay (sibling of lens-relay, not inside it)
+  const homeDir = process.env.HOME || process.env.USERPROFILE || '/home/penguin';
+  const eduRelay = path.join(homeDir, 'code', 'lens-edu-relay');
+  const filePath = path.join(eduRelay, relativePath);
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+const EDU_DOCS = [
+  // Module
+  { path: '/modules/feedback-loops.md', id: 'e0000001-0000-4000-8000-000000000001', type: 'markdown', version: 0, file: 'modules/feedback-loops.md' },
+  // Learning Outcomes
+  { path: '/Learning Outcomes/Feedback cycles create discontinuity.md', id: 'e0000002-0000-4000-8000-000000000002', type: 'markdown', version: 0, file: 'Learning Outcomes/Feedback cycles create discontinuity.md' },
+  { path: '/Learning Outcomes/Fizzle or Foom.md', id: 'e0000003-0000-4000-8000-000000000003', type: 'markdown', version: 0, file: 'Learning Outcomes/Fizzle or Foom.md' },
+  // Lenses
+  { path: '/Lenses/Cascades and Cycles.md', id: 'e0000004-0000-4000-8000-000000000004', type: 'markdown', version: 0, file: 'Lenses/Cascades and Cycles.md' },
+  { path: '/Lenses/Speculations concerning the first ultraintelligent machine.md', id: 'e0000005-0000-4000-8000-000000000005', type: 'markdown', version: 0, file: 'Lenses/Speculations concerning the first ultraintelligent machine.md' },
+  { path: '/Lenses/What are the differences between a singularity, an intelligence explosion, and a hard takeoff.md', id: 'e0000006-0000-4000-8000-000000000006', type: 'markdown', version: 0, file: 'Lenses/What are the differences between a singularity, an intelligence explosion, and a hard takeoff.md' },
+  { path: '/Lenses/Recursion Magic.md', id: 'e0000007-0000-4000-8000-000000000007', type: 'markdown', version: 0, file: 'Lenses/Recursion Magic.md' },
+  // Articles referenced by the lenses
+  { path: '/articles/yudkowsky-cascades-cycles-insight.md', id: 'e0000008-0000-4000-8000-000000000008', type: 'markdown', version: 0, file: 'articles/yudkowsky-cascades-cycles-insight.md' },
+  { path: '/articles/good-speculations-concerning-first-ultraintelligent-machine.md', id: 'e0000009-0000-4000-8000-000000000009', type: 'markdown', version: 0, file: 'articles/good-speculations-concerning-first-ultraintelligent-machine.md' },
+  { path: '/articles/aisafety-info-singularity-intelligence-explosion-hard-takeoff.md', id: 'e000000a-0000-4000-8000-00000000000a', type: 'markdown', version: 0, file: 'articles/aisafety-info-singularity-intelligence-explosion-hard-takeoff.md' },
+  { path: '/articles/recursion-magic.md', id: 'e000000b-0000-4000-8000-00000000000b', type: 'markdown', version: 0, file: 'articles/recursion-magic.md' },
+].map(d => ({ ...d, content: readEduFile(d.file) })).filter(d => d.content !== null);
+
 async function createDoc(docId) {
   const response = await fetch(`${RELAY_URL}/doc/new`, {
     method: 'POST',
@@ -471,13 +504,10 @@ async function main() {
       console.log('    (may already exist, continuing...)');
     }
 
-    // Create test documents on server (skip folders - they're just metadata)
+    // Create test documents on server (parallel HTTP POSTs)
     console.log('\n  Creating test documents on server:');
-    for (const testDoc of folder.docs) {
-      if (testDoc.type === 'folder') {
-        console.log(`    - ${testDoc.path} (folder, no server doc needed)`);
-        continue;
-      }
+    const createableDocs = folder.docs.filter(d => d.type !== 'folder');
+    await Promise.all(createableDocs.map(async (testDoc) => {
       const fullDocId = `${RELAY_ID}-${testDoc.id}`;
       try {
         await createDoc(fullDocId);
@@ -485,18 +515,51 @@ async function main() {
       } catch (e) {
         console.log(`    ⚠ ${fullDocId} (may already exist)`);
       }
+    }));
+    for (const testDoc of folder.docs.filter(d => d.type === 'folder')) {
+      console.log(`    - ${testDoc.path} (folder, no server doc needed)`);
     }
 
     // Populate the folder doc's filemeta_v0 Y.Map and folder_config
     await populateFolderDoc(folderDocId, folder.name, folder.docs);
 
-    // Populate each document with content
+    // Populate each document with content (parallel for speed)
     console.log('\n  Populating document content...');
-    for (const testDoc of folder.docs) {
-      await populateDocContent(testDoc);
-    }
+    const contentDocs = folder.docs.filter(d => d.type !== 'folder' && d.content);
+    await Promise.all(contentDocs.map(testDoc => populateDocContent(testDoc)));
 
     console.log(`\n✓ Folder "${folder.name}" setup complete\n`);
+  }
+
+  // Add Lens Edu test documents to Folder 1 (if lens-edu-relay repo exists)
+  if (EDU_DOCS.length > 0) {
+    console.log('─'.repeat(50));
+    console.log(`Setting up Lens Edu test documents (${EDU_DOCS.length} docs from lens-edu-relay)`);
+    console.log('─'.repeat(50));
+
+    const folder1DocId = `${RELAY_ID}-${FOLDER_1_ID}`;
+
+    // Create docs on server
+    console.log('\n  Creating Edu documents on server:');
+    for (const testDoc of EDU_DOCS) {
+      const fullDocId = `${RELAY_ID}-${testDoc.id}`;
+      try {
+        await createDoc(fullDocId);
+        console.log(`    ✓ ${testDoc.path.split('/').pop()}`);
+      } catch (e) {
+        console.log(`    ⚠ ${testDoc.path.split('/').pop()} (may already exist)`);
+      }
+    }
+
+    // Add to folder metadata
+    await populateFolderDoc(folder1DocId, 'Relay Folder 1', EDU_DOCS);
+
+    // Populate content (parallel for speed)
+    console.log('\n  Populating Edu document content...');
+    await Promise.all(EDU_DOCS.map(testDoc => populateDocContent(testDoc)));
+
+    console.log(`\n✓ Lens Edu test documents setup complete\n`);
+    console.log('  Test with: /edu/e0000001 (feedback-loops module)\n');
   }
 
   console.log('─'.repeat(50));

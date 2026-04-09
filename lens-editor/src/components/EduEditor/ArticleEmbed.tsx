@@ -1,11 +1,10 @@
 // src/components/EduEditor/ArticleEmbed.tsx
 import { useEffect, useState, useRef } from 'react';
-import type { EditorView } from 'codemirror';
 import ReactMarkdown from 'react-markdown';
 import { useDocConnection } from '../../hooks/useDocConnection';
+import { useSectionEditor } from '../../hooks/useSectionEditor';
 import { resolveWikilinkToUuid } from '../../lib/resolveDocPath';
 import { useNavigation } from '../../contexts/NavigationContext';
-import { createSectionEditorView } from '../SectionEditor/createSectionEditorView';
 import { RELAY_ID } from '../../lib/constants';
 import * as Y from 'yjs';
 
@@ -24,9 +23,16 @@ export function ArticleEmbed({ fromAnchor, toAnchor, articleSourceWikilink, lens
   const [articleTitle, setArticleTitle] = useState<string>('Article');
   const [editing, setEditing] = useState(false);
   const [excerptRange, setExcerptRange] = useState<{ from: number; to: number } | null>(null);
+  const editingRef = useRef(false);
+  editingRef.current = editing;
   const ytextRef = useRef<Y.Text | null>(null);
-  const viewRef = useRef<EditorView | null>(null);
-  const mountRef = useRef<HTMLDivElement>(null);
+
+  const { mountRef } = useSectionEditor({
+    ytext: ytextRef.current,
+    sectionFrom: excerptRange?.from ?? 0,
+    sectionTo: excerptRange?.to ?? 0,
+    active: editing,
+  });
 
   useEffect(() => {
     const name = articleSourceWikilink
@@ -54,6 +60,10 @@ export function ArticleEmbed({ fromAnchor, toAnchor, articleSourceWikilink, lens
       ytextRef.current = ytext;
 
       const update = () => {
+        // Skip updates while CM editor is active — ySectionSync handles bidirectional sync,
+        // and re-extracting the excerpt would cause unnecessary re-renders.
+        if (editingRef.current) return;
+
         const fullText = ytext.toString();
 
         // Dynamic import to avoid ESM/CJS issues
@@ -95,31 +105,6 @@ export function ArticleEmbed({ fromAnchor, toAnchor, articleSourceWikilink, lens
       cleanupPromise.then(cleanup => cleanup?.());
     };
   }, [articleSourceWikilink, lensSourcePath, fromAnchor, toAnchor, metadata, getOrConnect]);
-
-  // Create CM editor when editing
-  useEffect(() => {
-    if (viewRef.current) {
-      viewRef.current.destroy();
-      viewRef.current = null;
-    }
-    if (!editing || !mountRef.current || !ytextRef.current || !excerptRange) return;
-
-    const ytext = ytextRef.current;
-    const view = createSectionEditorView({
-      ytext,
-      sectionFrom: excerptRange.from,
-      sectionTo: excerptRange.to,
-      parent: mountRef.current,
-    });
-
-    viewRef.current = view;
-    requestAnimationFrame(() => view.focus());
-
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
-  }, [editing, excerptRange]);
 
   return (
     <div className="mb-7 rounded-xl border border-[rgba(184,112,24,0.15)] overflow-hidden shadow-[0_1px_4px_0_rgba(0,0,0,0.06)]"

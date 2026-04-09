@@ -1,23 +1,32 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import type { EditorView } from 'codemirror';
+import { useEffect, useState } from 'react';
 import { useYDoc, useYjsProvider } from '@y-sweet/react';
-import { parseSections } from './parseSections';
-import { createSectionEditorView } from './createSectionEditorView';
+import { parseSections, type Section } from './parseSections';
 import { SectionCard } from './SectionCard';
+import { useSectionEditor } from '../../hooks/useSectionEditor';
 
 interface SectionEditorProps {
   onOpenInEditor?: () => void;
 }
 
 export function SectionEditor({ onOpenInEditor }: SectionEditorProps) {
-  const mountRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
   const provider = useYjsProvider();
 
   const [synced, setSynced] = useState(false);
   const [sections, setSections] = useState<Section[]>([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+
+  const activeSection = activeIndex !== null
+    ? parseSections(ydoc.getText('contents').toString())[activeIndex] ?? null
+    : null;
+
+  const { mountRef } = useSectionEditor({
+    ytext: ydoc.getText('contents'),
+    sectionFrom: activeSection?.from ?? 0,
+    sectionTo: activeSection?.to ?? 0,
+    active: activeIndex !== null,
+    awareness: provider.awareness,
+  });
 
   // Sync detection
   useEffect(() => {
@@ -40,40 +49,6 @@ export function SectionEditor({ onOpenInEditor }: SectionEditorProps) {
     ytext.observe(update);
     return () => ytext.unobserve(update);
   }, [ydoc, synced]);
-
-  // Create/destroy CM when activeIndex changes
-  useEffect(() => {
-    // Destroy previous view
-    if (viewRef.current) {
-      viewRef.current.destroy();
-      viewRef.current = null;
-    }
-
-    if (activeIndex === null || !mountRef.current) return;
-
-    const ytext = ydoc.getText('contents');
-    const currentSections = parseSections(ytext.toString());
-    const section = currentSections[activeIndex];
-    if (!section) return;
-
-    const view = createSectionEditorView({
-      ytext,
-      sectionFrom: section.from,
-      sectionTo: section.to,
-      awareness: provider.awareness,
-      parent: mountRef.current,
-    });
-
-    viewRef.current = view;
-    requestAnimationFrame(() => view.focus());
-
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
-  }, [activeIndex, ydoc]);
-
-  const deactivate = useCallback(() => setActiveIndex(null), []);
 
   return (
     <div className="max-w-2xl mx-auto py-6 px-4">
@@ -99,7 +74,7 @@ export function SectionEditor({ onOpenInEditor }: SectionEditorProps) {
                 <div className="rounded-lg border-2 border-blue-400 bg-white overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
                     <span className="font-medium text-sm text-blue-700">{section.label}</span>
-                    <button onClick={deactivate}
+                    <button onClick={() => setActiveIndex(null)}
                       className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">
                       Done
                     </button>

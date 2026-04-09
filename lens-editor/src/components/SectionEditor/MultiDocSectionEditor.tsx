@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import type { EditorView } from 'codemirror';
+import { useRef, useState, useCallback } from 'react';
 import { parseSections } from './parseSections';
-import { createSectionEditorView } from './createSectionEditorView';
 import { SectionCard, getDocColor } from './SectionCard';
 import { useMultiDocSections } from './useMultiDocSections';
+import { useSectionEditor } from '../../hooks/useSectionEditor';
 
 interface MultiDocSectionEditorProps {
   compoundDocIds: string[];
@@ -12,66 +11,41 @@ interface MultiDocSectionEditorProps {
 }
 
 export function MultiDocSectionEditor({ compoundDocIds, docLabels }: MultiDocSectionEditorProps) {
-  const mountRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
   const { sections, synced, docStates } = useMultiDocSections(compoundDocIds);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
 
-  // Snapshot the section info when user clicks — so the CM creation effect
+  // Snapshot the section info when user clicks — so the hook's effect
   // doesn't depend on `sections` (which changes on every Y.Text edit).
   const activeSectionRef = useRef<{ compoundDocId: string; from: number; to: number } | null>(null);
 
   const activate = useCallback((i: number) => {
     const section = sections[i];
-    if (section) {
-      activeSectionRef.current = {
-        compoundDocId: section.compoundDocId,
-        from: section.from,
-        to: section.to,
-      };
-    }
-    setActiveIndex(i);
-  }, [sections]);
+    if (!section) return;
 
-  // Create/destroy CM when activeIndex changes
-  // Does NOT depend on `sections` — uses activeSectionRef snapshot instead
-  useEffect(() => {
-    if (viewRef.current) {
-      viewRef.current.destroy();
-      viewRef.current = null;
-    }
-    if (activeIndex === null || !mountRef.current || !activeSectionRef.current) return;
-
-    const { compoundDocId, from, to } = activeSectionRef.current;
-    const state = docStates.get(compoundDocId);
+    // Get the Y.Text for this section's doc to re-parse fresh offsets
+    const state = docStates.get(section.compoundDocId);
     if (!state) return;
+    const freshSections = parseSections(state.ytext.toString());
+    const freshSection = freshSections.find(s => s.from === section.from && s.to === section.to);
 
-    const { ytext, awareness } = state;
-
-    // Re-parse to get fresh offsets
-    const freshSections = parseSections(ytext.toString());
-    const freshSection = freshSections.find(s => s.from === from && s.to === to);
-    if (!freshSection) return;
-
-    const view = createSectionEditorView({
-      ytext,
-      sectionFrom: freshSection.from,
-      sectionTo: freshSection.to,
-      awareness,
-      parent: mountRef.current,
-    });
-
-    viewRef.current = view;
-    requestAnimationFrame(() => view.focus());
-
-    return () => {
-      view.destroy();
-      viewRef.current = null;
+    activeSectionRef.current = {
+      compoundDocId: section.compoundDocId,
+      from: freshSection?.from ?? section.from,
+      to: freshSection?.to ?? section.to,
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex]);
+    setActiveIndex(i);
+  }, [sections, docStates]);
 
-  const deactivate = useCallback(() => setActiveIndex(null), []);
+  const activeState = activeSectionRef.current
+    ? docStates.get(activeSectionRef.current.compoundDocId)
+    : null;
+  const { mountRef } = useSectionEditor({
+    ytext: activeState?.ytext ?? null,
+    sectionFrom: activeSectionRef.current?.from ?? 0,
+    sectionTo: activeSectionRef.current?.to ?? 0,
+    active: activeIndex !== null,
+    awareness: activeState?.awareness,
+  });
 
   return (
     <div className="max-w-2xl mx-auto py-6 px-4">
@@ -113,7 +87,7 @@ export function MultiDocSectionEditor({ compoundDocIds, docLabels }: MultiDocSec
                         );
                       })()}
                     </div>
-                    <button onClick={deactivate}
+                    <button onClick={() => setActiveIndex(null)}
                       className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">
                       Done
                     </button>
