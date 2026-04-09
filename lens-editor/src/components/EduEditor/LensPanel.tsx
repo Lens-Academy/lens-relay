@@ -192,60 +192,23 @@ export function LensPanel({ lensDocId, lensName }: LensPanelProps) {
           );
         }
 
-        // Legacy article-excerpt section (old format: separate from article-ref heading)
-        if (section.type === 'article-excerpt') {
+        // Video segment (new format: #### Video with source/from/to inline)
+        // Source inherits from previous video segment if not specified
+        if (section.type === 'video') {
+          let videoSource = fields.get('source')?.trim();
           const from = fields.get('from') ?? undefined;
           const to = fields.get('to') ?? undefined;
 
-          // Find article source from nearest preceding article-ref heading
-          let articleSource = '';
-          for (let j = i - 1; j >= 0; j--) {
-            if (sections[j].type === 'article-ref') {
-              const headingFields = parseFields(sections[j].content);
-              const src = headingFields.get('source');
-              if (src) {
-                articleSource = src.trim();
-                break;
-              }
-            }
-          }
-
-          if (!articleSource) {
-            return (
-              <div key={i} className="mb-7 p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
-                Article-excerpt has no article source:: in a preceding heading
-              </div>
-            );
-          }
-
-          const lensUuid = lensDocId.slice(RELAY_ID.length + 1);
-          const lensPath = Object.entries(metadata).find(([, m]) => m.id === lensUuid)?.[0] ?? '';
-
-          return (
-            <ArticleEmbed
-              key={i}
-              fromAnchor={from}
-              toAnchor={to}
-              articleSourceWikilink={articleSource}
-              lensSourcePath={lensPath}
-            />
-          );
-        }
-
-        // Video-excerpt section
-        if (section.type === 'video-excerpt') {
-          const from = fields.get('from') ?? undefined;
-          const to = fields.get('to') ?? undefined;
-
-          // Find video source from nearest preceding video-ref heading
-          let videoSource = '';
-          for (let j = i - 1; j >= 0; j--) {
-            if (sections[j].type === 'video-ref') {
-              const headingFields = parseFields(sections[j].content);
-              const src = headingFields.get('source');
-              if (src) {
-                videoSource = src.trim();
-                break;
+          // Source inheritance: find source from previous video segment
+          if (!videoSource) {
+            for (let j = i - 1; j >= 0; j--) {
+              if (sections[j].type === 'video') {
+                const prevFields = parseFields(sections[j].content);
+                const src = prevFields.get('source')?.trim();
+                if (src) {
+                  videoSource = src;
+                  break;
+                }
               }
             }
           }
@@ -253,7 +216,7 @@ export function LensPanel({ lensDocId, lensName }: LensPanelProps) {
           if (!videoSource) {
             return (
               <div key={i} className="mb-7 p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
-                Video-excerpt has no video source:: in a preceding heading
+                Video segment missing source:: field (no preceding video to inherit from)
               </div>
             );
           }

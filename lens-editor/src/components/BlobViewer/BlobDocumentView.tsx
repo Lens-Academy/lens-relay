@@ -9,7 +9,7 @@ interface BlobDocumentViewProps {
 }
 
 export function BlobDocumentView({ docId, hash, folderDocId, fileName }: BlobDocumentViewProps) {
-  const { content, loading, error } = useBlobContent(docId, hash, folderDocId);
+  const { content, loading, error } = useBlobContent(docId, hash);
 
   if (loading || content === null) {
     return (

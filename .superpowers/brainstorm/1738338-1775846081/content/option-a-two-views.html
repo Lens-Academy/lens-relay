@@ -1,0 +1,189 @@
+<h2>Option A: two content-pane states</h2>
+<p class="subtitle">Same layout (nav left, content right). Top mock = lens selected. Bottom mock = module selected.</p>
+
+<style>
+  .edu-mock { font-family: system-ui, sans-serif; font-size: 11px; color: #1a1a1a; }
+  .edu-mock .frame { border: 1px solid #cfd3d8; border-radius: 6px; overflow: hidden; background: #fff; margin-bottom: 18px; }
+  .edu-mock .pane { background: #fff; padding: 10px 12px; overflow: hidden; }
+  .edu-mock .pane-label { font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: #8a8f97; font-weight: 700; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px dashed #e0e3e8; }
+  .edu-mock .pane-editor { background: #faf8f3; }
+
+  .edu-mock .nav-module { font-weight: 700; font-size: 12px; padding: 5px 6px; margin-bottom: 4px; border-radius: 4px; cursor: pointer; }
+  .edu-mock .nav-module:hover { background: #f1f3f6; }
+  .edu-mock .nav-module.active { background: #e8f0fe; color: #1a56c0; border: 1px solid #1a56c0; }
+  .edu-mock .nav-page { padding: 3px 6px 3px 14px; color: #6a6f78; font-size: 10px; cursor: pointer; }
+  .edu-mock .nav-page:hover { background: #f1f3f6; }
+  .edu-mock .nav-lo { padding: 4px 6px 4px 14px; margin-top: 6px; border-left: 2px solid #f5c86a; color: #7a5a15; font-weight: 600; cursor: pointer; }
+  .edu-mock .nav-lo:hover { background: #fff5e0; }
+  .edu-mock .nav-submodule { padding: 3px 6px 3px 26px; color: #6a2d9b; font-weight: 600; font-size: 10px; cursor: pointer; }
+  .edu-mock .nav-lens { padding: 3px 6px 3px 26px; color: #1a56c0; font-size: 10px; cursor: pointer; border-radius: 3px; }
+  .edu-mock .nav-lens.active { background: #e8f0fe; border: 1px solid #1a56c0; }
+  .edu-mock .nav-lens:hover { background: #eef3fb; }
+  .edu-mock .nav-lens.deep { padding-left: 38px; }
+  .edu-mock .nav-test { padding: 3px 6px 3px 26px; color: #b03636; font-size: 10px; font-style: italic; cursor: pointer; }
+  .edu-mock .nav-test:hover { background: #fdeaea; }
+
+  .edu-mock .lens-toolbar { display: flex; gap: 5px; padding: 5px 7px; background: #fff; border: 1px solid #e8e5df; border-radius: 12px; margin-bottom: 10px; align-items: center; }
+  .edu-mock .lens-toolbar .tab { font-size: 9px; padding: 3px 8px; border-radius: 10px; background: #111; color: #fff; font-weight: 600; }
+  .edu-mock .lens-toolbar .tab.off { background: #eceef2; color: #5a5f68; }
+  .edu-mock .lens-toolbar .fname { margin-left: auto; font-size: 9px; color: #8a8f97; }
+
+  /* Lens-view section styles */
+  .edu-mock .section { background: #fff; border: 1px solid #e8e5df; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+  .edu-mock .section.text { border-color: #d6dae0; }
+  .edu-mock .section.chat { border-left: 3px solid #42a15b; }
+  .edu-mock .section.video { border-left: 3px solid #17a2a7; background: #f2faf9; }
+  .edu-mock .section.question { border-left: 3px solid #d87a1b; }
+  .edu-mock .section .stype { font-size: 8px; text-transform: uppercase; letter-spacing: 0.05em; color: #8a8f97; font-weight: 700; margin-bottom: 4px; }
+  .edu-mock .section .sbody { color: #43474e; line-height: 1.45; font-size: 10px; }
+
+  /* Module-view section styles */
+  .edu-mock .m-frontmatter { background: #fff; border: 1px solid #e4e0d4; border-radius: 5px; padding: 7px 10px; margin-bottom: 6px; font-family: ui-monospace, monospace; font-size: 9px; color: #6a6f78; }
+  .edu-mock .m-frontmatter .label { font-size: 8px; text-transform: uppercase; color: #8a8f97; font-weight: 700; font-family: system-ui, sans-serif; margin-bottom: 3px; }
+
+  .edu-mock .m-page { background: #fff; border: 1px solid #e8e5df; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+  .edu-mock .m-page .ptitle { font-family: 'Newsreader', serif; font-size: 14px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; }
+  .edu-mock .m-page .ptext { font-size: 10px; color: #43474e; line-height: 1.45; }
+
+  .edu-mock .m-lo { background: #fff; border: 1.5px solid #f0c96a; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+  .edu-mock .m-lo .lo-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+  .edu-mock .m-lo .lo-badge { font-size: 8px; background: #fff0cc; color: #7a5a15; padding: 1px 5px; border-radius: 3px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+  .edu-mock .m-lo .lo-title { font-weight: 700; font-size: 11px; color: #2a2f38; }
+  .edu-mock .m-lo .lo-source { font-family: ui-monospace, monospace; font-size: 9px; color: #8a8f97; margin-bottom: 4px; padding-bottom: 4px; border-bottom: 1px dashed #f0e0b0; }
+  .edu-mock .m-lo .lo-preview { font-size: 9px; color: #6a6f78; margin-bottom: 3px; font-style: italic; }
+  .edu-mock .m-lo .lens-line { font-size: 10px; color: #1a56c0; padding: 2px 0 2px 10px; cursor: pointer; border-left: 2px solid #e0e3e8; margin-left: 2px; }
+  .edu-mock .m-lo .lens-line:hover { text-decoration: underline; background: #f4f8ff; }
+  .edu-mock .m-lo .lens-line.deep { padding-left: 20px; }
+  .edu-mock .m-lo .sub-label { font-size: 9px; color: #6a2d9b; font-weight: 700; padding: 3px 0 1px 10px; }
+
+  .opt-a { display: grid; grid-template-columns: 200px 1fr; height: 340px; }
+  .opt-a .pane:first-child { border-right: 1px solid #e0e3e8; overflow-y: auto; }
+  .opt-a .pane-editor { overflow-y: auto; }
+
+  .mock-title { font-size: 11px; font-weight: 700; color: #2a2f38; margin-bottom: 5px; margin-top: 14px; letter-spacing: 0.02em; }
+</style>
+
+<div class="edu-mock">
+
+  <div class="mock-title">View 1 &mdash; lens selected ("PASTA AI")</div>
+  <div class="frame opt-a">
+    <div class="pane">
+      <div class="pane-label">Module structure</div>
+      <div class="nav-module">Cognitive Superpowers</div>
+      <div class="nav-page">Welcome (page)</div>
+      <div class="nav-lo">LO: Intelligence as adaptive strategy</div>
+      <div class="nav-lens active">&rarr; PASTA AI</div>
+      <div class="nav-lens">Other Lens</div>
+      <div class="nav-lo">LO: Processing speed advantage</div>
+      <div class="nav-lens">Speed Lens</div>
+      <div class="nav-lo">LO: AI manipulation examples</div>
+      <div class="nav-submodule">Automating Alignment</div>
+      <div class="nav-lens deep">Auto Align Lens</div>
+      <div class="nav-lens deep">AI for AI Safety</div>
+      <div class="nav-test">Test</div>
+    </div>
+
+    <div class="pane pane-editor">
+      <div class="pane-label">Content &mdash; PASTA AI (lens)</div>
+      <div class="lens-toolbar">
+        <span class="tab">Edit</span>
+        <span class="tab off">Preview</span>
+        <span class="tab off">Feedback</span>
+        <span class="fname">PASTA AI.md</span>
+      </div>
+      <div class="section text">
+        <div class="stype">Text</div>
+        <div class="sbody">PASTA stands for Process for Automating Scientific and Technological Advancement&hellip;</div>
+      </div>
+      <div class="section video">
+        <div class="stype">Video &mdash; 3:12 to 5:40</div>
+        <div class="sbody"><em>Computerphile: AI Self-Improvement</em></div>
+      </div>
+      <div class="section chat">
+        <div class="stype">Chat</div>
+        <div class="sbody">Ask the student to describe PASTA in their own words&hellip;</div>
+      </div>
+      <div class="section question">
+        <div class="stype">Question</div>
+        <div class="sbody">Why would automating R&amp;D speed up AI development?</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mock-title">View 2 &mdash; module selected ("Cognitive Superpowers")</div>
+  <div class="frame opt-a">
+    <div class="pane">
+      <div class="pane-label">Module structure</div>
+      <div class="nav-module active">Cognitive Superpowers</div>
+      <div class="nav-page">Welcome (page)</div>
+      <div class="nav-lo">LO: Intelligence as adaptive strategy</div>
+      <div class="nav-lens">PASTA AI</div>
+      <div class="nav-lens">Other Lens</div>
+      <div class="nav-lo">LO: Processing speed advantage</div>
+      <div class="nav-lens">Speed Lens</div>
+      <div class="nav-lo">LO: AI manipulation examples</div>
+      <div class="nav-submodule">Automating Alignment</div>
+      <div class="nav-lens deep">Auto Align Lens</div>
+      <div class="nav-lens deep">AI for AI Safety</div>
+      <div class="nav-test">Test</div>
+    </div>
+
+    <div class="pane pane-editor">
+      <div class="pane-label">Content &mdash; Cognitive Superpowers (module)</div>
+      <div class="lens-toolbar">
+        <span class="tab">Edit</span>
+        <span class="tab off">Preview</span>
+        <span class="tab off">Raw</span>
+        <span class="fname">Cognitive Superpowers.md</span>
+      </div>
+
+      <div class="m-frontmatter">
+        <div class="label">Frontmatter</div>
+        title: Cognitive Superpowers<br>
+        slug: cognitive-superpowers<br>
+        tags: [module]
+      </div>
+
+      <div class="m-page">
+        <div class="ptitle">Welcome</div>
+        <div class="ptext">In this module, we explore the myriad ways in which intelligence gives agents power over their environment and over other agents that are less intelligent&hellip;</div>
+      </div>
+
+      <div class="m-lo">
+        <div class="lo-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <span class="lo-title">Intelligence as adaptive strategy</span>
+        </div>
+        <div class="lo-source">source:: [[../Learning Outcomes/Intelligence as a universal adaptive strategy]]</div>
+        <div class="lo-preview">Lenses inside this LO:</div>
+        <div class="lens-line">&rarr; PASTA AI</div>
+        <div class="lens-line">&rarr; Other Lens</div>
+      </div>
+
+      <div class="m-lo">
+        <div class="lo-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <span class="lo-title">Processing speed advantage</span>
+        </div>
+        <div class="lo-source">source:: [[../Learning Outcomes/Understand the processing speed advantage]]</div>
+        <div class="lo-preview">Lenses inside this LO:</div>
+        <div class="lens-line">&rarr; Speed Lens</div>
+      </div>
+
+      <div class="m-lo">
+        <div class="lo-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <span class="lo-title">AI manipulation examples</span>
+        </div>
+        <div class="lo-source">source:: ![[../Learning Outcomes/Cite examples of AI manipulation]]</div>
+        <div class="lo-preview">Lenses inside this LO:</div>
+        <div class="sub-label">Submodule: Automating Alignment</div>
+        <div class="lens-line deep">&rarr; Auto Align Lens</div>
+        <div class="lens-line deep">&rarr; AI for AI Safety</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle">Top: right pane shows the lens (editable text/chat/video/question sections). Bottom: right pane shows the module (frontmatter, pages, LO-ref blocks with nested lens titles for navigation). Same nav in both &mdash; only the right pane changes based on selection. Nothing to click; let me know in the terminal.</p>

@@ -1,0 +1,211 @@
+<h2>Edu Editor layout: two options</h2>
+<p class="subtitle">Both mock the same moment: editing a lens ("PASTA AI") that lives inside the "Intelligence as a universal adaptive strategy" LO of the "Cognitive Superpowers" module. Click an option to vote.</p>
+
+<style>
+  /* Shared mock styles for both layouts */
+  .edu-mock { font-family: system-ui, sans-serif; font-size: 11px; color: #1a1a1a; }
+  .edu-mock .frame { border: 1px solid #cfd3d8; border-radius: 6px; overflow: hidden; background: #fff; }
+  .edu-mock .pane { background: #fff; padding: 10px 12px; overflow: hidden; }
+  .edu-mock .pane-label { font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: #8a8f97; font-weight: 700; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px dashed #e0e3e8; }
+  .edu-mock .pane-editor { background: #faf8f3; }
+  .edu-mock .row { display: flex; }
+  .edu-mock .nav-module { font-weight: 700; font-size: 12px; padding: 5px 6px; margin-bottom: 4px; border-radius: 4px; cursor: pointer; }
+  .edu-mock .nav-module:hover { background: #f1f3f6; }
+  .edu-mock .nav-module.active { background: #e8f0fe; color: #1a56c0; }
+  .edu-mock .nav-page { padding: 3px 6px 3px 14px; color: #6a6f78; font-size: 10px; cursor: pointer; }
+  .edu-mock .nav-page:hover { background: #f1f3f6; }
+  .edu-mock .nav-lo { padding: 4px 6px 4px 14px; margin-top: 6px; border-left: 2px solid #f5c86a; color: #7a5a15; font-weight: 600; cursor: pointer; }
+  .edu-mock .nav-lo:hover { background: #fff5e0; }
+  .edu-mock .nav-submodule { padding: 3px 6px 3px 26px; color: #6a2d9b; font-weight: 600; font-size: 10px; cursor: pointer; }
+  .edu-mock .nav-lens { padding: 3px 6px 3px 26px; color: #1a56c0; font-size: 10px; cursor: pointer; border-radius: 3px; }
+  .edu-mock .nav-lens.active { background: #e8f0fe; border: 1px solid #1a56c0; }
+  .edu-mock .nav-lens:hover { background: #eef3fb; }
+  .edu-mock .nav-lens.deep { padding-left: 38px; }
+  .edu-mock .nav-test { padding: 3px 6px 3px 26px; color: #b03636; font-size: 10px; font-style: italic; cursor: pointer; }
+  .edu-mock .nav-test:hover { background: #fdeaea; }
+
+  .edu-mock .lens-toolbar { display: flex; gap: 5px; padding: 5px 7px; background: #fff; border: 1px solid #e8e5df; border-radius: 12px; margin-bottom: 10px; align-items: center; }
+  .edu-mock .lens-toolbar .tab { font-size: 9px; padding: 3px 8px; border-radius: 10px; background: #111; color: #fff; font-weight: 600; }
+  .edu-mock .lens-toolbar .tab.off { background: #eceef2; color: #5a5f68; }
+  .edu-mock .lens-toolbar .fname { margin-left: auto; font-size: 9px; color: #8a8f97; }
+
+  .edu-mock .section { background: #fff; border: 1px solid #e8e5df; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+  .edu-mock .section.text { border-color: #d6dae0; }
+  .edu-mock .section.chat { border-left: 3px solid #42a15b; }
+  .edu-mock .section.video { border-left: 3px solid #17a2a7; background: #f2faf9; }
+  .edu-mock .section.question { border-left: 3px solid #d87a1b; }
+  .edu-mock .section .stype { font-size: 8px; text-transform: uppercase; letter-spacing: 0.05em; color: #8a8f97; font-weight: 700; margin-bottom: 4px; }
+  .edu-mock .section .sbody { color: #43474e; line-height: 1.45; font-size: 10px; }
+
+  /* Structural-section styling (module/LO view) */
+  .edu-mock .struct-section { background: #fff; border: 1px dashed #cfd3d8; border-radius: 5px; padding: 7px 9px; margin-bottom: 6px; }
+  .edu-mock .struct-section.selected { border: 2px solid #4a8df8; background: #f4f8ff; }
+  .edu-mock .struct-title { font-size: 10px; font-weight: 700; color: #2a2f38; }
+  .edu-mock .struct-meta { font-size: 9px; color: #8a8f97; margin-top: 2px; }
+  .edu-mock .lo-children { margin-top: 5px; padding-left: 10px; border-left: 1.5px solid #f5c86a; }
+  .edu-mock .lo-children .lens-line { font-size: 9px; color: #1a56c0; padding: 2px 0; cursor: pointer; }
+  .edu-mock .lo-children .lens-line:hover { text-decoration: underline; }
+
+  .edu-mock .empty { display: flex; align-items: center; justify-content: center; color: #9aa0a8; font-size: 10px; font-style: italic; min-height: 80%; border: 2px dashed #e0e3e8; border-radius: 6px; background: #fafafa; }
+
+  /* Option A layout */
+  .opt-a { display: grid; grid-template-columns: 200px 1fr; height: 340px; }
+  .opt-a .pane:first-child { border-right: 1px solid #e0e3e8; overflow-y: auto; }
+
+  /* Option B layout */
+  .opt-b { display: grid; grid-template-columns: 340px 1fr; height: 340px; }
+  .opt-b .pane:first-child { border-right: 1px solid #e0e3e8; overflow-y: auto; background: #fbfaf7; }
+</style>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)" style="flex: 1;">
+    <div class="letter">A</div>
+    <div class="content" style="flex: 1;">
+      <h3>Nav + single content pane</h3>
+      <p>Left: nav only. Right: whatever doc is selected (module/LO/lens). Consistent model — one panel for nav, one for editing, whichever doc it is.</p>
+
+      <div class="edu-mock" style="margin-top: 8px;">
+        <div class="frame opt-a">
+          <!-- Nav pane -->
+          <div class="pane">
+            <div class="pane-label">Module structure</div>
+            <div class="nav-module">Cognitive Superpowers</div>
+            <div class="nav-page">Welcome (page)</div>
+            <div class="nav-lo">LO: Intelligence as adaptive strategy</div>
+            <div class="nav-lens active">&rarr; PASTA AI</div>
+            <div class="nav-lens">Other Lens</div>
+            <div class="nav-lo">LO: Processing speed advantage</div>
+            <div class="nav-lens">Speed Lens</div>
+            <div class="nav-lo">LO: AI manipulation examples</div>
+            <div class="nav-submodule">Automating Alignment</div>
+            <div class="nav-lens deep">Auto Align Lens</div>
+            <div class="nav-lens deep">AI for AI Safety</div>
+            <div class="nav-test">Test</div>
+          </div>
+
+          <!-- Editor pane (showing lens) -->
+          <div class="pane pane-editor">
+            <div class="pane-label">Content &mdash; PASTA AI (lens)</div>
+            <div class="lens-toolbar">
+              <span class="tab">Edit</span>
+              <span class="tab off">Preview</span>
+              <span class="tab off">Feedback</span>
+              <span class="fname">PASTA AI.md</span>
+            </div>
+            <div class="section text">
+              <div class="stype">Text</div>
+              <div class="sbody">PASTA stands for Process for Automating Scientific and Technological Advancement&hellip;</div>
+            </div>
+            <div class="section video">
+              <div class="stype">Video &mdash; 3:12 to 5:40</div>
+              <div class="sbody"><em>Computerphile: AI Self-Improvement</em></div>
+            </div>
+            <div class="section chat">
+              <div class="stype">Chat</div>
+              <div class="sbody">Ask the student to describe PASTA in their own words&hellip;</div>
+            </div>
+            <div class="section question">
+              <div class="stype">Question</div>
+              <div class="sbody">Why would automating R&amp;D speed up AI development?</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pros-cons" style="margin-top: 10px;">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>One mental model: nav + editor, always.</li>
+          <li>Each pane has one job.</li>
+          <li>Module/LO and lens editing look the same.</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>When editing a module, nav duplicates the editor content.</li>
+          <li>Selecting a lens hides the module structure from the editor (nav only).</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)" style="flex: 1;">
+    <div class="letter">B</div>
+    <div class="content" style="flex: 1;">
+      <h3>Nav-is-editor for module/LO, lens on the right</h3>
+      <p>Left panel IS the module/LO editor: sections are editable in-place, with inline lens titles. Clicking a lens title opens it on the right. Right panel is lens-only.</p>
+
+      <div class="edu-mock" style="margin-top: 8px;">
+        <div class="frame opt-b">
+          <!-- Left: nav-editor -->
+          <div class="pane">
+            <div class="pane-label">Cognitive Superpowers (module)</div>
+
+            <div class="struct-section">
+              <div class="struct-title">Page: Welcome</div>
+              <div class="struct-meta">click to edit text</div>
+            </div>
+
+            <div class="struct-section">
+              <div class="struct-title">LO: Intelligence as adaptive strategy</div>
+              <div class="struct-meta">source:: [[Intelligence as a universal adaptive strategy]]</div>
+              <div class="lo-children">
+                <div class="lens-line" style="font-weight:700; color:#0d3f8a;">&rarr; PASTA AI (open on right)</div>
+                <div class="lens-line">Other Lens</div>
+              </div>
+            </div>
+
+            <div class="struct-section">
+              <div class="struct-title">LO: Processing speed advantage</div>
+              <div class="lo-children">
+                <div class="lens-line">Speed Lens</div>
+              </div>
+            </div>
+
+            <div class="struct-section">
+              <div class="struct-title">LO: AI manipulation examples</div>
+              <div class="lo-children">
+                <div style="font-size:9px; color:#6a2d9b; font-weight:600; padding:2px 0;">Submodule: Automating Alignment</div>
+                <div class="lens-line" style="padding-left:10px;">Auto Align Lens</div>
+                <div class="lens-line" style="padding-left:10px;">AI for AI Safety</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: lens editor -->
+          <div class="pane pane-editor">
+            <div class="pane-label">PASTA AI (lens)</div>
+            <div class="lens-toolbar">
+              <span class="tab">Edit</span>
+              <span class="tab off">Preview</span>
+              <span class="tab off">Feedback</span>
+              <span class="fname">PASTA AI.md</span>
+            </div>
+            <div class="section text">
+              <div class="stype">Text</div>
+              <div class="sbody">PASTA stands for Process for Automating Scientific and Technological Advancement&hellip;</div>
+            </div>
+            <div class="section video">
+              <div class="stype">Video &mdash; 3:12 to 5:40</div>
+              <div class="sbody"><em>Computerphile: AI Self-Improvement</em></div>
+            </div>
+            <div class="section question">
+              <div class="stype">Question</div>
+              <div class="sbody">Why would automating R&amp;D speed up AI development?</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pros-cons" style="margin-top: 10px;">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Module structure stays visible while editing a lens.</li>
+          <li>Two docs visible simultaneously (context + detail).</li>
+          <li>Nav is never "wasted space" — you can edit it.</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Left pane has two jobs (browse + edit) &mdash; more UI density.</li>
+          <li>Modules and LOs are edited in narrow column.</li>
+          <li>Right pane is empty until a lens is picked.</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { resolveWikilinkToUuid } from '../../lib/resolveDocPath';
+import { fetchBlobContent } from '../../lib/fetchBlob';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { RELAY_ID } from '../../lib/constants';
 
@@ -44,22 +45,20 @@ export function VideoExcerptEmbed({ fromTime, toTime, videoSourceWikilink, lensS
 
       const transcriptText = transcriptDoc.getText('contents').toString();
 
-      // Try to find and load timestamps.json
+      // Try to find and load timestamps.json (stored as blob, not Y.Doc)
       const transcriptPath = Object.entries(metadata).find(([, m]) => m.id === transcriptUuid)?.[0];
       let timestamps: Array<{ text: string; start: string }> | undefined;
 
       if (transcriptPath) {
         const tsPath = transcriptPath.replace(/\.md$/, '.timestamps.json');
-        const tsEntry = metadata[tsPath];
+        const tsEntry = metadata[tsPath] as { id: string; hash?: string } | undefined;
 
-        if (tsEntry) {
+        if (tsEntry?.hash) {
           try {
-            const tsCompoundId = `${RELAY_ID}-${(tsEntry as { id: string }).id}`;
-            const { doc: tsDoc } = await getOrConnect(tsCompoundId);
+            const tsDocId = `${RELAY_ID}-${tsEntry.id}`;
+            const text = await fetchBlobContent(tsDocId, tsEntry.hash);
             if (cancelled) return;
-
-            const tsText = tsDoc.getText('contents').toString();
-            timestamps = JSON.parse(tsText);
+            timestamps = JSON.parse(text);
           } catch {
             // Fall back to inline timestamp extraction
           }

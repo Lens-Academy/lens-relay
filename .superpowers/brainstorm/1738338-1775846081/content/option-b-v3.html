@@ -1,0 +1,271 @@
+<h2>Option B, v3 &mdash; left is structural + LO definitions only</h2>
+<p class="subtitle">Everything lens-shaped renders on the right: lenses, module pages, LO tests (with embedded questions), inline lens refs. The left pane only holds the module tree plus each LO's definition text (the one thing that's long-form and only belongs to the LO file).</p>
+
+<style>
+  .edu-mock { font-family: system-ui, sans-serif; font-size: 11px; color: #1a1a1a; }
+  .edu-mock .frame { border: 1px solid #cfd3d8; border-radius: 6px; overflow: hidden; background: #fff; margin-bottom: 18px; }
+  .edu-mock .pane { padding: 12px 14px; }
+  .edu-mock .pane-label { font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: #8a8f97; font-weight: 700; margin-bottom: 8px; padding-bottom: 5px; border-bottom: 1px dashed #e0e3e8; }
+
+  .left { background: #fbfaf7; overflow-y: auto; border-right: 1px solid #e0e3e8; }
+  .right { background: #faf8f3; overflow-y: auto; }
+
+  .module-header { padding: 8px 10px; background: #fff; border: 1px solid #e4e0d4; border-radius: 6px; margin-bottom: 8px; cursor: pointer; }
+  .module-header:hover { border-color: #4a8df8; }
+  .module-header .mtitle { font-family: 'Newsreader', serif; font-size: 14px; font-weight: 700; color: #1a1a1a; }
+  .module-header .mmeta { font-size: 9px; color: #8a8f97; margin-top: 2px; font-family: ui-monospace, monospace; }
+
+  /* Compact entries (pages, inline lenses at module level, tests, submodules) */
+  .tree-entry { padding: 5px 10px; background: #fff; border: 1px solid #e8e5df; border-radius: 4px; margin-bottom: 4px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 10px; }
+  .tree-entry:hover { background: #eef3fb; border-color: #4a8df8; }
+  .tree-entry.active { background: #d6e6ff; border: 1.5px solid #1a56c0; font-weight: 700; color: #0d3f8a; }
+  .tree-entry .badge { font-size: 7px; padding: 1px 4px; border-radius: 2px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+  .tree-entry .badge.page { background: #f0e9d8; color: #7a5a15; }
+  .tree-entry .badge.lens { background: #e8f0fe; color: #1a56c0; }
+  .tree-entry .badge.test { background: #fdeaea; color: #b03636; }
+  .tree-entry .badge.sub { background: #f3e8ff; color: #6a2d9b; }
+  .tree-entry .label { flex: 1; }
+  .tree-entry .caret { color: #9aa0a8; font-size: 9px; }
+
+  /* LO card: the only place with long text on left */
+  .lo-card { background: #fff; border: 1.5px solid #f0c96a; border-radius: 6px; margin-bottom: 8px; overflow: hidden; }
+  .lo-card-head { padding: 7px 10px 5px 10px; border-bottom: 1px dashed #f0e0b0; }
+  .lo-card-head .lo-badge { font-size: 7px; background: #fff0cc; color: #7a5a15; padding: 1px 5px; border-radius: 2px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+  .lo-card-head .lo-title { font-weight: 700; font-size: 11px; color: #2a2f38; margin-top: 3px; }
+
+  .lo-definition { padding: 6px 10px; background: #fffdf5; border-bottom: 1px dashed #f0e0b0; }
+  .lo-definition .def-label { font-size: 7px; text-transform: uppercase; letter-spacing: 0.04em; color: #a08030; font-weight: 700; margin-bottom: 3px; }
+  .lo-definition .def-text { font-size: 10px; color: #43474e; line-height: 1.45; cursor: text; padding: 3px 5px; border-radius: 3px; border: 1px solid transparent; }
+  .lo-definition .def-text:hover { background: #fff; border-color: #e8d8a0; }
+
+  .lo-children { padding: 6px 10px 8px 10px; }
+  .lo-child { padding: 4px 8px; font-size: 10px; cursor: pointer; border-radius: 3px; border: 1px solid transparent; margin: 2px 0; display: flex; align-items: center; gap: 5px; }
+  .lo-child:hover { background: #eef3fb; }
+  .lo-child.active { background: #d6e6ff; border-color: #1a56c0; font-weight: 700; }
+  .lo-child .badge { font-size: 7px; padding: 1px 4px; border-radius: 2px; font-weight: 700; text-transform: uppercase; }
+  .lo-child .badge.lens { background: #e8f0fe; color: #1a56c0; }
+  .lo-child .badge.test { background: #fdeaea; color: #b03636; }
+  .lo-child .badge.sub { background: #f3e8ff; color: #6a2d9b; }
+  .lo-child.sublabel { font-weight: 700; color: #6a2d9b; text-transform: uppercase; font-size: 9px; padding-top: 6px; cursor: default; background: transparent; }
+  .lo-child.sublabel:hover { background: transparent; }
+  .lo-child .label { flex: 1; color: #1a56c0; }
+  .lo-child .optional { font-size: 8px; color: #9aa0a8; font-style: italic; }
+
+  /* Right pane (lens editor) */
+  .lens-toolbar { display: flex; gap: 5px; padding: 5px 7px; background: #fff; border: 1px solid #e8e5df; border-radius: 12px; margin-bottom: 10px; align-items: center; }
+  .lens-toolbar .tab { font-size: 9px; padding: 3px 8px; border-radius: 10px; background: #111; color: #fff; font-weight: 600; }
+  .lens-toolbar .tab.off { background: #eceef2; color: #5a5f68; }
+  .lens-toolbar .fname { margin-left: auto; font-size: 9px; color: #8a8f97; }
+  .lens-toolbar .crumb { font-size: 9px; color: #6a6f78; }
+  .lens-toolbar .crumb strong { color: #1a1a1a; }
+
+  .section { background: #fff; border: 1px solid #e8e5df; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+  .section.text { border-color: #d6dae0; }
+  .section.chat { border-left: 3px solid #42a15b; }
+  .section.video { border-left: 3px solid #17a2a7; background: #f2faf9; }
+  .section.question { border-left: 3px solid #d87a1b; }
+  .section .stype { font-size: 8px; text-transform: uppercase; letter-spacing: 0.05em; color: #8a8f97; font-weight: 700; margin-bottom: 4px; }
+  .section .sbody { color: #43474e; line-height: 1.45; font-size: 10px; }
+
+  .empty-right { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #9aa0a8; text-align: center; padding: 40px 20px; }
+  .empty-right .big { font-size: 14px; color: #6a6f78; font-family: 'Newsreader', serif; margin-bottom: 6px; }
+  .empty-right .small { font-size: 10px; line-height: 1.5; max-width: 260px; }
+
+  .opt-b { display: grid; grid-template-columns: 420px 1fr; height: 640px; }
+
+  .mock-title { font-size: 11px; font-weight: 700; color: #2a2f38; margin-bottom: 5px; margin-top: 14px; letter-spacing: 0.02em; }
+</style>
+
+<div class="edu-mock">
+
+  <div class="mock-title">State A &mdash; LO "Intelligence as adaptive strategy" &middot; lens "PASTA AI" selected, rendered on right</div>
+  <div class="frame opt-b">
+    <div class="pane left">
+      <div class="pane-label">Cognitive Superpowers &mdash; module</div>
+
+      <div class="module-header">
+        <div class="mtitle">Cognitive Superpowers</div>
+        <div class="mmeta">slug: cognitive-superpowers &middot; tags: module</div>
+      </div>
+
+      <div class="tree-entry">
+        <span class="badge page">Page</span>
+        <span class="label">Welcome</span>
+        <span class="caret">&rarr;</span>
+      </div>
+
+      <div class="lo-card">
+        <div class="lo-card-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <div class="lo-title">Intelligence as adaptive strategy</div>
+        </div>
+        <div class="lo-definition">
+          <div class="def-label">Definition (editable)</div>
+          <div class="def-text">Students will be able to explain how intelligence functions as a universal adaptive strategy, giving agents power over their environment and over less intelligent agents.</div>
+        </div>
+        <div class="lo-children">
+          <div class="lo-child active"><span class="badge lens">Lens</span><span class="label">PASTA AI</span></div>
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">Other Lens</span></div>
+          <div class="lo-child"><span class="badge test">Test</span><span class="label">Test (empty)</span></div>
+        </div>
+      </div>
+
+      <div class="lo-card">
+        <div class="lo-card-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <div class="lo-title">Processing speed advantage</div>
+        </div>
+        <div class="lo-definition">
+          <div class="def-label">Definition (editable)</div>
+          <div class="def-text">Explain the processing-speed advantage machines have over humans and what it means for competitive dynamics.</div>
+        </div>
+        <div class="lo-children">
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">Speed Lens</span></div>
+          <div class="lo-child"><span class="badge test">Test</span><span class="label">Test (empty)</span></div>
+        </div>
+      </div>
+
+      <div class="lo-card">
+        <div class="lo-card-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <div class="lo-title">Arguments for and against agendas</div>
+        </div>
+        <div class="lo-definition">
+          <div class="def-label">Definition (editable)</div>
+          <div class="def-text">Meta LO: explain the pre-paradigmatic nature of AI Safety. Subject LO: summarize the primary arguments for and against Automating Alignment, Interpretability, AI Evaluations, AI Control, Agent Foundations.</div>
+        </div>
+        <div class="lo-children">
+          <div class="lo-child sublabel">Submodule: Automating Alignment</div>
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">Automating Alignment</span></div>
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">AI for AI safety</span></div>
+          <div class="lo-child sublabel">Submodule: Test Your Understanding</div>
+          <div class="lo-child"><span class="badge test">Test</span><span class="label">Test &mdash; 4 questions</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane right">
+      <div class="pane-label">PASTA AI &mdash; lens</div>
+      <div class="lens-toolbar">
+        <span class="tab">Edit</span>
+        <span class="tab off">Preview</span>
+        <span class="tab off">Feedback</span>
+        <span class="fname">PASTA AI.md</span>
+      </div>
+      <div class="section text">
+        <div class="stype">Text</div>
+        <div class="sbody">PASTA stands for Process for Automating Scientific and Technological Advancement. It is a conceptual framework that describes what happens when AI systems become capable of doing the research and engineering required to improve themselves.</div>
+      </div>
+      <div class="section video">
+        <div class="stype">Video &mdash; 3:12 to 5:40</div>
+        <div class="sbody"><em>Computerphile: AI Self-Improvement</em></div>
+      </div>
+      <div class="section chat">
+        <div class="stype">Chat (tutor instructions)</div>
+        <div class="sbody">Ask the student to describe PASTA in their own words&hellip;</div>
+      </div>
+      <div class="section question">
+        <div class="stype">Question</div>
+        <div class="sbody">Why would automating R&amp;D speed up AI development?</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mock-title">State B &mdash; "Test &mdash; 4 questions" selected, rendered on right as lens-like content</div>
+  <div class="frame opt-b">
+    <div class="pane left">
+      <div class="pane-label">Cognitive Superpowers &mdash; module</div>
+
+      <div class="module-header">
+        <div class="mtitle">Cognitive Superpowers</div>
+        <div class="mmeta">slug: cognitive-superpowers &middot; tags: module</div>
+      </div>
+
+      <div class="tree-entry">
+        <span class="badge page">Page</span>
+        <span class="label">Welcome</span>
+        <span class="caret">&rarr;</span>
+      </div>
+
+      <div class="lo-card">
+        <div class="lo-card-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <div class="lo-title">Intelligence as adaptive strategy</div>
+        </div>
+        <div class="lo-definition">
+          <div class="def-label">Definition (editable)</div>
+          <div class="def-text">Students will be able to explain how intelligence functions as a universal adaptive strategy&hellip;</div>
+        </div>
+        <div class="lo-children">
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">PASTA AI</span></div>
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">Other Lens</span></div>
+        </div>
+      </div>
+
+      <div class="lo-card">
+        <div class="lo-card-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <div class="lo-title">Processing speed advantage</div>
+        </div>
+        <div class="lo-definition">
+          <div class="def-label">Definition (editable)</div>
+          <div class="def-text">Explain the processing-speed advantage machines have over humans&hellip;</div>
+        </div>
+        <div class="lo-children">
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">Speed Lens</span></div>
+        </div>
+      </div>
+
+      <div class="lo-card">
+        <div class="lo-card-head">
+          <span class="lo-badge">Learning Outcome</span>
+          <div class="lo-title">Arguments for and against agendas</div>
+        </div>
+        <div class="lo-definition">
+          <div class="def-label">Definition (editable)</div>
+          <div class="def-text">Meta LO: explain the pre-paradigmatic nature of AI Safety. Subject LO: summarize the primary arguments for and against&hellip;</div>
+        </div>
+        <div class="lo-children">
+          <div class="lo-child sublabel">Submodule: Automating Alignment</div>
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">Automating Alignment</span></div>
+          <div class="lo-child"><span class="badge lens">Lens</span><span class="label">AI for AI safety</span></div>
+          <div class="lo-child sublabel">Submodule: Test Your Understanding</div>
+          <div class="lo-child active"><span class="badge test">Test</span><span class="label">Test &mdash; 4 questions</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane right">
+      <div class="pane-label">Test in "Arguments for and against agendas"</div>
+      <div class="lens-toolbar">
+        <span class="tab">Edit</span>
+        <span class="tab off">Preview</span>
+        <span class="crumb">&nbsp; inside <strong>Arguments for and against agendas.md</strong></span>
+        <span class="fname">## Test:</span>
+      </div>
+      <div class="section text">
+        <div class="stype">Text</div>
+        <div class="sbody">We'll be asking you some questions about this module</div>
+      </div>
+      <div class="section question">
+        <div class="stype">Question &middot; voice</div>
+        <div class="sbody">List the concepts from this module that seemed most important to you. You can type your answer or record it using the microphone.</div>
+      </div>
+      <div class="section question">
+        <div class="stype">Question &middot; max 900 chars</div>
+        <div class="sbody">Explain each of these terms in one sentence, in your own words: agenda, theory of change.</div>
+      </div>
+      <div class="section question">
+        <div class="stype">Question &middot; voice</div>
+        <div class="sbody">Choose one pro argument and one contra argument from the same direction. Reconstruct the strongest version of each&hellip;</div>
+      </div>
+      <div class="section question">
+        <div class="stype">Question &middot; voice</div>
+        <div class="sbody">What would you trust more: behavior-based evidence that a model is unsafe, or mechanistic evidence, and what could change your mind?</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle">Left pane is structural tree + each LO's definition text (the `learning-outcome:` frontmatter field, editable in place). Right pane renders lens-like content: lenses as full docs, tests as a subtree of an LO doc (note the breadcrumb "inside ArgumentsFor..." in state B), pages as a subtree of the module doc. No "expand for embedded test" button in the left pane &mdash; tests open on the right like anything else.</p>
