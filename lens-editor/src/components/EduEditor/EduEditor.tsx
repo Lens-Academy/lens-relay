@@ -3,6 +3,7 @@ import { useDocConnection } from '../../hooks/useDocConnection';
 import { parseSections } from '../SectionEditor/parseSections';
 import type { Section } from '../SectionEditor/parseSections';
 import { ModulePanel } from './ModulePanel';
+import { LensPanel } from './LensPanel';
 
 interface EduEditorProps {
   moduleDocId: string;
@@ -51,9 +52,6 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
     setSelectedLensName(name);
   }, []);
 
-  // Suppress unused variable warning — will be used in Task 6
-  void selectedLensName;
-
   if (!synced) {
     return (
       <div className="h-full flex items-center justify-center text-gray-400 text-sm">
@@ -81,9 +79,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
       <div className="flex-1 overflow-y-auto" style={{ background: '#faf8f3' }}>
         <div className="max-w-[720px] mx-auto py-8 px-10">
           {selectedLensDocId && selectedLensName ? (
-            <div className="text-sm text-gray-500">
-              Lens panel placeholder — {selectedLensName}
-            </div>
+            <LensPanel lensDocId={selectedLensDocId} lensName={selectedLensName} />
           ) : (
             <div className="flex items-center justify-center h-48 text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg">
               Select a lens from the module structure
