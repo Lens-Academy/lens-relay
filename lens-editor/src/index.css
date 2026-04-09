@@ -37,30 +37,46 @@
 }
 
 .cm-heading-2 {
-  font-size: 1.5em;
+  font-size: 1.6em;
   font-weight: 700;
   line-height: 1.3;
 }
 
 .cm-heading-3 {
-  font-size: 1.25em;
+  font-size: 1.37em;
   font-weight: 600;
   line-height: 1.4;
 }
 
 .cm-heading-4 {
-  font-size: 1.1em;
+  font-size: 1.25em;
   font-weight: 600;
 }
 
 .cm-heading-5 {
-  font-size: 1em;
+  font-size: 1.12em;
   font-weight: 600;
 }
 
 .cm-heading-6 {
-  font-size: 0.9em;
+  font-size: 1.12em;
   font-weight: 600;
+  color: #6b7280;
+}
+
+/* Heading line spacing — padding-top on .cm-line since headings are inline spans.
+   Needs .cm-line prefix to beat CodeMirror's .ͼ1 .cm-line specificity. */
+.cm-line.cm-heading-1-line { padding-top: 1.25rem; }
+.cm-line.cm-heading-2-line { padding-top: 1rem; }
+.cm-line.cm-heading-3-line { padding-top: 0.75rem; }
+.cm-line.cm-heading-4-line { padding-top: 0.5rem; }
+.cm-line.cm-heading-5-line { padding-top: 0.5rem; }
+.cm-line.cm-heading-6-line { padding-top: 0.5rem; }
+
+/* Blockquote — Obsidian-style left border with muted text */
+.cm-blockquote {
+  border-left: 3px solid #d1d5db;
+  padding-left: 12px !important;
   color: #6b7280;
 }
 
@@ -69,8 +85,9 @@
   font-style: italic;
 }
 
-.cm-strong {
-  font-weight: 700;
+.cm-strong,
+.cm-strong * {
+  font-weight: 600 !important;
 }
 
 /* Link widget */
@@ -228,6 +245,8 @@
 /* Completed task strikethrough */
 .cm-task-completed {
   text-decoration: line-through;
+  text-decoration-color: #5c5c5c;
+  color: #5c5c5c;
 }
 
 /* Frontmatter — bar (collapsed state + expanded header) */

@@ -344,6 +344,13 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 to: node.to,
                 deco: Decoration.mark({ class: HEADING_CLASSES[node.name] }),
               });
+              // Add line decoration for heading top spacing (margin-top doesn't work on inline spans)
+              const headingLine = view.state.doc.lineAt(node.from);
+              decorations.push({
+                from: headingLine.from,
+                to: headingLine.from,
+                deco: Decoration.line({ class: `cm-heading-line ${HEADING_CLASSES[node.name]}-line` }),
+              });
             }
 
             // HeaderMark (# characters): hide when cursor not on line
@@ -574,6 +581,37 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     }),
                   });
                 }
+              }
+            }
+
+            // Blockquote: add line decoration for left border styling
+            if (node.name === 'Blockquote') {
+              const startLine = view.state.doc.lineAt(node.from).number;
+              const endLine = view.state.doc.lineAt(node.to).number;
+              for (let ln = startLine; ln <= endLine; ln++) {
+                const line = view.state.doc.line(ln);
+                decorations.push({
+                  from: line.from,
+                  to: line.from,
+                  deco: Decoration.line({ class: 'cm-blockquote' }),
+                });
+              }
+            }
+
+            // QuoteMark: hide the > character when cursor is outside the blockquote
+            if (node.name === 'QuoteMark') {
+              const blockquote = node.node.parent;
+              if (blockquote && !selectionIntersects(selection, blockquote.from, blockquote.to)) {
+                // Hide > and trailing space
+                const lineObj = view.state.doc.lineAt(node.from);
+                const afterMark = node.to;
+                const hideTo = afterMark < lineObj.to && view.state.doc.sliceString(afterMark, afterMark + 1) === ' '
+                  ? afterMark + 1 : afterMark;
+                decorations.push({
+                  from: node.from,
+                  to: hideTo,
+                  deco: Decoration.mark({ class: HIDDEN_CLASS }),
+                });
               }
             }
 

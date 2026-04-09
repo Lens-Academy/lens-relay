@@ -323,7 +323,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         EditorView.theme({
           '&': {
             height: '100%',
-            fontSize: '14px',
+            fontSize: '16px',
+            lineHeight: '1.5',
+            color: '#222222',
             outline: 'none',
           },
           '&.cm-focused': {
@@ -332,12 +334,16 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           '.cm-scroller': {
             fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
             overflow: 'auto',
+            lineHeight: '1.5',
           },
           '.cm-content': {
-            padding: '16px 24px',
+            padding: '16px 24px 170px',
             maxWidth: '700px',
             marginLeft: 'auto',
             marginRight: 'auto',
+          },
+          '.cm-line': {
+            lineHeight: '1.5',
           },
           // Hide gutters (fold markers only, no line numbers)
           '.cm-gutters': {
