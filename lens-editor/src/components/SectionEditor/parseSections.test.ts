@@ -245,4 +245,23 @@ describe('parseSections', () => {
       'submodule', 'page', 'text', 'lo-ref',
     ]);
   });
+
+  it('assigns heading level to each section', () => {
+    const text =
+      '---\nid: x\n---\n' +
+      '# Lens: Welcome\n' +
+      '#### Text\ncontent::\nhi\n' +
+      '# Learning Outcome:\nsource:: foo\n' +
+      '## Submodule: A\n' +
+      '## Lens:\nsource:: bar\n';
+    const sections = parseSections(text);
+    const byType: Record<string, number> = {};
+    sections.forEach(s => { byType[s.type] = s.level; });
+    expect(sections[0].type).toBe('frontmatter');
+    expect(sections[0].level).toBe(0);
+    expect(sections.find(s => s.type === 'lens-ref')?.level).toBe(1); // first lens-ref occurrence (# Lens: Welcome)
+    expect(sections.find(s => s.type === 'text')?.level).toBe(4);
+    expect(sections.find(s => s.type === 'lo-ref')?.level).toBe(1);
+    expect(sections.find(s => s.type === 'submodule')?.level).toBe(2);
+  });
 });

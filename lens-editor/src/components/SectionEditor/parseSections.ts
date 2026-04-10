@@ -11,6 +11,8 @@ export interface Section {
   type: string;
   /** Human-readable label */
   label: string;
+  /** Heading level (1–4). 0 for frontmatter and body. */
+  level: number;
   /** Start character offset (inclusive) */
   from: number;
   /** End character offset (exclusive) */
@@ -43,6 +45,7 @@ export function parseSections(text: string): Section[] {
       sections.push({
         type: 'frontmatter',
         label: 'Frontmatter',
+        level: 0,
         from: 0,
         to,
         content: text.slice(0, to),
@@ -73,6 +76,7 @@ export function parseSections(text: string): Section[] {
       sections.push({
         type: 'body',
         label: 'Content',
+        level: 0,
         from: pos,
         to: text.length,
         content: text.slice(pos, text.length),
@@ -97,6 +101,7 @@ export function parseSections(text: string): Section[] {
       sections.push({
         type: 'body',
         label: 'Content',
+        level: 0,
         from: pos,
         to: headers[0].from,
         content: text.slice(pos, headers[0].from),
@@ -116,6 +121,7 @@ export function parseSections(text: string): Section[] {
     sections.push({
       type,
       label,
+      level: header.level,
       from: header.from,
       to: nextFrom,
       content: sectionContent,
