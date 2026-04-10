@@ -255,13 +255,18 @@ describe('parseSections', () => {
       '## Submodule: A\n' +
       '## Lens:\nsource:: bar\n';
     const sections = parseSections(text);
-    const byType: Record<string, number> = {};
-    sections.forEach(s => { byType[s.type] = s.level; });
     expect(sections[0].type).toBe('frontmatter');
     expect(sections[0].level).toBe(0);
     expect(sections.find(s => s.type === 'lens-ref')?.level).toBe(1); // first lens-ref occurrence (# Lens: Welcome)
     expect(sections.find(s => s.type === 'text')?.level).toBe(4);
     expect(sections.find(s => s.type === 'lo-ref')?.level).toBe(1);
     expect(sections.find(s => s.type === 'submodule')?.level).toBe(2);
+  });
+
+  it('assigns level 0 to a body section', () => {
+    const sections = parseSections('Hello world');
+    expect(sections).toHaveLength(1);
+    expect(sections[0].type).toBe('body');
+    expect(sections[0].level).toBe(0);
   });
 });
