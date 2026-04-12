@@ -4,6 +4,7 @@ import { resolveWikilinkToUuid } from '../../lib/resolveDocPath';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { ModuleHeader } from './ModuleTreeEditor/ModuleHeader';
 import { TreeEntry } from './ModuleTreeEditor/TreeEntry';
+import { LoCard } from './ModuleTreeEditor/LoCard';
 import { useLODocs } from './useLODocs';
 import { RELAY_ID } from '../../lib/constants';
 import type { ContentScope } from './ContentPanel';
@@ -34,9 +35,6 @@ export function ModuleTreeEditor({
   const moduleTitle = frontmatter.get('title') ?? modulePath.split('/').pop()?.replace(/\.md$/, '') ?? 'Module';
   const slug = frontmatter.get('slug');
   const tags = frontmatter.get('tags');
-
-  // Suppress unused variable warning — loDocs will be used in Task 8
-  void loDocs;
 
   return (
     <div>
@@ -131,7 +129,36 @@ export function ModuleTreeEditor({
           );
         }
 
-        // Skip lo-ref for now — LO cards come in Task 8
+        // LO ref — render an LoCard using fetched LO data
+        if (section.type === 'lo-ref' && section.level === 1) {
+          const fields = parseFields(section.content);
+          const sourceField = fields.get('source');
+          if (!sourceField) return null;
+          const uuid = resolveWikilinkToUuid(sourceField.trim(), modulePath, metadata);
+          if (!uuid) return null;
+          const loEntry = loDocs[uuid];
+          if (!loEntry) {
+            return (
+              <div key={i} className="px-3 py-2 mb-2 text-[11px] text-gray-400 italic border border-dashed border-gray-200 rounded">
+                Loading LO...
+              </div>
+            );
+          }
+
+          return (
+            <LoCard
+              key={i}
+              loDocId={`${RELAY_ID}-${uuid}`}
+              title={loEntry.title}
+              definition={loEntry.frontmatter.get('learning-outcome') ?? ''}
+              sections={loEntry.sections}
+              loPath={loEntry.loPath}
+              activeSelection={activeSelection}
+              onSelect={onSelect}
+            />
+          );
+        }
+
         // Skip child sections (level > 1 that belong to other parent sections)
         return null;
       })}
