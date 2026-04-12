@@ -12,6 +12,7 @@ import { useLODocs } from './useLODocs';
 import { useSectionEditor } from '../../hooks/useSectionEditor';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { RELAY_ID } from '../../lib/constants';
+import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import type { ContentScope } from './ContentPanel';
 
 /** Find the Y.Text range of a YAML frontmatter field's value. */
@@ -97,7 +98,12 @@ export function ModuleTreeEditor({
 
   return (
     <div>
-      <ModuleHeader title={moduleTitle} slug={slug} tags={tags} />
+      <ModuleHeader
+        title={moduleTitle}
+        slug={slug}
+        tags={tags}
+        onOpenInEditor={moduleDocId ? () => openDocInNewTab(RELAY_ID, docUuidFromCompoundId(moduleDocId), metadata) : undefined}
+      />
 
       {moduleSections.map((section, i) => {
         if (section.type === 'frontmatter') return null;

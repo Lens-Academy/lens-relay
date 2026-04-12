@@ -6,6 +6,7 @@ import { useDocConnection } from '../../hooks/useDocConnection';
 import { useSectionEditor } from '../../hooks/useSectionEditor';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { RELAY_ID } from '../../lib/constants';
+import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import { getSubtreeRange } from './getSubtreeRange';
 import * as Y from 'yjs';
 import {
@@ -239,9 +240,17 @@ export function ContentPanel({ scope }: ContentPanelProps) {
 
   return (
     <div>
-      <div className="mb-6 text-[11px] text-gray-400">
-        {scope.docName}.md
-        {scope.kind === 'subtree' && <span> &middot; {scope.breadcrumb}</span>}
+      <div className="mb-6 text-[11px] text-gray-400 flex items-center gap-2">
+        <span>
+          {scope.docName}.md
+          {scope.kind === 'subtree' && <span> &middot; {scope.breadcrumb}</span>}
+        </span>
+        <button
+          onClick={() => openDocInNewTab(RELAY_ID, docUuidFromCompoundId(scope.docId), metadata)}
+          className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
+        >
+          Show raw markdown in editor
+        </button>
       </div>
 
       {editingFmField === 'tldr' ? (

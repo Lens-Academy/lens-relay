@@ -4,6 +4,7 @@ import { parseFields } from '../../../lib/parseFields';
 import { resolveWikilinkToUuid } from '../../../lib/resolveDocPath';
 import { useNavigation } from '../../../contexts/NavigationContext';
 import { RELAY_ID } from '../../../lib/constants';
+import { openDocInNewTab, docUuidFromCompoundId } from '../../../lib/url-utils';
 import type { ContentScope } from '../ContentPanel';
 import { LoDefinition } from './LoDefinition';
 
@@ -44,6 +45,12 @@ export function LoCard({
           Learning Outcome
         </span>
         <div className="font-semibold text-[12px] text-gray-800 mt-1">{title}</div>
+        <button
+          onClick={() => openDocInNewTab(RELAY_ID, docUuidFromCompoundId(loDocId), metadata)}
+          className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline mt-0.5"
+        >
+          Show raw markdown in editor
+        </button>
       </div>
 
       {/* Definition */}

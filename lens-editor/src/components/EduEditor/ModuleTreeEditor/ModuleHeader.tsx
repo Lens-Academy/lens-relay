@@ -2,9 +2,10 @@ interface ModuleHeaderProps {
   title: string;
   slug?: string;
   tags?: string;
+  onOpenInEditor?: () => void;
 }
 
-export function ModuleHeader({ title, slug, tags }: ModuleHeaderProps) {
+export function ModuleHeader({ title, slug, tags, onOpenInEditor }: ModuleHeaderProps) {
   return (
     <div className="px-3 py-2.5 mb-2 rounded-md border border-[#e4e0d4] bg-white">
       <div style={{ fontFamily: "'Newsreader', serif", fontSize: '15px', fontWeight: 700, color: '#1a1a1a' }}>
@@ -16,6 +17,14 @@ export function ModuleHeader({ title, slug, tags }: ModuleHeaderProps) {
           {slug && tags && ' · '}
           {tags && `tags: ${tags}`}
         </div>
+      )}
+      {onOpenInEditor && (
+        <button
+          onClick={onOpenInEditor}
+          className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline mt-1"
+        >
+          Show raw markdown in editor
+        </button>
       )}
     </div>
   );
