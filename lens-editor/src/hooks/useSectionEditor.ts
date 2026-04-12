@@ -9,6 +9,10 @@ interface UseSectionEditorOpts {
   sectionFrom: number;
   sectionTo: number;
   active: boolean;
+  /** Stable identity for the current edit target. When this changes, the editor
+   *  is recreated with the new range. Without this, switching directly between
+   *  two fields (both active=true) won't remount the editor. */
+  editKey?: string | null;
   awareness?: Awareness;
 }
 
@@ -52,7 +56,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts.active]);
+  }, [opts.active, opts.editKey]);
 
   return { mountRef };
 }

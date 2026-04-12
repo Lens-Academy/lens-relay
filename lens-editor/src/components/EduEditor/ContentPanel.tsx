@@ -149,11 +149,14 @@ export function ContentPanel({ scope }: ContentPanelProps) {
     setEditingIndex(index);
   }
 
+  const editKey = editingFmField ?? (editingIndex !== null ? `section-${editingIndex}` : null);
+
   const { mountRef } = useSectionEditor({
     ytext: ytextRef.current,
     sectionFrom: editRange.from,
     sectionTo: editRange.to,
     active: isEditing,
+    editKey,
   });
 
   const docId = scope?.docId ?? null;
