@@ -175,7 +175,7 @@ describe('ModuleTreeEditor', () => {
 
     // Editing UI should appear after async getOrConnect resolves
     await waitFor(() => {
-      expect(screen.getByText('Editing definition')).toBeInTheDocument();
+      expect(screen.getByText('Editing Description:')).toBeInTheDocument();
     });
   });
 });

@@ -25,6 +25,87 @@ interface ContentPanelProps {
   scope: ContentScope | null;
 }
 
+/**
+ * Find the absolute Y.Text range of a field's value within a section.
+ * Returns [from, to) offsets into the full Y.Text.
+ * If the field isn't found, falls back to the whole section range.
+ */
+function getFieldValueRange(
+  sectionContent: string,
+  sectionFrom: number,
+  fieldName: string,
+): [number, number] {
+  // Find the field line: `fieldName::` optionally followed by value on same line
+  const pattern = new RegExp(`^${fieldName}::(?:\\s(.*))?$`, 'm');
+  const match = pattern.exec(sectionContent);
+  if (!match) return [sectionFrom, sectionFrom + sectionContent.length];
+
+  const fieldLineEnd = match.index + match[0].length;
+
+  // Value starts after the field line (or on the same line if inline)
+  const inlineValue = match[1]?.trim();
+  let valueStart: number;
+  if (inlineValue) {
+    // Inline value: `content:: the actual text`
+    valueStart = match.index + match[0].indexOf(inlineValue);
+  } else {
+    // Multi-line: value starts on the next line
+    valueStart = fieldLineEnd + 1; // skip the \n
+  }
+
+  // Value ends at the next field line or end of section content
+  const rest = sectionContent.slice(valueStart);
+  const nextField = rest.match(/^\w[\w-]*::(?:\s|$)/m);
+  let valueEnd: number;
+  if (nextField) {
+    // Trim trailing newlines before the next field
+    let end = valueStart + nextField.index!;
+    while (end > valueStart && sectionContent[end - 1] === '\n') end--;
+    valueEnd = end;
+  } else {
+    // Trim trailing newlines at section end
+    let end = sectionContent.length;
+    while (end > valueStart && sectionContent[end - 1] === '\n') end--;
+    valueEnd = end;
+  }
+
+  return [sectionFrom + valueStart, sectionFrom + valueEnd];
+}
+
+/**
+ * Find the absolute Y.Text range of a YAML frontmatter field's value.
+ * Handles both `key: value` and `key: "quoted value"` on a single line.
+ * For multi-line quoted values, captures until the closing quote.
+ */
+function getFrontmatterFieldRange(
+  sectionContent: string,
+  sectionFrom: number,
+  fieldName: string,
+): [number, number] | null {
+  const pattern = new RegExp(`^${fieldName}:\\s*(.*)$`, 'm');
+  const match = pattern.exec(sectionContent);
+  if (!match) return null;
+
+  let valueStr = match[1];
+  let valueStart = match.index + match[0].length - valueStr.length;
+
+  // Strip surrounding quotes
+  if (valueStr.startsWith('"') && valueStr.endsWith('"')) {
+    valueStart += 1;
+    valueStr = valueStr.slice(1, -1);
+  }
+
+  return [sectionFrom + valueStart, sectionFrom + valueStart + valueStr.length];
+}
+
+/** Map section type to the primary prose field name */
+function proseFieldForType(type: string): string | null {
+  if (type === 'text') return 'content';
+  if (type === 'chat') return 'instructions';
+  if (type === 'question') return 'content';
+  return null;
+}
+
 export function ContentPanel({ scope }: ContentPanelProps) {
   const { getOrConnect } = useDocConnection();
   const { metadata } = useNavigation();
@@ -32,17 +113,47 @@ export function ContentPanel({ scope }: ContentPanelProps) {
   const [synced, setSynced] = useState(false);
   const [frontmatter, setFrontmatter] = useState<Map<string, string>>(new Map());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editingFmField, setEditingFmField] = useState<string | null>(null); // frontmatter field name being edited
   const ytextRef = useRef<Y.Text | null>(null);
 
-  const activeSection = editingIndex !== null
-    ? parseSections(ytextRef.current?.toString() ?? '')[editingIndex] ?? null
-    : null;
+  // Compute the editing range
+  const editRange = (() => {
+    if (editingIndex === null && !editingFmField) return { from: 0, to: 0 };
+
+    const currentSections = parseSections(ytextRef.current?.toString() ?? '');
+
+    // Frontmatter field editing
+    if (editingFmField) {
+      const fmSection = currentSections.find(s => s.type === 'frontmatter');
+      if (!fmSection) return { from: 0, to: 0 };
+      const range = getFrontmatterFieldRange(fmSection.content, fmSection.from, editingFmField);
+      if (!range) return { from: 0, to: 0 };
+      return { from: range[0], to: range[1] };
+    }
+
+    // Section editing
+    const section = currentSections[editingIndex!];
+    if (!section) return { from: 0, to: 0 };
+    const proseField = proseFieldForType(section.type);
+    if (proseField) {
+      const [from, to] = getFieldValueRange(section.content, section.from, proseField);
+      return { from, to };
+    }
+    return { from: section.from, to: section.to };
+  })();
+
+  const isEditing = editingIndex !== null || editingFmField !== null;
+
+  function startEditingSection(index: number) {
+    setEditingFmField(null);
+    setEditingIndex(index);
+  }
 
   const { mountRef } = useSectionEditor({
     ytext: ytextRef.current,
-    sectionFrom: activeSection?.from ?? 0,
-    sectionTo: activeSection?.to ?? 0,
-    active: editingIndex !== null,
+    sectionFrom: editRange.from,
+    sectionTo: editRange.to,
+    active: isEditing,
   });
 
   const docId = scope?.docId ?? null;
@@ -83,6 +194,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
     setSynced(false);
     setSections([]);
     setEditingIndex(null);
+    setEditingFmField(null);
     const cleanupPromise = connect();
     return () => {
       cancelled = true;
@@ -129,16 +241,47 @@ export function ContentPanel({ scope }: ContentPanelProps) {
         {scope.kind === 'subtree' && <span> &middot; {scope.breadcrumb}</span>}
       </div>
 
-      {tldr && (
-        <div className="mb-4 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed">
+      {editingFmField === 'tldr' ? (
+        <div className="mb-4 rounded-lg border-2 border-blue-400 bg-white overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
+            <span className="font-medium text-sm text-blue-700">User-facing TL;DR</span>
+            <button onClick={() => setEditingFmField(null)}
+              className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">
+              Done
+            </button>
+          </div>
+          <div ref={mountRef} style={{ minHeight: '40px' }} />
+        </div>
+      ) : tldr ? (
+        <div className="mb-4 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed relative group cursor-pointer hover:outline hover:outline-2 hover:outline-blue-300/30 hover:outline-offset-1"
+          onClick={() => { setEditingIndex(null); setEditingFmField('tldr'); }}>
+          <div className="absolute -top-2 -right-2 bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+            click to edit
+          </div>
           <strong className="text-[#b87018]">User-facing TL;DR:</strong> {tldr}
         </div>
-      )}
-      {frontmatter.get('summary_for_tutor') && (
-        <div className="mb-6 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed">
+      ) : null}
+
+      {editingFmField === 'summary_for_tutor' ? (
+        <div className="mb-6 rounded-lg border-2 border-blue-400 bg-white overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
+            <span className="font-medium text-sm text-blue-700">AI-facing summary</span>
+            <button onClick={() => setEditingFmField(null)}
+              className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">
+              Done
+            </button>
+          </div>
+          <div ref={mountRef} style={{ minHeight: '40px' }} />
+        </div>
+      ) : frontmatter.get('summary_for_tutor') ? (
+        <div className="mb-6 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed relative group cursor-pointer hover:outline hover:outline-2 hover:outline-blue-300/30 hover:outline-offset-1"
+          onClick={() => { setEditingIndex(null); setEditingFmField('summary_for_tutor'); }}>
+          <div className="absolute -top-2 -right-2 bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+            click to edit
+          </div>
           <strong className="text-[#6a2d9b]">AI-facing summary:</strong> {frontmatter.get('summary_for_tutor')}
         </div>
-      )}
+      ) : null}
 
       {sections
         .map((section, i) => ({ section, i }))
@@ -171,7 +314,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
             <TextRenderer
               key={i}
               content={content}
-              onStartEdit={() => setEditingIndex(i)}
+              onStartEdit={() => startEditingSection(i)}
             />
           );
         }
@@ -184,7 +327,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
               key={i}
               title={section.label}
               instructions={instructions}
-              onStartEdit={() => setEditingIndex(i)}
+              onStartEdit={() => startEditingSection(i)}
             />
           );
         }
@@ -278,7 +421,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
               assessmentInstructions={assessmentInstructions}
               enforceVoice={enforceVoice}
               maxChars={maxChars}
-              onStartEdit={() => setEditingIndex(i)}
+              onStartEdit={() => startEditingSection(i)}
             />
           );
         }
@@ -290,7 +433,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
               key={i}
               label={section.label}
               fontSize={22}
-              onStartEdit={() => setEditingIndex(i)}
+              onStartEdit={() => startEditingSection(i)}
             />
           );
         }
@@ -301,7 +444,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
             <HeadingRenderer
               key={i}
               label={section.label}
-              onStartEdit={() => setEditingIndex(i)}
+              onStartEdit={() => startEditingSection(i)}
             />
           );
         }

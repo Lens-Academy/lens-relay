@@ -14,6 +14,24 @@ import { useDocConnection } from '../../hooks/useDocConnection';
 import { RELAY_ID } from '../../lib/constants';
 import type { ContentScope } from './ContentPanel';
 
+/** Find the Y.Text range of a YAML frontmatter field's value. */
+function getFmFieldRange(
+  sectionContent: string,
+  sectionFrom: number,
+  fieldName: string,
+): [number, number] | null {
+  const pattern = new RegExp(`^${fieldName}:\\s*(.*)$`, 'm');
+  const match = pattern.exec(sectionContent);
+  if (!match) return null;
+  let valueStr = match[1];
+  let valueStart = match.index + match[0].length - valueStr.length;
+  if (valueStr.startsWith('"') && valueStr.endsWith('"')) {
+    valueStart += 1;
+    valueStr = valueStr.slice(1, -1);
+  }
+  return [sectionFrom + valueStart, sectionFrom + valueStart + valueStr.length];
+}
+
 interface ModuleTreeEditorProps {
   moduleSections: Section[];
   modulePath: string;
@@ -53,10 +71,12 @@ export function ModuleTreeEditor({
     const text = ytext.toString();
     const sections = parseSections(text);
     const fm = sections.find(s => s.type === 'frontmatter');
-    const sectionFrom = fm ? fm.from : 0;
-    const sectionTo = fm ? fm.to : 0;
+    if (!fm) return;
+
+    // Narrow to just the learning-outcome field value
+    const fieldRange = getFmFieldRange(fm.content, fm.from, 'learning-outcome');
     setEditingYtext(ytext);
-    setEditingRange([sectionFrom, sectionTo]);
+    setEditingRange(fieldRange ?? [fm.from, fm.to]);
     setEditingDefUuid(uuid);
   }
 
