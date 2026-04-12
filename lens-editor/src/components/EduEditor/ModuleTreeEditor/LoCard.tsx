@@ -49,7 +49,7 @@ export function LoCard({
           onClick={() => openDocInNewTab(RELAY_ID, docUuidFromCompoundId(loDocId), metadata)}
           className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline mt-0.5"
         >
-          Show raw markdown in editor
+          Show Raw Markdown
         </button>
       </div>
 

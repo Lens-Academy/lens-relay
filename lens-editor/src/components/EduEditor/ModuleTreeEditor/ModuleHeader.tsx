@@ -23,7 +23,7 @@ export function ModuleHeader({ title, slug, tags, onOpenInEditor }: ModuleHeader
           onClick={onOpenInEditor}
           className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline mt-1"
         >
-          Show raw markdown in editor
+          Show Raw Markdown
         </button>
       )}
     </div>

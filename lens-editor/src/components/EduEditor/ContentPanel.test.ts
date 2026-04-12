@@ -47,6 +47,7 @@ vi.mock('./ContentPanel/renderers', () => ({
 vi.mock('../../contexts/NavigationContext', () => ({
   useNavigation: () => ({
     metadata: { 'Lenses/PASTA.md': { id: 'lens-pasta-uuid' } },
+    folderNames: [],
   }),
 }));
 

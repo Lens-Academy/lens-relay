@@ -7,6 +7,8 @@ import { useSectionEditor } from '../../hooks/useSectionEditor';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { RELAY_ID } from '../../lib/constants';
 import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
+import { getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
+import { getPlatformUrl } from '../../lib/platform-url';
 import { getSubtreeRange } from './getSubtreeRange';
 import * as Y from 'yjs';
 import {
@@ -109,7 +111,7 @@ function proseFieldForType(type: string): string | null {
 
 export function ContentPanel({ scope }: ContentPanelProps) {
   const { getOrConnect } = useDocConnection();
-  const { metadata } = useNavigation();
+  const { metadata, folderNames } = useNavigation();
   const [sections, setSections] = useState<Section[]>([]);
   const [synced, setSynced] = useState(false);
   const [frontmatter, setFrontmatter] = useState<Map<string, string>>(new Map());
@@ -230,6 +232,11 @@ export function ContentPanel({ scope }: ContentPanelProps) {
 
   const tldr = frontmatter.get('tldr');
 
+  // Derive platform URL for "Show on Website" link
+  const folderName = lensPath ? getFolderNameFromPath(lensPath, folderNames) : null;
+  const originalPath = lensPath && folderName ? getOriginalPath(lensPath, folderName) : null;
+  const platformUrl = originalPath ? getPlatformUrl(originalPath) : null;
+
   let visibleFrom = 0;
   let visibleTo = sections.length;
   if (scope.kind === 'subtree' && sections.length > scope.rootSectionIndex) {
@@ -249,8 +256,18 @@ export function ContentPanel({ scope }: ContentPanelProps) {
           onClick={() => openDocInNewTab(RELAY_ID, docUuidFromCompoundId(scope.docId), metadata)}
           className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
         >
-          Show raw markdown in editor
+          Show Raw Markdown
         </button>
+        {platformUrl && (
+          <a
+            href={platformUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
+          >
+            Show on Website
+          </a>
+        )}
       </div>
 
       {editingFmField === 'tldr' ? (
