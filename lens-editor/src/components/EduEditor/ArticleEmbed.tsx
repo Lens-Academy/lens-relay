@@ -1,6 +1,14 @@
 // src/components/EduEditor/ArticleEmbed.tsx
 import { useEffect, useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
+
+function preserveBlankLines(text: string): string {
+  return text.replace(/\n{2,}/g, (match) => {
+    const extras = match.length - 1;
+    return '\n\n' + '\u00A0\n\n'.repeat(extras);
+  });
+}
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { useSectionEditor } from '../../hooks/useSectionEditor';
 import { resolveWikilinkToUuid } from '../../lib/resolveDocPath';
@@ -34,13 +42,6 @@ export function ArticleEmbed({ fromAnchor, toAnchor, articleSourceWikilink, lens
     active: editing,
   });
 
-  useEffect(() => {
-    const name = articleSourceWikilink
-      .replace(/^!?\[\[/, '').replace(/\]\]$/, '')
-      .split('/').pop()?.split('|')[0] ?? 'Article';
-    setArticleTitle(name);
-  }, [articleSourceWikilink]);
-
   // Connect to article doc and extract excerpt
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +59,21 @@ export function ArticleEmbed({ fromAnchor, toAnchor, articleSourceWikilink, lens
 
       const ytext = doc.getText('contents');
       ytextRef.current = ytext;
+
+      // Extract title/author from frontmatter
+      const fullText = ytext.toString();
+      const titleMatch = fullText.match(/^title:\s*"?([^"\n]+)"?\s*$/m);
+      const authorMatch = fullText.match(/^\s+-\s*"?([^"\n]+)"?\s*$/m);
+      if (titleMatch) {
+        const t = titleMatch[1].trim();
+        const a = authorMatch ? authorMatch[1].trim() : null;
+        setArticleTitle(a ? `${t} — ${a}` : t);
+      } else {
+        const fallback = articleSourceWikilink
+          .replace(/^!?\[\[/, '').replace(/\]\]$/, '')
+          .split('/').pop()?.split('|')[0] ?? 'Article';
+        setArticleTitle(fallback);
+      }
 
       const update = () => {
         // Skip updates while CM editor is active — ySectionSync handles bidirectional sync,
@@ -131,8 +147,8 @@ export function ArticleEmbed({ fromAnchor, toAnchor, articleSourceWikilink, lens
               click to edit
             </div>
             <div className="text-gray-400 tracking-wider mb-1">&hellip;</div>
-            <div className="text-[14px] leading-[1.8] text-gray-700 prose prose-sm max-w-none" style={{ fontFamily: "'DM Sans', sans-serif" }}>
-              <ReactMarkdown>{excerptText}</ReactMarkdown>
+            <div className="text-[13px] leading-[1.5] text-gray-700 prose prose-sm max-w-none" style={{ fontFamily: "'DM Sans', sans-serif" }}>
+              <ReactMarkdown remarkPlugins={[remarkBreaks]}>{preserveBlankLines(excerptText)}</ReactMarkdown>
             </div>
             <div className="text-gray-400 tracking-wider mt-1">&hellip;</div>
           </div>

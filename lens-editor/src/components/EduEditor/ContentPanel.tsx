@@ -130,8 +130,13 @@ export function ContentPanel({ scope }: ContentPanelProps) {
       </div>
 
       {tldr && (
+        <div className="mb-4 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed">
+          <strong className="text-[#b87018]">User-facing TL;DR:</strong> {tldr}
+        </div>
+      )}
+      {frontmatter.get('summary_for_tutor') && (
         <div className="mb-6 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed">
-          <strong className="text-[#b87018]">TL;DR:</strong> {tldr}
+          <strong className="text-[#6a2d9b]">AI-facing summary:</strong> {frontmatter.get('summary_for_tutor')}
         </div>
       )}
 

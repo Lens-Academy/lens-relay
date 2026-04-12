@@ -53,6 +53,7 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.0",
     "react-textarea-autosize": "^8.5.9",
+    "remark-breaks": "^4.0.0",
     "tsx": "^4.21.0",
     "y-codemirror.next": "^0.3.5",
     "yjs": "^13.6.29"

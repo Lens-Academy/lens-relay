@@ -1,4 +1,13 @@
 import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
+
+/** Preserve multiple blank lines by inserting non-breaking space paragraphs. */
+function preserveBlankLines(text: string): string {
+  return text.replace(/\n{2,}/g, (match) => {
+    const extras = match.length - 1;
+    return '\n\n' + '\u00A0\n\n'.repeat(extras);
+  });
+}
 
 interface TextRendererProps {
   content: string;
@@ -15,10 +24,10 @@ export function TextRenderer({ content, onStartEdit }: TextRendererProps) {
         click to edit
       </div>
       <div
-        className="text-[15px] leading-[1.75] text-gray-900 prose prose-sm max-w-none"
+        className="text-[13px] leading-[1.5] text-gray-900 prose prose-sm max-w-none"
         style={{ fontFamily: "'DM Sans', sans-serif" }}
       >
-        <ReactMarkdown>{content}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkBreaks]}>{preserveBlankLines(content)}</ReactMarkdown>
       </div>
     </div>
   );
