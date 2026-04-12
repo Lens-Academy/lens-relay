@@ -7,6 +7,7 @@ import { useSectionEditor } from '../../hooks/useSectionEditor';
 import { PowerToolbar } from './PowerToolbar';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { RELAY_ID } from '../../lib/constants';
+import { getSubtreeRange } from './getSubtreeRange';
 import * as Y from 'yjs';
 import {
   TextRenderer,
@@ -114,9 +115,25 @@ export function ContentPanel({ scope }: ContentPanelProps) {
 
   const tldr = frontmatter.get('tldr');
 
+  let visibleFrom = 0;
+  let visibleTo = sections.length;
+  if (scope.kind === 'subtree' && sections.length > scope.rootSectionIndex) {
+    const [rangeFrom, rangeTo] = getSubtreeRange(sections, scope.rootSectionIndex);
+    visibleFrom = rangeFrom + 1; // skip the root header itself — it's in the toolbar
+    visibleTo = rangeTo;
+  }
+
   return (
     <div>
-      <PowerToolbar lensFileName={`${scope.docName}.md`} />
+      {scope.kind === 'full-doc' ? (
+        <PowerToolbar lensFileName={`${scope.docName}.md`} />
+      ) : (
+        <div className="flex items-center gap-2 mb-6 px-3 py-2 bg-white rounded-lg border border-[#e8e5df] text-xs text-gray-500">
+          <span className="px-2.5 py-0.5 rounded-xl bg-gray-900 text-white font-medium">Edit</span>
+          <span className="text-[11px] text-gray-500">{scope.docName}</span>
+          <span className="text-[11px] text-gray-400">&middot; {scope.breadcrumb}</span>
+        </div>
+      )}
 
       {tldr && (
         <div className="mb-6 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed">
@@ -124,7 +141,10 @@ export function ContentPanel({ scope }: ContentPanelProps) {
         </div>
       )}
 
-      {sections.map((section, i) => {
+      {sections
+        .map((section, i) => ({ section, i }))
+        .filter(({ i }) => i >= visibleFrom && i < visibleTo)
+        .map(({ section, i }) => {
         if (section.type === 'frontmatter') return null;
 
         const fields = parseFields(section.content);

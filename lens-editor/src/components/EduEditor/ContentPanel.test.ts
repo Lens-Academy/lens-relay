@@ -93,4 +93,59 @@ describe('ContentPanel', () => {
     render(React.createElement(ContentPanel, { scope: null }));
     expect(screen.getByText(/pick a lens/i)).toBeInTheDocument();
   });
+
+  it('renders only the subtree when scope.kind is "subtree"', async () => {
+    seedLensDoc(
+      'lens-pasta-uuid',
+      '---\ntitle: Module\n---\n' +
+      '# Lens: Welcome\n' +
+      '#### Text\ncontent::\nWelcome text\n' +
+      '# Learning Outcome:\nsource:: foo\n',
+    );
+
+    render(
+      React.createElement(ContentPanel, {
+        scope: {
+          kind: 'subtree' as const,
+          docId: `${RELAY_ID}-lens-pasta-uuid`,
+          docName: 'Welcome',
+          docPath: 'modules/mod.md',
+          rootSectionIndex: 1, // "# Lens: Welcome" (0 is frontmatter)
+          breadcrumb: 'inside modules/mod.md',
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Welcome text/)).toBeInTheDocument();
+    });
+    // Learning Outcome should NOT render — outside the subtree
+    expect(screen.queryByText(/foo/)).not.toBeInTheDocument();
+  });
+
+  it('displays the breadcrumb for subtree scope', async () => {
+    seedLensDoc(
+      'lens-pasta-uuid',
+      '---\ntitle: Module\n---\n' +
+      '# Lens: Welcome\n' +
+      '#### Text\ncontent::\nHello\n',
+    );
+
+    render(
+      React.createElement(ContentPanel, {
+        scope: {
+          kind: 'subtree' as const,
+          docId: `${RELAY_ID}-lens-pasta-uuid`,
+          docName: 'Welcome',
+          docPath: 'modules/mod.md',
+          rootSectionIndex: 1,
+          breadcrumb: 'inside modules/mod.md',
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/inside modules\/mod\.md/)).toBeInTheDocument();
+    });
+  });
 });
