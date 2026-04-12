@@ -14,6 +14,19 @@ function parseWikilink(text: string): { path: string; display?: string; isEmbed?
 }
 
 /**
+ * Derive a human-readable title from a wikilink path.
+ * [[../modules/feedback-loops]] → "Feedback Loops"
+ * [[../modules/Cognitive Superpowers]] → "Cognitive Superpowers"
+ */
+export function titleFromWikilink(wikilinkText: string): string {
+  const match = wikilinkText.match(/\[\[([^\]|]+)/);
+  const path = match ? match[1].trim() : wikilinkText;
+  const filename = path.split('/').pop() ?? path;
+  const base = filename.replace(/\.md$/, '');
+  return base.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/**
  * Resolve a relative path against a source file's directory.
  * Browser-compatible — no Node path module needed.
  */

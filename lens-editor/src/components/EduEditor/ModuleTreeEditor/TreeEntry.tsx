@@ -4,10 +4,11 @@ interface TreeEntryProps {
   label: string;
   inlineTag?: string;
   active: boolean;
+  showArrow?: boolean;
   onClick: () => void;
 }
 
-export function TreeEntry({ badgeText, badgeClass, label, inlineTag, active, onClick }: TreeEntryProps) {
+export function TreeEntry({ badgeText, badgeClass, label, inlineTag, active, showArrow = true, onClick }: TreeEntryProps) {
   return (
     <div
       onClick={onClick}
@@ -22,7 +23,7 @@ export function TreeEntry({ badgeText, badgeClass, label, inlineTag, active, onC
       </span>
       <span className="text-[12px] font-medium text-gray-800 flex-1">{label}</span>
       {inlineTag && <span className="text-[9px] text-gray-400 italic">{inlineTag}</span>}
-      <span className="text-blue-300 text-sm">&rarr;</span>
+      {showArrow && <span className="text-blue-300 text-sm">&rarr;</span>}
     </div>
   );
 }
