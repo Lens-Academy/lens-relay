@@ -2,8 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { parseSections } from '../SectionEditor/parseSections';
 import type { Section } from '../SectionEditor/parseSections';
-import { ModulePanel } from './ModulePanel';
-import { LensPanel } from './LensPanel';
+import { ModuleTreeEditor } from './ModuleTreeEditor';
+import { ContentPanel, type ContentScope } from './ContentPanel';
 
 interface EduEditorProps {
   moduleDocId: string;
@@ -14,8 +14,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const { getOrConnect, disconnectAll } = useDocConnection();
   const [moduleSections, setModuleSections] = useState<Section[]>([]);
   const [synced, setSynced] = useState(false);
-  const [selectedLensDocId, setSelectedLensDocId] = useState<string | null>(null);
-  const [selectedLensName, setSelectedLensName] = useState<string | null>(null);
+  const [scope, setScope] = useState<ContentScope | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,9 +32,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
       update();
       ytext.observe(update);
 
-      return () => {
-        ytext.unobserve(update);
-      };
+      return () => { ytext.unobserve(update); };
     }
 
     const cleanupPromise = connect();
@@ -47,10 +44,17 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
 
   useEffect(() => disconnectAll, [disconnectAll]);
 
-  const handleSelectLens = useCallback((docId: string, name: string) => {
-    setSelectedLensDocId(docId);
-    setSelectedLensName(name);
+  const handleSelect = useCallback((next: ContentScope) => {
+    setScope(next);
   }, []);
+
+  const activeSelection =
+    scope === null
+      ? null
+      : {
+          docId: scope.docId,
+          rootIndex: scope.kind === 'subtree' ? scope.rootSectionIndex : undefined,
+        };
 
   if (!synced) {
     return (
@@ -62,29 +66,22 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
 
   return (
     <div className="h-full flex">
-      {/* Left panel: Module structure */}
-      <div className="w-[340px] min-w-[340px] border-r-2 border-gray-200 bg-white overflow-y-auto p-4">
+      <div className="w-[420px] min-w-[420px] border-r-2 border-gray-200 bg-[#fbfaf7] overflow-y-auto p-4">
         <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-3 pb-2 border-b border-gray-200">
-          Module Structure
+          {sourcePath?.split('/').pop()?.replace(/\.md$/, '') ?? 'Module'}
         </div>
-        <ModulePanel
-          sections={moduleSections}
-          sourcePath={sourcePath ?? ''}
-          onSelectLens={handleSelectLens}
-          activeLensDocId={selectedLensDocId}
+        <ModuleTreeEditor
+          moduleSections={moduleSections}
+          modulePath={sourcePath ?? ''}
+          moduleDocId={moduleDocId}
+          activeSelection={activeSelection}
+          onSelect={handleSelect}
         />
       </div>
 
-      {/* Right panel: Lens content */}
       <div className="flex-1 overflow-y-auto" style={{ background: '#faf8f3' }}>
-        <div className="max-w-[720px] mx-auto py-8 px-10">
-          {selectedLensDocId && selectedLensName ? (
-            <LensPanel lensDocId={selectedLensDocId} lensName={selectedLensName} />
-          ) : (
-            <div className="flex items-center justify-center h-48 text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg">
-              Select a lens from the module structure
-            </div>
-          )}
+        <div className="max-w-[720px] mx-auto py-8 px-10 h-full">
+          <ContentPanel scope={scope} />
         </div>
       </div>
     </div>
