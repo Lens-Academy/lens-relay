@@ -1,3 +1,4 @@
+import React from 'react';
 import type { Section } from '../../SectionEditor/parseSections';
 import { parseFields } from '../../../lib/parseFields';
 import { resolveWikilinkToUuid } from '../../../lib/resolveDocPath';
@@ -14,6 +15,10 @@ interface LoCardProps {
   loPath: string;
   activeSelection: { docId: string; rootIndex?: number } | null;
   onSelect: (scope: ContentScope) => void;
+  editingDefinition: boolean;
+  definitionMountRef: React.RefObject<HTMLDivElement | null>;
+  onEditDefinition: () => void;
+  onDoneEditingDefinition: () => void;
 }
 
 export function LoCard({
@@ -24,6 +29,10 @@ export function LoCard({
   loPath,
   activeSelection,
   onSelect,
+  editingDefinition,
+  definitionMountRef,
+  onEditDefinition,
+  onDoneEditingDefinition,
 }: LoCardProps) {
   const { metadata } = useNavigation();
 
@@ -38,7 +47,13 @@ export function LoCard({
       </div>
 
       {/* Definition */}
-      <LoDefinition definition={definition} />
+      <LoDefinition
+        definition={definition}
+        editing={editingDefinition}
+        mountRef={definitionMountRef}
+        onStartEdit={onEditDefinition}
+        onDone={onDoneEditingDefinition}
+      />
 
       {/* Children */}
       <div className="px-3 py-2">

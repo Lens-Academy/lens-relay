@@ -1,4 +1,7 @@
+import { useState } from 'react';
+import * as Y from 'yjs';
 import type { Section } from '../SectionEditor/parseSections';
+import { parseSections } from '../SectionEditor/parseSections';
 import { parseFields, parseFrontmatterFields } from '../../lib/parseFields';
 import { resolveWikilinkToUuid } from '../../lib/resolveDocPath';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -6,6 +9,8 @@ import { ModuleHeader } from './ModuleTreeEditor/ModuleHeader';
 import { TreeEntry } from './ModuleTreeEditor/TreeEntry';
 import { LoCard } from './ModuleTreeEditor/LoCard';
 import { useLODocs } from './useLODocs';
+import { useSectionEditor } from '../../hooks/useSectionEditor';
+import { useDocConnection } from '../../hooks/useDocConnection';
 import { RELAY_ID } from '../../lib/constants';
 import type { ContentScope } from './ContentPanel';
 
@@ -26,6 +31,40 @@ export function ModuleTreeEditor({
 }: ModuleTreeEditorProps) {
   const { metadata } = useNavigation();
   const loDocs = useLODocs(moduleSections, modulePath);
+  const { getOrConnect } = useDocConnection();
+
+  const [editingDefUuid, setEditingDefUuid] = useState<string | null>(null);
+  const [editingYtext, setEditingYtext] = useState<Y.Text | null>(null);
+  const [editingRange, setEditingRange] = useState<[number, number]>([0, 0]);
+
+  const { mountRef: definitionMountRef } = useSectionEditor({
+    ytext: editingYtext,
+    sectionFrom: editingRange[0],
+    sectionTo: editingRange[1],
+    active: editingDefUuid !== null,
+  });
+
+  async function startEditingDefinition(uuid: string) {
+    const loEntry = loDocs[uuid];
+    if (!loEntry) return;
+    const docId = `${RELAY_ID}-${uuid}`;
+    const { doc } = await getOrConnect(docId);
+    const ytext = doc.getText('contents');
+    const text = ytext.toString();
+    const sections = parseSections(text);
+    const fm = sections.find(s => s.type === 'frontmatter');
+    const sectionFrom = fm ? fm.from : 0;
+    const sectionTo = fm ? fm.to : 0;
+    setEditingYtext(ytext);
+    setEditingRange([sectionFrom, sectionTo]);
+    setEditingDefUuid(uuid);
+  }
+
+  function stopEditingDefinition() {
+    setEditingDefUuid(null);
+    setEditingYtext(null);
+    setEditingRange([0, 0]);
+  }
 
   const frontmatter = (() => {
     const fm = moduleSections.find(s => s.type === 'frontmatter');
@@ -155,6 +194,10 @@ export function ModuleTreeEditor({
               loPath={loEntry.loPath}
               activeSelection={activeSelection}
               onSelect={onSelect}
+              editingDefinition={editingDefUuid === uuid}
+              definitionMountRef={definitionMountRef}
+              onEditDefinition={() => startEditingDefinition(uuid)}
+              onDoneEditingDefinition={stopEditingDefinition}
             />
           );
         }

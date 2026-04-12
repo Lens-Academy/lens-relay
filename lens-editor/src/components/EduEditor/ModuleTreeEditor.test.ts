@@ -1,16 +1,29 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { parseSections } from '../SectionEditor/parseSections';
 
 // Stable mock refs
-const stableGetOrConnect = vi.fn(async () => ({ doc: {} as any, provider: { destroy: vi.fn() } }));
+import * as Y from 'yjs';
+
+const mockConnections = new Map<string, { doc: Y.Doc; provider: { destroy: () => void } }>();
+const stableGetOrConnect = vi.fn(async (docId: string) => {
+  if (mockConnections.has(docId)) return mockConnections.get(docId)!;
+  const doc = new Y.Doc();
+  const conn = { doc, provider: { destroy: vi.fn() } };
+  mockConnections.set(docId, conn);
+  return conn;
+});
 vi.mock('../../hooks/useDocConnection', () => ({
   useDocConnection: () => ({
     getOrConnect: stableGetOrConnect,
     disconnect: vi.fn(),
     disconnectAll: vi.fn(),
   }),
+}));
+
+vi.mock('../../hooks/useSectionEditor', () => ({
+  useSectionEditor: () => ({ mountRef: { current: null } }),
 }));
 
 // Controllable useLODocs mock
@@ -113,5 +126,56 @@ describe('ModuleTreeEditor', () => {
     expect(screen.getByText('PASTA.md')).toBeInTheDocument();
     // Test count shows
     expect(screen.getByText('Test (1 questions)')).toBeInTheDocument();
+  });
+
+  it('shows editing UI when the LO definition is clicked', async () => {
+    mockMetadata = {
+      'LOs/LO-Click.md': { id: 'lo-click-uuid' },
+    };
+
+    // Seed a real Y.Doc with frontmatter so getOrConnect returns something usable
+    const loDoc = new Y.Doc();
+    loDoc.getText('contents').insert(0, '---\nlearning-outcome: Click to edit me\n---\n');
+    mockConnections.set(`cb696037-0f72-4e93-8717-4e433129d789-lo-click-uuid`, {
+      doc: loDoc,
+      provider: { destroy: vi.fn() },
+    });
+
+    const loText = '---\nlearning-outcome: Click to edit me\n---\n';
+    const loSections = parseSections(loText);
+
+    loDocsMock.mockReturnValue({
+      'lo-click-uuid': {
+        loPath: 'LO-Click.md',
+        title: 'Click LO',
+        frontmatter: new Map([['learning-outcome', 'Click to edit me']]),
+        sections: loSections,
+      },
+    });
+
+    const moduleText =
+      '---\ntitle: Click Module\n---\n' +
+      '# Learning Outcome:\nsource:: [[LOs/LO-Click.md]]\n';
+    const moduleSections = parseSections(moduleText);
+
+    render(
+      React.createElement(ModuleTreeEditor, {
+        moduleSections,
+        modulePath: 'click-module.md',
+        activeSelection: null,
+        onSelect: () => {},
+      }),
+    );
+
+    // Definition text is visible before clicking
+    expect(screen.getByText('Click to edit me')).toBeInTheDocument();
+
+    // Click the definition text to start editing
+    fireEvent.click(screen.getByText('Click to edit me'));
+
+    // Editing UI should appear after async getOrConnect resolves
+    await waitFor(() => {
+      expect(screen.getByText('Editing definition')).toBeInTheDocument();
+    });
   });
 });
