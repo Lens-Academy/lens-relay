@@ -14,7 +14,7 @@ export function LoDefinition({ definition, editing, mountRef, onStartEdit, onDon
       <div className="px-3 py-2 bg-[#fffdf5] border-b border-dashed border-[#f0e0b0]">
         <div className="flex items-center justify-between mb-1">
           <div className="text-[9px] uppercase tracking-wider text-amber-700 font-semibold">
-            Editing definition
+            Editing Learning Outcome Definition
           </div>
           <button
             onClick={onDone}
@@ -31,7 +31,7 @@ export function LoDefinition({ definition, editing, mountRef, onStartEdit, onDon
   return (
     <div className="px-3 py-2 bg-[#fffdf5] border-b border-dashed border-[#f0e0b0]">
       <div className="text-[9px] uppercase tracking-wider text-amber-700 font-semibold mb-1">
-        Definition
+        Learning Outcome Definition
       </div>
       <div
         className="text-[11px] text-gray-700 leading-relaxed px-1 py-0.5 cursor-pointer hover:bg-amber-50 rounded"

@@ -4,7 +4,6 @@ import { parseSections } from '../SectionEditor/parseSections';
 import { parseFields, parseFrontmatterFields } from '../../lib/parseFields';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { useSectionEditor } from '../../hooks/useSectionEditor';
-import { PowerToolbar } from './PowerToolbar';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { RELAY_ID } from '../../lib/constants';
 import { getSubtreeRange } from './getSubtreeRange';
@@ -125,15 +124,10 @@ export function ContentPanel({ scope }: ContentPanelProps) {
 
   return (
     <div>
-      {scope.kind === 'full-doc' ? (
-        <PowerToolbar lensFileName={`${scope.docName}.md`} />
-      ) : (
-        <div className="flex items-center gap-2 mb-6 px-3 py-2 bg-white rounded-lg border border-[#e8e5df] text-xs text-gray-500">
-          <span className="px-2.5 py-0.5 rounded-xl bg-gray-900 text-white font-medium">Edit</span>
-          <span className="text-[11px] text-gray-500">{scope.docName}</span>
-          <span className="text-[11px] text-gray-400">&middot; {scope.breadcrumb}</span>
-        </div>
-      )}
+      <div className="mb-6 text-[11px] text-gray-400">
+        {scope.docName}.md
+        {scope.kind === 'subtree' && <span> &middot; {scope.breadcrumb}</span>}
+      </div>
 
       {tldr && (
         <div className="mb-6 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed">
