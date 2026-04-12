@@ -6,6 +6,7 @@ import { getOriginalPath, getFolderNameFromPath } from '../lib/multi-folder-util
 import { moveDocument } from '../lib/relay-api';
 import { getPlatformUrl } from '../lib/platform-url';
 import { extractFrontmatter } from '../lib/frontmatter';
+import { shortUuid } from '../lib/url-utils';
 import { RELAY_ID } from '../App';
 
 interface DocumentTitleProps {
@@ -116,6 +117,12 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
   const originalPath = path && folderName ? getOriginalPath(path, folderName) : null;
   const platformUrl = originalPath ? getPlatformUrl(originalPath, frontmatterSlug) : null;
 
+  // Show "Open in Review Editor" for course and module documents
+  const isCourseOrModule = originalPath
+    ? /^\/?(?:courses|modules)\//i.test(originalPath)
+    : false;
+  const eduEditorUrl = isCourseOrModule ? `/edu/${shortUuid(uuid)}` : null;
+
   if (!path) return null;
 
   return (
@@ -132,30 +139,29 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
         placeholder="Untitled"
         spellCheck={false}
       />
-      {platformUrl && (
-        <a
-          href={platformUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="View on Lens Platform"
-          className="flex-shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-            <polyline points="15 3 21 3 21 9" />
-            <line x1="10" y1="14" x2="21" y2="3" />
-          </svg>
-        </a>
+      {(eduEditorUrl || platformUrl) && (
+        <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
+          {platformUrl && (
+            <a
+              href={platformUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline whitespace-nowrap"
+            >
+              Open on Website
+            </a>
+          )}
+          {eduEditorUrl && (
+            <a
+              href={eduEditorUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline whitespace-nowrap"
+            >
+              Open in Review Editor
+            </a>
+          )}
+        </div>
       )}
     </div>
   );
