@@ -1,4 +1,5 @@
 use super::{FileInfo, Result, StoreError, VersionInfo};
+use crate::metrics::RelayMetrics;
 use crate::store::Store;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -204,6 +205,7 @@ impl S3Store {
         body: Option<Vec<u8>>,
     ) -> Result<Response> {
         let url = action.sign_with_time(PRESIGNED_URL_DURATION, &Timestamp::now());
+        let method_label = method.as_str().to_string();
         let mut request = self.client.request(method, url);
 
         request = if let Some(body) = body {
@@ -214,26 +216,50 @@ impl S3Store {
 
         let response = request.send().await;
 
+        let record = |outcome: &str| {
+            if let Ok(metrics) = RelayMetrics::new() {
+                metrics.record_s3_request(&method_label, outcome);
+            }
+        };
+
         let response = match response {
             Ok(response) => response,
-            Err(e) => return Err(StoreError::ConnectionError(e.to_string())),
+            Err(e) => {
+                record("connection_error");
+                return Err(StoreError::ConnectionError(e.to_string()));
+            }
         };
 
         match response.status() {
-            StatusCode::OK => Ok(response),
-            StatusCode::NOT_FOUND => Err(StoreError::DoesNotExist(
-                "Received NOT_FOUND from S3-compatible API.".to_string(),
-            )),
-            StatusCode::FORBIDDEN => Err(StoreError::NotAuthorized(
-                "Received FORBIDDEN from S3-compatible API.".to_string(),
-            )),
-            StatusCode::UNAUTHORIZED => Err(StoreError::NotAuthorized(
-                "Received UNAUTHORIZED from S3-compatible API.".to_string(),
-            )),
-            _ => Err(StoreError::ConnectionError(format!(
-                "Received {} from S3-compatible API.",
-                response.status()
-            ))),
+            StatusCode::OK => {
+                record("ok");
+                Ok(response)
+            }
+            StatusCode::NOT_FOUND => {
+                record("not_found");
+                Err(StoreError::DoesNotExist(
+                    "Received NOT_FOUND from S3-compatible API.".to_string(),
+                ))
+            }
+            StatusCode::FORBIDDEN => {
+                record("forbidden");
+                Err(StoreError::NotAuthorized(
+                    "Received FORBIDDEN from S3-compatible API.".to_string(),
+                ))
+            }
+            StatusCode::UNAUTHORIZED => {
+                record("unauthorized");
+                Err(StoreError::NotAuthorized(
+                    "Received UNAUTHORIZED from S3-compatible API.".to_string(),
+                ))
+            }
+            _ => {
+                record("other_error");
+                Err(StoreError::ConnectionError(format!(
+                    "Received {} from S3-compatible API.",
+                    response.status()
+                )))
+            }
         }
     }
 
@@ -249,20 +275,24 @@ impl S3Store {
             return Ok(());
         }
 
-        let action = self.bucket.head_bucket(Some(&self.credentials));
-        let result = self.store_request(Method::HEAD, action, None).await;
+        // Use ListObjectsV2 with max-keys=0 so that prefix-scoped IAM
+        // policies (s3:ListBucket with s3:prefix condition) are sufficient.
+        let mut action = self.bucket.list_objects_v2(Some(&self.credentials));
+        action.with_max_keys(0);
+        if let Some(prefix) = &self.prefix {
+            action.with_prefix(prefix.as_str());
+        }
+        let result = self.store_request(Method::GET, action, None).await;
 
         match result {
-            // Normally a 404 indicates that we are attempting to fetch an object that does
-            // not exist, but we have only attempted to retrieve a bucket, so here it
-            // indicates that the bucket does not exist.
             Err(StoreError::DoesNotExist(_)) => {
                 return Err(StoreError::BucketDoesNotExist(
-                    "Bucket does not exist.".to_string(),
+                    "Bucket does not exist or not accessible with the configured prefix."
+                        .to_string(),
                 ))
             }
             Err(e) => return Err(e),
-            Ok(response) => response,
+            Ok(_) => {}
         };
 
         self._bucket_checked.set(()).unwrap();

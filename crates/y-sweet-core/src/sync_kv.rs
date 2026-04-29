@@ -113,6 +113,7 @@ pub struct SyncKv {
     key: String,
     dirty: AtomicBool,
     dirty_callback: Box<dyn Fn() + Send + Sync>,
+    shutdown: AtomicBool,
     created_at: Option<u64>,
     metadata: Arc<Mutex<Option<BTreeMap<String, ciborium::value::Value>>>>,
 }
@@ -169,12 +170,16 @@ impl SyncKv {
             key,
             dirty: AtomicBool::new(false),
             dirty_callback: Box::new(callback),
+            shutdown: AtomicBool::new(false),
             created_at,
             metadata: Arc::new(Mutex::new(metadata)),
         })
     }
 
     fn mark_dirty(&self) {
+        if self.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
         self.dirty.store(true, Ordering::Relaxed);
         // Always fire the callback, even if already dirty. The callback uses
         // try_send() on a bounded channel which naturally coalesces redundant
@@ -186,6 +191,10 @@ impl SyncKv {
     }
 
     pub async fn persist(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.dirty.swap(false, Ordering::Relaxed) {
+            return Ok(());
+        }
+
         if let Some(store) = &self.store {
             let now = current_timestamp_ms();
 
@@ -247,6 +256,16 @@ impl SyncKv {
 
     pub fn is_empty(&self) -> bool {
         self.data.lock().unwrap().is_empty()
+    }
+
+    pub fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        // Call the callback one last time to wake up the persistence worker
+        (self.dirty_callback)();
     }
 
     /// Set metadata for this document

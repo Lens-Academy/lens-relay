@@ -305,10 +305,12 @@ fn get_store_from_config(
                     .or_else(|| env::var("AWS_SECRET_ACCESS_KEY").ok())
                     .ok_or_else(|| anyhow::anyhow!("AWS_SECRET_ACCESS_KEY is required"))?,
                 token: env::var("AWS_SESSION_TOKEN").ok(),
-                endpoint: if s3_config.endpoint.is_empty() {
-                    format!("https://s3.dualstack.{}.amazonaws.com", s3_config.region)
-                } else {
+                endpoint: if !s3_config.endpoint.is_empty() {
                     s3_config.endpoint.clone()
+                } else if let Ok(ep) = env::var("AWS_ENDPOINT_URL_S3") {
+                    ep
+                } else {
+                    format!("https://s3.dualstack.{}.amazonaws.com", s3_config.region)
                 },
                 region: s3_config.region.clone(),
                 bucket: s3_config.bucket.clone(),
@@ -346,10 +348,12 @@ fn get_store_from_config(
                     .or_else(|| env::var("AWS_SECRET_ACCESS_KEY").ok())
                     .ok_or_else(|| anyhow::anyhow!("AWS_SECRET_ACCESS_KEY is required"))?,
                 token: env::var("AWS_SESSION_TOKEN").ok(),
-                endpoint: if s3_config.endpoint.is_empty() {
-                    format!("https://s3.dualstack.{}.amazonaws.com", s3_config.region)
-                } else {
+                endpoint: if !s3_config.endpoint.is_empty() {
                     s3_config.endpoint.clone()
+                } else if let Ok(ep) = env::var("AWS_ENDPOINT_URL_S3") {
+                    ep
+                } else {
+                    format!("https://s3.dualstack.{}.amazonaws.com", s3_config.region)
                 },
                 region: s3_config.region.clone(),
                 bucket: s3_config.bucket.clone(),
@@ -382,6 +386,51 @@ fn get_store_from_opts(store_path: &str) -> Result<Box<dyn Store>> {
         Ok(Box::new(store))
     } else {
         Ok(Box::new(FileSystemStore::new(PathBuf::from(store_path))?))
+    }
+}
+
+fn log_store_backend(store_config: &y_sweet_core::config::StoreConfig) {
+    use y_sweet_core::config::StoreConfig;
+
+    match store_config {
+        StoreConfig::Memory => {
+            tracing::info!("Store backend: memory (documents will not be persisted)");
+        }
+        StoreConfig::Filesystem(fs) => {
+            tracing::info!("Store backend: filesystem at {}", fs.path);
+        }
+        other => {
+            let kind = match other {
+                StoreConfig::S3(_) => "s3",
+                StoreConfig::Aws(_) => "aws",
+                StoreConfig::Cloudflare(_) => "cloudflare",
+                StoreConfig::Backblaze(_) => "backblaze",
+                StoreConfig::Minio(_) => "minio",
+                StoreConfig::Tigris(_) => "tigris",
+                _ => "s3-compatible",
+            };
+            if let Some(s3) = other.to_s3_config() {
+                let prefix = if s3.prefix.is_empty() {
+                    "(no prefix)".to_string()
+                } else {
+                    format!("prefix={}", s3.prefix)
+                };
+                let endpoint = if s3.endpoint.is_empty() {
+                    format!("region={}", s3.region)
+                } else {
+                    format!("endpoint={}", s3.endpoint)
+                };
+                tracing::info!(
+                    "Store backend: {} bucket={} {} {}",
+                    kind,
+                    s3.bucket,
+                    endpoint,
+                    prefix,
+                );
+            } else {
+                tracing::info!("Store backend: {}", kind);
+            }
+        }
     }
 }
 
@@ -445,39 +494,55 @@ fn generate_allowed_hosts(
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts = Opts::parse();
+    let mut loaded_serve_config = None;
 
-    let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
+    if let ServSubcommand::Serve {
+        config,
+        port,
+        host,
+        metrics_port,
+        checkpoint_freq_seconds,
+        store,
+        auth,
+        url,
+        allowed_hosts,
+    } = &opts.subcmd
+    {
+        loaded_serve_config = Some(load_config_for_serve_args(
+            config.as_ref(),
+            store,
+            port,
+            host,
+            metrics_port,
+            checkpoint_freq_seconds,
+            auth,
+            url,
+            allowed_hosts,
+        )?);
+    }
+
+    let filter = if let Some(config) = &loaded_serve_config {
+        EnvFilter::try_new(&config.logging.level).with_context(|| {
+            format!(
+                "Invalid logging.level/RUST_LOG filter: {}",
+                config.logging.level
+            )
+        })?
+    } else {
+        EnvFilter::builder()
+            .with_default_directive(LevelFilter::INFO.into())
+            .from_env_lossy()
+    };
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(filter)
         .init();
 
     match &opts.subcmd {
-        ServSubcommand::Serve {
-            config,
-            port,
-            host,
-            metrics_port,
-            checkpoint_freq_seconds,
-            store,
-            auth,
-            url,
-            allowed_hosts,
-        } => {
-            // Load configuration
-            let config = load_config_for_serve_args(
-                config.as_ref(),
-                store,
-                port,
-                host,
-                metrics_port,
-                checkpoint_freq_seconds,
-                auth,
-                url,
-                allowed_hosts,
-            )?;
+        ServSubcommand::Serve { .. } => {
+            let config = loaded_serve_config
+                .take()
+                .expect("serve config should be loaded before tracing initialization");
 
             // Initialize logging based on config
             let log_level = &config.logging.level;
@@ -524,6 +589,7 @@ async fn main() -> Result<()> {
 
             // Create store from config
             let store = if let Some(store) = get_store_from_config(&config.store)? {
+                log_store_backend(&config.store);
                 store.init().await?;
                 Some(store)
             } else {
@@ -603,7 +669,7 @@ async fn main() -> Result<()> {
                 let server = server.clone();
                 let token = token.clone();
                 async move {
-                    let routes = server.routes();
+                    let routes = server.routes_with_metrics();
                     let app = routes.layer(middleware::from_fn(
                         relay::server::Server::version_header_middleware,
                     ));
@@ -954,6 +1020,12 @@ async fn main() -> Result<()> {
 
                 // Use the unified S3Config::from_env method with explicit bucket and prefix
                 let s3_config = S3Config::from_env(Some(bucket), prefix)?;
+                tracing::info!(
+                    "Store backend: s3 bucket={} endpoint={} prefix={}",
+                    s3_config.bucket,
+                    s3_config.endpoint,
+                    s3_config.bucket_prefix.as_deref().unwrap_or("(none)"),
+                );
                 let store = S3Store::new(s3_config);
                 let store: Box<dyn Store> = Box::new(store);
                 store.init().await?;
@@ -962,6 +1034,7 @@ async fn main() -> Result<()> {
                 if env::var("STORAGE_PREFIX").is_ok() {
                     anyhow::bail!("If STORAGE_PREFIX is set, STORAGE_BUCKET must also be set.");
                 }
+                tracing::warn!("No store set. Documents will be stored in memory only.");
 
                 None
             };

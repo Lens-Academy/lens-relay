@@ -3,6 +3,7 @@ use crate::sync::{
     self, awareness::Awareness, DefaultProtocol, EventMessage, Message, Protocol, SyncMessage,
     MSG_SYNC, MSG_SYNC_UPDATE,
 };
+use crate::sync_kv::SyncKv;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock, RwLock};
 use yrs::{
@@ -12,7 +13,7 @@ use yrs::{
         decoder::Decode,
         encoder::{Encode, Encoder, EncoderV1},
     },
-    ReadTxn, Subscription, Transact, Update,
+    Array, Map, Out, ReadTxn, Subscription, Transact, Update,
 };
 
 fn current_time_epoch_millis() -> u64 {
@@ -52,6 +53,13 @@ pub struct DocConnection {
     /// Expiration time for the authentication token in milliseconds since epoch.
     /// If None, the token never expires.
     expiration_time: Option<u64>,
+
+    /// Optional reference to the document's SyncKv for reading subdoc state vectors
+    sync_kv: Option<Arc<SyncKv>>,
+
+    /// Authenticated user identity from the connection token.
+    /// When set, the server will register new client_ids under this user in the "users" map.
+    user: Option<String>,
 }
 
 impl DocConnection {
@@ -198,7 +206,114 @@ impl DocConnection {
             closed,
             event_subscriptions: Arc::new(RwLock::new(HashSet::new())),
             expiration_time,
+            sync_kv: None,
+            user: None,
         }
+    }
+
+    /// Set the SyncKv reference for subdoc state vector queries
+    pub fn set_sync_kv(&mut self, sync_kv: Arc<SyncKv>) {
+        self.sync_kv = Some(sync_kv);
+    }
+
+    /// Set the authenticated user identity for server-driven PUD registration.
+    pub fn set_user(&mut self, user: String) {
+        self.user = Some(user);
+    }
+
+    /// Snapshot the current state vector's client_ids (for before/after comparison).
+    fn snapshot_sv(&self, awareness: &Awareness) -> std::collections::HashSet<ClientID> {
+        let txn = awareness.doc().transact();
+        txn.state_vector()
+            .iter()
+            .map(|(&cid, &_clock)| cid)
+            .collect()
+    }
+
+    /// After applying an update, register any client_ids that are new in the state vector.
+    /// The caller must already hold the awareness lock — pass the guard directly.
+    fn register_new_client_ids(
+        &self,
+        awareness: &Awareness,
+        sv_before: &std::collections::HashSet<ClientID>,
+    ) {
+        let user_id = match &self.user {
+            Some(u) => u,
+            None => return,
+        };
+
+        let sv_after = awareness.doc().transact().state_vector();
+
+        let new_ids: Vec<ClientID> = sv_after
+            .iter()
+            .filter_map(|(&cid, &_clock)| {
+                if !sv_before.contains(&cid) {
+                    Some(cid)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if new_ids.is_empty() {
+            return;
+        }
+
+        let doc = awareness.doc();
+
+        for client_id in new_ids {
+            Self::register_pud_client_id_on_doc(doc, user_id, client_id);
+        }
+    }
+
+    /// Register a client_id in the "users" PermanentUserData map on the document.
+    /// Takes a Doc reference directly to avoid re-locking awareness.
+    fn register_pud_client_id_on_doc(doc: &yrs::Doc, user_id: &str, client_id: ClientID) {
+        // get_or_insert_map takes a write txn internally, call before any read txn.
+        let users_map = doc.get_or_insert_map("users");
+
+        // Check if already registered.
+        {
+            let txn = doc.transact();
+            if let Some(Out::YMap(user_map)) = users_map.get(&txn, user_id) {
+                if let Some(Out::YArray(ids_arr)) = user_map.get(&txn, "ids") {
+                    for item in ids_arr.iter(&txn) {
+                        let existing_id = match &item {
+                            Out::Any(yrs::Any::Number(n)) => Some(*n as u64),
+                            Out::Any(yrs::Any::BigInt(n)) => Some(*n as u64),
+                            _ => None,
+                        };
+                        if existing_id == Some(client_id) {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut txn = doc.transact_mut();
+
+        let user_map = match users_map.get(&txn, user_id) {
+            Some(Out::YMap(m)) => m,
+            _ => users_map.insert(&mut txn, user_id, yrs::MapPrelim::default()),
+        };
+
+        let ids_arr = match user_map.get(&txn, "ids") {
+            Some(Out::YArray(a)) => a,
+            _ => user_map.insert(&mut txn, "ids", yrs::ArrayPrelim::default()),
+        };
+
+        // Ensure `ds` exists as an empty YArray so canonical Yjs PUD readers don't crash.
+        if !matches!(user_map.get(&txn, "ds"), Some(Out::YArray(_))) {
+            user_map.insert(&mut txn, "ds", yrs::ArrayPrelim::default());
+        }
+
+        ids_arr.push_back(&mut txn, yrs::Any::Number(client_id as f64));
+        tracing::info!(
+            user_id,
+            client_id,
+            "Registered client_id for user via server-driven PUD"
+        );
     }
 
     /// Check if the token associated with this connection has expired
@@ -250,9 +365,19 @@ impl DocConnection {
                     protocol.handle_sync_step1(&awareness, sv)
                 }
                 SyncMessage::SyncStep2(update) => {
+                    if update.is_empty() {
+                        return Ok(None);
+                    }
+
                     if can_write {
                         let mut awareness = a.write().unwrap_or_else(|e| e.into_inner());
-                        protocol.handle_sync_step2(&mut awareness, Update::decode_v1(&update)?)
+                        let sv_before = self.snapshot_sv(&awareness);
+                        let result =
+                            protocol.handle_sync_step2(&mut awareness, Update::decode_v1(&update)?);
+                        if result.is_ok() {
+                            self.register_new_client_ids(&awareness, &sv_before);
+                        }
+                        result
                     } else {
                         Err(sync::Error::PermissionDenied {
                             reason: "Token does not have write access".to_string(),
@@ -260,9 +385,19 @@ impl DocConnection {
                     }
                 }
                 SyncMessage::Update(update) => {
+                    if update.is_empty() {
+                        return Ok(None);
+                    }
+
                     if can_write {
                         let mut awareness = a.write().unwrap_or_else(|e| e.into_inner());
-                        protocol.handle_update(&mut awareness, Update::decode_v1(&update)?)
+                        let sv_before = self.snapshot_sv(&awareness);
+                        let result =
+                            protocol.handle_update(&mut awareness, Update::decode_v1(&update)?);
+                        if result.is_ok() {
+                            self.register_new_client_ids(&awareness, &sv_before);
+                        }
+                        result
                     } else {
                         Err(sync::Error::PermissionDenied {
                             reason: "Token does not have write access".to_string(),
@@ -320,6 +455,106 @@ impl DocConnection {
                 } else {
                     tracing::warn!("Failed to acquire event subscriptions lock for unsubscribe");
                 }
+                Ok(None)
+            }
+            Message::QuerySubdocs(guids) => {
+                let subdocs_value = self
+                    .sync_kv
+                    .as_ref()
+                    .and_then(|kv| kv.get_metadata())
+                    .and_then(|m| m.get("subdocs").cloned())
+                    .unwrap_or_else(|| ciborium::value::Value::Map(Vec::new()));
+
+                // Filter to requested GUIDs (empty = all)
+                let entries = if let ciborium::value::Value::Map(entries) = subdocs_value {
+                    if guids.is_empty() {
+                        entries
+                    } else {
+                        let guids_set: std::collections::HashSet<&str> =
+                            guids.iter().map(|s| s.as_str()).collect();
+                        entries
+                            .into_iter()
+                            .filter(|(k, _)| {
+                                if let ciborium::value::Value::Text(key) = k {
+                                    guids_set.contains(key.as_str())
+                                } else {
+                                    false
+                                }
+                            })
+                            .collect()
+                    }
+                } else {
+                    Vec::new()
+                };
+
+                // Build response: {guid: state_vector_bytes, ...}
+                let mut response_entries = Vec::new();
+                for (k, v) in &entries {
+                    if let ciborium::value::Value::Map(fields) = v {
+                        for (fk, fv) in fields {
+                            if let (
+                                ciborium::value::Value::Text(fname),
+                                ciborium::value::Value::Bytes(_),
+                            ) = (fk, fv)
+                            {
+                                if fname == "state_vector" {
+                                    response_entries.push((k.clone(), fv.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update last-seen timestamps for queried GUIDs
+                if !guids.is_empty() {
+                    if let Some(kv) = self.sync_kv.as_ref() {
+                        let now = current_time_epoch_millis();
+                        let now_val = ciborium::value::Value::Integer(now.into());
+                        let mut metadata = kv.get_metadata().unwrap_or_default();
+                        let subdocs = metadata
+                            .entry("subdocs".to_string())
+                            .or_insert_with(|| ciborium::value::Value::Map(Vec::new()));
+
+                        if let ciborium::value::Value::Map(ref mut all_entries) = subdocs {
+                            for guid in &guids {
+                                let key = ciborium::value::Value::Text(guid.clone());
+                                if let Some((_, ref mut entry_val)) =
+                                    all_entries.iter_mut().find(|(k, _)| *k == key)
+                                {
+                                    if let ciborium::value::Value::Map(ref mut fields) = entry_val {
+                                        let ls_key =
+                                            ciborium::value::Value::Text("last_seen".to_string());
+                                        if let Some(field) =
+                                            fields.iter_mut().find(|(k, _)| *k == ls_key)
+                                        {
+                                            field.1 = now_val.clone();
+                                        } else {
+                                            fields.push((ls_key, now_val.clone()));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        kv.set_metadata(metadata);
+                    }
+                }
+
+                let response = ciborium::value::Value::Map(response_entries);
+                let mut cbor_bytes = Vec::new();
+                ciborium::ser::into_writer(&response, &mut cbor_bytes).unwrap_or_else(|_| {
+                    cbor_bytes.clear();
+                    ciborium::ser::into_writer(
+                        &ciborium::value::Value::Map(Vec::new()),
+                        &mut cbor_bytes,
+                    )
+                    .unwrap();
+                });
+                Ok(Some(Message::Subdocs(cbor_bytes)))
+            }
+            Message::Subdocs(_) => {
+                // Server shouldn't receive Subdocs from clients
+                tracing::warn!("Client sent Subdocs message to server, ignoring");
                 Ok(None)
             }
             Message::Event(_event_data) => {
@@ -390,7 +625,7 @@ impl Drop for DocConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync::{DefaultProtocol, EventMessage, Message};
+    use crate::sync::{DefaultProtocol, EventMessage, Message, SyncMessage};
 
     #[test]
     fn test_doc_connection_event_subscriptions() {
@@ -682,5 +917,36 @@ mod tests {
         // Should succeed when not expired
         let result = connection.send(&encoded).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_doc_connection_send_empty_sync_step2_is_noop() {
+        let doc = yrs::Doc::new();
+        let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
+
+        let connection = DocConnection::new(awareness, Authorization::Full, |_| {});
+        let msg = Message::Sync(SyncMessage::SyncStep2(Vec::new()));
+        let encoded = msg.encode_v1();
+
+        let result = connection.send(&encoded).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_doc_connection_allows_empty_sync_update_from_read_only() {
+        let doc = yrs::Doc::new();
+        let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
+
+        let connection = DocConnection::new(awareness, Authorization::ReadOnly, |_| {});
+
+        let sync_step2 = Message::Sync(SyncMessage::SyncStep2(Vec::new()));
+        let result = connection.handle_msg(&DefaultProtocol, sync_step2);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+
+        let update = Message::Sync(SyncMessage::Update(Vec::new()));
+        let result = connection.handle_msg(&DefaultProtocol, update);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 }

@@ -2,6 +2,9 @@ FROM rust:1.89-slim-trixie AS builder
 
 WORKDIR /build
 
+ARG RELAY_VERSION
+ENV RELAY_VERSION=${RELAY_VERSION}
+
 COPY . .
 RUN cargo build --release
 

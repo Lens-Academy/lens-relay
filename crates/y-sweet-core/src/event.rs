@@ -85,6 +85,8 @@ pub struct DocumentUpdatedEvent {
     pub metadata: BTreeMap<String, serde_json::Value>,
     #[serde(skip)] // Don't serialize the raw update data to JSON
     pub update: Option<Vec<u8>>,
+    #[serde(skip)] // Internal use only: encoded state vector after this update
+    pub state_vector: Option<Vec<u8>>,
 }
 
 impl DocumentUpdatedEvent {
@@ -95,6 +97,7 @@ impl DocumentUpdatedEvent {
             user: None,
             metadata: BTreeMap::new(),
             update: None,
+            state_vector: None,
         }
     }
 
@@ -107,6 +110,12 @@ impl DocumentUpdatedEvent {
     /// Builder method to add Yjs update data
     pub fn with_update(mut self, update: Vec<u8>) -> Self {
         self.update = Some(update);
+        self
+    }
+
+    /// Builder method to add encoded state vector
+    pub fn with_state_vector(mut self, state_vector: Vec<u8>) -> Self {
+        self.state_vector = Some(state_vector);
         self
     }
 
@@ -298,11 +307,13 @@ pub struct WebhookPayload {
 
 impl From<EventEnvelope> for WebhookPayload {
     fn from(envelope: EventEnvelope) -> Self {
+        let mut payload = serde_json::to_value(envelope.event)
+            .expect("DocumentUpdatedEvent should always serialize");
+        payload["timestamp"] = serde_json::Value::String(envelope.timestamp.to_rfc3339());
         WebhookPayload {
             event_type: envelope.event_type,
             event_id: envelope.event_id,
-            payload: serde_json::to_value(envelope.event)
-                .expect("DocumentUpdatedEvent should always serialize"),
+            payload,
         }
     }
 }
@@ -617,7 +628,7 @@ impl DebouncedSyncProtocolEventSender {
     }
 
     pub async fn queue_event(&self, envelope: EventEnvelope) {
-        let doc_id = &envelope.channel;
+        let doc_id = &envelope.event.doc_id;
 
         // Extract user from event
         let user = envelope.event.user.as_deref();

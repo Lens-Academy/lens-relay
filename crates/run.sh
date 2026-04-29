@@ -9,7 +9,7 @@ fi
 echo "Starting Relay Server..."
 ./relay config validate
 if [ -n "$1" ]; then
-    exec ./relay serve --host=0.0.0.0 --url="$1"
+    exec ./relay serve --url="$1"
 else
-    exec ./relay serve --host=0.0.0.0
+    exec ./relay serve
 fi

@@ -13,3 +13,4 @@ auth.local.env
 .env
 __pycache__/
 ~
+.igit

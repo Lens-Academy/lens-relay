@@ -10,6 +10,7 @@ pub mod event;
 pub mod link_indexer;
 pub mod link_parser;
 pub mod metrics;
+pub mod permanent_user_data;
 pub mod search_index;
 pub mod share_token;
 pub mod store;

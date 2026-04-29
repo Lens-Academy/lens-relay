@@ -1,10 +1,13 @@
 use crate::{
-    doc_connection::DOC_NAME, event::DocumentUpdatedEvent, store::Store,
-    sync::awareness::Awareness, sync_kv::SyncKv, webhook::WebhookCallback,
+    doc_connection::DOC_NAME, event::DocumentUpdatedEvent, permanent_user_data::CompactionResult,
+    store::Store, sync::awareness::Awareness, sync_kv::SyncKv, webhook::WebhookCallback,
 };
 use anyhow::{anyhow, Context, Result};
 use std::sync::{Arc, RwLock};
-use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Subscription, Transact, Update};
+use yrs::{
+    updates::decoder::Decode, updates::encoder::Encode, Array, Doc, Map, Out, ReadTxn, StateVector,
+    Subscription, Transact, Update,
+};
 use yrs_kvstore::DocOps;
 
 pub struct DocWithSyncKv {
@@ -75,10 +78,14 @@ impl DocWithSyncKv {
                         .origin()
                         .map(|o| o.as_ref() == b"link-indexer")
                         .unwrap_or(false);
-                    // Create the event payload with business data, metadata, and update
+                    // Extract state vector from the transaction (post-update)
+                    let sv = txn.state_vector().encode_v1();
+
+                    // Create the event payload with business data, metadata, update, and state vector
                     let event = DocumentUpdatedEvent::new(doc_key.clone())
                         .with_metadata(&sync_kv)
-                        .with_update(event.update.to_vec());
+                        .with_update(event.update.to_vec())
+                        .with_state_vector(sv);
 
                     // Callback handles envelope creation and dispatch
                     callback(event, is_indexer);
@@ -134,5 +141,398 @@ impl DocWithSyncKv {
                 None
             }
         })
+    }
+
+    /// Compact the "users" PermanentUserData map: deduplicate ids, clear ds.
+    ///
+    /// The mutations trigger the update observer, which marks SyncKv dirty so
+    /// the compacted state will be persisted on the next flush.
+    pub fn compact_user_data(&self) -> CompactionResult {
+        let awareness_guard = self.awareness.read().unwrap();
+        let doc = &awareness_guard.doc;
+        crate::permanent_user_data::compact_user_data(doc)
+    }
+
+    /// Register a client_id under the given user in the "users" PermanentUserData map.
+    /// This is a no-op if the client_id is already registered for that user.
+    /// Returns true if a new registration was written.
+    pub fn register_client_id(&self, user_id: &str, client_id: u64) -> bool {
+        let awareness_guard = self.awareness.read().unwrap();
+        let doc = &awareness_guard.doc;
+
+        // get_or_insert_map takes a write txn internally, call before any read txn.
+        let users_map = doc.get_or_insert_map("users");
+
+        // Check if already registered under a read txn.
+        {
+            let txn = doc.transact();
+            if let Some(Out::YMap(user_map)) = users_map.get(&txn, user_id) {
+                if let Some(Out::YArray(ids_arr)) = user_map.get(&txn, "ids") {
+                    for item in ids_arr.iter(&txn) {
+                        let existing_id = match &item {
+                            Out::Any(yrs::Any::Number(n)) => Some(*n as u64),
+                            Out::Any(yrs::Any::BigInt(n)) => Some(*n as u64),
+                            _ => None,
+                        };
+                        if existing_id == Some(client_id) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        // Read txn dropped before taking a write txn.
+
+        let mut txn = doc.transact_mut();
+
+        // Get or create the user entry.
+        let user_map = match users_map.get(&txn, user_id) {
+            Some(Out::YMap(m)) => m,
+            _ => users_map.insert(&mut txn, user_id, yrs::MapPrelim::default()),
+        };
+
+        // Get or create the ids array.
+        let ids_arr = match user_map.get(&txn, "ids") {
+            Some(Out::YArray(a)) => a,
+            _ => user_map.insert(&mut txn, "ids", yrs::ArrayPrelim::default()),
+        };
+
+        // Ensure `ds` exists as an empty YArray so canonical Yjs PUD readers don't crash.
+        if !matches!(user_map.get(&txn, "ds"), Some(Out::YArray(_))) {
+            user_map.insert(&mut txn, "ds", yrs::ArrayPrelim::default());
+        }
+
+        ids_arr.push_back(&mut txn, yrs::Any::Number(client_id as f64));
+        tracing::info!(
+            user_id,
+            client_id,
+            "Registered client_id for user via server-driven PUD"
+        );
+        true
+    }
+
+    /// Update the state vector for a subdocument in this document's metadata index.
+    /// Also seeds the last-seen timestamp so new entries aren't immediately eligible for GC.
+    pub fn update_subdoc_state_vector(&self, subdoc_id: &str, encoded_sv: Vec<u8>) {
+        let mut metadata = self.sync_kv.get_metadata().unwrap_or_default();
+
+        let subdocs = metadata
+            .entry("subdocs".to_string())
+            .or_insert_with(|| ciborium::value::Value::Map(Vec::new()));
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let entry_value = ciborium::value::Value::Map(vec![
+            (
+                ciborium::value::Value::Text("state_vector".to_string()),
+                ciborium::value::Value::Bytes(encoded_sv),
+            ),
+            (
+                ciborium::value::Value::Text("last_seen".to_string()),
+                ciborium::value::Value::Integer(now.into()),
+            ),
+        ]);
+
+        if let ciborium::value::Value::Map(ref mut entries) = subdocs {
+            let key = ciborium::value::Value::Text(subdoc_id.to_string());
+            if let Some(entry) = entries.iter_mut().find(|(k, _)| *k == key) {
+                entry.1 = entry_value;
+            } else {
+                entries.push((key, entry_value));
+            }
+        }
+
+        self.sync_kv.set_metadata(metadata);
+    }
+
+    /// Get the subdocument state vector index from metadata.
+    pub fn get_subdoc_state_vectors(&self) -> Option<Vec<(String, Vec<u8>)>> {
+        let metadata = self.sync_kv.get_metadata()?;
+        let subdocs = metadata.get("subdocs")?;
+
+        if let ciborium::value::Value::Map(entries) = subdocs {
+            let mut result = Vec::new();
+            for (k, v) in entries {
+                if let ciborium::value::Value::Text(doc_id) = k {
+                    if let ciborium::value::Value::Map(fields) = v {
+                        for (fk, fv) in fields {
+                            if let (
+                                ciborium::value::Value::Text(fname),
+                                ciborium::value::Value::Bytes(sv_bytes),
+                            ) = (fk, fv)
+                            {
+                                if fname == "state_vector" {
+                                    result.push((doc_id.clone(), sv_bytes.clone()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Some(result)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Store;
+    use async_trait::async_trait;
+    use dashmap::DashMap;
+
+    #[derive(Default, Clone)]
+    struct MemoryStore {
+        data: Arc<DashMap<String, Vec<u8>>>,
+    }
+
+    #[cfg_attr(not(feature = "single-threaded"), async_trait)]
+    #[cfg_attr(feature = "single-threaded", async_trait(?Send))]
+    impl Store for MemoryStore {
+        async fn init(&self) -> crate::store::Result<()> {
+            Ok(())
+        }
+        async fn get(&self, key: &str) -> crate::store::Result<Option<Vec<u8>>> {
+            Ok(self.data.get(key).map(|v| v.clone()))
+        }
+        async fn set(&self, key: &str, value: Vec<u8>) -> crate::store::Result<()> {
+            self.data.insert(key.to_owned(), value);
+            Ok(())
+        }
+        async fn remove(&self, key: &str) -> crate::store::Result<()> {
+            self.data.remove(key);
+            Ok(())
+        }
+        async fn exists(&self, key: &str) -> crate::store::Result<bool> {
+            Ok(self.data.contains_key(key))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subdoc_state_vector_roundtrip() {
+        let store = MemoryStore::default();
+        let dwskv = DocWithSyncKv::new("parent_doc", Some(Arc::new(Box::new(store))), || (), None)
+            .await
+            .unwrap();
+
+        // Initially no subdoc state vectors
+        assert!(dwskv.get_subdoc_state_vectors().is_none());
+
+        // Add a subdoc state vector
+        dwskv.update_subdoc_state_vector("subdoc-abc", vec![1, 2, 3, 4]);
+
+        let svs = dwskv.get_subdoc_state_vectors().unwrap();
+        assert_eq!(svs.len(), 1);
+        assert_eq!(svs[0], ("subdoc-abc".to_string(), vec![1, 2, 3, 4]));
+
+        // Add another subdoc
+        dwskv.update_subdoc_state_vector("subdoc-def", vec![5, 6, 7, 8]);
+
+        let svs = dwskv.get_subdoc_state_vectors().unwrap();
+        assert_eq!(svs.len(), 2);
+
+        // Update existing subdoc — should replace, not duplicate
+        dwskv.update_subdoc_state_vector("subdoc-abc", vec![10, 20, 30]);
+
+        let svs = dwskv.get_subdoc_state_vectors().unwrap();
+        assert_eq!(svs.len(), 2);
+        let abc = svs.iter().find(|(id, _)| id == "subdoc-abc").unwrap();
+        assert_eq!(abc.1, vec![10, 20, 30]);
+    }
+
+    #[tokio::test]
+    async fn test_subdoc_state_vectors_persist() {
+        let store = MemoryStore::default();
+
+        // Create parent, add subdoc state vectors, persist
+        {
+            let dwskv = DocWithSyncKv::new(
+                "parent_doc",
+                Some(Arc::new(Box::new(store.clone()))),
+                || (),
+                None,
+            )
+            .await
+            .unwrap();
+
+            dwskv.update_subdoc_state_vector("subdoc-1", vec![1, 2, 3]);
+            dwskv.update_subdoc_state_vector("subdoc-2", vec![4, 5, 6]);
+            dwskv.sync_kv().persist().await.unwrap();
+        }
+
+        // Reload and verify state vectors survived
+        {
+            let dwskv = DocWithSyncKv::new(
+                "parent_doc",
+                Some(Arc::new(Box::new(store.clone()))),
+                || (),
+                None,
+            )
+            .await
+            .unwrap();
+
+            let svs = dwskv.get_subdoc_state_vectors().unwrap();
+            assert_eq!(svs.len(), 2);
+
+            let s1 = svs.iter().find(|(id, _)| id == "subdoc-1").unwrap();
+            assert_eq!(s1.1, vec![1, 2, 3]);
+
+            let s2 = svs.iter().find(|(id, _)| id == "subdoc-2").unwrap();
+            assert_eq!(s2.1, vec![4, 5, 6]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subdoc_last_seen_seeded_on_update() {
+        let store = MemoryStore::default();
+        let dwskv = DocWithSyncKv::new("parent_doc", Some(Arc::new(Box::new(store))), || (), None)
+            .await
+            .unwrap();
+
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        dwskv.update_subdoc_state_vector("subdoc-abc", vec![1, 2, 3]);
+
+        let metadata = dwskv.sync_kv().get_metadata().unwrap();
+        let subdocs = metadata.get("subdocs").unwrap();
+        if let ciborium::value::Value::Map(entries) = subdocs {
+            assert_eq!(entries.len(), 1);
+            let (k, v) = &entries[0];
+            assert_eq!(*k, ciborium::value::Value::Text("subdoc-abc".to_string()));
+            if let ciborium::value::Value::Map(fields) = v {
+                // Check state_vector
+                let sv = fields
+                    .iter()
+                    .find(|(k, _)| *k == ciborium::value::Value::Text("state_vector".to_string()))
+                    .unwrap();
+                assert_eq!(sv.1, ciborium::value::Value::Bytes(vec![1, 2, 3]));
+                // Check last_seen
+                let ls = fields
+                    .iter()
+                    .find(|(k, _)| *k == ciborium::value::Value::Text("last_seen".to_string()))
+                    .unwrap();
+                if let ciborium::value::Value::Integer(ts) = &ls.1 {
+                    let ts: u64 = (*ts).try_into().unwrap();
+                    assert!(ts >= before);
+                } else {
+                    panic!("Expected Integer timestamp");
+                }
+            } else {
+                panic!("Expected Map for subdoc entry");
+            }
+        } else {
+            panic!("Expected Map for subdocs");
+        }
+
+        // Second update should refresh the timestamp, not duplicate the entry
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        dwskv.update_subdoc_state_vector("subdoc-abc", vec![4, 5, 6]);
+
+        let metadata = dwskv.sync_kv().get_metadata().unwrap();
+        let subdocs = metadata.get("subdocs").unwrap();
+        if let ciborium::value::Value::Map(entries) = subdocs {
+            assert_eq!(entries.len(), 1);
+            if let ciborium::value::Value::Map(fields) = &entries[0].1 {
+                let sv = fields
+                    .iter()
+                    .find(|(k, _)| *k == ciborium::value::Value::Text("state_vector".to_string()))
+                    .unwrap();
+                assert_eq!(sv.1, ciborium::value::Value::Bytes(vec![4, 5, 6]));
+            }
+        } else {
+            panic!("Expected Map");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_client_id_basic() {
+        let store = MemoryStore::default();
+        let dwskv = DocWithSyncKv::new("test_doc", Some(Arc::new(Box::new(store))), || (), None)
+            .await
+            .unwrap();
+
+        // First registration should return true.
+        assert!(dwskv.register_client_id("alice", 12345));
+
+        // Duplicate registration should return false.
+        assert!(!dwskv.register_client_id("alice", 12345));
+
+        // Different client_id for same user should return true.
+        assert!(dwskv.register_client_id("alice", 67890));
+
+        // Verify the "users" map structure via a read txn.
+        let awareness = dwskv.awareness();
+        let awareness_guard = awareness.read().unwrap();
+        let doc = &awareness_guard.doc;
+        let users_map = doc.get_or_insert_map("users");
+        let txn = doc.transact();
+
+        let alice = users_map.get(&txn, "alice").unwrap();
+        if let Out::YMap(user_map) = alice {
+            let ids = user_map.get(&txn, "ids").unwrap();
+            if let Out::YArray(ids_arr) = ids {
+                let items: Vec<i64> = ids_arr
+                    .iter(&txn)
+                    .filter_map(|item| match item {
+                        Out::Any(yrs::Any::Number(n)) => Some(n as i64),
+                        Out::Any(yrs::Any::BigInt(n)) => Some(n),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(items, vec![12345i64, 67890i64]);
+            } else {
+                panic!("Expected YArray for ids");
+            }
+        } else {
+            panic!("Expected YMap for user entry");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_register_client_id_multiple_users() {
+        let store = MemoryStore::default();
+        let dwskv = DocWithSyncKv::new("test_doc", Some(Arc::new(Box::new(store))), || (), None)
+            .await
+            .unwrap();
+
+        assert!(dwskv.register_client_id("alice", 111));
+        assert!(dwskv.register_client_id("bob", 222));
+        assert!(dwskv.register_client_id("alice", 333));
+
+        let awareness = dwskv.awareness();
+        let awareness_guard = awareness.read().unwrap();
+        let doc = &awareness_guard.doc;
+        let users_map = doc.get_or_insert_map("users");
+        let txn = doc.transact();
+
+        // Alice should have 2 client_ids.
+        if let Some(Out::YMap(alice_map)) = users_map.get(&txn, "alice") {
+            if let Some(Out::YArray(ids)) = alice_map.get(&txn, "ids") {
+                assert_eq!(ids.len(&txn), 2);
+            } else {
+                panic!("Expected ids array for alice");
+            }
+        } else {
+            panic!("Expected user map for alice");
+        }
+
+        // Bob should have 1 client_id.
+        if let Some(Out::YMap(bob_map)) = users_map.get(&txn, "bob") {
+            if let Some(Out::YArray(ids)) = bob_map.get(&txn, "ids") {
+                assert_eq!(ids.len(&txn), 1);
+            } else {
+                panic!("Expected ids array for bob");
+            }
+        } else {
+            panic!("Expected user map for bob");
+        }
     }
 }
