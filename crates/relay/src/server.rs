@@ -2355,52 +2355,11 @@ impl Server {
                     }) as y_sweet_core::webhook::WebhookCallback,
                 )
             } else {
-                // Even without event dispatcher, we still want indexing
-                let has_indexer = link_indexer_for_callback.is_some();
-                let has_search = search_tx_for_callback.is_some();
-                if has_indexer || has_search {
-                    let indexer = link_indexer_for_callback.clone();
-                    let search_tx = search_tx_for_callback.clone();
-                    let search_pending = search_pending_for_callback.clone();
-                    let doc_key = doc_key_for_indexer.clone();
-                    Some(
-                        Arc::new(move |_event: DocumentUpdatedEvent, is_indexer: bool| {
-                            if !is_indexer {
-                                if let Some(ref indexer) = indexer {
-                                    let indexer = indexer.clone();
-                                    let doc_key = doc_key.clone();
-                                    tokio::spawn(async move {
-                                        indexer.on_document_update(&doc_key).await;
-                                    });
-                                }
-
-                                // Notify search index worker (with deduplication)
-                                if let Some(ref tx) = search_tx {
-                                    if let Some(ref pending) = search_pending {
-                                        let now = tokio::time::Instant::now();
-                                        let is_new = match pending.entry(doc_key.clone()) {
-                                            Entry::Occupied(mut e) => {
-                                                e.get_mut().last_updated = now;
-                                                false
-                                            }
-                                            Entry::Vacant(e) => {
-                                                e.insert(link_indexer::PendingEntry::new(now));
-                                                true
-                                            }
-                                        };
-                                        if is_new {
-                                            if let Err(e) = tx.try_send(doc_key.clone()) {
-                                                tracing::error!("Search index channel send failed (worker dead?): {e}");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }) as y_sweet_core::webhook::WebhookCallback,
-                    )
-                } else {
-                    None
-                }
+                // Server::new always constructs an event_dispatcher (with
+                // webhooks if configured, otherwise sync-protocol-only). The
+                // None case is reachable only via #[cfg(test)] helpers that
+                // bypass the doc-creation pipeline, so no callback is needed.
+                None
             }
         };
 

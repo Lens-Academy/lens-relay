@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Lens Relay readiness watchdog every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=relay-watchdog.service
+
+[Install]
+WantedBy=timers.target

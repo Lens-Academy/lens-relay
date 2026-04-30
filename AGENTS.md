@@ -58,6 +58,7 @@ docs/                 # Operational documentation
 - **Storage:** Cloudflare R2 bucket `lens-relay-storage`
 - **Tunnel:** Cloudflare Tunnel (no inbound ports needed)
 - **Relay ID:** `cb696037-0f72-4e93-8717-4e433129d789`
+- **Relay watchdog:** Detects when `relay-server` is running but unresponsive and automatically restarts it; see `docs/relay-watchdog.md`.
 
 ## Running relay-server
 

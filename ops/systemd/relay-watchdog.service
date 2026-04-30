@@ -1,0 +1,10 @@
+[Unit]
+Description=Lens Relay readiness watchdog
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/relay-watchdog.sh
+User=root
+Group=root

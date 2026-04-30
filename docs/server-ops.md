@@ -213,6 +213,37 @@ docker exec relay-git-sync uv run python cli.py sync \
   --folder-id <folder-uuid>
 ```
 
+## Relay Readiness Watchdog
+
+A host-level systemd timer runs `/usr/local/bin/relay-watchdog.sh` every minute. It probes `http://relay-server:8080/ready` from Docker network `lens-relay_default` with `curlimages/curl:8.10.1`. After repeated readiness failures, it restarts only the `relay-server` container.
+
+```bash
+# Install or update watchdog files
+docker pull curlimages/curl:8.10.1
+install -m 0755 scripts/prod/relay-watchdog.sh /usr/local/bin/relay-watchdog.sh
+install -m 0755 scripts/prod/relay-watchdog-report.sh /usr/local/bin/relay-watchdog-report.sh
+install -m 0644 ops/systemd/relay-watchdog.service /etc/systemd/system/relay-watchdog.service
+install -m 0644 ops/systemd/relay-watchdog.timer /etc/systemd/system/relay-watchdog.timer
+systemctl daemon-reload
+systemctl enable --now relay-watchdog.timer
+
+# Check timer and recent runs
+systemctl status relay-watchdog.timer
+journalctl -u relay-watchdog.service -n 50
+journalctl -t relay-watchdog -n 50
+
+# Restart summaries
+/usr/local/bin/relay-watchdog-report.sh 24
+/usr/local/bin/relay-watchdog-report.sh 168
+
+# Disable auto-restarts
+systemctl disable --now relay-watchdog.timer
+```
+
+Counters are stored in `/var/lib/lens-relay-watchdog/state.env`. Restart events are appended to `/var/log/lens-relay-watchdog/restarts.jsonl`, and human-readable events are logged under `journalctl -t relay-watchdog`.
+
+Environment overrides are supported by the watchdog script, including `RELAY_WATCHDOG_NETWORK`, `RELAY_WATCHDOG_FAILS_REQUIRED`, `RELAY_WATCHDOG_TIMEOUT_SECONDS`, and `RELAY_WATCHDOG_CURL_IMAGE`.
+
 ## Content Validation
 
 Educational content is validated using a TypeScript parser/validator published as an npm package.
