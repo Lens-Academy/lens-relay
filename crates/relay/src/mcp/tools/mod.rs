@@ -53,7 +53,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -76,7 +76,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -95,7 +95,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -143,7 +143,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -166,7 +166,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -196,7 +196,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -219,7 +219,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -246,7 +246,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "session_id": {
                         "type": "string",
-                        "description": "Session ID from create_session. Required for all tool calls."
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -259,14 +259,20 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
 /// Dispatch a tool call to the correct handler and wrap result in MCP CallToolResult format.
 pub async fn dispatch_tool(
     server: &Arc<Server>,
-    transport_session_id: &str,
     name: &str,
     arguments: &Value,
     access: &McpAccess,
 ) -> Value {
-    // create_session returns the transport session_id — no argument validation needed
+    // create_session allocates a fresh app session and returns its id.
+    //
+    // The LLM is responsible for passing this id back as the `session_id`
+    // argument on every subsequent tool call. We do *not* store the id in the
+    // transport-layer `mcp-session-id` header — see the module-level rationale
+    // in `mcp/session.rs` for why session identity lives in the JSON-RPC
+    // payload rather than the HTTP transport.
     if name == "create_session" {
-        return tool_success(transport_session_id);
+        let sid = server.mcp_sessions.create_session(access.clone());
+        return tool_success(&sid);
     }
 
     // All other tools require session_id argument and validation
@@ -278,6 +284,9 @@ pub async fn dispatch_tool(
     if server.mcp_sessions.get_session(session_id).is_none() {
         return tool_error("Invalid session_id. Call create_session to get a valid session.");
     }
+
+    // Refresh activity so cleanup_stale doesn't evict an actively-used session.
+    server.mcp_sessions.touch(session_id);
 
     // Defense-in-depth: block write tools for read-only access
     if !access.writable && matches!(name, "edit" | "create" | "move") {

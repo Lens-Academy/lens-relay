@@ -875,7 +875,35 @@ impl Server {
             });
         }
 
+        // Spawn periodic MCP session cleanup (prunes app sessions idle > TTL)
+        {
+            let sessions = self.mcp_sessions.clone();
+            let cancel = self.cancellation_token.clone();
+            tokio::spawn(async move {
+                Self::mcp_session_cleanup_loop(sessions, cancel).await;
+            });
+        }
+
         tracing::info!("Background workers started (link indexer, search index)");
+    }
+
+    /// Periodically prune idle MCP app sessions. Runs every 5 minutes until
+    /// the cancellation token fires.
+    async fn mcp_session_cleanup_loop(
+        sessions: Arc<crate::mcp::session::SessionManager>,
+        cancellation_token: CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(5 * 60)) => {
+                    sessions.cleanup_stale(crate::mcp::session::SessionManager::ttl());
+                }
+                _ = cancellation_token.cancelled() => {
+                    tracing::info!("MCP session cleanup loop shutting down");
+                    return;
+                }
+            }
+        }
     }
 
     /// Monitors persistence liveness. If documents have been marked dirty but no

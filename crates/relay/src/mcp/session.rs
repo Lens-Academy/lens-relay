@@ -1,18 +1,50 @@
+//! # Why are MCP sessions managed by an MCP *tool* instead of the transport?
+//!
+//! At first glance this design looks backwards — the streamable-HTTP MCP
+//! transport already has a session mechanism (`mcp-session-id` header), so why
+//! make the LLM thread an `session_id` argument through every tool call?
+//!
+//! Claude.ai connects to us through the Anthropic Proxy, which is
+//! request-scoped: each MCP call is an independent HTTP exchange, and the
+//! proxy does not carry transport-layer session state across them. The only
+//! place we can store session identity that survives between calls is *inside
+//! the JSON-RPC payload itself* — i.e. the LLM has to call a `create_session`
+//! tool, receive the id back, and quote it on every subsequent tool call.
+//!
+//! Once that machinery exists for Claude.ai, the simplest design is to use
+//! the same flow for Claude Code: the transport stays fully stateless (no
+//! `mcp-session-id` header is ever issued or required), and the LLM manages
+//! the session lifecycle directly via the `create_session` tool. If we only
+//! ever had to support Claude Code we'd let the streamable-HTTP transport
+//! handle session ids automatically — but running two parallel mechanisms
+//! (transport-managed for one client, tool-managed for the other) doubles the
+//! code and the failure surface.
+//!
+//! As a side benefit, this design routes around the known Claude Code
+//! reconnect bug (anthropics/claude-code#9608): when a session expires the
+//! LLM sees a plain `isError: true` tool result instead of an HTTP 4xx, and
+//! recovers by calling `create_session` again — no `/mcp reconnect` needed.
+
 use dashmap::DashMap;
-use serde_json::Value;
 use std::collections::HashSet;
 use std::time::Instant;
 use y_sweet_core::share_token::McpAccess;
 
-/// Maximum session age before cleanup. Sessions from clients that never
-/// send DELETE (e.g. Claude.ai) are purged after this duration.
-const SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+/// Maximum app-session age before cleanup. App sessions are allocated by the
+/// `create_session` MCP tool; the LLM passes the returned id as a parameter to
+/// every other tool call. Sessions are pruned after this idle period — when the
+/// LLM hits an expired/missing id, it sees the existing "Invalid session_id"
+/// tool-result error and re-creates a session, no human intervention needed.
+const SESSION_TTL: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Opportunistic-cleanup threshold. When `create_session` is called and the
+/// session map already holds at least this many entries, we run a cleanup
+/// pass before inserting. Keeps memory bounded under pathological traffic
+/// without paying for a cleanup on every allocation.
+const CLEANUP_THRESHOLD: usize = 1000;
 
 pub struct McpSession {
     pub session_id: String,
-    pub protocol_version: String,
-    pub client_info: Option<Value>,
-    pub initialized: bool,
     pub created_at: Instant,
     pub last_activity: Instant,
     pub read_docs: HashSet<String>,
@@ -30,16 +62,24 @@ impl SessionManager {
         }
     }
 
-    /// Create a new session, returning the session ID.
-    pub fn create_session(&self, protocol_version: String, client_info: Option<Value>, access: McpAccess) -> String {
-        self.cleanup_stale(SESSION_TTL);
+    /// Time-to-live applied by periodic cleanup.
+    pub const fn ttl() -> std::time::Duration {
+        SESSION_TTL
+    }
+
+    /// Allocate a new app session, returning the session ID.
+    ///
+    /// Runs an opportunistic cleanup pass when the map is over
+    /// `CLEANUP_THRESHOLD` entries, so memory stays bounded even between runs
+    /// of the periodic cleanup task.
+    pub fn create_session(&self, access: McpAccess) -> String {
+        if self.sessions.len() >= CLEANUP_THRESHOLD {
+            self.cleanup_stale(SESSION_TTL);
+        }
         let session_id = nanoid::nanoid!(8);
         let now = Instant::now();
         let session = McpSession {
             session_id: session_id.clone(),
-            protocol_version,
-            client_info,
-            initialized: false,
             created_at: now,
             last_activity: now,
             read_docs: HashSet::new(),
@@ -65,14 +105,10 @@ impl SessionManager {
         self.sessions.get_mut(session_id)
     }
 
-    /// Mark a session as initialized. Returns true if session existed.
-    pub fn mark_initialized(&self, session_id: &str) -> bool {
+    /// Refresh `last_activity` for an existing session. No-op if session is gone.
+    pub fn touch(&self, session_id: &str) {
         if let Some(mut session) = self.sessions.get_mut(session_id) {
-            session.initialized = true;
             session.last_activity = Instant::now();
-            true
-        } else {
-            false
         }
     }
 
@@ -81,47 +117,54 @@ impl SessionManager {
         self.sessions.remove(session_id).is_some()
     }
 
-    /// Remove sessions older than `max_age`.
+    /// Remove sessions whose `last_activity` is older than `max_age`.
+    ///
+    /// Uses `checked_duration_since` to avoid panicking when the host's
+    /// monotonic clock is younger than `max_age` (e.g. a freshly-rebooted VPS
+    /// running with a 7-day TTL — `Instant::now() - 7d` would underflow).
     pub fn cleanup_stale(&self, max_age: std::time::Duration) {
-        let cutoff = Instant::now() - max_age;
-        self.sessions
-            .retain(|_, session| session.last_activity > cutoff);
+        let now = Instant::now();
+        self.sessions.retain(|_, session| {
+            match now.checked_duration_since(session.last_activity) {
+                Some(age) => age < max_age,
+                // last_activity is in the future relative to `now` (clock
+                // anomaly). Keep the session — it's clearly fresh.
+                None => true,
+            }
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn default_access() -> McpAccess {
         McpAccess { writable: true, folder_uuid: None, folder_name: None }
     }
 
     #[test]
-    fn create_session_returns_32_char_id() {
+    fn create_session_returns_8_char_id() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None, default_access());
+        let id = mgr.create_session(default_access());
         assert_eq!(id.len(), 8);
     }
 
     #[test]
     fn two_sessions_have_different_ids() {
         let mgr = SessionManager::new();
-        let id1 = mgr.create_session("2025-03-26".into(), None, default_access());
-        let id2 = mgr.create_session("2025-03-26".into(), None, default_access());
+        let id1 = mgr.create_session(default_access());
+        let id2 = mgr.create_session(default_access());
         assert_ne!(id1, id2);
     }
 
     #[test]
     fn get_session_valid_id() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), Some(json!({"name": "test"})), default_access());
+        let id = mgr.create_session(default_access());
         let session = mgr.get_session(&id).expect("session should exist");
         assert_eq!(session.session_id, id);
-        assert_eq!(session.protocol_version, "2025-03-26");
-        assert!(!session.initialized);
-        assert!(session.client_info.is_some());
+        assert!(session.read_docs.is_empty());
     }
 
     #[test]
@@ -131,25 +174,33 @@ mod tests {
     }
 
     #[test]
-    fn mark_initialized_sets_flag() {
+    fn touch_updates_last_activity() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None, default_access());
+        let id = mgr.create_session(default_access());
 
-        assert!(!mgr.get_session(&id).unwrap().initialized);
-        assert!(mgr.mark_initialized(&id));
-        assert!(mgr.get_session(&id).unwrap().initialized);
+        // Backdate last_activity so we can detect the touch.
+        {
+            let mut session = mgr.get_session_mut(&id).unwrap();
+            session.last_activity = Instant::now() - std::time::Duration::from_secs(60);
+        }
+        let before = mgr.get_session(&id).unwrap().last_activity;
+
+        mgr.touch(&id);
+
+        let after = mgr.get_session(&id).unwrap().last_activity;
+        assert!(after > before);
     }
 
     #[test]
-    fn mark_initialized_nonexistent_returns_false() {
+    fn touch_nonexistent_is_noop() {
         let mgr = SessionManager::new();
-        assert!(!mgr.mark_initialized("nonexistent"));
+        mgr.touch("nonexistent"); // must not panic
     }
 
     #[test]
     fn remove_session_makes_it_inaccessible() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None, default_access());
+        let id = mgr.create_session(default_access());
         assert!(mgr.get_session(&id).is_some());
         assert!(mgr.remove_session(&id));
         assert!(mgr.get_session(&id).is_none());
@@ -162,25 +213,15 @@ mod tests {
     }
 
     #[test]
-    fn read_docs_starts_empty() {
-        let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None, default_access());
-        let session = mgr.get_session(&id).unwrap();
-        assert!(session.read_docs.is_empty());
-    }
-
-    #[test]
     fn read_docs_can_be_modified() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None, default_access());
+        let id = mgr.create_session(default_access());
 
-        // Insert a doc_id via get_session_mut
         {
             let mut session = mgr.get_session_mut(&id).unwrap();
             session.read_docs.insert("doc-123".to_string());
         }
 
-        // Verify it's there
         let session = mgr.get_session(&id).unwrap();
         assert!(session.read_docs.contains("doc-123"));
         assert_eq!(session.read_docs.len(), 1);
@@ -189,12 +230,9 @@ mod tests {
     #[test]
     fn cleanup_stale_removes_old_sessions() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None, default_access());
-
-        // Session exists
+        let id = mgr.create_session(default_access());
         assert!(mgr.get_session(&id).is_some());
 
-        // Cleanup with 0 duration removes everything
         mgr.cleanup_stale(std::time::Duration::from_secs(0));
 
         assert!(mgr.get_session(&id).is_none());
@@ -203,10 +241,27 @@ mod tests {
     #[test]
     fn cleanup_stale_keeps_fresh_sessions() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session("2025-03-26".into(), None, default_access());
+        let id = mgr.create_session(default_access());
 
-        // Cleanup with 1 hour keeps the just-created session
         mgr.cleanup_stale(std::time::Duration::from_secs(3600));
+
+        assert!(mgr.get_session(&id).is_some());
+    }
+
+    #[test]
+    fn touch_keeps_session_alive_past_ttl() {
+        let mgr = SessionManager::new();
+        let id = mgr.create_session(default_access());
+
+        // Backdate last_activity beyond a 30s TTL.
+        {
+            let mut session = mgr.get_session_mut(&id).unwrap();
+            session.last_activity = Instant::now() - std::time::Duration::from_secs(60);
+        }
+
+        // Refresh and confirm cleanup keeps it.
+        mgr.touch(&id);
+        mgr.cleanup_stale(std::time::Duration::from_secs(30));
 
         assert!(mgr.get_session(&id).is_some());
     }

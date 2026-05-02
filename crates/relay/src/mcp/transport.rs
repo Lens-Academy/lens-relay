@@ -1,11 +1,11 @@
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
     Json,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::Arc;
 use tracing::debug;
 use y_sweet_core::share_token::{decode_mcp_key, McpAccess};
@@ -46,20 +46,25 @@ pub async fn mcp_auth_middleware(
 }
 
 /// Handle POST /mcp — JSON-RPC messages (requests and notifications).
+///
+/// The transport is stateless: no `mcp-session-id` header is issued or checked.
+/// Tool-level sessions are managed by the `create_session` MCP tool, which
+/// returns a session id the LLM passes to subsequent tool calls. See the
+/// module-level docs in `mcp/session.rs` for the design rationale (short
+/// version: Claude.ai connects through the Anthropic Proxy which is
+/// request-scoped, so session identity has to live in the JSON-RPC payload
+/// rather than the transport).
 pub async fn handle_mcp_post(
     State(server): State<Arc<Server>>,
     axum::Extension(access): axum::Extension<McpAccess>,
-    headers: HeaderMap,
     body: String,
 ) -> Response {
-    handle_mcp_post_inner(server, access, headers, body).await
+    handle_mcp_post_inner(server, access, body).await
 }
 
-/// Shared implementation for POST /mcp with a resolved McpAccess.
 async fn handle_mcp_post_inner(
     server: Arc<Server>,
     access: McpAccess,
-    headers: HeaderMap,
     body: String,
 ) -> Response {
     // Parse JSON body
@@ -94,9 +99,6 @@ async fn handle_mcp_post_inner(
         }
     };
 
-    let session_id = extract_session_id(&headers);
-    let sessions = &server.mcp_sessions;
-
     // Resolve folder_name from UUID if not already set
     let access = if access.folder_name.is_none() {
         if let Some(ref uuid) = access.folder_uuid {
@@ -114,66 +116,13 @@ async fn handle_mcp_post_inner(
     match message {
         JsonRpcMessage::Notification(notif) => {
             debug!(method = %notif.method, "MCP notification received");
-            router::handle_notification(sessions, session_id.as_deref(), &notif);
+            router::handle_notification(&notif);
             StatusCode::ACCEPTED.into_response()
         }
         JsonRpcMessage::Request(req) => {
             debug!(method = %req.method, id = %req.id, "MCP request received");
-
-            if req.method == "initialize" {
-                // Initialize does not require an existing session
-                let (resp, new_session_id) =
-                    router::dispatch_request(&server, None, &req, &access).await;
-
-                let mut response = (StatusCode::OK, Json(resp)).into_response();
-
-                if let Some(sid) = new_session_id {
-                    if let Ok(val) = HeaderValue::from_str(&sid) {
-                        response.headers_mut().insert("mcp-session-id", val);
-                    }
-                }
-
-                response
-            } else {
-                // Non-initialize requests require a session ID
-                let sid = match session_id {
-                    Some(ref s) => s.clone(),
-                    None => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Json(json!({
-                                "jsonrpc": "2.0",
-                                "id": req.id,
-                                "error": {
-                                    "code": -32600,
-                                    "message": "Missing mcp-session-id header"
-                                }
-                            })),
-                        )
-                            .into_response();
-                    }
-                };
-
-                // Verify session exists
-                if sessions.get_session(&sid).is_none() {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        Json(json!({
-                            "jsonrpc": "2.0",
-                            "id": req.id,
-                            "error": {
-                                "code": -32600,
-                                "message": "Session not found"
-                            }
-                        })),
-                    )
-                        .into_response();
-                }
-
-                let (resp, _) = router::dispatch_request(&server, Some(&sid), &req, &access).await;
-
-                (StatusCode::OK, Json(resp)).into_response()
-            }
+            let resp = router::dispatch_request(&server, &req, &access).await;
+            (StatusCode::OK, Json(resp)).into_response()
         }
     }
 }
@@ -183,22 +132,13 @@ pub async fn handle_mcp_get() -> impl IntoResponse {
     (StatusCode::METHOD_NOT_ALLOWED, "SSE not supported yet")
 }
 
-/// Handle DELETE /mcp — session termination.
-pub async fn handle_mcp_delete(State(server): State<Arc<Server>>, headers: HeaderMap) -> Response {
-    let session_id = match extract_session_id(&headers) {
-        Some(sid) => sid,
-        None => {
-            return StatusCode::BAD_REQUEST.into_response();
-        }
-    };
-
-    let sessions = &server.mcp_sessions;
-    if sessions.remove_session(&session_id) {
-        debug!(session_id = %session_id, "MCP session deleted");
-        StatusCode::OK.into_response()
-    } else {
-        StatusCode::NOT_FOUND.into_response()
-    }
+/// Handle DELETE /mcp — no-op acknowledgement.
+///
+/// The streamable-HTTP MCP spec lets clients DELETE to end a session. With a
+/// stateless transport there is nothing to clean up, but some clients send a
+/// DELETE on shutdown anyway, so we return 200 to keep them happy.
+pub async fn handle_mcp_delete() -> Response {
+    StatusCode::OK.into_response()
 }
 
 // --- Path-key variants: /mcp/:key validates key from URL path ---
@@ -217,14 +157,13 @@ fn decode_path_key(server: &Server, key: &str) -> Result<McpAccess, Response> {
 pub async fn handle_mcp_post_with_key(
     State(server): State<Arc<Server>>,
     Path(key): Path<String>,
-    headers: HeaderMap,
     body: String,
 ) -> Response {
     let access = match decode_path_key(&server, &key) {
         Ok(a) => a,
         Err(err) => return err,
     };
-    handle_mcp_post_inner(server, access, headers, body).await
+    handle_mcp_post_inner(server, access, body).await
 }
 
 /// Handle GET /mcp/:key
@@ -242,18 +181,9 @@ pub async fn handle_mcp_get_with_key(
 pub async fn handle_mcp_delete_with_key(
     State(server): State<Arc<Server>>,
     Path(key): Path<String>,
-    headers: HeaderMap,
 ) -> Response {
     if let Err(err) = decode_path_key(&server, &key) {
         return err;
     }
-    handle_mcp_delete(State(server), headers).await
-}
-
-/// Extract the mcp-session-id from request headers.
-fn extract_session_id(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+    handle_mcp_delete().await
 }
