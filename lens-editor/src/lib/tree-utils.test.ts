@@ -65,6 +65,17 @@ describe('buildTreeFromPaths', () => {
 
     expect(projects?.docId).toBeUndefined();
   });
+
+  it('skips corrupt metadata entries that cannot provide stable tree ids', () => {
+    const tree = buildTreeFromPaths({
+      '/Good.md': { id: 'good-id', type: 'markdown', version: 0 },
+      '/Broken.md': {} as any,
+    });
+
+    expect(tree).toHaveLength(1);
+    expect(tree[0].name).toBe('Good.md');
+    expect(tree[0].id).toBe('good-id');
+  });
 });
 
 describe('filterTree', () => {

@@ -226,15 +226,19 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "move",
-            "description": "Move or rename a document. Automatically rewrites wikilinks in other documents that reference the moved file. Use for both renames (same folder, new filename) and cross-folder moves.",
+            "description": "Move or rename a file or folder. Automatically rewrites wikilinks in other documents that reference moved files. Use for file renames, file moves, and folder renames.",
             "inputSchema": {
                 "type": "object",
-                "required": ["file_path", "new_path", "session_id"],
+                "required": ["new_path", "session_id"],
                 "additionalProperties": false,
                 "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Current path of the file or folder (e.g. 'Lens/Biology/Photosynthesis.md' or 'Lens/Biology'). Required unless file_path is provided."
+                    },
                     "file_path": {
                         "type": "string",
-                        "description": "Current path of the document (e.g. 'Lens/Biology/Photosynthesis.md')"
+                        "description": "Deprecated alias for path."
                     },
                     "new_path": {
                         "type": "string",
@@ -402,6 +406,19 @@ mod integration_tests {
     use super::{create_doc, edit, glob, grep, read};
     use super::test_helpers::*;
     use serde_json::json;
+
+    #[test]
+    fn move_schema_allows_file_path_alias_without_requiring_path() {
+        let tools = super::tool_definitions(true);
+        let move_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "move")
+            .expect("move tool should be present");
+
+        assert_eq!(move_tool["inputSchema"]["required"], json!(["new_path", "session_id"]));
+        assert!(move_tool["inputSchema"]["properties"]["path"].is_object());
+        assert!(move_tool["inputSchema"]["properties"]["file_path"].is_object());
+    }
 
     #[tokio::test]
     async fn json_file_create_read_edit_roundtrip() {

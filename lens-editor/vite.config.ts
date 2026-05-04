@@ -41,12 +41,23 @@ export default defineConfig(() => {
    * to the relay server with the injected server auth token.
    */
   function relayProxyAuthPlugin(): Plugin {
+    async function resolveFolderName(folderUuid: string): Promise<string | undefined> {
+      const headers: Record<string, string> = {};
+      if (relayServerToken) {
+        headers.Authorization = `Bearer ${relayServerToken}`;
+      }
+      const res = await fetch(`${relayTarget}/folder/${encodeURIComponent(folderUuid)}/name`, { headers });
+      if (!res.ok) return undefined;
+      const data = await res.json() as { name?: string };
+      return data.name;
+    }
+
     return {
       name: 'relay-proxy-auth',
       configureServer(server) {
         // Validate share token on /api/relay/ proxy requests
         server.middlewares.use('/api/relay', async (req, res, next) => {
-          const { validateProxyToken, checkProxyAccess } = await import('./server/relay-proxy-auth.ts');
+          const { validateProxyToken, checkProxyAccessWithBody } = await import('./server/relay-proxy-auth.ts');
 
           const shareToken = req.headers['x-share-token'] as string | undefined;
           const auth = validateProxyToken(shareToken);
@@ -60,7 +71,25 @@ export default defineConfig(() => {
           const queryIdx = fullUrl.indexOf('?');
           const pathOnly = queryIdx >= 0 ? fullUrl.slice(0, queryIdx) : fullUrl;
           const query = queryIdx >= 0 ? fullUrl.slice(queryIdx + 1) : '';
-          const access = checkProxyAccess(req.method || 'GET', pathOnly, query, auth);
+          let parsedBody: unknown = undefined;
+          if ((req.method || 'GET') === 'POST' && pathOnly === '/move') {
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            const rawBody = Buffer.concat(chunks);
+            (req as any).relayProxyBody = rawBody;
+            try {
+              parsedBody = rawBody.length ? JSON.parse(rawBody.toString('utf8')) : undefined;
+            } catch {
+              parsedBody = undefined;
+            }
+          }
+
+          const allowedFolderName = !auth.isAllFolders && (req.method || 'GET') === 'POST' && pathOnly === '/move'
+            ? await resolveFolderName(auth.payload.folder)
+            : undefined;
+          const access = checkProxyAccessWithBody(req.method || 'GET', pathOnly, query, auth, parsedBody, allowedFolderName);
           if (!access.allowed) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: access.reason || 'Access denied' }));
@@ -314,6 +343,13 @@ export default defineConfig(() => {
           rewrite: (path) => path.replace(/^\/api\/relay/, ''),
           secure: !useLocalRelay,
           configure: (proxy) => {
+            proxy.on('proxyReq', (proxyReq, req) => {
+              const rawBody = (req as any).relayProxyBody as Buffer | undefined;
+              if (rawBody) {
+                proxyReq.setHeader('Content-Length', String(rawBody.length));
+                proxyReq.write(rawBody);
+              }
+            });
             if (relayServerToken) {
               proxy.on('proxyReq', (proxyReq) => {
                 proxyReq.setHeader('Authorization', `Bearer ${relayServerToken}`);

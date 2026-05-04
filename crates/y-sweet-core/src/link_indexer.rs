@@ -920,7 +920,7 @@ pub fn move_document(
 /// Extract all fields from a filemeta entry value as a flat HashMap<String, Any>.
 ///
 /// Handles both Out::YMap (from Rust/Yrs) and Out::Any(Any::Map) (from JS clients).
-fn extract_filemeta_fields(value: &Out, txn: &impl ReadTxn) -> HashMap<String, Any> {
+pub fn extract_filemeta_fields(value: &Out, txn: &impl ReadTxn) -> HashMap<String, Any> {
     let mut fields = HashMap::new();
     match value {
         Out::YMap(meta_map) => {

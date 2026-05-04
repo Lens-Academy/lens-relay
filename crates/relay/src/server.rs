@@ -61,7 +61,7 @@ use y_sweet_core::{
     sync_kv::SyncKv,
     webhook::WebhookConfig,
 };
-use yrs::{Array, GetString, Map, ReadTxn, Text, Transact, WriteTxn};
+use yrs::{GetString, Map, ReadTxn, Text, Transact, WriteTxn};
 
 const RELAY_SERVER_VERSION: &str = env!("GIT_VERSION");
 
@@ -329,6 +329,13 @@ struct SuggestionsQuery {
 #[derive(Deserialize)]
 struct MoveDocRequest {
     uuid: String,
+    new_path: String,
+    target_folder: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MovePathRequest {
+    path: String,
     new_path: String,
     target_folder: Option<String>,
 }
@@ -963,6 +970,23 @@ impl Server {
 
     /// Resolve a folder UUID to its display name by finding any document in that folder.
     pub fn folder_name_for_uuid(&self, folder_uuid: &str) -> Option<String> {
+        for folder_doc_id in link_indexer::find_all_folder_docs(&self.docs) {
+            if let Some((_, fid)) = link_indexer::parse_doc_id(&folder_doc_id) {
+                if fid != folder_uuid {
+                    continue;
+                }
+                let Some(doc_ref) = self.docs.get(&folder_doc_id) else {
+                    continue;
+                };
+                let awareness = doc_ref.awareness();
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+                return Some(y_sweet_core::doc_resolver::read_folder_name(
+                    &guard.doc,
+                    &folder_doc_id,
+                ));
+            }
+        }
+
         for path in self.doc_resolver().all_paths() {
             if let Some(info) = self.doc_resolver().resolve_path(&path) {
                 if let Some((_, fid)) = link_indexer::parse_doc_id(&info.folder_doc_id) {
@@ -2078,6 +2102,277 @@ impl Server {
         Ok(result)
     }
 
+    /// Move a markdown document or rename a metadata-only folder by user-facing path.
+    pub async fn move_path(
+        &self,
+        path: &str,
+        new_path: &str,
+        target_folder: Option<&str>,
+    ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
+        if !new_path.starts_with('/') {
+            return Err(MoveDocumentError::BadRequest(
+                "new_path must start with '/'".into(),
+            ));
+        }
+
+        if let Some(info) = self.doc_resolver().resolve_path(path) {
+            let source_type = self
+                .filemeta_type_for_uuid(&info.uuid)
+                .unwrap_or_else(|| "markdown".to_string());
+            match source_type.as_str() {
+                "markdown" => {
+                    return self
+                        .move_document(&info.uuid, new_path, target_folder)
+                        .await;
+                }
+                "folder" => {
+                    return self.move_folder_path(path, new_path, target_folder).await;
+                }
+                other => {
+                    return Err(MoveDocumentError::BadRequest(format!(
+                        "Cannot move filemeta entry of type '{}'",
+                        other
+                    )));
+                }
+            }
+        }
+
+        self.move_folder_path(path, new_path, target_folder).await
+    }
+
+    fn filemeta_type_for_uuid(&self, uuid: &str) -> Option<String> {
+        for folder_doc_id in link_indexer::find_all_folder_docs(&self.docs) {
+            let Some(doc_ref) = self.docs.get(&folder_doc_id) else {
+                continue;
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            let Some(filemeta) = txn.get_map("filemeta_v0") else {
+                continue;
+            };
+            for (_, value) in filemeta.iter(&txn) {
+                if link_indexer::extract_id_from_filemeta_entry(&value, &txn).as_deref()
+                    == Some(uuid)
+                {
+                    return link_indexer::extract_type_from_filemeta_entry(&value, &txn);
+                }
+            }
+        }
+        None
+    }
+
+    async fn move_folder_path(
+        &self,
+        path: &str,
+        new_path: &str,
+        target_folder: Option<&str>,
+    ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
+        if new_path.ends_with(".md") {
+            return Err(MoveDocumentError::BadRequest(
+                "Folder destination must not end with '.md'".into(),
+            ));
+        }
+        if new_path == "/" || new_path.ends_with('/') || new_path.contains("//") {
+            return Err(MoveDocumentError::BadRequest(
+                "Invalid folder destination path".into(),
+            ));
+        }
+        if new_path
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .any(|segment| segment == "." || segment == "..")
+        {
+            return Err(MoveDocumentError::BadRequest(
+                "Folder destination must not contain '.' or '..' segments".into(),
+            ));
+        }
+
+        let folder_doc_ids = link_indexer::find_all_folder_docs(&self.docs);
+        let mut source_folder_doc_id = None;
+        let mut source_folder_name = None;
+        let mut old_in_folder_path = None;
+
+        for folder_doc_id in &folder_doc_ids {
+            let Some(doc_ref) = self.docs.get(folder_doc_id) else {
+                continue;
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+            let prefix = format!("{}/", name);
+            if let Some(rest) = path.strip_prefix(&prefix) {
+                source_folder_doc_id = Some(folder_doc_id.clone());
+                source_folder_name = Some(name);
+                old_in_folder_path = Some(format!("/{}", rest.trim_start_matches('/')));
+                break;
+            }
+        }
+
+        let source_folder_doc_id = source_folder_doc_id
+            .ok_or_else(|| MoveDocumentError::NotFound(format!("Folder not found: {}", path)))?;
+        let source_folder_name = source_folder_name.unwrap_or_default();
+        let old_path = old_in_folder_path.unwrap_or_default();
+        if new_path == old_path || new_path.starts_with(&format!("{}/", old_path)) {
+            return Err(MoveDocumentError::BadRequest(
+                "Cannot move a folder to itself or one of its descendants".into(),
+            ));
+        }
+
+        if let Some(target) = target_folder {
+            if target != source_folder_name {
+                return Err(MoveDocumentError::BadRequest(
+                    "Folder cross-folder move is not supported".into(),
+                ));
+            }
+        }
+
+        let entries_to_move: Vec<(
+            String,
+            String,
+            String,
+            String,
+            std::collections::HashMap<String, yrs::Any>,
+        )> = {
+            let doc_ref = self
+                .docs
+                .get(&source_folder_doc_id)
+                .ok_or_else(|| MoveDocumentError::Internal("Source folder doc not loaded".into()))?;
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            let filemeta = txn
+                .get_map("filemeta_v0")
+                .ok_or_else(|| MoveDocumentError::NotFound("No filemeta_v0".into()))?;
+
+            let old_prefix = format!("{}/", old_path);
+            let new_prefix = format!("{}/", new_path);
+            let source_paths: std::collections::HashSet<String> = filemeta
+                .keys(&txn)
+                .filter(|p| *p == old_path || p.starts_with(&old_prefix))
+                .map(|p| p.to_string())
+                .collect();
+            if source_paths.is_empty() {
+                return Err(MoveDocumentError::NotFound(format!(
+                    "Folder not found: {}",
+                    path
+                )));
+            }
+            if let Some(old_value) = filemeta.get(&txn, &old_path) {
+                if link_indexer::extract_type_from_filemeta_entry(&old_value, &txn).as_deref()
+                    != Some("folder")
+                {
+                    return Err(MoveDocumentError::BadRequest(format!(
+                        "{} is not a folder",
+                        path
+                    )));
+                }
+            }
+            if filemeta.get(&txn, new_path).is_some() && !source_paths.contains(new_path) {
+                return Err(MoveDocumentError::Conflict(format!(
+                    "Path '{}' already exists in target folder",
+                    new_path
+                )));
+            }
+            let mut moves = Vec::new();
+            for source_path in &source_paths {
+                let destination = if source_path == &old_path {
+                    new_path.to_string()
+                } else {
+                    format!("{}{}", new_prefix, &source_path[old_prefix.len()..])
+                };
+                if filemeta.get(&txn, &destination).is_some()
+                    && !source_paths.contains(&destination)
+                {
+                    return Err(MoveDocumentError::Conflict(format!(
+                        "Path '{}' already exists in target folder",
+                        destination
+                    )));
+                }
+                if let Some(value) = filemeta.get(&txn, source_path) {
+                    let entry_type =
+                        link_indexer::extract_type_from_filemeta_entry(&value, &txn)
+                            .unwrap_or_default();
+                    let id = link_indexer::extract_id_from_filemeta_entry(&value, &txn)
+                        .unwrap_or_default();
+                    let fields = link_indexer::extract_filemeta_fields(&value, &txn);
+                    moves.push((source_path.clone(), destination, entry_type, id, fields));
+                }
+            }
+            moves.sort_by(|a, b| a.0.cmp(&b.0));
+            moves
+        };
+
+        let markdown_moves: Vec<(String, String)> = entries_to_move
+            .iter()
+            .filter_map(|(_, dst, entry_type, id, _)| {
+                (entry_type == "markdown" && !id.is_empty()).then(|| (id.clone(), dst.clone()))
+            })
+            .collect();
+
+        let mut links_rewritten = 0usize;
+        for (uuid, destination) in markdown_moves {
+            let result = self.move_document(&uuid, &destination, None).await?;
+            links_rewritten += result.links_rewritten;
+        }
+
+        let folder_sync_kv = {
+            let doc_ref = self
+                .docs
+                .get(&source_folder_doc_id)
+                .ok_or_else(|| MoveDocumentError::Internal("Source folder doc not loaded".into()))?;
+            let sync_kv = doc_ref.sync_kv();
+            let awareness = doc_ref.awareness();
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard.doc.transact_mut_with("link-indexer");
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let docs_map = txn.get_or_insert_map("docs");
+
+            for (source, _, entry_type, _, _) in &entries_to_move {
+                if entry_type != "markdown" {
+                    filemeta.remove(&mut txn, source);
+                    docs_map.remove(&mut txn, source);
+                }
+            }
+            for (source, destination, entry_type, id, fields) in &entries_to_move {
+                if entry_type == "markdown" {
+                    continue;
+                }
+                filemeta.insert(
+                    &mut txn,
+                    destination.as_str(),
+                    yrs::Any::Map(fields.clone().into()),
+                );
+                docs_map.insert(
+                    &mut txn,
+                    destination.as_str(),
+                    yrs::Any::String(id.to_string().into()),
+                );
+                if source == &old_path {
+                    continue;
+                }
+            }
+            sync_kv
+        };
+
+        if let Err(e) = folder_sync_kv.persist().await {
+            tracing::error!("Failed to persist folder doc after folder move: {:?}", e);
+        }
+
+        self.doc_resolver.rebuild(&self.docs);
+        if let Some(ref indexer) = self.link_indexer {
+            indexer.on_document_update(&source_folder_doc_id).await;
+        }
+
+        Ok(link_indexer::MoveResult {
+            old_path,
+            new_path: new_path.to_string(),
+            old_folder_name: source_folder_name.clone(),
+            new_folder_name: source_folder_name,
+            links_rewritten,
+        })
+    }
+
     /// Convenience wrapper for tests: creates a Server and discards the WorkerReceivers.
     /// Workers are not spawned, which is fine for tests that don't need background indexing.
     #[cfg(test)]
@@ -3022,6 +3317,8 @@ impl Server {
             )
             .route("/webhook/reload", post(reload_webhook_config_endpoint))
             .route("/search", get(handle_search))
+            .route("/folder/:folder_uuid/name", get(handle_folder_name))
+            .route("/move", post(handle_move_path))
             .route("/doc/move", post(handle_move_document))
             .route("/doc/upsert", post(handle_upsert_document))
             .route("/doc/check", post(handle_check_documents))
@@ -3727,6 +4024,21 @@ async fn handle_search(
     })))
 }
 
+async fn handle_folder_name(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Path(folder_uuid): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    server_state.check_auth(auth_header)?;
+    match server_state.folder_name_for_uuid(&folder_uuid) {
+        Some(name) => Ok(Json(json!({ "name": name }))),
+        None => Err(AppError::new(
+            StatusCode::NOT_FOUND,
+            anyhow!("Folder '{}' not found", folder_uuid),
+        )),
+    }
+}
+
 /// Scan all documents in a folder for CriticMarkup suggestions.
 ///
 /// GET /suggestions?folder_id=...
@@ -3835,6 +4147,31 @@ async fn handle_move_document(
     server_state.check_auth(auth_header)?;
     let result = server_state
         .move_document(&body.uuid, &body.new_path, body.target_folder.as_deref())
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(Json(MoveDocResponse {
+        old_path: result.old_path,
+        new_path: result.new_path,
+        old_folder: result.old_folder_name,
+        new_folder: result.new_folder_name,
+        links_rewritten: result.links_rewritten,
+    }))
+}
+
+/// Move a document or rename a folder by user-facing path.
+///
+/// POST /move
+/// Body: { "path": "Lens/Old.md", "new_path": "/New.md", "target_folder": "Lens Edu" }
+/// Response: { "old_path", "new_path", "old_folder", "new_folder", "links_rewritten" }
+async fn handle_move_path(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Json(body): Json<MovePathRequest>,
+) -> Result<Json<MoveDocResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+    let result = server_state
+        .move_path(&body.path, &body.new_path, body.target_folder.as_deref())
         .await
         .map_err(AppError::from)?;
 
@@ -5283,8 +5620,596 @@ async fn metrics_endpoint(State(_server_state): State<Arc<Server>>) -> Result<St
 #[cfg(test)]
 mod test {
     use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Method, Request};
+    use serde_json::Value as JsonValue;
+    use tower::util::ServiceExt;
     use y_sweet_core::api_types::Authorization;
     use y_sweet_core::auth::ExpirationTimeEpochMillis;
+    use y_sweet_core::doc_sync::DocWithSyncKv;
+    use yrs::GetString;
+    use yrs::{Any, Map, ReadTxn, Text, Transact, WriteTxn};
+
+    const TEST_RELAY_ID: &str = "cb696037-0f72-4e93-8717-4e433129d789";
+    const TEST_FOLDER_UUID: &str = "b0000001-0000-4000-8000-000000000001";
+
+    async fn insert_test_folder_doc(
+        server: &Arc<Server>,
+        folder_name: &str,
+        entries: &[(&str, &str, &str)],
+    ) -> String {
+        let folder_doc_id = format!("{}-{}", TEST_RELAY_ID, TEST_FOLDER_UUID);
+        let dwskv = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
+            .await
+            .unwrap();
+        {
+            let awareness = dwskv.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String(folder_name.into()));
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let docs_map = txn.get_or_insert_map("docs");
+            for (path, uuid, entry_type) in entries {
+                let mut map = std::collections::HashMap::new();
+                map.insert("id".to_string(), Any::String((*uuid).into()));
+                map.insert("type".to_string(), Any::String((*entry_type).into()));
+                map.insert("version".to_string(), Any::Number(0.0));
+                filemeta.insert(&mut txn, *path, Any::Map(map.into()));
+                docs_map.insert(&mut txn, *path, Any::String((*uuid).into()));
+            }
+        }
+        server.docs().insert(folder_doc_id.clone(), dwskv);
+        server.doc_resolver().rebuild(server.docs());
+        folder_doc_id
+    }
+
+    async fn insert_test_content_doc(server: &Arc<Server>, uuid: &str, content: &str) {
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, uuid);
+        let dwskv = DocWithSyncKv::new(&doc_id, None, || (), None)
+            .await
+            .unwrap();
+        {
+            let awareness = dwskv.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, content);
+        }
+        server.docs().insert(doc_id, dwskv);
+    }
+
+    fn insert_backlink(
+        server: &Arc<Server>,
+        folder_doc_id: &str,
+        target_uuid: &str,
+        backlinker_uuid: &str,
+    ) {
+        let doc_ref = server.docs().get(folder_doc_id).unwrap();
+        let awareness = doc_ref.awareness();
+        let guard = awareness.write().unwrap();
+        let mut txn = guard.doc.transact_mut();
+        let backlinks = txn.get_or_insert_map("backlinks_v0");
+        backlinks.insert(
+            &mut txn,
+            target_uuid,
+            vec![Any::String(backlinker_uuid.into())],
+        );
+    }
+
+    fn filemeta_has(server: &Arc<Server>, folder_doc_id: &str, path: &str) -> bool {
+        let doc_ref = server.docs().get(folder_doc_id).unwrap();
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        txn.get_map("filemeta_v0")
+            .and_then(|m| m.get(&txn, path))
+            .is_some()
+    }
+
+    fn legacy_docs_value(
+        server: &Arc<Server>,
+        folder_doc_id: &str,
+        path: &str,
+    ) -> Option<String> {
+        let doc_ref = server.docs().get(folder_doc_id).unwrap();
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        txn.get_map("docs").and_then(|m| match m.get(&txn, path) {
+            Some(yrs::Out::Any(Any::String(value))) => Some(value.to_string()),
+            _ => None,
+        })
+    }
+
+    fn content_text(server: &Arc<Server>, uuid: &str) -> String {
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, uuid);
+        let doc_ref = server.docs().get(&doc_id).unwrap();
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        txn.get_text("contents")
+            .map(|text| text.get_string(&txn))
+            .unwrap_or_default()
+    }
+
+    async fn post_move(server: &Arc<Server>, body: JsonValue) -> (StatusCode, JsonValue) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/move")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn move_path_file_moves_existing_file() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Old.md", "11111111-1111-4111-8111-111111111111", "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, "11111111-1111-4111-8111-111111111111", "Old").await;
+
+        let result = server
+            .move_path("Relay Folder 1/Old.md", "/New.md", None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.old_path, "/Old.md");
+        assert_eq!(result.new_path, "/New.md");
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Old.md"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/New.md"));
+    }
+
+    #[tokio::test]
+    async fn folder_rename_moves_metadata() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
+                ("/Old/Child.md", "33333333-3333-4333-8333-333333333333", "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Child").await;
+
+        server
+            .move_path("Relay Folder 1/Old", "/New", None)
+            .await
+            .unwrap();
+
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Old"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Old/Child.md"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/New"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/New/Child.md"));
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/New"),
+            Some("22222222-2222-4222-8222-222222222222".to_string())
+        );
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/New/Child.md"),
+            Some("33333333-3333-4333-8333-333333333333".to_string())
+        );
+        assert_eq!(legacy_docs_value(&server, &folder_doc_id, "/Old"), None);
+        assert_eq!(legacy_docs_value(&server, &folder_doc_id, "/Old/Child.md"), None);
+    }
+
+    #[tokio::test]
+    async fn folder_rename_moves_synthetic_ancestor_folder() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[(
+                "/articles/Article.md",
+                "33333333-3333-4333-8333-333333333333",
+                "markdown",
+            )],
+        )
+        .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article")
+            .await;
+
+        let result = server
+            .move_path("Relay Folder 1/articles", "/renamed", None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.old_path, "/articles");
+        assert_eq!(result.new_path, "/renamed");
+        assert!(!filemeta_has(&server, &folder_doc_id, "/articles/Article.md"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/renamed/Article.md"));
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/articles/Article.md"),
+            None
+        );
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/renamed/Article.md"),
+            Some("33333333-3333-4333-8333-333333333333".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn folder_rename_rejects_synthetic_destination_collision_without_mutation() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                (
+                    "/articles/Article.md",
+                    "33333333-3333-4333-8333-333333333333",
+                    "markdown",
+                ),
+                (
+                    "/renamed/Article.md",
+                    "44444444-4444-4444-8444-444444444444",
+                    "markdown",
+                ),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article")
+            .await;
+        insert_test_content_doc(&server, "44444444-4444-4444-8444-444444444444", "Existing")
+            .await;
+
+        let result = server
+            .move_path("Relay Folder 1/articles", "/renamed", None)
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/articles/Article.md"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/renamed/Article.md"));
+    }
+
+    #[tokio::test]
+    async fn folder_rename_rewrites_synthetic_descendant_backlinks() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                (
+                    "/articles/Article.md",
+                    "33333333-3333-4333-8333-333333333333",
+                    "markdown",
+                ),
+                (
+                    "/Backlinker.md",
+                    "44444444-4444-4444-8444-444444444444",
+                    "markdown",
+                ),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article")
+            .await;
+        insert_test_content_doc(
+            &server,
+            "44444444-4444-4444-8444-444444444444",
+            "See [[articles/Article]]",
+        )
+        .await;
+        insert_backlink(
+            &server,
+            &folder_doc_id,
+            "33333333-3333-4333-8333-333333333333",
+            "44444444-4444-4444-8444-444444444444",
+        );
+
+        let result = server
+            .move_path("Relay Folder 1/articles", "/renamed", None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.links_rewritten, 1);
+        assert_eq!(
+            content_text(&server, "44444444-4444-4444-8444-444444444444"),
+            "See [[renamed/Article]]"
+        );
+    }
+
+    #[tokio::test]
+    async fn folder_rename_rewrites_descendant_backlinks() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
+                ("/Old/Child.md", "33333333-3333-4333-8333-333333333333", "markdown"),
+                ("/Backlinker.md", "44444444-4444-4444-8444-444444444444", "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Child").await;
+        insert_test_content_doc(
+            &server,
+            "44444444-4444-4444-8444-444444444444",
+            "See [[Old/Child]]",
+        )
+        .await;
+        insert_backlink(
+            &server,
+            &folder_doc_id,
+            "33333333-3333-4333-8333-333333333333",
+            "44444444-4444-4444-8444-444444444444",
+        );
+
+        let result = server
+            .move_path("Relay Folder 1/Old", "/New", None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.links_rewritten, 1);
+        assert_eq!(
+            content_text(&server, "44444444-4444-4444-8444-444444444444"),
+            "See [[New/Child]]"
+        );
+    }
+
+    #[tokio::test]
+    async fn folder_rename_without_backlinkers_reports_zero_rewrites() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
+                ("/Old/Child.md", "33333333-3333-4333-8333-333333333333", "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Child").await;
+
+        let result = server
+            .move_path("Relay Folder 1/Old", "/New", None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.links_rewritten, 0);
+    }
+
+    #[tokio::test]
+    async fn move_path_rejects_folder_destination_collision_without_mutation() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
+                ("/Existing", "55555555-5555-4555-8555-555555555555", "folder"),
+            ],
+        )
+        .await;
+
+        let result = server
+            .move_path("Relay Folder 1/Old", "/Existing", None)
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Old"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Existing"));
+    }
+
+    #[tokio::test]
+    async fn move_path_rejects_descendant_destination_collision_without_mutation() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
+                ("/Old/Child.md", "33333333-3333-4333-8333-333333333333", "markdown"),
+                ("/New/Child.md", "44444444-4444-4444-8444-444444444444", "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Child").await;
+        insert_test_content_doc(
+            &server,
+            "44444444-4444-4444-8444-444444444444",
+            "Existing",
+        )
+        .await;
+
+        let result = server
+            .move_path("Relay Folder 1/Old", "/New", None)
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Old"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Old/Child.md"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/New/Child.md"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/New"));
+    }
+
+    #[tokio::test]
+    async fn move_path_rejects_invalid_folder_destinations_without_mutation() {
+        let invalid_destinations = ["/", "/New/", "/New//Child", "/.", "/..", "/New/../Child"];
+        for new_path in invalid_destinations {
+            let server = Server::new_for_test();
+            let folder_doc_id = insert_test_folder_doc(
+                &server,
+                "Relay Folder 1",
+                &[("/Old", "22222222-2222-4222-8222-222222222222", "folder")],
+            )
+            .await;
+
+            let result = server.move_path("Relay Folder 1/Old", new_path, None).await;
+
+            assert!(
+                matches!(result, Err(MoveDocumentError::BadRequest(_))),
+                "expected BadRequest for {new_path}"
+            );
+            assert!(filemeta_has(&server, &folder_doc_id, "/Old"));
+            assert!(!filemeta_has(&server, &folder_doc_id, new_path));
+        }
+    }
+
+    #[tokio::test]
+    async fn move_path_rejects_folder_cross_folder_move() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Old", "22222222-2222-4222-8222-222222222222", "folder")],
+        )
+        .await;
+
+        let result = server
+            .move_path("Relay Folder 1/Old", "/New", Some("Relay Folder 2"))
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::BadRequest(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Old"));
+    }
+
+    #[tokio::test]
+    async fn move_path_rejects_folder_to_markdown_destination() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Old", "22222222-2222-4222-8222-222222222222", "folder")],
+        )
+        .await;
+
+        let result = server
+            .move_path("Relay Folder 1/Old", "/Old.md", None)
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::BadRequest(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Old"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Old.md"));
+    }
+
+    #[tokio::test]
+    async fn move_path_rejects_folder_descendant_destination() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Old", "22222222-2222-4222-8222-222222222222", "folder")],
+        )
+        .await;
+
+        let result = server
+            .move_path("Relay Folder 1/Old", "/Old/Sub", None)
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::BadRequest(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Old"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Old/Sub"));
+    }
+
+    #[tokio::test]
+    async fn handle_move_path_route_moves_file() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Old.md", "11111111-1111-4111-8111-111111111111", "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, "11111111-1111-4111-8111-111111111111", "Old").await;
+
+        let (status, body) = post_move(
+            &server,
+            json!({ "path": "Relay Folder 1/Old.md", "new_path": "/New.md" }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["old_path"], "/Old.md");
+        assert_eq!(body["new_path"], "/New.md");
+        assert_eq!(body["old_folder"], "Relay Folder 1");
+        assert_eq!(body["new_folder"], "Relay Folder 1");
+        assert!(filemeta_has(&server, &folder_doc_id, "/New.md"));
+    }
+
+    #[tokio::test]
+    async fn handle_move_path_route_renames_folder() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Old", "22222222-2222-4222-8222-222222222222", "folder")],
+        )
+        .await;
+
+        let (status, body) = post_move(
+            &server,
+            json!({ "path": "Relay Folder 1/Old", "new_path": "/New" }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["old_path"], "/Old");
+        assert_eq!(body["new_path"], "/New");
+        assert!(filemeta_has(&server, &folder_doc_id, "/New"));
+    }
+
+    #[tokio::test]
+    async fn handle_move_path_route_returns_conflict_for_collision() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
+                ("/Existing", "55555555-5555-4555-8555-555555555555", "folder"),
+            ],
+        )
+        .await;
+
+        let (status, _) = post_move(
+            &server,
+            json!({ "path": "Relay Folder 1/Old", "new_path": "/Existing" }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn handle_move_path_route_returns_bad_request_for_folder_cross_folder_move() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Old", "22222222-2222-4222-8222-222222222222", "folder")],
+        )
+        .await;
+
+        let (status, _) = post_move(
+            &server,
+            json!({
+                "path": "Relay Folder 1/Old",
+                "new_path": "/New",
+                "target_folder": "Relay Folder 2"
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
 
     #[tokio::test]
     async fn test_auth_doc() {

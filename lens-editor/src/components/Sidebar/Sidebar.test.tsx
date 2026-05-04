@@ -5,13 +5,17 @@
  *
  * @vitest-environment happy-dom
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import * as Y from 'yjs';
+
+vi.mock('../../App', () => ({
+  RELAY_ID: 'cb696037-0f72-4e93-8717-4e433129d789',
+}));
 
 // Mock useResolvedDocId — unit tests don't test doc resolution
 vi.mock('../../hooks/useResolvedDocId', () => ({
@@ -25,7 +29,12 @@ vi.mock('../../lib/relay-api', async () => {
     createDocument: vi.fn().mockResolvedValue('new-doc-id'),
     deleteDocument: vi.fn(),
     moveDocument: vi.fn(),
+    movePath: vi.fn().mockResolvedValue({ links_rewritten: 0 }),
   };
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe('Sidebar with multi-folder metadata', () => {
@@ -99,7 +108,7 @@ describe('Sidebar with multi-folder metadata', () => {
     );
 
     // The Lens folder row should contain a create-document button
-    const createBtn = screen.getByRole('button', { name: /create document in Lens/i });
+    const createBtn = screen.getByRole('button', { name: /create in Lens/i });
     expect(createBtn).toBeInTheDocument();
   });
 
@@ -235,12 +244,148 @@ describe('Sidebar with multi-folder metadata', () => {
     );
 
     // Click "+" on Lens Edu folder
-    const createBtn = screen.getByRole('button', { name: /create document in Lens Edu/i });
+    const createBtn = screen.getByRole('button', { name: /create in Lens Edu/i });
     await user.click(createBtn);
+    await user.click(await screen.findByRole('button', { name: /new file/i }));
 
     // Should call createDocument with the Lens Edu doc and correct path
-    expect(mockCreate).toHaveBeenCalledWith(eduDoc, '/Untitled.md', 'markdown');
+    await waitFor(() => {
+      expect(mockCreate).toHaveBeenCalledWith(eduDoc, '/Untitled.md', 'markdown');
+    });
     // Should navigate to new doc
     expect(mockNavigate).toHaveBeenCalled();
+  });
+
+  it('renames folder metadata entries from the file tree', async () => {
+    const user = userEvent.setup();
+    const { movePath: mockMovePath, moveDocument: mockMove } = await import('../../lib/relay-api');
+    const metadata = {
+      '/Lens/Projects': { id: 'folder-projects', type: 'folder' as const, version: 0 },
+      '/Lens/Projects/Welcome.md': { id: 'welcome', type: 'markdown' as const, version: 0 },
+    };
+
+    const lensDoc = new Y.Doc();
+    const filemeta = lensDoc.getMap('filemeta_v0');
+    const legacyDocs = lensDoc.getMap<string>('docs');
+    filemeta.set('/Projects', { id: 'folder-projects', type: 'folder', version: 0 });
+    filemeta.set('/Projects/Welcome.md', { id: 'welcome', type: 'markdown', version: 0 });
+    legacyDocs.set('/Projects', 'folder-projects');
+    legacyDocs.set('/Projects/Welcome.md', 'welcome');
+
+    const folderDocs = new Map<string, Y.Doc>([['Lens', lensDoc]]);
+    const folderNames = ['Lens'];
+    const errors = new Map<string, Error>();
+
+    render(
+      <MemoryRouter initialEntries={['/welcome']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs,
+            folderNames,
+            errors,
+            onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    const folderText = screen.getByText('Projects');
+    const folderRow = folderText.closest('[class*="cursor-pointer"]') as HTMLElement;
+    expect(folderRow).not.toBeNull();
+
+    fireEvent.contextMenu(folderRow);
+    await user.click(await screen.findByText('Rename'));
+
+    const input = await screen.findByDisplayValue('Projects');
+    fireEvent.change(input, { target: { value: 'Renamed' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(mockMovePath).toHaveBeenCalledWith('Lens/Projects', '/Renamed');
+    });
+    expect(mockMove).not.toHaveBeenCalled();
+  });
+
+  it('renames synthetic folder nodes from the file tree', async () => {
+    const user = userEvent.setup();
+    const { movePath: mockMovePath } = await import('../../lib/relay-api');
+    const metadata = {
+      '/Lens/articles/Article.md': { id: 'article', type: 'markdown' as const, version: 0 },
+    };
+    const folderDocs = new Map<string, Y.Doc>([['Lens', new Y.Doc()]]);
+    const folderNames = ['Lens'];
+    const errors = new Map<string, Error>();
+
+    render(
+      <MemoryRouter initialEntries={['/article']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs,
+            folderNames,
+            errors,
+            onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    const folderText = screen.getByText('articles');
+    const folderRow = folderText.closest('[class*="cursor-pointer"]') as HTMLElement;
+    expect(folderRow).not.toBeNull();
+
+    fireEvent.contextMenu(folderRow);
+    await user.click(await screen.findByText('Rename'));
+
+    const input = await screen.findByDisplayValue('articles');
+    fireEvent.change(input, { target: { value: 'renamed' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(mockMovePath).toHaveBeenCalledWith('Lens/articles', '/renamed');
+    });
+  });
+
+  it('does not offer rename for shared folder root nodes', async () => {
+    const metadata = {
+      '/Lens/articles/Article.md': { id: 'article', type: 'markdown' as const, version: 0 },
+    };
+    const folderDocs = new Map<string, Y.Doc>([['Lens', new Y.Doc()]]);
+    const folderNames = ['Lens'];
+    const errors = new Map<string, Error>();
+
+    render(
+      <MemoryRouter initialEntries={['/article']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs,
+            folderNames,
+            errors,
+            onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    const rootText = document.querySelector('span[title="/Lens"]') as HTMLElement;
+    expect(rootText).not.toBeNull();
+    const sharedFolderRoot = rootText.closest('[class*="cursor-pointer"]') as HTMLElement;
+    expect(sharedFolderRoot).not.toBeNull();
+
+    fireEvent.contextMenu(sharedFolderRoot);
+
+    expect(screen.queryByText('Rename')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete Folder')).not.toBeInTheDocument();
   });
 });

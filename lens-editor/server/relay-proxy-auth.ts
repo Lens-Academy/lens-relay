@@ -67,3 +67,40 @@ export function checkProxyAccess(
   // Default: block unknown endpoints for folder-scoped tokens
   return { allowed: false, reason: 'Endpoint not allowed with folder-scoped token' };
 }
+
+export function checkProxyAccessWithBody(
+  method: string,
+  path: string,
+  query: string,
+  auth: ProxyAuthResult,
+  body?: unknown,
+  allowedFolderName?: string,
+): { allowed: boolean; reason?: string } {
+  if (auth.isAllFolders) return { allowed: true };
+
+  if (method === 'POST' && path === '/move') {
+    if (auth.payload.role === 'view') {
+      return { allowed: false, reason: 'Move requires edit access' };
+    }
+    if (!allowedFolderName) {
+      return { allowed: false, reason: 'Unable to verify source folder for move' };
+    }
+    const moveBody = typeof body === 'object' && body !== null
+      ? body as { path?: unknown; target_folder?: unknown }
+      : {};
+    const sourcePath = moveBody.path;
+    if (
+      typeof sourcePath !== 'string'
+      || (sourcePath !== allowedFolderName && !sourcePath.startsWith(`${allowedFolderName}/`))
+    ) {
+      return { allowed: false, reason: 'Move source is outside this folder' };
+    }
+    const targetFolder = moveBody.target_folder;
+    if (typeof targetFolder === 'string' && targetFolder && targetFolder !== allowedFolderName) {
+      return { allowed: false, reason: 'Cross-folder move not allowed with folder-scoped token' };
+    }
+    return { allowed: true };
+  }
+
+  return checkProxyAccess(method, path, query, auth);
+}

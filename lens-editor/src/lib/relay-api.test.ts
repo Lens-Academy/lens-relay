@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as Y from 'yjs';
-import { createDocument, renameDocument, deleteDocument, createFolder } from './relay-api';
+import { createDocument, renameDocument, renameFolder, deleteDocument, createFolder, movePath } from './relay-api';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 
 // Mock fetch for server calls
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
+
+vi.mock('../App', () => ({
+  RELAY_ID: 'cb696037-0f72-4e93-8717-4e433129d789',
+}));
 
 // Mock YSweetProvider and getClientToken to avoid real network connections.
 // These are exercised by createDocument -> initializeContentDocument which
@@ -145,10 +149,87 @@ describe('relay-api', () => {
       expect(meta!.type).toBe('markdown');
     });
 
+    it('clones Y.Map metadata values before moving', () => {
+      const meta = new Y.Map();
+      meta.set('id', 'old-id');
+      meta.set('type', 'markdown');
+      meta.set('version', 0);
+      filemeta.set('/Original.md', meta as any);
+      legacyDocs.set('/Original.md', 'old-id');
+
+      renameDocument(doc, '/Original.md', '/Renamed.md');
+
+      expect(filemeta.get('/Renamed.md')).toEqual({ id: 'old-id', type: 'markdown', version: 0 });
+    });
+
     it('does nothing if old path does not exist', () => {
       renameDocument(doc, '/NonExistent.md', '/Whatever.md');
 
       expect(filemeta.get('/Whatever.md')).toBeUndefined();
+    });
+  });
+
+  describe('renameFolder', () => {
+    it('moves folder metadata and descendants to the new folder path', () => {
+      createFolder(doc, '/Projects/Alpha');
+      filemeta.set('/Projects/Alpha/README.md', { id: 'readme-id', type: 'markdown', version: 0 });
+      legacyDocs.set('/Projects/Alpha/README.md', 'readme-id');
+
+      renameFolder(doc, '/Projects/Alpha', '/Projects/Renamed');
+
+      expect(filemeta.get('/Projects/Alpha')).toBeUndefined();
+      expect(filemeta.get('/Projects/Alpha/README.md')).toBeUndefined();
+      expect(legacyDocs.get('/Projects/Alpha')).toBeUndefined();
+      expect(legacyDocs.get('/Projects/Alpha/README.md')).toBeUndefined();
+
+      expect(filemeta.get('/Projects/Renamed')!.type).toBe('folder');
+      expect(filemeta.get('/Projects/Renamed/README.md')!.id).toBe('readme-id');
+      expect(legacyDocs.get('/Projects/Renamed/README.md')).toBe('readme-id');
+    });
+
+    it('clones Y.Map metadata values before moving descendants', () => {
+      createFolder(doc, '/Modules');
+      const childMeta = new Y.Map();
+      childMeta.set('id', 'module-id');
+      childMeta.set('type', 'markdown');
+      childMeta.set('version', 0);
+      filemeta.set('/Modules/feedback-loops.md', childMeta as any);
+      legacyDocs.set('/Modules/feedback-loops.md', 'module-id');
+
+      renameFolder(doc, '/Modules', '/Modules 2');
+
+      const renamedMeta = filemeta.get('/Modules 2/feedback-loops.md') as any;
+      expect(renamedMeta).toEqual({ id: 'module-id', type: 'markdown', version: 0 });
+    });
+
+    it('does nothing if the folder path does not exist', () => {
+      renameFolder(doc, '/Missing', '/Renamed');
+
+      expect(filemeta.size).toBe(0);
+      expect(legacyDocs.size).toBe(0);
+    });
+  });
+
+  describe('movePath', () => {
+    it('calls path-based move endpoint', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          old_path: '/Old.md',
+          new_path: '/New.md',
+          old_folder: 'Lens',
+          new_folder: 'Lens',
+          links_rewritten: 0,
+        }),
+      });
+
+      await movePath('Lens/Old.md', '/New.md');
+
+      expect(mockFetch).toHaveBeenCalledWith('/api/relay/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: 'Lens/Old.md', new_path: '/New.md' }),
+      });
     });
   });
 

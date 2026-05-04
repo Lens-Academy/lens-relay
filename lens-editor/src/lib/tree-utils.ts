@@ -59,7 +59,10 @@ export function buildTreeFromPaths(metadata: Record<string, FileMetadata>): Tree
 
   // Sort paths to ensure parent folders are processed before children
   // Also sort folders first, then alphabetically
-  const sortedPaths = Object.keys(metadata).sort((a, b) => {
+  const validEntries = Object.entries(metadata).filter(([, meta]) => {
+    return typeof meta?.id === 'string' && meta.id.length > 0;
+  });
+  const sortedPaths = validEntries.map(([path]) => path).sort((a, b) => {
     const aIsFolder = metadata[a].type === 'folder';
     const bIsFolder = metadata[b].type === 'folder';
 

@@ -33,6 +33,13 @@ function debug(operation: string, ...args: unknown[]) {
   }
 }
 
+function cloneFileMetadata(meta: FileMetadata | any): FileMetadata {
+  if (typeof meta?.toJSON === 'function') {
+    return meta.toJSON() as FileMetadata;
+  }
+  return { ...meta };
+}
+
 /** UUID v4 generator that works in insecure contexts (plain HTTP). */
 function generateUUID(): string {
   if (typeof crypto.randomUUID === 'function') {
@@ -212,12 +219,13 @@ export function renameDocument(
   debug('renameDocument', { oldPath, newPath, meta, legacyId });
 
   if (meta) {
+    const clonedMeta = cloneFileMetadata(meta);
     // Wrap in transaction for atomicity - Obsidian does the same
     // Both delete and set happen in a single Y.js update
     // Must update both filemeta_v0 AND legacy docs map
     folderDoc.transact(() => {
       filemeta.delete(oldPath);
-      filemeta.set(newPath, meta);
+      filemeta.set(newPath, clonedMeta);
       if (legacyId) {
         legacyDocs.delete(oldPath);
         legacyDocs.set(newPath, legacyId);
@@ -229,6 +237,59 @@ export function renameDocument(
   } else {
     debug('renameDocument', 'WARNING: no metadata found for oldPath, rename skipped');
   }
+}
+
+/**
+ * Rename a folder and all metadata entries below it.
+ * Folders are metadata-only entries, so this stays local to the folder Y.Doc.
+ */
+export function renameFolder(
+  folderDoc: Y.Doc,
+  oldPath: string,
+  newPath: string
+): void {
+  const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
+  const legacyDocs = folderDoc.getMap<string>('docs');
+  const oldPrefix = `${oldPath}/`;
+  const newPrefix = `${newPath}/`;
+
+  const filemetaMoves = Array.from(filemeta.entries())
+    .filter(([path]) => path === oldPath || path.startsWith(oldPrefix))
+    .map(([path, meta]) => ({
+      oldPath: path,
+      newPath: path === oldPath ? newPath : `${newPrefix}${path.slice(oldPrefix.length)}`,
+      meta: cloneFileMetadata(meta),
+    }));
+
+  if (filemetaMoves.length === 0) {
+    debug('renameFolder', 'WARNING: no metadata found for oldPath, rename skipped', { oldPath, newPath });
+    return;
+  }
+
+  const legacyMoves = Array.from(legacyDocs.entries())
+    .filter(([path]) => path === oldPath || path.startsWith(oldPrefix))
+    .map(([path, id]) => ({
+      oldPath: path,
+      newPath: path === oldPath ? newPath : `${newPrefix}${path.slice(oldPrefix.length)}`,
+      id,
+    }));
+
+  folderDoc.transact(() => {
+    for (const move of filemetaMoves) {
+      filemeta.delete(move.oldPath);
+    }
+    for (const move of legacyMoves) {
+      legacyDocs.delete(move.oldPath);
+    }
+    for (const move of filemetaMoves) {
+      filemeta.set(move.newPath, move.meta);
+    }
+    for (const move of legacyMoves) {
+      legacyDocs.set(move.newPath, move.id);
+    }
+  }, LENS_EDITOR_ORIGIN);
+
+  debug('renameFolder', 'rename complete', { oldPath, newPath, movedEntries: filemetaMoves.length });
 }
 
 /**
@@ -337,6 +398,33 @@ export async function moveDocument(
   }
 
   const response = await fetch('/api/relay/doc/move', {
+    method: 'POST',
+    headers: relayHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Move failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Move a document or rename a folder by user-facing path.
+ */
+export async function movePath(
+  path: string,
+  newPath: string,
+  targetFolder?: string
+): Promise<MoveDocumentResponse> {
+  const body: Record<string, string> = { path, new_path: newPath };
+  if (targetFolder) {
+    body.target_folder = targetFolder;
+  }
+
+  const response = await fetch('/api/relay/move', {
     method: 'POST',
     headers: relayHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),

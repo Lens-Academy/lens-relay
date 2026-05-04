@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateProxyToken, checkProxyAccess, type ProxyAuthResult } from './relay-proxy-auth.ts';
+import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, type ProxyAuthResult } from './relay-proxy-auth.ts';
 import { signShareToken } from './share-token.ts';
 
 const FOLDER_A = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
@@ -7,9 +7,9 @@ const FOLDER_B = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
 const ALL_FOLDERS = '00000000-0000-0000-0000-000000000000';
 const RELAY_ID = 'cb696037-0f72-4e93-8717-4e433129d789';
 
-function makeAuth(folder: string): ProxyAuthResult {
+function makeAuth(folder: string, role: 'edit' | 'view' = 'edit'): ProxyAuthResult {
   return {
-    payload: { purpose: 'share' as const, role: 'edit' as const, folder, expiry: Math.floor(Date.now() / 1000) + 3600 },
+    payload: { purpose: 'share' as const, role, folder, expiry: Math.floor(Date.now() / 1000) + 3600 },
     isAllFolders: folder === ALL_FOLDERS,
   };
 }
@@ -49,6 +49,48 @@ describe('checkProxyAccess', () => {
   it('folder-scoped token blocks /doc/move', () => {
     const result = checkProxyAccess('POST', '/doc/move', '', scopedAuth);
     expect(result.allowed).toBe(false);
+  });
+
+  it('folder-scoped edit token allows same-folder /move', () => {
+    const result = checkProxyAccessWithBody('POST', '/move', '', scopedAuth, {
+      path: 'Relay Folder 1/Old.md',
+      new_path: '/New.md',
+    }, 'Relay Folder 1');
+    expect(result.allowed).toBe(true);
+  });
+
+  it('folder-scoped edit token rejects /move target folder mismatch', () => {
+    const result = checkProxyAccessWithBody('POST', '/move', '', scopedAuth, {
+      path: 'Relay Folder 1/Old.md',
+      new_path: '/Old.md',
+      target_folder: 'Relay Folder 2',
+    }, 'Relay Folder 1');
+    expect(result.allowed).toBe(false);
+  });
+
+  it('folder-scoped view token rejects /move', () => {
+    const result = checkProxyAccessWithBody('POST', '/move', '', makeAuth(FOLDER_A, 'view'), {
+      path: 'Relay Folder 1/Old.md',
+      new_path: '/New.md',
+    }, 'Relay Folder 1');
+    expect(result.allowed).toBe(false);
+  });
+
+  it('folder-scoped edit token rejects source folder mismatch', () => {
+    const result = checkProxyAccessWithBody('POST', '/move', '', scopedAuth, {
+      path: 'Relay Folder 2/Syllabus.md',
+      new_path: '/Renamed.md',
+    }, 'Relay Folder 1');
+    expect(result.allowed).toBe(false);
+  });
+
+  it('all-folders token allows /move', () => {
+    const result = checkProxyAccessWithBody('POST', '/move', '', allFoldersAuth, {
+      path: 'Relay Folder 2/Old.md',
+      new_path: '/New.md',
+      target_folder: 'Lens Edu',
+    });
+    expect(result.allowed).toBe(true);
   });
 
   it('folder-scoped token allows /doc/new', () => {

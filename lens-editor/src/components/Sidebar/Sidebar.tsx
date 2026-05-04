@@ -12,7 +12,7 @@ import { useNavigation } from '../../contexts/NavigationContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } from '../../lib/tree-utils';
-import { createDocument, createFolder, deleteDocument, moveDocument } from '../../lib/relay-api';
+import { createDocument, createFolder, deleteDocument, movePath } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab } from '../../lib/url-utils';
@@ -116,16 +116,17 @@ export function Sidebar() {
   }, [metadata]);
 
   // CRUD handlers
-  const handleRenameSubmit = useCallback(async (prefixedOldPath: string, newName: string, docId: string) => {
+  const handleRenameSubmit = useCallback(async (prefixedOldPath: string, newName: string, isFolder: boolean) => {
     const folderName = getFolderNameFromPath(prefixedOldPath, folderNames);
     if (!folderName) return;
     const oldPath = getOriginalPath(prefixedOldPath, folderName);
     const parts = oldPath.split('/');
-    const filename = newName.endsWith('.md') ? newName : `${newName}.md`;
-    parts[parts.length - 1] = filename;
+    parts[parts.length - 1] = isFolder
+      ? newName
+      : newName.endsWith('.md') ? newName : `${newName}.md`;
     const newPath = parts.join('/');
     try {
-      await moveDocument(docId, newPath);
+      await movePath(prefixedOldPath.slice(1), newPath);
     } catch (err: any) {
       console.error('Rename failed:', err);
       setMoveError(err.message || 'Rename failed');
@@ -206,7 +207,7 @@ export function Sidebar() {
       // Determine if this is a cross-folder move
       const currentFolder = getFolderNameFromPath(moveTarget.path, folderNames);
       const targetFolder = moveTargetFolder !== currentFolder ? moveTargetFolder : undefined;
-      await moveDocument(moveTarget.docId, moveNewPath, targetFolder);
+      await movePath(moveTarget.path.slice(1), moveNewPath, targetFolder);
       setMoveTarget(null);
       setMoveNewPath('');
     } catch (err: any) {
@@ -248,7 +249,7 @@ export function Sidebar() {
       : undefined;
 
     try {
-      await moveDocument(dragNode.data.docId, newOriginalPath, crossFolder);
+      await movePath(oldPrefixedPath.slice(1), newOriginalPath, crossFolder);
     } catch (err: any) {
       console.error('Drag move failed:', err);
       setMoveError(err.message || 'Move failed');
@@ -365,6 +366,13 @@ export function Sidebar() {
           </>
         )}
       </div>
+
+      {/* Review link */}
+      {moveError && !moveTarget && (
+        <div className="px-3 py-2 border-t border-red-100 bg-red-50 text-sm text-red-700">
+          {moveError}
+        </div>
+      )}
 
       {/* Review link */}
       <div className="px-3 py-2 border-t border-gray-200">

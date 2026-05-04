@@ -15,6 +15,7 @@ export function FileTreeNode({
 }: NodeRendererProps<TreeNode>) {
   const isFolder = node.data.isFolder;
   const depth = node.level;
+  const isSharedFolderRoot = isFolder && depth === 0;
   const ctx = useFileTreeContext();
   const dragTargetPath = useDragTarget();
   const isDropTarget = isFolder && dragTargetPath === node.data.path;
@@ -71,9 +72,7 @@ export function FileTreeNode({
   const handleSubmitRename = () => {
     const trimmed = editValue.trim();
     if (trimmed && trimmed !== node.data.name) {
-      if (node.data.docId) {
-        ctx.onRenameSubmit?.(node.data.path, trimmed, node.data.docId);
-      }
+      ctx.onRenameSubmit?.(node.data.path, trimmed, isFolder, node.data.docId);
     }
     ctx.onEditingChange(null);
   };
@@ -234,6 +233,7 @@ export function FileTreeNode({
         onDelete={handleDelete}
         onMove={handleMove}
         isFolder={isFolder}
+        isSharedFolderRoot={isSharedFolderRoot}
       >
         {content}
       </FileTreeContextMenu>

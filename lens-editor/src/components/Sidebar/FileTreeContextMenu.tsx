@@ -7,6 +7,7 @@ interface FileTreeContextMenuProps {
   onDelete: () => void;
   onMove: () => void;
   isFolder: boolean;
+  isSharedFolderRoot?: boolean;
 }
 
 export function FileTreeContextMenu({
@@ -15,6 +16,7 @@ export function FileTreeContextMenu({
   onDelete,
   onMove,
   isFolder,
+  isSharedFolderRoot = false,
 }: FileTreeContextMenuProps) {
   return (
     <ContextMenu.Root>
@@ -25,12 +27,14 @@ export function FileTreeContextMenu({
         <ContextMenu.Content
           className="bg-white rounded shadow-lg py-1 min-w-[160px] z-50"
         >
-          <ContextMenu.Item
-            className="px-3 py-1.5 text-sm hover:bg-gray-100 cursor-pointer outline-none"
-            onSelect={onRename}
-          >
-            Rename
-          </ContextMenu.Item>
+          {!isSharedFolderRoot && (
+            <ContextMenu.Item
+              className="px-3 py-1.5 text-sm hover:bg-gray-100 cursor-pointer outline-none"
+              onSelect={onRename}
+            >
+              Rename
+            </ContextMenu.Item>
+          )}
           {!isFolder && (
             <ContextMenu.Item
               className="px-3 py-1.5 text-sm hover:bg-gray-100 cursor-pointer outline-none"
@@ -39,13 +43,17 @@ export function FileTreeContextMenu({
               Move to...
             </ContextMenu.Item>
           )}
-          <ContextMenu.Separator className="h-px bg-gray-200 my-1" />
-          <ContextMenu.Item
-            className="px-3 py-1.5 text-sm text-red-600 hover:bg-gray-100 cursor-pointer outline-none"
-            onSelect={onDelete}
-          >
-            {isFolder ? 'Delete Folder' : 'Delete'}
-          </ContextMenu.Item>
+          {!isSharedFolderRoot && (
+            <>
+              <ContextMenu.Separator className="h-px bg-gray-200 my-1" />
+              <ContextMenu.Item
+                className="px-3 py-1.5 text-sm text-red-600 hover:bg-gray-100 cursor-pointer outline-none"
+                onSelect={onDelete}
+              >
+                {isFolder ? 'Delete Folder' : 'Delete'}
+              </ContextMenu.Item>
+            </>
+          )}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
