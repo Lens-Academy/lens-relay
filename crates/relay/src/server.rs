@@ -4519,11 +4519,11 @@ async fn handle_check_video_ids(
         let rel_path = format!("/{}", &path[body.folder.len()..].trim_start_matches('/'));
 
         for (video_id, slot) in found.iter_mut() {
-            if slot.is_none() {
-                let needle = format!("watch?v={}", video_id);
-                if content.contains(&needle) {
-                    *slot = Some(rel_path.clone());
-                }
+            if slot.is_none()
+                && (content.contains(&format!("watch?v={}", video_id))
+                    || content.contains(&format!("/{}", video_id)))
+            {
+                *slot = Some(rel_path.clone());
             }
         }
     }
@@ -5855,6 +5855,25 @@ mod test {
         (status, body)
     }
 
+    async fn post_check_video_ids(server: &Arc<Server>, body: JsonValue) -> (StatusCode, JsonValue) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/doc/check-video-ids")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+        (status, body)
+    }
+
     #[tokio::test]
     async fn move_path_file_moves_existing_file() {
         let server = Server::new_for_test();
@@ -5875,6 +5894,60 @@ mod test {
         assert_eq!(result.new_path, "/New.md");
         assert!(!filemeta_has(&server, &folder_doc_id, "/Old.md"));
         assert!(filemeta_has(&server, &folder_doc_id, "/New.md"));
+    }
+
+    #[tokio::test]
+    async fn check_video_ids_detects_compact_youtube_paths() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(
+            &server,
+            "Lens Edu",
+            &[
+                (
+                    "/video_transcripts/Short.md",
+                    "11111111-1111-4111-8111-111111111111",
+                    "markdown",
+                ),
+                (
+                    "/video_transcripts/Normal.md",
+                    "22222222-2222-4222-8222-222222222222",
+                    "markdown",
+                ),
+            ],
+        )
+        .await;
+        insert_test_content_doc(
+            &server,
+            "11111111-1111-4111-8111-111111111111",
+            "---\nurl: \"/shorts/GMTDrG3hYJ0\"\n---\n",
+        )
+        .await;
+        insert_test_content_doc(
+            &server,
+            "22222222-2222-4222-8222-222222222222",
+            "---\nurl: \"/Nl7-bRFSZBs\"\n---\n",
+        )
+        .await;
+
+        let (status, body) = post_check_video_ids(
+            &server,
+            json!({
+                "folder": "Lens Edu",
+                "subfolder": "video_transcripts",
+                "video_ids": ["GMTDrG3hYJ0", "Nl7-bRFSZBs"]
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["found"]["GMTDrG3hYJ0"],
+            "/video_transcripts/Short.md"
+        );
+        assert_eq!(
+            body["found"]["Nl7-bRFSZBs"],
+            "/video_transcripts/Normal.md"
+        );
     }
 
     #[tokio::test]

@@ -142,36 +142,60 @@ void function() {
     return full;
   }
 
-  // Extract a YouTube video ID from common URL forms.
-  function extractVideoId(line) {
-    var m = line.match(/[?&]v=([\w-]{11})(?:[&#]|$)/);
-    if (m) return m[1];
+  function compactYouTubePath(videoId, isShort) {
+    return isShort ? '/shorts/' + videoId : '/' + videoId;
+  }
 
-    m = line.match(/(?:youtube\.com|youtube-nocookie\.com)\/(?:shorts|embed)\/([\w-]{11})(?:[/?#&]|$)/);
-    if (m) return m[1];
+  // Extract a YouTube video input from common URL forms.
+  function extractVideoInput(line) {
+    var m = line.match(/[?&]v=([\w-]{11})(?:[&#]|$)/);
+    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], false) };
+
+    m = line.match(/(?:youtube\.com|youtube-nocookie\.com)?\/shorts\/([\w-]{11})(?:[/?#&]|$)/);
+    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], true) };
+
+    m = line.match(/(?:youtube\.com|youtube-nocookie\.com)?\/embed\/([\w-]{11})(?:[/?#&]|$)/);
+    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], false) };
 
     m = line.match(/youtu\.be\/([\w-]{11})(?:[/?#&]|$)/);
-    if (m) return m[1];
+    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], false) };
+
+    m = line.match(/^\/([\w-]{11})(?:[/?#&]|$)/);
+    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], false) };
 
     return null;
   }
 
-  // Parse video IDs from URLs
-  function parseVideoIds(text) {
+  // Parse video inputs from URLs
+  function parseVideoInputs(text) {
     var lines = text.trim().split('\n');
-    var ids = [];
+    var inputs = [];
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim();
       if (!line) continue;
-      var id = extractVideoId(line);
-      if (id) ids.push(id);
+      var input = extractVideoInput(line);
+      if (!input) continue;
+
+      var existing = null;
+      for (var j = 0; j < inputs.length; j++) {
+        if (inputs[j].video_id === input.video_id) {
+          existing = inputs[j];
+          break;
+        }
+      }
+
+      if (!existing) {
+        inputs.push(input);
+      } else if (input.url.indexOf('/shorts/') === 0) {
+        existing.url = input.url;
+      }
     }
-    // Dedupe
-    return ids.filter(function(id, idx) { return ids.indexOf(id) === idx; });
+    return inputs;
   }
 
   // Fetch transcript for a single video
-  function fetchTranscript(videoId) {
+  function fetchTranscript(videoInput) {
+    var videoId = videoInput.video_id;
     return fetch('https://www.youtube.com/youtubei/v1/player?key=' + apiKey + '&prettyPrint=false', {
       method: 'POST',
       credentials: 'include',
@@ -222,7 +246,7 @@ void function() {
             video_id: videoId,
             title: title,
             channel: channel,
-            url: 'https://www.youtube.com/watch?v=' + videoId,
+            url: videoInput.url,
             transcript_type: enTrack.kind === 'asr' ? 'word_level' : 'sentence_level',
             track_lang: enTrack.languageCode,
             transcript_raw: transcriptData,
@@ -238,9 +262,9 @@ void function() {
   // Fetch button handler
   document.getElementById('lens-av-fetch').onclick = function() {
     var btn = this;
-    var videoIds = parseVideoIds(document.getElementById('lens-av-urls').value);
+    var videoInputs = parseVideoInputs(document.getElementById('lens-av-urls').value);
 
-    if (videoIds.length === 0) {
+    if (videoInputs.length === 0) {
       alert('No valid YouTube URLs found. Paste URLs like:\nhttps://www.youtube.com/watch?v=Nl7-bRFSZBs\nhttps://www.youtube.com/shorts/Nl7-bRFSZBs');
       return;
     }
@@ -252,8 +276,8 @@ void function() {
     results.length = 0;
 
     // Create job entries
-    var jobs = videoIds.map(function(id) {
-      return { id: id, el: null, status: 'queued', data: null, error: null };
+    var jobs = videoInputs.map(function(input) {
+      return { id: input.video_id, input: input, el: null, status: 'queued', data: null, error: null };
     });
 
     jobs.forEach(function(job) {
@@ -286,7 +310,7 @@ void function() {
       job.el.className = 'lens-av-job fetching';
       job.el.querySelector('.lens-av-job-detail').textContent = 'Fetching transcript...';
 
-      fetchTranscript(job.id)
+      fetchTranscript(job.input)
         .then(function(data) {
           job.data = data;
           job.status = 'done';
