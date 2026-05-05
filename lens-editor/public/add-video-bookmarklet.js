@@ -142,26 +142,26 @@ void function() {
     return full;
   }
 
-  function compactYouTubePath(videoId, isShort) {
-    return isShort ? '/shorts/' + videoId : '/' + videoId;
+  function fullYouTubeUrl(videoId, isShort) {
+    return isShort ? 'https://www.youtube.com/shorts/' + videoId : 'https://www.youtube.com/watch?v=' + videoId;
   }
 
   // Extract a YouTube video input from common URL forms.
   function extractVideoInput(line) {
     var m = line.match(/[?&]v=([\w-]{11})(?:[&#]|$)/);
-    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], false) };
+    if (m) return { video_id: m[1], url: fullYouTubeUrl(m[1], false) };
 
     m = line.match(/(?:youtube\.com|youtube-nocookie\.com)?\/shorts\/([\w-]{11})(?:[/?#&]|$)/);
-    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], true) };
+    if (m) return { video_id: m[1], url: fullYouTubeUrl(m[1], true) };
 
     m = line.match(/(?:youtube\.com|youtube-nocookie\.com)?\/embed\/([\w-]{11})(?:[/?#&]|$)/);
-    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], false) };
+    if (m) return { video_id: m[1], url: fullYouTubeUrl(m[1], false) };
 
     m = line.match(/youtu\.be\/([\w-]{11})(?:[/?#&]|$)/);
-    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], false) };
+    if (m) return { video_id: m[1], url: fullYouTubeUrl(m[1], false) };
 
     m = line.match(/^\/([\w-]{11})(?:[/?#&]|$)/);
-    if (m) return { video_id: m[1], url: compactYouTubePath(m[1], false) };
+    if (m) return { video_id: m[1], url: fullYouTubeUrl(m[1], false) };
 
     return null;
   }
@@ -186,7 +186,7 @@ void function() {
 
       if (!existing) {
         inputs.push(input);
-      } else if (input.url.indexOf('/shorts/') === 0) {
+      } else if (input.url.indexOf('/shorts/') !== -1) {
         existing.url = input.url;
       }
     }

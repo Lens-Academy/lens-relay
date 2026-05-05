@@ -114,17 +114,17 @@ describe('add-video bookmarklet', () => {
     return JSON.parse(String(addVideoCall[1]?.body));
   }
 
-  it('sends a compact Shorts path when importing a Shorts URL', async () => {
+  it('sends a full Shorts URL when importing a Shorts URL', async () => {
     const fetchMock = stubYouTubeAndAddVideoFetch();
     const { window, document } = await runBookmarkletOn('https://www.youtube.com/shorts/GMTDrG3hYJ0');
     (window as any).fetch = fetchMock;
 
     const body = await submitImportedVideos(document, fetchMock);
 
-    expect(body.videos[0].url).toBe('/shorts/GMTDrG3hYJ0');
+    expect(body.videos[0].url).toBe('https://www.youtube.com/shorts/GMTDrG3hYJ0');
   });
 
-  it('sends compact normal paths and prefers Shorts when duplicate inputs use the same video ID', async () => {
+  it('sends full normal URLs and prefers Shorts when duplicate inputs use the same video ID', async () => {
     const fetchMock = stubYouTubeAndAddVideoFetch();
     const { window, document } = await runBookmarkletOn('https://www.youtube.com/watch?v=GMTDrG3hYJ0');
     (window as any).fetch = fetchMock;
@@ -137,6 +137,6 @@ describe('add-video bookmarklet', () => {
     const body = await submitImportedVideos(document, fetchMock);
 
     expect(body.videos).toHaveLength(1);
-    expect(body.videos[0].url).toBe('/shorts/GMTDrG3hYJ0');
+    expect(body.videos[0].url).toBe('https://www.youtube.com/shorts/GMTDrG3hYJ0');
   });
 });

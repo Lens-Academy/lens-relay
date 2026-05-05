@@ -4521,7 +4521,7 @@ async fn handle_check_video_ids(
         for (video_id, slot) in found.iter_mut() {
             if slot.is_none()
                 && (content.contains(&format!("watch?v={}", video_id))
-                    || content.contains(&format!("/{}", video_id)))
+                    || content.contains(&format!("/shorts/{}", video_id)))
             {
                 *slot = Some(rel_path.clone());
             }
@@ -5897,7 +5897,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn check_video_ids_detects_compact_youtube_paths() {
+    async fn check_video_ids_detects_full_youtube_urls() {
         let server = Server::new_for_test();
         insert_test_folder_doc(
             &server,
@@ -5919,13 +5919,13 @@ mod test {
         insert_test_content_doc(
             &server,
             "11111111-1111-4111-8111-111111111111",
-            "---\nurl: \"/shorts/GMTDrG3hYJ0\"\n---\n",
+            "---\nurl: \"https://www.youtube.com/shorts/GMTDrG3hYJ0\"\n---\n",
         )
         .await;
         insert_test_content_doc(
             &server,
             "22222222-2222-4222-8222-222222222222",
-            "---\nurl: \"/Nl7-bRFSZBs\"\n---\n",
+            "---\nurl: \"https://www.youtube.com/watch?v=Nl7-bRFSZBs\"\n---\n",
         )
         .await;
 
@@ -5948,6 +5948,40 @@ mod test {
             body["found"]["Nl7-bRFSZBs"],
             "/video_transcripts/Normal.md"
         );
+    }
+
+    #[tokio::test]
+    async fn check_video_ids_ignores_compact_youtube_paths() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(
+            &server,
+            "Lens Edu",
+            &[(
+                "/video_transcripts/Legacy.md",
+                "11111111-1111-4111-8111-111111111111",
+                "markdown",
+            )],
+        )
+        .await;
+        insert_test_content_doc(
+            &server,
+            "11111111-1111-4111-8111-111111111111",
+            "---\nurl: \"/GMTDrG3hYJ0\"\n---\n",
+        )
+        .await;
+
+        let (status, body) = post_check_video_ids(
+            &server,
+            json!({
+                "folder": "Lens Edu",
+                "subfolder": "video_transcripts",
+                "video_ids": ["GMTDrG3hYJ0"]
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["found"]["GMTDrG3hYJ0"].is_null());
     }
 
     #[tokio::test]
