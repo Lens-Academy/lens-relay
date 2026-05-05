@@ -115,9 +115,9 @@ void function() {
   );
   document.body.appendChild(overlay);
 
-  // Pre-fill with current video URL if on a watch page
+  // Pre-fill with current video URL if on a watch or Shorts page
   var urlParams = new URLSearchParams(location.search);
-  var currentVideoId = urlParams.get('v');
+  var currentVideoId = urlParams.get('v') || (location.pathname.match(/^\/shorts\/([\w-]{11})(?:\/|$)/) || [])[1];
   if (currentVideoId) {
     document.getElementById('lens-av-urls').value = location.href;
   }
@@ -142,6 +142,20 @@ void function() {
     return full;
   }
 
+  // Extract a YouTube video ID from common URL forms.
+  function extractVideoId(line) {
+    var m = line.match(/[?&]v=([\w-]{11})(?:[&#]|$)/);
+    if (m) return m[1];
+
+    m = line.match(/(?:youtube\.com|youtube-nocookie\.com)\/(?:shorts|embed)\/([\w-]{11})(?:[/?#&]|$)/);
+    if (m) return m[1];
+
+    m = line.match(/youtu\.be\/([\w-]{11})(?:[/?#&]|$)/);
+    if (m) return m[1];
+
+    return null;
+  }
+
   // Parse video IDs from URLs
   function parseVideoIds(text) {
     var lines = text.trim().split('\n');
@@ -149,8 +163,8 @@ void function() {
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim();
       if (!line) continue;
-      var m = line.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/);
-      if (m) ids.push(m[1]);
+      var id = extractVideoId(line);
+      if (id) ids.push(id);
     }
     // Dedupe
     return ids.filter(function(id, idx) { return ids.indexOf(id) === idx; });
@@ -227,7 +241,7 @@ void function() {
     var videoIds = parseVideoIds(document.getElementById('lens-av-urls').value);
 
     if (videoIds.length === 0) {
-      alert('No valid YouTube URLs found. Paste URLs like:\nhttps://www.youtube.com/watch?v=Nl7-bRFSZBs');
+      alert('No valid YouTube URLs found. Paste URLs like:\nhttps://www.youtube.com/watch?v=Nl7-bRFSZBs\nhttps://www.youtube.com/shorts/Nl7-bRFSZBs');
       return;
     }
 

@@ -121,9 +121,10 @@ export function Sidebar() {
     if (!folderName) return;
     const oldPath = getOriginalPath(prefixedOldPath, folderName);
     const parts = oldPath.split('/');
+    const oldName = parts[parts.length - 1];
     parts[parts.length - 1] = isFolder
       ? newName
-      : newName.endsWith('.md') ? newName : `${newName}.md`;
+      : oldName.endsWith('.md') && !newName.endsWith('.md') ? `${newName}.md` : newName;
     const newPath = parts.join('/');
     try {
       await movePath(prefixedOldPath.slice(1), newPath);

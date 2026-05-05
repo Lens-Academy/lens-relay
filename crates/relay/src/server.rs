@@ -47,7 +47,7 @@ use y_sweet_core::{
     auth::{Authenticator, ExpirationTimeEpochMillis, Permission, DEFAULT_EXPIRATION_SECONDS},
     critic_scanner,
     doc_connection::DocConnection,
-    doc_resolver::DocumentResolver,
+    doc_resolver::{DocInfo, DocumentResolver},
     doc_sync::DocWithSyncKv,
     event::{
         DebouncedSyncProtocolEventSender, DocumentUpdatedEvent, EventDispatcher, EventEnvelope,
@@ -2102,7 +2102,8 @@ impl Server {
         Ok(result)
     }
 
-    /// Move a markdown document or rename a metadata-only folder by user-facing path.
+    /// Move a markdown document, rename a metadata-only folder, or rename a
+    /// non-markdown file metadata entry by user-facing path.
     pub async fn move_path(
         &self,
         path: &str,
@@ -2128,11 +2129,10 @@ impl Server {
                 "folder" => {
                     return self.move_folder_path(path, new_path, target_folder).await;
                 }
-                other => {
-                    return Err(MoveDocumentError::BadRequest(format!(
-                        "Cannot move filemeta entry of type '{}'",
-                        other
-                    )));
+                _ => {
+                    return self
+                        .move_filemeta_entry_path(path, new_path, target_folder, &info)
+                        .await;
                 }
             }
         }
@@ -2160,6 +2160,109 @@ impl Server {
             }
         }
         None
+    }
+
+    async fn move_filemeta_entry_path(
+        &self,
+        path: &str,
+        new_path: &str,
+        target_folder: Option<&str>,
+        info: &DocInfo,
+    ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
+        if new_path == "/" || new_path.ends_with('/') || new_path.contains("//") {
+            return Err(MoveDocumentError::BadRequest(
+                "Invalid file destination path".into(),
+            ));
+        }
+        if new_path
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .any(|segment| segment == "." || segment == "..")
+        {
+            return Err(MoveDocumentError::BadRequest(
+                "File destination must not contain '.' or '..' segments".into(),
+            ));
+        }
+        if let Some(target) = target_folder {
+            if target != info.folder_name {
+                return Err(MoveDocumentError::BadRequest(
+                    "Non-markdown file cross-folder move is not supported".into(),
+                ));
+            }
+        }
+
+        let prefix = format!("{}/", info.folder_name);
+        let old_path = path
+            .strip_prefix(&prefix)
+            .map(|rest| format!("/{}", rest.trim_start_matches('/')))
+            .ok_or_else(|| MoveDocumentError::NotFound(format!("Path not found: {}", path)))?;
+
+        let folder_sync_kv = {
+            let doc_ref = self
+                .docs
+                .get(&info.folder_doc_id)
+                .ok_or_else(|| MoveDocumentError::Internal("Source folder doc not loaded".into()))?;
+            let sync_kv = doc_ref.sync_kv();
+            let awareness = doc_ref.awareness();
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard.doc.transact_mut_with("link-indexer");
+            let filemeta = txn
+                .get_map("filemeta_v0")
+                .ok_or_else(|| MoveDocumentError::NotFound("No filemeta_v0".into()))?;
+            let value = filemeta
+                .get(&txn, &old_path)
+                .ok_or_else(|| MoveDocumentError::NotFound(format!("Path not found: {}", path)))?;
+            let entry_type = link_indexer::extract_type_from_filemeta_entry(&value, &txn)
+                .unwrap_or_default();
+            if entry_type == "markdown" || entry_type == "folder" {
+                return Err(MoveDocumentError::BadRequest(format!(
+                    "{} is not a non-markdown file",
+                    path
+                )));
+            }
+            if filemeta.get(&txn, new_path).is_some() && old_path != new_path {
+                return Err(MoveDocumentError::Conflict(format!(
+                    "Path '{}' already exists in target folder",
+                    new_path
+                )));
+            }
+            let id = link_indexer::extract_id_from_filemeta_entry(&value, &txn)
+                .unwrap_or_default();
+            let fields = link_indexer::extract_filemeta_fields(&value, &txn);
+
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let docs_map = txn.get_or_insert_map("docs");
+            filemeta.remove(&mut txn, old_path.as_str());
+            docs_map.remove(&mut txn, old_path.as_str());
+            filemeta.insert(
+                &mut txn,
+                new_path,
+                yrs::Any::Map(fields.clone().into()),
+            );
+            docs_map.insert(
+                &mut txn,
+                new_path,
+                yrs::Any::String(id.to_string().into()),
+            );
+            sync_kv
+        };
+
+        if let Err(e) = folder_sync_kv.persist().await {
+            tracing::error!("Failed to persist folder doc after file metadata move: {:?}", e);
+        }
+
+        self.doc_resolver.rebuild(&self.docs);
+        if let Some(ref indexer) = self.link_indexer {
+            indexer.on_document_update(&info.folder_doc_id).await;
+        }
+
+        Ok(link_indexer::MoveResult {
+            old_path,
+            new_path: new_path.to_string(),
+            old_folder_name: info.folder_name.clone(),
+            new_folder_name: info.folder_name.clone(),
+            links_rewritten: 0,
+        })
     }
 
     async fn move_folder_path(
@@ -5772,6 +5875,47 @@ mod test {
         assert_eq!(result.new_path, "/New.md");
         assert!(!filemeta_has(&server, &folder_doc_id, "/Old.md"));
         assert!(filemeta_has(&server, &folder_doc_id, "/New.md"));
+    }
+
+    #[tokio::test]
+    async fn move_path_renames_non_markdown_file_metadata() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[(
+                "/source.timestamps.json",
+                "22222222-2222-4222-8222-222222222222",
+                "file",
+            )],
+        )
+        .await;
+
+        let result = server
+            .move_path(
+                "Relay Folder 1/source.timestamps.json",
+                "/renamed.timestamps.json",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.old_path, "/source.timestamps.json");
+        assert_eq!(result.new_path, "/renamed.timestamps.json");
+        assert!(!filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/source.timestamps.json"
+        ));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/renamed.timestamps.json"
+        ));
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/renamed.timestamps.json"),
+            Some("22222222-2222-4222-8222-222222222222".to_string())
+        );
     }
 
     #[tokio::test]

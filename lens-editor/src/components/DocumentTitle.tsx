@@ -3,7 +3,7 @@ import { useYDoc } from '@y-sweet/react';
 import { useNavigation } from '../contexts/NavigationContext';
 import { findPathByUuid } from '../lib/uuid-to-path';
 import { getOriginalPath, getFolderNameFromPath } from '../lib/multi-folder-utils';
-import { moveDocument } from '../lib/relay-api';
+import { movePath } from '../lib/relay-api';
 import { getPlatformUrl } from '../lib/platform-url';
 import { extractFrontmatter } from '../lib/frontmatter';
 import { shortUuid } from '../lib/url-utils';
@@ -67,11 +67,11 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
     parts[parts.length - 1] = filename;
     const newPath = parts.join('/');
     try {
-      await moveDocument(uuid, newPath);
+      await movePath(path.slice(1), newPath);
     } catch (err: any) {
       console.error('Rename failed:', err);
     }
-  }, [value, displayName, path, uuid, folderNames]);
+  }, [value, displayName, path, folderNames]);
 
   const handleBlur = () => {
     if (cancelledRef.current) {

@@ -22,7 +22,7 @@ export function AddVideoPage({ shareToken }: { shareToken: string }) {
         const { token } = await tokenResp.json() as { token: string };
 
         // 2. Fetch bookmarklet JS
-        const jsResp = await fetch('/add-video-bookmarklet.js');
+        const jsResp = await fetch('/add-video-bookmarklet.js?v=shorts-20260505');
         if (!jsResp.ok) throw new Error('Failed to load bookmarklet script');
         let js = await jsResp.text();
 
