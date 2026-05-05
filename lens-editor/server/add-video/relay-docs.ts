@@ -36,7 +36,7 @@ async function upsertRelayDoc(
     throw new Error(`Relay upsert failed: ${resp.status} ${text}`);
   }
 
-  return resp.json();
+  return await resp.json() as { doc_id: string; path: string; created: boolean };
 }
 
 /** Create a new document in Relay */

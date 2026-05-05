@@ -55,10 +55,10 @@ export function resolveRelativePath(relativePath: string, sourceFile: string): s
 export function resolveWikilinkToUuid(
   wikilinkText: string,
   sourceFile: string,
-  metadata: Record<string, { id: string; [key: string]: unknown }>
+  metadata: Record<string, { id: string }>
 ): string | null {
   const parsed = parseWikilink(wikilinkText.trim());
-  if (!parsed || parsed.error || !parsed.path) return null;
+  if (!parsed || !parsed.path) return null;
 
   const resolved = resolveRelativePath(parsed.path, sourceFile);
 

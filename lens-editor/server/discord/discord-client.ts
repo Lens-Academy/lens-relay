@@ -19,14 +19,15 @@ const MAX_CHANNEL_CACHE = 500;
 const MAX_WEBHOOK_CACHE = 100;
 
 /** Evict expired entries, then oldest if still over limit. */
-function evictIfNeeded<T extends { expiresAt?: number }>(
+function evictIfNeeded<T>(
   cache: Map<string, T>,
   maxSize: number,
 ): void {
   if (cache.size < maxSize) return;
   const now = Date.now();
   for (const [key, entry] of cache) {
-    if ('expiresAt' in entry && (entry.expiresAt as number) < now) cache.delete(key);
+    const expiresAt = (entry as { expiresAt?: number }).expiresAt;
+    if (expiresAt !== undefined && expiresAt < now) cache.delete(key);
   }
   // Still over? Drop oldest entries (Map iteration is insertion-order)
   while (cache.size >= maxSize) {

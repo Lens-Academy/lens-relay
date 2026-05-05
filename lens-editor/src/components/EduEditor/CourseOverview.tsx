@@ -15,7 +15,7 @@ function extractWikilink(section: Section): string | null {
 interface CourseOverviewProps {
   courseSections: Section[];
   coursePath: string;
-  metadata: Record<string, { id: string; [key: string]: unknown }>;
+  metadata: Record<string, { id: string }>;
   selectedModuleDocId: string | null;
   onSelectModule: (docId: string, displayName: string) => void;
 }

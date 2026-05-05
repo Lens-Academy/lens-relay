@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react';
-import { parse, type SimpleMarkdown } from 'discord-markdown-parser';
+import { parse } from 'discord-markdown-parser';
 
-type ASTNode = SimpleMarkdown.SingleASTNode;
+type ASTNode = ReturnType<typeof parse>[number];
 
 /**
  * Recursively render an array of AST nodes to React elements.

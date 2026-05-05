@@ -51,8 +51,8 @@ interface FileTreeProps {
 export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileTreeProps) {
   const [dragTarget, setDragTarget] = useState<string | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const treeRef = useRef<TreeApi<TreeNode>>();
-  const clearTimer = useRef<ReturnType<typeof setTimeout>>();
+  const treeRef = useRef<TreeApi<TreeNode> | null>(null);
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Force re-render once tree API is available so StickyScrollOverlay gets treeApi
   const [treeMounted, setTreeMounted] = useState(false);
 
