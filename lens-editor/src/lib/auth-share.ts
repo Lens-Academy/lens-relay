@@ -19,9 +19,24 @@ function roleLevel(token: string): number {
  */
 function shouldReplaceToken(existing: string, incoming: string): boolean {
   if (isTokenExpired(existing)) return true;
-  // Different folder → always accept (user clicked a new link)
-  if (decodeFolderFromToken(existing) !== decodeFolderFromToken(incoming)) return true;
-  return roleLevel(incoming) < roleLevel(existing);
+
+  const existingRole = roleLevel(existing);
+  const incomingRole = roleLevel(incoming);
+  if (incomingRole < existingRole) return true;
+  if (incomingRole > existingRole) return false;
+
+  const existingFolder = decodeFolderFromToken(existing);
+  const incomingFolder = decodeFolderFromToken(incoming);
+  const existingIsAllFolders = existingFolder ? isAllFoldersToken(existingFolder) : false;
+  const incomingIsAllFolders = incomingFolder ? isAllFoldersToken(incomingFolder) : false;
+
+  if (incomingIsAllFolders && !existingIsAllFolders) return true;
+  if (!incomingIsAllFolders && existingIsAllFolders) return false;
+
+  if (existingFolder !== incomingFolder) return true;
+  const existingExpiry = tokenExpiry(existing) ?? -Infinity;
+  const incomingExpiry = tokenExpiry(incoming) ?? -Infinity;
+  return incomingExpiry > existingExpiry;
 }
 
 /**
@@ -89,13 +104,22 @@ export function decodePurposeFromToken(token: string): string | null {
  */
 export function isTokenExpired(token: string): boolean {
   try {
-    const bytes = base64urlToBytes(token);
-    if (bytes.length < 22) return true; // too short to contain expiry
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const expiry = view.getUint32(18, false); // big-endian
+    const expiry = tokenExpiry(token);
+    if (expiry === null) return true;
     return expiry < Math.floor(Date.now() / 1000);
   } catch {
     return true; // malformed → treat as expired
+  }
+}
+
+function tokenExpiry(token: string): number | null {
+  try {
+    const bytes = base64urlToBytes(token);
+    if (bytes.length < 22) return null;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return view.getUint32(18, false); // big-endian
+  } catch {
+    return null;
   }
 }
 

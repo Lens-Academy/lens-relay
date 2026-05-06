@@ -13,7 +13,12 @@ function makeFakeBinaryToken(roleByte: number, purposeByte: number = 0): string 
 }
 
 /** Build a fake binary token with a specific folder UUID */
-function makeFakeTokenWithFolder(roleByte: number, folderUuid: string, purposeByte: number = 0): string {
+function makeFakeTokenWithFolder(
+  roleByte: number,
+  folderUuid: string,
+  purposeByte: number = 0,
+  expiry: number = Math.floor(Date.now() / 1000) + 3600
+): string {
   const bytes = new Uint8Array(30);
   bytes[0] = purposeByte;
   bytes[1] = roleByte;
@@ -21,7 +26,9 @@ function makeFakeTokenWithFolder(roleByte: number, folderUuid: string, purposeBy
   for (let i = 0; i < 16; i++) {
     bytes[2 + i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   }
-  for (let i = 18; i < 30; i++) bytes[i] = i;
+  const view = new DataView(bytes.buffer);
+  view.setUint32(18, expiry, false);
+  for (let i = 22; i < 30; i++) bytes[i] = i;
   let binary = '';
   for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -62,6 +69,104 @@ describe('auth-share', () => {
       window.history.replaceState({}, '', '/?t=new-token');
       expect(getShareTokenFromUrl()).toBe('new-token');
       expect(localStorage.getItem('lens-share-token')).toBe('new-token');
+    });
+
+    it('should keep an all-folders edit token when opening a single-folder suggest link', () => {
+      const allFoldersEditToken = makeFakeTokenWithFolder(1, '00000000-0000-0000-0000-000000000000');
+      const singleFolderSuggestToken = makeFakeTokenWithFolder(2, 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e');
+      localStorage.setItem('lens-share-token', allFoldersEditToken);
+      window.history.replaceState({}, '', `/?t=${singleFolderSuggestToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(allFoldersEditToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(allFoldersEditToken);
+    });
+
+    it('should keep an all-folders edit token when opening a single-folder view link', () => {
+      const allFoldersEditToken = makeFakeTokenWithFolder(1, '00000000-0000-0000-0000-000000000000');
+      const singleFolderViewToken = makeFakeTokenWithFolder(3, 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e');
+      localStorage.setItem('lens-share-token', allFoldersEditToken);
+      window.history.replaceState({}, '', `/?t=${singleFolderViewToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(allFoldersEditToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(allFoldersEditToken);
+    });
+
+    it('should replace all-folders suggest access with a single-folder edit link', () => {
+      const allFoldersSuggestToken = makeFakeTokenWithFolder(2, '00000000-0000-0000-0000-000000000000');
+      const singleFolderEditToken = makeFakeTokenWithFolder(1, 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e');
+      localStorage.setItem('lens-share-token', allFoldersSuggestToken);
+      window.history.replaceState({}, '', `/?t=${singleFolderEditToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(singleFolderEditToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(singleFolderEditToken);
+    });
+
+    it('should replace single-folder edit access with an all-folders edit link', () => {
+      const singleFolderEditToken = makeFakeTokenWithFolder(1, 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e');
+      const allFoldersEditToken = makeFakeTokenWithFolder(1, '00000000-0000-0000-0000-000000000000');
+      localStorage.setItem('lens-share-token', singleFolderEditToken);
+      window.history.replaceState({}, '', `/?t=${allFoldersEditToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(allFoldersEditToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(allFoldersEditToken);
+    });
+
+    it('should replace same-folder suggest access with an edit link', () => {
+      const folder = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
+      const suggestToken = makeFakeTokenWithFolder(2, folder);
+      const editToken = makeFakeTokenWithFolder(1, folder);
+      localStorage.setItem('lens-share-token', suggestToken);
+      window.history.replaceState({}, '', `/?t=${editToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(editToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(editToken);
+    });
+
+    it('should keep same-folder edit access when opening a suggest link', () => {
+      const folder = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
+      const editToken = makeFakeTokenWithFolder(1, folder);
+      const suggestToken = makeFakeTokenWithFolder(2, folder);
+      localStorage.setItem('lens-share-token', editToken);
+      window.history.replaceState({}, '', `/?t=${suggestToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(editToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(editToken);
+    });
+
+    it('should replace equal same-folder access when the new link expires later', () => {
+      const folder = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
+      const now = Math.floor(Date.now() / 1000);
+      const storedEditToken = makeFakeTokenWithFolder(1, folder, 0, now + 3600);
+      const newerEditToken = makeFakeTokenWithFolder(1, folder, 0, now + 7200);
+      localStorage.setItem('lens-share-token', storedEditToken);
+      window.history.replaceState({}, '', `/?t=${newerEditToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(newerEditToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(newerEditToken);
+    });
+
+    it('should keep equal same-folder access when the new link expires earlier', () => {
+      const folder = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
+      const now = Math.floor(Date.now() / 1000);
+      const storedEditToken = makeFakeTokenWithFolder(1, folder, 0, now + 7200);
+      const olderEditToken = makeFakeTokenWithFolder(1, folder, 0, now + 3600);
+      localStorage.setItem('lens-share-token', storedEditToken);
+      window.history.replaceState({}, '', `/?t=${olderEditToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(storedEditToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(storedEditToken);
+    });
+
+    it('should replace expired stored access with a valid incoming link', () => {
+      const folder = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
+      const now = Math.floor(Date.now() / 1000);
+      const expiredEditToken = makeFakeTokenWithFolder(1, folder, 0, now - 1);
+      const validSuggestToken = makeFakeTokenWithFolder(2, folder, 0, now + 3600);
+      localStorage.setItem('lens-share-token', expiredEditToken);
+      window.history.replaceState({}, '', `/?t=${validSuggestToken}`);
+
+      expect(getShareTokenFromUrl()).toBe(validSuggestToken);
+      expect(localStorage.getItem('lens-share-token')).toBe(validSuggestToken);
     });
   });
 
