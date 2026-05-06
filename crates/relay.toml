@@ -38,3 +38,7 @@ name = "Lens"
 [[folders]]
 uuid = "ea4015da-24af-4d9d-ac49-8c902cb17121"
 name = "Lens Edu"
+
+[[folders]]
+uuid = "24027431-24c0-42c2-9f8f-04ed0dd458aa"
+name = "Lens Edu Private"
