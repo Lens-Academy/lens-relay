@@ -10,6 +10,7 @@ Display documents from multiple Relay shared folders in a unified file tree.
 |------|-----------|----------|
 | Lens | `fbd5eb54-73cc-41b0-ac28-2b93d3b4244e` | `{RELAY_ID}-fbd5eb54-...` |
 | Lens Edu | `ea4015da-24af-4d9d-ac49-8c902cb17121` | `{RELAY_ID}-ea4015da-...` |
+| Lens Edu Private | `24027431-24c0-42c2-9f8f-04ed0dd458aa` | `{RELAY_ID}-24027431-...` |
 
 ## Approach
 
@@ -19,6 +20,7 @@ Each folder's Y.Doc stores paths without folder prefixes:
 ```
 Lens Y.Doc:      { "/doc.md": {...}, "/notes/meeting.md": {...} }
 Lens Edu Y.Doc:  { "/syllabus.md": {...} }
+Private Y.Doc:   { "/draft.md": {...} }
 ```
 
 For display, we prefix paths with folder names:
@@ -26,7 +28,8 @@ For display, we prefix paths with folder names:
 Merged view: {
   "/Lens/doc.md": {...},
   "/Lens/notes/meeting.md": {...},
-  "/Lens Edu/syllabus.md": {...}
+  "/Lens Edu/syllabus.md": {...},
+  "/Lens Edu Private/draft.md": {...}
 }
 ```
 

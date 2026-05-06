@@ -120,6 +120,7 @@ for folder_id, files in d.items():
 | `/root/relay-git-sync-data/ssh/config` | SSH config with host aliases for multiple deploy keys |
 | `/root/relay-git-sync-data/ssh/git_sync_key` | SSH key for lens-relay repo |
 | `/root/relay-git-sync-data/ssh/educational_key` | SSH key for lens-educational-content repo |
+| `/root/relay-git-sync-data/ssh/edu_private_key` | SSH key for lens-edu-private-relay repo |
 
 ## Git Sync
 
@@ -127,8 +128,9 @@ for folder_id, files in d.items():
 
 | Obsidian Folder | Shared Folder ID | GitHub Repo | Branch |
 |-----------------|------------------|-------------|--------|
-| Lens | `fbd5eb54-73cc-41b0-ac28-2b93d3b4244e` | [Lens-Academy/lens-relay](https://github.com/Lens-Academy/lens-relay) | main |
+| Lens | `fbd5eb54-73cc-41b0-ac28-2b93d3b4244e` | [Lens-Academy/lens-folder-relay](https://github.com/Lens-Academy/lens-folder-relay) | main |
 | Lens Edu | `ea4015da-24af-4d9d-ac49-8c902cb17121` | [Lens-Academy/lens-edu-relay](https://github.com/Lens-Academy/lens-edu-relay) | staging |
+| Lens Edu Private | `24027431-24c0-42c2-9f8f-04ed0dd458aa` | [Lens-Academy/lens-edu-private-relay](https://github.com/Lens-Academy/lens-edu-private-relay) | main |
 
 - **Sync interval:** Changes committed every ~10 seconds
 - **Webhook endpoint:** https://relay.lensacademy.org/git-sync/webhooks
@@ -140,7 +142,7 @@ for folder_id, files in d.items():
 [[git_connector]]
 shared_folder_id = "fbd5eb54-73cc-41b0-ac28-2b93d3b4244e"
 relay_id = "cb696037-0f72-4e93-8717-4e433129d789"
-url = "git@github.com:Lens-Academy/lens-relay.git"
+url = "git@github.com:Lens-Academy/lens-folder-relay.git"
 branch = "main"
 remote_name = "origin"
 prefix = ""
@@ -150,6 +152,14 @@ shared_folder_id = "ea4015da-24af-4d9d-ac49-8c902cb17121"
 relay_id = "cb696037-0f72-4e93-8717-4e433129d789"
 url = "git@github.com-educational:Lens-Academy/lens-edu-relay.git"
 branch = "staging"
+remote_name = "origin"
+prefix = ""
+
+[[git_connector]]
+shared_folder_id = "24027431-24c0-42c2-9f8f-04ed0dd458aa"
+relay_id = "cb696037-0f72-4e93-8717-4e433129d789"
+url = "git@github.com-edu-private:Lens-Academy/lens-edu-private-relay.git"
+branch = "main"
 remote_name = "origin"
 prefix = ""
 ```
@@ -172,6 +182,13 @@ Host github.com-educational
     HostName github.com
     User git
     IdentityFile /data/ssh/educational_key
+    IdentitiesOnly yes
+
+# Private educational content repo
+Host github.com-edu-private
+    HostName github.com
+    User git
+    IdentityFile /data/ssh/edu_private_key
     IdentitiesOnly yes
 ```
 
@@ -206,6 +223,7 @@ cat /root/relay.toml
 # Test SSH connections from git-sync container
 docker exec relay-git-sync ssh -F /data/ssh/config -T git@github.com
 docker exec relay-git-sync ssh -F /data/ssh/config -T git@github.com-educational
+docker exec relay-git-sync ssh -F /data/ssh/config -T git@github.com-edu-private
 
 # Manual sync of a specific folder
 docker exec relay-git-sync uv run python cli.py sync \
