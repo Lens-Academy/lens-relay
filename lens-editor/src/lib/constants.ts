@@ -20,6 +20,7 @@ export const FOLDERS: FolderConfig[] = (USE_LOCAL_RELAY && !USE_LOCAL_R2)
   : [
       { id: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e', name: 'Lens' },
       { id: 'ea4015da-24af-4d9d-ac49-8c902cb17121', name: 'Lens Edu' },
+      { id: '24027431-24c0-42c2-9f8f-04ed0dd458aa', name: 'Lens Edu Private' },
     ];
 
 // Default document short UUID (first 8 chars — used only in URL redirect)
