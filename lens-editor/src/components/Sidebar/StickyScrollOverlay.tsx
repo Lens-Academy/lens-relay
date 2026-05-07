@@ -61,7 +61,12 @@ function computeStickyHeaders(
   if (topIndex < 0 || topIndex >= visibleNodes.length) return [];
 
   const topNode = visibleNodes[topIndex];
-  const baseAncestors = getAncestorFolders(topNode);
+  // Only show sticky headers for folders whose rows have scrolled above the viewport top.
+  // Without this filter, a folder at rowIndex=0 (scrollTop=0) renders a duplicate sticky
+  // row at y=0 that covers the real row and hides its + button.
+  const baseAncestors = getAncestorFolders(topNode).filter(
+    ancestor => (ancestor.rowIndex ?? 0) * ROW_HEIGHT < scrollTop
+  );
 
   let ancestors = baseAncestors;
   const overlayHeight = baseAncestors.length * ROW_HEIGHT;
