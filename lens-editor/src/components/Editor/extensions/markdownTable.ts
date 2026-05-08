@@ -1,6 +1,6 @@
 import { EditorView, Decoration, WidgetType, keymap } from '@codemirror/view';
 import type { DecorationSet, KeyBinding } from '@codemirror/view';
-import { Prec, StateField, RangeSetBuilder } from '@codemirror/state';
+import { Prec, StateField, RangeSetBuilder, Transaction } from '@codemirror/state';
 import type { EditorState, Extension } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
@@ -359,8 +359,12 @@ function buildTableDecorations(state: EditorState): DecorationSet {
       // because lezer's TableDelimiter ends before trailing whitespace, so a
       // cursor in the trailing space would fall outside node.to even though
       // the user is still mid-row. Line-number comparison avoids that.
+      // Skip this check until the user has actually interacted with the editor
+      // (otherwise the default cursor at position 0 on doc load reads as
+      // "user is editing the table at the top of the doc").
+      const userInteracted = state.field(userInteractedField, false);
       const { fromLine: tableFromLine, toLine: tableToLine } = tableLineRange(state, node.node);
-      const cursorInside = selection.ranges.some(r => {
+      const cursorInside = userInteracted && selection.ranges.some(r => {
         const cursorFromLine = state.doc.lineAt(r.from).number;
         const cursorToLine = state.doc.lineAt(r.to).number;
         return cursorToLine >= tableFromLine && cursorFromLine <= tableToLine;
@@ -407,12 +411,25 @@ function buildTableDecorations(state: EditorState): DecorationSet {
   return builder.finish();
 }
 
+// Tracks whether the user has actually interacted with the editor (typed,
+// clicked, used a keymap, etc.). Until they have, we skip the "cursor on a
+// table line → show raw" rule — otherwise an opened doc that happens to start
+// with a table renders as raw markdown because the default cursor position
+// (0) lies on the table's first line.
+const userInteractedField = StateField.define<boolean>({
+  create: () => false,
+  update(value, tr) {
+    if (value) return true; // sticky once set
+    return tr.annotation(Transaction.userEvent) !== undefined;
+  },
+});
+
 const tableField = StateField.define<DecorationSet>({
   create(state) {
     return buildTableDecorations(state);
   },
   update(value, tr) {
-    if (tr.docChanged || tr.selection) {
+    if (tr.docChanged || tr.selection || tr.annotation(Transaction.userEvent) !== undefined) {
       return buildTableDecorations(tr.state);
     }
     return value;
@@ -484,6 +501,16 @@ const tableTheme = EditorView.theme({
     outline: 'none',
     minWidth: '60px',
   },
+  // Force a line-box of full text height in every cell so empty cells don't
+  // collapse below the height of filled rows. The pseudo has zero width and
+  // is invisible, so it doesn't affect cell content or cursor positioning.
+  '.cm-md-table th::before, .cm-md-table td::before': {
+    content: '""',
+    display: 'inline-block',
+    width: '0',
+    height: '1.5em',
+    verticalAlign: 'middle',
+  },
   '.cm-md-table th:last-child, .cm-md-table td:last-child': {
     borderRight: 'none',
   },
@@ -513,5 +540,5 @@ const tableTheme = EditorView.theme({
 });
 
 export function markdownTableExtension(): Extension {
-  return [tableField, Prec.highest(keymap.of(tableEscapeKeymap)), tableTheme];
+  return [userInteractedField, tableField, Prec.highest(keymap.of(tableEscapeKeymap)), tableTheme];
 }

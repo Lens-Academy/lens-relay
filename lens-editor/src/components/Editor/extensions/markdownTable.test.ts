@@ -36,11 +36,45 @@ describe('markdownTable - rendering', () => {
     expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
   });
 
-  it('does NOT render the widget when cursor is on a table line', () => {
+  it('does NOT render the widget when cursor is on a table line (after user navigates)', () => {
     const content = '| A | B |\n| - | - |\n| 1 | 2 |\n\nAfter';
-    view = createEditor(content, 3);
+    view = createEditor(content, content.indexOf('After'));
+    // Simulate the user navigating into the table via keyboard
+    view.dispatch({
+      selection: { anchor: 3 },
+      userEvent: 'select.keyboard',
+    });
 
     expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(0);
+  });
+
+  it('renders the widget on initial load even when default cursor lands on a table line', () => {
+    // Mimics the "refresh / open doc" scenario: cursor defaults to position 0,
+    // which happens to be on the table's first line. Widget should still render
+    // because no user interaction has happened yet.
+    const content = '| Name | ID |\n| - | - |\n| Ben | 92 |';
+    view = createEditor(content, 0);
+
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
+  });
+
+  it('cell editing does not flip the editor into "user navigated" mode', () => {
+    // Regression guard: our cell input handler dispatches without a userEvent
+    // annotation, so it must NOT toggle the cursor-hide rule. Otherwise a user
+    // who opens a doc and types into a cell would suddenly see the widget
+    // collapse to raw markdown (because their CM6 cursor is still at 0, which
+    // lies on the table's first line).
+    const content = '| Name | ID |\n| - | - |\n| Ben | 92 |';
+    view = createEditor(content, 0);
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
+
+    // Simulate the user typing into a cell (mirrors what attachCellHandlers does)
+    const cell = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+    cell.textContent = 'Bens';
+    cell.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // Widget must still be rendered — cell editing isn't "navigation into raw mode"
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
   });
 
   it('renders header and body cell content', () => {
@@ -72,8 +106,12 @@ describe('markdownTable - rendering', () => {
 
   it('hides only the table whose line the cursor is on, when multiple tables exist', () => {
     const content = '| A |\n| - |\n| 1 |\n\n| B |\n| - |\n| 2 |\n\nend';
-    // Cursor on the SECOND table's data row
-    view = createEditor(content, content.indexOf('| 2 |') + 2);
+    view = createEditor(content, content.indexOf('end'));
+    // User navigates onto the SECOND table's data row
+    view.dispatch({
+      selection: { anchor: content.indexOf('| 2 |') + 2 },
+      userEvent: 'select.keyboard',
+    });
 
     expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
     const th = view.contentDOM.querySelector('.cm-md-table th');
@@ -265,7 +303,9 @@ describe('markdownTable - escape keymap', () => {
 
   it('moving cursor off the table re-renders the widget (round-trip)', () => {
     const content = '| A |\n| - |\n| 1 |\nafter';
-    view = createEditor(content, 3); // on table line — no widget
+    view = createEditor(content, 3);
+    // Simulate the user navigating onto the table line so the cursor-hide rule kicks in
+    view.dispatch({ selection: { anchor: 3 }, userEvent: 'select.keyboard' });
     expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(0);
 
     pressEscape(view);
