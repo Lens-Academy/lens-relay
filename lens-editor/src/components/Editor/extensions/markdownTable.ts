@@ -459,7 +459,15 @@ const tableField = StateField.define<DecorationSet>({
     }
     return value;
   },
-  provide: f => EditorView.decorations.from(f),
+  // Provide the same range set as both decorations AND atomic ranges. Atomic
+  // makes arrow-key navigation skip over the widget instead of landing inside
+  // it — predictable and matches Obsidian Live Preview. The ranges only exist
+  // when the widget is rendered (cursor not on a table line), so the typing
+  // flow that creates a table from raw markdown is unaffected.
+  provide: f => [
+    EditorView.decorations.from(f),
+    EditorView.atomicRanges.of(view => view.state.field(f)),
+  ],
 });
 
 // ---------------------------------------------------------------------------

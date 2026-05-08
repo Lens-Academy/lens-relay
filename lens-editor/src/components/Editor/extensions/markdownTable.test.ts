@@ -3,6 +3,7 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { Table } from '@lezer/markdown';
+import { cursorLineUp } from '@codemirror/commands';
 import { markdownTableExtension, tableEscapeKeymap } from './markdownTable';
 
 function createEditor(content: string, cursorPos: number) {
@@ -392,6 +393,31 @@ describe('markdownTable - escape keymap', () => {
 
     const handled = pressEscape(view);
     expect(handled).toBe(false);
+  });
+
+  it('Up arrow skips over the table widget rather than landing inside it (atomic)', () => {
+    // Doc structure:
+    //   line 1: | A | B |       ← table
+    //   line 2: | - | - |       ← table
+    //   line 3: | 1 | 2 |       ← table
+    //   line 4: (blank)
+    //   line 5: After
+    const content = '| A | B |\n| - | - |\n| 1 | 2 |\n\nAfter';
+    view = createEditor(content, content.length); // cursor at end of "After"
+
+    // First Up: into the blank line above "After"
+    cursorLineUp(view);
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(4);
+
+    // Second Up: would normally land inside the table widget. With atomic
+    // ranges, the cursor must skip over the widget entirely — so it lands
+    // at line 1 (start of doc), NOT on lines 2 or 3 (inside the widget).
+    cursorLineUp(view);
+    const cursorLine = view.state.doc.lineAt(view.state.selection.main.head).number;
+    expect(cursorLine).toBe(1);
+    // Specifically, the cursor must be at position 0 (start of doc / before
+    // the widget content), not somewhere mid-table.
+    expect(view.state.selection.main.head).toBe(0);
   });
 
   it('moving cursor off the table re-renders the widget (round-trip)', () => {
