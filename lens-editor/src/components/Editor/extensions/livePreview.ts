@@ -528,6 +528,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     deco: Decoration.mark({ class: HIDDEN_CLASS }),
                   });
                 }
+
               }
 
               // Skip child iteration (CodeMark/CodeInfo/CodeText handled above)

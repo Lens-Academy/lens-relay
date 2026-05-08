@@ -28,6 +28,7 @@ import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment } from './extensions/livePreview';
+import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
@@ -299,6 +300,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           addKeymap: false,
         }),
         livePreview(wikilinkContextRef.current),
+        codeBlockCopyButton(),
         sourceReadOnlyCompartment.of([]),
         emphasisPersistPlugin,
         headingFlashPlugin,
