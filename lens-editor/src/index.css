@@ -195,18 +195,20 @@
   margin-right: 6px;
 }
 
-/* Inline code */
+/* Inline code. Background uses alpha so the selection layer (CM6 renders it
+ * behind content via z-index: -1) stays visible through the gray. A solid
+ * color would hide the selection highlight entirely. */
 .cm-inline-code {
-  background-color: #f3f4f6;
+  background-color: rgba(243, 244, 246, 0.7);
   border-radius: 3px;
   padding: 0.125em 0.25em;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.9em;
 }
 
-/* Fenced code blocks */
+/* Fenced code blocks. Same reason for the alpha as .cm-inline-code above. */
 .cm-code-block {
-  background-color: #f3f4f6;
+  background-color: rgba(243, 244, 246, 0.7);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.9em;
   padding: 0 0.5em;
