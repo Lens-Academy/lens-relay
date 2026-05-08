@@ -132,6 +132,103 @@ describe('markdownTable - cell editing', () => {
   });
 });
 
+describe('markdownTable - row navigation across edits', () => {
+  // Helper to simulate typing into a focused cell (browser sets textContent, then fires input)
+  function typeInCell(cell: HTMLElement, text: string) {
+    cell.textContent = (cell.textContent ?? '') + text;
+    cell.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function pressArrowDown(cell: HTMLElement) {
+    cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  }
+
+  it('typing then pressing Down produces a clean row with correct content (no accumulation)', () => {
+    const content = '| Name | ID |\n| - | - |\n| 92 |  |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    // Click into the "92" cell
+    const firstDataCell = view.contentDOM.querySelector<HTMLElement>('.cm-md-table tbody tr td')!;
+    firstDataCell.focus();
+
+    // Type "f" → press Down (should add new row + focus it) → type "f" → repeat
+    typeInCell(firstDataCell, 'f');
+    pressArrowDown(firstDataCell);
+
+    const docAfter = view.state.doc.toString();
+    expect(docAfter.match(/92f/g)?.length ?? 0).toBe(1);
+    expect(docAfter.split('\n').filter(l => l.includes('|')).length).toBe(4);
+  });
+
+  it('Enter on the last row adds a new row and focuses its first cell (typing lands there)', async () => {
+    const content = '| Name | ID |\n| - | - |\n| Ben | 92 |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const benCell = view.contentDOM.querySelector<HTMLElement>('.cm-md-table tbody tr td')!;
+    benCell.focus();
+
+    // Press Enter on Ben — should append a new row and focus its first cell.
+    benCell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    // Focus restoration is scheduled in a RAF after the dispatch.
+    await new Promise<void>(r => requestAnimationFrame(() => r()));
+
+    // Doc has the new empty row
+    expect(view.state.doc.toString()).toContain('| Ben | 92 |\n|  |  |');
+
+    // Focus is on a cell in the new last row, and that cell is editable.
+    const active = document.activeElement as HTMLElement;
+    expect(active?.tagName).toBe('TD');
+    expect(active?.contentEditable).toBe('true');
+
+    // The active cell belongs to the LAST tr (the one we just added).
+    const lastTr = view.contentDOM.querySelector<HTMLElement>('.cm-md-table tbody tr:last-child');
+    expect(lastTr?.contains(active)).toBe(true);
+
+    // Typing into it produces a doc change (proves the input handler is wired up).
+    active.textContent = 'a';
+    active.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(view.state.doc.toString()).toContain('|a|');
+  });
+
+  it('repeated type-then-down does not corrupt the table or accumulate text in one cell', () => {
+    const content = '| Name | ID |\n| - | - |\n| 92 |  |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    // Re-find the last data row's first cell from the live DOM each iteration —
+    // happy-dom doesn't reliably restore DOM focus across RAF, so we drive the
+    // simulated user from the DOM rather than document.activeElement.
+    function lastFirstCell(): HTMLElement {
+      const rows = view.contentDOM.querySelectorAll('.cm-md-table tbody tr');
+      const last = rows[rows.length - 1];
+      return last.querySelector('td') as HTMLElement;
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const c = lastFirstCell();
+      typeInCell(c, 'f');
+      pressArrowDown(c);
+    }
+
+    // Each iteration adds exactly one 'f' to one cell. There should be no
+    // run of more than one 'f' anywhere in the doc — if addRow's stale nodeTo
+    // corrupted the markdown, characters would pile up.
+    const doc = view.state.doc.toString();
+    const fRuns = doc.match(/f+/g) ?? [];
+    for (const run of fRuns) {
+      expect(run.length, `unexpected run of 'f's in doc:\n${doc}`).toBeLessThanOrEqual(1);
+    }
+
+    // And the table's structural integrity: every table line should start with `|`
+    // and end with `|`, with consistent column count.
+    const tableLines = doc.split('\n').filter(l => l.includes('|'));
+    for (const line of tableLines) {
+      expect(line.trim().startsWith('|'), `malformed table line: ${JSON.stringify(line)}`).toBe(true);
+      expect(line.trim().endsWith('|'), `malformed table line: ${JSON.stringify(line)}`).toBe(true);
+    }
+  });
+});
+
 describe('markdownTable - escape keymap', () => {
   it('moves cursor to the line after the table when pressed on a table line', () => {
     const content = '| A |\n| - |\n| 1 |\nafter';

@@ -118,11 +118,18 @@ class TableWidget extends WidgetType {
       this.data.headers.forEach((_, ci) => {
         const cell = row[ci];
         const td = tr.insertCell();
+        // Rows with fewer cells than the header (malformed markdown) get
+        // non-editable placeholders. Editing those would have nowhere safe
+        // to insert into and would corrupt the table.
+        if (!cell) {
+          td.dataset.colIndex = String(ci);
+          return;
+        }
         td.contentEditable = 'true';
-        td.textContent = cell ? cell.content.trim() : '';
-        td.style.textAlign = cell?.align ?? 'left';
-        td.dataset.cellFrom = cell ? String(cell.from) : String(this.data.nodeTo);
-        td.dataset.cellTo = cell ? String(cell.to) : String(this.data.nodeTo);
+        td.textContent = cell.content.trim();
+        td.style.textAlign = cell.align;
+        td.dataset.cellFrom = String(cell.from);
+        td.dataset.cellTo = String(cell.to);
         td.dataset.colIndex = String(ci);
         this.attachCellHandlers(td, view);
       });
@@ -179,9 +186,11 @@ class TableWidget extends WidgetType {
         el.blur();
         view.focus();
       } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
         e.stopPropagation();
         this.navigateColumn(el, colIdx, -1, view);
       } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
         e.stopPropagation();
         this.navigateColumn(el, colIdx, 1, view);
       } else {
@@ -204,7 +213,7 @@ class TableWidget extends WidgetType {
     if (next) {
       this.focusCell(next);
     } else if (delta > 0) {
-      this.addRow(view, colIdx);
+      this.addRow(current, view, colIdx);
     }
   }
 
@@ -217,7 +226,7 @@ class TableWidget extends WidgetType {
     if (target) {
       this.focusCell(target);
     } else if (delta > 0) {
-      this.addRow(view, colIdx);
+      this.addRow(current, view, colIdx);
     }
   }
 
@@ -232,21 +241,36 @@ class TableWidget extends WidgetType {
     sel?.addRange(range);
   }
 
-  private addRow(view: EditorView, focusColIdx = 0) {
+  private addRow(currentCell: HTMLElement, view: EditorView, focusColIdx = 0) {
     const numCols = this.data.headers.length;
     const emptyRow = '\n| ' + Array(numCols).fill('').join(' | ') + ' |';
-    const { nodeFrom, nodeTo } = this.data;
+
+    // Recompute the table's true end from the current state. `this.data.nodeTo`
+    // is captured at widget construction and goes stale across cell edits
+    // (because handlers survive updateDOM-only rebuilds with their original
+    // closure). The cell's dataset.cellFrom is kept fresh by updateDOM, so we
+    // use it as a stable anchor INTO the current table.
+    const cellFrom = parseInt(currentCell.dataset.cellFrom ?? '0');
+    const tableNode = findTableAt(view.state, cellFrom);
+    if (!tableNode) return;
+
+    const { toLine } = tableLineRange(view.state, tableNode);
+    const insertPos = view.state.doc.line(toLine).to;
+    // Capture the table's start before dispatch so we can find its (rebuilt) wrapper.
+    // Inserting at end-of-table doesn't shift the table's start, so this remains valid.
+    const tableFrom = tableNode.from;
 
     view.dispatch({
-      changes: { from: nodeTo, to: nodeTo, insert: emptyRow },
+      changes: { from: insertPos, to: insertPos, insert: emptyRow },
     });
 
-    // After the transaction, the widget is recreated (new row count → updateDOM returns false
-    // → toDOM called). Find the new DOM and focus the correct cell.
+    // After the dispatch, find the (possibly rebuilt) wrapper by its tracked
+    // start position and focus the new row's first cell.
     requestAnimationFrame(() => {
-      const wrapper = view.dom.querySelector(`[data-table-from="${nodeFrom}"]`);
+      if (!view.dom.isConnected) return;
+      const wrapper = view.dom.querySelector(`.cm-md-table-wrapper[data-table-from="${tableFrom}"]`);
       const rows = wrapper?.querySelectorAll('tbody tr');
-      if (!rows) return;
+      if (!rows?.length) return;
       const newRow = rows[rows.length - 1];
       const cell = newRow?.querySelectorAll('td')[focusColIdx] as HTMLElement | undefined;
       if (cell) this.focusCell(cell);
@@ -263,6 +287,45 @@ class TableWidget extends WidgetType {
 // ---------------------------------------------------------------------------
 // Decorations (StateField — block decorations are not allowed via ViewPlugin)
 // ---------------------------------------------------------------------------
+
+function findTableAt(state: EditorState, pos: number): SyntaxNode | null {
+  let found: SyntaxNode | null = null;
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name === 'Table' && node.from <= pos && pos <= node.to) {
+        found = node.node;
+        return false;
+      }
+    },
+  });
+  return found;
+}
+
+// Lezer omits TableCell nodes for whitespace-only cells (`|  |  |` parses with
+// only TableDelimiter children, no cells). Walk the row's delimiters and
+// synthesize cell info for the gaps between them so empty cells have a real
+// document range to write into when the user types.
+function extractRowCells(state: EditorState, row: SyntaxNode): CellInfo[] {
+  const delims: Array<{ from: number; to: number }> = [];
+  const cells: Array<{ from: number; to: number; content: string }> = [];
+  for (let c = row.firstChild; c; c = c.nextSibling) {
+    if (c.name === 'TableDelimiter') delims.push({ from: c.from, to: c.to });
+    else if (c.name === 'TableCell') cells.push({ from: c.from, to: c.to, content: state.sliceDoc(c.from, c.to) });
+  }
+  const out: CellInfo[] = [];
+  for (let i = 0; i < delims.length - 1; i++) {
+    const gapStart = delims[i].to;
+    const gapEnd = delims[i + 1].from;
+    const cell = cells.find(c => c.from >= gapStart && c.to <= gapEnd);
+    if (cell) {
+      out.push({ ...cell, align: 'left' });
+    } else {
+      // Empty cell — span the whole gap so typing replaces it cleanly
+      out.push({ from: gapStart, to: gapEnd, content: state.sliceDoc(gapStart, gapEnd), align: 'left' });
+    }
+  }
+  return out;
+}
 
 // Lezer's GFM Table parsing is "loose": it greedily includes trailing non-pipe
 // lines as TableRow children even when they aren't real rows. Filter those out
@@ -310,22 +373,12 @@ function buildTableDecorations(state: EditorState): DecorationSet {
 
       for (let child = node.node.firstChild; child; child = child.nextSibling) {
         if (child.name === 'TableHeader') {
-          for (let c = child.firstChild; c; c = c.nextSibling) {
-            if (c.name === 'TableCell') {
-              headers.push({ from: c.from, to: c.to, content: state.sliceDoc(c.from, c.to), align: 'left' });
-            }
-          }
+          headers.push(...extractRowCells(state, child.node));
         } else if (child.name === 'TableDelimiter' && aligns.length === 0) {
           // First top-level TableDelimiter is the separator row (|---|---|)
           aligns = parseAlignments(state.sliceDoc(child.from, child.to));
         } else if (child.name === 'TableRow' && state.sliceDoc(child.from, child.to).includes('|')) {
-          const rowCells: CellInfo[] = [];
-          for (let c = child.firstChild; c; c = c.nextSibling) {
-            if (c.name === 'TableCell') {
-              rowCells.push({ from: c.from, to: c.to, content: state.sliceDoc(c.from, c.to), align: 'left' });
-            }
-          }
-          rows.push(rowCells);
+          rows.push(extractRowCells(state, child.node));
         }
       }
 
