@@ -3,9 +3,7 @@ import type { DecorationSet } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder } from '@codemirror/state';
-
-const COPY_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-const CHECK_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+import { iconNode } from '../../../lib/icons';
 
 class CopyButtonWidget extends WidgetType {
   constructor(private readonly codeText: string) {
@@ -20,7 +18,7 @@ class CopyButtonWidget extends WidgetType {
     const btn = document.createElement('button');
     btn.className = 'cm-code-copy-btn';
     btn.setAttribute('aria-label', 'Copy code');
-    btn.innerHTML = COPY_ICON;
+    btn.appendChild(iconNode('copy'));
 
     // Prevent mousedown from repositioning the editor cursor, which would flip
     // the code block into edit mode and reveal the hidden fence markers.
@@ -30,8 +28,8 @@ class CopyButtonWidget extends WidgetType {
       e.stopPropagation();
       try {
         await navigator.clipboard.writeText(this.codeText);
-        btn.innerHTML = CHECK_ICON;
-        setTimeout(() => { btn.innerHTML = COPY_ICON; }, 2000);
+        btn.replaceChildren(iconNode('check'));
+        setTimeout(() => { btn.replaceChildren(iconNode('copy')); }, 2000);
       } catch {
         // Clipboard API unavailable (e.g. insecure context)
       }
@@ -138,6 +136,13 @@ const copyButtonTheme = EditorView.theme({
     color: '#4b5563',
     background: '#e5e7eb',
     borderColor: '#d1d5db',
+  },
+  // Size the icon SVGs; width/height are omitted from the SVG root in icons.ts
+  // so all sizing is controlled here via CSS.
+  '.cm-code-copy-btn svg': {
+    width: '13px',
+    height: '13px',
+    display: 'block',
   },
 });
 
