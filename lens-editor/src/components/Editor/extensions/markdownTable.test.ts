@@ -168,6 +168,99 @@ describe('markdownTable - cell editing', () => {
 
     expect(view.state.doc.toString()).toBe('| A |\n| - |\n|  |\n\nend');
   });
+
+  it('typing | in a cell escapes it as \\| in the doc and preserves table structure', () => {
+    const content = '| A | B |\n| - | - |\n| 1 | 2 |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const firstTd = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+    firstTd.textContent = 'a|b';
+    firstTd.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // The | in the cell content must be backslash-escaped in the markdown,
+    // otherwise lezer reparses the row as having three columns instead of two.
+    expect(view.state.doc.toString()).toBe('| A | B |\n| - | - |\n| a\\|b | 2 |\n\nend');
+
+    // And the row in the rendered widget should still have exactly 2 cells
+    const tds = view.contentDOM.querySelectorAll('.cm-md-table tbody tr td');
+    expect(tds.length).toBe(2);
+  });
+
+  it('typing \\ in a cell escapes it as \\\\ in the doc (round-trip preserves backslashes)', () => {
+    const content = '| A |\n| - |\n| x |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+    td.textContent = 'a\\b';
+    td.dispatchEvent(new Event('input', { bubbles: true }));
+
+    // The single \ should be doubled in the markdown source so it doesn't
+    // get interpreted as an escape-character on the next reparse.
+    expect(view.state.doc.toString()).toBe('| A |\n| - |\n| a\\\\b |\n\nend');
+  });
+
+  it('escaped pipes in source are displayed as plain | in the cell', () => {
+    // A doc that already contains \| in a cell should render as "a|b" in the widget.
+    const content = '| A |\n| - |\n| a\\|b |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+    expect(td.textContent).toBe('a|b');
+  });
+
+  it('pasting text with newlines strips them so the row is not broken', () => {
+    const content = '| A |\n| - |\n|  |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+
+    // Construct a paste event with clipboardData containing newlines
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: { getData: (type: string) => type === 'text/plain' ? 'one\ntwo\r\nthree' : '' },
+    });
+    // Place a selection inside the cell so the paste handler has a range
+    td.focus();
+    const range = document.createRange();
+    range.selectNodeContents(td);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    td.dispatchEvent(pasteEvent);
+
+    // Newlines must be replaced with spaces — otherwise the markdown row
+    // splits across multiple lines, breaking the table.
+    expect(view.state.doc.toString().includes('\none\n')).toBe(false);
+    expect(view.state.doc.toString()).toContain('one two three');
+  });
+
+  it('pasting text containing | escapes them so the row is not split', () => {
+    const content = '| A |\n| - |\n|  |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: { getData: (type: string) => type === 'text/plain' ? 'a|b|c' : '' },
+    });
+    td.focus();
+    const range = document.createRange();
+    range.selectNodeContents(td);
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    td.dispatchEvent(pasteEvent);
+
+    expect(view.state.doc.toString()).toContain('a\\|b\\|c');
+    // Still a single-column row
+    const tds = view.contentDOM.querySelectorAll('.cm-md-table tbody tr td');
+    expect(tds.length).toBe(1);
+  });
 });
 
 describe('markdownTable - row navigation across edits', () => {

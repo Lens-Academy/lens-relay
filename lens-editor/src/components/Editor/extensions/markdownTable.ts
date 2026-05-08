@@ -21,6 +21,27 @@ interface TableWidgetData {
   nodeTo: number;
 }
 
+// `|` and `\` are syntactically meaningful inside a GFM table cell. Escape
+// them with a backslash when writing user input to the doc; reverse the
+// escape when displaying. Without this, typing or pasting `|` would split
+// the row into a new column on the next reparse.
+function escapeForCell(s: string): string {
+  return s.replace(/[\\|]/g, c => '\\' + c);
+}
+
+function unescapeFromCell(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      out += s[i + 1];
+      i++;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
 function parseAlignments(delimText: string): Align[] {
   const parts = delimText.split('|');
   return parts.slice(1, parts.length - 1).map(cell => {
@@ -70,7 +91,7 @@ class TableWidget extends WidgetType {
       if (!el) return;
       el.dataset.cellFrom = String(cell.from);
       el.dataset.cellTo = String(cell.to);
-      if (document.activeElement !== el) el.textContent = cell.content.trim();
+      if (document.activeElement !== el) el.textContent = unescapeFromCell(cell.content.trim());
     });
 
     this.data.rows.forEach((row, ri) => {
@@ -82,7 +103,7 @@ class TableWidget extends WidgetType {
         if (!el) return;
         el.dataset.cellFrom = String(cell.from);
         el.dataset.cellTo = String(cell.to);
-        if (document.activeElement !== el) el.textContent = cell.content.trim();
+        if (document.activeElement !== el) el.textContent = unescapeFromCell(cell.content.trim());
       });
     });
 
@@ -103,7 +124,7 @@ class TableWidget extends WidgetType {
     this.data.headers.forEach((cell, ci) => {
       const th = document.createElement('th');
       th.contentEditable = 'true';
-      th.textContent = cell.content.trim();
+      th.textContent = unescapeFromCell(cell.content.trim());
       th.style.textAlign = cell.align;
       th.dataset.cellFrom = String(cell.from);
       th.dataset.cellTo = String(cell.to);
@@ -126,7 +147,7 @@ class TableWidget extends WidgetType {
           return;
         }
         td.contentEditable = 'true';
-        td.textContent = cell.content.trim();
+        td.textContent = unescapeFromCell(cell.content.trim());
         td.style.textAlign = cell.align;
         td.dataset.cellFrom = String(cell.from);
         td.dataset.cellTo = String(cell.to);
@@ -143,10 +164,12 @@ class TableWidget extends WidgetType {
     // Stop CM6 from stealing mouse events (which would blur the contenteditable)
     el.addEventListener('mousedown', e => e.stopPropagation());
 
-    // Plain-text paste only
+    // Plain-text paste only; newlines collapse to spaces so the paste
+    // doesn't split the markdown row across multiple lines. Pipes and
+    // backslashes are handled by the input handler's escapeForCell.
     el.addEventListener('paste', e => {
       e.preventDefault();
-      const text = e.clipboardData?.getData('text/plain') ?? '';
+      const text = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r?\n/g, ' ');
       const sel = window.getSelection();
       if (!sel?.rangeCount) return;
       const range = sel.getRangeAt(0);
@@ -156,17 +179,19 @@ class TableWidget extends WidgetType {
       el.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
-    // Sync contenteditable → CM6 document on every change
+    // Sync contenteditable → CM6 document on every change. The DOM holds the
+    // user-visible text; the doc holds the GFM-escaped form. Every dispatch
+    // converts DOM → doc by escaping `|` and `\`.
     el.addEventListener('input', () => {
       const from = parseInt(el.dataset.cellFrom!);
       const to = parseInt(el.dataset.cellTo!);
-      const newContent = el.textContent ?? '';
+      const docContent = escapeForCell(el.textContent ?? '');
       view.dispatch({
-        changes: { from, to, insert: newContent },
+        changes: { from, to, insert: docContent },
       });
       // Optimistically update cellTo so the next input event uses the right range.
       // updateDOM() will overwrite this with the authoritative value after the transaction.
-      el.dataset.cellTo = String(from + newContent.length);
+      el.dataset.cellTo = String(from + docContent.length);
     });
 
     // Keyboard navigation
