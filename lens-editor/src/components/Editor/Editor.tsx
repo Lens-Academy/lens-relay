@@ -17,7 +17,7 @@ import { completionKeymap } from '@codemirror/autocomplete';
 import { lintKeymap, forceLinting } from '@codemirror/lint';
 import { harperLinter, updateHarperFolder } from './extensions/harper';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { Autolink, TaskList } from '@lezer/markdown';
+import { Autolink, Table, TaskList } from '@lezer/markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
 import { tightMarkdownKeymap } from './extensions/tightListEnter';
 import { checklistKeymap } from './extensions/checklistToggle';
@@ -28,6 +28,7 @@ import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment } from './extensions/livePreview';
+import { markdownTableExtension } from './extensions/markdownTable';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
@@ -295,10 +296,11 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         ]),
         markdown({
           base: markdownLanguage,
-          extensions: [WikilinkExtension, TaskList, Autolink],
+          extensions: [WikilinkExtension, TaskList, Autolink, Table],
           addKeymap: false,
         }),
         livePreview(wikilinkContextRef.current),
+        markdownTableExtension(),
         sourceReadOnlyCompartment.of([]),
         emphasisPersistPlugin,
         headingFlashPlugin,
