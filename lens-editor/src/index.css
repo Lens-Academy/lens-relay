@@ -195,9 +195,14 @@
   margin-right: 6px;
 }
 
-/* Inline code. Background uses alpha so the selection layer (CM6 renders it
- * behind content via z-index: -1) stays visible through the gray. A solid
- * color would hide the selection highlight entirely. */
+/* CONVENTION: Backgrounds on editor decorations (.cm-line classes, inline
+ * spans like .cm-inline-code, etc.) MUST use rgba with alpha — never a solid
+ * color. CM6 renders the selection background on .cm-selectionLayer with
+ * z-index: -1, so any opaque background on a sibling/ancestor will hide the
+ * text selection highlight entirely. CM6's own line backgrounds (e.g.
+ * .cm-activeLine) follow the same alpha pattern. */
+
+/* Inline code */
 .cm-inline-code {
   background-color: rgba(243, 244, 246, 0.7);
   border-radius: 3px;
@@ -206,7 +211,7 @@
   font-size: 0.9em;
 }
 
-/* Fenced code blocks. Same reason for the alpha as .cm-inline-code above. */
+/* Fenced code blocks */
 .cm-code-block {
   background-color: rgba(243, 244, 246, 0.7);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
