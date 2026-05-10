@@ -72,6 +72,32 @@ async function createDocumentOnServer(docId: string): Promise<void> {
   }
 }
 
+async function waitForDocumentAccess(docId: string): Promise<void> {
+  const token = getShareToken();
+  if (!token) return;
+
+  const delays = [50, 100, 200, 400, 800, 1200];
+  let lastError = '';
+
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    const response = await fetch('/api/auth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, docId }),
+    });
+
+    if (response.ok) return;
+
+    lastError = await response.text().catch(() => '');
+    const isPendingFolderIndex = response.status === 403 && lastError.includes('document not found');
+    if (!isPendingFolderIndex || attempt === delays.length) {
+      throw new Error(`New document is not accessible: ${response.status} ${lastError}`);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+  }
+}
+
 /**
  * Initialize a content document with an underscore character.
  * This triggers Obsidian to create the file immediately rather than waiting
@@ -188,6 +214,12 @@ export async function createDocument(
 
   debug('createDocument', 'filemeta updated, current entries:',
     Array.from(filemeta.entries()).map(([p, m]) => ({ path: p, id: m.id })));
+
+  // The relay's folder lookup is updated asynchronously from folder metadata.
+  // Wait until share-token auth can see the new filemeta entry before opening
+  // the content doc or navigating to it, otherwise the app may render
+  // "Wrong Folder" for a freshly-created document.
+  await waitForDocumentAccess(fullDocId);
 
   // Step 3: Initialize content document to trigger Obsidian sync
   // This adds an underscore so Obsidian creates the file immediately

@@ -29,7 +29,7 @@ import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment } from './extensions/livePreview';
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
-import { markdownTableExtension } from './extensions/markdownTable';
+import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
@@ -302,7 +302,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         }),
         livePreview(wikilinkContextRef.current),
         codeBlockCopyButton(),
-        markdownTableExtension(),
+        markdownTableCompartment.of(markdownTableExtension()),
         sourceReadOnlyCompartment.of([]),
         emphasisPersistPlugin,
         headingFlashPlugin,

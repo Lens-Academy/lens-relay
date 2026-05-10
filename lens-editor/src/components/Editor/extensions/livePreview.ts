@@ -25,6 +25,7 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin } from './criticmarkup';
+import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
 import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
@@ -914,6 +915,9 @@ export function toggleSourceMode(view: EditorView, sourceMode: boolean) {
       ),
       criticMarkupCompartment.reconfigure(
         sourceMode ? criticMarkupSourcePlugin : criticMarkupPlugin
+      ),
+      markdownTableCompartment.reconfigure(
+        sourceMode ? [] : markdownTableExtension()
       ),
       setFrontmatterEnabled.of(!sourceMode),
     ],

@@ -4,7 +4,8 @@ import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { Table } from '@lezer/markdown';
 import { cursorLineUp } from '@codemirror/commands';
-import { markdownTableExtension, tableEscapeKeymap } from './markdownTable';
+import { livePreview, toggleSourceMode } from './livePreview';
+import { markdownTableCompartment, markdownTableExtension, tableEscapeKeymap } from './markdownTable';
 
 function createEditor(content: string, cursorPos: number) {
   const state = EditorState.create({
@@ -13,6 +14,19 @@ function createEditor(content: string, cursorPos: number) {
     extensions: [
       markdown({ extensions: [Table] }),
       markdownTableExtension(),
+    ],
+  });
+  return new EditorView({ state, parent: document.body });
+}
+
+function createEditorWithModeToggle(content: string, cursorPos: number) {
+  const state = EditorState.create({
+    doc: content,
+    selection: { anchor: cursorPos },
+    extensions: [
+      markdown({ extensions: [Table] }),
+      livePreview(),
+      markdownTableCompartment.of(markdownTableExtension()),
     ],
   });
   return new EditorView({ state, parent: document.body });
@@ -142,6 +156,20 @@ describe('markdownTable - rendering', () => {
     cells.forEach(cell => {
       expect(cell.isContentEditable).toBe(true);
     });
+  });
+
+  it('renders only in live preview mode and shows raw markdown in source mode', () => {
+    const content = '| A | B |\n| - | - |\n| 1 | 2 |\n\nAfter';
+    view = createEditorWithModeToggle(content, content.indexOf('After'));
+
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
+
+    toggleSourceMode(view, true);
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(0);
+    expect(view.contentDOM.textContent).toContain('| A | B |');
+
+    toggleSourceMode(view, false);
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
   });
 });
 

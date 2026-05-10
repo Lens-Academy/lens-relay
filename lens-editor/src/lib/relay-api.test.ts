@@ -45,6 +45,7 @@ describe('relay-api', () => {
     doc = new Y.Doc();
     filemeta = doc.getMap<FileMetadata>('filemeta_v0');
     legacyDocs = doc.getMap<string>('docs');
+    localStorage.clear();
     mockFetch.mockReset();
     // Default: successful server response
     mockFetch.mockResolvedValue({ ok: true });
@@ -121,6 +122,24 @@ describe('relay-api', () => {
 
       await expect(createDocument(doc, '/FailedDoc.md')).rejects.toThrow('Failed to create document on server');
       expect(filemeta.get('/FailedDoc.md')).toBeUndefined();
+    });
+
+    it('waits for share-token auth to see the new document before returning', async () => {
+      localStorage.setItem('lens-share-token', 'share-token');
+      mockFetch
+        .mockResolvedValueOnce({ ok: true })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 403,
+          text: () => Promise.resolve('{"error":"Access denied: document not found"}'),
+        })
+        .mockResolvedValueOnce({ ok: true });
+
+      await createDocument(doc, '/IndexedLater.md');
+
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(mockFetch.mock.calls[1][0]).toBe('/api/auth/token');
+      expect(mockFetch.mock.calls[2][0]).toBe('/api/auth/token');
     });
   });
 

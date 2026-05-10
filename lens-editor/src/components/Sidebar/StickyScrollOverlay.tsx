@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, type MutableRefObject } from 'react';
 import type { TreeApi, NodeApi } from 'react-arborist';
 import type { TreeNode } from '../../lib/tree-utils';
+import { useFileTreeContext } from './FileTreeContext';
 
 const ROW_HEIGHT = 28; // Must match FileTree's rowHeight prop
 const INDENT_SIZE = 16; // Must match FileTree's indent prop
@@ -47,6 +48,7 @@ function findLastDescendantIndex(
 interface ComputedHeader {
   id: string;
   name: string;
+  path: string;
   level: number;
   isOpen: boolean;
   top: number;
@@ -118,6 +120,7 @@ function computeStickyHeaders(
     result.push({
       id: ancestor.id,
       name: ancestor.data.name,
+      path: ancestor.data.path,
       level: ancestor.level,
       isOpen: ancestor.isOpen,
       top,
@@ -135,9 +138,42 @@ interface RowHolder {
   chevron: SVGSVGElement;
   folderIcon: SVGSVGElement;
   nameSpan: HTMLSpanElement;
+  createWrapper: HTMLDivElement;
+  createButton: HTMLButtonElement;
+  createMenu: HTMLDivElement;
+  newFileButton: HTMLButtonElement;
+  newFolderButton: HTMLButtonElement;
 }
 
-function createRowElement(slot: number): RowHolder {
+interface CreateCallbacks {
+  onCreateDocument?: (folderPath: string) => void;
+  onCreateFolder?: (folderPath: string) => void;
+}
+
+function createMenuItem(label: string): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.style.display = 'block';
+  button.style.width = '100%';
+  button.style.padding = '6px 12px';
+  button.style.border = 'none';
+  button.style.background = 'transparent';
+  button.style.color = '#374151';
+  button.style.fontSize = '14px';
+  button.style.lineHeight = '20px';
+  button.style.textAlign = 'left';
+  button.style.cursor = 'pointer';
+  button.addEventListener('mouseenter', () => { button.style.backgroundColor = '#f3f4f6'; });
+  button.addEventListener('mouseleave', () => { button.style.backgroundColor = 'transparent'; });
+  return button;
+}
+
+function createRowElement(
+  slot: number,
+  callbacksRef: MutableRefObject<CreateCallbacks>,
+  openMenuRef: MutableRefObject<HTMLDivElement | null>,
+): RowHolder {
   const root = document.createElement('div');
   root.style.position = 'absolute';
   root.style.left = '0';
@@ -226,16 +262,125 @@ function createRowElement(slot: number): RowHolder {
   nameSpan.style.marginLeft = '4px';
   root.appendChild(nameSpan);
 
-  return { root, indentGuides, chevron, folderIcon, nameSpan };
+  const createWrapper = document.createElement('div');
+  createWrapper.style.marginLeft = 'auto';
+  createWrapper.style.flexShrink = '0';
+  createWrapper.style.display = 'none';
+
+  const createButton = document.createElement('button');
+  createButton.type = 'button';
+  createButton.style.padding = '2px';
+  createButton.style.border = 'none';
+  createButton.style.borderRadius = '4px';
+  createButton.style.background = 'transparent';
+  createButton.style.color = '#9ca3af'; // gray-400
+  createButton.style.cursor = 'pointer';
+  createButton.style.display = 'flex';
+  createButton.style.alignItems = 'center';
+  createButton.style.justifyContent = 'center';
+  createButton.addEventListener('mouseenter', () => {
+    createButton.style.color = '#4b5563';
+    createButton.style.backgroundColor = '#e5e7eb';
+  });
+  createButton.addEventListener('mouseleave', () => {
+    createButton.style.color = '#9ca3af';
+    createButton.style.backgroundColor = 'transparent';
+  });
+  createButton.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const path = root.dataset.nodePath;
+    if (!path) return;
+
+    const existing = openMenuRef.current;
+    if (existing && existing !== createMenu) {
+      existing.style.display = 'none';
+      delete existing.dataset.nodePath;
+    }
+
+    if (createMenu.style.display === 'block') {
+      createMenu.style.display = 'none';
+      delete createMenu.dataset.nodePath;
+      openMenuRef.current = null;
+      return;
+    }
+
+    const rect = createButton.getBoundingClientRect();
+    createMenu.dataset.nodePath = path;
+    createMenu.style.left = `${Math.max(0, rect.right - 140)}px`;
+    createMenu.style.top = `${rect.bottom + 4}px`;
+    createMenu.style.display = 'block';
+    openMenuRef.current = createMenu;
+  });
+
+  const plusIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  plusIcon.setAttribute('viewBox', '0 0 24 24');
+  plusIcon.setAttribute('fill', 'none');
+  plusIcon.setAttribute('stroke', 'currentColor');
+  plusIcon.setAttribute('stroke-width', '2');
+  plusIcon.style.width = '14px';
+  plusIcon.style.height = '14px';
+  const plusPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  plusPath.setAttribute('stroke-linecap', 'round');
+  plusPath.setAttribute('stroke-linejoin', 'round');
+  plusPath.setAttribute('d', 'M12 4v16m8-8H4');
+  plusIcon.appendChild(plusPath);
+  createButton.appendChild(plusIcon);
+  createWrapper.appendChild(createButton);
+  root.appendChild(createWrapper);
+
+  const createMenu = document.createElement('div');
+  createMenu.style.position = 'fixed';
+  createMenu.style.display = 'none';
+  createMenu.style.minWidth = '140px';
+  createMenu.style.padding = '4px 0';
+  createMenu.style.border = '1px solid #e5e7eb';
+  createMenu.style.borderRadius = '4px';
+  createMenu.style.backgroundColor = '#ffffff';
+  createMenu.style.boxShadow = '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)';
+  createMenu.style.zIndex = '50';
+  createMenu.addEventListener('click', e => e.stopPropagation());
+  createMenu.addEventListener('mousedown', e => e.stopPropagation());
+
+  const newFileButton = createMenuItem('New File');
+  newFileButton.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const path = createMenu.dataset.nodePath;
+    if (path) callbacksRef.current.onCreateDocument?.(path);
+    createMenu.style.display = 'none';
+    delete createMenu.dataset.nodePath;
+    openMenuRef.current = null;
+  });
+  createMenu.appendChild(newFileButton);
+
+  const newFolderButton = createMenuItem('New Folder');
+  newFolderButton.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const path = createMenu.dataset.nodePath;
+    if (path) callbacksRef.current.onCreateFolder?.(path);
+    createMenu.style.display = 'none';
+    delete createMenu.dataset.nodePath;
+    openMenuRef.current = null;
+  });
+  createMenu.appendChild(newFolderButton);
+  document.body.appendChild(createMenu);
+
+  return { root, indentGuides, chevron, folderIcon, nameSpan, createWrapper, createButton, createMenu, newFileButton, newFolderButton };
 }
 
 // ── React component (thin shell — all scroll work is imperative) ────
 
 export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
+  const { onCreateDocument, onCreateFolder } = useFileTreeContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<RowHolder[]>([]);
   const prevIdsRef = useRef<string[]>([]);
   const rafRef = useRef<number>(0);
+  const callbacksRef = useRef<CreateCallbacks>({});
+  const openMenuRef = useRef<HTMLDivElement | null>(null);
+  callbacksRef.current = { onCreateDocument, onCreateFolder };
 
   // Build the pre-allocated row pool once on mount
   useEffect(() => {
@@ -244,7 +389,7 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
 
     const rows: RowHolder[] = [];
     for (let i = 0; i < MAX_STICKY_DEPTH; i++) {
-      const holder = createRowElement(i);
+      const holder = createRowElement(i, callbacksRef, openMenuRef);
       container.appendChild(holder.root);
       rows.push(holder);
     }
@@ -254,8 +399,33 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
       // Cleanup: remove all pre-allocated elements
       for (const row of rows) {
         row.root.remove();
+        row.createMenu.remove();
       }
       rowsRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    const closeMenu = (event: MouseEvent) => {
+      const menu = openMenuRef.current;
+      if (!menu) return;
+      const target = event.target as Node;
+      if (menu.contains(target) || rowsRef.current.some(row => row.createWrapper.contains(target))) return;
+      menu.style.display = 'none';
+      delete menu.dataset.nodePath;
+      openMenuRef.current = null;
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !openMenuRef.current) return;
+      openMenuRef.current.style.display = 'none';
+      delete openMenuRef.current.dataset.nodePath;
+      openMenuRef.current = null;
+    };
+    document.addEventListener('mousedown', closeMenu);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeMenu);
+      document.removeEventListener('keydown', closeOnEscape);
     };
   }, []);
 
@@ -307,6 +477,7 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
         row.root.style.transform = `translateY(${h.top}px)`;
         row.root.style.display = 'flex';
         row.root.dataset.nodeId = h.id;
+        row.root.dataset.nodePath = h.path;
 
         // Update indent guides
         for (let g = 0; g < MAX_STICKY_DEPTH; g++) {
@@ -318,10 +489,17 @@ export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
 
         // Name
         row.nameSpan.textContent = h.name;
+        row.createButton.setAttribute('aria-label', `Create in ${h.name}`);
+        row.createWrapper.style.display = callbacksRef.current.onCreateDocument || callbacksRef.current.onCreateFolder ? 'block' : 'none';
+        row.newFileButton.style.display = callbacksRef.current.onCreateDocument ? 'block' : 'none';
+        row.newFolderButton.style.display = callbacksRef.current.onCreateFolder ? 'block' : 'none';
 
         maxBottom = Math.max(maxBottom, h.top + ROW_HEIGHT);
       } else {
         row.root.style.display = 'none';
+        row.createMenu.style.display = 'none';
+        delete row.createMenu.dataset.nodePath;
+        if (openMenuRef.current === row.createMenu) openMenuRef.current = null;
       }
     }
 

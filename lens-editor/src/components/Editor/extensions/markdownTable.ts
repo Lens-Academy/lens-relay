@@ -1,6 +1,6 @@
 import { EditorView, Decoration, WidgetType, keymap } from '@codemirror/view';
 import type { DecorationSet, KeyBinding } from '@codemirror/view';
-import { Prec, StateField, RangeSetBuilder, Transaction } from '@codemirror/state';
+import { Compartment, Prec, StateField, RangeSetBuilder, Transaction } from '@codemirror/state';
 import type { EditorState, Extension } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
@@ -507,6 +507,8 @@ export const tableEscapeKeymap: KeyBinding[] = [{
     return handled;
   },
 }];
+
+export const markdownTableCompartment = new Compartment();
 
 // ---------------------------------------------------------------------------
 // Theme
