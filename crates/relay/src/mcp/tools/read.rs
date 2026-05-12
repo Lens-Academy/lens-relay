@@ -108,12 +108,7 @@ fn format_cat_n(content: &str, offset: usize, limit: usize) -> String {
         .take(limit)
         .map(|(i, line)| {
             let line_num = i + 1; // 1-indexed
-            let truncated = if line.len() > 2000 {
-                &line[..2000]
-            } else {
-                line
-            };
-            format!("{:>6}\t{}", line_num, truncated)
+            format!("{:>6}\t{}", line_num, line)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -168,6 +163,30 @@ mod accepted_view_tests {
             result.contains("[Pending suggestions]"),
             "Should have pending suggestions footer: {}",
             result
+        );
+    }
+
+    #[tokio::test]
+    async fn read_returns_long_line_in_full() {
+        // Regression: per-line byte truncation at 2000 silently cut long lines,
+        // breaking read→edit round-tripping. 3000-char single line must come back whole.
+        let long_line = "x".repeat(3000);
+        let server = build_test_server(&[("/Long.md", "uuid-long", &long_line)]).await;
+        let sid = setup_session_with_read(&server, &format!("{}-uuid-long", RELAY_ID));
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Long.md", "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result.contains(&"x".repeat(3000)),
+            "full 3000-char line should be present; result length = {}",
+            result.len()
         );
     }
 
@@ -240,12 +259,24 @@ mod tests {
     }
 
     #[test]
-    fn format_cat_n_truncates_long_lines() {
+    fn format_cat_n_preserves_long_lines() {
+        // Per-line byte truncation removed — round-tripping long lines through
+        // read→edit must work. Response size is bounded by `limit` (line count).
         let long_line = "x".repeat(3000);
         let result = format_cat_n(&long_line, 0, 2000);
-        // Should truncate to 2000 chars
-        let expected = format!("     1\t{}", "x".repeat(2000));
+        let expected = format!("     1\t{}", "x".repeat(3000));
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn format_cat_n_does_not_panic_on_multibyte_chars() {
+        // Em dash (U+2014, 3 bytes in UTF-8) straddling the old 2000-byte boundary
+        // would have panicked on `&line[..2000]`. Verify no panic and full content.
+        let line = format!("{}\u{2014}{}", "x".repeat(1999), "y".repeat(500));
+        // Bytes: 1999 + 3 + 500 = 2502; emdash bytes occupy positions 1999,2000,2001.
+        let result = format_cat_n(&line, 0, 2000);
+        assert!(result.contains('\u{2014}'), "em dash should be present");
+        assert!(result.ends_with("yyy"), "tail should be preserved");
     }
 
     /// After GC evicts a doc from memory, read should reload it from storage.
