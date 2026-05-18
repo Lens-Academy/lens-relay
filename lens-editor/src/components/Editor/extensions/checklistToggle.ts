@@ -61,5 +61,5 @@ export const toggleChecklist: StateCommand = ({ state, dispatch }) => {
 };
 
 export const checklistKeymap = [
-  { key: 'Mod-l' as const, run: toggleChecklist },
+  { key: 'Mod-Alt-l' as const, run: toggleChecklist },
 ];
