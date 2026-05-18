@@ -255,7 +255,13 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
                     isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'
                   }`}
                   onMouseEnter={() => setSelectedIndex(index)}
-                  onClick={() => handleSelect(item.entry.id)}
+                  onClick={(e) => {
+                    if (e.ctrlKey || e.metaKey) {
+                      handleOpenNewTab(item.entry.id);
+                    } else {
+                      handleSelect(item.entry.id);
+                    }
+                  }}
                   onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }}
                   onAuxClick={(e) => {
                     if (e.button === 1) {
