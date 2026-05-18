@@ -288,7 +288,13 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         // Keymaps
         keymap.of([
           ...closeBracketsKeymap,
-          ...defaultKeymap,
+          ...defaultKeymap.filter(
+            (b) =>
+              b.key !== 'Alt-ArrowLeft' &&
+              b.key !== 'Alt-ArrowRight' &&
+              b.key !== 'Shift-Alt-ArrowLeft' &&
+              b.key !== 'Shift-Alt-ArrowRight',
+          ),
           ...searchKeymap,
           ...yUndoManagerKeymap,
           ...foldKeymap,
