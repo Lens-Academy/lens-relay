@@ -14,3 +14,4 @@ auth.local.env
 __pycache__/
 ~
 .igit
+.DS_Store

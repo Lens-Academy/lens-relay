@@ -14,6 +14,19 @@ interface UseSectionEditorOpts {
    *  two fields (both active=true) won't remount the editor. */
   editKey?: string | null;
   awareness?: Awareness;
+  /** Opt in to the criticmarkup extension stack. Default false so existing
+   *  callers keep their current behavior. */
+  enableCriticMarkup?: boolean;
+  /** Initial suggestion mode for criticmarkup-enabled editors. Ignored when
+   *  enableCriticMarkup is false. */
+  initialSuggestionMode?: boolean;
+  /** Fires when the user clicks an inline comment badge (`cm-comment-badge`)
+   *  in the editor. The argument is the absolute Y.Text position of the
+   *  thread, translated from the section editor's local position. */
+  onCommentBadgeClick?: (absoluteFrom: number) => void;
+  /** Fires when the user invokes the "Add Comment" keyboard shortcut inside
+   *  the section editor (Mod-Shift-m). */
+  onRequestAddComment?: () => void;
 }
 
 /**
@@ -38,7 +51,23 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
     }
     if (!opts.active || !mountRef.current || !optsRef.current.ytext) return;
 
-    const { ytext, sectionFrom, sectionTo, awareness } = optsRef.current;
+    const {
+      ytext,
+      sectionFrom,
+      sectionTo,
+      awareness,
+      enableCriticMarkup,
+      initialSuggestionMode,
+    } = optsRef.current;
+
+    // Read the latest callback at click time so we don't capture a stale
+    // reference if the parent re-binds it.
+    const onCommentBadgeClick = (absoluteFrom: number) => {
+      optsRef.current.onCommentBadgeClick?.(absoluteFrom);
+    };
+    const onRequestAddComment = () => {
+      optsRef.current.onRequestAddComment?.();
+    };
 
     const view = createSectionEditorView({
       ytext: ytext!,
@@ -46,6 +75,10 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       sectionTo,
       awareness,
       parent: mountRef.current,
+      enableCriticMarkup,
+      initialSuggestionMode,
+      onCommentBadgeClick,
+      onRequestAddComment,
     });
 
     viewRef.current = view;
@@ -56,7 +89,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts.active, opts.editKey]);
+  }, [opts.active, opts.editKey, opts.enableCriticMarkup, opts.initialSuggestionMode]);
 
-  return { mountRef };
+  return { mountRef, viewRef };
 }

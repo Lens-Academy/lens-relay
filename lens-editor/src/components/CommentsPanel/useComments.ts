@@ -1,7 +1,7 @@
 // src/components/CommentsPanel/useComments.ts
 import type { EditorView } from '@codemirror/view';
 import { criticMarkupField } from '../Editor/extensions/criticmarkup';
-import { parseThreads, type CommentThread } from '../../lib/criticmarkup-parser';
+import { parse, parseThreads, type CommentThread } from '../../lib/criticmarkup-parser';
 
 /**
  * Hook that extracts comments from the editor and groups them into threads.
@@ -17,5 +17,19 @@ export function useComments(view: EditorView | null): CommentThread[] {
   if (!view) return [];
 
   const ranges = view.state.field(criticMarkupField);
+  return parseThreads(ranges);
+}
+
+/**
+ * Variant for callers that don't have a CodeMirror EditorView available
+ * (e.g. EduEditor's read-only renderers). Parses directly from the source
+ * markdown string.
+ *
+ * Like useComments above, this is a pure function — caller controls
+ * re-rendering by passing freshly-stringified text.
+ */
+export function useCommentsFromText(text: string | null): CommentThread[] {
+  if (!text) return [];
+  const ranges = parse(text);
   return parseThreads(ranges);
 }
