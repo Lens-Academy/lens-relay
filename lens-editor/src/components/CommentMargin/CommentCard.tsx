@@ -1,5 +1,6 @@
 import { useState, forwardRef } from 'react';
 import type { CommentThread } from '../../lib/criticmarkup-parser';
+import { decodeCommentContent } from '../../lib/criticmarkup-parser';
 import { AddCommentForm } from '../CommentsPanel/AddCommentForm';
 import { formatTimestamp } from '../../lib/format-timestamp';
 
@@ -21,6 +22,7 @@ export const CommentCard = forwardRef<HTMLDivElement, CommentCardProps>(
     const replyCount = replies.length;
     const author = rootComment.metadata?.author || 'Anonymous';
     const timestamp = rootComment.metadata?.timestamp;
+    const rootText = decodeCommentContent(rootComment.content);
 
     const handleReply = (content: string) => {
       onReply(content);
@@ -37,49 +39,59 @@ export const CommentCard = forwardRef<HTMLDivElement, CommentCardProps>(
           onFocus();
         }}
       >
-        <div className="px-3 py-2">
+        <div className="px-3 pt-2 pb-2">
           <div className="flex items-center gap-2 mb-1">
-            <span className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-xs font-semibold border ${focused ? 'bg-blue-700 text-white border-blue-700' : 'bg-blue-50 text-blue-600 border-blue-200'}`}>
+            <span
+              className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[11px] font-semibold ${
+                focused
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-blue-50 text-blue-700 ring-1 ring-blue-200'
+              }`}
+            >
               {badgeNumber}
             </span>
             <span className="text-sm font-medium text-gray-900">{author}</span>
             {timestamp && (
-              <span className="text-xs text-gray-400">{formatTimestamp(timestamp)}</span>
+              <span className="text-[11px] text-gray-400">{formatTimestamp(timestamp)}</span>
+            )}
+            {!showReplyForm && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowReplyForm(true);
+                }}
+                className="ml-auto text-[11px] text-blue-600 hover:text-blue-800 font-medium"
+              >
+                Reply
+              </button>
             )}
           </div>
-          <p className="text-sm text-gray-700 whitespace-pre-wrap">{rootComment.content}</p>
+          <p className="text-sm text-gray-700 whitespace-pre-wrap leading-snug">{rootText}</p>
         </div>
 
-        {/* Replies */}
-        {replies.map((reply, index) => (
-          <div key={`reply-${reply.from}-${index}`} className="px-3 py-1 ml-[26px] border-t border-gray-100">
-            <div className="flex items-center gap-2 mb-0.5">
-              <span className="text-xs font-medium text-gray-700">{reply.metadata?.author || 'Anonymous'}</span>
-              {reply.metadata?.timestamp && (
-                <span className="text-xs text-gray-400">{formatTimestamp(reply.metadata.timestamp)}</span>
-              )}
+        {/* Replies — only render the divider + container when there's at least one. */}
+        {replyCount > 0 && (
+          <div className="px-3 pb-2 pt-1 border-t border-gray-100">
+            <div className="border-l-2 border-gray-100 pl-3 ml-1 space-y-2">
+              {replies.map((reply, index) => (
+                <div key={`reply-${reply.from}-${index}`}>
+                  <div className="flex items-baseline gap-2 mb-0.5">
+                    <span className="text-[12px] font-medium text-gray-800">{reply.metadata?.author || 'Anonymous'}</span>
+                    {reply.metadata?.timestamp && (
+                      <span className="text-[10px] text-gray-400">{formatTimestamp(reply.metadata.timestamp)}</span>
+                    )}
+                  </div>
+                  <p className="text-[13px] text-gray-700 whitespace-pre-wrap leading-snug">
+                    {decodeCommentContent(reply.content)}
+                  </p>
+                </div>
+              ))}
             </div>
-            <p className="text-sm text-gray-600 whitespace-pre-wrap">{reply.content}</p>
-          </div>
-        ))}
-
-        {/* Footer: reply count + reply button */}
-        <div className="px-3 py-1.5 flex items-center gap-2 border-t border-gray-100">
-          {replyCount > 0 && (
-            <span className="text-xs text-gray-500">
+            <div className="mt-1.5 text-[11px] text-gray-500">
               {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
-            </span>
-          )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowReplyForm(true);
-            }}
-            className="text-xs text-blue-600 hover:text-blue-800"
-          >
-            Reply
-          </button>
-        </div>
+            </div>
+          </div>
+        )}
 
         {showReplyForm && (
           <div className="border-t border-gray-100">

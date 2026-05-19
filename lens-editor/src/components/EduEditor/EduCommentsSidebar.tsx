@@ -262,23 +262,9 @@ function CommentThreadCard({
         </div>
       </div>
 
-      <div className="px-3 pb-2 pt-1 flex items-center gap-3 ml-9">
-        {replies.length > 0 && (
-          <span className="text-xs text-gray-500">
-            {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
-          </span>
-        )}
-        <button
-          onClick={() => setShowReplyForm(true)}
-          className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-        >
-          Reply
-        </button>
-      </div>
-
       {replies.length > 0 && (
         <div
-          className="ml-9 mr-3 mb-2 border-l-2 pl-3"
+          className="ml-9 mr-3 mb-2 mt-1 border-l-2 pl-3"
           style={{ borderColor: CARD_BORDER }}
         >
           {replies.map((reply, idx) => (
@@ -288,6 +274,22 @@ function CommentThreadCard({
           ))}
         </div>
       )}
+
+      <div className="px-3 pb-2 pt-1 flex items-center gap-3 ml-9">
+        {replies.length > 0 && (
+          <span className="text-[11px] text-gray-500">
+            {replies.length} {replies.length === 1 ? 'reply' : 'replies'}
+          </span>
+        )}
+        {!showReplyForm && (
+          <button
+            onClick={() => setShowReplyForm(true)}
+            className="text-[11px] text-blue-600 hover:text-blue-800 font-medium"
+          >
+            Reply
+          </button>
+        )}
+      </div>
 
       {showReplyForm && (
         <div

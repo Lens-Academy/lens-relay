@@ -21,8 +21,14 @@ interface CommentMarginProps {
   positionMapper?: PositionMapper;
 }
 
-const DEFAULT_CARD_HEIGHT = 80;
-const CARD_GAP = 4;
+// Initial height estimate for cards that haven't been measured yet. Sized
+// generously so the first paint rarely overlaps; the ResizeObserver then
+// dials in the real height per-card. Multi-reply threads still settle after
+// the first measurement, but the initial frame looks clean.
+const DEFAULT_CARD_HEIGHT = 100;
+// Vertical gap between cards. Bigger than the previous 4px so adjacent cards
+// don't visually touch and the focused outline reads cleanly.
+const CARD_GAP = 10;
 
 export function CommentMargin({
   view,
