@@ -7,6 +7,7 @@ data-local-*
 data
 relay.local.toml
 relay.local-r2.toml
+!relay.local-r2.toml
 relay.staging.toml
 relay-binary
 fly.toml

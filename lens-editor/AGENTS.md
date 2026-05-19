@@ -37,7 +37,7 @@ npm run relay:start
 npm run dev:local
 ```
 
-In-memory storage — starts fresh every time. Setup runs automatically after the server is ready. Uses test IDs (`local-test-folder`, `local-welcome`, etc.) with no interference with production.
+In-memory storage — starts fresh every time. Setup runs automatically after the server is ready. Uses test IDs (`local-test-folder`, `local-welcome`, etc.) with no interference with production. This is useful for quick isolated testing, but it has known gaps compared with production-shaped data; for workflows involving real folder metadata, blobs, backlinks, or other production-like behavior, use the Lens Relay dev R2 bucket instead. Developers can request dev R2 access from Luc Brinkman.
 
 ### 3. Local with R2 (copy of production data)
 

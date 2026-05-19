@@ -9,6 +9,7 @@ node_modules
 CLAUDE.local.md
 *.local
 *.local-r2.toml
+!crates/relay.local-r2.toml
 auth.local.env
 .env
 __pycache__/

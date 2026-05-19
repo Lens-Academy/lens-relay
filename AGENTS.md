@@ -117,6 +117,7 @@ cd lens-editor && npm run dev:local:r2
 ```
 
 Use `dev:local:r2` with `relay:start:r2` — see `lens-editor/AGENTS.md` for full setup.
+Local filesystem storage is useful for quick isolated testing, but it has known gaps compared with production-shaped data. For workflows involving real folder metadata, blobs, backlinks, or other production-like behavior, test against the Lens Relay dev R2 bucket instead. Developers can request dev R2 access from Luc Brinkman.
 
 See `lens-editor/AGENTS.md` for Y.Doc structure documentation and editor-specific development guidance.
 
