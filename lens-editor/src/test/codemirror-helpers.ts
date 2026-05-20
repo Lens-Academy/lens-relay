@@ -228,10 +228,10 @@ export function pressEnter(view: EditorView): boolean {
 }
 
 /**
- * Simulate pressing Ctrl+L (checklist toggle) through the checklist keymap.
+ * Simulate pressing Ctrl+Shift+L (checklist toggle) through the checklist keymap.
  */
-export function pressCtrlL(view: EditorView): boolean {
-  const binding = checklistKeymap.find((k) => k.key === 'Mod-l');
+export function pressCtrlShiftL(view: EditorView): boolean {
+  const binding = checklistKeymap.find((k) => k.key === 'Mod-Shift-l');
   return binding?.run?.(view) ?? false;
 }
 

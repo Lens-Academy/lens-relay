@@ -38,12 +38,12 @@ function createChecklistEditor(
   };
 }
 
-function pressCtrlL(view: EditorView): boolean {
-  const binding = checklistKeymap.find((k) => k.key === 'Mod-l');
+function pressCtrlShiftL(view: EditorView): boolean {
+  const binding = checklistKeymap.find((k) => k.key === 'Mod-Shift-l');
   return binding?.run?.(view) ?? false;
 }
 
-describe('Checklist Toggle (Ctrl+L)', () => {
+describe('Checklist Toggle (Ctrl+Shift+L)', () => {
   let cleanup: (() => void) | undefined;
 
   afterEach(() => {
@@ -55,7 +55,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 5);
     cleanup = c;
 
-    const result = pressCtrlL(view);
+    const result = pressCtrlShiftL(view);
 
     expect(result).toBe(true);
     expect(view.state.doc.toString()).toBe('- [ ] hello world');
@@ -66,7 +66,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 5);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('- [ ] some item');
   });
@@ -76,7 +76,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 5);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('* [ ] some item');
   });
@@ -86,7 +86,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 5);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('+ [ ] some item');
   });
@@ -96,7 +96,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 5);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('1. [ ] some item');
   });
@@ -106,7 +106,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 10);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('- [x] todo item');
   });
@@ -116,7 +116,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 10);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('- [ ] done item');
   });
@@ -126,7 +126,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 5);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('  - [ ] hello world');
   });
@@ -136,7 +136,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 8);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('  - [ ] nested item');
   });
@@ -146,7 +146,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 15);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('    - [x] deeply nested');
   });
@@ -156,7 +156,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 10);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('* [x] asterisk todo');
   });
@@ -166,7 +166,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 10);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('1. [x] ordered todo');
   });
@@ -176,7 +176,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 10);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('1. [ ] ordered done');
   });
@@ -186,7 +186,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 3);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     // After toggle: "- [x] hello" — cursor at end (11)
     expect(view.state.selection.main.head).toBe('- [x] hello'.length);
@@ -197,7 +197,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 0);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('- [ ] ');
   });
@@ -207,7 +207,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 12); // middle of "line two"
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('line one\n- [ ] line two\nline three');
   });
@@ -217,7 +217,7 @@ describe('Checklist Toggle (Ctrl+L)', () => {
     const { view, cleanup: c } = createChecklistEditor(doc, 5);
     cleanup = c;
 
-    pressCtrlL(view);
+    pressCtrlShiftL(view);
 
     expect(view.state.doc.toString()).toBe('12. [ ] some item');
   });
