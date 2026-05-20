@@ -72,6 +72,7 @@ function scheduleUpload(
       replacePlaceholder(view, placeholder, `![[${embedPath}]]`);
     })
     .catch((err: Error) => {
+      console.error('[imagePaste] upload failed', err);
       replacePlaceholder(view, placeholder, `<!-- upload failed: ${err.message} -->`);
     });
 }

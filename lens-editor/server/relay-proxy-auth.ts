@@ -48,8 +48,16 @@ export function checkProxyAccess(
     return { allowed: true };
   }
 
-  // GET /f/{compoundDocId}/upload-url — allowed for edit role (relay server enforces ACL)
-  if (method === 'GET' && /^\/f\/[^/]+\/upload-url$/.test(path)) {
+  // POST /f/{compoundDocId}/upload-url — allowed for edit role (relay server enforces ACL)
+  if (method === 'POST' && /^\/f\/[^/]+\/upload-url$/.test(path)) {
+    if (auth.payload.role === 'view') {
+      return { allowed: false, reason: 'Upload requires edit access' };
+    }
+    return { allowed: true };
+  }
+
+  // PUT /f/{compoundDocId}/upload — raw blob upload (local dev, no-auth relay)
+  if (method === 'PUT' && /^\/f\/[^/]+\/upload$/.test(path)) {
     if (auth.payload.role === 'view') {
       return { allowed: false, reason: 'Upload requires edit access' };
     }

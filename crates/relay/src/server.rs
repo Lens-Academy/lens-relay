@@ -308,7 +308,9 @@ struct FileUploadQueryParams {
 
 #[derive(Deserialize)]
 struct FileUploadParams {
-    token: String,
+    token: Option<String>,
+    // Used in local dev (no auth) instead of a signed file token
+    hash: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -4828,12 +4830,54 @@ async fn handle_file_upload_url(
 
     let token = get_token_from_header(auth_header);
 
+    // Local dev fast path: no authenticator configured → accept any upload, validate by hash only.
+    // Mirrors the unauthenticated blob-read route registered when authenticator.is_none().
+    if server_state.authenticator.is_none() {
+        let hash = params.hash.ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                anyhow!("hash query parameter required"),
+            )
+        })?;
+        if !validate_file_hash(&hash) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                anyhow!("Invalid file hash format"),
+            ));
+        }
+        let store = server_state.store.as_ref().ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                anyhow!("No store configured for file uploads"),
+            )
+        })?;
+        let key = format!("files/{}/{}", doc_id, hash);
+        let upload_url = store
+            .generate_upload_url(&key, params.content_type.as_deref(), params.content_length)
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?;
+        let Some(url) = upload_url else {
+            return Err(AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                anyhow!("Failed to generate upload URL"),
+            ));
+        };
+        // For local filesystem store the URL is a relative path (/f/{doc}/upload).
+        // Return it as-is so the caller can route it through their own proxy without
+        // constructing an absolute http:// URL (which would cause mixed-content issues
+        // when the client is on https).
+        let response_url = if url.starts_with("http") {
+            url
+        } else {
+            format!("{}?hash={}", url, hash)
+        };
+        return Ok(Json(FileUploadUrlResponse {
+            upload_url: response_url,
+        }));
+    }
+
     let Some(authenticator) = &server_state.authenticator else {
-        return Err(AppError::auth(
-            StatusCode::UNAUTHORIZED,
-            anyhow!("Authentication is required for file operations"),
-            "no_authenticator",
-        ));
+        unreachable!("authenticator checked above")
     };
 
     let Some(token) = token.as_deref() else {
@@ -7468,7 +7512,14 @@ async fn handle_file_upload(
 ) -> Result<StatusCode, AppError> {
     tracing::info!(doc_id = %doc_id, "Handling file upload");
 
-    let permission = validate_file_token(&server_state, &params.token, &doc_id)?;
+    let token_str = params.token.as_deref().ok_or_else(|| {
+        AppError::auth(
+            StatusCode::UNAUTHORIZED,
+            anyhow!("No token provided"),
+            "missing_token",
+        )
+    })?;
+    let permission = validate_file_token(&server_state, token_str, &doc_id)?;
 
     if let Permission::File(file_permission) = permission {
         // Only allow Full permission to upload
@@ -7593,7 +7644,48 @@ async fn handle_file_upload_raw(
 ) -> Result<StatusCode, AppError> {
     tracing::info!(doc_id = %doc_id, "Handling raw file upload");
 
-    let permission = validate_file_token(&server_state, &params.token, &doc_id)?;
+    // Local dev fast path: no authenticator → validate by hash only (no token required).
+    if server_state.authenticator.is_none() {
+        let hash = params.hash.as_deref().ok_or_else(|| {
+            AppError::new(StatusCode::BAD_REQUEST, anyhow!("hash query parameter required"))
+        })?;
+        if !validate_file_hash(hash) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                anyhow!("Invalid file hash format"),
+            ));
+        }
+        let store = server_state.store.as_ref().ok_or_else(|| {
+            AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                anyhow!("No store configured for file uploads"),
+            )
+        })?;
+        let mut hasher = Sha256::new();
+        hasher.update(&body);
+        let actual_hash = format!("{:x}", hasher.finalize());
+        if actual_hash != hash {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                anyhow!("File hash mismatch: expected {}, got {}", hash, actual_hash),
+            ));
+        }
+        let key = format!("files/{}/{}", doc_id, hash);
+        store
+            .set(&key, body.to_vec())
+            .await
+            .map_err(|e| AppError::new(StatusCode::INTERNAL_SERVER_ERROR, e.into()))?;
+        return Ok(StatusCode::OK);
+    }
+
+    let token_str = params.token.as_deref().ok_or_else(|| {
+        AppError::auth(
+            StatusCode::UNAUTHORIZED,
+            anyhow!("No token provided"),
+            "missing_token",
+        )
+    })?;
+    let permission = validate_file_token(&server_state, token_str, &doc_id)?;
 
     if let Permission::File(file_permission) = permission {
         // Only allow Full permission to upload

@@ -86,32 +86,55 @@ export async function uploadAttachment({
   const compoundDocId = `${RELAY_ID}-${id}`;
 
   // Create the blob document on the server before writing filemeta
+  console.debug('[uploadAttachment] creating doc', compoundDocId);
   await createDocumentOnServer(compoundDocId);
+  console.debug('[uploadAttachment] doc created');
 
-  // Get a pre-signed upload URL for the blob
+  // Get a pre-signed upload URL for the blob (scoped to the attachment doc, not the folder doc)
   const urlParams = new URLSearchParams({
     hash,
     content_type: file.type,
     content_length: String(file.size),
   });
-  const compoundFolderDocId = `${RELAY_ID}-${folderId}`;
-  const uploadUrlRes = await fetch(
-    `/api/relay/f/${compoundFolderDocId}/upload-url?${urlParams}`,
-    { headers: relayHeaders() },
-  );
+  const uploadUrlPath = `/api/relay/f/${compoundDocId}/upload-url?${urlParams}`;
+  console.debug('[uploadAttachment] requesting upload URL', uploadUrlPath);
+  const uploadUrlRes = await fetch(uploadUrlPath, { method: 'POST', headers: relayHeaders() });
   if (!uploadUrlRes.ok) {
-    throw new Error(`Failed to get upload URL: ${uploadUrlRes.status} ${uploadUrlRes.statusText}`);
+    const body = await uploadUrlRes.text().catch(() => '(could not read body)');
+    console.error('[uploadAttachment] upload-url failed', {
+      status: uploadUrlRes.status,
+      url: uploadUrlPath,
+      body,
+    });
+    throw new Error(
+      `Failed to get upload URL: ${uploadUrlRes.status} — ${body || uploadUrlRes.statusText}`,
+    );
   }
-  const { uploadUrl } = await uploadUrlRes.json() as { uploadUrl: string };
+  const uploadUrlJson = await uploadUrlRes.json() as { uploadUrl: string };
+  const uploadUrl = uploadUrlJson.uploadUrl;
+  console.debug('[uploadAttachment] upload URL received', uploadUrl);
 
-  // Upload the blob to the pre-signed URL
-  const putRes = await fetch(uploadUrl, {
+  // Upload the blob to the pre-signed URL.
+  // For local dev the relay returns a relative path (/f/{doc}/upload?hash=...) to avoid
+  // mixed-content issues when the Vite dev server runs on https. Route it through the proxy.
+  const absoluteUploadUrl = uploadUrl.startsWith('http')
+    ? uploadUrl
+    : `/api/relay${uploadUrl}`;
+  const uploadHeaders: Record<string, string> = { 'Content-Type': file.type };
+  if (!uploadUrl.startsWith('http')) {
+    Object.assign(uploadHeaders, relayHeaders());
+  }
+
+  console.debug('[uploadAttachment] uploading blob to', absoluteUploadUrl.split('?')[0]);
+  const putRes = await fetch(absoluteUploadUrl, {
     method: 'PUT',
-    headers: { 'Content-Type': file.type },
+    headers: uploadHeaders,
     body: file,
   });
   if (!putRes.ok) {
-    throw new Error(`Blob upload failed: ${putRes.status} ${putRes.statusText}`);
+    const body = await putRes.text().catch(() => '(could not read body)');
+    console.error('[uploadAttachment] blob PUT failed', { status: putRes.status, body });
+    throw new Error(`Blob upload failed: ${putRes.status} — ${body || putRes.statusText}`);
   }
 
   // Register the attachment in the folder doc's Y.Maps
