@@ -30,6 +30,9 @@ import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontm
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateEffect } from '@codemirror/state';
+import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
+
+const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 
 // CSS classes for heading sizes
 const HEADING_CLASSES: Record<string, string> = {
@@ -63,6 +66,20 @@ export interface WikilinkContext {
 
 // Module-scoped context (set by livePreview factory)
 let wikilinkContext: WikilinkContext | null = null;
+
+/**
+ * Context for resolving ![[image]] embeds — set via updateImageEmbedContext()
+ */
+export interface ImageEmbedContext {
+  metadata: FolderMetadata;
+  relayId: string;
+}
+
+let imageEmbedContext: ImageEmbedContext | null = null;
+
+export function updateImageEmbedContext(context: ImageEmbedContext | undefined) {
+  imageEmbedContext = context ?? null;
+}
 
 /**
  * StateEffect dispatched when wikilink metadata changes (e.g., file renames).
@@ -183,8 +200,11 @@ class ImageWidget extends WidgetType {
     const container = document.createElement('span');
     container.className = 'cm-image-widget';
 
-    // Security: only allow http/https URLs
-    if (!/^https?:\/\//i.test(this.url)) {
+    // Security: only allow http/https URLs and trusted same-origin relay blob endpoints
+    const isTrustedUrl = /^https?:\/\//i.test(this.url)
+      || this.url.startsWith('/api/relay/')
+      || this.url.startsWith('/api/blob');
+    if (!isTrustedUrl) {
       container.classList.add('cm-image-error');
       const fallback = document.createElement('span');
       fallback.className = 'cm-image-fallback';
@@ -227,6 +247,108 @@ class ImageWidget extends WidgetType {
 
   eq(other: ImageWidget): boolean {
     return this.alt === other.alt && this.url === other.url;
+  }
+}
+
+/**
+ * ImageEmbedWidget - Renders ![[path]] wikilink embeds as inline image previews.
+ * Resolves path against imageEmbedContext metadata, then fetches the blob URL.
+ */
+class ImageEmbedWidget extends WidgetType {
+  private readonly embedPath: string;
+  private readonly docId: string | undefined;
+  private readonly hash: string | undefined;
+  private readonly view: EditorView;
+
+  constructor(embedPath: string, docId: string | undefined, hash: string | undefined, view: EditorView) {
+    super();
+    this.embedPath = embedPath;
+    this.docId = docId;
+    this.hash = hash;
+    this.view = view;
+  }
+
+  get estimatedHeight(): number { return 150; }
+
+  toDOM(): HTMLElement {
+    const container = document.createElement('span');
+    container.className = 'cm-image-widget';
+
+    const filename = this.embedPath.split('/').pop() || this.embedPath;
+    const placeholder = document.createElement('span');
+    placeholder.className = 'cm-image-loading';
+    placeholder.textContent = filename;
+    container.appendChild(placeholder);
+
+    if (!this.docId || !this.hash) {
+      placeholder.className = 'cm-image-fallback';
+      container.classList.add('cm-image-error');
+      return container;
+    }
+
+    this.loadImage(container, placeholder, filename).catch(() => { /* errors handled inside */ });
+    return container;
+  }
+
+  private async loadImage(container: HTMLElement, placeholder: HTMLElement, filename: string): Promise<void> {
+    let blobUrl: string;
+    try {
+      blobUrl = await this.resolveBlobUrl();
+    } catch {
+      placeholder.remove();
+      container.classList.add('cm-image-error');
+      const fallback = document.createElement('span');
+      fallback.className = 'cm-image-fallback';
+      fallback.textContent = `Failed to load: ${filename}`;
+      container.appendChild(fallback);
+      this.view.requestMeasure();
+      return;
+    }
+
+    const img = document.createElement('img');
+    img.className = 'cm-image-preview';
+    img.alt = filename;
+    img.style.display = 'none';
+
+    img.onload = () => {
+      placeholder.remove();
+      img.style.display = '';
+      this.view.requestMeasure();
+    };
+    img.onerror = () => {
+      placeholder.remove();
+      img.remove();
+      container.classList.add('cm-image-error');
+      const fallback = document.createElement('span');
+      fallback.className = 'cm-image-fallback';
+      fallback.textContent = `Image not found: ${filename}`;
+      container.appendChild(fallback);
+      this.view.requestMeasure();
+    };
+
+    container.appendChild(img);
+    img.src = blobUrl;
+  }
+
+  private async resolveBlobUrl(): Promise<string> {
+    const relayId = imageEmbedContext?.relayId ?? '';
+    const compoundDocId = `${relayId}-${this.docId}`;
+
+    if (USE_LOCAL_RELAY) {
+      return `/api/relay/blob/${compoundDocId}/${this.hash}`;
+    }
+
+    const shareToken = localStorage.getItem('lens-share-token') ?? '';
+    const dlRes = await fetch(`/api/relay/f/${compoundDocId}/download-url?hash=${this.hash}`, {
+      headers: { 'X-Share-Token': shareToken },
+    });
+    if (!dlRes.ok) throw new Error(`Download URL failed: ${dlRes.status}`);
+    const { downloadUrl } = await dlRes.json() as { downloadUrl: string };
+    return `/api/blob-fetch?url=${encodeURIComponent(downloadUrl)}`;
+  }
+
+  eq(other: ImageEmbedWidget): boolean {
+    return this.embedPath === other.embedPath && this.hash === other.hash;
   }
 }
 
@@ -478,6 +600,23 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 const raw = view.state.doc.sliceString(contentNode.from, contentNode.to);
                 const pipeIndex = raw.indexOf('|');
                 const content = pipeIndex !== -1 ? raw.substring(0, pipeIndex) : raw;
+
+                // Detect ![[...]] image embed by checking for leading '!'
+                const isImageEmbed = view.state.doc.sliceString(node.from, node.from + 1) === '!';
+                if (isImageEmbed) {
+                  const normalizedPath = content.startsWith('/') ? content : `/${content}`;
+                  const meta = imageEmbedContext?.metadata[normalizedPath];
+                  const docId = meta?.type === 'image' ? meta.id : undefined;
+                  const hash = meta?.type === 'image' ? meta.hash : undefined;
+                  decorations.push({
+                    from: node.from,
+                    to: node.to,
+                    deco: Decoration.replace({
+                      widget: new ImageEmbedWidget(content, docId, hash, view),
+                    }),
+                  });
+                  return false;
+                }
 
                 const resolved = wikilinkContext ? wikilinkContext.isResolved(content) : true;
                 decorations.push({

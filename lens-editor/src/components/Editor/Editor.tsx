@@ -27,7 +27,7 @@ import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
-import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment } from './extensions/livePreview';
+import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment, updateImageEmbedContext } from './extensions/livePreview';
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
 import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
@@ -204,6 +204,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // This is separate from the editor creation effect to avoid recreating the editor
   useEffect(() => {
     updateWikilinkContext(wikilinkContextRef.current);
+    updateImageEmbedContext(metadata ? { metadata, relayId: RELAY_ID } : undefined);
     viewRef.current?.dispatch({
       effects: wikilinkMetadataChanged.of(undefined),
     });
