@@ -1,7 +1,7 @@
 /**
- * Checklist Toggle (Ctrl+L)
+ * Checklist Toggle (Ctrl+Shift+L)
  *
- * Obsidian-style checklist toggling: pressing Ctrl+L cycles through
+ * Obsidian-style checklist toggling: pressing Ctrl+Shift+L cycles through
  * plain text → unchecked checkbox → checked checkbox → unchecked.
  * Handles `-`, `*`, `+` markers and ordered lists (`1.`).
  * Preserves leading indentation. Works with multiple cursors.
@@ -61,5 +61,5 @@ export const toggleChecklist: StateCommand = ({ state, dispatch }) => {
 };
 
 export const checklistKeymap = [
-  { key: 'Mod-l' as const, run: toggleChecklist },
+  { key: 'Mod-Shift-l' as const, run: toggleChecklist },
 ];
