@@ -28,7 +28,7 @@ import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
-import { RELAY_ID, PANEL_CONFIG } from '../../App';
+import { RELAY_ID, PANEL_CONFIG, FOLDERS } from '../../App';
 
 /**
  * Editor area component that lives INSIDE the RelayProvider key boundary.
@@ -38,7 +38,7 @@ import { RELAY_ID, PANEL_CONFIG } from '../../App';
 export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
-  const { metadata, onNavigate } = useNavigation();
+  const { metadata, onNavigate, folderDocs } = useNavigation();
   const { canWrite, canEdit } = useAuth();
   const { manager, headerStage } = useSidebar();
   const hasDiscussion = useHasDiscussion();
@@ -53,6 +53,26 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const uuid = currentDocId.slice(RELAY_ID.length + 1);
     return findPathByUuid(uuid, metadata) ?? undefined;
   }, [currentDocId, metadata]);
+
+  // Stable refs for upload getters (avoids stale closures in imagePasteExtension)
+  const folderDocsRef = useRef<Map<string, import('yjs').Doc>>(new Map());
+  folderDocsRef.current = folderDocs;
+  const currentFilePathForUploadRef = useRef<string | undefined>(undefined);
+  currentFilePathForUploadRef.current = currentFilePath;
+
+  const getFolderDoc = useCallback(() => {
+    const fp = currentFilePathForUploadRef.current;
+    if (!fp) return null;
+    const folderName = fp.split('/').filter(Boolean)[0];
+    return folderName ? (folderDocsRef.current.get(folderName) ?? null) : null;
+  }, []);
+
+  const getFolderId = useCallback(() => {
+    const fp = currentFilePathForUploadRef.current;
+    if (!fp) return null;
+    const folderName = fp.split('/').filter(Boolean)[0];
+    return folderName ? (FOLDERS.find(f => f.name === folderName)?.id ?? null) : null;
+  }, []);
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -249,6 +269,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onRequestAddComment={handleRequestAddComment}
               metadata={metadata}
               currentFilePath={currentFilePath}
+              getFolderDoc={getFolderDoc}
+              getFolderId={getFolderId}
             />
           </div>
         </div>

@@ -43,6 +43,7 @@ import { resolvePageName } from '../../lib/document-resolver';
 import { openDocInNewTab } from '../../lib/url-utils';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
+import { imagePasteExtension } from './extensions/imagePaste';
 
 // List indentation keymap - Tab/Shift+Tab to indent/de-indent
 const listIndentKeymap = keymap.of([
@@ -60,6 +61,8 @@ interface EditorProps {
   onRequestAddComment?: () => void;
   metadata?: FolderMetadata;
   currentFilePath?: string;
+  getFolderDoc?: () => Y.Doc | null;
+  getFolderId?: () => string | null;
 }
 
 /**
@@ -100,7 +103,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, metadata, currentFilePath }: EditorProps) {
+export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, metadata, currentFilePath, getFolderDoc, getFolderId }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -322,6 +325,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         remoteCursorTheme,
         criticMarkupExtension({ canAcceptReject }),
         harperLinter,
+        ...(!readOnly && getFolderDoc && getFolderId
+          ? [imagePasteExtension({ getFolderDoc, getFolderId, getCurrentFilePath })]
+          : []),
         Prec.highest(keymap.of([{
           key: 'Mod-Shift-m',
           run: () => {
