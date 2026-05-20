@@ -17,7 +17,7 @@ function getShareToken(): string | null {
 }
 
 /** Build headers that include the share token for proxy auth. */
-function relayHeaders(extra?: Record<string, string>): Record<string, string> {
+export function relayHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { ...extra };
   const token = getShareToken();
   if (token) {
@@ -41,7 +41,7 @@ function cloneFileMetadata(meta: FileMetadata | any): FileMetadata {
 }
 
 /** UUID v4 generator that works in insecure contexts (plain HTTP). */
-function generateUUID(): string {
+export function generateUUID(): string {
   if (typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
@@ -60,7 +60,7 @@ function generateUUID(): string {
  * This must be called BEFORE adding to filemeta, otherwise the document
  * won't be accessible (auth endpoint returns 404 for non-existent docs).
  */
-async function createDocumentOnServer(docId: string): Promise<void> {
+export async function createDocumentOnServer(docId: string): Promise<void> {
   const response = await fetch('/api/relay/doc/new', {
     method: 'POST',
     headers: relayHeaders({ 'Content-Type': 'application/json' }),
