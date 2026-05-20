@@ -30,6 +30,8 @@ Clients:
   - lens-editor (web-based editor, React + CodeMirror)
 ```
 
+See `lens-editor/AGENTS.md` for Y.Doc structure documentation and editor-specific development guidance.
+
 ### Monorepo Layout
 
 ```
@@ -60,66 +62,64 @@ docs/                 # Operational documentation
 - **Relay ID:** `cb696037-0f72-4e93-8717-4e433129d789`
 - **Relay watchdog:** Detects when `relay-server` is running but unresponsive and automatically restarts it; see `docs/relay-watchdog.md`.
 
-## Running relay-server
-
-### With Docker (production)
-
-Production uses `docker-compose.prod.yaml` to manage all services (relay-server, lens-editor, cloudflared, relay-git-sync):
+## Running The Stack
+### Production
 
 ```bash
 docker compose -f docker-compose.prod.yaml build
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
+Production uses `docker-compose.prod.yaml` to manage relay-server, lens-editor, cloudflared, and relay-git-sync.
 See `.env.example` for required environment variables and `docs/server-ops.md` for full operational details.
 
-### With Cargo (local dev)
-
-```bash
-cargo run --manifest-path=crates/Cargo.toml --bin relay -- serve --port 8090
-```
-
-This auto-detects `crates/relay.toml` if present. For local dev, omit the config file to skip auth (the relay.toml has production public keys that require a server URL). Use `-c crates/relay.toml` only when testing with auth enabled (also requires `--url`).
-
-**After starting the server, always run the setup script** to populate test documents:
-
-```bash
-cd lens-editor && npm run relay:setup
-```
-
-**After setup, always generate an editor share link** so the user can open the editor immediately:
-
-```bash
-cd lens-editor && npx tsx scripts/generate-share-link.ts --role edit --folder b0000001-0000-4000-8000-000000000001 --base-url http://dev.vps:5173
-```
-
-**For production share links**, the token must be signed with the production secret. Without it, tokens are signed with a dev-only key and will be rejected with 401 "Invalid or expired share token":
+For production share links, the token must be signed with the production secret. Without it, tokens are signed with a dev-only key and will be rejected with 401 "Invalid or expired share token":
 
 ```bash
 SHARE_TOKEN_SECRET=$(ssh relay-prod 'grep SHARE_TOKEN_SECRET /root/lens-relay/.env | cut -d= -f2') \
   npx tsx scripts/generate-share-link.ts --role edit --folder b0000001-0000-4000-8000-000000000001 --base-url https://editor.lensacademy.org
 ```
 
-## Running lens-editor
+### Local Dev 
+In local dev, the backend can either use local file storage, or connect to a remote R2 storage that that more closely resembles the production setup.
 
-**Always start both the relay server and the Vite dev server together.** When asked to start one, start the other too.
+Use local file storage for most tests and quick tests. Local filesystem storage has known gaps compared with production-shaped data, so use dev R2 for workflows involving real folder metadata, blobs, backlinks, or other production-like behavior.
 
+Always start the relay server and lens-editor together for local development. The npm scripts live in `lens-editor/`, but `npm run relay:start*` starts the Rust relay from `crates/` under the hood.
+
+#### local dev with local file storage
 ```bash
-cd lens-editor && npm install && npm run dev:local
+cd lens-editor
+npm install
+
+# Terminal 1: start local relay backend with filesystem-backed test storage
+npm run relay:start
+
+# Terminal 2: start Vite frontend against the local relay
+npm run dev:local
 ```
 
-`dev:local` sets `VITE_LOCAL_RELAY=true` to point the editor at the local relay server.
+`relay:start` chooses the workspace-specific relay port and runs `relay:setup` automatically after the server is reachable. `relay:setup` initializes the local filesystem with some sample markdown documents that can be used for testing. When adding new features, it can be useful to expand the `relay:setup` script.
 
-For R2-backed local development (real production data instead of test fixtures):
+After setup, generate an editor share link so the user can open the editor immediately:
 
 ```bash
-cd lens-editor && npm run dev:local:r2
+cd lens-editor && npx tsx scripts/generate-share-link.ts --role edit --folder b0000001-0000-4000-8000-000000000001 --base-url http://localhost:5173
 ```
 
-Use `dev:local:r2` with `relay:start:r2` — see `lens-editor/AGENTS.md` for full setup.
-Local filesystem storage is useful for quick isolated testing, but it has known gaps compared with production-shaped data. For workflows involving real folder metadata, blobs, backlinks, or other production-like behavior, test against the Lens Relay dev R2 bucket instead. Developers can request dev R2 access from Luc Brinkman.
+#### Local Dev With Dev R2
+```bash
+cd lens-editor
+npm install
 
-See `lens-editor/AGENTS.md` for Y.Doc structure documentation and editor-specific development guidance.
+# Terminal 1: start local relay backed by the dev R2 bucket
+npm run relay:start:r2
+
+# Terminal 2: start Vite frontend against the local relay using production-shaped folder IDs
+npm run dev:local:r2
+```
+
+This uses the dev R2 bucket (`lens-relay-dev`), a copy of production data safe to write to and experiment with. No setup script is needed. Requires `crates/auth.local.env`; developers can request dev R2 access from Luc Brinkman.
 
 ## Upstream Sync
 
@@ -170,31 +170,4 @@ Edu content CI workflow files live in that repo (`.github/workflows/validate.yml
 
 ## Regression Detector
 
-Detects content regressions in relay-synced GitHub repos — files whose content reverted to a previous state due to sync errors, merge conflicts, or accidents.
-
-```bash
-# Check lens-folder-relay (last 7 days, default 60-minute minimum gap)
-python3 scripts/detect-regressions.py ~/code/lens-folder-relay
-
-# Check with longer lookback
-python3 scripts/detect-regressions.py ~/code/lens-folder-relay --days 90
-
-# JSON output for programmatic use
-python3 scripts/detect-regressions.py ~/code/lens-folder-relay --output json
-
-# Show all reversions including short undo/redo (noisy)
-python3 scripts/detect-regressions.py ~/code/lens-folder-relay --min-gap 0
-
-# Only show reversions spanning 24+ hours
-python3 scripts/detect-regressions.py ~/code/lens-folder-relay --min-gap 1440
-```
-
-Three detectors: exact reversion (blob hash match), near-exact reversion (line-set similarity ≥90%), and full wipe (content replaced with near-empty). The `--min-gap` flag (default: 60 minutes) filters out short-lived undo/redo cycles that are normal editing.
-
-Fetch the repos before running: `cd ~/code/lens-folder-relay && git fetch origin main`
-
-## Version Control
-
-This repo uses non-colocated jj. See `~/.claude/jj.md` for workflow reference.
-
-Personal/local overrides go in `CLAUDE.local.md` (gitignored). Symlinked from parent directory in workspace setups.
+Use `docs/regression-detector.md` when asked to check relay-synced GitHub repos for accidental content reversions.
