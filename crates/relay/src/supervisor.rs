@@ -104,6 +104,28 @@ pub fn apply_outcome(
     }
 }
 
+/// Run a fire-and-forget future, catching any panic. Increments
+/// `worker_panics_total{worker=<worker>}` on panic so silent spawn panics
+/// become visible. Returns `Some(msg)` on panic (caller logs context) or
+/// `None` on clean completion.
+pub async fn run_with_panic_recovery<Fut>(
+    worker: &'static str,
+    metrics: &y_sweet_core::metrics::RelayMetrics,
+    fut: Fut,
+) -> Option<String>
+where
+    Fut: std::future::Future<Output = ()> + Send,
+{
+    match AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(()) => None,
+        Err(payload) => {
+            let msg = extract_panic_msg(&*payload);
+            metrics.record_worker_panic(worker);
+            Some(msg)
+        }
+    }
+}
+
 fn extract_panic_msg(payload: &(dyn Any + Send + 'static)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         s.to_string()
@@ -363,6 +385,60 @@ mod tests {
             .find(|(n, _, _)| *n == "status_test_worker")
             .expect("worker should appear in snapshot");
         assert!(!*alive, "BudgetExceeded must flip alive to false");
+    }
+
+    // === run_with_panic_recovery for fire-and-forget spawns ===
+    //
+    // The `on_document_update` notification spawned at server.rs:2852
+    // is fire-and-forget. A panic there is silently absorbed by tokio
+    // today — no log, no metric. This helper catches the panic so
+    // operators see it via `worker_panics_total{worker="on_document_update"}`.
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn run_with_panic_recovery_increments_counter_on_panic() {
+        let registry = Registry::new();
+        let metrics = RelayMetrics::new_with_registry(&registry).unwrap();
+
+        let result = run_with_panic_recovery("panic_recovery_test_worker", &metrics, async {
+            panic!("simulated update panic");
+        })
+        .await;
+
+        assert!(
+            result.is_some(),
+            "panicking future should return Some(panic_msg)"
+        );
+        assert_eq!(
+            metrics
+                .worker_panics_total
+                .with_label_values(&["panic_recovery_test_worker"])
+                .get(),
+            1.0
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn run_with_panic_recovery_returns_none_on_clean_completion() {
+        let registry = Registry::new();
+        let metrics = RelayMetrics::new_with_registry(&registry).unwrap();
+        let ran = Arc::new(AtomicU32::new(0));
+        let ran_clone = ran.clone();
+
+        let result = run_with_panic_recovery("panic_recovery_test_worker", &metrics, async move {
+            ran_clone.store(1, Ordering::SeqCst);
+        })
+        .await;
+
+        assert!(result.is_none(), "clean future should return None");
+        assert_eq!(ran.load(Ordering::SeqCst), 1, "future body should run");
+        assert_eq!(
+            metrics
+                .worker_panics_total
+                .with_label_values(&["panic_recovery_test_worker"])
+                .get(),
+            0.0,
+            "clean completion must not touch the counter"
+        );
     }
 
     /// CleanExit outcome must NOT touch metrics: the worker stopped because

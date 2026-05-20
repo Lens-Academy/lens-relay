@@ -2781,6 +2781,7 @@ impl Server {
             let doc_key_for_indexer = doc_id.to_string();
             let docs = self.docs.clone();
             let doc_id_for_callback = doc_id.to_string();
+            let metrics_for_callback = self.metrics.clone();
             // Capture parent awareness to keep it alive (prevents GC while subdoc exists)
             let _parent_awareness = parent_awareness_guard;
 
@@ -2832,8 +2833,25 @@ impl Server {
                             if let Some(ref indexer) = link_indexer_for_callback {
                                 let indexer = indexer.clone();
                                 let doc_key = doc_key_for_indexer.clone();
+                                let metrics = metrics_for_callback.clone();
                                 tokio::spawn(async move {
-                                    indexer.on_document_update(&doc_key).await;
+                                    let doc_key_for_log = doc_key.clone();
+                                    if let Some(msg) = crate::supervisor::run_with_panic_recovery(
+                                        "on_document_update",
+                                        &metrics,
+                                        async move {
+                                            indexer.on_document_update(&doc_key).await;
+                                        },
+                                    )
+                                    .await
+                                    {
+                                        tracing::error!(
+                                            worker = "on_document_update",
+                                            doc = %doc_key_for_log,
+                                            panic_msg = %msg,
+                                            "fire-and-forget task panicked; one update lost"
+                                        );
+                                    }
                                 });
                             }
 
