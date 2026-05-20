@@ -48,6 +48,22 @@ export function checkProxyAccess(
     return { allowed: true };
   }
 
+  // GET /f/{compoundDocId}/upload-url — allowed for edit role (relay server enforces ACL)
+  if (method === 'GET' && /^\/f\/[^/]+\/upload-url$/.test(path)) {
+    if (auth.payload.role === 'view') {
+      return { allowed: false, reason: 'Upload requires edit access' };
+    }
+    return { allowed: true };
+  }
+
+  // GET /f/{compoundDocId}/download-url — allowed for edit role (relay server enforces ACL)
+  if (method === 'GET' && /^\/f\/[^/]+\/download-url$/.test(path)) {
+    if (auth.payload.role === 'view') {
+      return { allowed: false, reason: 'Download URL requires edit access' };
+    }
+    return { allowed: true };
+  }
+
   // GET /suggestions — allowed only if folder_id matches token folder
   if (method === 'GET' && path === '/suggestions') {
     const params = new URLSearchParams(query);
