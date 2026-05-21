@@ -62,7 +62,6 @@ interface EditorProps {
   metadata?: FolderMetadata;
   currentFilePath?: string;
   getFolderDoc?: () => Y.Doc | null;
-  getFolderId?: () => string | null;
 }
 
 /**
@@ -103,7 +102,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, metadata, currentFilePath, getFolderDoc, getFolderId }: EditorProps) {
+export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, metadata, currentFilePath, getFolderDoc }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -326,8 +325,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         remoteCursorTheme,
         criticMarkupExtension({ canAcceptReject }),
         harperLinter,
-        ...(!readOnly && getFolderDoc && getFolderId
-          ? [imagePasteExtension({ getFolderDoc, getFolderId, getCurrentFilePath })]
+        ...(!readOnly && getFolderDoc
+          ? [imagePasteExtension({ getFolderDoc, getCurrentFilePath })]
           : []),
         Prec.highest(keymap.of([{
           key: 'Mod-Shift-m',

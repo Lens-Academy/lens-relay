@@ -5,7 +5,6 @@ import { uploadAttachment } from '../../../lib/uploadAttachment';
 
 export interface ImagePasteOptions {
   getFolderDoc: () => Y.Doc | null;
-  getFolderId: () => string | null;
   getCurrentFilePath: () => string | null;
 }
 
@@ -48,14 +47,13 @@ export function imagePasteExtension(options: ImagePasteOptions): Extension {
 function scheduleUpload(
   view: EditorView,
   file: File,
-  { getFolderDoc, getFolderId, getCurrentFilePath }: ImagePasteOptions,
+  { getFolderDoc, getCurrentFilePath }: ImagePasteOptions,
   insertPos?: number,
 ): void {
   const folderDoc = getFolderDoc();
-  const folderId = getFolderId();
   const currentFilePath = getCurrentFilePath();
 
-  if (!folderDoc || !folderId || !currentFilePath) return;
+  if (!folderDoc || !currentFilePath) return;
 
   const shortId = Math.random().toString(36).slice(2, 8);
   const placeholder = `![[uploading-${shortId}...]]`;
@@ -66,7 +64,7 @@ function scheduleUpload(
     selection: { anchor: pos + placeholder.length + 1 },
   });
 
-  uploadAttachment({ folderDoc, folderId, currentFilePath, file })
+  uploadAttachment({ folderDoc, currentFilePath, file })
     .then(({ path }) => {
       const embedPath = path.startsWith('/') ? path.slice(1) : path;
       replacePlaceholder(view, placeholder, `![[${embedPath}]]`);

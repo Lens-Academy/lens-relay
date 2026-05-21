@@ -28,7 +28,7 @@ import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
-import { RELAY_ID, PANEL_CONFIG, FOLDERS } from '../../App';
+import { RELAY_ID, PANEL_CONFIG } from '../../App';
 
 /**
  * Editor area component that lives INSIDE the RelayProvider key boundary.
@@ -65,13 +65,6 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     if (!fp) return null;
     const folderName = fp.split('/').filter(Boolean)[0];
     return folderName ? (folderDocsRef.current.get(folderName) ?? null) : null;
-  }, []);
-
-  const getFolderId = useCallback(() => {
-    const fp = currentFilePathForUploadRef.current;
-    if (!fp) return null;
-    const folderName = fp.split('/').filter(Boolean)[0];
-    return folderName ? (FOLDERS.find(f => f.name === folderName)?.id ?? null) : null;
   }, []);
 
   // Callback to receive view reference from Editor
@@ -270,7 +263,6 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               metadata={metadata}
               currentFilePath={currentFilePath}
               getFolderDoc={getFolderDoc}
-              getFolderId={getFolderId}
             />
           </div>
         </div>

@@ -53,7 +53,6 @@ export function pickFilename(
 
 export interface UploadAttachmentOptions {
   folderDoc: Y.Doc;
-  folderId: string;
   currentFilePath: string;
   file: File;
   timestamp?: number;
@@ -72,7 +71,6 @@ export interface UploadAttachmentResult {
  */
 export async function uploadAttachment({
   folderDoc,
-  folderId,
   currentFilePath,
   file,
   timestamp = Date.now(),
@@ -110,11 +108,9 @@ export async function uploadAttachment({
       `Failed to get upload URL: ${uploadUrlRes.status} — ${body || uploadUrlRes.statusText}`,
     );
   }
-  const uploadUrlJson = await uploadUrlRes.json() as { uploadUrl: string };
-  const uploadUrl = uploadUrlJson.uploadUrl;
   console.debug('[uploadAttachment] upload URL received', uploadUrl);
+  const { uploadUrl } = await uploadUrlRes.json() as { uploadUrl: string };
 
-  // Upload the blob to the pre-signed URL.
   // For local dev the relay returns a relative path (/f/{doc}/upload?hash=...) to avoid
   // mixed-content issues when the Vite dev server runs on https. Route it through the proxy.
   const absoluteUploadUrl = uploadUrl.startsWith('http')
