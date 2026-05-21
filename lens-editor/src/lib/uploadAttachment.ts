@@ -83,10 +83,7 @@ export async function uploadAttachment({
   const id = generateUUID();
   const compoundDocId = `${RELAY_ID}-${id}`;
 
-  // Create the blob document on the server before writing filemeta
-  console.debug('[uploadAttachment] creating doc', compoundDocId);
   await createDocumentOnServer(compoundDocId);
-  console.debug('[uploadAttachment] doc created');
 
   // Get a pre-signed upload URL for the blob (scoped to the attachment doc, not the folder doc)
   const urlParams = new URLSearchParams({
@@ -95,7 +92,6 @@ export async function uploadAttachment({
     content_length: String(file.size),
   });
   const uploadUrlPath = `/api/relay/f/${compoundDocId}/upload-url?${urlParams}`;
-  console.debug('[uploadAttachment] requesting upload URL', uploadUrlPath);
   const uploadUrlRes = await fetch(uploadUrlPath, { method: 'POST', headers: relayHeaders() });
   if (!uploadUrlRes.ok) {
     const body = await uploadUrlRes.text().catch(() => '(could not read body)');
@@ -108,7 +104,6 @@ export async function uploadAttachment({
       `Failed to get upload URL: ${uploadUrlRes.status} — ${body || uploadUrlRes.statusText}`,
     );
   }
-  console.debug('[uploadAttachment] upload URL received', uploadUrl);
   const { uploadUrl } = await uploadUrlRes.json() as { uploadUrl: string };
 
   // For local dev the relay returns a relative path (/f/{doc}/upload?hash=...) to avoid
@@ -121,7 +116,6 @@ export async function uploadAttachment({
     Object.assign(uploadHeaders, relayHeaders());
   }
 
-  console.debug('[uploadAttachment] uploading blob to', absoluteUploadUrl.split('?')[0]);
   const putRes = await fetch(absoluteUploadUrl, {
     method: 'PUT',
     headers: uploadHeaders,
