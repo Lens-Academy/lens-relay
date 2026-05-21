@@ -154,6 +154,16 @@ export async function uploadAttachment({
   };
 
   folderDoc.transact(() => {
+    // Ensure the attachments folder entry exists. Obsidian creates this entry
+    // when the folder first appears; without it, the first paste from
+    // lens-editor produces a state Obsidian normalizes against, causing churn.
+    if (!filemeta.has(ATTACHMENTS_FOLDER_PATH)) {
+      filemeta.set(ATTACHMENTS_FOLDER_PATH, {
+        id: generateUUID(),
+        type: 'folder',
+        version: 0,
+      });
+    }
     filemeta.set(attachmentPath, meta);
   }, LENS_EDITOR_ORIGIN);
 
