@@ -127,9 +127,11 @@ export async function uploadAttachment({
     throw new Error(`Blob upload failed: ${putRes.status} — ${body || putRes.statusText}`);
   }
 
-  // Register the attachment in the folder doc's Y.Maps
+  // Register the attachment in the folder doc's filemeta_v0 Y.Map.
+  // Images must NOT be written to the legacy `docs` map — Obsidian's SyncStore
+  // treats that map as authoritative for markdown documents, so an image entry
+  // there can be misread as a phantom markdown doc.
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
-  const legacyDocs = folderDoc.getMap<string>('docs');
 
   const meta: FileMetadata = {
     id,
@@ -142,7 +144,6 @@ export async function uploadAttachment({
 
   folderDoc.transact(() => {
     filemeta.set(attachmentPath, meta);
-    legacyDocs.set(attachmentPath, id);
   }, LENS_EDITOR_ORIGIN);
 
   return { path: attachmentPath };
