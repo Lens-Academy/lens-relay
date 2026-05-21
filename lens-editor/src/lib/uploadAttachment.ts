@@ -54,8 +54,7 @@ export function pickFilename(
   timestamp: number,
 ): string {
   if (file.name && file.name !== 'image.png' && file.name !== 'blob') {
-    // Sanitize the original name — remove path separators
-    const safeName = file.name.replace(/[/\\]/g, '-');
+    const safeName = file.name.replace(/[\\/:*?"<>|]/g, '-');
     return `${docName}-${safeName}`;
   }
   const ext = MIME_TO_EXT[file.type] ?? 'png';
@@ -149,7 +148,7 @@ export async function uploadAttachment({
     type: 'image',
     mimetype: file.type,
     hash,
-    synctime: timestamp,
+    synctime: Date.now(),
     version: 0,
   };
 

@@ -613,7 +613,19 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   // Derive the folder prefix from currentFilePath and prepend it.
                   const folderName = imageEmbedContext?.currentFilePath?.split('/').filter(Boolean)[0];
                   const lookupPath = folderName ? `/${folderName}${normalizedPath}` : normalizedPath;
-                  const meta = imageEmbedContext?.metadata[lookupPath];
+                  let meta = imageEmbedContext?.metadata[lookupPath];
+                  // Fallback: if currentFilePath wasn't populated yet (race on initial
+                  // doc load) the folder-prefixed lookup misses. Scan metadata keys
+                  // for any entry whose suffix matches the embed path.
+                  if (!meta && !folderName && imageEmbedContext) {
+                    const suffix = normalizedPath;
+                    for (const key in imageEmbedContext.metadata) {
+                      if (key.endsWith(suffix)) {
+                        meta = imageEmbedContext.metadata[key];
+                        break;
+                      }
+                    }
+                  }
                   const docId = meta?.type === 'image' ? meta.id : undefined;
                   const hash = meta?.type === 'image' ? meta.hash : undefined;
                   decorations.push({
