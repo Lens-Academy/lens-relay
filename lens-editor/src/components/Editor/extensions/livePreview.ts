@@ -73,6 +73,8 @@ let wikilinkContext: WikilinkContext | null = null;
 export interface ImageEmbedContext {
   metadata: FolderMetadata;
   relayId: string;
+  /** Prefixed path of the currently-open document, e.g. "/Relay Folder 1/Welcome.md" */
+  currentFilePath?: string;
 }
 
 let imageEmbedContext: ImageEmbedContext | null = null;
@@ -335,7 +337,9 @@ class ImageEmbedWidget extends WidgetType {
     const compoundDocId = `${relayId}-${this.docId}`;
 
     if (USE_LOCAL_RELAY) {
-      return `/api/relay/blob/${compoundDocId}/${this.hash}`;
+      // /api/blob/ is served by the blobServePlugin directly from the filesystem store
+      // without auth — can be used as img.src unlike /api/relay/blob/ which requires X-Share-Token.
+      return `/api/blob/${compoundDocId}/${this.hash}`;
     }
 
     const shareToken = localStorage.getItem('lens-share-token') ?? '';
@@ -605,7 +609,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 const isImageEmbed = view.state.doc.sliceString(node.from, node.from + 1) === '!';
                 if (isImageEmbed) {
                   const normalizedPath = content.startsWith('/') ? content : `/${content}`;
-                  const meta = imageEmbedContext?.metadata[normalizedPath];
+                  // metadata uses folder-prefixed paths (e.g. "/Relay Folder 1/attachments/img.png").
+                  // Derive the folder prefix from currentFilePath and prepend it.
+                  const folderName = imageEmbedContext?.currentFilePath?.split('/').filter(Boolean)[0];
+                  const lookupPath = folderName ? `/${folderName}${normalizedPath}` : normalizedPath;
+                  const meta = imageEmbedContext?.metadata[lookupPath];
                   const docId = meta?.type === 'image' ? meta.id : undefined;
                   const hash = meta?.type === 'image' ? meta.hash : undefined;
                   decorations.push({

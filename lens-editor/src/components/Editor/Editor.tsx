@@ -204,11 +204,11 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // This is separate from the editor creation effect to avoid recreating the editor
   useEffect(() => {
     updateWikilinkContext(wikilinkContextRef.current);
-    updateImageEmbedContext(metadata ? { metadata, relayId: RELAY_ID } : undefined);
+    updateImageEmbedContext(metadata ? { metadata, relayId: RELAY_ID, currentFilePath } : undefined);
     viewRef.current?.dispatch({
       effects: wikilinkMetadataChanged.of(undefined),
     });
-  }, [metadata, onNavigate]);
+  }, [metadata, onNavigate, currentFilePath]);
 
   // Update Harper folder gate when the active file changes
   useEffect(() => {
