@@ -5,6 +5,17 @@ import { generateUUID, createDocumentOnServer, relayHeaders } from './relay-api'
 
 const LENS_EDITOR_ORIGIN = 'lens-editor';
 
+/**
+ * Folder path where pasted/dropped attachments are stored.
+ *
+ * Hardcoded to `/attachments` for now. The Obsidian Relay plugin honors each
+ * vault's "Files & Links → Default location for new attachments" setting, but
+ * that lives in `obsidian-settings.json` (outside the Y.Doc) and isn't reachable
+ * from the web client. All Lens Academy vaults use `attachments/`, so this is
+ * safe today; revisit if a user configures a different attachment location.
+ */
+export const ATTACHMENTS_FOLDER_PATH = '/attachments';
+
 const MIME_TO_EXT: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -77,7 +88,7 @@ export async function uploadAttachment({
 }: UploadAttachmentOptions): Promise<UploadAttachmentResult> {
   const docName = sanitizeDocName(currentFilePath);
   const filename = pickFilename(file, docName, timestamp);
-  const attachmentPath = `/attachments/${filename}`;
+  const attachmentPath = `${ATTACHMENTS_FOLDER_PATH}/${filename}`;
 
   const hash = await sha256Hex(file);
   const id = generateUUID();
