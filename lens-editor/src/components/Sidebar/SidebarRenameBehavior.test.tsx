@@ -8,6 +8,7 @@ import { MemoryRouter } from 'react-router-dom';
 import * as Y from 'yjs';
 import { Sidebar } from './Sidebar';
 import { NavigationContext } from '../../contexts/NavigationContext';
+import { AuthProvider } from '../../contexts/AuthContext';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 
 vi.mock('../../App', () => ({
@@ -154,5 +155,33 @@ describe('Sidebar file tree rename behavior', () => {
       expect(serverPaths.get(newPath)).toBe(docId);
     });
     expect(serverPaths.has(oldPath)).toBe(false);
+  });
+
+  it('hides create actions for view-only users', async () => {
+    const metadata: FolderMetadata = {
+      '/Lens/source.md': { id: '33333333-3333-4333-8333-333333333333', type: 'markdown', version: 0 },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/some-doc']}>
+        <AuthProvider role="view" folderUuid={null} isAllFolders>
+          <NavigationContext.Provider
+            value={{
+              metadata,
+              folderDocs: new Map([['Lens', new Y.Doc()]]),
+              folderNames: ['Lens'],
+              errors: new Map(),
+              onNavigate: vi.fn(),
+              justCreatedRef: { current: false },
+            }}
+          >
+            <Sidebar />
+          </NavigationContext.Provider>
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('button', { name: /Create in Lens/i })).toBeNull();
+    expect(screen.queryByText('New HTML File')).toBeNull();
   });
 });

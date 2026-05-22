@@ -46,6 +46,17 @@ describe('checkProxyAccess', () => {
     expect(checkProxyAccess('GET', '/suggestions', `folder_id=${RELAY_ID}-${FOLDER_B}`, allFoldersAuth).allowed).toBe(true);
   });
 
+  it('all-folders view token blocks write endpoints', () => {
+    const allFoldersViewAuth = makeAuth(ALL_FOLDERS, 'view');
+
+    expect(checkProxyAccess('POST', '/doc/new', '', allFoldersViewAuth).allowed).toBe(false);
+    expect(checkProxyAccessWithBody('POST', '/move', '', allFoldersViewAuth, {
+      path: 'Relay Folder 2/Old.md',
+      new_path: '/New.md',
+    }).allowed).toBe(false);
+    expect(checkProxyAccess('GET', '/search', 'q=test', allFoldersViewAuth).allowed).toBe(true);
+  });
+
   it('folder-scoped token blocks /doc/move', () => {
     const result = checkProxyAccess('POST', '/doc/move', '', scopedAuth);
     expect(result.allowed).toBe(false);
@@ -95,6 +106,10 @@ describe('checkProxyAccess', () => {
 
   it('folder-scoped token allows /doc/new', () => {
     expect(checkProxyAccess('POST', '/doc/new', '', scopedAuth).allowed).toBe(true);
+  });
+
+  it('folder-scoped view token blocks /doc/new', () => {
+    expect(checkProxyAccess('POST', '/doc/new', '', makeAuth(FOLDER_A, 'view')).allowed).toBe(false);
   });
 
   it('folder-scoped token allows /doc/resolve', () => {
