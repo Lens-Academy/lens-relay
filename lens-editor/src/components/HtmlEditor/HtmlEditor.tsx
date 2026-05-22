@@ -9,6 +9,7 @@ type Mode = 'source' | 'preview' | 'split';
 interface HtmlEditorProps {
   ytext: Y.Text;
   awareness: Awareness;
+  readOnly?: boolean;
 }
 
 const modes: Array<{ id: Mode; label: string }> = [
@@ -17,7 +18,7 @@ const modes: Array<{ id: Mode; label: string }> = [
   { id: 'split', label: 'Split' },
 ];
 
-export function HtmlEditor({ ytext, awareness }: HtmlEditorProps) {
+export function HtmlEditor({ ytext, awareness, readOnly = false }: HtmlEditorProps) {
   const [mode, setMode] = useState<Mode>('preview');
 
   return (
@@ -44,7 +45,7 @@ export function HtmlEditor({ ytext, awareness }: HtmlEditorProps) {
       <div className="flex min-h-0 flex-1">
         {mode !== 'preview' && (
           <div className="min-w-0 flex-1">
-            <HtmlSourceEditor ytext={ytext} awareness={awareness} />
+            <HtmlSourceEditor ytext={ytext} awareness={awareness} readOnly={readOnly} />
           </div>
         )}
         {mode !== 'source' && (

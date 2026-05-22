@@ -14,6 +14,14 @@ function renderWithDoc() {
   return render(<HtmlEditor ytext={ytext} awareness={awareness} />);
 }
 
+function createHtmlDoc() {
+  const doc = new Y.Doc();
+  const ytext = doc.getText('contents');
+  ytext.insert(0, '<h1>Test</h1>');
+  const awareness = new Awareness(doc);
+  return { ytext, awareness };
+}
+
 describe('HtmlEditor', () => {
   afterEach(() => cleanup());
 
@@ -28,6 +36,17 @@ describe('HtmlEditor', () => {
     await userEvent.click(screen.getByRole('button', { name: /source/i }));
     expect(container.querySelector('.cm-editor')).not.toBeNull();
     expect(container.querySelector('iframe')).toBeNull();
+  });
+
+  it('makes source mode non-editable when readOnly is true', async () => {
+    const { ytext, awareness } = createHtmlDoc();
+    const { container } = render(
+      <HtmlEditor ytext={ytext} awareness={awareness} readOnly />
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: /source/i }));
+
+    expect(container.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('false');
   });
 
   it('switching to split mode shows both source and preview', async () => {

@@ -293,8 +293,9 @@ function DocumentView() {
 function HtmlEditorMount() {
   const ydoc = useYDoc();
   const provider = useYjsProvider();
+  const { canWrite } = useAuth();
   const ytext = ydoc.getText('contents');
-  return <HtmlEditor ytext={ytext} awareness={provider.awareness} />;
+  return <HtmlEditor ytext={ytext} awareness={provider.awareness} readOnly={!canWrite} />;
 }
 
 function EduEditorView() {
