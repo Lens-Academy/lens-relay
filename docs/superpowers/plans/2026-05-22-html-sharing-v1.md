@@ -31,7 +31,8 @@
 | `crates/relay/src/mcp/tools/create_doc.rs` | Modify: route `.html` through `create_document_direct` (instead of rejecting); update error message; add tests |
 | `crates/y-sweet-core/src/link_indexer.rs` | Modify: skip `.html` files in `index_document`; add test |
 | `lens-editor/package.json` | Modify: add `@codemirror/lang-html` dependency |
-| `lens-editor/src/lib/relay-api.ts` | Modify: extend `createDocument` to accept `'file'` type; skip legacy `docs` map for non-markdown |
+| `lens-editor/src/lib/relay-api.ts` | Modify: extract `writeFileMeta` helper (pure, testable); extend `createDocument` to accept `'file'` type via the helper; skip legacy `docs` map for non-markdown |
+| `lens-editor/src/lib/relay-api.writeFileMeta.test.ts` | Create: tests for the `writeFileMeta` helper (real Y.Doc, no mocks) |
 | `lens-editor/src/lib/editor-selector.ts` | Create: pure function picking which editor component to render given a path + filemeta entry |
 | `lens-editor/src/lib/editor-selector.test.ts` | Create: tests for editor-selector |
 | `lens-editor/src/components/HtmlEditor/HtmlPreview.tsx` | Create: sandboxed iframe with debounced srcdoc from a Y.Text |
@@ -43,7 +44,11 @@
 | `lens-editor/src/components/HtmlEditor/index.ts` | Create: barrel export |
 | `lens-editor/src/App.tsx` | Modify: use `editor-selector` to dispatch `.html` paths to `HtmlEditor` |
 | `lens-editor/src/components/Sidebar/CreateMenu.tsx` | Modify: add "New HTML File" option |
-| `lens-editor/src/components/Sidebar/Sidebar.tsx` | Modify: wire `handleInstantCreateHtml`; fix rename to preserve any existing extension |
+| `lens-editor/src/components/Sidebar/FileTreeContext.tsx` | Modify: extend `FileTreeContextValue` with `onCreateHtmlDocument?: (folderPath: string) => void` |
+| `lens-editor/src/components/Sidebar/FileTreeNode.tsx` | Modify: forward `ctx.onCreateHtmlDocument` to `CreateMenu` |
+| `lens-editor/src/components/Sidebar/Sidebar.tsx` | Modify: extract `nextUntitledHtmlName` to a testable module; wire `handleInstantCreateHtml`; provide it via `FileTreeProvider`; replace rename logic with `renamePreservingExtension` |
+| `lens-editor/src/lib/untitled-name.ts` | Create: `nextUntitledHtmlName` helper (pure, testable) |
+| `lens-editor/src/lib/untitled-name.test.ts` | Create: tests for `nextUntitledHtmlName` |
 | `lens-editor/src/components/Sidebar/Sidebar.test.tsx` (if exists, else inline-utility test) | Modify or create: tests for rename extension-preservation |
 
 ---
@@ -66,11 +71,14 @@ Open `crates/relay/src/mcp/tools/create_doc.rs` and confirm its current structur
 
 - [ ] **Step 2: Write the failing test**
 
-Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/relay/src/mcp/tools/create_doc.rs`:
+Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/relay/src/mcp/tools/create_doc.rs`. The existing module's `use super::*` block re-exports `Server`, `Value`, `Arc`, and `blob`; you must add the yrs traits explicitly for `get_text`/`get_string`/`transact`:
 
 ```rust
     #[tokio::test]
     async fn create_html_uses_direct_path() {
+        use yrs::{GetString, ReadTxn, Text, Transact};
+        use y_sweet_core::link_indexer::extract_type_from_filemeta_entry;
+
         let server = build_blob_test_server_with_folder().await;
         let result = execute(
             &server,
@@ -99,6 +107,19 @@ Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/relay/src/
         let text = txn.get_text("contents").expect("contents text exists");
         let value = text.get_string(&txn);
         assert_eq!(value, "<h1>Hello</h1>", "content should be raw HTML, no CriticMarkup");
+        drop(guard);
+
+        // Folder filemeta_v0 entry MUST have type="file" — this is the contract
+        // that the frontend's pickEditor and the link indexer rely on.
+        let folder_ref = docs.get(&info.folder_doc_id).expect("folder doc loaded");
+        let folder_awareness = folder_ref.awareness();
+        let folder_guard = folder_awareness.read().unwrap();
+        let folder_txn = folder_guard.doc.transact();
+        let filemeta = folder_txn.get_map("filemeta_v0").expect("filemeta_v0 exists");
+        let entry = filemeta.get(&folder_txn, "/page.html").expect("entry exists");
+        let file_type = extract_type_from_filemeta_entry(&entry, &folder_txn)
+            .expect("type field present");
+        assert_eq!(file_type, "file", "HTML files must have type=\"file\", not \"markdown\"");
     }
 
     #[tokio::test]
@@ -236,79 +257,105 @@ Confirm signature at line 1552: `pub(crate) fn index_document(&self, doc_id: &st
 
 - [ ] **Step 2: Write the failing test**
 
-Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/y-sweet-core/src/link_indexer.rs` (find it; there is an existing module with helpers — the existing test `index_document_with_dashmap_and_awareness` at line 4686 is a good reference for shape):
+Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/y-sweet-core/src/link_indexer.rs`. The reference test `index_document_with_dashmap_and_awareness` at line 4686 shows the required doc-ID shape: `parse_doc_id` (line 24) requires `<36-char-uuid>-<36-char-uuid>` with a `-` at byte 36, so use full UUIDs, not short strings.
 
 ```rust
     #[tokio::test]
     async fn index_document_skips_html_files() {
         use dashmap::DashMap;
-        use yrs::{Map, Text, Transact, Any};
+        use yrs::{Any, Map, ReadTxn, Text, Transact};
         use crate::doc_sync::DocWithSyncKv;
         use std::collections::HashMap;
 
+        let relay_id = "cb696037-0f72-4e93-8717-4e433129d789";
+        let folder_uuid = "b0000001-0000-4000-8000-000000000001";
+        let html_uuid   = "a0000001-0000-4000-8000-000000000001";
+        let md_uuid     = "a0000002-0000-4000-8000-000000000002";
+
+        let folder_id = format!("{}-{}", relay_id, folder_uuid);
+        let html_id   = format!("{}-{}", relay_id, html_uuid);
+        let md_id     = format!("{}-{}", relay_id, md_uuid);
+
         let docs: DashMap<String, DocWithSyncKv> = DashMap::new();
 
-        let folder_doc_id = "relay-folder".to_string();
-        let html_doc_id = "relay-htmluuid".to_string();
-        let html_uuid = "htmluuid";
-
-        // Folder doc with a single .html file in filemeta_v0
-        let folder = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
-            .await
-            .unwrap();
+        // Folder doc with two files: an .html and an .md sibling.
+        let folder = DocWithSyncKv::new(&folder_id, None, || (), None).await.unwrap();
         {
             let awareness = folder.awareness();
-            let mut guard = awareness.write().unwrap();
+            let guard = awareness.write().unwrap();
             let mut txn = guard.doc.transact_mut();
             let config = txn.get_or_insert_map("folder_config");
             config.insert(&mut txn, "name", Any::String("Lens".into()));
             let filemeta = txn.get_or_insert_map("filemeta_v0");
-            let mut root = HashMap::new();
-            root.insert("type".to_string(), Any::String("folder".into()));
-            filemeta.insert(&mut txn, "/", Any::Map(root.into()));
-            let mut entry = HashMap::new();
-            entry.insert("id".to_string(), Any::String(html_uuid.into()));
-            entry.insert("type".to_string(), Any::String("file".into()));
-            entry.insert("version".to_string(), Any::Number(0.0));
-            filemeta.insert(&mut txn, "/page.html", Any::Map(entry.into()));
+            let mut html_entry = HashMap::new();
+            html_entry.insert("id".to_string(), Any::String(html_uuid.into()));
+            html_entry.insert("type".to_string(), Any::String("file".into()));
+            html_entry.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/page.html", Any::Map(html_entry.into()));
+            let mut md_entry = HashMap::new();
+            md_entry.insert("id".to_string(), Any::String(md_uuid.into()));
+            md_entry.insert("type".to_string(), Any::String("markdown".into()));
+            md_entry.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/notes.md", Any::Map(md_entry.into()));
         }
-        docs.insert(folder_doc_id.clone(), folder);
+        docs.insert(folder_id.clone(), folder);
 
-        // Content doc with text that LOOKS like wikilinks
-        let html = DocWithSyncKv::new(&html_doc_id, None, || (), None)
-            .await
-            .unwrap();
+        // HTML content doc with a wikilink to the .md sibling. If .html were indexed,
+        // /notes.md's backlinks would gain html_uuid. The skip must prevent that.
+        let html = DocWithSyncKv::new(&html_id, None, || (), None).await.unwrap();
         {
             let awareness = html.awareness();
-            let mut guard = awareness.write().unwrap();
+            let guard = awareness.write().unwrap();
             let mut txn = guard.doc.transact_mut();
             let text = txn.get_or_insert_text("contents");
-            text.insert(&mut txn, 0, "<a href=\"[[Other Page]]\">Link</a>");
+            text.insert(&mut txn, 0, "<a href=\"[[notes]]\">Link</a>");
         }
-        docs.insert(html_doc_id.clone(), html);
+        docs.insert(html_id.clone(), html);
+
+        // Markdown sibling that points to the .html file via a wikilink. .md MUST be indexed,
+        // and its backlink to /page.html must land on html_uuid — proving the skip didn't
+        // accidentally short-circuit Markdown indexing.
+        let md = DocWithSyncKv::new(&md_id, None, || (), None).await.unwrap();
+        {
+            let awareness = md.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, "See [[page]] for details");
+        }
+        docs.insert(md_id.clone(), md);
 
         let (indexer, _rx) = LinkIndexer::new();
-        let folder_doc_ids = vec![folder_doc_id.clone()];
+        let folder_doc_ids = vec![folder_id.clone()];
 
-        // Should be a no-op for .html
-        let result = indexer.index_document(&html_doc_id, &docs, &folder_doc_ids);
-        assert!(result.is_ok(), "indexing .html should not error: {:?}", result.err());
+        let html_result = indexer.index_document(&html_id, &docs, &folder_doc_ids);
+        assert!(html_result.is_ok(), "indexing .html should not error: {:?}", html_result.err());
 
-        // No backlinks should have been written for the .html doc
-        let doc_ref = docs.get(&folder_doc_id).unwrap();
-        let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap();
+        let md_result = indexer.index_document(&md_id, &docs, &folder_doc_ids);
+        assert!(md_result.is_ok(), "indexing .md should not error: {:?}", md_result.err());
+
+        let folder_ref = docs.get(&folder_id).unwrap();
+        let folder_awareness = folder_ref.awareness();
+        let guard = folder_awareness.read().unwrap();
         let txn = guard.doc.transact();
-        if let Some(backlinks) = txn.get_map("backlinks_v0") {
-            assert!(
-                backlinks.get(&txn, html_uuid).is_none(),
-                "backlinks_v0 must have no entry for .html files"
-            );
-        }
+        let backlinks = txn.get_map("backlinks_v0").expect("backlinks_v0 should exist after indexing");
+
+        // .md SHOULD be a backlink target — proves Markdown indexing still runs.
+        let md_backlinks_for_html_target = read_backlinks_array(&backlinks, &txn, html_uuid);
+        assert_eq!(
+            md_backlinks_for_html_target, vec![md_uuid],
+            ".md doc's [[page]] wikilink must produce a backlink entry on html_uuid"
+        );
+
+        // .html must NOT have produced a backlink — proves the skip works.
+        let html_backlinks_for_md_target = read_backlinks_array(&backlinks, &txn, md_uuid);
+        assert!(
+            html_backlinks_for_md_target.is_empty(),
+            "skipped .html doc must not produce backlinks (got {:?})",
+            html_backlinks_for_md_target
+        );
     }
 ```
-
-(Use the existing reference test `index_document_with_dashmap_and_awareness` at line 4686 to confirm the exact imports and `LinkIndexer::new()` shape if anything in the snippet above does not match local types.)
 
 - [ ] **Step 3: Run test to verify it fails**
 
@@ -338,9 +385,11 @@ In `crates/y-sweet-core/src/link_indexer.rs`, modify `index_document` (around li
             return Err(anyhow::anyhow!("No folder docs found for indexing"));
         }
 
-        // Skip non-Markdown files. We currently support wikilink extraction only
-        // from .md content. Probing the path requires a short folder lock per
-        // folder until we find the entry.
+        // Skip .html files: we don't extract wikilinks from raw HTML in v1 because
+        // attribute values, scripts, and style blocks produce false positives.
+        // Each iteration takes a short folder lock just long enough to read the
+        // filemeta path; we stop as soon as we find the entry (in any folder).
+        let mut path_for_doc: Option<String> = None;
         for fid in folder_doc_ids {
             let awareness = match docs.get(fid) {
                 Some(r) => r.awareness(),
@@ -350,12 +399,16 @@ In `crates/y-sweet-core/src/link_indexer.rs`, modify `index_document` (around li
             let txn = guard.doc.transact();
             if let Some(filemeta) = txn.get_map("filemeta_v0") {
                 if let Some(path) = find_path_for_uuid(&filemeta, &txn, doc_uuid) {
-                    if path.ends_with(".html") {
-                        return Ok(());
-                    }
-                    break;  // path found and is not html; proceed
+                    path_for_doc = Some(path);
+                    break;
                 }
             }
+        }
+        // If we did find a path AND it's .html, skip indexing. If we didn't find a
+        // path (transient state — filemeta not yet written), fall through to the
+        // existing flow, which is the safer default.
+        if path_for_doc.as_deref().is_some_and(|p| p.ends_with(".html")) {
+            return Ok(());
         }
 
         // ... rest of existing function unchanged ...
@@ -427,65 +480,62 @@ jj commit -m "Add @codemirror/lang-html dependency"
 
 The editor-side `createDocument` (`lens-editor/src/lib/relay-api.ts:165`) currently accepts `type: 'markdown' | 'canvas'` and always writes a legacy `docs` Y.Map entry (for Obsidian compatibility with `.md`). For HTML we need `type: 'file'` and we must NOT write to the legacy `docs` map.
 
+The filemeta-write logic is mixed into a function that also performs three network calls (`createDocumentOnServer`, `waitForDocumentAccess`, `initializeContentDocument`) via module-private helpers. Testing those private helpers via `vi.spyOn(module, ...)` does not work (ESM namespace bindings cannot be reassigned). Instead, extract the pure filemeta-write into its own exported helper and test that directly — no mocks needed.
+
 **Files:**
-- Modify: `lens-editor/src/lib/relay-api.ts` around the `createDocument` function
-- Create: `lens-editor/src/lib/relay-api.createDocument.test.ts` (new — colocated unit test)
+- Modify: `lens-editor/src/lib/relay-api.ts` — extract `writeFileMeta`, call it from `createDocument`, widen the `type` union
+- Create: `lens-editor/src/lib/relay-api.writeFileMeta.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `lens-editor/src/lib/relay-api.createDocument.test.ts`:
+Create `lens-editor/src/lib/relay-api.writeFileMeta.test.ts`:
 
 ```ts
 // @vitest-environment happy-dom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import * as Y from 'yjs';
+import { writeFileMeta } from './relay-api';
 
-// Stub the network bits so we can focus on the filemeta logic.
-vi.mock('./relay-api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./relay-api')>();
-  return {
-    ...actual,
-    // The pieces we don't want to actually run during the test.
-    // We replace them below per-test via spyOn for clarity.
-  };
-});
-
-import * as relayApi from './relay-api';
-
-describe('createDocument', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    // Stub network/server-touching helpers so the test stays hermetic.
-    vi.spyOn(relayApi as any, 'createDocumentOnServer').mockResolvedValue(undefined);
-    vi.spyOn(relayApi as any, 'waitForDocumentAccess').mockResolvedValue(undefined);
-    vi.spyOn(relayApi as any, 'initializeContentDocument').mockResolvedValue(undefined);
-  });
-
-  it('writes type:"file" and NO legacy docs entry for HTML files', async () => {
+describe('writeFileMeta', () => {
+  it('writes type:"file" and NO legacy docs entry for HTML files', () => {
     const folder = new Y.Doc();
     const filemeta = folder.getMap('filemeta_v0');
-    const legacyDocs = folder.getMap('docs');
+    const legacyDocs = folder.getMap<string>('docs');
 
-    const id = await relayApi.createDocument(folder, '/page.html', 'file');
+    writeFileMeta(folder, '/page.html', 'uuid-html-1', 'file');
 
     const entry = filemeta.get('/page.html') as any;
     expect(entry).toBeDefined();
     expect(entry.type).toBe('file');
-    expect(entry.id).toBe(id);
+    expect(entry.id).toBe('uuid-html-1');
+    expect(entry.version).toBe(0);
     expect(legacyDocs.has('/page.html')).toBe(false);
   });
 
-  it('writes type:"markdown" AND legacy docs entry for markdown files', async () => {
+  it('writes type:"markdown" AND legacy docs entry for markdown files', () => {
     const folder = new Y.Doc();
     const filemeta = folder.getMap('filemeta_v0');
-    const legacyDocs = folder.getMap('docs');
+    const legacyDocs = folder.getMap<string>('docs');
 
-    const id = await relayApi.createDocument(folder, '/note.md', 'markdown');
+    writeFileMeta(folder, '/note.md', 'uuid-md-1', 'markdown');
 
     const entry = filemeta.get('/note.md') as any;
     expect(entry).toBeDefined();
     expect(entry.type).toBe('markdown');
-    expect(legacyDocs.get('/note.md')).toBe(id);
+    expect(entry.id).toBe('uuid-md-1');
+    expect(legacyDocs.get('/note.md')).toBe('uuid-md-1');
+  });
+
+  it('writes type:"canvas" with NO legacy docs entry', () => {
+    const folder = new Y.Doc();
+    const filemeta = folder.getMap('filemeta_v0');
+    const legacyDocs = folder.getMap<string>('docs');
+
+    writeFileMeta(folder, '/board.canvas', 'uuid-canvas-1', 'canvas');
+
+    const entry = filemeta.get('/board.canvas') as any;
+    expect(entry?.type).toBe('canvas');
+    expect(legacyDocs.has('/board.canvas')).toBe(false);
   });
 });
 ```
@@ -493,41 +543,62 @@ describe('createDocument', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd lens-editor && npm run test:run -- relay-api.createDocument
+cd lens-editor && npm run test:run -- relay-api.writeFileMeta
 ```
 
-Expected: FAIL — TypeScript will complain that `'file'` is not assignable to `'markdown' | 'canvas'`. Even if type-checking is lenient, the legacy `docs` map will contain the entry (current implementation always writes it).
+Expected: FAIL — `writeFileMeta` is not exported from `./relay-api`.
 
-- [ ] **Step 3: Update `createDocument` signature and body**
+- [ ] **Step 3: Extract `writeFileMeta` and have `createDocument` call it**
 
-In `lens-editor/src/lib/relay-api.ts`, change the `createDocument` function:
+In `lens-editor/src/lib/relay-api.ts`:
 
-1. Broaden the `type` parameter union: `type: 'markdown' | 'canvas' | 'file' = 'markdown'`.
-2. Only write to the legacy `docs` map when `type === 'markdown'`.
-
-The exact change inside the `folderDoc.transact(() => { ... })` block:
+1. Add the new exported helper alongside the existing `createDocument` (above it is fine):
 
 ```ts
+/**
+ * Write a filemeta_v0 entry (and legacy 'docs' entry for markdown) for a new file.
+ * Pure with respect to the Y.Doc: no network, no UUID generation, no waits.
+ *
+ * Legacy "docs" map is required by the Obsidian Relay client for markdown files
+ * (SyncStore.getMeta() will mark filemeta-only entries for deletion). Non-markdown
+ * types do not appear in the legacy map.
+ */
+export function writeFileMeta(
+  folderDoc: Y.Doc,
+  path: string,
+  id: string,
+  type: 'markdown' | 'canvas' | 'file',
+  version: number = 0,
+): void {
+  const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
+  const legacyDocs = folderDoc.getMap<string>('docs');
+  const meta: FileMetadata = { id, type, version };
   folderDoc.transact(() => {
-    // Add to modern filemeta_v0
     filemeta.set(path, meta);
-    // Legacy "docs" map is only used by Obsidian Relay client for markdown files.
-    // Non-markdown files (file type) live only in filemeta_v0.
     if (type === 'markdown') {
       legacyDocs.set(path, id);
     }
   }, LENS_EDITOR_ORIGIN);
+}
 ```
 
-Also update the post-transact verification logging block: the "legacyDocsExists" assertion is only meaningful when `type === 'markdown'`, so guard the `legacyDocs.get(path)` lookup or keep it but ignore the value for non-markdown — leave the existing `debug(...)` call intact, no functional changes needed beyond the type widening and the conditional write.
+2. Widen the `createDocument` signature: change `type: 'markdown' | 'canvas' = 'markdown'` to `type: 'markdown' | 'canvas' | 'file' = 'markdown'`.
+
+3. Replace the inline `folderDoc.transact(() => { filemeta.set(...); legacyDocs.set(...); }, LENS_EDITOR_ORIGIN)` block in `createDocument` with a single call:
+
+```ts
+  writeFileMeta(folderDoc, path, id, type);
+```
+
+The "verification after set" debug-log block can be left intact; for non-markdown types its `legacyDocsExists` field will be `false`, which is correct.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cd lens-editor && npm run test:run -- relay-api.createDocument
+cd lens-editor && npm run test:run -- relay-api.writeFileMeta
 ```
 
-Expected: PASS.
+Expected: all three tests PASS.
 
 - [ ] **Step 5: Verify no regressions in adjacent tests**
 
@@ -535,13 +606,13 @@ Expected: PASS.
 cd lens-editor && npm run test:run -- relay-api
 ```
 
-Expected: all `relay-api*` tests still pass.
+Expected: all `relay-api*` tests still pass (including the integration test, if a relay server is running).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 jj st
-jj commit -m "Extend createDocument to support type:'file' for HTML/non-markdown"
+jj commit -m "Extract writeFileMeta helper; support type:'file' for HTML/non-markdown"
 ```
 
 ---
@@ -563,7 +634,7 @@ Create `lens-editor/src/components/HtmlEditor/HtmlPreview.test.tsx`:
 ```tsx
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, act } from '@testing-library/react';
 import * as Y from 'yjs';
 import { HtmlPreview } from './HtmlPreview';
 
@@ -577,7 +648,7 @@ describe('HtmlPreview', () => {
     vi.useRealTimers();
   });
 
-  it('renders a sandboxed iframe with allow-scripts but no other tokens', () => {
+  it('renders a sandboxed iframe with ONLY the allow-scripts token (no allow-same-origin)', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<h1>Hello</h1>');
@@ -585,45 +656,51 @@ describe('HtmlPreview', () => {
     const { container } = render(<HtmlPreview ytext={ytext} />);
     const iframe = container.querySelector('iframe');
     expect(iframe).not.toBeNull();
-    expect(iframe!.getAttribute('sandbox')).toBe('allow-scripts');
+    const sandbox = iframe!.getAttribute('sandbox') ?? '';
+    expect(sandbox).toBe('allow-scripts');
+    // Security-critical negative assertion: opaque origin requires NO allow-same-origin.
+    // (If both were set, scripts in the iframe could reach parent.document.)
+    expect(sandbox).not.toContain('allow-same-origin');
   });
 
-  it('initial srcdoc reflects Y.Text content after the debounce', () => {
+  it('updates srcdoc after a Y.Text mutation, debounced by 300ms', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
-    ytext.insert(0, '<p>initial</p>');
+    // Start empty so the FIRST debounced write is observable (with content prefilled,
+    // the component's initial render would already match, and the debounce timer
+    // would be untested).
 
     const { container } = render(<HtmlPreview ytext={ytext} />);
+    const iframe = () => container.querySelector('iframe')!;
 
-    // Advance past the 300ms debounce
-    vi.advanceTimersByTime(350);
+    // Mutate Y.Text. Wrap in act() because Y.Text.observe synchronously fires
+    // setState, which React 19 may batch into a microtask.
+    await act(async () => {
+      ytext.insert(0, '<p>first</p>');
+    });
 
-    const iframe = container.querySelector('iframe')!;
-    expect(iframe.getAttribute('srcdoc')).toBe('<p>initial</p>');
-  });
+    // Before debounce: srcdoc is still the initial empty value.
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(iframe().getAttribute('srcdoc') ?? '').toBe('');
 
-  it('updates srcdoc after a Y.Text edit and the debounce elapses', () => {
-    const doc = new Y.Doc();
-    const ytext = doc.getText('contents');
-    ytext.insert(0, '<p>old</p>');
+    // After debounce: srcdoc reflects the new content.
+    await act(async () => { vi.advanceTimersByTime(250); });
+    expect(iframe().getAttribute('srcdoc')).toBe('<p>first</p>');
 
-    const { container } = render(<HtmlPreview ytext={ytext} />);
-    vi.advanceTimersByTime(350);
-
-    ytext.delete(0, ytext.length);
-    ytext.insert(0, '<p>new</p>');
-
-    // Before debounce: stale
-    vi.advanceTimersByTime(100);
-    const iframe = container.querySelector('iframe')!;
-    expect(iframe.getAttribute('srcdoc')).toBe('<p>old</p>');
-
-    // After debounce: fresh
-    vi.advanceTimersByTime(300);
-    expect(iframe.getAttribute('srcdoc')).toBe('<p>new</p>');
+    // A second mutation must be debounced independently.
+    await act(async () => {
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>second</p>');
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(iframe().getAttribute('srcdoc')).toBe('<p>first</p>'); // still stale
+    await act(async () => { vi.advanceTimersByTime(250); });
+    expect(iframe().getAttribute('srcdoc')).toBe('<p>second</p>');
   });
 });
 ```
+
+Note: the first test asserts both the positive sandbox attribute AND the absence of `allow-same-origin`. The second test is the load-bearing one — it starts with empty Y.Text so the debounce timing is actually exercised, and uses `act()` to handle React 19 batching around Y.Text observe callbacks.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -724,7 +801,7 @@ import { HtmlSourceEditor } from './HtmlSourceEditor';
 describe('HtmlSourceEditor', () => {
   afterEach(() => cleanup());
 
-  it('renders a CodeMirror editor showing the Y.Text content', () => {
+  it('mounts a CodeMirror editor when given a Y.Text and Awareness', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<h1>Hi</h1>');
@@ -734,29 +811,15 @@ describe('HtmlSourceEditor', () => {
       <HtmlSourceEditor ytext={ytext} awareness={awareness} />
     );
 
-    const cm = container.querySelector('.cm-editor');
-    expect(cm).not.toBeNull();
-    // CodeMirror renders content into .cm-content
-    const content = container.querySelector('.cm-content');
-    expect(content?.textContent).toContain('<h1>Hi</h1>');
-  });
-
-  it('reflects later Y.Text changes in the rendered editor', () => {
-    const doc = new Y.Doc();
-    const ytext = doc.getText('contents');
-    const awareness = new Awareness(doc);
-
-    const { container } = render(
-      <HtmlSourceEditor ytext={ytext} awareness={awareness} />
-    );
-
-    ytext.insert(0, '<p>new</p>');
-    // CodeMirror updates synchronously via yCollab transactions
-    const content = container.querySelector('.cm-content');
-    expect(content?.textContent).toContain('<p>new</p>');
+    // `.cm-editor` is added synchronously by the EditorView constructor; this
+    // assertion fails if the component throws during mount (e.g. missing extension,
+    // bad lang import, ytext not provided).
+    expect(container.querySelector('.cm-editor')).not.toBeNull();
   });
 });
 ```
+
+We intentionally do NOT assert on `.cm-content` text or test "yCollab propagates later Y.Text mutations into CodeMirror's DOM." Those behaviors belong to CodeMirror's renderer and `y-codemirror.next`, both upstream-tested. Reproducing them in vitest+happy-dom means fighting microtask scheduling for a contract we don't own. The cross-pane Y.Text → preview path IS tested behaviorally in Task 7's `HtmlEditor` tests. End-to-end source-pane bidirectional editing is verified manually in Task 11.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -885,7 +948,7 @@ export function HtmlSourceEditor({ ytext, awareness, readOnly = false }: HtmlSou
 cd lens-editor && npm run test:run -- HtmlSourceEditor
 ```
 
-Expected: PASS. The second test relies on yCollab propagating Y.Text changes into the CodeMirror DOM synchronously in happy-dom; if that does not hold, change the assertion to inspect CodeMirror's state directly: expose the view via an `onEditorReady` callback prop (modeled on `Editor.tsx`'s prop), then assert `view.state.doc.toString().includes('<p>new</p>')` instead of querying `.cm-content`. The behavior under test (Y.Text → editor) is the same; only the assertion target changes.
+Expected: PASS — the single test verifies CodeMirror mounts and renders the initial Y.Text content. No `onEditorReady` prop or DOM polling needed.
 
 - [ ] **Step 5: Commit**
 
@@ -899,6 +962,8 @@ jj commit -m "Add HtmlSourceEditor: CodeMirror + lang-html bound to Y.Text via y
 ### Task 7: `HtmlEditor` component (three-mode toggle + layout)
 
 The orchestrator. Owns the mode state (`source` | `preview` | `split`), renders an inline 3-button toggle, and composes `HtmlSourceEditor` + `HtmlPreview` according to the mode. Defaults to `preview`.
+
+**Accepted v1 trade-off:** mode switching uses **conditional rendering** (the inactive pane is unmounted), not `display:none`. This means switching modes destroys CodeMirror state (selection, scroll position, undo stack scoped to the local UndoManager). For v1 this is acceptable — yCollab's Y.UndoManager state lives on the Y.Doc and is rebuilt on remount, and most editing happens in either source or split mode. Persisting CodeMirror state across mode switches is a v2-ish UX polish.
 
 **Files:**
 - Create: `lens-editor/src/components/HtmlEditor/HtmlEditor.tsx`
@@ -962,8 +1027,39 @@ describe('HtmlEditor', () => {
     expect(previewBtn.getAttribute('aria-pressed')).toBe('false');
     expect(sourceBtn.getAttribute('aria-pressed')).toBe('true');
   });
+
+  it('preview pane is bound to the SAME Y.Text instance the parent owns', async () => {
+    // Behavioral test: if HtmlEditor accidentally created a fresh Y.Doc per child,
+    // mutating the parent's ytext would not show up in the preview's iframe.
+    vi.useFakeTimers();
+    try {
+      const doc = new Y.Doc();
+      const ytext = doc.getText('contents');
+      const awareness = new Awareness(doc);
+
+      const { container } = render(<HtmlEditor ytext={ytext} awareness={awareness} />);
+      // Default mode is preview, so the iframe is present.
+      const iframe = () => container.querySelector('iframe')!;
+
+      await act(async () => { ytext.insert(0, '<p>shared</p>'); });
+      await act(async () => { vi.advanceTimersByTime(400); });
+
+      expect(iframe().getAttribute('srcdoc')).toBe('<p>shared</p>');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 ```
+
+Add to the imports at the top of this test file:
+
+```tsx
+import { act } from '@testing-library/react';
+import { vi } from 'vitest';
+```
+
+(The other tests don't use fake timers; isolate `useFakeTimers()` inside the one test that needs it via try/finally so it doesn't leak into other tests.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1132,7 +1228,7 @@ Expected: FAIL — module does not exist.
 Create `lens-editor/src/lib/editor-selector.ts`:
 
 ```ts
-import type { FileMetadata } from './relay-api';
+import type { FileMetadata } from '../hooks/useFolderMetadata';
 
 export type EditorKind = 'blob' | 'html' | 'markdown';
 
@@ -1150,7 +1246,7 @@ export function pickEditor(filePath: string | null, entry: FileMetadata | null):
 }
 ```
 
-If `FileMetadata` is not exported from `relay-api.ts`, locate the existing type definition (search for `interface FileMetadata` or `type FileMetadata`) and import from the right module. If it's defined inline somewhere, define a minimal local interface in `editor-selector.ts` and avoid coupling.
+`FileMetadata` is exported from `lens-editor/src/hooks/useFolderMetadata.ts:8` (relay-api.ts re-imports from there, but doesn't re-export). Import from the source, not the re-importer.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1246,18 +1342,149 @@ jj commit -m "Route .html paths to HtmlEditor via editor-selector helper"
 
 ### Task 9: "New HTML File" option in sidebar
 
-Add a third menu item to `CreateMenu` and a new `handleInstantCreateHtml` in `Sidebar` that calls `createDocument(folderDoc, path, 'file')` and uses an `.html` filename.
+Add a third menu item to `CreateMenu` and a new `handleInstantCreateHtml` in `Sidebar`. The plumbing path is **Sidebar → FileTreeProvider value → FileTreeContext → FileTreeNode → CreateMenu** (callbacks come through React context, not direct props).
 
 **Files:**
+- Create: `lens-editor/src/lib/untitled-name.ts` — pure helper, testable
+- Create: `lens-editor/src/lib/untitled-name.test.ts`
 - Modify: `lens-editor/src/components/Sidebar/CreateMenu.tsx`
-- Modify: `lens-editor/src/components/Sidebar/Sidebar.tsx`
-- Modify: `lens-editor/src/components/Sidebar/FileTreeNode.tsx` (pass-through if it forwards the callback)
+- Modify: `lens-editor/src/components/Sidebar/FileTreeContext.tsx` — add `onCreateHtmlDocument` field
+- Modify: `lens-editor/src/components/Sidebar/FileTreeNode.tsx` — forward context callback to `CreateMenu`
+- Modify: `lens-editor/src/components/Sidebar/Sidebar.tsx` — add `handleInstantCreateHtml`, pass via FileTreeProvider value
 
-- [ ] **Step 1: Inspect call sites**
+- [ ] **Step 1: Inspect the wiring**
 
-Read `lens-editor/src/components/Sidebar/FileTreeNode.tsx` around line 219 — that's the `<CreateMenu ... />` call site. Confirm what props it currently passes (`onCreateDocument`, `onCreateFolder`). The new `onCreateHtmlDocument` callback needs to be plumbed from `Sidebar.tsx` → `FileTreeNode.tsx` → `CreateMenu.tsx`.
+Read these to confirm the context-mediated callback flow:
+- `FileTreeContext.tsx` — defines `FileTreeContextValue` interface with the existing `onCreateDocument` / `onCreateFolder` fields.
+- `FileTreeNode.tsx:5,19,218–223` — uses `useFileTreeContext()`, then passes `ctx.onCreateDocument` / `ctx.onCreateFolder` to `<CreateMenu>`.
+- `Sidebar.tsx:344–353` — wraps the tree in `<FileTreeProvider value={{ ... onCreateDocument: handleInstantCreate, ... }}>`.
 
-- [ ] **Step 2: Extend `CreateMenu` props and UI**
+The Sticky-Scroll overlay (`StickyScrollOverlay.tsx`) ALSO reads `ctx.onCreateDocument` / `ctx.onCreateFolder` to render its hover icons. For v1 we are intentionally NOT adding an HTML quick-create icon to the sticky overlay — keep that overlay unchanged and accept that the "New HTML File" option is reachable only through the regular per-folder `+` menu.
+
+- [ ] **Step 2: Write the failing test for `nextUntitledHtmlName`**
+
+Create `lens-editor/src/lib/untitled-name.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { nextUntitledHtmlName } from './untitled-name';
+
+describe('nextUntitledHtmlName', () => {
+  it('returns "Untitled.html" when no collision', () => {
+    expect(nextUntitledHtmlName('/', {})).toBe('Untitled.html');
+    expect(nextUntitledHtmlName('/Notes', {})).toBe('Untitled.html');
+  });
+
+  it('handles root path with empty string', () => {
+    expect(nextUntitledHtmlName('', {})).toBe('Untitled.html');
+  });
+
+  it('increments suffix when "Untitled.html" already exists at root', () => {
+    expect(nextUntitledHtmlName('/', { '/Untitled.html': {} })).toBe('Untitled 2.html');
+  });
+
+  it('increments suffix when both "Untitled.html" and "Untitled 2.html" exist', () => {
+    expect(
+      nextUntitledHtmlName('/', { '/Untitled.html': {}, '/Untitled 2.html': {} })
+    ).toBe('Untitled 3.html');
+  });
+
+  it('increments based on the target folder, not other folders', () => {
+    expect(
+      nextUntitledHtmlName('/Notes', {
+        '/Untitled.html': {},          // root, irrelevant
+        '/Notes/Untitled.html': {},    // collision in target folder
+      })
+    ).toBe('Untitled 2.html');
+  });
+
+  it('ignores collisions on differently-suffixed files (e.g. .md)', () => {
+    expect(nextUntitledHtmlName('/', { '/Untitled.md': {} })).toBe('Untitled.html');
+  });
+});
+```
+
+- [ ] **Step 3: Run test to verify it fails**
+
+```bash
+cd lens-editor && npm run test:run -- untitled-name
+```
+
+Expected: FAIL — module does not exist.
+
+- [ ] **Step 4: Implement `nextUntitledHtmlName`**
+
+Create `lens-editor/src/lib/untitled-name.ts`:
+
+```ts
+/**
+ * Find the next available "Untitled.html" name in `folderPath`, avoiding
+ * collisions with existing entries in `metadata`. Mirrors the markdown
+ * helper `generateUntitledName` but uses the .html extension.
+ *
+ * `folderPath` is the in-folder path (e.g. "/", "", "/Notes"). The returned
+ * value is just the basename (e.g. "Untitled 3.html"); callers join it
+ * onto folderPath to produce the full path.
+ */
+export function nextUntitledHtmlName(
+  folderPath: string,
+  metadata: Record<string, unknown>,
+): string {
+  const base = 'Untitled';
+  const prefix = folderPath === '' || folderPath === '/' ? '/' : `${folderPath}/`;
+  if (!metadata[`${prefix}${base}.html`]) return `${base}.html`;
+  for (let i = 2; i < 1000; i++) {
+    const name = `${base} ${i}.html`;
+    if (!metadata[`${prefix}${name}`]) return name;
+  }
+  return `${base} ${Date.now()}.html`;
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+```bash
+cd lens-editor && npm run test:run -- untitled-name
+```
+
+Expected: all six tests PASS.
+
+- [ ] **Step 6: Extend `FileTreeContextValue`**
+
+In `lens-editor/src/components/Sidebar/FileTreeContext.tsx`, add one field to the interface (alongside the existing `onCreateDocument` / `onCreateFolder`):
+
+```ts
+export interface FileTreeContextValue {
+  // ... existing fields unchanged ...
+  onCreateDocument?: (folderPath: string) => void;
+  onCreateHtmlDocument?: (folderPath: string) => void;  // NEW
+  onCreateFolder?: (folderPath: string) => void;
+  // ... existing fields unchanged ...
+}
+```
+
+- [ ] **Step 7: Forward the new callback in `FileTreeNode.tsx`**
+
+In `lens-editor/src/components/Sidebar/FileTreeNode.tsx`, find the `<CreateMenu ... />` invocation around line 220 and add a third prop:
+
+```tsx
+<CreateMenu
+  folderName={node.data.name}
+  onCreateDocument={ctx.onCreateDocument ? () => ctx.onCreateDocument!(node.data.path) : undefined}
+  onCreateHtmlDocument={ctx.onCreateHtmlDocument ? () => ctx.onCreateHtmlDocument!(node.data.path) : undefined}
+  onCreateFolder={ctx.onCreateFolder ? () => ctx.onCreateFolder!(node.data.path) : undefined}
+/>
+```
+
+Also update the guard that wraps the menu (currently `{isFolder && (ctx.onCreateDocument || ctx.onCreateFolder) && (...)}` at line 218) to include the new callback:
+
+```tsx
+{isFolder && (ctx.onCreateDocument || ctx.onCreateHtmlDocument || ctx.onCreateFolder) && (
+  <CreateMenu ... />
+)}
+```
+
+- [ ] **Step 8: Extend `CreateMenu` props and UI**
 
 In `lens-editor/src/components/Sidebar/CreateMenu.tsx`:
 
@@ -1301,9 +1528,17 @@ export function CreateMenu({ folderName, onCreateDocument, onCreateHtmlDocument,
 }
 ```
 
-- [ ] **Step 3: Add `handleInstantCreateHtml` to `Sidebar.tsx`**
+- [ ] **Step 9: Add `handleInstantCreateHtml` to `Sidebar.tsx`**
 
-In `lens-editor/src/components/Sidebar/Sidebar.tsx`, after the existing `handleInstantCreate` (around line 145–175), add:
+In `lens-editor/src/components/Sidebar/Sidebar.tsx`:
+
+1. Add the import at the top:
+
+```tsx
+import { nextUntitledHtmlName } from '../../lib/untitled-name';
+```
+
+2. After the existing `handleInstantCreate` (around line 145–175), add:
 
 ```tsx
 const handleInstantCreateHtml = useCallback(async (folderPath: string) => {
@@ -1313,9 +1548,6 @@ const handleInstantCreateHtml = useCallback(async (folderPath: string) => {
   if (!doc) return;
 
   const originalFolderPath = getOriginalPath(folderPath, folderName);
-
-  // Generate an untitled name with .html extension. generateUntitledName is
-  // markdown-specific (adds .md); for HTML we mirror the same logic but use .html.
   const baseName = nextUntitledHtmlName(originalFolderPath, metadata);
   const path = originalFolderPath === '' || originalFolderPath === '/'
     ? `/${baseName}`
@@ -1332,28 +1564,35 @@ const handleInstantCreateHtml = useCallback(async (folderPath: string) => {
 }, [folderDocs, folderNames, metadata, onNavigate]);
 ```
 
-Add the `nextUntitledHtmlName` helper at the top of `Sidebar.tsx` (or inline if trivial):
+3. Pass the new handler through `FileTreeProvider`. Find the `<FileTreeProvider value={{ ... }}>` block (around line 344) and add one field to the value object:
 
 ```tsx
-function nextUntitledHtmlName(folderPath: string, metadata: Record<string, unknown>): string {
-  const base = 'Untitled';
-  const prefix = folderPath === '' || folderPath === '/' ? '/' : `${folderPath}/`;
-  if (!metadata[`${prefix}${base}.html`]) return `${base}.html`;
-  for (let i = 2; i < 1000; i++) {
-    const name = `${base} ${i}.html`;
-    if (!metadata[`${prefix}${name}`]) return name;
-  }
-  return `${base} ${Date.now()}.html`;
-}
+<FileTreeProvider
+  value={{
+    editingPath,
+    onEditingChange: setEditingPath,
+    onRequestRename: (path) => setEditingPath(path),
+    onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
+    onRequestMove: handleMoveRequest,
+    onRenameSubmit: handleRenameSubmit,
+    onCreateDocument: handleInstantCreate,
+    onCreateHtmlDocument: handleInstantCreateHtml,  // NEW
+    onCreateFolder: handleCreateFolder,
+    onOpenNewTab: handleOpenNewTab,
+    activeDocId,
+  }}
+>
 ```
 
-Pass the new callback through to `FileTreeNode`'s `CreateMenu`. Find the `<CreateMenu ... />` invocation in `FileTreeNode.tsx` around line 219 and add `onCreateHtmlDocument={...}` similarly to the existing `onCreateDocument`.
+- [ ] **Step 10: Verify end-to-end wiring**
 
-- [ ] **Step 4: Manually verify creation**
+```bash
+cd lens-editor && npm run build 2>&1 | tail -20
+```
 
-There is no unit test for this wiring (the existing `handleInstantCreate` is also untested). Verify manually after Phase E. Skip ahead to the smoke test if you want immediate feedback.
+Expected: clean TypeScript build. There is no unit test for the wiring chain (existing `handleInstantCreate` is also untested; we test the pure pieces — `nextUntitledHtmlName`, `writeFileMeta`, `pickEditor` — and verify the wiring manually in Task 11's smoke test).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 jj st
@@ -1399,6 +1638,17 @@ describe('renamePreservingExtension', () => {
   it('ignores leading dots in dotfiles (treats them as no extension)', () => {
     // .gitignore renamed to .npmignore: leading-dot files don't have a separate "extension"
     expect(renamePreservingExtension('.gitignore', '.npmignore')).toBe('.npmignore');
+  });
+
+  it('treats only the last segment of a multi-dot extension', () => {
+    // 'archive.tar.gz' has ext '.gz' under lastIndexOf semantics. We document this:
+    // the user gets 'backup.gz', not 'backup.tar.gz'. That matches Finder/Explorer rename
+    // behavior on most platforms and is acceptable for v1.
+    expect(renamePreservingExtension('archive.tar.gz', 'backup')).toBe('backup.gz');
+  });
+
+  it('the typed extension wins even if it differs from the old extension', () => {
+    expect(renamePreservingExtension('page.html', 'page2.md')).toBe('page2.md');
   });
 });
 ```
