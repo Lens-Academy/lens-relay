@@ -2,7 +2,7 @@ import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 import { getClientToken } from './auth';
-import { RELAY_ID } from '../App';
+import { RELAY_ID } from './constants';
 
 // Transaction origin identifier - Obsidian uses this pattern to identify
 // the source of Y.js changes and avoid processing its own updates
@@ -153,6 +153,30 @@ async function initializeContentDocument(fullDocId: string): Promise<void> {
 }
 
 /**
+ * Write file metadata for a document path.
+ *
+ * The legacy docs map is markdown-only for Obsidian compatibility; non-markdown
+ * file types should exist only in filemeta_v0.
+ */
+export function writeFileMeta(
+  folderDoc: Y.Doc,
+  path: string,
+  id: string,
+  type: 'markdown' | 'canvas' | 'file',
+  version: number = 0,
+): void {
+  const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
+  const legacyDocs = folderDoc.getMap<string>('docs');
+  const meta: FileMetadata = { id, type, version };
+  folderDoc.transact(() => {
+    filemeta.set(path, meta);
+    if (type === 'markdown') {
+      legacyDocs.set(path, id);
+    }
+  }, LENS_EDITOR_ORIGIN);
+}
+
+/**
  * Create a new document in the folder's filemeta_v0 Y.Map.
  *
  * This function:
@@ -165,9 +189,10 @@ async function initializeContentDocument(fullDocId: string): Promise<void> {
 export async function createDocument(
   folderDoc: Y.Doc,
   path: string,
-  type: 'markdown' | 'canvas' = 'markdown'
+  type: 'markdown' | 'canvas' | 'file' = 'markdown'
 ): Promise<string> {
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
+  const legacyDocs = folderDoc.getMap<string>('docs');
   const id = generateUUID();
   const fullDocId = `${RELAY_ID}-${id}`;
 
@@ -190,17 +215,7 @@ export async function createDocument(
     debug('createDocument', 'WARNING: entry already exists!', existing);
   }
 
-  // IMPORTANT: Obsidian's SyncStore.getMeta() requires document entries to exist
-  // in BOTH filemeta_v0 AND the legacy "docs" Y.Map. If an entry exists only in
-  // filemeta_v0, it gets marked for deletion! (SyncStore.ts:336-339)
-  const legacyDocs = folderDoc.getMap<string>('docs');
-
-  folderDoc.transact(() => {
-    // Add to modern filemeta_v0
-    filemeta.set(path, meta);
-    // Add to legacy docs map (path -> guid)
-    legacyDocs.set(path, id);
-  }, LENS_EDITOR_ORIGIN);
+  writeFileMeta(folderDoc, path, id, type);
 
   // Verify the entries were added
   const verifyFilemeta = filemeta.get(path);
@@ -221,14 +236,16 @@ export async function createDocument(
   // "Wrong Folder" for a freshly-created document.
   await waitForDocumentAccess(fullDocId);
 
-  // Step 3: Initialize content document to trigger Obsidian sync
-  // This adds an underscore so Obsidian creates the file immediately
-  try {
-    await initializeContentDocument(fullDocId);
-  } catch (err) {
-    // Don't fail the whole operation if content init fails
-    // The document is still created and will sync when edited
-    debug('createDocument', 'WARNING: failed to initialize content', err);
+  // Step 3: Initialize markdown content document to trigger Obsidian sync.
+  // Non-markdown files must start empty.
+  if (type === 'markdown') {
+    try {
+      await initializeContentDocument(fullDocId);
+    } catch (err) {
+      // Don't fail the whole operation if content init fails
+      // The document is still created and will sync when edited
+      debug('createDocument', 'WARNING: failed to initialize content', err);
+    }
   }
 
   return id;
