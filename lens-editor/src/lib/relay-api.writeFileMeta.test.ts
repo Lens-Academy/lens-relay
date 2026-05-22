@@ -19,6 +19,21 @@ describe('writeFileMeta', () => {
     expect(legacyDocs.has('/page.html')).toBe(false);
   });
 
+  it('removes stale legacy docs entry when writing file metadata for an existing markdown path', () => {
+    const folder = new Y.Doc();
+    const filemeta = folder.getMap('filemeta_v0');
+    const legacyDocs = folder.getMap<string>('docs');
+    legacyDocs.set('/page.html', 'old-md-id');
+
+    writeFileMeta(folder, '/page.html', 'uuid-html-1', 'file');
+
+    const entry = filemeta.get('/page.html') as any;
+    expect(entry).toBeDefined();
+    expect(entry.type).toBe('file');
+    expect(entry.id).toBe('uuid-html-1');
+    expect(legacyDocs.has('/page.html')).toBe(false);
+  });
+
   it('writes type:"markdown" AND legacy docs entry for markdown files', () => {
     const folder = new Y.Doc();
     const filemeta = folder.getMap('filemeta_v0');

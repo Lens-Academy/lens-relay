@@ -172,6 +172,8 @@ export function writeFileMeta(
     filemeta.set(path, meta);
     if (type === 'markdown') {
       legacyDocs.set(path, id);
+    } else {
+      legacyDocs.delete(path);
     }
   }, LENS_EDITOR_ORIGIN);
 }
@@ -206,8 +208,7 @@ export async function createDocument(
   // Step 2: Add to filemeta (this syncs via Y.js)
   // Use transact() with origin like Obsidian does - this allows other clients
   // to identify the source of the change
-  const meta: FileMetadata = { id, type, version: 0 };
-  debug('createDocument', 'adding to filemeta Y.Map...', { path, meta });
+  debug('createDocument', 'adding to filemeta Y.Map...', { path, id, type, version: 0 });
 
   // Check if entry already exists or is being deleted
   const existing = filemeta.get(path);
