@@ -17,6 +17,7 @@ import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUn
 import { nextUntitledHtmlName } from '../../lib/untitled-name';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab } from '../../lib/url-utils';
+import { renamePreservingExtension } from '../../lib/filename-utils';
 
 export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -125,7 +126,7 @@ export function Sidebar() {
     const oldName = parts[parts.length - 1];
     parts[parts.length - 1] = isFolder
       ? newName
-      : oldName.endsWith('.md') && !newName.endsWith('.md') ? `${newName}.md` : newName;
+      : renamePreservingExtension(oldName, newName);
     const newPath = parts.join('/');
     try {
       await movePath(prefixedOldPath.slice(1), newPath);
