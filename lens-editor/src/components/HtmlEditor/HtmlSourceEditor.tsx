@@ -55,6 +55,7 @@ export function HtmlSourceEditor({
     });
 
     const state = EditorState.create({
+      doc: ytext.toString(),
       extensions: [
         ...(readOnly ? [EditorView.editable.of(false), EditorState.readOnly.of(true)] : []),
         indentUnit.of('\t'),

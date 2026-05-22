@@ -8,7 +8,7 @@ import { HtmlSourceEditor } from './HtmlSourceEditor';
 describe('HtmlSourceEditor', () => {
   afterEach(() => cleanup());
 
-  it('mounts a CodeMirror editor when given a Y.Text and Awareness', () => {
+  it('mounts a CodeMirror editor seeded from existing Y.Text content', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<h1>Hi</h1>');
@@ -19,5 +19,6 @@ describe('HtmlSourceEditor', () => {
     );
 
     expect(container.querySelector('.cm-editor')).not.toBeNull();
+    expect(container.querySelector('.cm-content')?.textContent).toContain('<h1>Hi</h1>');
   });
 });

@@ -134,21 +134,25 @@ pub async fn execute(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: new_string".to_string())?;
 
-    // 2. Reject if AI included CriticMarkup suggestion syntax in its input
-    //    (comment delimiters {>> <<} are allowed — AI can read and write comments)
-    super::critic_markup::reject_if_contains_markup(old_string, "old_string")?;
-    super::critic_markup::reject_if_contains_markup(new_string, "new_string")?;
-
-    // 2b. Validate comment preservation: non-AI comments must be kept intact
-    super::critic_markup::validate_comment_preservation(old_string, new_string)?;
-
-    // 3. Resolve document path to doc_id
+    // 2. Resolve document path to doc_id
     let doc_info = server
         .doc_resolver()
         .resolve_path(file_path)
         .ok_or_else(|| format!("Error: Document not found: {}", file_path))?;
 
-    // 4. Check read-before-edit: session must have read this document first
+    let raw_ytext_file = blob::is_raw_ytext_file(file_path);
+
+    if !raw_ytext_file {
+        // Reject if AI included CriticMarkup suggestion syntax in markdown input.
+        // Comment delimiters {>> <<} are allowed — AI can read and write comments.
+        super::critic_markup::reject_if_contains_markup(old_string, "old_string")?;
+        super::critic_markup::reject_if_contains_markup(new_string, "new_string")?;
+
+        // Validate comment preservation: non-AI comments must be kept intact.
+        super::critic_markup::validate_comment_preservation(old_string, new_string)?;
+    }
+
+    // 3. Check read-before-edit: session must have read this document first
     {
         let session = server
             .mcp_sessions
@@ -168,7 +172,11 @@ pub async fn execute(
         return edit_blob_file(server, &doc_info, file_path, old_string, new_string).await;
     }
 
-    // 5. Reload from storage if GC evicted the doc
+    if raw_ytext_file {
+        return edit_raw_ytext_file(server, &doc_info, file_path, old_string, new_string).await;
+    }
+
+    // 4. Reload from storage if GC evicted the doc
     server
         .ensure_doc_loaded(&doc_info.doc_id)
         .await
@@ -221,7 +229,7 @@ pub async fn execute(
             .get(&doc_info.doc_id)
             .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
         let awareness = doc_ref.awareness();
-        let mut guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+        let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
         let mut txn = guard.doc.transact_mut();
         let text = txn.get_or_insert_text("contents");
 
@@ -276,6 +284,70 @@ pub async fn execute(
         "Edited {}: replaced {} characters with CriticMarkup suggestion for human review.",
         file_path,
         effective_old.len()
+    ))
+}
+
+/// Edit a raw Y.Text file (e.g. .html) by direct text replacement — no CriticMarkup wrapping.
+async fn edit_raw_ytext_file(
+    server: &Arc<Server>,
+    doc_info: &y_sweet_core::doc_resolver::DocInfo,
+    file_path: &str,
+    old_string: &str,
+    new_string: &str,
+) -> Result<String, String> {
+    server
+        .ensure_doc_loaded(&doc_info.doc_id)
+        .await
+        .map_err(|e| format!("Error: Failed to load document {}: {}", file_path, e))?;
+
+    {
+        let doc_ref = server
+            .docs()
+            .get(&doc_info.doc_id)
+            .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
+        let awareness = doc_ref.awareness();
+        let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+        let mut txn = guard.doc.transact_mut();
+        let text = txn.get_or_insert_text("contents");
+        let content = text.get_string(&txn);
+
+        let matches: Vec<usize> = content.match_indices(old_string).map(|(i, _)| i).collect();
+        let match_start = match matches.len() {
+            0 => {
+                return Err(format!(
+                    "Error: old_string not found in {}. Make sure it matches exactly.",
+                    file_path
+                ))
+            }
+            1 => matches[0],
+            n => {
+                return Err(format!(
+                    "Error: old_string is not unique in {} ({} occurrences). Include more context.",
+                    file_path, n
+                ))
+            }
+        };
+
+        let start = content[..match_start].chars().count() as u32;
+        let len = old_string.chars().count() as u32;
+        text.remove_range(&mut txn, start, len);
+        text.insert(&mut txn, start, new_string);
+    }
+
+    {
+        let doc_ref = server
+            .docs()
+            .get(&doc_info.doc_id)
+            .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
+        if let Err(e) = doc_ref.sync_kv().persist().await {
+            tracing::error!("Failed to persist edit for {}: {:?}", doc_info.doc_id, e);
+        }
+    }
+
+    Ok(format!(
+        "Edited {}: replaced {} characters.",
+        file_path,
+        old_string.len()
     ))
 }
 
@@ -392,6 +464,53 @@ mod tests {
             "Surrounding text should be preserved: {}",
             content
         );
+    }
+
+    #[tokio::test]
+    async fn edit_html_replaces_raw_ytext_without_criticmarkup() {
+        let server =
+            build_test_server(&[("/Page.html", "uuid-html", "<h1>Hello</h1>")]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-html");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Page.html",
+                "old_string": "Hello",
+                "new_string": "Hi",
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
+        let content = read_doc_content(&server, &doc_id);
+        assert_eq!(content, "<h1>Hi</h1>");
+        assert!(!content.contains("{++"));
+        assert!(!content.contains("{--"));
+    }
+
+    #[tokio::test]
+    async fn edit_html_allows_literal_criticmarkup_like_text() {
+        let server =
+            build_test_server(&[("/Page.html", "uuid-html", "<p>placeholder</p>")]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-html");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Page.html",
+                "old_string": "placeholder",
+                "new_string": "{++literal++}",
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "edit should allow raw HTML text: {:?}", result);
+        assert_eq!(read_doc_content(&server, &doc_id), "<p>{++literal++}</p>");
     }
 
     #[tokio::test]

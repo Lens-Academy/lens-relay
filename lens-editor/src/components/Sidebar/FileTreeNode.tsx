@@ -53,8 +53,9 @@ export function FileTreeNode({
   }, [isEditing, node.data.name]);
 
   const handleRename = () => {
+    if (!ctx.onRequestRename) return;
     blurGuardRef.current = true; // Arm guard before state change
-    ctx.onRequestRename?.(node.data.path);
+    ctx.onRequestRename(node.data.path);
     ctx.onEditingChange(node.data.path);
     setEditValue(node.data.name);
   };

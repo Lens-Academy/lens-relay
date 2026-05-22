@@ -184,4 +184,72 @@ describe('Sidebar file tree rename behavior', () => {
     expect(screen.queryByRole('button', { name: /Create in Lens/i })).toBeNull();
     expect(screen.queryByText('New HTML File')).toBeNull();
   });
+
+  it('hides rename, move, and delete actions for view-only users', async () => {
+    const metadata: FolderMetadata = {
+      '/Lens/source.html': { id: '44444444-4444-4444-8444-444444444444', type: 'file', version: 0 },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/some-doc']}>
+        <AuthProvider role="view" folderUuid={null} isAllFolders>
+          <NavigationContext.Provider
+            value={{
+              metadata,
+              folderDocs: new Map([['Lens', new Y.Doc()]]),
+              folderNames: ['Lens'],
+              errors: new Map(),
+              onNavigate: vi.fn(),
+              justCreatedRef: { current: false },
+            }}
+          >
+            <Sidebar />
+          </NavigationContext.Provider>
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    const fileRow = screen
+      .getByText('source.html')
+      .closest('[class*="cursor-pointer"]') as HTMLElement;
+
+    fireEvent.contextMenu(fileRow);
+
+    expect(screen.queryByText('Rename')).not.toBeInTheDocument();
+    expect(screen.queryByText('Move to...')).not.toBeInTheDocument();
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument();
+  });
+
+  it('does not enter inline rename on double-click for view-only users', async () => {
+    const metadata: FolderMetadata = {
+      '/Lens/source.html': { id: '55555555-5555-4555-8555-555555555555', type: 'file', version: 0 },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/some-doc']}>
+        <AuthProvider role="view" folderUuid={null} isAllFolders>
+          <NavigationContext.Provider
+            value={{
+              metadata,
+              folderDocs: new Map([['Lens', new Y.Doc()]]),
+              folderNames: ['Lens'],
+              errors: new Map(),
+              onNavigate: vi.fn(),
+              justCreatedRef: { current: false },
+            }}
+          >
+            <Sidebar />
+          </NavigationContext.Provider>
+        </AuthProvider>
+      </MemoryRouter>
+    );
+
+    const fileRow = screen
+      .getByText('source.html')
+      .closest('[class*="cursor-pointer"]') as HTMLElement;
+
+    fireEvent.doubleClick(fileRow);
+
+    expect(screen.queryByDisplayValue('source.html')).not.toBeInTheDocument();
+  });
 });

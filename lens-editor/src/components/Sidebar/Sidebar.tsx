@@ -370,10 +370,10 @@ export function Sidebar() {
                   value={{
                     editingPath,
                     onEditingChange: setEditingPath,
-                    onRequestRename: (path) => setEditingPath(path),
-                    onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
-                    onRequestMove: handleMoveRequest,
-                    onRenameSubmit: handleRenameSubmit,
+                    onRequestRename: canWrite ? (path) => setEditingPath(path) : undefined,
+                    onRequestDelete: canWrite ? (path, name) => setDeleteTarget({ path, name }) : undefined,
+                    onRequestMove: canWrite ? handleMoveRequest : undefined,
+                    onRenameSubmit: canWrite ? handleRenameSubmit : undefined,
                     onCreateDocument: canWrite ? handleInstantCreate : undefined,
                     onCreateHtmlDocument: canWrite ? handleInstantCreateHtml : undefined,
                     onCreateFolder: canWrite ? handleCreateFolder : undefined,
@@ -384,7 +384,7 @@ export function Sidebar() {
                   <FileTree
                     data={filteredTree}
                     onSelect={handleSelect}
-                    onMove={handleDragMove}
+                    onMove={canWrite ? handleDragMove : undefined}
                     openAll={!!fileFilter}
                     activeDocId={activeDocId}
                   />
