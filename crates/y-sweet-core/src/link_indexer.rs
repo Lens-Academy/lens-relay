@@ -1581,6 +1581,15 @@ impl LinkIndexer {
         if doc_path.as_deref().is_some_and(|path| path.ends_with(".html")) {
             // v1 wikilink extraction is Markdown-oriented; HTML can contain false
             // positives in attributes, scripts, and styles.
+            let empty_targets = HashSet::new();
+            for fid in folder_doc_ids {
+                let awareness = match docs.get(fid) {
+                    Some(r) => r.awareness(),
+                    None => continue,
+                };
+                let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+                apply_backlink_diff(&guard.doc, doc_uuid, &empty_targets);
+            }
             return Ok(());
         }
 
@@ -4822,6 +4831,13 @@ mod tests {
             extra_entry.insert("type".to_string(), Any::String("markdown".into()));
             extra_entry.insert("version".to_string(), Any::Number(0.0));
             filemeta.insert(&mut txn, "/extra.md", Any::Map(extra_entry.into()));
+
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.insert(
+                &mut txn,
+                notes_uuid,
+                vec![Any::String(html_uuid.into())],
+            );
         }
         docs.insert(folder_id.clone(), folder);
 
