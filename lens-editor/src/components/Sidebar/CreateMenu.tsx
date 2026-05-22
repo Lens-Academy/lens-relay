@@ -3,10 +3,11 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 interface CreateMenuProps {
   folderName: string;
   onCreateDocument?: () => void;
+  onCreateHtmlDocument?: () => void;
   onCreateFolder?: () => void;
 }
 
-export function CreateMenu({ folderName, onCreateDocument, onCreateFolder }: CreateMenuProps) {
+export function CreateMenu({ folderName, onCreateDocument, onCreateHtmlDocument, onCreateFolder }: CreateMenuProps) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -61,6 +62,18 @@ export function CreateMenu({ folderName, onCreateDocument, onCreateFolder }: Cre
               }}
             >
               New File
+            </button>
+          )}
+          {onCreateHtmlDocument && (
+            <button
+              className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateHtmlDocument();
+                handleClose();
+              }}
+            >
+              New HTML File
             </button>
           )}
           {onCreateFolder && (

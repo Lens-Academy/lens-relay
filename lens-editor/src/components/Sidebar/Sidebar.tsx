@@ -14,6 +14,7 @@ import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } from '../../lib/tree-utils';
 import { createDocument, createFolder, deleteDocument, movePath } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
+import { nextUntitledHtmlName } from '../../lib/untitled-name';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab } from '../../lib/url-utils';
 
@@ -164,6 +165,28 @@ export function Sidebar() {
       onNavigate(compoundDocId);
     } catch (error) {
       console.error('Failed to create document:', error);
+    }
+  }, [folderDocs, folderNames, metadata, onNavigate, justCreatedRef]);
+
+  const handleInstantCreateHtml = useCallback(async (folderPath: string) => {
+    const folderName = getFolderNameFromPath(folderPath, folderNames);
+    if (!folderName) return;
+    const doc = folderDocs.get(folderName);
+    if (!doc) return;
+
+    const originalFolderPath = getOriginalPath(folderPath, folderName);
+    const baseName = nextUntitledHtmlName(folderPath, metadata);
+    const path = originalFolderPath === '' || originalFolderPath === '/'
+      ? `/${baseName}`
+      : `${originalFolderPath}/${baseName}`;
+
+    try {
+      const id = await createDocument(doc, path, 'file');
+      justCreatedRef.current = true;
+      const compoundDocId = `${RELAY_ID}-${id}`;
+      onNavigate(compoundDocId);
+    } catch (error) {
+      console.error('Failed to create HTML document:', error);
     }
   }, [folderDocs, folderNames, metadata, onNavigate, justCreatedRef]);
 
@@ -349,6 +372,7 @@ export function Sidebar() {
                     onRequestMove: handleMoveRequest,
                     onRenameSubmit: handleRenameSubmit,
                     onCreateDocument: handleInstantCreate,
+                    onCreateHtmlDocument: handleInstantCreateHtml,
                     onCreateFolder: handleCreateFolder,
                     onOpenNewTab: handleOpenNewTab,
                     activeDocId,
