@@ -24,6 +24,72 @@ beforeEach(() => {
 });
 
 describe('Sidebar file tree rename behavior', () => {
+  it('preserves markdown extension when renaming a markdown file without typing an extension', async () => {
+    const user = userEvent.setup();
+    const docId = '11111111-1111-4111-8111-111111111111';
+    const oldPath = 'Lens/source.md';
+    const newPath = 'Lens/renamed.md';
+    const serverPaths = new Map<string, string>([[oldPath, docId]]);
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body ?? '{}'));
+
+      if (
+        url === '/api/relay/move' &&
+        body.path === oldPath &&
+        body.new_path === '/renamed.md'
+      ) {
+        const movedDocId = serverPaths.get(oldPath);
+        if (movedDocId) {
+          serverPaths.delete(oldPath);
+          serverPaths.set(newPath, movedDocId);
+        }
+        return new Response(JSON.stringify({ links_rewritten: 0 }), { status: 200 });
+      }
+
+      return new Response(`Move request did not preserve markdown extension: ${JSON.stringify(body)}`, { status: 404 });
+    });
+
+    const metadata: FolderMetadata = {
+      '/Lens/source.md': { id: docId, type: 'file', version: 0 },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/some-doc']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs: new Map([['Lens', new Y.Doc()]]),
+            folderNames: ['Lens'],
+            errors: new Map(),
+            onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    const fileRow = screen
+      .getByText('source.md')
+      .closest('[class*="cursor-pointer"]') as HTMLElement;
+
+    fireEvent.contextMenu(fileRow);
+    await user.click(await screen.findByText('Rename'));
+
+    const input = await screen.findByDisplayValue('source.md');
+    await new Promise(resolve => setTimeout(resolve, 75));
+    await user.clear(input);
+    await user.type(input, 'renamed{Enter}');
+
+    await waitFor(() => {
+      expect(serverPaths.get(newPath)).toBe(docId);
+    });
+    expect(serverPaths.has(oldPath)).toBe(false);
+  });
+
   it('renames timestamps JSON files without forcing a markdown extension', async () => {
     const user = userEvent.setup();
     const docId = '22222222-2222-4222-8222-222222222222';

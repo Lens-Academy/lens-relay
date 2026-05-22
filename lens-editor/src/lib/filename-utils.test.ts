@@ -22,6 +22,10 @@ describe('renamePreservingExtension', () => {
     expect(renamePreservingExtension('.gitignore', '.npmignore')).toBe('.npmignore');
   });
 
+  it('treats dotfiles with multiple dots as extensionless', () => {
+    expect(renamePreservingExtension('.env.local', 'env')).toBe('env');
+  });
+
   it('treats only the last segment of a multi-dot extension', () => {
     expect(renamePreservingExtension('archive.tar.gz', 'backup')).toBe('backup.gz');
   });

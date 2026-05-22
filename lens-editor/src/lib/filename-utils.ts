@@ -6,6 +6,7 @@ export function renamePreservingExtension(oldName: string, newName: string): str
 }
 
 function extensionOf(name: string): string {
+  if (name.startsWith('.')) return '';
   const idx = name.lastIndexOf('.');
   if (idx <= 0) return '';
   return name.slice(idx);
