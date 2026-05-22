@@ -259,6 +259,8 @@ Confirm signature at line 1552: `pub(crate) fn index_document(&self, doc_id: &st
 
 Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/y-sweet-core/src/link_indexer.rs`. The reference test `index_document_with_dashmap_and_awareness` at line 4686 shows the required doc-ID shape: `parse_doc_id` (line 24) requires `<36-char-uuid>-<36-char-uuid>` with a `-` at byte 36, so use full UUIDs, not short strings.
 
+**Wikilink resolution note:** the link indexer's `resolve_in_virtual_tree` (link_indexer.rs:236) is **markdown-only** — it skips entries whose `entry_type != "markdown"` (line 247) and the absolute-fallback path it computes is hardcoded `/{link_name}.md` (line 240). So `[[anything]]` never resolves to a `.html` entry, regardless of whether we add the skip. The test below avoids this trap: the `.html` doc tries to wikilink to a sibling `.md` (which the resolver WOULD resolve if we indexed the .html — so the skip is observably preventing the backlink), and the `.md` sibling wikilinks to a SECOND `.md` file (which the resolver can resolve, so we can prove Markdown indexing still works).
+
 ```rust
     #[tokio::test]
     async fn index_document_skips_html_files() {
@@ -270,15 +272,18 @@ Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/y-sweet-co
         let relay_id = "cb696037-0f72-4e93-8717-4e433129d789";
         let folder_uuid = "b0000001-0000-4000-8000-000000000001";
         let html_uuid   = "a0000001-0000-4000-8000-000000000001";
-        let md_uuid     = "a0000002-0000-4000-8000-000000000002";
+        let notes_uuid  = "a0000002-0000-4000-8000-000000000002";
+        let extra_uuid  = "a0000003-0000-4000-8000-000000000003";
 
         let folder_id = format!("{}-{}", relay_id, folder_uuid);
         let html_id   = format!("{}-{}", relay_id, html_uuid);
-        let md_id     = format!("{}-{}", relay_id, md_uuid);
+        let notes_id  = format!("{}-{}", relay_id, notes_uuid);
+        let extra_id  = format!("{}-{}", relay_id, extra_uuid);
 
         let docs: DashMap<String, DocWithSyncKv> = DashMap::new();
 
-        // Folder doc with two files: an .html and an .md sibling.
+        // Folder doc with three files: .html, .md ("notes"), and another .md ("extra")
+        // which is the wikilink target of /notes.md.
         let folder = DocWithSyncKv::new(&folder_id, None, || (), None).await.unwrap();
         {
             let awareness = folder.awareness();
@@ -287,21 +292,30 @@ Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/y-sweet-co
             let config = txn.get_or_insert_map("folder_config");
             config.insert(&mut txn, "name", Any::String("Lens".into()));
             let filemeta = txn.get_or_insert_map("filemeta_v0");
+
             let mut html_entry = HashMap::new();
             html_entry.insert("id".to_string(), Any::String(html_uuid.into()));
             html_entry.insert("type".to_string(), Any::String("file".into()));
             html_entry.insert("version".to_string(), Any::Number(0.0));
             filemeta.insert(&mut txn, "/page.html", Any::Map(html_entry.into()));
-            let mut md_entry = HashMap::new();
-            md_entry.insert("id".to_string(), Any::String(md_uuid.into()));
-            md_entry.insert("type".to_string(), Any::String("markdown".into()));
-            md_entry.insert("version".to_string(), Any::Number(0.0));
-            filemeta.insert(&mut txn, "/notes.md", Any::Map(md_entry.into()));
+
+            let mut notes_entry = HashMap::new();
+            notes_entry.insert("id".to_string(), Any::String(notes_uuid.into()));
+            notes_entry.insert("type".to_string(), Any::String("markdown".into()));
+            notes_entry.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/notes.md", Any::Map(notes_entry.into()));
+
+            let mut extra_entry = HashMap::new();
+            extra_entry.insert("id".to_string(), Any::String(extra_uuid.into()));
+            extra_entry.insert("type".to_string(), Any::String("markdown".into()));
+            extra_entry.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/extra.md", Any::Map(extra_entry.into()));
         }
         docs.insert(folder_id.clone(), folder);
 
-        // HTML content doc with a wikilink to the .md sibling. If .html were indexed,
-        // /notes.md's backlinks would gain html_uuid. The skip must prevent that.
+        // HTML doc wikilinks to the .md sibling. If .html were indexed, /notes.md's
+        // backlinks would gain html_uuid (the resolver maps `[[notes]]` → `/notes.md`).
+        // The skip must prevent that.
         let html = DocWithSyncKv::new(&html_id, None, || (), None).await.unwrap();
         {
             let awareness = html.awareness();
@@ -312,18 +326,20 @@ Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/y-sweet-co
         }
         docs.insert(html_id.clone(), html);
 
-        // Markdown sibling that points to the .html file via a wikilink. .md MUST be indexed,
-        // and its backlink to /page.html must land on html_uuid — proving the skip didn't
-        // accidentally short-circuit Markdown indexing.
-        let md = DocWithSyncKv::new(&md_id, None, || (), None).await.unwrap();
+        // /notes.md wikilinks to /extra.md — both markdown, so the resolver will
+        // map `[[extra]]` → `/extra.md`. Proves Markdown indexing still runs after our skip.
+        let notes = DocWithSyncKv::new(&notes_id, None, || (), None).await.unwrap();
         {
-            let awareness = md.awareness();
+            let awareness = notes.awareness();
             let guard = awareness.write().unwrap();
             let mut txn = guard.doc.transact_mut();
             let text = txn.get_or_insert_text("contents");
-            text.insert(&mut txn, 0, "See [[page]] for details");
+            text.insert(&mut txn, 0, "See [[extra]] for details");
         }
-        docs.insert(md_id.clone(), md);
+        docs.insert(notes_id.clone(), notes);
+
+        let extra = DocWithSyncKv::new(&extra_id, None, || (), None).await.unwrap();
+        docs.insert(extra_id.clone(), extra);
 
         let (indexer, _rx) = LinkIndexer::new();
         let folder_doc_ids = vec![folder_id.clone()];
@@ -331,8 +347,8 @@ Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/y-sweet-co
         let html_result = indexer.index_document(&html_id, &docs, &folder_doc_ids);
         assert!(html_result.is_ok(), "indexing .html should not error: {:?}", html_result.err());
 
-        let md_result = indexer.index_document(&md_id, &docs, &folder_doc_ids);
-        assert!(md_result.is_ok(), "indexing .md should not error: {:?}", md_result.err());
+        let notes_result = indexer.index_document(&notes_id, &docs, &folder_doc_ids);
+        assert!(notes_result.is_ok(), "indexing .md should not error: {:?}", notes_result.err());
 
         let folder_ref = docs.get(&folder_id).unwrap();
         let folder_awareness = folder_ref.awareness();
@@ -340,19 +356,21 @@ Append to the `#[cfg(test)] mod tests` block at the bottom of `crates/y-sweet-co
         let txn = guard.doc.transact();
         let backlinks = txn.get_map("backlinks_v0").expect("backlinks_v0 should exist after indexing");
 
-        // .md SHOULD be a backlink target — proves Markdown indexing still runs.
-        let md_backlinks_for_html_target = read_backlinks_array(&backlinks, &txn, html_uuid);
+        // /extra.md MUST have notes_uuid as a backlink source. This proves the .md
+        // indexing path still runs (i.e., the skip isn't too eager).
+        let extra_backlinks = read_backlinks_array(&backlinks, &txn, extra_uuid);
         assert_eq!(
-            md_backlinks_for_html_target, vec![md_uuid],
-            ".md doc's [[page]] wikilink must produce a backlink entry on html_uuid"
+            extra_backlinks, vec![notes_uuid],
+            "/notes.md's [[extra]] wikilink must produce a backlink on extra_uuid"
         );
 
-        // .html must NOT have produced a backlink — proves the skip works.
-        let html_backlinks_for_md_target = read_backlinks_array(&backlinks, &txn, md_uuid);
+        // /notes.md must NOT have html_uuid as a backlink source — the .html doc
+        // was skipped, so its `[[notes]]` was never extracted.
+        let notes_backlinks = read_backlinks_array(&backlinks, &txn, notes_uuid);
         assert!(
-            html_backlinks_for_md_target.is_empty(),
-            "skipped .html doc must not produce backlinks (got {:?})",
-            html_backlinks_for_md_target
+            notes_backlinks.is_empty(),
+            "skipped .html doc must not produce a backlink on /notes.md (got {:?})",
+            notes_backlinks
         );
     }
 ```
@@ -591,6 +609,36 @@ export function writeFileMeta(
 ```
 
 The "verification after set" debug-log block can be left intact; for non-markdown types its `legacyDocsExists` field will be `false`, which is correct.
+
+4. **Gate the `initializeContentDocument` call by type.** The existing call seeds the new doc's `Y.Text('contents')` with the character `_` so Obsidian materializes the file. For HTML, Obsidian doesn't sync the file anyway, and the underscore would render as literal `_` in both source and preview panes. Find the existing block (around line 222):
+
+```ts
+  // Step 3: Initialize content document to trigger Obsidian sync
+  // This adds an underscore so Obsidian creates the file immediately
+  try {
+    await initializeContentDocument(fullDocId);
+  } catch (err) {
+    // Don't fail the whole operation if content init fails
+    ...
+  }
+```
+
+Wrap the `try` block in a markdown-only conditional:
+
+```ts
+  // Step 3: Initialize content document to trigger Obsidian sync (markdown only).
+  // For non-markdown types ('file', 'canvas') we leave the Y.Text empty — Obsidian
+  // does not sync these as Y.Docs, so the "_" placeholder is not needed and would
+  // appear as visible content in the editor/preview.
+  if (type === 'markdown') {
+    try {
+      await initializeContentDocument(fullDocId);
+    } catch (err) {
+      // Don't fail the whole operation if content init fails
+      ...
+    }
+  }
+```
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -976,8 +1024,8 @@ Create `lens-editor/src/components/HtmlEditor/HtmlEditor.test.tsx`:
 
 ```tsx
 // @vitest-environment happy-dom
-import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { render, screen, cleanup, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
@@ -1050,13 +1098,6 @@ describe('HtmlEditor', () => {
     }
   });
 });
-```
-
-Add to the imports at the top of this test file:
-
-```tsx
-import { act } from '@testing-library/react';
-import { vi } from 'vitest';
 ```
 
 (The other tests don't use fake timers; isolate `useFakeTimers()` inside the one test that needs it via try/finally so it doesn't leak into other tests.)
@@ -1363,6 +1404,8 @@ The Sticky-Scroll overlay (`StickyScrollOverlay.tsx`) ALSO reads `ctx.onCreateDo
 
 - [ ] **Step 2: Write the failing test for `nextUntitledHtmlName`**
 
+**Convention note:** `folderPath` here is a **prefixed virtual path** (e.g. `/Lens` or `/Lens/Notes`), matching the existing `generateUntitledName(folderPath, metadata)` helper at `lens-editor/src/lib/multi-folder-utils.ts:70`. The merged `metadata` object is also keyed by prefixed paths (e.g. `/Lens/foo.md`). We mirror that helper's algorithm so call sites in `Sidebar.tsx` can use both interchangeably.
+
 Create `lens-editor/src/lib/untitled-name.test.ts`:
 
 ```ts
@@ -1371,35 +1414,58 @@ import { nextUntitledHtmlName } from './untitled-name';
 
 describe('nextUntitledHtmlName', () => {
   it('returns "Untitled.html" when no collision', () => {
-    expect(nextUntitledHtmlName('/', {})).toBe('Untitled.html');
-    expect(nextUntitledHtmlName('/Notes', {})).toBe('Untitled.html');
+    expect(nextUntitledHtmlName('/Lens', {})).toBe('Untitled.html');
+    expect(nextUntitledHtmlName('/Lens/Notes', {})).toBe('Untitled.html');
   });
 
-  it('handles root path with empty string', () => {
-    expect(nextUntitledHtmlName('', {})).toBe('Untitled.html');
-  });
-
-  it('increments suffix when "Untitled.html" already exists at root', () => {
-    expect(nextUntitledHtmlName('/', { '/Untitled.html': {} })).toBe('Untitled 2.html');
-  });
-
-  it('increments suffix when both "Untitled.html" and "Untitled 2.html" exist', () => {
+  it('returns "Untitled 1.html" when "Untitled.html" already exists in the folder', () => {
     expect(
-      nextUntitledHtmlName('/', { '/Untitled.html': {}, '/Untitled 2.html': {} })
-    ).toBe('Untitled 3.html');
+      nextUntitledHtmlName('/Lens', { '/Lens/Untitled.html': {} as any })
+    ).toBe('Untitled 1.html');
   });
 
-  it('increments based on the target folder, not other folders', () => {
+  it('returns "Untitled 2.html" when both "Untitled.html" and "Untitled 1.html" exist', () => {
     expect(
-      nextUntitledHtmlName('/Notes', {
-        '/Untitled.html': {},          // root, irrelevant
-        '/Notes/Untitled.html': {},    // collision in target folder
+      nextUntitledHtmlName('/Lens', {
+        '/Lens/Untitled.html':   {} as any,
+        '/Lens/Untitled 1.html': {} as any,
       })
     ).toBe('Untitled 2.html');
   });
 
+  it('ignores collisions in other folders (prefix-scoped)', () => {
+    expect(
+      nextUntitledHtmlName('/Lens/Notes', {
+        '/Lens/Untitled.html':       {} as any,  // different folder, irrelevant
+        '/Lens/Notes/Untitled.html': {} as any,  // collision in target folder
+      })
+    ).toBe('Untitled 1.html');
+  });
+
+  it('ignores entries in deeper subfolders (only direct children count)', () => {
+    expect(
+      nextUntitledHtmlName('/Lens', {
+        '/Lens/Notes/Untitled.html': {} as any,  // subfolder child, not a sibling
+      })
+    ).toBe('Untitled.html');
+  });
+
   it('ignores collisions on differently-suffixed files (e.g. .md)', () => {
-    expect(nextUntitledHtmlName('/', { '/Untitled.md': {} })).toBe('Untitled.html');
+    expect(nextUntitledHtmlName('/Lens', { '/Lens/Untitled.md': {} as any })).toBe('Untitled.html');
+  });
+
+  it('handles folderPath with trailing slash', () => {
+    expect(
+      nextUntitledHtmlName('/Lens/', { '/Lens/Untitled.html': {} as any })
+    ).toBe('Untitled 1.html');
+  });
+
+  it('returns "Untitled.html" when only "Untitled 1.html" exists (fills lowest gap)', () => {
+    // Matches existing generateUntitledName convention: take next-sequential from 0,
+    // don't fill gaps higher up.
+    expect(
+      nextUntitledHtmlName('/Lens', { '/Lens/Untitled 1.html': {} as any })
+    ).toBe('Untitled.html');
   });
 });
 ```
@@ -1419,25 +1485,32 @@ Create `lens-editor/src/lib/untitled-name.ts`:
 ```ts
 /**
  * Find the next available "Untitled.html" name in `folderPath`, avoiding
- * collisions with existing entries in `metadata`. Mirrors the markdown
- * helper `generateUntitledName` but uses the .html extension.
+ * collisions with direct-child entries in `metadata`. Mirrors `generateUntitledName`
+ * (multi-folder-utils.ts) but with the `.html` extension.
  *
- * `folderPath` is the in-folder path (e.g. "/", "", "/Notes"). The returned
- * value is just the basename (e.g. "Untitled 3.html"); callers join it
- * onto folderPath to produce the full path.
+ * @param folderPath - The PREFIXED folder path, e.g. "/Lens" or "/Lens/Notes".
+ * @param metadata   - Merged folder metadata, keyed by prefixed virtual paths.
+ * @returns Just the basename, e.g. "Untitled.html" or "Untitled 1.html".
+ *          Callers join it onto folderPath to produce the full path.
  */
 export function nextUntitledHtmlName(
   folderPath: string,
   metadata: Record<string, unknown>,
 ): string {
-  const base = 'Untitled';
-  const prefix = folderPath === '' || folderPath === '/' ? '/' : `${folderPath}/`;
-  if (!metadata[`${prefix}${base}.html`]) return `${base}.html`;
-  for (let i = 2; i < 1000; i++) {
-    const name = `${base} ${i}.html`;
-    if (!metadata[`${prefix}${name}`]) return name;
+  const prefix = folderPath.endsWith('/') ? folderPath : `${folderPath}/`;
+
+  // Only direct children of folderPath (no nested descendants).
+  const existing = new Set(
+    Object.keys(metadata)
+      .filter((p) => p.startsWith(prefix))
+      .map((p) => p.slice(prefix.length).split('/')[0])
+  );
+
+  if (!existing.has('Untitled.html')) return 'Untitled.html';
+  for (let i = 1; ; i++) {
+    const candidate = `Untitled ${i}.html`;
+    if (!existing.has(candidate)) return candidate;
   }
-  return `${base} ${Date.now()}.html`;
 }
 ```
 
@@ -1538,7 +1611,7 @@ In `lens-editor/src/components/Sidebar/Sidebar.tsx`:
 import { nextUntitledHtmlName } from '../../lib/untitled-name';
 ```
 
-2. After the existing `handleInstantCreate` (around line 145–175), add:
+2. After the existing `handleInstantCreate` (around line 145–175), add this — note that `nextUntitledHtmlName` takes the **prefixed** `folderPath` (just like `generateUntitledName` does in `handleInstantCreate`), while the actual filesystem path is built from `originalFolderPath`:
 
 ```tsx
 const handleInstantCreateHtml = useCallback(async (folderPath: string) => {
@@ -1548,7 +1621,7 @@ const handleInstantCreateHtml = useCallback(async (folderPath: string) => {
   if (!doc) return;
 
   const originalFolderPath = getOriginalPath(folderPath, folderName);
-  const baseName = nextUntitledHtmlName(originalFolderPath, metadata);
+  const baseName = nextUntitledHtmlName(folderPath, metadata);  // PREFIXED, not original
   const path = originalFolderPath === '' || originalFolderPath === '/'
     ? `/${baseName}`
     : `${originalFolderPath}/${baseName}`;
