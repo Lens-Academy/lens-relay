@@ -2,7 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup, within, fireEvent } from '@testing-library/react';
+import { render, cleanup, fireEvent } from '@testing-library/react';
 import { CommentCard } from './CommentCard';
 import type { CommentThread } from '../../lib/criticmarkup-parser';
 

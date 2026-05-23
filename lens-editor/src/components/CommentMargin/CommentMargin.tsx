@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { EditorView } from '@codemirror/view';
 import { useComments } from '../CommentsPanel/useComments';
 import { CommentCard } from './CommentCard';
@@ -30,7 +30,8 @@ export function CommentMargin({
   addCommentTrigger = 0,
   positionMapper,
 }: CommentMarginProps) {
-  const mapper: PositionMapper = positionMapper ?? ((pos) => view.lineBlockAt(pos).top);
+  const defaultMapper = useCallback<PositionMapper>((pos) => view.lineBlockAt(pos).top, [view]);
+  const mapper: PositionMapper = positionMapper ?? defaultMapper;
 
   const threads = useComments(view);
   const focusedThreadFrom = view.state.field(focusedThreadField);
@@ -38,20 +39,19 @@ export function CommentMargin({
   const [newCommentY, setNewCommentY] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
-  const cardHeightsRef = useRef<Map<number, number>>(new Map());
   const cardElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const observerRef = useRef<ResizeObserver | null>(null);
-  const [cardHeightsVersion, setCardHeightsVersion] = useState(0);
+  const [cardHeights, setCardHeights] = useState<Map<number, number>>(() => new Map());
   const prevTriggerRef = useRef(addCommentTrigger);
 
-  // Trigger re-render (stateVersion and cardHeightsVersion changes)
+  // Trigger re-render when the editor state changes.
   void stateVersion;
-  void cardHeightsVersion;
 
   // Show new comment card when trigger increments
   useEffect(() => {
     if (addCommentTrigger > prevTriggerRef.current) {
       const cursorPos = view.state.selection.main.head;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- External toolbar trigger intentionally opens a positioned composer immediately.
       setNewCommentY(mapper(cursorPos));
       setShowNewComment(true);
     }
@@ -85,13 +85,19 @@ export function CommentMargin({
   }, [view]);
 
   // Map threads to positions
-  const mappedThreads = mapThreadPositions(threads, mapper);
+  const mappedThreads = useMemo(
+    () => mapThreadPositions(threads, mapper),
+    [threads, mapper],
+  );
 
   // Build layout items with measured or estimated heights
-  const layoutItems: LayoutItem[] = mappedThreads.map(({ thread }) => ({
-    targetY: mapper(thread.from),
-    height: cardHeightsRef.current.get(thread.from) ?? DEFAULT_CARD_HEIGHT,
-  }));
+  const layoutItems: LayoutItem[] = useMemo(
+    () => mappedThreads.map(({ thread }) => ({
+      targetY: mapper(thread.from),
+      height: cardHeights.get(thread.from) ?? DEFAULT_CARD_HEIGHT,
+    })),
+    [cardHeights, mappedThreads, mapper],
+  );
 
   const focusedIndex = focusedThreadFrom != null
     ? mappedThreads.findIndex(({ thread }) => thread.from === focusedThreadFrom)
@@ -111,18 +117,25 @@ export function CommentMargin({
   // ResizeObserver to track card height changes (replies, form open/close)
   useEffect(() => {
     const observer = new ResizeObserver((entries) => {
-      let changed = false;
+      const updates: Array<{ threadFrom: number; height: number }> = [];
       for (const entry of entries) {
         const el = entry.target as HTMLDivElement;
         const threadFrom = Number(el.dataset.threadFrom);
         if (isNaN(threadFrom)) continue;
         const newHeight = el.getBoundingClientRect().height;
-        if (newHeight > 0 && cardHeightsRef.current.get(threadFrom) !== newHeight) {
-          cardHeightsRef.current.set(threadFrom, newHeight);
+        if (newHeight > 0) updates.push({ threadFrom, height: newHeight });
+      }
+      if (updates.length === 0) return;
+      setCardHeights(previous => {
+        let changed = false;
+        const next = new Map(previous);
+        for (const { threadFrom, height } of updates) {
+          if (next.get(threadFrom) === height) continue;
+          next.set(threadFrom, height);
           changed = true;
         }
-      }
-      if (changed) setCardHeightsVersion(v => v + 1);
+        return changed ? next : previous;
+      });
     });
     observerRef.current = observer;
     return () => observer.disconnect();
