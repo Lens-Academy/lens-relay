@@ -27,6 +27,7 @@ import {
 import { ContextMenu } from '../Editor/ContextMenu';
 import type { ContextMenuItem } from '../Editor/extensions/criticmarkup-context-menu';
 import { getContextMenuItems } from '../Editor/extensions/criticmarkup-context-menu';
+import type { SectionViewEntry } from '../../lib/anchor-resolver';
 
 export type ContentScope =
   | { kind: 'full-doc'; docId: string; docName: string; docPath: string }
@@ -64,6 +65,13 @@ interface ContentPanelProps {
    *  when none are visible. EduEditor uses this to keep the sidebar
    *  auto-scrolled to the comments for the section currently on screen. */
   onVisibleCommentChange?: (absoluteFrom: number | null) => void;
+  /** Fires when the active doc's Y.Text changes (on scope switch or initial
+   *  connect). The parent uses this to pass the correct yText to CommentsLayer. */
+  onYTextChange?: (ytext: Y.Text | null) => void;
+  /** Fires when the active section editor view mounts or unmounts. The parent
+   *  uses this to update its SectionViewEntry list for CommentsLayer's
+   *  resolveAnchorY resolver. */
+  onSectionViewChange?: (entry: SectionViewEntry | null) => void;
 }
 
 /**
@@ -156,6 +164,8 @@ export function ContentPanel({
   onRequestAddComment,
   scrollRootRef,
   onVisibleCommentChange,
+  onYTextChange,
+  onSectionViewChange,
 }: ContentPanelProps) {
   const { getOrConnect } = useDocConnection();
   const { metadata, folderNames } = useNavigation();
@@ -385,6 +395,7 @@ export function ContentPanel({
       setSynced(true);
       update();
       ytext.observe(update);
+      onYTextChange?.(ytext);
 
       return () => {
         ytext.unobserve(update);
@@ -396,12 +407,46 @@ export function ContentPanel({
     setDocText('');
     setEditingIndex(null);
     setEditingFmField(null);
+    onYTextChange?.(null);
     const cleanupPromise = connect();
     return () => {
       cancelled = true;
+      onYTextChange?.(null);
       cleanupPromise.then(cleanup => cleanup?.());
     };
-  }, [docId, getOrConnect]);
+  }, [docId, getOrConnect]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Report the active section view (and its Y.Text slice range) to the parent.
+  // The parent uses this to build a SectionViewEntry list for CommentsLayer's
+  // multi-view anchor resolver. We report after every editKey change (which is
+  // when useSectionEditor mounts/unmounts a view) and whenever the edit range
+  // shifts. We use a rAF so the viewRef has been populated by useSectionEditor
+  // before we read it.
+  useEffect(() => {
+    if (!onSectionViewChange) return;
+    if (!isEditing) {
+      onSectionViewChange(null);
+      return;
+    }
+    const tick = requestAnimationFrame(() => {
+      const view = sectionViewRef.current;
+      if (!view) {
+        onSectionViewChange(null);
+        return;
+      }
+      onSectionViewChange({
+        view,
+        yTextFrom: editRange.from,
+        yTextTo: editRange.from + view.state.doc.length,
+      });
+    });
+    return () => {
+      cancelAnimationFrame(tick);
+      onSectionViewChange(null);
+    };
+    // editKey drives remounts; editRange.from shifts the slice offset.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing, editKey, editRange.from, onSectionViewChange]);
 
   // Scroll-spy: watch comment markers in the content scroll container and
   // report a single "active" one upward. The sidebar uses this to follow

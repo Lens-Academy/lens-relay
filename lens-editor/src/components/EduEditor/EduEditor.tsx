@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import * as Y from 'yjs';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -14,12 +15,14 @@ import { CourseOverview } from './CourseOverview';
 import { RELAY_ID } from '../../lib/constants';
 import { SuggestionModeControl } from '../SuggestionModeToggle/SuggestionModeControl';
 import { OverflowMenu } from '../OverflowMenu';
-import { EduCommentsSidebar } from './EduCommentsSidebar';
+import { CommentsLayer } from '../Comments/CommentsLayer';
 import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
+import { resolveAnchorYFromSectionViews } from '../../lib/anchor-resolver';
+import type { SectionViewEntry } from '../../lib/anchor-resolver';
 
 const SUGGESTION_MODE_KEY = 'edu-editor:suggestion-mode';
-const SIDEBAR_OPEN_KEY = 'edu-editor:comments-sidebar-open';
+const COMMENTS_VISIBLE_KEY = 'edu-editor:comments-visible';
 
 function readBoolFromLocalStorage(key: string, defaultValue: boolean): boolean {
   try {
@@ -71,70 +74,98 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const [selectedModuleSections, setSelectedModuleSections] = useState<Section[]>([]);
   const [selectedModuleSynced, setSelectedModuleSynced] = useState(false);
 
-  // Suggestion-mode and comments-sidebar state, persisted across refreshes.
+  // Suggestion-mode and comments-layer visibility, persisted across refreshes.
   const [isSuggestionMode, setIsSuggestionMode] = useState(() =>
     readBoolFromLocalStorage(SUGGESTION_MODE_KEY, false)
   );
-  const [commentsSidebarOpen, setCommentsSidebarOpen] = useState(() =>
-    readBoolFromLocalStorage(SIDEBAR_OPEN_KEY, false)
+  const [commentsVisible, setCommentsVisible] = useState(() =>
+    readBoolFromLocalStorage(COMMENTS_VISIBLE_KEY, false)
   );
-  const [commentInsertPos, setCommentInsertPos] = useState<number | null>(null);
-  const [focusedRangeFrom, setFocusedRangeFrom] = useState<number | null>(null);
-  // Increment to ask the sidebar to open its add-comment form. Bumped by
-  // the Mod-Shift-m shortcut and the right-click "Add Comment" item.
-  const [addCommentTrigger, setAddCommentTrigger] = useState(0);
-  // Absolute Y.Text position of the topmost comment marker currently visible
-  // in the main content scroll area. Updated by ContentPanel via the
-  // IntersectionObserver-backed scroll-spy. Drives a gentle sidebar
-  // auto-scroll (block: 'nearest') so reviewers can scroll the page and
-  // have the sidebar follow without losing their current focus.
-  const [visibleCommentFrom, setVisibleCommentFrom] = useState<number | null>(null);
   // Ref to the main content scroll container; ContentPanel needs it as the
   // IntersectionObserver's root.
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  // The content panel's wrapper div — CommentsLayer uses it as editorRootRef
+  // to toggle .cm-comment-badge--focused on badges inside it.
+  const contentPanelWrapperRef = useRef<HTMLDivElement | null>(null);
+
+  // Active Y.Text for the currently selected doc (set by ContentPanel via
+  // onYTextChange callback). CommentsLayer subscribes to this directly.
+  const [activeYText, setActiveYText] = useState<Y.Text | null>(null);
+
+  // Currently mounted section editor view. ContentPanel reports it via
+  // onSectionViewChange so CommentsLayer can resolve comment anchor positions
+  // using the multi-view resolver.
+  const sectionViewsRef = useRef<SectionViewEntry[]>([]);
 
   const handleSuggestionModeChange = useCallback((next: boolean) => {
     setIsSuggestionMode(next);
     writeBoolToLocalStorage(SUGGESTION_MODE_KEY, next);
   }, []);
 
-  const handleSidebarToggle = useCallback(() => {
-    setCommentsSidebarOpen(prev => {
+  const handleCommentsToggle = useCallback(() => {
+    setCommentsVisible(prev => {
       const next = !prev;
-      writeBoolToLocalStorage(SIDEBAR_OPEN_KEY, next);
+      writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, next);
       return next;
     });
   }, []);
 
   const commentsControl = useMemo(() => ({
-    isOpen: commentsSidebarOpen,
-    onToggle: handleSidebarToggle,
-    title: commentsSidebarOpen ? 'Hide comments' : 'Show comments',
-  }), [commentsSidebarOpen, handleSidebarToggle]);
+    isOpen: commentsVisible,
+    onToggle: handleCommentsToggle,
+    title: commentsVisible ? 'Hide comments' : 'Show comments',
+  }), [commentsVisible, handleCommentsToggle]);
 
   useHeaderCommentsControl(commentsControl);
 
   const handleClickCriticRange = useCallback((range: CriticMarkupRange) => {
     if (range.type !== 'comment') return;
-    if (!commentsSidebarOpen) {
-      setCommentsSidebarOpen(true);
-      writeBoolToLocalStorage(SIDEBAR_OPEN_KEY, true);
+    // Ensure CommentsLayer is visible so the user can see the focused card.
+    if (!commentsVisible) {
+      setCommentsVisible(true);
+      writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, true);
     }
-    setFocusedRangeFrom(range.from);
-  }, [commentsSidebarOpen]);
+    // CommentsLayer listens for `comment-badge-focus` CustomEvents dispatched
+    // by the criticmarkup extension's badge widget; focus is managed there.
+    // We also dispatch one here so clicking a rendered prose pill (which fires
+    // onClickCriticRange) also focuses the matching card.
+    document.dispatchEvent(new CustomEvent('comment-badge-focus', { detail: { threadFrom: range.from } }));
+  }, [commentsVisible]);
 
-  // The Mod-Shift-m shortcut and the right-click "Add Comment" menu both
-  // route here. We open the sidebar (if closed) and bump the trigger so the
-  // sidebar shows its add-comment form. The sidebar itself reads the current
-  // `commentInsertPos` (which ContentPanel keeps in sync with the active
-  // section editor's cursor).
+  // The Mod-Shift-m shortcut and the right-click "Add Comment" menu route here.
+  // CommentsLayer's Add button is hidden (insertCursorPos={null}), so we just
+  // ensure comments are visible — the user can add via the criticmarkup extension
+  // within each section editor.
   const handleRequestAddComment = useCallback(() => {
-    if (!commentsSidebarOpen) {
-      setCommentsSidebarOpen(true);
-      writeBoolToLocalStorage(SIDEBAR_OPEN_KEY, true);
+    if (!commentsVisible) {
+      setCommentsVisible(true);
+      writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, true);
     }
-    setAddCommentTrigger(t => t + 1);
-  }, [commentsSidebarOpen]);
+  }, [commentsVisible]);
+
+  // Callback for ContentPanel to report the active doc's Y.Text.
+  const handleYTextChange = useCallback((ytext: Y.Text | null) => {
+    setActiveYText(ytext);
+  }, []);
+
+  // Callback for ContentPanel to report the active section editor view.
+  // CommentsLayer uses the list (at most one entry at a time) for multi-view
+  // anchor resolution via resolveAnchorYFromSectionViews.
+  const handleSectionViewChange = useCallback((entry: SectionViewEntry | null) => {
+    sectionViewsRef.current = entry ? [entry] : [];
+  }, []);
+
+  // Stable callbacks for CommentsLayer — wrapped once so they don't cause
+  // layout-effect re-runs on every parent render.
+  const resolveAnchorY = useCallback(
+    (offset: number) => resolveAnchorYFromSectionViews(sectionViewsRef.current, offset),
+    [],
+  );
+
+  const getViewportRect = useCallback(() => {
+    const rect = contentScrollRef.current?.getBoundingClientRect();
+    return rect ? { top: rect.top, height: rect.height } : { top: 0, height: 0 };
+  }, []);
 
   const isCourseMode = docSections.some(s => s.type === 'module-ref');
 
@@ -253,7 +284,6 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   // suggest-role entirely.)
   const criticMarkupEnabled = canWrite;
 
-  const activeDocId = scope?.docId ?? null;
   const portalTarget = typeof document === 'undefined'
     ? null
     : document.getElementById('header-controls');
@@ -327,48 +357,45 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
           )}
         </div>
 
+        {/* Content area: scrollable container with relative positioning so
+            CommentsLayer can sit as an absolute overlay in the margin. */}
         <div
           ref={contentScrollRef}
-          className="flex-1 overflow-y-auto"
+          className="flex-1 overflow-y-auto relative"
           style={{ background: '#faf8f3' }}
         >
-          <div className="max-w-[720px] mx-auto py-8 px-10 h-full">
+          <div
+            ref={contentPanelWrapperRef}
+            className="max-w-[720px] mx-auto py-8 px-10 h-full"
+          >
             <ContentPanel
               scope={scope}
               criticMarkupEnabled={criticMarkupEnabled}
               suggestionMode={isSuggestionMode}
-              onCommentInsertPosChange={setCommentInsertPos}
               onClickCriticRange={handleClickCriticRange}
               onRequestAddComment={handleRequestAddComment}
               scrollRootRef={contentScrollRef}
-              onVisibleCommentChange={setVisibleCommentFrom}
+              onYTextChange={handleYTextChange}
+              onSectionViewChange={handleSectionViewChange}
             />
           </div>
-        </div>
 
-        {/* Always rendered so width can transition. When closed: zero width
-            and the inner panel is translated off-screen, so the layout
-            collapses smoothly without remounting the sidebar (which would
-            re-fetch the doc and lose UI state every toggle). */}
-        <div
-          className={`shrink-0 overflow-hidden border-gray-200 bg-white transition-[width,border-left-width] duration-200 ease-in-out ${
-            commentsSidebarOpen ? 'w-[320px] border-l' : 'w-0 border-l-0'
-          }`}
-          aria-hidden={!commentsSidebarOpen}
-        >
-          <div
-            className={`w-[320px] h-full flex flex-col transition-transform duration-200 ease-in-out ${
-              commentsSidebarOpen ? 'translate-x-0' : 'translate-x-full'
-            }`}
-          >
-            <EduCommentsSidebar
-              docId={activeDocId}
-              focusedRangeFrom={focusedRangeFrom}
-              insertAtPos={commentInsertPos}
-              addCommentTrigger={addCommentTrigger}
-              visibleCommentFrom={visibleCommentFrom}
+          {/* CommentsLayer: margin overlay aligned to the content panel. Shown
+              when the user toggles comments on (via the header button) and a
+              doc Y.Text is active. */}
+          {commentsVisible && activeYText && (
+            <CommentsLayer
+              yText={activeYText}
+              resolveAnchorY={resolveAnchorY}
+              getViewportRect={getViewportRect}
+              scrollContainerRef={contentScrollRef}
+              editorRootRef={contentPanelWrapperRef}
+              currentUserName={displayName ?? ''}
+              // TODO(unified-comments): route the most-recently-focused section editor's
+              // cursor through here so the column's Add button works in the course editor.
+              insertCursorPos={null}
             />
-          </div>
+          )}
         </div>
       </div>
     </div>
