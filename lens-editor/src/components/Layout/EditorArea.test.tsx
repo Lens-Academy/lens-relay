@@ -5,6 +5,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { EditorArea } from './EditorArea';
+import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
+
+const renderWithProviders = (ui: React.ReactElement) =>
+  render(<DisplayNameProvider>{ui}</DisplayNameProvider>);
+
+// Mock @y-sweet/react to avoid needing a YDocProvider
+vi.mock('@y-sweet/react', () => {
+  const Y = require('yjs');
+  const ydoc = new Y.Doc();
+  return { useYDoc: () => ydoc };
+});
 
 // Mock the providers that EditorArea needs
 vi.mock('../../contexts/NavigationContext', () => ({
@@ -71,7 +82,7 @@ vi.mock('../DiscussionPanel/useHasDiscussion', () => ({
 
 describe('EditorArea', () => {
   it('renders comment margin panel', () => {
-    const { container } = render(<EditorArea currentDocId="test-doc" />);
+    const { container } = renderWithProviders(<EditorArea currentDocId="test-doc" />);
 
     // Comment margin panel exists (editorView is null so CommentMargin won't render content,
     // but the panel container should exist)
@@ -80,14 +91,14 @@ describe('EditorArea', () => {
   });
 
   it('renders TableOfContents in sidebar', () => {
-    const { container } = render(<EditorArea currentDocId="test-doc" />);
+    const { container } = renderWithProviders(<EditorArea currentDocId="test-doc" />);
 
     const tocPanel = container.querySelector('.toc-panel');
     expect(tocPanel).toBeInTheDocument();
   });
 
   it('renders panels with correct layout structure', () => {
-    const { container } = render(<EditorArea currentDocId="test-doc" />);
+    const { container } = renderWithProviders(<EditorArea currentDocId="test-doc" />);
 
     expect(container.querySelector('.toc-panel')).toBeInTheDocument();
 

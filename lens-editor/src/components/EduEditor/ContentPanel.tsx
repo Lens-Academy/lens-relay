@@ -428,8 +428,8 @@ export function ContentPanel({
   //   1. Rendered prose pills (`.cm-comment-anchor[data-cm-absolute-from]`)
   //      from CriticMarkupSpan — value is already absolute.
   //   2. Active CodeMirror badges (`.cm-comment-badge[data-thread-from]`)
-  //      inside the section editor — value is local; we translate by adding
-  //      `editRange.from` (the section's absolute Y.Text offset).
+  //      inside the section editor — value is ABSOLUTE (already translated
+  //      by the commentOffsetTranslator Facet at decoration time in Task 8).
   useEffect(() => {
     const root = scrollRootRef?.current;
     if (!root || !onVisibleCommentChange || !criticMarkupEnabled) return;
@@ -450,10 +450,10 @@ export function ContentPanel({
         if (!isNaN(n)) return n;
       }
       if (el.classList.contains('cm-comment-badge')) {
-        const local = (el as HTMLElement).dataset.threadFrom;
-        if (local != null) {
-          const n = parseInt(local, 10);
-          if (!isNaN(n)) return sectionAbsFromRef.current + n;
+        const abs = (el as HTMLElement).dataset.threadFrom;
+        if (abs != null) {
+          const n = parseInt(abs, 10);
+          if (!isNaN(n)) return n; // already absolute (translated by commentOffsetTranslator Facet)
         }
       }
       return null;
