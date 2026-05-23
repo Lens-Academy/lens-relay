@@ -1,4 +1,12 @@
-import { validateEnvelope, type Envelope, type BridgeToParent, type CommentSummary, type Fingerprint, type ParentToBridge } from './protocol';
+import {
+  validateEnvelope,
+  type Envelope,
+  type BridgeToParent,
+  type CommentSummary,
+  type Fingerprint,
+  type ParentToBridge,
+  type PreviewScrollState,
+} from './protocol';
 
 export const OVERLAY_ROOT_ID = 'lens-comment-overlay-root';
 const OVERLAY_ROOT_MARKER = 'v1';
@@ -186,6 +194,45 @@ export function captureFingerprintAt(target: Element, clickX: number, clickY: nu
   };
 }
 
+function textOffsetWithin(target: Element, node: Node, offset: number): number | null {
+  const doc = target.ownerDocument;
+  const view = doc.defaultView;
+  if (!view || !target.contains(node)) return null;
+  if (node.nodeType === view.Node.TEXT_NODE) {
+    let total = 0;
+    const walker = doc.createTreeWalker(target, view.NodeFilter.SHOW_TEXT);
+    for (let current = walker.nextNode(); current; current = walker.nextNode()) {
+      if (current === node) return total + Math.max(0, Math.min(offset, current.textContent?.length ?? 0));
+      total += current.textContent?.length ?? 0;
+    }
+    return null;
+  }
+
+  let total = 0;
+  const children = Array.from(node.childNodes).slice(0, Math.max(0, offset));
+  for (const child of children) total += child.textContent?.length ?? 0;
+  return total;
+}
+
+function caretTextOffsetAtPoint(doc: Document, target: Element, x: number, y: number): number | null {
+  const caretRangeFromPoint = doc.caretRangeFromPoint?.bind(doc);
+  const range = caretRangeFromPoint?.(x, y);
+  if (range) return textOffsetWithin(target, range.startContainer, range.startOffset);
+
+  const caretPositionFromPoint = (
+    doc as Document & {
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    }
+  ).caretPositionFromPoint?.bind(doc);
+  const position = caretPositionFromPoint?.(x, y);
+  if (!position) return null;
+  return textOffsetWithin(target, position.offsetNode, position.offset);
+}
+
+function rangeStartTextOffset(target: Element, range: Range): number | null {
+  return textOffsetWithin(target, range.startContainer, range.startOffset);
+}
+
 export function findProbe(doc: Document, token: string): { x: number; y: number; w: number; h: number } | null {
   if (!doc.body) return null;
   const showComment = doc.defaultView?.NodeFilter.SHOW_COMMENT ?? NodeFilter.SHOW_COMMENT;
@@ -260,6 +307,90 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   postToParent({ type: 'ready', payload: {} });
 
   let lastComments: CommentSummary[] = [];
+  let scrollFrame: number | null = null;
+  let restoreFrame: number | null = null;
+  function readScrollState(): PreviewScrollState {
+    const root = doc.documentElement;
+    const body = doc.body;
+    const scrollHeight = Math.max(
+      root?.scrollHeight ?? 0,
+      body?.scrollHeight ?? 0,
+    );
+    const scrollWidth = Math.max(
+      root?.scrollWidth ?? 0,
+      body?.scrollWidth ?? 0,
+    );
+    const viewportWidth = win.visualViewport?.width ?? win.innerWidth;
+    const clientWidth = Number.isFinite(viewportWidth) && viewportWidth > 0
+      ? viewportWidth
+      : root?.clientWidth ?? 0;
+    const viewportHeight = win.visualViewport?.height ?? win.innerHeight;
+    const clientHeight = Number.isFinite(viewportHeight) && viewportHeight > 0
+      ? viewportHeight
+      : root?.clientHeight ?? 0;
+    return {
+      x: win.scrollX,
+      y: win.scrollY,
+      scrollWidth,
+      clientWidth,
+      scrollHeight,
+      clientHeight,
+    };
+  }
+  const postScrollState = (): void => {
+    postToParent({ type: 'scroll-state', payload: readScrollState() });
+  };
+  const scheduleScrollState = (): void => {
+    if (scrollFrame !== null) return;
+    scrollFrame = win.requestAnimationFrame(() => {
+      scrollFrame = null;
+      postScrollState();
+    });
+  };
+  function restoreAfterStableLayout(readTarget: () => { x: number; y: number }): void {
+    if (restoreFrame !== null) {
+      win.cancelAnimationFrame(restoreFrame);
+      restoreFrame = null;
+    }
+    let attempts = 0;
+    let lastMaxY = -1;
+    let stableFrames = 0;
+    const step = (): void => {
+      restoreFrame = null;
+      attempts += 1;
+      const state = readScrollState();
+      const maxY = Math.max(0, state.scrollHeight - state.clientHeight);
+      if (!getBody()) {
+        restoreFrame = win.requestAnimationFrame(step);
+        return;
+      }
+      if (maxY === lastMaxY) stableFrames += 1;
+      else stableFrames = 0;
+      lastMaxY = maxY;
+      if (stableFrames < 2 && attempts < 20) {
+        restoreFrame = win.requestAnimationFrame(step);
+        return;
+      }
+      const target = readTarget();
+      win.scrollTo(target.x, target.y);
+      postScrollState();
+    };
+    restoreFrame = win.requestAnimationFrame(step);
+  }
+  function restoreScrollRatio(xRatio: number, yRatio: number): void {
+    restoreAfterStableLayout(() => {
+      const state = readScrollState();
+      const maxX = Math.max(0, state.scrollWidth - state.clientWidth);
+      const maxY = Math.max(0, state.scrollHeight - state.clientHeight);
+      return {
+        x: xRatio <= 0 ? 0 : xRatio * maxX,
+        y: Math.max(0, Math.min(maxY, yRatio * maxY)),
+      };
+    });
+  }
+  function restoreScrollPosition(x: number, y: number): void {
+    restoreAfterStableLayout(() => ({ x, y }));
+  }
 
   const messageListener = (event: MessageEvent): void => {
     if (event.source !== parent) return;
@@ -331,7 +462,15 @@ export function installBridge(win: Window & typeof globalThis): () => void {
         const x = msg.payload.x;
         const y = msg.payload.y;
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        win.scrollTo(x, y);
+        restoreScrollPosition(x, y);
+        break;
+      }
+      case 'restore-scroll-ratio': {
+        if (!isObject(msg.payload)) return;
+        const xRatio = msg.payload.xRatio;
+        const yRatio = msg.payload.yRatio;
+        if (!Number.isFinite(xRatio) || !Number.isFinite(yRatio)) return;
+        restoreScrollRatio(Math.max(0, Math.min(1, xRatio)), Math.max(0, Math.min(1, yRatio)));
         break;
       }
       case 'init':
@@ -354,7 +493,8 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       if (body) body.style.cursor = previousCursor ?? '';
     }
     previousCursor = null;
-    const fingerprint = captureFingerprintAt(target, event.clientX, event.clientY, 0);
+    const charOffset = caretTextOffsetAtPoint(doc, target, event.clientX, event.clientY) ?? 0;
+    const fingerprint = captureFingerprintAt(target, event.clientX, event.clientY, charOffset);
     postToParent({ type: 'click-captured', payload: { fingerprint } });
   };
   win.addEventListener('click', clickListener, true);
@@ -365,7 +505,8 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     const ownedOverlayRoot = getOwnedOverlayRoot(doc);
     if (ownedOverlayRoot?.contains(target)) return;
     event.preventDefault();
-    const fingerprint = captureFingerprintAt(target, event.clientX, event.clientY, 0);
+    const charOffset = caretTextOffsetAtPoint(doc, target, event.clientX, event.clientY) ?? 0;
+    const fingerprint = captureFingerprintAt(target, event.clientX, event.clientY, charOffset);
     postToParent({
       type: 'placement-requested',
       payload: {
@@ -409,7 +550,8 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       if (currentOverlayRoot?.contains(target) || rangeIntersectsOwnedOverlay(range, currentOverlayRoot)) return;
       const x = rect.left + rect.width / 2;
       const y = rect.top + rect.height / 2;
-      const fingerprint = captureFingerprintAt(target, x, y, 0);
+      const charOffset = rangeStartTextOffset(target, range) ?? 0;
+      const fingerprint = captureFingerprintAt(target, x, y, charOffset);
       postToParent({
         type: 'placement-requested',
         payload: {
@@ -422,6 +564,8 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     }, 0);
   };
   win.addEventListener('mouseup', selectionListener);
+
+  win.addEventListener('scroll', scheduleScrollState);
 
   let pending = false;
   let suppressRenderMutations = false;
@@ -486,6 +630,15 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     win.removeEventListener('click', clickListener, true);
     win.removeEventListener('contextmenu', contextMenuListener, true);
     win.removeEventListener('mouseup', selectionListener);
+    win.removeEventListener('scroll', scheduleScrollState);
+    if (scrollFrame !== null) {
+      win.cancelAnimationFrame(scrollFrame);
+      scrollFrame = null;
+    }
+    if (restoreFrame !== null) {
+      win.cancelAnimationFrame(restoreFrame);
+      restoreFrame = null;
+    }
     if (selectionTimer !== null) {
       win.clearTimeout(selectionTimer);
       selectionTimer = null;

@@ -13,6 +13,7 @@ import {
   type Envelope,
   type Fingerprint,
   type ParentToBridge,
+  type PreviewScrollState,
 } from './bridge/protocol';
 
 interface HtmlPreviewProps {
@@ -39,6 +40,17 @@ interface PendingPreviewComment {
   point: PreviewPoint;
   scroll: PreviewScroll;
   source: string;
+}
+interface PendingPlacementMenu {
+  fingerprint: Fingerprint;
+  point: PreviewPoint;
+  scroll: PreviewScroll;
+  source: string;
+}
+interface PreviewFrame {
+  id: number;
+  srcDoc: string;
+  state: 'active' | 'loading';
 }
 type PendingProbe = {
   frame: HTMLIFrameElement;
@@ -103,6 +115,16 @@ function isPoint(value: unknown): value is PreviewPoint {
   return isObject(value) && typeof value.x === 'number' && typeof value.y === 'number';
 }
 
+function isPreviewScrollState(value: unknown): value is PreviewScrollState {
+  return isObject(value)
+    && typeof value.x === 'number'
+    && typeof value.y === 'number'
+    && typeof value.scrollWidth === 'number'
+    && typeof value.clientWidth === 'number'
+    && typeof value.scrollHeight === 'number'
+    && typeof value.clientHeight === 'number';
+}
+
 function isPlacementTrigger(value: unknown): value is PreviewPlacementTrigger {
   return value === 'contextmenu' || value === 'selection' || value === 'toolbar';
 }
@@ -134,6 +156,10 @@ function makeCommentId(): string {
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function makeDiagnosticMarker(index: number): string {
+  return `[[@${index}]]`;
 }
 
 function injectBridge(source: string): string {
@@ -259,25 +285,54 @@ export function HtmlPreview({
 }: HtmlPreviewProps) {
   const [content, setContent] = useState(() => ytext.toString());
   const [debounced, setDebounced] = useState(content);
+  const [frames, setFrames] = useState<PreviewFrame[]>(() => [{
+    id: 1,
+    srcDoc: injectBridge(content),
+    state: 'active',
+  }]);
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const [pendingComment, setPendingComment] = useState<PendingPreviewComment | null>(null);
+  const [pendingPlacementMenu, setPendingPlacementMenu] = useState<PendingPlacementMenu | null>(null);
   const [nonce] = useState(() => makeNonce());
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const frameRefs = useRef(new Map<number, HTMLIFrameElement>());
+  const nextFrameIdRef = useRef(2);
+  const framesRef = useRef(frames);
+  const activeFrameIdRef = useRef(1);
   const observedSourceRef = useRef(content);
   const mountedRef = useRef(true);
   const isCommentModeRef = useRef(isCommentMode);
   const readOnlyRef = useRef(readOnly);
   const placementGenerationRef = useRef(0);
   const pendingRestoreScrollRef = useRef<PreviewScroll | null>(null);
+  const lastKnownScrollRef = useRef<PreviewScrollState>({
+    x: 0,
+    y: 0,
+    scrollWidth: 0,
+    clientWidth: 0,
+    scrollHeight: 0,
+    clientHeight: 0,
+  });
+  const restoringFrameIdRef = useRef<number | null>(null);
+  const restoringScrollRef = useRef<{ frameId: number; scroll: PreviewScroll } | null>(null);
+  const postActivationRestoreRef = useRef<{ frameId: number; scroll: PreviewScroll } | null>(null);
+  const diagnosticMarkerIndexRef = useRef(1);
+  const getActiveIframe = useCallback(() => {
+    return frameRefs.current.get(activeFrameIdRef.current) ?? null;
+  }, []);
   const getProbeViewportSize = useCallback(() => {
-    const iframe = iframeRef.current;
+    const iframe = getActiveIframe();
     return normalizeProbeViewportSize({
       width: iframe?.clientWidth ?? 0,
       height: iframe?.clientHeight ?? 0,
     });
-  }, []);
+  }, [getActiveIframe]);
   const defaultProbeRunner = useHiddenProbeRunner(nonce, getProbeViewportSize);
   const activeProbeRunner = probeRunner ?? defaultProbeRunner;
+
+  useEffect(() => {
+    framesRef.current = frames;
+    activeFrameIdRef.current = frames.find(frame => frame.state === 'active')?.id ?? frames[0]?.id ?? 1;
+  }, [frames]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -298,8 +353,9 @@ export function HtmlPreview({
     readOnlyRef.current = readOnly;
     if (readOnly) {
       placementGenerationRef.current += 1;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- Entering read-only must synchronously remove the composer so preview-only users cannot submit.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Entering read-only must synchronously remove UI that could mutate source.
       setPendingComment(null);
+      setPendingPlacementMenu(null);
     }
   }, [readOnly]);
 
@@ -310,6 +366,7 @@ export function HtmlPreview({
         observedSourceRef.current = nextSource;
         placementGenerationRef.current += 1;
         setPendingComment(null);
+        setPendingPlacementMenu(null);
       }
       setContent(nextSource);
     };
@@ -324,37 +381,207 @@ export function HtmlPreview({
   }, [content, debounceMs]);
 
   const comments = useMemo(() => summarizeComments(debounced), [debounced]);
-  const srcDoc = useMemo(() => injectBridge(debounced), [debounced]);
 
   useEffect(() => {
-    function openComposer(position: number, point: PreviewPoint, scroll: PreviewScroll, source: string) {
-      setPendingComment({ position, point, scroll, source });
+    const nextSrcDoc = injectBridge(debounced);
+    setFrames(currentFrames => {
+      const activeFrame = currentFrames.find(frame => frame.state === 'active') ?? currentFrames[0];
+      if (activeFrame?.srcDoc === nextSrcDoc) {
+        restoringFrameIdRef.current = null;
+        restoringScrollRef.current = null;
+        postActivationRestoreRef.current = null;
+        pendingRestoreScrollRef.current = null;
+        return activeFrame.state === 'active' && currentFrames.length === 1
+          ? currentFrames
+          : [{ ...activeFrame, state: 'active' }];
+      }
+      const existingLoadingFrame = currentFrames.find(frame => (
+        frame.state === 'loading' && frame.srcDoc === nextSrcDoc
+      ));
+      if (existingLoadingFrame) {
+        return [
+          ...(activeFrame ? [activeFrame] : []),
+          existingLoadingFrame,
+        ];
+      }
+      return [
+        ...(activeFrame ? [activeFrame] : []),
+        {
+          id: nextFrameIdRef.current++,
+          srcDoc: nextSrcDoc,
+          state: 'loading',
+        },
+      ];
+    });
+  }, [debounced]);
+
+  const openComposer = useCallback((
+    position: number,
+    point: PreviewPoint,
+    scroll: PreviewScroll,
+    source: string
+  ) => {
+    setPendingComment({ position, point, scroll, source });
+  }, []);
+
+  const resolvePlacementForAction = useCallback((
+    fingerprint: Fingerprint,
+    point: PreviewPoint,
+    scroll: PreviewScroll,
+    shouldStayCurrent: () => boolean,
+    onResolved: (position: number, source: string) => void,
+  ) => {
+    const source = ytext.toString();
+    const candidates = scoreCandidates(source, fingerprint);
+    if (candidates.length === 1) {
+      if (!shouldStayCurrent()) return;
+      onResolved(candidates[0].position, source);
+      return;
     }
 
-    function resolvePlacement(
+    void verifyByProbe(source, candidates, fingerprint, activeProbeRunner).then(result => {
+      if (!shouldStayCurrent()) return;
+      if (result.kind === 'placed') {
+        onResolved(result.position, source);
+      } else {
+        onManualPlacement?.(result.candidates);
+      }
+    }).catch(() => {
+      if (!shouldStayCurrent()) return;
+    });
+  }, [activeProbeRunner, onManualPlacement, ytext]);
+
+  const handleCreateCommentFromMenu = useCallback(() => {
+    if (!pendingPlacementMenu || readOnly) return;
+    const placement = pendingPlacementMenu;
+    setPendingPlacementMenu(null);
+
+    const generation = placementGenerationRef.current + 1;
+    placementGenerationRef.current = generation;
+    const isStillCurrent = () => (
+      mountedRef.current
+      && !readOnlyRef.current
+      && placementGenerationRef.current === generation
+      && placement.source === ytext.toString()
+    );
+
+    resolvePlacementForAction(
+      placement.fingerprint,
+      placement.point,
+      placement.scroll,
+      isStillCurrent,
+      (position, source) => openComposer(position, placement.point, placement.scroll, source),
+    );
+  }, [openComposer, pendingPlacementMenu, readOnly, resolvePlacementForAction, ytext]);
+
+  const handleAddMarkerFromMenu = useCallback(() => {
+    if (!pendingPlacementMenu || readOnly) return;
+    const placement = pendingPlacementMenu;
+    setPendingPlacementMenu(null);
+
+    const generation = placementGenerationRef.current + 1;
+    placementGenerationRef.current = generation;
+    const isStillCurrent = () => (
+      mountedRef.current
+      && !readOnlyRef.current
+      && placementGenerationRef.current === generation
+      && placement.source === ytext.toString()
+    );
+
+    resolvePlacementForAction(
+      placement.fingerprint,
+      placement.point,
+      placement.scroll,
+      isStillCurrent,
+      (position, source) => {
+        if (source !== ytext.toString()) return;
+        const marker = makeDiagnosticMarker(diagnosticMarkerIndexRef.current);
+        diagnosticMarkerIndexRef.current += 1;
+        ytext.insert(position, marker);
+      },
+    );
+  }, [pendingPlacementMenu, readOnly, resolvePlacementForAction, ytext]);
+
+  const postToFrame = useCallback((frameId: number, message: ParentToBridge): void => {
+    postToBridge(frameRefs.current.get(frameId) ?? null, nonce, message);
+  }, [nonce]);
+
+  useEffect(() => {
+    const pending = postActivationRestoreRef.current;
+    if (!pending || pending.frameId !== activeFrameIdRef.current) return;
+    postActivationRestoreRef.current = null;
+    requestAnimationFrame(() => {
+      if (!mountedRef.current) return;
+      if (activeFrameIdRef.current !== pending.frameId) return;
+      postToFrame(pending.frameId, { type: 'restore-scroll', payload: pending.scroll });
+    });
+  }, [frames, postToFrame]);
+
+  const postToAllFrames = useCallback((message: ParentToBridge): void => {
+    for (const frame of framesRef.current) postToFrame(frame.id, message);
+  }, [postToFrame]);
+
+  const findFrameIdByWindow = useCallback((source: MessageEventSource | null): number | null => {
+    for (const [frameId, iframe] of frameRefs.current) {
+      if (iframe.contentWindow === source) return frameId;
+    }
+    return null;
+  }, []);
+
+  const activateRestoredFrame = useCallback((frameId: number): void => {
+    const intendedScroll = restoringScrollRef.current?.frameId === frameId
+      ? restoringScrollRef.current.scroll
+      : { x: lastKnownScrollRef.current.x, y: lastKnownScrollRef.current.y };
+    postActivationRestoreRef.current = {
+      frameId,
+      scroll: intendedScroll,
+    };
+    restoringFrameIdRef.current = null;
+    restoringScrollRef.current = null;
+    setFrames(currentFrames => {
+      const target = currentFrames.find(frame => frame.id === frameId);
+      if (!target) return currentFrames;
+      return [{ ...target, state: 'active' }];
+    });
+  }, []);
+
+  const initializeFrame = useCallback((frame: PreviewFrame): void => {
+    postToFrame(frame.id, {
+      type: 'init',
+      payload: { comments: summarizeComments(ytext.toString()) },
+    });
+    postToFrame(frame.id, {
+      type: isCommentModeRef.current ? 'enable-click-to-place' : 'disable-click-to-place',
+      payload: {},
+    });
+    if (frame.state === 'loading') {
+      restoringFrameIdRef.current = frame.id;
+      const pendingScroll = pendingRestoreScrollRef.current;
+      const scroll = pendingScroll ?? lastKnownScrollRef.current;
+      const restoreScroll = { x: scroll.x, y: scroll.y };
+      restoringScrollRef.current = { frameId: frame.id, scroll: restoreScroll };
+      postToFrame(frame.id, { type: 'restore-scroll', payload: restoreScroll });
+      pendingRestoreScrollRef.current = null;
+    } else {
+      const scroll = pendingRestoreScrollRef.current ?? lastKnownScrollRef.current;
+      postToFrame(frame.id, { type: 'restore-scroll', payload: { x: scroll.x, y: scroll.y } });
+    }
+  }, [postToFrame, ytext]);
+
+  useEffect(() => {
+    function resolveCommentPlacement(
       fingerprint: Fingerprint,
       point: PreviewPoint,
       scroll: PreviewScroll,
       shouldStayCurrent: () => boolean
     ) {
-      const source = ytext.toString();
-      const candidates = scoreCandidates(source, fingerprint);
-      if (candidates.length === 1) {
-        if (!shouldStayCurrent()) return;
-        openComposer(candidates[0].position, point, scroll, source);
-        return;
-      }
-
-      void verifyByProbe(source, candidates, fingerprint, activeProbeRunner).then(result => {
-        if (!shouldStayCurrent()) return;
-        if (result.kind === 'placed') {
-          openComposer(result.position, point, scroll, source);
-        } else {
-          onManualPlacement?.(result.candidates);
-        }
-      }).catch(() => {
-        if (!shouldStayCurrent()) return;
-      });
+      resolvePlacementForAction(
+        fingerprint,
+        point,
+        scroll,
+        shouldStayCurrent,
+        (position, source) => openComposer(position, point, scroll, source),
+      );
     }
 
     function handleClickCaptured(payload: unknown) {
@@ -373,25 +600,35 @@ export function HtmlPreview({
       const fallbackPoint = { x: payload.fingerprint.clickRect.x, y: payload.fingerprint.clickRect.y };
       const fallbackScroll = { x: 0, y: 0 };
 
-      resolvePlacement(payload.fingerprint, fallbackPoint, fallbackScroll, isStillCurrent);
+      resolveCommentPlacement(payload.fingerprint, fallbackPoint, fallbackScroll, isStillCurrent);
     }
 
     function handlePlacementRequested(payload: unknown) {
       if (readOnly) return;
       if (!isPlacementRequestPayload(payload)) return;
 
-      const generation = placementGenerationRef.current + 1;
-      placementGenerationRef.current = generation;
-      const isStillCurrent = () => (
-        mountedRef.current
-        && !readOnlyRef.current
-        && placementGenerationRef.current === generation
-      );
-
-      resolvePlacement(payload.fingerprint, payload.point, payload.scroll, isStillCurrent);
+      placementGenerationRef.current += 1;
+      setPendingComment(null);
+      setPendingPlacementMenu({
+        fingerprint: payload.fingerprint,
+        point: payload.point,
+        scroll: payload.scroll,
+        source: ytext.toString(),
+      });
     }
 
-    function handleMessage(message: BridgeToParent) {
+    function handleMessage(message: BridgeToParent, frame: PreviewFrame) {
+      if (message.type === 'scroll-state') {
+        if (!isPreviewScrollState(message.payload)) return;
+        if (frame.state === 'active') {
+          lastKnownScrollRef.current = message.payload;
+        }
+        if (restoringFrameIdRef.current === frame.id) activateRestoredFrame(frame.id);
+        return;
+      }
+
+      if (frame.state !== 'active') return;
+
       switch (message.type) {
         case 'dot-clicked':
           if (!isObject(message.payload) || typeof message.payload.id !== 'string') return;
@@ -415,64 +652,96 @@ export function HtmlPreview({
     }
 
     function onMessage(event: MessageEvent) {
-      const iframe = iframeRef.current;
-      if (!iframe || event.source !== iframe.contentWindow) return;
+      const frameId = findFrameIdByWindow(event.source);
+      if (frameId === null) return;
+      const frame = framesRef.current.find(candidate => candidate.id === frameId);
+      if (!frame) return;
 
       if (isReadyMessage(event.data)) {
-        postToBridge(iframe, nonce, {
-          type: 'init',
-          payload: { comments: summarizeComments(ytext.toString()) },
-        });
-        const scroll = pendingRestoreScrollRef.current;
-        if (scroll) {
-          postToBridge(iframe, nonce, { type: 'restore-scroll', payload: scroll });
-          pendingRestoreScrollRef.current = null;
-        }
+        initializeFrame(frame);
         return;
       }
 
       const message = validateEnvelope<BridgeToParent>(event.data, nonce);
       if (!message || typeof message.type !== 'string') return;
-      handleMessage(message);
+      handleMessage(message, frame);
     }
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, [
-    activeProbeRunner,
     currentUser,
+    activateRestoredFrame,
+    findFrameIdByWindow,
+    initializeFrame,
     isCommentMode,
     nonce,
-    onManualPlacement,
     onOrphanedChange,
     origin,
+    openComposer,
     readOnly,
+    resolvePlacementForAction,
     ytext,
   ]);
 
   useEffect(() => {
-    postToBridge(iframeRef.current, nonce, {
+    postToAllFrames({
       type: 'set-comments',
       payload: { comments },
     });
-  }, [comments, nonce]);
+  }, [comments, postToAllFrames]);
 
   useEffect(() => {
-    postToBridge(iframeRef.current, nonce, {
+    postToAllFrames({
       type: isCommentMode ? 'enable-click-to-place' : 'disable-click-to-place',
       payload: {},
     });
-  }, [isCommentMode, nonce]);
+  }, [isCommentMode, postToAllFrames]);
 
   return (
     <div className="relative h-full w-full">
-      <iframe
-        ref={iframeRef}
-        title="HTML preview"
-        sandbox="allow-scripts"
-        srcDoc={srcDoc}
-        className="w-full h-full border-0 bg-white"
-      />
+      {frames.map(frame => (
+        <iframe
+          key={frame.id}
+          ref={(node) => {
+            if (node) frameRefs.current.set(frame.id, node);
+            else frameRefs.current.delete(frame.id);
+          }}
+          title="HTML preview"
+          sandbox="allow-scripts"
+          srcDoc={frame.srcDoc}
+          data-preview-frame-state={frame.state}
+          className={[
+            'absolute inset-0 h-full w-full border-0 bg-white',
+            frame.state === 'loading' ? 'pointer-events-none opacity-0' : '',
+          ].join(' ')}
+        />
+      ))}
+      {pendingPlacementMenu && (
+        <div
+          className="absolute min-w-40 rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+          style={{
+            left: Math.max(8, pendingPlacementMenu.point.x),
+            top: Math.max(8, pendingPlacementMenu.point.y),
+            zIndex: 20,
+          }}
+        >
+          <button
+            type="button"
+            className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+            onClick={handleCreateCommentFromMenu}
+          >
+            Create comment
+          </button>
+          <button
+            type="button"
+            className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+            onClick={handleAddMarkerFromMenu}
+          >
+            Add marker
+          </button>
+        </div>
+      )}
       {pendingComment && (
         <NewCommentCard
           onSubmit={(body) => {

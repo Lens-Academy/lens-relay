@@ -280,10 +280,100 @@ describe('installBridge placement and scroll handling', () => {
     cleanup();
   });
 
+  it('captures right-click character offset from the browser caret at the clicked point', () => {
+    setupBody('<p id="target">Hello world</p>');
+    const target = document.getElementById('target')!;
+    const textNode = target.firstChild!;
+    stubRenderedRect(target, {
+      left: 5, top: 10, right: 105, bottom: 30, width: 100, height: 20,
+      x: 5, y: 10,
+    });
+    const originalCaretRangeFromPoint = document.caretRangeFromPoint;
+    const range = document.createRange();
+    range.setStart(textNode, 6);
+    range.setEnd(textNode, 6);
+    Object.defineProperty(document, 'caretRangeFromPoint', {
+      configurable: true,
+      value: vi.fn(() => range),
+    });
+
+    const cleanup = installBridge(window);
+    const posted: unknown[] = [];
+    vi.spyOn(window.parent, 'postMessage').mockImplementation((msg: unknown) => {
+      posted.push(msg);
+    });
+
+    try {
+      window.dispatchEvent(new MessageEvent('message', {
+        source: window.parent,
+        data: { nonce: 'N', message: { type: 'init', payload: { comments: [] } } },
+      }));
+      target.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+        clientX: 50,
+        clientY: 20,
+      }));
+
+      const placement = posted.find((env): env is { nonce: string; message: Extract<import('./protocol').BridgeToParent, { type: 'placement-requested' }> } => (
+        typeof env === 'object'
+        && env !== null
+        && 'message' in env
+        && typeof env.message === 'object'
+        && env.message !== null
+        && 'type' in env.message
+        && env.message.type === 'placement-requested'
+      ));
+      expect(placement?.message.payload.fingerprint.before).toBe('Hello ');
+      expect(placement?.message.payload.fingerprint.after).toBe('world');
+    } finally {
+      cleanup();
+      Object.defineProperty(document, 'caretRangeFromPoint', {
+        configurable: true,
+        value: originalCaretRangeFromPoint,
+      });
+    }
+  });
+
   it('restores scroll when parent sends restore-scroll', () => {
+    vi.useFakeTimers();
     setupBody('<p>scroll me</p>');
     const cleanup = installBridge(window);
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      return window.setTimeout(() => cb(0), 0);
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window.parent,
+      data: { nonce: 'N', message: { type: 'init', payload: { comments: [] } } },
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window.parent,
+      data: { nonce: 'N', message: { type: 'restore-scroll', payload: { x: 3, y: 140 } } },
+    }));
+    vi.runAllTimers();
+
+    expect(scrollTo).toHaveBeenCalledWith(3, 140);
+    cleanup();
+  });
+
+  it('defers restore-scroll until the iframe layout range is stable', () => {
+    vi.useFakeTimers();
+    setupBody('<p>scroll me</p>');
+    const cleanup = installBridge(window);
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      return window.setTimeout(() => cb(0), 0);
+    });
+    Object.defineProperty(document.documentElement, 'scrollHeight', {
+      configurable: true,
+      value: 2000,
+    });
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 500,
+    });
 
     window.dispatchEvent(new MessageEvent('message', {
       source: window.parent,
@@ -294,7 +384,45 @@ describe('installBridge placement and scroll handling', () => {
       data: { nonce: 'N', message: { type: 'restore-scroll', payload: { x: 3, y: 140 } } },
     }));
 
+    expect(scrollTo).not.toHaveBeenCalledWith(3, 140);
+    vi.runAllTimers();
+
     expect(scrollTo).toHaveBeenCalledWith(3, 140);
+    cleanup();
+  });
+
+  it('restores scroll ratio using the iframe document scroll range', () => {
+    vi.useFakeTimers();
+    setupBody('<p>scroll me</p>');
+    const cleanup = installBridge(window);
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      return window.setTimeout(() => cb(0), 0);
+    });
+    Object.defineProperty(document.documentElement, 'scrollHeight', {
+      configurable: true,
+      value: 2000,
+    });
+    Object.defineProperty(document.body, 'clientHeight', {
+      configurable: true,
+      value: 2000,
+    });
+    Object.defineProperty(window, 'innerHeight', {
+      configurable: true,
+      value: 500,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window.parent,
+      data: { nonce: 'N', message: { type: 'init', payload: { comments: [] } } },
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window.parent,
+      data: { nonce: 'N', message: { type: 'restore-scroll-ratio', payload: { xRatio: 0, yRatio: 0.4 } } },
+    }));
+    vi.runAllTimers();
+
+    expect(scrollTo).toHaveBeenCalledWith(0, 600);
     cleanup();
   });
 });

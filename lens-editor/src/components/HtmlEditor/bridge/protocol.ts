@@ -22,6 +22,18 @@ export interface PreviewScroll {
   y: number;
 }
 
+export interface PreviewScrollState extends PreviewScroll {
+  scrollWidth: number;
+  clientWidth: number;
+  scrollHeight: number;
+  clientHeight: number;
+}
+
+export interface PreviewScrollRatio {
+  xRatio: number;
+  yRatio: number;
+}
+
 export type PlacementTrigger = 'contextmenu' | 'selection' | 'toolbar';
 
 export interface PlacementRequest {
@@ -38,13 +50,15 @@ export type ParentToBridge =
   | { type: 'find-probe'; payload: { token: string } }
   | { type: 'highlight-comment'; payload: { id: string } }
   | { type: 'set-comments'; payload: { comments: CommentSummary[] } }
-  | { type: 'restore-scroll'; payload: PreviewScroll };
+  | { type: 'restore-scroll'; payload: PreviewScroll }
+  | { type: 'restore-scroll-ratio'; payload: PreviewScrollRatio };
 
 export type BridgeToParent =
   | { type: 'ready'; payload: Record<string, never> }
   | { type: 'click-captured'; payload: { fingerprint: Fingerprint } }
   | { type: 'dot-clicked'; payload: { id: string } }
   | { type: 'placement-requested'; payload: PlacementRequest }
+  | { type: 'scroll-state'; payload: PreviewScrollState }
   | { type: 'probe-found'; payload: { token: string; rect: { x: number; y: number; w: number; h: number } | null } }
   | { type: 'comments-rendered'; payload: { found: string[]; orphaned: string[] } };
 

@@ -55,6 +55,33 @@ describe('installBridge', () => {
     expect(sent[0].message.type).toBe('ready');
   });
 
+  it('posts throttled scroll-state messages with the current scroll position', () => {
+    vi.useFakeTimers();
+    arm();
+    sent = [];
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      return window.setTimeout(() => cb(0), 0);
+    });
+
+    try {
+      window.scrollTo(3, 140);
+      window.dispatchEvent(new Event('scroll'));
+      window.dispatchEvent(new Event('scroll'));
+      vi.runAllTimers();
+
+      const scrollStates = sent.filter(e => e.message.type === 'scroll-state');
+      expect(scrollStates).toHaveLength(1);
+      expect(scrollStates[0].message).toEqual({
+        type: 'scroll-state',
+        payload: expect.objectContaining({ x: 3, y: 140 }),
+      });
+      expect((scrollStates[0].message as Extract<BridgeToParent, { type: 'scroll-state' }>).payload.scrollHeight).toEqual(expect.any(Number));
+      expect((scrollStates[0].message as Extract<BridgeToParent, { type: 'scroll-state' }>).payload.clientHeight).toEqual(expect.any(Number));
+    } finally {
+      raf.mockRestore();
+    }
+  });
+
   it('does not throw when installed before body exists and renders after DOMContentLoaded', () => {
     const earlyWin = new HappyWindow();
     earlyWin.document.body.remove();
@@ -221,6 +248,46 @@ describe('installBridge', () => {
         point: { x: 70, y: 39 },
       },
     });
+    const fingerprint = (placement?.message as Extract<BridgeToParent, { type: 'placement-requested' }> | undefined)?.payload.fingerprint;
+    expect(fingerprint?.before).toBe('');
+    expect(fingerprint?.after).toContain('selectable text');
+  });
+
+  it('posts selected text placement with fingerprint offset at the selection start', async () => {
+    vi.useFakeTimers();
+    arm();
+    dispatchToBridge({ type: 'init', payload: { comments: [] } });
+    document.body.innerHTML = '<p id="target">selectable text</p>';
+    const target = document.getElementById('target')!;
+    const textNode = target.firstChild!;
+    stubRenderedRect(target);
+    sent = [];
+
+    const range = document.createRange();
+    range.setStart(textNode, 7);
+    range.setEnd(textNode, 11);
+    vi.spyOn(range, 'getBoundingClientRect').mockReturnValue({
+      left: 20,
+      top: 30,
+      right: 120,
+      bottom: 48,
+      x: 20,
+      y: 30,
+      width: 100,
+      height: 18,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 30, clientY: 35 }));
+    await vi.runAllTimersAsync();
+
+    const placement = sent.find(e => e.message.type === 'placement-requested');
+    const fingerprint = (placement?.message as Extract<BridgeToParent, { type: 'placement-requested' }> | undefined)?.payload.fingerprint;
+    expect(fingerprint?.before).toBe('selecta');
+    expect(fingerprint?.after).toBe('ble text');
   });
 
   it('does not post selection placement after cleanup before selection timeout fires', async () => {

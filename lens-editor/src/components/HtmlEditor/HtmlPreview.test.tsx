@@ -44,27 +44,47 @@ describe('HtmlPreview', () => {
     const ytext = doc.getText('contents');
 
     const { container } = render(<HtmlPreview ytext={ytext} />);
-    const iframe = () => container.querySelector('iframe')!;
+    const activeIframe = () => container.querySelector('iframe[data-preview-frame-state="active"]') as HTMLIFrameElement;
+    const loadingIframe = () => container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement | null;
+    const activateLoadingIframe = async () => {
+      const frame = loadingIframe();
+      expect(frame).not.toBeNull();
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { nonce: '', message: { type: 'ready', payload: {} } },
+          source: frame!.contentWindow,
+        }));
+        dispatchFromBridge(frame!, {
+          nonce: '__test_nonce__',
+          message: { type: 'scroll-state', payload: { x: 0, y: 0, scrollWidth: 500, clientWidth: 500, scrollHeight: 1000, clientHeight: 500 } },
+        });
+      });
+    };
 
     await act(async () => {
       ytext.insert(0, '<p>first</p>');
     });
 
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(iframe().getAttribute('srcdoc') ?? '').toContain('<script>');
-    expect(iframe().getAttribute('srcdoc') ?? '').not.toContain('<p>first</p>');
+    expect(activeIframe().getAttribute('srcdoc') ?? '').toContain('<script>');
+    expect(loadingIframe()).toBeNull();
 
     await act(async () => { vi.advanceTimersByTime(250); });
-    expect(iframe().getAttribute('srcdoc')).toContain('<p>first</p>');
+    expect(loadingIframe()?.getAttribute('srcdoc')).toContain('<p>first</p>');
+    expect(activeIframe().getAttribute('srcdoc')).not.toContain('<p>first</p>');
+
+    await activateLoadingIframe();
+    expect(activeIframe().getAttribute('srcdoc')).toContain('<p>first</p>');
 
     await act(async () => {
       ytext.delete(0, ytext.length);
       ytext.insert(0, '<p>second</p>');
     });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(iframe().getAttribute('srcdoc')).toContain('<p>first</p>');
+    expect(activeIframe().getAttribute('srcdoc')).toContain('<p>first</p>');
+    expect(loadingIframe()).toBeNull();
     await act(async () => { vi.advanceTimersByTime(250); });
-    expect(iframe().getAttribute('srcdoc')).toContain('<p>second</p>');
+    expect(loadingIframe()?.getAttribute('srcdoc')).toContain('<p>second</p>');
   });
 });
 
@@ -229,6 +249,275 @@ describe('HtmlPreview bridge integration', () => {
     }
   });
 
+  it('keeps the current iframe visible until the replacement iframe restores scroll', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>first</p>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 320, scrollWidth: 500, clientWidth: 500, scrollHeight: 1600, clientHeight: 800 } },
+      });
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>second</p>');
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(0);
+    });
+    await act(async () => {});
+
+    const framesWhileLoading = Array.from(container.querySelectorAll('iframe')) as HTMLIFrameElement[];
+    expect(framesWhileLoading).toHaveLength(2);
+    expect(framesWhileLoading[0]).toBe(activeFrame);
+    expect(framesWhileLoading[0]).toHaveAttribute('data-preview-frame-state', 'active');
+    expect(framesWhileLoading[1]).toHaveAttribute('data-preview-frame-state', 'loading');
+    expect(framesWhileLoading[0].srcdoc).toContain('<p>first</p>');
+    expect(framesWhileLoading[1].srcdoc).toContain('<p>second</p>');
+
+    const replacementFrame = framesWhileLoading[1];
+    const posted: unknown[] = [];
+    const spy = vi.spyOn(replacementFrame.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { posted.push(msg); }) as typeof window.postMessage
+    );
+
+    try {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { nonce: '', message: { type: 'ready', payload: {} } },
+          source: replacementFrame.contentWindow,
+        }));
+      });
+
+      expect(posted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'restore-scroll', payload: { x: 0, y: 320 } },
+      });
+      expect(activeFrame).toHaveAttribute('data-preview-frame-state', 'active');
+      expect(replacementFrame).toHaveAttribute('data-preview-frame-state', 'loading');
+
+      await act(async () => {
+        dispatchFromBridge(replacementFrame, {
+          nonce: '__test_nonce__',
+          message: { type: 'scroll-state', payload: { x: 0, y: 320, scrollWidth: 500, clientWidth: 500, scrollHeight: 1600, clientHeight: 800 } },
+        });
+      });
+
+      const finalFrames = Array.from(container.querySelectorAll('iframe')) as HTMLIFrameElement[];
+      expect(finalFrames).toHaveLength(1);
+      expect(finalFrames[0]).toBe(replacementFrame);
+      expect(finalFrames[0]).toHaveAttribute('data-preview-frame-state', 'active');
+      expect(finalFrames[0].srcdoc).toContain('<p>second</p>');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not activate a stale replacement iframe after source reverts while loading', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>first</p>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 320, scrollWidth: 500, clientWidth: 500, scrollHeight: 1600, clientHeight: 800 } },
+      });
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>second</p>');
+    });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => {});
+
+    const staleReplacementFrame = container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement;
+    expect(staleReplacementFrame).not.toBeNull();
+    expect(staleReplacementFrame.srcdoc).toContain('<p>second</p>');
+
+    await act(async () => {
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>first</p>');
+    });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => {});
+
+    let framesAfterRevert = Array.from(container.querySelectorAll('iframe')) as HTMLIFrameElement[];
+    expect(framesAfterRevert).toHaveLength(1);
+    expect(framesAfterRevert[0]).toBe(activeFrame);
+    expect(framesAfterRevert[0]).toHaveAttribute('data-preview-frame-state', 'active');
+    expect(framesAfterRevert[0].srcdoc).toContain('<p>first</p>');
+
+    await act(async () => {
+      dispatchFromBridge(staleReplacementFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 320, scrollWidth: 500, clientWidth: 500, scrollHeight: 1600, clientHeight: 800 } },
+      });
+    });
+
+    framesAfterRevert = Array.from(container.querySelectorAll('iframe')) as HTMLIFrameElement[];
+    expect(framesAfterRevert).toHaveLength(1);
+    expect(framesAfterRevert[0]).toBe(activeFrame);
+    expect(framesAfterRevert[0].srcdoc).toContain('<p>first</p>');
+  });
+
+  it('posts exact scroll coordinates to replacement iframes for source edits', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>first</p>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 150, y: 320, scrollWidth: 900, clientWidth: 300, scrollHeight: 1600, clientHeight: 800 } },
+      });
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>second</p>');
+    });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => {});
+
+    const replacementFrame = container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement;
+    const posted: unknown[] = [];
+    const spy = vi.spyOn(replacementFrame.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { posted.push(msg); }) as typeof window.postMessage
+    );
+
+    try {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { nonce: '', message: { type: 'ready', payload: {} } },
+          source: replacementFrame.contentWindow,
+        }));
+      });
+
+      expect(posted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'restore-scroll', payload: { x: 150, y: 320 } },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('restores the same scroll coordinates again after the replacement iframe becomes visible', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>first</p>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 320, scrollWidth: 500, clientWidth: 500, scrollHeight: 1600, clientHeight: 800 } },
+      });
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>second</p>');
+    });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => {});
+
+    const replacementFrame = container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement;
+    const posted: unknown[] = [];
+    const spy = vi.spyOn(replacementFrame.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { posted.push(msg); }) as typeof window.postMessage
+    );
+
+    try {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { nonce: '', message: { type: 'ready', payload: {} } },
+          source: replacementFrame.contentWindow,
+        }));
+      });
+      posted.length = 0;
+
+      await act(async () => {
+        dispatchFromBridge(replacementFrame, {
+          nonce: '__test_nonce__',
+          message: { type: 'scroll-state', payload: { x: 0, y: 320, scrollWidth: 500, clientWidth: 500, scrollHeight: 1600, clientHeight: 800 } },
+        });
+      });
+      await act(async () => { vi.runAllTimers(); });
+      await act(async () => {});
+
+      expect(container.querySelector('iframe[data-preview-frame-state="active"]')).toBe(replacementFrame);
+      expect(posted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'restore-scroll', payload: { x: 0, y: 320 } },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not treat a hidden replacement iframe clamped scroll as the restore target', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>first</p>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 1697, scrollWidth: 500, clientWidth: 500, scrollHeight: 2600, clientHeight: 903 } },
+      });
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>second</p>');
+    });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => {});
+
+    const replacementFrame = container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement;
+    const posted: unknown[] = [];
+    const spy = vi.spyOn(replacementFrame.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { posted.push(msg); }) as typeof window.postMessage
+    );
+
+    try {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { nonce: '', message: { type: 'ready', payload: {} } },
+          source: replacementFrame.contentWindow,
+        }));
+      });
+      posted.length = 0;
+
+      await act(async () => {
+        dispatchFromBridge(replacementFrame, {
+          nonce: '__test_nonce__',
+          message: { type: 'scroll-state', payload: { x: 0, y: 479, scrollWidth: 500, clientWidth: 500, scrollHeight: 1382, clientHeight: 903 } },
+        });
+      });
+      await act(async () => { vi.runAllTimers(); });
+      await act(async () => {});
+
+      expect(container.querySelector('iframe[data-preview-frame-state="active"]')).toBe(replacementFrame);
+      expect(posted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'restore-scroll', payload: { x: 0, y: 1697 } },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('ignores ready messages with a non-empty nonce', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
@@ -300,7 +589,7 @@ describe('HtmlPreview bridge integration', () => {
 });
 
 describe('HtmlPreview click-to-place', () => {
-  it('right-click placement opens composer without mutating source', async () => {
+  it('right-click placement shows an action menu without mutating source', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<p>Hello world</p>');
@@ -330,8 +619,123 @@ describe('HtmlPreview click-to-place', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create comment' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add marker' })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/add a comment/i)).not.toBeInTheDocument();
     expect(ytext.toString()).not.toContain('lens-comment');
+  });
+
+  it('create comment from the placement menu opens composer without mutating source', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>Hello world</p>');
+
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'placement-requested',
+          payload: {
+            trigger: 'contextmenu',
+            fingerprint: {
+              before: '',
+              after: 'Hello world',
+              tag: 'p',
+              ancestorPath: [{ tag: 'p', index: 0 }],
+              clickRect: { x: 20, y: 30, w: 120, h: 20 },
+            },
+            point: { x: 20, y: 30 },
+            scroll: { x: 0, y: 100 },
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create comment' }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create comment' })).not.toBeInTheDocument();
+    expect(ytext.toString()).not.toContain('lens-comment');
+  });
+
+  it('selection placement shows the same action menu before opening composer', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>Hello world</p>');
+
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'placement-requested',
+          payload: {
+            trigger: 'selection',
+            fingerprint: {
+              before: 'Hello ',
+              after: 'world',
+              tag: 'p',
+              ancestorPath: [{ tag: 'p', index: 0 }],
+              clickRect: { x: 20, y: 30, w: 120, h: 20 },
+            },
+            point: { x: 42, y: 44 },
+            scroll: { x: 0, y: 100 },
+          },
+        },
+      });
+    });
+
+    expect(screen.getByRole('button', { name: 'Create comment' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add marker' })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/add a comment/i)).not.toBeInTheDocument();
+  });
+
+  it('add marker from the placement menu inserts a visible diagnostic token without creating a comment', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>Hello world</p>');
+
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'placement-requested',
+          payload: {
+            trigger: 'contextmenu',
+            fingerprint: {
+              before: '',
+              after: 'Hello world',
+              tag: 'p',
+              ancestorPath: [{ tag: 'p', index: 0 }],
+              clickRect: { x: 20, y: 30, w: 120, h: 20 },
+            },
+            point: { x: 20, y: 30 },
+            scroll: { x: 0, y: 100 },
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add marker' }));
+      await Promise.resolve();
+    });
+
+    expect(ytext.toString()).toBe('<p>[[@1]]Hello world</p>');
+    expect(parseComments(ytext.toString())).toEqual([]);
+    expect(screen.queryByRole('button', { name: 'Add marker' })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/add a comment/i)).not.toBeInTheDocument();
   });
 
   it('read-only placement requests do not open composer or mutate source', async () => {
@@ -364,6 +768,7 @@ describe('HtmlPreview click-to-place', () => {
       await Promise.resolve();
     });
 
+    expect(screen.queryByRole('button', { name: 'Create comment' })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/add a comment/i)).not.toBeInTheDocument();
     expect(ytext.toString()).not.toContain('lens-comment');
   });
@@ -397,6 +802,8 @@ describe('HtmlPreview click-to-place', () => {
         },
       });
     });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create comment' }));
 
     expect(onPlace).not.toHaveBeenCalled();
 
@@ -442,6 +849,7 @@ describe('HtmlPreview click-to-place', () => {
       });
     });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Create comment' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(ytext.toString()).not.toContain('lens-comment');
@@ -476,12 +884,13 @@ describe('HtmlPreview click-to-place', () => {
       });
     });
 
-    expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create comment' })).toBeInTheDocument();
 
     await act(async () => {
       ytext.insert(0, '<p>remote edit</p>');
     });
 
+    expect(screen.queryByRole('button', { name: 'Create comment' })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/add a comment/i)).not.toBeInTheDocument();
     expect(ytext.toString()).not.toContain('lens-comment');
   });
@@ -514,6 +923,8 @@ describe('HtmlPreview click-to-place', () => {
         },
       });
     });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create comment' }));
 
     fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
       target: { value: 'stale comment' },
@@ -561,6 +972,8 @@ describe('HtmlPreview click-to-place', () => {
           },
         });
       });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Create comment' }));
 
       fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
         target: { value: 'real comment' },

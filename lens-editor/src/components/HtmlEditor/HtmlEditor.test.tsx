@@ -187,12 +187,12 @@ describe('HtmlEditor', () => {
           <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" />
         </DisplayNameProvider>
       );
-      const iframe = () => container.querySelector('iframe')!;
 
       await act(async () => { ytext.insert(0, '<p>shared</p>'); });
       await act(async () => { vi.advanceTimersByTime(400); });
 
-      expect(iframe().getAttribute('srcdoc')).toContain('<p>shared</p>');
+      const iframes = Array.from(container.querySelectorAll('iframe'));
+      expect(iframes.some(iframe => iframe.getAttribute('srcdoc')?.includes('<p>shared</p>'))).toBe(true);
     } finally {
       vi.useRealTimers();
     }

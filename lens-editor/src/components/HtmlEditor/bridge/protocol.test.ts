@@ -53,10 +53,28 @@ describe('validateEnvelope', () => {
     expect(validateEnvelope(env, 'n')).toEqual(msg);
   });
 
+  it('accepts scroll-state bridge messages', () => {
+    const msg: BridgeToParent = {
+      type: 'scroll-state',
+      payload: { x: 0, y: 140, scrollWidth: 900, clientWidth: 300, scrollHeight: 2000, clientHeight: 500 },
+    };
+    const env: Envelope<BridgeToParent> = { nonce: 'n', message: msg };
+    expect(validateEnvelope(env, 'n')).toEqual(msg);
+  });
+
   it('accepts restore-scroll parent messages', () => {
     const msg: ParentToBridge = {
       type: 'restore-scroll',
       payload: { x: 0, y: 140 },
+    };
+    const env: Envelope<ParentToBridge> = { nonce: 'n', message: msg };
+    expect(validateEnvelope(env, 'n')).toEqual(msg);
+  });
+
+  it('accepts restore-scroll-ratio parent messages', () => {
+    const msg: ParentToBridge = {
+      type: 'restore-scroll-ratio',
+      payload: { xRatio: 0, yRatio: 0.5 },
     };
     const env: Envelope<ParentToBridge> = { nonce: 'n', message: msg };
     expect(validateEnvelope(env, 'n')).toEqual(msg);
