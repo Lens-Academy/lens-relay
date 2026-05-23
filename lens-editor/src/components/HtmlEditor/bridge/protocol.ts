@@ -12,18 +12,39 @@ export interface CommentSummary {
   replies: number;
 }
 
+export interface ViewportPoint {
+  x: number;
+  y: number;
+}
+
+export interface PreviewScroll {
+  x: number;
+  y: number;
+}
+
+export type PlacementTrigger = 'contextmenu' | 'selection' | 'toolbar';
+
+export interface PlacementRequest {
+  trigger: PlacementTrigger;
+  fingerprint: Fingerprint;
+  point: ViewportPoint;
+  scroll: PreviewScroll;
+}
+
 export type ParentToBridge =
   | { type: 'init'; payload: { comments: CommentSummary[] } }
   | { type: 'enable-click-to-place'; payload: Record<string, never> }
   | { type: 'disable-click-to-place'; payload: Record<string, never> }
   | { type: 'find-probe'; payload: { token: string } }
   | { type: 'highlight-comment'; payload: { id: string } }
-  | { type: 'set-comments'; payload: { comments: CommentSummary[] } };
+  | { type: 'set-comments'; payload: { comments: CommentSummary[] } }
+  | { type: 'restore-scroll'; payload: PreviewScroll };
 
 export type BridgeToParent =
   | { type: 'ready'; payload: Record<string, never> }
   | { type: 'click-captured'; payload: { fingerprint: Fingerprint } }
   | { type: 'dot-clicked'; payload: { id: string } }
+  | { type: 'placement-requested'; payload: PlacementRequest }
   | { type: 'probe-found'; payload: { token: string; rect: { x: number; y: number; w: number; h: number } | null } }
   | { type: 'comments-rendered'; payload: { found: string[]; orphaned: string[] } };
 
