@@ -14,8 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import { useDocConnection } from '../../hooks/useDocConnection';
-import { useCommentsFromText } from '../CommentsPanel/useComments';
-import { AddCommentForm } from '../CommentsPanel/AddCommentForm';
+import { useCommentsFromText, AddCommentForm } from '../Comments';
 import { formatTimestamp } from '../../lib/format-timestamp';
 import {
   insertCommentInYText,
