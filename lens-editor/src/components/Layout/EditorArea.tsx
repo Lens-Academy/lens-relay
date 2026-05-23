@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
 import { EditorState, StateEffect } from '@codemirror/state';
+import { useYDoc } from '@y-sweet/react';
+import * as Y from 'yjs';
 import { criticMarkupField, suggestionModeField } from '../Editor/extensions/criticmarkup';
 import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
 import { SourceSuggestionBanner } from '../SourceSuggestionBanner/SourceSuggestionBanner';
@@ -15,7 +17,7 @@ import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
-import { CommentMargin } from '../CommentMargin';
+import { CommentsLayer } from '../Comments/CommentsLayer';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
@@ -24,7 +26,9 @@ import { useHasDiscussion } from '../DiscussionPanel/useHasDiscussion';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSidebar } from '../../contexts/SidebarContext';
+import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
+import { resolveAnchorYFromView } from '../../lib/anchor-resolver';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
@@ -41,7 +45,33 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const { metadata, onNavigate } = useNavigation();
   const { canWrite, canEdit } = useAuth();
   const { manager, headerStage } = useSidebar();
+  const { displayName } = useDisplayName();
   const hasDiscussion = useHasDiscussion();
+
+  // Y.Text for the document content (same field name used by Editor.tsx)
+  const ydoc = useYDoc();
+  const yText: Y.Text = useMemo(() => ydoc.getText('contents'), [ydoc]);
+
+  // Stable refs for CommentsLayer scroll/editor DOM elements
+  const scrollContainerRef = useRef<HTMLElement | null>(null);
+  const editorRootRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    scrollContainerRef.current = editorView ? editorView.scrollDOM : null;
+    editorRootRef.current = editorView ? editorView.dom : null;
+  }, [editorView]);
+
+  // Stable callbacks for CommentsLayer
+  const getViewportRect = useCallback(() => {
+    if (!editorView) return { top: 0, height: 0 };
+    const rect = editorView.scrollDOM.getBoundingClientRect();
+    return { top: rect.top, height: rect.height };
+  }, [editorView]);
+
+  const resolveAnchorY = useCallback(
+    (offset: number) => editorView ? resolveAnchorYFromView(editorView, offset) : null,
+    [editorView],
+  );
+
   const [addCommentTrigger, setAddCommentTrigger] = useState(0);
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
@@ -262,14 +292,18 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         />
         <div
           id="comment-margin"
-          className={`overflow-hidden flex-shrink-0 ${commentMarginCollapsed ? '' : 'border-l border-gray-100 bg-gray-50/50'}`}
+          className={`overflow-hidden flex-shrink-0 relative ${commentMarginCollapsed ? '' : 'border-l border-gray-100 bg-gray-50/50'}`}
           style={{ width: commentMarginCollapsed ? 0 : manager.getWidth('comment-margin') }}
         >
           {editorView && (
-            <CommentMargin
-              view={editorView}
-              stateVersion={stateVersion}
-              addCommentTrigger={addCommentTrigger}
+            <CommentsLayer
+              yText={yText}
+              resolveAnchorY={resolveAnchorY}
+              getViewportRect={getViewportRect}
+              scrollContainerRef={scrollContainerRef}
+              editorRootRef={editorRootRef}
+              currentUserName={displayName ?? 'anonymous'}
+              insertCursorPos={editorView.state.selection.main.head}
             />
           )}
         </div>
