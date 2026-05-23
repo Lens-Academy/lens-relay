@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import { BRIDGE_SOURCE } from 'virtual:bridge-bundle';
+import { NewCommentCard } from '../CommentMargin/NewCommentCard';
 import { CommentThread } from './CommentThread';
 import { addComment, parseComments } from './comment-store';
 import { scoreCandidates, verifyByProbe, type Candidate, type ProbeRunner } from './position-finder';
@@ -28,8 +29,16 @@ interface HtmlPreviewProps {
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
+type PreviewPoint = { x: number; y: number };
+type PreviewScroll = { x: number; y: number };
+type PreviewPlacementTrigger = 'contextmenu' | 'selection' | 'toolbar';
 type ProbeViewportSize = { width: number; height: number };
 type ProbeViewportSizeGetter = () => ProbeViewportSize;
+interface PendingPreviewComment {
+  position: number;
+  point: PreviewPoint;
+  scroll: PreviewScroll;
+}
 type PendingProbe = {
   frame: HTMLIFrameElement;
   resolve: (rect: Rect | null) => void;
@@ -87,6 +96,29 @@ function isFingerprint(value: unknown): value is Fingerprint {
     && typeof frame.tag === 'string'
     && typeof frame.index === 'number'
   ));
+}
+
+function isPoint(value: unknown): value is PreviewPoint {
+  return isObject(value) && typeof value.x === 'number' && typeof value.y === 'number';
+}
+
+function isPlacementTrigger(value: unknown): value is PreviewPlacementTrigger {
+  return value === 'contextmenu' || value === 'selection' || value === 'toolbar';
+}
+
+function isPlacementRequestPayload(
+  value: unknown
+): value is {
+  trigger: PreviewPlacementTrigger;
+  fingerprint: Fingerprint;
+  point: PreviewPoint;
+  scroll: PreviewScroll;
+} {
+  if (!isObject(value)) return false;
+  return isPlacementTrigger(value.trigger)
+    && isFingerprint(value.fingerprint)
+    && isPoint(value.point)
+    && isPoint(value.scroll);
 }
 
 function makeCommentId(): string {
@@ -227,12 +259,15 @@ export function HtmlPreview({
   const [content, setContent] = useState(() => ytext.toString());
   const [debounced, setDebounced] = useState(content);
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+  const [pendingComment, setPendingComment] = useState<PendingPreviewComment | null>(null);
   const [nonce] = useState(() => makeNonce());
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const observedSourceRef = useRef(content);
   const mountedRef = useRef(true);
   const isCommentModeRef = useRef(isCommentMode);
+  const readOnlyRef = useRef(readOnly);
   const placementGenerationRef = useRef(0);
+  const pendingRestoreScrollRef = useRef<PreviewScroll | null>(null);
   const getProbeViewportSize = useCallback(() => {
     const iframe = iframeRef.current;
     return normalizeProbeViewportSize({
@@ -253,8 +288,19 @@ export function HtmlPreview({
 
   useEffect(() => {
     isCommentModeRef.current = isCommentMode;
-    if (!isCommentMode) placementGenerationRef.current += 1;
+    placementGenerationRef.current += 1;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Comment-mode changes intentionally invalidate any in-progress composer before it can submit at a stale placement.
+    setPendingComment(null);
   }, [isCommentMode]);
+
+  useEffect(() => {
+    readOnlyRef.current = readOnly;
+    if (readOnly) {
+      placementGenerationRef.current += 1;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Entering read-only must synchronously remove the composer so preview-only users cannot submit.
+      setPendingComment(null);
+    }
+  }, [readOnly]);
 
   useEffect(() => {
     const sync = () => {
@@ -262,6 +308,7 @@ export function HtmlPreview({
       if (observedSourceRef.current !== nextSource) {
         observedSourceRef.current = nextSource;
         placementGenerationRef.current += 1;
+        setPendingComment(null);
       }
       setContent(nextSource);
     };
@@ -279,49 +326,68 @@ export function HtmlPreview({
   const srcDoc = useMemo(() => injectBridge(debounced), [debounced]);
 
   useEffect(() => {
-    function placeAndOpen(position: number) {
-      const id = makeCommentId();
-      addComment(ytext, origin, {
-        id,
-        author: currentUser,
-        ts: new Date().toISOString(),
-        body: '',
-        position,
+    function openComposer(position: number, point: PreviewPoint, scroll: PreviewScroll) {
+      setPendingComment({ position, point, scroll });
+    }
+
+    function resolvePlacement(
+      fingerprint: Fingerprint,
+      point: PreviewPoint,
+      scroll: PreviewScroll,
+      shouldStayCurrent: () => boolean
+    ) {
+      const source = ytext.toString();
+      const candidates = scoreCandidates(source, fingerprint);
+      if (candidates.length === 1) {
+        if (!shouldStayCurrent()) return;
+        openComposer(candidates[0].position, point, scroll);
+        return;
+      }
+
+      void verifyByProbe(source, candidates, fingerprint, activeProbeRunner).then(result => {
+        if (!shouldStayCurrent()) return;
+        if (result.kind === 'placed') {
+          openComposer(result.position, point, scroll);
+        } else {
+          onManualPlacement?.(result.candidates);
+        }
+      }).catch(() => {
+        if (!shouldStayCurrent()) return;
       });
-      setOpenThreadId(id);
-      onPlaceComplete?.(id);
     }
 
     function handleClickCaptured(payload: unknown) {
+      if (readOnly) return;
       if (!isCommentMode) return;
       if (!isObject(payload) || !isFingerprint(payload.fingerprint)) return;
-
-      const source = ytext.toString();
-      const candidates = scoreCandidates(source, payload.fingerprint);
-      if (candidates.length === 1) {
-        placementGenerationRef.current += 1;
-        placeAndOpen(candidates[0].position);
-        return;
-      }
 
       const generation = placementGenerationRef.current + 1;
       placementGenerationRef.current = generation;
       const isStillCurrent = () => (
         mountedRef.current
         && isCommentModeRef.current
+        && !readOnlyRef.current
+        && placementGenerationRef.current === generation
+      );
+      const fallbackPoint = { x: payload.fingerprint.clickRect.x, y: payload.fingerprint.clickRect.y };
+      const fallbackScroll = { x: 0, y: 0 };
+
+      resolvePlacement(payload.fingerprint, fallbackPoint, fallbackScroll, isStillCurrent);
+    }
+
+    function handlePlacementRequested(payload: unknown) {
+      if (readOnly) return;
+      if (!isPlacementRequestPayload(payload)) return;
+
+      const generation = placementGenerationRef.current + 1;
+      placementGenerationRef.current = generation;
+      const isStillCurrent = () => (
+        mountedRef.current
+        && !readOnlyRef.current
         && placementGenerationRef.current === generation
       );
 
-      void verifyByProbe(source, candidates, payload.fingerprint, activeProbeRunner).then(result => {
-        if (!isStillCurrent()) return;
-        if (result.kind === 'placed') {
-          placeAndOpen(result.position);
-        } else {
-          onManualPlacement?.(result.candidates);
-        }
-      }).catch(() => {
-        if (!isStillCurrent()) return;
-      });
+      resolvePlacement(payload.fingerprint, payload.point, payload.scroll, isStillCurrent);
     }
 
     function handleMessage(message: BridgeToParent) {
@@ -336,6 +402,9 @@ export function HtmlPreview({
           break;
         case 'click-captured':
           handleClickCaptured(message.payload);
+          break;
+        case 'placement-requested':
+          handlePlacementRequested(message.payload);
           break;
         case 'probe-found':
           break;
@@ -353,6 +422,11 @@ export function HtmlPreview({
           type: 'init',
           payload: { comments: summarizeComments(ytext.toString()) },
         });
+        const scroll = pendingRestoreScrollRef.current;
+        if (scroll) {
+          postToBridge(iframe, nonce, { type: 'restore-scroll', payload: scroll });
+          pendingRestoreScrollRef.current = null;
+        }
         return;
       }
 
@@ -370,8 +444,8 @@ export function HtmlPreview({
     nonce,
     onManualPlacement,
     onOrphanedChange,
-    onPlaceComplete,
     origin,
+    readOnly,
     ytext,
   ]);
 
@@ -398,6 +472,36 @@ export function HtmlPreview({
         srcDoc={srcDoc}
         className="w-full h-full border-0 bg-white"
       />
+      {pendingComment && (
+        <NewCommentCard
+          onSubmit={(body) => {
+            if (readOnly) {
+              setPendingComment(null);
+              return;
+            }
+            const id = makeCommentId();
+            pendingRestoreScrollRef.current = pendingComment.scroll;
+            addComment(ytext, origin, {
+              id,
+              author: currentUser,
+              ts: new Date().toISOString(),
+              body,
+              position: pendingComment.position,
+            });
+            setPendingComment(null);
+            setOpenThreadId(id);
+            onPlaceComplete?.(id);
+          }}
+          onCancel={() => setPendingComment(null)}
+          style={{
+            position: 'absolute',
+            left: Math.max(8, pendingComment.point.x),
+            top: Math.max(8, pendingComment.point.y),
+            width: 320,
+            zIndex: 20,
+          }}
+        />
+      )}
       {openThreadId && (
         <div className="absolute right-4 top-4 z-10">
           <CommentThread

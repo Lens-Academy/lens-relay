@@ -219,6 +219,11 @@ describe('HtmlEditor', () => {
       });
     });
 
+    fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
+      target: { value: 'display name check' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
     expect(parseComments(ytext.toString())[0].comment.author).toBe('Luc');
   });
 
