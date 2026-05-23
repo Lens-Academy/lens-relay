@@ -6,6 +6,25 @@ export interface Candidate {
 }
 
 const MAX_CANDIDATES = 8;
+const MAX_PROBES = 5;
+const TOLERANCE_PX = 20;
+
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface ProbeRunner {
+  /** Renders `sourceWithProbe` and reports the rect of `<!--lens-probe TOKEN-->`. */
+  run(sourceWithProbe: string, token: string): Promise<Rect | null>;
+  dispose(): void;
+}
+
+export type VerifyResult =
+  | { kind: 'placed'; position: number }
+  | { kind: 'manual'; candidates: Candidate[] };
 
 interface PathFrame {
   tag: string;
@@ -48,6 +67,45 @@ export function scoreCandidates(source: string, fp: Fingerprint): Candidate[] {
   }
   out.sort((a, b) => b.score - a.score || a.position - b.position);
   return out.slice(0, MAX_CANDIDATES);
+}
+
+export function makeProbeToken(): string {
+  const bytes = new Uint8Array(8);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function verifyByProbe(
+  source: string,
+  candidates: Candidate[],
+  fp: Fingerprint,
+  runner: ProbeRunner,
+): Promise<VerifyResult> {
+  for (const candidate of candidates.slice(0, MAX_PROBES)) {
+    const token = makeProbeToken();
+    const marker = `<!--lens-probe ${token}-->`;
+    const sourceWithProbe = source.slice(0, candidate.position) + marker + source.slice(candidate.position);
+    const rect = await runner.run(sourceWithProbe, token);
+    if (rect && rectsOverlap(rect, fp.clickRect, TOLERANCE_PX)) {
+      return { kind: 'placed', position: candidate.position };
+    }
+  }
+  return { kind: 'manual', candidates };
+}
+
+function rectsOverlap(a: Rect, b: Rect, tolerancePx: number): boolean {
+  return !(
+    a.x + a.w + tolerancePx < b.x
+    || b.x + b.w + tolerancePx < a.x
+    || a.y + a.h + tolerancePx < b.y
+    || b.y + b.h + tolerancePx < a.y
+  );
 }
 
 function openPathAt(source: string, position: number): PathFrame[] {
