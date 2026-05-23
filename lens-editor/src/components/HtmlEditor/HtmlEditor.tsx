@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { LENS_EDITOR_ORIGIN } from '../../lib/relay-api';
@@ -6,8 +6,8 @@ import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { HtmlSourceEditor } from './HtmlSourceEditor';
 import { HtmlPreview } from './HtmlPreview';
 import { OrphanedCommentsPanel } from './OrphanedCommentsPanel';
-import { parseComments } from './comment-store';
-import type { ProbeRunner } from './position-finder';
+import { addComment, parseComments } from './comment-store';
+import type { Candidate, ProbeRunner } from './position-finder';
 
 type Mode = 'source' | 'preview' | 'split';
 
@@ -25,6 +25,20 @@ const modes: Array<{ id: Mode; label: string }> = [
   { id: 'split', label: 'Split' },
 ];
 
+function makeCommentId(): string {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export function HtmlEditor({
   ytext,
   awareness,
@@ -37,16 +51,32 @@ export function HtmlEditor({
   const [mode, setMode] = useState<Mode>('preview');
   const [commentMode, setCommentMode] = useState(false);
   const [orphanedIds, setOrphanedIds] = useState<string[]>([]);
+  const [pendingCandidates, setPendingCandidates] = useState<Candidate[] | null>(null);
+  const pendingSourceRef = useRef<string | null>(null);
+  const activePendingCandidates = !readOnly && commentMode ? pendingCandidates : null;
 
   useEffect(() => {
-    const pruneOrphans = () => {
-      const existingCommentIds = new Set(parseComments(ytext.toString()).map(cluster => cluster.comment.id));
+    const syncFromSource = () => {
+      const source = ytext.toString();
+      const existingCommentIds = new Set(parseComments(source).map(cluster => cluster.comment.id));
       setOrphanedIds(ids => ids.filter(id => existingCommentIds.has(id)));
+      if (pendingSourceRef.current !== null && pendingSourceRef.current !== source) {
+        pendingSourceRef.current = null;
+        setPendingCandidates(null);
+      }
     };
-    pruneOrphans();
-    ytext.observe(pruneOrphans);
-    return () => ytext.unobserve(pruneOrphans);
+    syncFromSource();
+    ytext.observe(syncFromSource);
+    return () => ytext.unobserve(syncFromSource);
   }, [ytext]);
+
+  useEffect(() => {
+    if (commentMode && !readOnly) return;
+    pendingSourceRef.current = null;
+    // Must clear immediately so a rapid off/on toggle cannot cancel stale pending placement cleanup.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPendingCandidates(null);
+  }, [commentMode, readOnly]);
 
   return (
     <div className="flex h-full w-full flex-col bg-white">
@@ -93,7 +123,28 @@ export function HtmlEditor({
       <div className="flex min-h-0 flex-1">
         {mode !== 'preview' && (
           <div className="min-w-0 flex-1">
-            <HtmlSourceEditor ytext={ytext} awareness={awareness} readOnly={readOnly} />
+            <HtmlSourceEditor
+              ytext={ytext}
+              awareness={awareness}
+              readOnly={readOnly}
+              highlightRanges={activePendingCandidates?.map(candidate => ({
+                from: candidate.position,
+                to: Math.min(candidate.position + 10, ytext.toString().length),
+              }))}
+              onClickAtPosition={(position) => {
+                if (!activePendingCandidates) return;
+                addComment(ytext, LENS_EDITOR_ORIGIN, {
+                  id: makeCommentId(),
+                  author: currentUser,
+                  ts: new Date().toISOString(),
+                  body: '',
+                  position,
+                });
+                pendingSourceRef.current = null;
+                setPendingCandidates(null);
+                setCommentMode(false);
+              }}
+            />
           </div>
         )}
         {mode !== 'source' && (
@@ -105,6 +156,12 @@ export function HtmlEditor({
               isCommentMode={commentMode && !readOnly}
               onOrphanedChange={setOrphanedIds}
               onPlaceComplete={() => setCommentMode(false)}
+              onManualPlacement={(candidates) => {
+                if (readOnly || !commentMode) return;
+                setMode('split');
+                pendingSourceRef.current = ytext.toString();
+                setPendingCandidates(candidates);
+              }}
               probeRunner={probeRunner}
               readOnly={readOnly}
             />

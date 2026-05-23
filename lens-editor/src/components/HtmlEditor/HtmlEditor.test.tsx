@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { EditorView } from 'codemirror';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { HtmlEditor } from './HtmlEditor';
 import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
 import { parseComments } from './comment-store';
 import type { BridgeToParent, Envelope } from './bridge/protocol';
+import type { ProbeRunner } from './position-finder';
 
 vi.mock('./bridge/protocol', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./bridge/protocol')>();
@@ -36,6 +38,32 @@ function createHtmlDoc() {
 
 function dispatchFromBridge(iframe: HTMLIFrameElement, env: Envelope<BridgeToParent>): void {
   window.dispatchEvent(new MessageEvent('message', { data: env, source: iframe.contentWindow }));
+}
+
+async function triggerManualPlacementFallback() {
+  const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+  await act(async () => {
+    dispatchFromBridge(iframe, {
+      nonce: '__test_nonce__',
+      message: {
+        type: 'click-captured',
+        payload: {
+          fingerprint: {
+            before: 'click ',
+            after: 'here',
+            tag: 'p',
+            ancestorPath: [],
+            clickRect: { x: 9999, y: 9999, w: 1, h: 1 },
+          },
+        },
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull());
+  await waitFor(() => {
+    expect(document.querySelectorAll('.cm-lens-candidate').length).toBeGreaterThanOrEqual(2);
+  });
 }
 
 describe('HtmlEditor', () => {
@@ -236,5 +264,220 @@ describe('HtmlEditor', () => {
     );
 
     expect(screen.queryByRole('button', { name: /comment mode/i })).toBeNull();
+  });
+
+  it('on manual placement, switches to split mode and shows highlights on both candidates', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+    const missRunner: ProbeRunner = {
+      async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; },
+      dispose() {},
+    };
+
+    render(
+      <DisplayNameProvider>
+        <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" probeRunner={missRunner} />
+      </DisplayNameProvider>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'click ',
+              after: 'here',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 9999, y: 9999, w: 1, h: 1 },
+            },
+          },
+        },
+      });
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+    expect(screen.getByRole('button', { name: /split/i })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => {
+      expect(document.querySelectorAll('.cm-lens-candidate').length).toBeGreaterThanOrEqual(2);
+    });
+    expect(parseComments(ytext.toString())).toEqual([]);
+  });
+
+  it('source-pane click while manual placement is pending writes a marker at that position', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+    const missRunner: ProbeRunner = {
+      async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; },
+      dispose() {},
+    };
+    const posAtCoords = vi.spyOn(EditorView.prototype, 'posAtCoords').mockReturnValue(3);
+
+    try {
+      render(
+        <DisplayNameProvider>
+          <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" probeRunner={missRunner} />
+        </DisplayNameProvider>,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+
+      const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+      await act(async () => {
+        dispatchFromBridge(iframe, {
+          nonce: '__test_nonce__',
+          message: {
+            type: 'click-captured',
+            payload: {
+              fingerprint: {
+                before: 'click ',
+                after: 'here',
+                tag: 'p',
+                ancestorPath: [],
+                clickRect: { x: 9999, y: 9999, w: 1, h: 1 },
+              },
+            },
+          },
+        });
+        await new Promise(resolve => setTimeout(resolve, 0));
+      });
+      await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull());
+
+      const editor = document.querySelector('.cm-content') as HTMLElement;
+      await act(async () => {
+        editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 50 }));
+      });
+
+      await waitFor(() => expect(parseComments(ytext.toString())).toHaveLength(1));
+      const [cluster] = parseComments(ytext.toString());
+      expect(cluster.sourceStart).toBe(3);
+      expect(cluster.comment.author).toBe('me@x');
+      expect(screen.getByRole('button', { name: /comment mode/i })).toHaveAttribute('aria-pressed', 'false');
+    } finally {
+      posAtCoords.mockRestore();
+    }
+  });
+
+  it('clears pending manual placement when comment mode is toggled off', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+    const missRunner: ProbeRunner = {
+      async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; },
+      dispose() {},
+    };
+    const posAtCoords = vi.spyOn(EditorView.prototype, 'posAtCoords').mockReturnValue(3);
+
+    try {
+      render(
+        <DisplayNameProvider>
+          <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" probeRunner={missRunner} />
+        </DisplayNameProvider>,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+      await triggerManualPlacementFallback();
+
+      await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+
+      await waitFor(() => expect(document.querySelectorAll('.cm-lens-candidate')).toHaveLength(0));
+      const editor = document.querySelector('.cm-content') as HTMLElement;
+      await act(async () => {
+        editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 50 }));
+      });
+
+      expect(parseComments(ytext.toString())).toEqual([]);
+    } finally {
+      posAtCoords.mockRestore();
+    }
+  });
+
+  it('does not re-arm pending manual placement after rapid comment mode off/on', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+    const missRunner: ProbeRunner = {
+      async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; },
+      dispose() {},
+    };
+    const posAtCoords = vi.spyOn(EditorView.prototype, 'posAtCoords').mockReturnValue(3);
+
+    try {
+      render(
+        <DisplayNameProvider>
+          <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" probeRunner={missRunner} />
+        </DisplayNameProvider>,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+      await triggerManualPlacementFallback();
+
+      vi.useFakeTimers();
+      const commentModeButton = screen.getByRole('button', { name: /comment mode/i });
+      act(() => {
+        fireEvent.click(commentModeButton);
+      });
+      act(() => {
+        fireEvent.click(commentModeButton);
+      });
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+      vi.useRealTimers();
+
+      await waitFor(() => expect(document.querySelectorAll('.cm-lens-candidate')).toHaveLength(0));
+      const editor = document.querySelector('.cm-content') as HTMLElement;
+      await act(async () => {
+        editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 50 }));
+      });
+
+      expect(parseComments(ytext.toString())).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      posAtCoords.mockRestore();
+    }
+  });
+
+  it('clears pending manual placement when the source changes before source click', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+    const missRunner: ProbeRunner = {
+      async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; },
+      dispose() {},
+    };
+    const posAtCoords = vi.spyOn(EditorView.prototype, 'posAtCoords').mockReturnValue(3);
+
+    try {
+      render(
+        <DisplayNameProvider>
+          <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" probeRunner={missRunner} />
+        </DisplayNameProvider>,
+      );
+      await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+      await triggerManualPlacementFallback();
+
+      await act(async () => {
+        ytext.insert(0, '<p>new</p>');
+      });
+
+      await waitFor(() => expect(document.querySelectorAll('.cm-lens-candidate')).toHaveLength(0));
+      const editor = document.querySelector('.cm-content') as HTMLElement;
+      await act(async () => {
+        editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 50 }));
+      });
+
+      expect(parseComments(ytext.toString())).toEqual([]);
+    } finally {
+      posAtCoords.mockRestore();
+    }
   });
 });

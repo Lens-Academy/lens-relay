@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { EditorView } from 'codemirror';
 import {
+  Decoration,
+  type DecorationSet,
   keymap,
   highlightSpecialChars,
   drawSelection,
@@ -8,7 +10,7 @@ import {
   rectangularSelection,
   crosshairCursor,
 } from '@codemirror/view';
-import { EditorState } from '@codemirror/state';
+import { EditorState, StateEffect, StateField } from '@codemirror/state';
 import { defaultKeymap } from '@codemirror/commands';
 import {
   indentOnInput,
@@ -30,19 +32,60 @@ import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { remoteCursorTheme } from '../Editor/remoteCursorTheme';
 
+interface HighlightRange {
+  from: number;
+  to: number;
+}
+
 interface HtmlSourceEditorProps {
   ytext: Y.Text;
   awareness: Awareness;
   readOnly?: boolean;
+  highlightRanges?: HighlightRange[];
+  onClickAtPosition?: (position: number) => void;
 }
+
+const setHighlights = StateEffect.define<HighlightRange[]>();
+
+const highlightField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(decorations, transaction) {
+    let next = decorations.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(setHighlights)) {
+        const docLength = transaction.state.doc.length;
+        next = Decoration.set(
+          effect.value
+            .map(range => ({
+              from: Math.max(0, Math.min(range.from, docLength)),
+              to: Math.max(0, Math.min(range.to, docLength)),
+            }))
+            .filter(range => range.to > range.from)
+            .map(range => Decoration.mark({ class: 'cm-lens-candidate' }).range(range.from, range.to)),
+        );
+      }
+    }
+    return next;
+  },
+  provide: field => EditorView.decorations.from(field),
+});
 
 export function HtmlSourceEditor({
   ytext,
   awareness,
   readOnly = false,
+  highlightRanges,
+  onClickAtPosition,
 }: HtmlSourceEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const onClickAtPositionRef = useRef(onClickAtPosition);
+
+  useEffect(() => {
+    onClickAtPositionRef.current = onClickAtPosition;
+  }, [onClickAtPosition]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -88,6 +131,16 @@ export function HtmlSourceEditor({
         html(),
         yCollab(ytext, awareness, { undoManager }),
         remoteCursorTheme,
+        highlightField,
+        EditorView.domEventHandlers({
+          mouseup(event, view) {
+            const handler = onClickAtPositionRef.current;
+            if (!handler) return false;
+            const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+            if (pos !== null) handler(pos);
+            return false;
+          },
+        }),
         EditorView.lineWrapping,
         EditorView.theme({
           '&': {
@@ -113,6 +166,10 @@ export function HtmlSourceEditor({
           '.cm-gutters': {
             display: 'none',
           },
+          '.cm-lens-candidate': {
+            backgroundColor: 'rgba(251, 191, 36, 0.25)',
+            borderBottom: '2px solid rgb(251, 191, 36)',
+          },
         }),
       ],
     });
@@ -128,6 +185,12 @@ export function HtmlSourceEditor({
       undoManager.destroy();
     };
   }, [awareness, readOnly, ytext]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: setHighlights.of(highlightRanges ?? []),
+    });
+  }, [highlightRanges]);
 
   return <div ref={containerRef} className="h-full w-full" />;
 }
