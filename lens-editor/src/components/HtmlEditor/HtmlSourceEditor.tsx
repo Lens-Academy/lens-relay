@@ -42,7 +42,7 @@ interface HtmlSourceEditorProps {
   awareness: Awareness;
   readOnly?: boolean;
   highlightRanges?: HighlightRange[];
-  onClickAtPosition?: (position: number) => void;
+  onClickAtPosition?: (position: number, point: { x: number; y: number }) => void;
 }
 
 const setHighlights = StateEffect.define<HighlightRange[]>();
@@ -138,7 +138,7 @@ export function HtmlSourceEditor({
             const handler = onClickAtPositionRef.current;
             if (!handler) return false;
             const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-            if (pos !== null) handler(pos);
+            if (pos !== null) handler(pos, { x: event.clientX, y: event.clientY });
             return false;
           },
         }),

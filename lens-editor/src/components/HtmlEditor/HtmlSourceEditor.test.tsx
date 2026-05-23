@@ -98,7 +98,7 @@ describe('HtmlSourceEditor', () => {
     expect(container.querySelectorAll('.cm-lens-candidate')).toHaveLength(0);
   });
 
-  it('calls onClickAtPosition with the doc offset when armed', () => {
+  it('calls onClickAtPosition with doc offset and viewport coordinates when armed', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<p>abc</p>');
@@ -118,7 +118,7 @@ describe('HtmlSourceEditor', () => {
 
       editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 50 }));
 
-      expect(onClick).toHaveBeenCalledWith(3);
+      expect(onClick).toHaveBeenCalledWith(3, { x: 100, y: 50 });
     } finally {
       posAtCoords.mockRestore();
     }

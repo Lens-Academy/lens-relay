@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import type { ComponentProps } from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, act, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -64,6 +65,61 @@ async function triggerManualPlacementFallback() {
   await waitFor(() => {
     expect(document.querySelectorAll('.cm-lens-candidate').length).toBeGreaterThanOrEqual(2);
   });
+}
+
+async function openManualSourceComposer(
+  ytext: Y.Text,
+  awareness: Awareness,
+  props: Partial<ComponentProps<typeof HtmlEditor>> = {},
+) {
+  const runner: ProbeRunner = {
+    async run() { return null; },
+    dispose() {},
+  };
+  const posAtCoords = vi.spyOn(EditorView.prototype, 'posAtCoords').mockReturnValue(3);
+  const view = render(
+    <DisplayNameProvider>
+      <HtmlEditor
+        ytext={ytext}
+        awareness={awareness}
+        currentUser="me@x"
+        probeRunner={runner}
+        {...props}
+      />
+    </DisplayNameProvider>,
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+
+  const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+  await act(async () => {
+    window.dispatchEvent(new MessageEvent('message', {
+      source: iframe.contentWindow,
+      data: {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'click ',
+              after: 'here',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 10, y: 10, w: 20, h: 20 },
+            },
+          },
+        },
+      },
+    }));
+    await Promise.resolve();
+  });
+
+  const highlighted = document.querySelector('.cm-lens-candidate') as HTMLElement;
+  await act(async () => {
+    highlighted.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 120, clientY: 80 }));
+  });
+
+  return { posAtCoords, ...view };
 }
 
 describe('HtmlEditor', () => {
@@ -271,7 +327,7 @@ describe('HtmlEditor', () => {
     expect(screen.queryByRole('button', { name: /comment mode/i })).toBeNull();
   });
 
-  it('on manual placement, switches to split mode and shows highlights on both candidates', async () => {
+  it('on manual placement, switches to source mode and shows highlights on both candidates', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<p>click here</p><p>click here</p>');
@@ -308,14 +364,203 @@ describe('HtmlEditor', () => {
       await new Promise(resolve => setTimeout(resolve, 0));
     });
 
-    expect(screen.getByRole('button', { name: /split/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /^Source$/ })).toHaveAttribute('aria-pressed', 'true');
     await waitFor(() => {
       expect(document.querySelectorAll('.cm-lens-candidate').length).toBeGreaterThanOrEqual(2);
     });
     expect(parseComments(ytext.toString())).toEqual([]);
   });
 
-  it('source-pane click while manual placement is pending writes a marker at that position', async () => {
+  it('manual source placement opens composer and writes root body only on submit', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+    const runner: ProbeRunner = {
+      async run() { return null; },
+      dispose() {},
+    };
+    const posAtCoords = vi.spyOn(EditorView.prototype, 'posAtCoords').mockReturnValue(3);
+
+    try {
+      render(
+        <DisplayNameProvider>
+          <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" probeRunner={runner} />
+        </DisplayNameProvider>,
+      );
+      fireEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+
+      const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: iframe.contentWindow,
+          data: {
+            nonce: '__test_nonce__',
+            message: {
+              type: 'click-captured',
+              payload: {
+                fingerprint: {
+                  before: 'click ',
+                  after: 'here',
+                  tag: 'p',
+                  ancestorPath: [],
+                  clickRect: { x: 10, y: 10, w: 20, h: 20 },
+                },
+              },
+            },
+          },
+        }));
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText('Source')).toHaveAttribute('aria-pressed', 'true');
+      expect(ytext.toString()).not.toContain('lens-comment');
+
+      const highlighted = document.querySelector('.cm-lens-candidate') as HTMLElement;
+      await act(async () => {
+        highlighted.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 120, clientY: 80 }));
+      });
+
+      expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
+      expect(ytext.toString()).not.toContain('lens-comment');
+
+      fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
+        target: { value: 'manual body' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+      const clusters = parseComments(ytext.toString());
+      expect(clusters).toHaveLength(1);
+      expect(clusters[0].comment.body).toBe('manual body');
+      expect(clusters[0].replies).toEqual([]);
+    } finally {
+      posAtCoords.mockRestore();
+    }
+  });
+
+  it('manual composer cannot mutate after rerendering readOnly before submit', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+
+    const { posAtCoords, rerender } = await openManualSourceComposer(ytext, awareness);
+    try {
+      fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
+        target: { value: 'stale body' },
+      });
+      rerender(
+        <DisplayNameProvider>
+          <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" readOnly />
+        </DisplayNameProvider>,
+      );
+
+      const submit = screen.queryByRole('button', { name: 'Comment' });
+      if (submit) fireEvent.click(submit);
+
+      expect(parseComments(ytext.toString())).toEqual([]);
+    } finally {
+      posAtCoords.mockRestore();
+    }
+  });
+
+  it('manual composer cannot mutate after comment mode is toggled off before submit', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+
+    const { posAtCoords } = await openManualSourceComposer(ytext, awareness);
+    try {
+      fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
+        target: { value: 'stale body' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+
+      const submit = screen.queryByRole('button', { name: 'Comment' });
+      if (submit) fireEvent.click(submit);
+
+      expect(parseComments(ytext.toString())).toEqual([]);
+    } finally {
+      posAtCoords.mockRestore();
+    }
+  });
+
+  it('manual composer cannot write a stale position after source changes before submit', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+
+    const { posAtCoords } = await openManualSourceComposer(ytext, awareness);
+    try {
+      fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
+        target: { value: 'stale source body' },
+      });
+
+      await act(async () => {
+        ytext.insert(0, '<p>new intro</p>');
+      });
+
+      const submit = screen.queryByRole('button', { name: 'Comment' });
+      if (submit) fireEvent.click(submit);
+
+      expect(parseComments(ytext.toString())).toEqual([]);
+    } finally {
+      posAtCoords.mockRestore();
+    }
+  });
+
+  it('positions manual composer using source wrapper local coordinates', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const awareness = new Awareness(doc);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function () {
+      if (
+        this instanceof HTMLElement
+        && this.classList.contains('relative')
+        && this.classList.contains('min-w-0')
+        && this.classList.contains('flex-1')
+      ) {
+        return {
+          x: 40,
+          y: 30,
+          top: 30,
+          left: 40,
+          right: 640,
+          bottom: 430,
+          width: 600,
+          height: 400,
+          toJSON: () => {},
+        };
+      }
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => {},
+      };
+    });
+
+    const { posAtCoords } = await openManualSourceComposer(ytext, awareness);
+    try {
+      const card = document.querySelector('.comment-card-new') as HTMLElement;
+
+      expect(card.style.left).toBe('80px');
+      expect(card.style.top).toBe('50px');
+    } finally {
+      rectSpy.mockRestore();
+      posAtCoords.mockRestore();
+    }
+  });
+
+  it('source-pane click while manual placement is pending opens the composer before writing a marker', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<p>click here</p><p>click here</p>');
@@ -360,10 +605,19 @@ describe('HtmlEditor', () => {
         editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 50 }));
       });
 
+      expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
+      expect(parseComments(ytext.toString())).toEqual([]);
+
+      fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
+        target: { value: 'source placement' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
       await waitFor(() => expect(parseComments(ytext.toString())).toHaveLength(1));
       const [cluster] = parseComments(ytext.toString());
       expect(cluster.sourceStart).toBe(3);
       expect(cluster.comment.author).toBe('me@x');
+      expect(cluster.comment.body).toBe('source placement');
       expect(screen.getByRole('button', { name: /comment mode/i })).toHaveAttribute('aria-pressed', 'false');
     } finally {
       posAtCoords.mockRestore();

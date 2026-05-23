@@ -6,6 +6,7 @@ import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { HtmlSourceEditor } from './HtmlSourceEditor';
 import { HtmlPreview } from './HtmlPreview';
 import { OrphanedCommentsPanel } from './OrphanedCommentsPanel';
+import { NewCommentCard } from '../CommentMargin/NewCommentCard';
 import { addComment, parseComments } from './comment-store';
 import type { Candidate, ProbeRunner } from './position-finder';
 
@@ -52,7 +53,13 @@ export function HtmlEditor({
   const [commentMode, setCommentMode] = useState(false);
   const [orphanedIds, setOrphanedIds] = useState<string[]>([]);
   const [pendingCandidates, setPendingCandidates] = useState<Candidate[] | null>(null);
+  const [manualComposer, setManualComposer] = useState<{
+    position: number;
+    point: { x: number; y: number };
+    source: string;
+  } | null>(null);
   const pendingSourceRef = useRef<string | null>(null);
+  const sourceWrapperRef = useRef<HTMLDivElement>(null);
   const activePendingCandidates = !readOnly && commentMode ? pendingCandidates : null;
 
   useEffect(() => {
@@ -63,7 +70,9 @@ export function HtmlEditor({
       if (pendingSourceRef.current !== null && pendingSourceRef.current !== source) {
         pendingSourceRef.current = null;
         setPendingCandidates(null);
+        setManualComposer(null);
       }
+      setManualComposer(composer => (composer && composer.source !== source ? null : composer));
     };
     syncFromSource();
     ytext.observe(syncFromSource);
@@ -76,6 +85,7 @@ export function HtmlEditor({
     // Must clear immediately so a rapid off/on toggle cannot cancel stale pending placement cleanup.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setPendingCandidates(null);
+    setManualComposer(null);
   }, [commentMode, readOnly]);
 
   return (
@@ -122,7 +132,7 @@ export function HtmlEditor({
 
       <div className="flex min-h-0 flex-1">
         {mode !== 'preview' && (
-          <div className="min-w-0 flex-1">
+          <div ref={sourceWrapperRef} className="relative min-w-0 flex-1">
             <HtmlSourceEditor
               ytext={ytext}
               awareness={awareness}
@@ -131,20 +141,51 @@ export function HtmlEditor({
                 from: candidate.position,
                 to: Math.min(candidate.position + 10, ytext.toString().length),
               }))}
-              onClickAtPosition={(position) => {
+              onClickAtPosition={(position, point) => {
                 if (!activePendingCandidates) return;
-                addComment(ytext, LENS_EDITOR_ORIGIN, {
-                  id: makeCommentId(),
-                  author: currentUser,
-                  ts: new Date().toISOString(),
-                  body: '',
-                  position,
-                });
+                const rect = sourceWrapperRef.current?.getBoundingClientRect();
+                const localPoint = rect
+                  ? { x: point.x - rect.left, y: point.y - rect.top }
+                  : point;
+                setManualComposer({ position, point: localPoint, source: ytext.toString() });
                 pendingSourceRef.current = null;
                 setPendingCandidates(null);
-                setCommentMode(false);
               }}
             />
+            {manualComposer && !readOnly && commentMode && (
+              <NewCommentCard
+                onSubmit={(body) => {
+                  if (readOnly || !commentMode) {
+                    setManualComposer(null);
+                    return;
+                  }
+                  if (manualComposer.source !== ytext.toString()) {
+                    setManualComposer(null);
+                    return;
+                  }
+                  addComment(ytext, LENS_EDITOR_ORIGIN, {
+                    id: makeCommentId(),
+                    author: currentUser,
+                    ts: new Date().toISOString(),
+                    body,
+                    position: manualComposer.position,
+                  });
+                  setManualComposer(null);
+                  setCommentMode(false);
+                }}
+                onCancel={() => {
+                  setManualComposer(null);
+                  setCommentMode(false);
+                }}
+                style={{
+                  position: 'absolute',
+                  top: Math.max(8, manualComposer.point.y),
+                  left: Math.max(8, manualComposer.point.x),
+                  width: 320,
+                  zIndex: 20,
+                }}
+              />
+            )}
           </div>
         )}
         {mode !== 'source' && (
@@ -158,9 +199,10 @@ export function HtmlEditor({
               onPlaceComplete={() => setCommentMode(false)}
               onManualPlacement={(candidates) => {
                 if (readOnly || !commentMode) return;
-                setMode('split');
+                setMode('source');
                 pendingSourceRef.current = ytext.toString();
                 setPendingCandidates(candidates);
+                setManualComposer(null);
               }}
               probeRunner={probeRunner}
               readOnly={readOnly}
