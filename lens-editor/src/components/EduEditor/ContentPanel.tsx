@@ -594,7 +594,7 @@ export function ContentPanel({
 
   const tldr = frontmatter.get('tldr');
 
-  // Derive platform URL for "Show on Website" link
+  // Derive platform URL for the published lensacademy.org link
   const folderName = lensPath ? getFolderNameFromPath(lensPath, folderNames) : null;
   const originalPath = lensPath && folderName ? getOriginalPath(lensPath, folderName) : null;
   const platformUrl = originalPath ? getPlatformUrl(originalPath) : null;
@@ -627,7 +627,7 @@ export function ContentPanel({
           onClick={() => openDocInNewTab(RELAY_ID, docUuidFromCompoundId(scope.docId), metadata)}
           className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
         >
-          Show Raw Markdown
+          Open in File Editor
         </button>
         {platformUrl && (
           <a
@@ -636,7 +636,7 @@ export function ContentPanel({
             rel="noopener noreferrer"
             className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
           >
-            Show on Website
+            Show on Lensacademy.org
           </a>
         )}
       </div>

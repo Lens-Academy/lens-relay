@@ -117,7 +117,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
   const originalPath = path && folderName ? getOriginalPath(path, folderName) : null;
   const platformUrl = originalPath ? getPlatformUrl(originalPath, frontmatterSlug) : null;
 
-  // Show "Open in Review Editor" for course and module documents
+  // Show "Open in Course Editor" for course and module documents
   const isCourseOrModule = originalPath
     ? /^\/?(?:courses|modules)\//i.test(originalPath)
     : false;
@@ -148,7 +148,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
               rel="noopener noreferrer"
               className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline whitespace-nowrap"
             >
-              Open on Website
+              Show on Lensacademy.org
             </a>
           )}
           {eduEditorUrl && (
@@ -158,7 +158,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
               rel="noopener noreferrer"
               className="text-[11px] text-blue-500 hover:text-blue-700 hover:underline whitespace-nowrap"
             >
-              Open in Review Editor
+              Open in Course Editor
             </a>
           )}
         </div>
