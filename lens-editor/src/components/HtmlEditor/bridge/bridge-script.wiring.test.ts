@@ -183,6 +183,111 @@ describe('installBridge', () => {
     expect((captured!.message as Extract<BridgeToParent, { type: 'click-captured' }>).payload.fingerprint.tag).toBe('p');
   });
 
+  it('posts placement-requested when rendered text is selected', async () => {
+    vi.useFakeTimers();
+    arm();
+    dispatchToBridge({ type: 'init', payload: { comments: [] } });
+    document.body.innerHTML = '<p id="target">selectable text</p>';
+    const target = document.getElementById('target')!;
+    stubRenderedRect(target);
+    sent = [];
+
+    const rangeRect = {
+      left: 20,
+      top: 30,
+      right: 120,
+      bottom: 48,
+      x: 20,
+      y: 30,
+      width: 100,
+      height: 18,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    vi.spyOn(range, 'getBoundingClientRect').mockReturnValue(rangeRect);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 30, clientY: 35 }));
+    await vi.runAllTimersAsync();
+
+    const placement = sent.find(e => e.message.type === 'placement-requested');
+    expect(placement?.message).toMatchObject({
+      type: 'placement-requested',
+      payload: {
+        trigger: 'selection',
+        point: { x: 70, y: 39 },
+      },
+    });
+  });
+
+  it('does not post selection placement after cleanup before selection timeout fires', async () => {
+    vi.useFakeTimers();
+    arm();
+    dispatchToBridge({ type: 'init', payload: { comments: [] } });
+    document.body.innerHTML = '<p id="target">selectable text</p>';
+    const target = document.getElementById('target')!;
+    stubRenderedRect(target);
+    sent = [];
+
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    vi.spyOn(range, 'getBoundingClientRect').mockReturnValue({
+      left: 20,
+      top: 30,
+      right: 120,
+      bottom: 48,
+      x: 20,
+      y: 30,
+      width: 100,
+      height: 18,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 30, clientY: 35 }));
+    const cleanup = cleanups.pop()!;
+    cleanup();
+    await vi.runAllTimersAsync();
+
+    expect(sent.filter(e => e.message.type === 'placement-requested')).toHaveLength(0);
+  });
+
+  it('does not post selection placement from owned overlay mouseup with lingering selection', async () => {
+    vi.useFakeTimers();
+    arm();
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    const target = document.getElementById('t')!;
+    const dot = document.querySelector('.lens-comment-dot') as HTMLElement;
+    sent = [];
+
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    vi.spyOn(range, 'getBoundingClientRect').mockReturnValue({
+      left: 20,
+      top: 30,
+      right: 120,
+      bottom: 48,
+      x: 20,
+      y: 30,
+      width: 100,
+      height: 18,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    dot.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 102, clientY: 22 }));
+    await vi.runAllTimersAsync();
+
+    expect(sent.filter(e => e.message.type === 'placement-requested')).toHaveLength(0);
+  });
+
   it('ignores malformed enable-click-to-place after init without arming click capture', () => {
     arm();
     dispatchToBridge({ type: 'init', payload: { comments: [] } });

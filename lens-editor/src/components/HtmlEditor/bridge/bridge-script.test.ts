@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   findCommentNodes,
   findAnchorElement,
   renderDots,
   captureFingerprintAt,
   findProbe,
+  installBridge,
 } from './bridge-script';
 import type { CommentSummary } from './protocol';
 
@@ -231,6 +232,70 @@ describe('captureFingerprintAt', () => {
     const fp = captureFingerprintAt(target, 7, 9, 5);
 
     expect(fp.clickRect).toEqual({ x: 7, y: 9, w: 50, h: 20 });
+  });
+});
+
+describe('installBridge placement and scroll handling', () => {
+  it('captures right-click placement requests with point and scroll', () => {
+    setupBody('<p id="target">Hello world</p>');
+    window.scrollTo(0, 120);
+    const target = document.getElementById('target')!;
+    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({
+      left: 5, top: 10, right: 105, bottom: 30, width: 100, height: 20,
+      x: 5, y: 10, toJSON() {},
+    } as DOMRect);
+
+    const fp = captureFingerprintAt(target, 15, 20, 0);
+    expect(fp.after).toContain('Hello');
+
+    const cleanup = installBridge(window);
+    const posted: unknown[] = [];
+    vi.spyOn(window.parent, 'postMessage').mockImplementation((msg: unknown) => {
+      posted.push(msg);
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window.parent,
+      data: { nonce: 'N', message: { type: 'init', payload: { comments: [] } } },
+    }));
+    target.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 15,
+      clientY: 20,
+    }));
+
+    expect(posted).toContainEqual({
+      nonce: 'N',
+      message: {
+        type: 'placement-requested',
+        payload: expect.objectContaining({
+          trigger: 'contextmenu',
+          fingerprint: fp,
+          point: { x: 15, y: 20 },
+          scroll: { x: 0, y: 120 },
+        }),
+      },
+    });
+    cleanup();
+  });
+
+  it('restores scroll when parent sends restore-scroll', () => {
+    setupBody('<p>scroll me</p>');
+    const cleanup = installBridge(window);
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window.parent,
+      data: { nonce: 'N', message: { type: 'init', payload: { comments: [] } } },
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window.parent,
+      data: { nonce: 'N', message: { type: 'restore-scroll', payload: { x: 3, y: 140 } } },
+    }));
+
+    expect(scrollTo).toHaveBeenCalledWith(3, 140);
+    cleanup();
   });
 });
 

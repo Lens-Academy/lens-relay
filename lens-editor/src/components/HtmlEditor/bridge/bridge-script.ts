@@ -46,6 +46,10 @@ function isEmptyObjectPayload(payload: unknown): payload is Record<string, never
     && Object.keys(payload).length === 0;
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 export interface FoundComment {
   id: string;
   node: Comment;
@@ -208,6 +212,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   const doc = win.document;
   let dotRoot: HTMLDivElement | null = null;
   let pendingBodyRender = false;
+  let selectionTimer: number | null = null;
 
   function postToParent(message: BridgeToParent): void {
     const env: Envelope<BridgeToParent> = { nonce: nonce ?? '', message };
@@ -321,6 +326,14 @@ export function installBridge(win: Window & typeof globalThis): () => void {
         postToParent({ type: 'probe-found', payload: { token, rect } });
         break;
       }
+      case 'restore-scroll': {
+        if (!isObject(msg.payload)) return;
+        const x = msg.payload.x;
+        const y = msg.payload.y;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        win.scrollTo(x, y);
+        break;
+      }
       case 'init':
         break;
     }
@@ -345,6 +358,70 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     postToParent({ type: 'click-captured', payload: { fingerprint } });
   };
   win.addEventListener('click', clickListener, true);
+
+  const contextMenuListener = (event: MouseEvent): void => {
+    const target = event.target;
+    if (!(target instanceof win.Element)) return;
+    const ownedOverlayRoot = getOwnedOverlayRoot(doc);
+    if (ownedOverlayRoot?.contains(target)) return;
+    event.preventDefault();
+    const fingerprint = captureFingerprintAt(target, event.clientX, event.clientY, 0);
+    postToParent({
+      type: 'placement-requested',
+      payload: {
+        trigger: 'contextmenu',
+        fingerprint,
+        point: { x: event.clientX, y: event.clientY },
+        scroll: { x: win.scrollX, y: win.scrollY },
+      },
+    });
+  };
+  win.addEventListener('contextmenu', contextMenuListener, true);
+
+  function elementFromSelection(selection: Selection): Element | null {
+    const node = selection.anchorNode;
+    if (!node) return null;
+    return node.nodeType === win.Node.ELEMENT_NODE
+      ? node as Element
+      : node.parentElement;
+  }
+
+  function rangeIntersectsOwnedOverlay(range: Range, root: Element | null): boolean {
+    if (!root) return false;
+    return root.contains(range.commonAncestorContainer);
+  }
+
+  const selectionListener = (event: MouseEvent): void => {
+    const eventTarget = event.target;
+    if (!(eventTarget instanceof win.Element)) return;
+    const ownedOverlayRoot = getOwnedOverlayRoot(doc);
+    if (ownedOverlayRoot?.contains(eventTarget)) return;
+    if (selectionTimer !== null) win.clearTimeout(selectionTimer);
+    selectionTimer = win.setTimeout(() => {
+      selectionTimer = null;
+      const selection = win.getSelection();
+      if (!selection || selection.toString().trim() === '' || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      const target = elementFromSelection(selection);
+      if (!target) return;
+      const currentOverlayRoot = getOwnedOverlayRoot(doc);
+      if (currentOverlayRoot?.contains(target) || rangeIntersectsOwnedOverlay(range, currentOverlayRoot)) return;
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+      const fingerprint = captureFingerprintAt(target, x, y, 0);
+      postToParent({
+        type: 'placement-requested',
+        payload: {
+          trigger: 'selection',
+          fingerprint,
+          point: { x, y },
+          scroll: { x: win.scrollX, y: win.scrollY },
+        },
+      });
+    }, 0);
+  };
+  win.addEventListener('mouseup', selectionListener);
 
   let pending = false;
   let suppressRenderMutations = false;
@@ -407,6 +484,12 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   const cleanup = (): void => {
     win.removeEventListener('message', messageListener);
     win.removeEventListener('click', clickListener, true);
+    win.removeEventListener('contextmenu', contextMenuListener, true);
+    win.removeEventListener('mouseup', selectionListener);
+    if (selectionTimer !== null) {
+      win.clearTimeout(selectionTimer);
+      selectionTimer = null;
+    }
     doc.removeEventListener('DOMContentLoaded', domReadyListener);
     dotRoot?.removeEventListener('click', dotClickListener);
     dotRoot = null;
