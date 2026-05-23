@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, cleanup, act, screen } from '@testing-library/react';
+import { render, cleanup, act, screen, waitFor, renderHook } from '@testing-library/react';
 import * as Y from 'yjs';
-import { HtmlPreview } from './HtmlPreview';
+import { HtmlPreview, useHiddenProbeRunner } from './HtmlPreview';
+import { parseComments } from './comment-store';
 import type { BridgeToParent, Envelope } from './bridge/protocol';
+import type { ProbeRunner } from './position-finder';
 
 vi.mock('./bridge/protocol', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./bridge/protocol')>();
@@ -270,5 +272,476 @@ describe('HtmlPreview bridge integration', () => {
 
     expect(threw).toBe(false);
     expect(screen.queryByText('x')).toBeNull();
+  });
+});
+
+describe('HtmlPreview click-to-place', () => {
+  it('sends click-to-place mode changes to the bridge with exact empty payloads', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>Hi</p>');
+
+    const { rerender } = render(<HtmlPreview ytext={ytext} isCommentMode={false} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+    const posted: unknown[] = [];
+    const spy = vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { posted.push(msg); }) as typeof window.postMessage
+    );
+
+    try {
+      rerender(<HtmlPreview ytext={ytext} isCommentMode={true} />);
+      rerender(<HtmlPreview ytext={ytext} isCommentMode={false} />);
+
+      expect(posted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'enable-click-to-place', payload: {} },
+      });
+      expect(posted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'disable-click-to-place', payload: {} },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('inserts a comment marker when bridge reports a click whose fingerprint uniquely matches source', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>unique words here</p>');
+    const onPlace = vi.fn();
+    const runner: ProbeRunner = {
+      run: vi.fn(async () => null),
+      dispose() {},
+    };
+
+    render(
+      <HtmlPreview
+        ytext={ytext}
+        currentUser="me@x"
+        origin={Symbol()}
+        debounceMs={0}
+        isCommentMode={true}
+        onPlaceComplete={onPlace}
+        probeRunner={runner}
+      />
+    );
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'unique ',
+              after: 'words',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 0, y: 0, w: 10, h: 10 },
+            },
+          },
+        },
+      });
+    });
+
+    const comments = parseComments(ytext.toString());
+    expect(comments).toHaveLength(1);
+    expect(comments[0].comment.author).toBe('me@x');
+    expect(comments[0].comment.body).toBe('');
+    expect(onPlace).toHaveBeenCalledWith(comments[0].comment.id);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it('ignores click-captured when comment mode is disabled or fingerprint shape is invalid', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>unique words here</p>');
+
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" debounceMs={0} isCommentMode={false} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'unique ',
+              after: 'words',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 0, y: 0, w: 10, h: 10 },
+            },
+          },
+        },
+      });
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: { fingerprint: { before: 1 as unknown as string } },
+        },
+      });
+    });
+
+    expect(parseComments(ytext.toString())).toEqual([]);
+  });
+
+  it('falls back to manual placement when every probe candidate misses the click rect', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const onManual = vi.fn();
+    const missRunner: ProbeRunner = {
+      async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; },
+      dispose() {},
+    };
+
+    render(
+      <HtmlPreview
+        ytext={ytext}
+        currentUser="me@x"
+        origin={Symbol()}
+        debounceMs={0}
+        isCommentMode={true}
+        onManualPlacement={onManual}
+        probeRunner={missRunner}
+      />
+    );
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'click ',
+              after: 'here',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 9999, y: 9999, w: 1, h: 1 },
+            },
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(onManual).toHaveBeenCalledWith([
+      { position: 9, score: 10 },
+      { position: 26, score: 10 },
+    ]);
+    expect(parseComments(ytext.toString())).toEqual([]);
+  });
+
+  it('places a comment when the injected probe runner reports a rect overlap', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const onPlace = vi.fn();
+    const hitRunner: ProbeRunner = {
+      async run() { return { x: 95, y: 45, w: 20, h: 20 }; },
+      dispose() {},
+    };
+
+    render(
+      <HtmlPreview
+        ytext={ytext}
+        currentUser="me@x"
+        origin={Symbol()}
+        debounceMs={0}
+        isCommentMode={true}
+        onPlaceComplete={onPlace}
+        probeRunner={hitRunner}
+      />
+    );
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'click ',
+              after: 'here',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 100, y: 50, w: 10, h: 10 },
+            },
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+
+    const comments = parseComments(ytext.toString());
+    expect(comments).toHaveLength(1);
+    expect(onPlace).toHaveBeenCalledWith(comments[0].comment.id);
+  });
+
+  it('does not place or notify when comment mode is disabled before async probe resolves', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const onPlace = vi.fn();
+    const onManual = vi.fn();
+    let resolveProbe: ((rect: { x: number; y: number; w: number; h: number } | null) => void) | undefined;
+    const runner: ProbeRunner = {
+      run: vi.fn(() => new Promise(resolve => { resolveProbe = resolve; })),
+      dispose() {},
+    };
+
+    const { rerender } = render(
+      <HtmlPreview
+        ytext={ytext}
+        currentUser="me@x"
+        origin={Symbol()}
+        debounceMs={0}
+        isCommentMode={true}
+        onPlaceComplete={onPlace}
+        onManualPlacement={onManual}
+        probeRunner={runner}
+      />
+    );
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'click ',
+              after: 'here',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 100, y: 50, w: 10, h: 10 },
+            },
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+
+    rerender(
+      <HtmlPreview
+        ytext={ytext}
+        currentUser="me@x"
+        origin={Symbol()}
+        debounceMs={0}
+        isCommentMode={false}
+        onPlaceComplete={onPlace}
+        onManualPlacement={onManual}
+        probeRunner={runner}
+      />
+    );
+
+    await act(async () => {
+      resolveProbe?.({ x: 95, y: 45, w: 20, h: 20 });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(parseComments(ytext.toString())).toEqual([]);
+    expect(onPlace).not.toHaveBeenCalled();
+    expect(onManual).not.toHaveBeenCalled();
+  });
+
+  it('does not place or notify when Y.Text changes before async probe resolves', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const onPlace = vi.fn();
+    const onManual = vi.fn();
+    let resolveProbe: ((rect: { x: number; y: number; w: number; h: number } | null) => void) | undefined;
+    const runner: ProbeRunner = {
+      run: vi.fn(() => new Promise(resolve => { resolveProbe = resolve; })),
+      dispose() {},
+    };
+
+    render(
+      <HtmlPreview
+        ytext={ytext}
+        currentUser="me@x"
+        origin={Symbol()}
+        debounceMs={0}
+        isCommentMode={true}
+        onPlaceComplete={onPlace}
+        onManualPlacement={onManual}
+        probeRunner={runner}
+      />
+    );
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'click ',
+              after: 'here',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 100, y: 50, w: 10, h: 10 },
+            },
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      ytext.insert(0, '<p>remote edit</p>');
+    });
+
+    await act(async () => {
+      resolveProbe?.({ x: 95, y: 45, w: 20, h: 20 });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(ytext.toString()).not.toContain('lens-comment');
+    expect(parseComments(ytext.toString())).toEqual([]);
+    expect(onPlace).not.toHaveBeenCalled();
+    expect(onManual).not.toHaveBeenCalled();
+  });
+
+  it('does not mutate or notify when an injected probe runner rejects', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const onPlace = vi.fn();
+    const onManual = vi.fn();
+    const runner: ProbeRunner = {
+      run: vi.fn(async () => { throw new Error('probe failed'); }),
+      dispose() {},
+    };
+
+    render(
+      <HtmlPreview
+        ytext={ytext}
+        currentUser="me@x"
+        origin={Symbol()}
+        debounceMs={0}
+        isCommentMode={true}
+        onPlaceComplete={onPlace}
+        onManualPlacement={onManual}
+        probeRunner={runner}
+      />
+    );
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'click ',
+              after: 'here',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 100, y: 50, w: 10, h: 10 },
+            },
+          },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(parseComments(ytext.toString())).toEqual([]);
+    expect(onPlace).not.toHaveBeenCalled();
+    expect(onManual).not.toHaveBeenCalled();
+  });
+});
+
+describe('useHiddenProbeRunner orchestration (parent-side)', () => {
+  it('resolves concurrent .run() calls to their respective rects and disposes cleanly', async () => {
+    vi.useRealTimers();
+    const { result, unmount } = renderHook(() => useHiddenProbeRunner('__test_nonce__'));
+    const runner = result.current;
+
+    const pA = runner.run('<body><!--lens-probe TA--></body>', 'TA');
+    const pB = runner.run('<body><!--lens-probe TB--></body>', 'TB');
+
+    await waitFor(() => expect(document.querySelectorAll('iframe[style*="-9999px"]')).toHaveLength(2));
+    const [frameA, frameB] = Array.from(document.querySelectorAll('iframe[style*="-9999px"]')) as HTMLIFrameElement[];
+    expect(frameA.srcdoc).toContain('<!--lens-probe TA-->');
+    expect(frameB.srcdoc).toContain('<!--lens-probe TB-->');
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { nonce: '', message: { type: 'ready', payload: {} } },
+      source: frameA.contentWindow,
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { nonce: '', message: { type: 'ready', payload: {} } },
+      source: frameB.contentWindow,
+    }));
+    await Promise.resolve();
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        nonce: '__test_nonce__',
+        message: { type: 'probe-found', payload: { token: 'TA', rect: { x: 10, y: 10, w: 10, h: 10 } } },
+      },
+      source: frameA.contentWindow,
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        nonce: '__test_nonce__',
+        message: { type: 'probe-found', payload: { token: 'TB', rect: { x: 20, y: 20, w: 10, h: 10 } } },
+      },
+      source: frameB.contentWindow,
+    }));
+
+    await expect(Promise.all([pA, pB])).resolves.toEqual([
+      { x: 10, y: 10, w: 10, h: 10 },
+      { x: 20, y: 20, w: 10, h: 10 },
+    ]);
+
+    unmount();
+    expect(document.querySelectorAll('iframe[style*="-9999px"]')).toHaveLength(0);
+  });
+
+  it('resolves to null when bridge ready never arrives', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useHiddenProbeRunner('__test_nonce__'));
+    const p = result.current.run('<body><!--lens-probe X--></body>', 'X');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+
+    await expect(p).resolves.toBeNull();
+  });
+
+  it('resolves to null when bridge ready arrives but probe-found does not', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useHiddenProbeRunner('__test_nonce__'));
+    const p = result.current.run('<body><!--lens-probe Y--></body>', 'Y');
+    const frame = document.querySelector('iframe[style*="-9999px"]') as HTMLIFrameElement;
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { nonce: '', message: { type: 'ready', payload: {} } },
+      source: frame.contentWindow,
+    }));
+    await Promise.resolve();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+
+    await expect(p).resolves.toBeNull();
   });
 });
