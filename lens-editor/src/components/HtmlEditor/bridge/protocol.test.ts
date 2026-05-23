@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { makeNonce, validateEnvelope, type Envelope, type BridgeToParent, type ParentToBridge } from './protocol';
+import { makeNonce, validateEnvelope, type Envelope, type BridgeToParent } from './protocol';
 
 describe('makeNonce', () => {
   it('returns a 32-char hex string', () => {
