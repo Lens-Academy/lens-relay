@@ -1,0 +1,48 @@
+import { describe, it, expect, vi } from 'vitest';
+import {
+  resolveAnchorYFromView,
+  resolveAnchorYFromSectionViews,
+  type SectionViewEntry,
+} from './anchor-resolver';
+
+function makeView(coordsByPos: Map<number, { top: number; bottom: number }>) {
+  return {
+    coordsAtPos: (pos: number) => coordsByPos.get(pos) ?? null,
+    scrollDOM: { getBoundingClientRect: () => ({ top: 0 }) } as Element,
+  } as const;
+}
+
+describe('resolveAnchorYFromView', () => {
+  it('returns the top y from coordsAtPos', () => {
+    const view = makeView(new Map([[42, { top: 123, bottom: 145 }]]));
+    expect(resolveAnchorYFromView(view as any, 42)).toBe(123);
+  });
+
+  it('returns null when coordsAtPos returns null', () => {
+    const view = makeView(new Map());
+    expect(resolveAnchorYFromView(view as any, 42)).toBeNull();
+  });
+});
+
+describe('resolveAnchorYFromSectionViews', () => {
+  it('finds the right section and translates to local position', () => {
+    const viewA = makeView(new Map([[5, { top: 100, bottom: 120 }]]));
+    const viewB = makeView(new Map([[3, { top: 250, bottom: 270 }]]));
+    const entries: SectionViewEntry[] = [
+      { view: viewA as any, yTextFrom: 0,  yTextTo: 50 },
+      { view: viewB as any, yTextFrom: 50, yTextTo: 100 },
+    ];
+    // Offset 53 falls in viewB; local pos = 53 - 50 = 3.
+    expect(resolveAnchorYFromSectionViews(entries, 53)).toBe(250);
+    // Offset 5 falls in viewA; local pos = 5.
+    expect(resolveAnchorYFromSectionViews(entries, 5)).toBe(100);
+  });
+
+  it('returns null when no section owns the offset', () => {
+    const viewA = makeView(new Map());
+    const entries: SectionViewEntry[] = [
+      { view: viewA as any, yTextFrom: 0, yTextTo: 50 },
+    ];
+    expect(resolveAnchorYFromSectionViews(entries, 999)).toBeNull();
+  });
+});
