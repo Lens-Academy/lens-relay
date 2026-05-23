@@ -64,28 +64,32 @@ function CriticMarkupSpan({
   absoluteFrom,
   onClickRange,
 }: CriticMarkupSpanProps) {
-  // For comment ranges, the parent provides the range's absolute Y.Text
-  // position (via the badge map). We rewrite the range we hand to
-  // onClickRange so callers — most notably the EduEditor sidebar — can
-  // match against absolute positions without the renderer or any
-  // intermediate component doing position math (which is fragile when
-  // intermediate components clean the source via parseFields, etc.).
-  const handleClick = onClickRange
-    ? () => {
-        if (range.type === 'comment' && absoluteFrom != null) {
-          const delta = absoluteFrom - range.from;
-          onClickRange({
-            ...range,
-            from: absoluteFrom,
-            to: range.to + delta,
-            contentFrom: range.contentFrom + delta,
-            contentTo: range.contentTo + delta,
-          });
-        } else {
-          onClickRange(range);
-        }
+  // For comment ranges, always dispatch the focus CustomEvent that
+  // CommentsLayer listens for (same shape as the CM widget badge handler),
+  // so read-mode anchor pills trigger card focus even when no onClickRange
+  // consumer is wired. For non-comment ranges, fall through to onClickRange.
+  const handleClick = (e: React.MouseEvent) => {
+    if (range.type === 'comment' && absoluteFrom != null) {
+      e.stopPropagation();
+      document.dispatchEvent(
+        new CustomEvent('comment-badge-focus', {
+          detail: { threadFrom: absoluteFrom },
+        }),
+      );
+      if (onClickRange) {
+        const delta = absoluteFrom - range.from;
+        onClickRange({
+          ...range,
+          from: absoluteFrom,
+          to: range.to + delta,
+          contentFrom: range.contentFrom + delta,
+          contentTo: range.contentTo + delta,
+        });
       }
-    : undefined;
+    } else if (onClickRange) {
+      onClickRange(range);
+    }
+  };
   const author = range.metadata?.author;
   const title = author ? `${range.type} by ${author}` : range.type;
 

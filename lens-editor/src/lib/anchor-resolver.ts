@@ -41,3 +41,36 @@ export function resolveAnchorYFromSectionViews(
   }
   return null;
 }
+
+/**
+ * Resolve a Y.Text offset to a screen y by scanning the editor root for an
+ * inline anchor element with the matching absolute offset.
+ *
+ * Two anchor forms are searched, in order:
+ *   1. `.cm-comment-badge[data-thread-from="<offset>"]` — CodeMirror widget
+ *      rendered by the criticmarkup extension (file editor; edit-mode section
+ *      in course editor). After Task 8 these carry absolute offsets.
+ *   2. `.cm-comment-anchor[data-cm-absolute-from="<offset>"]` — React span
+ *      rendered by `renderMarkdownWithCriticMarkup` (read-mode sections in
+ *      course editor).
+ *
+ * Returns the top y of the first match, or null if neither selector finds an
+ * element. Use as a fallback to `resolveAnchorYFromSectionViews` when no CM
+ * view owns the offset.
+ */
+export function resolveAnchorYFromDOM(
+  root: HTMLElement,
+  offset: number,
+): number | null {
+  const cm = root.querySelector(
+    `.cm-comment-badge[data-thread-from="${offset}"]`,
+  ) as HTMLElement | null;
+  if (cm) return cm.getBoundingClientRect().top;
+
+  const react = root.querySelector(
+    `.cm-comment-anchor[data-cm-absolute-from="${offset}"]`,
+  ) as HTMLElement | null;
+  if (react) return react.getBoundingClientRect().top;
+
+  return null;
+}

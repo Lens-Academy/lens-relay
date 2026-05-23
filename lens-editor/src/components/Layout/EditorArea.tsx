@@ -28,7 +28,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
-import { resolveAnchorYFromView } from '../../lib/anchor-resolver';
+import { resolveAnchorYFromView, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
@@ -67,10 +67,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     return { top: rect.top, height: rect.height };
   }, [editorView]);
 
-  const resolveAnchorY = useCallback(
-    (offset: number) => editorView ? resolveAnchorYFromView(editorView, offset) : null,
-    [editorView],
-  );
+  const resolveAnchorY = useCallback((offset: number) => {
+    if (editorView) {
+      const cm = resolveAnchorYFromView(editorView, offset);
+      if (cm != null) return cm;
+    }
+    const root = editorRootRef.current;
+    return root ? resolveAnchorYFromDOM(root as HTMLElement, offset) : null;
+  }, [editorView]);
 
   const [addCommentTrigger, setAddCommentTrigger] = useState(0);
   const [synced, setSynced] = useState(false);

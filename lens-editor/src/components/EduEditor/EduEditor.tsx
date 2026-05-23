@@ -18,7 +18,7 @@ import { OverflowMenu } from '../OverflowMenu';
 import { CommentsLayer } from '../Comments/CommentsLayer';
 import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
-import { resolveAnchorYFromSectionViews } from '../../lib/anchor-resolver';
+import { resolveAnchorYFromSectionViews, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import type { SectionViewEntry } from '../../lib/anchor-resolver';
 
 const SUGGESTION_MODE_KEY = 'edu-editor:suggestion-mode';
@@ -157,10 +157,15 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
 
   // Stable callbacks for CommentsLayer — wrapped once so they don't cause
   // layout-effect re-runs on every parent render.
-  const resolveAnchorY = useCallback(
-    (offset: number) => resolveAnchorYFromSectionViews(sectionViewsRef.current, offset),
-    [],
-  );
+  // Chain: try CM section views first (edit mode), fall back to DOM anchor
+  // scanning (read mode — where no CM view is mounted but React-rendered
+  // .cm-comment-anchor spans with data-cm-absolute-from attributes exist).
+  const resolveAnchorY = useCallback((offset: number) => {
+    const cm = resolveAnchorYFromSectionViews(sectionViewsRef.current, offset);
+    if (cm != null) return cm;
+    const root = contentPanelWrapperRef.current;
+    return root ? resolveAnchorYFromDOM(root, offset) : null;
+  }, []);
 
   const getViewportRect = useCallback(() => {
     const rect = contentScrollRef.current?.getBoundingClientRect();
