@@ -486,6 +486,48 @@ describe('HtmlPreview click-to-place', () => {
     expect(ytext.toString()).not.toContain('lens-comment');
   });
 
+  it('does not submit contextual composer at a stale source position', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>Hello world</p>');
+
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'placement-requested',
+          payload: {
+            trigger: 'contextmenu',
+            fingerprint: {
+              before: '',
+              after: 'Hello world',
+              tag: 'p',
+              ancestorPath: [{ tag: 'p', index: 0 }],
+              clickRect: { x: 20, y: 30, w: 120, h: 20 },
+            },
+            point: { x: 20, y: 30 },
+            scroll: { x: 0, y: 100 },
+          },
+        },
+      });
+    });
+
+    fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
+      target: { value: 'stale comment' },
+    });
+    const submit = screen.getByRole('button', { name: 'Comment' });
+
+    act(() => {
+      ytext.insert(0, '<p>remote edit</p>');
+      fireEvent.click(submit);
+    });
+
+    expect(parseComments(ytext.toString())).toEqual([]);
+  });
+
   it('posts saved scroll after submit when iframe reports ready again', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');

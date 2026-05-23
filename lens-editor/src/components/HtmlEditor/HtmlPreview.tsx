@@ -38,6 +38,7 @@ interface PendingPreviewComment {
   position: number;
   point: PreviewPoint;
   scroll: PreviewScroll;
+  source: string;
 }
 type PendingProbe = {
   frame: HTMLIFrameElement;
@@ -326,8 +327,8 @@ export function HtmlPreview({
   const srcDoc = useMemo(() => injectBridge(debounced), [debounced]);
 
   useEffect(() => {
-    function openComposer(position: number, point: PreviewPoint, scroll: PreviewScroll) {
-      setPendingComment({ position, point, scroll });
+    function openComposer(position: number, point: PreviewPoint, scroll: PreviewScroll, source: string) {
+      setPendingComment({ position, point, scroll, source });
     }
 
     function resolvePlacement(
@@ -340,14 +341,14 @@ export function HtmlPreview({
       const candidates = scoreCandidates(source, fingerprint);
       if (candidates.length === 1) {
         if (!shouldStayCurrent()) return;
-        openComposer(candidates[0].position, point, scroll);
+        openComposer(candidates[0].position, point, scroll, source);
         return;
       }
 
       void verifyByProbe(source, candidates, fingerprint, activeProbeRunner).then(result => {
         if (!shouldStayCurrent()) return;
         if (result.kind === 'placed') {
-          openComposer(result.position, point, scroll);
+          openComposer(result.position, point, scroll, source);
         } else {
           onManualPlacement?.(result.candidates);
         }
@@ -476,6 +477,10 @@ export function HtmlPreview({
         <NewCommentCard
           onSubmit={(body) => {
             if (readOnly) {
+              setPendingComment(null);
+              return;
+            }
+            if (pendingComment.source !== ytext.toString()) {
               setPendingComment(null);
               return;
             }
