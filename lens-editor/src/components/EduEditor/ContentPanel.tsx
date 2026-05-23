@@ -434,9 +434,6 @@ export function ContentPanel({
     const root = scrollRootRef?.current;
     if (!root || !onVisibleCommentChange || !criticMarkupEnabled) return;
 
-    const sectionAbsFromRef = { current: editRange.from };
-    sectionAbsFromRef.current = editRange.from;
-
     const observed = new Map<Element, number>();
     let lastReported: number | null = null;
     let direction: 'up' | 'down' | 'none' = 'none';
