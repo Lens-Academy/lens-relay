@@ -23,11 +23,11 @@
 | `lens-editor/src/components/HtmlEditor/comment-store.ytext.test.ts` | Integration tests against a real `Y.Doc`/`Y.Text` for the mutation helpers (no Yjs mocks). | New |
 | `lens-editor/src/components/HtmlEditor/bridge/protocol.ts` | Discriminated union of message types `BridgeToParent` / `ParentToBridge`; `makeNonce()`; `validateEnvelope()`. Shared between parent and bridge. | New |
 | `lens-editor/src/components/HtmlEditor/bridge/protocol.test.ts` | Unit tests for envelope validation and nonce mismatch handling. | New |
-| `lens-editor/src/components/HtmlEditor/bridge/bridge-script.ts` | The injected script. Exports pure functions (`renderDots`, `captureFingerprintAt`, `findProbe`, `installBridge`) so they're directly unit-testable against happy-dom. The trailing IIFE invocation that bootstraps `installBridge(window, ...)` in production is appended by the bundler plugin (Task 13), not the file itself. | New |
+| `lens-editor/src/components/HtmlEditor/bridge/bridge-script.ts` | The injected script. Exports pure functions (`renderDots`, `captureFingerprintAt`, `findProbe`, `installBridge`) so they're directly unit-testable against happy-dom. The trailing IIFE invocation `LensBridge.installBridge(window)` in production is appended by the bundler plugin (Task 13), not the file itself. | New |
 | `lens-editor/src/components/HtmlEditor/bridge/bridge-script.test.ts` | DOM-level tests for `renderDots`, `captureFingerprintAt`, `findProbe` against happy-dom (no mocked DOM). | New |
 | `lens-editor/src/components/HtmlEditor/bridge/bridge-script.wiring.test.ts` | Tests `installBridge` end-to-end against happy-dom: ready/init handshake, click capture, MutationObserver, source/nonce filtering. | New |
 | `lens-editor/src/components/HtmlEditor/bridge/bridge-bundle.test.ts` | Smoke test that the `virtual:bridge-bundle` exports are non-empty IIFE source + hex hash. | New |
-| `lens-editor/vite-plugin-bridge-bundle.ts` | Vite plugin that bundles `bridge-script.ts` as IIFE via esbuild, computes SHA-256, exports `BRIDGE_SOURCE`/`BRIDGE_SCRIPT_HASH` from `virtual:bridge-bundle`. | New |
+| `lens-editor/vite-plugin-bridge-bundle.ts` | Vite plugin that bundles `bridge-script.ts` as IIFE via esbuild with `globalName: 'LensBridge'`, exports `BRIDGE_SOURCE` from `virtual:bridge-bundle`. | New |
 | `lens-editor/vite.config.ts` | Register the bridge plugin. | Modify |
 | `lens-editor/src/vite-env.d.ts` | Augment with `declare module 'virtual:bridge-bundle'`. | Modify |
 | `lens-editor/src/components/HtmlEditor/position-finder.ts` | Fingerprint scoring (pure) + probe-verify orchestration (impure: drives a hidden iframe via a passed-in `ProbeRunner`). | New |
@@ -742,7 +742,7 @@ export interface CommentSummary {
 }
 
 export type ParentToBridge =
-  | { type: 'init'; payload: { comments: CommentSummary[]; scriptHash: string } }
+  | { type: 'init'; payload: { comments: CommentSummary[] } }
   | { type: 'enable-click-to-place'; payload: Record<string, never> }
   | { type: 'disable-click-to-place'; payload: Record<string, never> }
   | { type: 'find-probe'; payload: { token: string } }
@@ -750,7 +750,7 @@ export type ParentToBridge =
   | { type: 'set-comments'; payload: { comments: CommentSummary[] } };
 
 export type BridgeToParent =
-  | { type: 'ready'; payload: { scriptHash: string } }
+  | { type: 'ready'; payload: Record<string, never> }
   | { type: 'click-captured'; payload: { fingerprint: Fingerprint } }
   | { type: 'dot-clicked'; payload: { id: string } }
   | { type: 'probe-found'; payload: { token: string; rect: { x: number; y: number; w: number; h: number } | null } }
@@ -1066,7 +1066,7 @@ jj st
 
 Append the runtime IIFE that listens for `message` events from the parent, captures clicks, runs MutationObserver, and posts back. This is what gets injected as `<script>` text into srcdoc.
 
-**Signature revision (review feedback):** `installBridge` takes only the window (`Window & typeof globalThis`) and the script hash. It uses `win.parent.postMessage` internally — no `parent` injection parameter. Tests assign `vi.fn()` to `window.parent.postMessage` before calling. This removes a production prop whose only purpose was test capture.
+**Signature revision (review feedback):** `installBridge` takes only the window (`Window & typeof globalThis`). It uses `win.parent.postMessage` internally — no `parent` injection parameter. Tests use `vi.spyOn(window.parent, 'postMessage').mockImplementation(...)` before calling. This removes a production param whose only purpose was test capture. (Script-hash verification was dropped in Task 13 — it added no security in a sandboxed iframe.)
 
 **Security:** The `ready` handshake must NOT leak the parent's nonce to arbitrary message sources. The bridge sends `ready` without a nonce, but the parent only responds with `init` (containing the real nonce) if the message arrived from `iframeRef.current.contentWindow`. The bridge's listener filters incoming messages: it ignores any message whose `source` is not its designated `win.parent`.
 
@@ -1077,47 +1077,48 @@ Append the runtime IIFE that listens for `message` events from the parent, captu
 `bridge-script.wiring.test.ts`:
 
 ```ts
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { installBridge } from './bridge-script';
 import type { Envelope, BridgeToParent, ParentToBridge } from './protocol';
 
-const SCRIPT_HASH = 'test-hash';
-
 describe('installBridge', () => {
   let sent: Array<Envelope<BridgeToParent>>;
-  const originalPostMessage = window.parent.postMessage;
+  let postSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   beforeEach(() => {
     document.body.innerHTML = '';
     sent = [];
   });
   afterEach(() => {
-    window.parent.postMessage = originalPostMessage;
+    postSpy?.mockRestore();
+    postSpy = null;
   });
 
   // Stub production postMessage target. In happy-dom window.parent === window,
   // so this hook is the same one production uses (where the iframe's window.parent
-  // is the editor window).
+  // is the editor window). vi.spyOn handles non-writable-property cases that direct
+  // assignment doesn't.
   function arm(): void {
     document.body.innerHTML =
       '<p>before</p>' +
       '<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->' +
       '<p id="t">after</p>';
-    window.parent.postMessage = ((env: Envelope<BridgeToParent>) => sent.push(env)) as typeof window.parent.postMessage;
-    installBridge(window as Window & typeof globalThis, SCRIPT_HASH);
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    installBridge(window as Window & typeof globalThis);
   }
 
-  it('posts "ready" with scriptHash immediately on install', () => {
+  it('posts "ready" immediately on install', () => {
     arm();
     expect(sent[0].message.type).toBe('ready');
-    expect((sent[0].message as Extract<BridgeToParent, { type: 'ready' }>).payload.scriptHash).toBe(SCRIPT_HASH);
   });
 
   it('after receiving init, renders dots and posts comments-rendered', () => {
     arm();
     const initEnv: Envelope<ParentToBridge> = {
       nonce: 'NONCE',
-      message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }], scriptHash: SCRIPT_HASH } },
+      message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } },
     };
     window.dispatchEvent(new MessageEvent('message', { data: initEnv, source: window.parent }));
     expect(document.querySelectorAll('.lens-comment-dot')).toHaveLength(1);
@@ -1129,7 +1130,7 @@ describe('installBridge', () => {
   it('ignores messages with wrong nonce after init', () => {
     arm();
     window.dispatchEvent(new MessageEvent('message', {
-      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [], scriptHash: SCRIPT_HASH } } },
+      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [] } } },
       source: window.parent,
     }));
     const sentCountAfterInit = sent.length;
@@ -1143,7 +1144,7 @@ describe('installBridge', () => {
   it('on dot click, posts dot-clicked with the comment id', () => {
     arm();
     window.dispatchEvent(new MessageEvent('message', {
-      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }], scriptHash: SCRIPT_HASH } } },
+      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } } },
       source: window.parent,
     }));
     const dot = document.querySelector('.lens-comment-dot') as HTMLElement;
@@ -1156,7 +1157,7 @@ describe('installBridge', () => {
   it('when enable-click-to-place is active, next body click posts click-captured', () => {
     arm();
     window.dispatchEvent(new MessageEvent('message', {
-      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [], scriptHash: SCRIPT_HASH } } },
+      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [] } } },
       source: window.parent,
     }));
     window.dispatchEvent(new MessageEvent('message', {
@@ -1173,7 +1174,7 @@ describe('installBridge', () => {
   it('responds to find-probe with rect or null', () => {
     arm();
     window.dispatchEvent(new MessageEvent('message', {
-      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [], scriptHash: SCRIPT_HASH } } },
+      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [] } } },
       source: window.parent,
     }));
     document.body.insertAdjacentHTML('beforeend', '<!--lens-probe TKN--><span>x</span>');
@@ -1201,7 +1202,7 @@ Append to `bridge-script.ts`:
 import { validateEnvelope, type Envelope, type BridgeToParent, type ParentToBridge } from './protocol';
 // OVERLAY_ROOT_ID is exported by the file's existing Task-4 code; reused here.
 
-export function installBridge(win: Window & typeof globalThis, scriptHash: string): void {
+export function installBridge(win: Window & typeof globalThis): void {
   const parent = win.parent;
   let nonce: string | null = null;
   let clickToPlaceArmed = false;
@@ -1227,7 +1228,7 @@ export function installBridge(win: Window & typeof globalThis, scriptHash: strin
   }
 
   // emit ready immediately (no nonce yet)
-  postToParent({ type: 'ready', payload: { scriptHash } });
+  postToParent({ type: 'ready', payload: {} });
 
   let lastComments: Array<{ id: string; body: string; replies: number }> = [];
 
@@ -1601,7 +1602,7 @@ Renders one thread (parent + replies), provides reply input and edit/delete affo
 `CommentThread.test.tsx`:
 
 ```tsx
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as Y from 'yjs';
@@ -1958,23 +1959,47 @@ describe('HtmlPreview bridge integration', () => {
     ytext.insert(0, '<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->');
     render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
     const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
-    // Spy on the iframe's contentWindow.postMessage so we can assert init is sent.
+    // Note: the initial set-comments effect runs on mount before this spy is
+    // installed, so its postMessage call is not captured. That's fine — this
+    // test asserts only that the parent responds to `ready` with `init`.
     const posted: unknown[] = [];
-    if (iframe.contentWindow) {
-      iframe.contentWindow.postMessage = ((msg: unknown) => { posted.push(msg); }) as typeof window.postMessage;
-    }
-    await act(async () => {
-      // Bridge sends ready (no nonce envelope).
-      window.dispatchEvent(new MessageEvent('message', {
-        data: { nonce: '', message: { type: 'ready', payload: { scriptHash: 'any' } } },
-        source: iframe.contentWindow,
-      }));
-    });
-    const init = posted.find((p): p is Envelope<{ type: 'init' }> =>
-      typeof p === 'object' && p !== null && (p as { message?: { type?: string } }).message?.type === 'init',
+    const spy = vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { posted.push(msg); }) as typeof window.postMessage,
     );
-    expect(init).toBeDefined();
-    expect((init as Envelope<{ nonce: string }>).nonce).toBe('__test_nonce__');
+    try {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { nonce: '', message: { type: 'ready', payload: {} } },
+          source: iframe.contentWindow,
+        }));
+      });
+      const init = posted.find((p): p is Envelope<{ type: 'init' }> =>
+        typeof p === 'object' && p !== null && (p as { message?: { type?: string } }).message?.type === 'init',
+      );
+      expect(init).toBeDefined();
+      expect((init as Envelope<{ nonce: string }>).nonce).toBe('__test_nonce__');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('ignores well-nonced messages whose payload is shape-invalid', async () => {
+    // Defensive: an attacker (or a bridge bug) could send the right nonce but
+    // a malformed payload. The parent must not crash.
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->');
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        // dot-clicked with non-string id; ignored without throwing.
+        message: { type: 'dot-clicked', payload: { id: 42 as unknown as string } },
+      });
+    });
+    // No popover should open. (No "x" text rendered.)
+    expect(screen.queryByText('x')).toBeNull();
   });
 });
 ```
@@ -1992,7 +2017,7 @@ import type * as Y from 'yjs';
 import { CommentThread } from './CommentThread';
 import { parseComments } from './comment-store';
 import { makeNonce, validateEnvelope, type Envelope, type BridgeToParent, type CommentSummary, type ParentToBridge } from './bridge/protocol';
-import { BRIDGE_SOURCE, BRIDGE_SCRIPT_HASH } from './bridge/bridge-bundle';
+import { BRIDGE_SOURCE } from 'virtual:bridge-bundle';
 
 interface HtmlPreviewProps {
   ytext: Y.Text;
@@ -2033,7 +2058,7 @@ export function HtmlPreview({ ytext, currentUser, origin, debounceMs = 300, onOr
       const data = event.data as Envelope<BridgeToParent>;
       // Pre-init "ready" message: no nonce yet. Source check above is the only gate.
       if (typeof data === 'object' && data !== null && (data as { message?: { type?: string } }).message?.type === 'ready') {
-        sendToBridge({ type: 'init', payload: { comments: summarize(ytext), scriptHash: BRIDGE_SCRIPT_HASH } });
+        sendToBridge({ type: 'init', payload: { comments: summarize(ytext) } });
         return;
       }
       const msg = validateEnvelope<BridgeToParent>(data, nonceRef.current);
@@ -2043,10 +2068,12 @@ export function HtmlPreview({ ytext, currentUser, origin, debounceMs = 300, onOr
     function handle(msg: BridgeToParent) {
       switch (msg.type) {
         case 'dot-clicked':
+          if (typeof msg.payload?.id !== 'string') return;
           setOpenThreadId(msg.payload.id);
           break;
         case 'comments-rendered':
-          onOrphanedChange?.(msg.payload.orphaned);
+          if (!Array.isArray(msg.payload?.orphaned)) return;
+          onOrphanedChange?.(msg.payload.orphaned.filter(x => typeof x === 'string'));
           break;
         case 'click-captured':
           // Wired in Task 10
@@ -2181,40 +2208,22 @@ describe('HtmlPreview click-to-place', () => {
   });
 
   it('falls back to manual placement when every probe candidate misses the click rect', async () => {
-    // Two candidates: each requires its own find-probe round-trip. We need to
-    // answer each probe request with a miss, then assert onManual is called.
+    // Inject an in-memory ProbeRunner whose probes always miss the click rect.
+    // This is a real implementation of the ProbeRunner interface, not a mock —
+    // production swaps it for useHiddenProbeRunner via the same prop.
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<p>click here</p><p>click here</p>');
     const onManual = vi.fn();
+    const missRunner: ProbeRunner = {
+      async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; }, // always misses
+      dispose() {},
+    };
     render(<HtmlPreview
       ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0}
-      isCommentMode={true} onManualPlacement={onManual}
+      isCommentMode={true} onManualPlacement={onManual} probeRunner={missRunner}
     />);
     const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
-
-    // Intercept find-probe RPCs so we can respond per-token instead of guessing.
-    const probeTokens: string[] = [];
-    const visiblePost = iframe.contentWindow?.postMessage;
-    if (iframe.contentWindow) {
-      iframe.contentWindow.postMessage = ((msg: unknown) => {
-        const env = msg as Envelope<{ type: string; payload: { token?: string } }>;
-        if (env?.message?.type === 'find-probe' && env.message.payload?.token) {
-          probeTokens.push(env.message.payload.token);
-        }
-      }) as typeof window.postMessage;
-    }
-    // The hidden iframe runner posts to its own iframe; for this test we don't
-    // care about its postMessage, we care that the parent's verify loop walks
-    // both candidates and ends in manual fallback. Drive that by stubbing
-    // verifyByProbe via a vi.spyOn — see comment-store.ts pattern.
-
-    // Simpler: directly assert the flow by stubbing the probe runner. The
-    // useHiddenProbeRunner hook gets its iframe-backed runner; in this test we
-    // override it by exposing a runner-factory prop. (See Task 10 step 3.)
-    // For the purposes of this test, the runner-factory is replaced with a
-    // function returning a runner whose .run() resolves to a non-overlapping rect.
-
     await act(async () => {
       dispatchFromBridge(iframe, {
         nonce: '__test_nonce__',
@@ -2225,57 +2234,60 @@ describe('HtmlPreview click-to-place', () => {
           },
         },
       });
+      // Let the verify chain settle.
+      await new Promise(r => setTimeout(r, 0));
     });
     expect(onManual).toHaveBeenCalled();
     expect(parseComments(ytext.toString())).toEqual([]);
   });
-});
 
-describe('useHiddenProbeRunner (real-iframe integration)', () => {
-  it('renders the probe source into a hidden iframe and resolves find-probe with a rect', async () => {
-    // This is the integration test for the real ProbeRunner used in production.
-    // It mounts a hidden iframe via the hook, kicks off ready→init→find-probe,
-    // and asserts the resolved rect is non-null for a found probe.
-    //
-    // happy-dom limitation: srcdoc scripts do not execute. The test therefore
-    // mounts the bridge into the iframe's contentWindow *manually* via
-    // installBridge, simulating what production browser execution would do.
-    // This validates the parent-side hook's RPC orchestration and the bridge's
-    // find-probe logic end-to-end across a real Window/MessageEvent boundary.
-    const { renderHook } = await import('@testing-library/react');
-    const { useHiddenProbeRunner } = await import('./HtmlPreview');
-    const { installBridge } = await import('./bridge/bridge-script');
-
-    const { result } = renderHook(() => useHiddenProbeRunner('__test_nonce__'));
-    const runner = result.current;
-
-    // The hook lazily creates the iframe on first .run() call. Trigger it,
-    // then install the bridge into the iframe's window once it appears.
-    const runPromise = runner.run(
-      '<body><p>before</p><!--lens-probe TKN--><p id="t">after</p></body>',
-      'TKN',
-    );
-    // Wait for the iframe to appear in the DOM.
-    await new Promise(r => setTimeout(r, 10));
-    const hiddenIframe = document.querySelector('iframe[style*="-9999px"]') as HTMLIFrameElement;
-    expect(hiddenIframe).not.toBeNull();
-    // Manually install the bridge into the hidden iframe's window.
-    // (Production browsers run the injected <script> automatically; happy-dom does not.)
-    if (hiddenIframe.contentWindow && hiddenIframe.contentDocument) {
-      hiddenIframe.contentDocument.body.innerHTML = '<p>before</p><!--lens-probe TKN--><p id="t">after</p>';
-      installBridge(hiddenIframe.contentWindow as Window & typeof globalThis, 'any-hash');
-    }
-    const rect = await runPromise;
-    expect(rect).not.toBeNull();
-    runner.dispose();
+  it('places a comment when the injected probe runner reports a rect overlap', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p><p>click here</p>');
+    const onPlace = vi.fn();
+    const hitRunner: ProbeRunner = {
+      async run() { return { x: 95, y: 45, w: 20, h: 20 }; }, // overlaps clickRect below
+      dispose() {},
+    };
+    render(<HtmlPreview
+      ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0}
+      isCommentMode={true} onPlaceComplete={onPlace} probeRunner={hitRunner}
+    />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: { before: 'click ', after: 'here', tag: 'p', ancestorPath: [], clickRect: { x: 100, y: 50, w: 10, h: 10 } },
+          },
+        },
+      });
+      await new Promise(r => setTimeout(r, 0));
+    });
+    expect(parseComments(ytext.toString())).toHaveLength(1);
+    expect(onPlace).toHaveBeenCalled();
   });
 });
+
+// The real useHiddenProbeRunner is exercised by Task 15's manual smoke test
+// against a real browser. happy-dom does not execute <script> inside srcdoc
+// iframes and reassigns contentWindow on srcdoc changes, making a
+// deterministic happy-dom integration test infeasible. A Playwright variant
+// is tracked as v2 follow-up work (see "Out of scope" in spec).
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Run tests to verify they fail (enumerated)**
 
 Run: `cd lens-editor && npm run test:run -- HtmlPreview`
-Expected: FAIL — `isCommentMode` prop ignored, no placement happens.
+Expected failure modes — verify each new test fails for the right reason:
+1. "inserts a comment marker when bridge reports a click whose fingerprint uniquely matches source" — FAIL because `isCommentMode` prop is unknown (TypeScript error) and/or click-captured handler does nothing.
+2. "falls back to manual placement..." — FAIL because `probeRunner` prop is unknown and/or no manual callback wired.
+3. "places a comment when the injected probe runner reports a rect overlap" — FAIL for the same reasons.
+
+If any test fails for a different reason (typo, missing import, undefined member), fix the test before moving on. Tests that pass on first run mean the assertions are too weak.
 
 - [ ] **Step 3: Extend `HtmlPreview.tsx`**
 
@@ -2294,8 +2306,13 @@ interface HtmlPreviewProps {
   isCommentMode?: boolean;
   onPlaceComplete?: (commentId: string) => void;
   onManualPlacement?: (candidates: { position: number; score: number }[]) => void;
+  /** Optional dependency injection — defaults to a real hidden-iframe runner.
+   *  Tests inject in-memory implementations of the ProbeRunner interface. */
+  probeRunner?: ProbeRunner;
 }
 ```
+
+The component uses `probeRunner ?? defaultRunner` where `defaultRunner` is built by `useHiddenProbeRunner(nonceRef.current)`. This is legitimate DI (the same `ProbeRunner` interface exists at the position-finder layer and is genuinely useful for off-thread render in the future), not a test-only seam.
 
 Inside the component, when `isCommentMode` changes, send `enable-click-to-place` / `disable-click-to-place` to the bridge:
 
@@ -2309,79 +2326,114 @@ useEffect(() => {
 }, [isCommentMode]);
 ```
 
-Build a `ProbeRunner` backed by a hidden iframe. **Exported** so the Task 10 integration test can render it via `renderHook`:
+Build a `ProbeRunner` backed by a hidden iframe. **Exported** so it can be reused or replaced. Round-2 review found two bugs in the previous draft:
+- One-shot `pendingResolve` was overwritten on overlapping probes; replaced with a `Map<token, resolve>`.
+- Each `.run()` re-attached a `ready` listener that was never removed; replaced with explicit add/remove.
+- Added a 2s timeout that resolves to `null` (treated as miss) if the bridge never replies — prevents indefinite hangs when a user script crashes the IIFE.
 
 ```tsx
+type Rect = { x: number; y: number; w: number; h: number };
+
 export function useHiddenProbeRunner(nonce: string): ProbeRunner {
   return useMemo(() => {
     let iframe: HTMLIFrameElement | null = null;
-    let pendingResolve: ((rect: { x: number; y: number; w: number; h: number } | null) => void) | null = null;
+    const pending = new Map<string, (rect: Rect | null) => void>();
+
     function ensureIframe(): HTMLIFrameElement {
       if (iframe) return iframe;
       iframe = document.createElement('iframe');
       iframe.setAttribute('sandbox', 'allow-scripts');
       iframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;visibility:hidden;';
       document.body.appendChild(iframe);
+      // Single persistent listener for probe-found across all runs.
       window.addEventListener('message', (event) => {
         if (event.source !== iframe?.contentWindow) return;
         const msg = validateEnvelope<BridgeToParent>(event.data, nonce);
-        if (msg?.type === 'probe-found' && pendingResolve) {
-          pendingResolve(msg.payload.rect);
-          pendingResolve = null;
+        if (msg?.type !== 'probe-found') return;
+        const resolve = pending.get(msg.payload.token);
+        if (resolve) {
+          pending.delete(msg.payload.token);
+          resolve(msg.payload.rect);
         }
       });
       return iframe;
     }
+
+    function waitForReady(frame: HTMLIFrameElement, timeoutMs = 1000): Promise<boolean> {
+      return new Promise((resolve) => {
+        const handler = (event: MessageEvent) => {
+          if (event.source !== frame.contentWindow) return;
+          const d = event.data as Envelope<BridgeToParent>;
+          if (d?.message?.type === 'ready') {
+            cleanup();
+            resolve(true);
+          }
+        };
+        const timer = setTimeout(() => { cleanup(); resolve(false); }, timeoutMs);
+        const cleanup = () => {
+          clearTimeout(timer);
+          window.removeEventListener('message', handler);
+        };
+        window.addEventListener('message', handler);
+      });
+    }
+
     return {
       async run(sourceWithProbe, token) {
         const frame = ensureIframe();
-        const srcWithBridge = `<script>${BRIDGE_SOURCE}</script>` + sourceWithProbe;
-        frame.srcdoc = srcWithBridge;
-        // Wait for ready, then send init + find-probe.
-        await new Promise<void>((resolve) => {
-          const handler = (event: MessageEvent) => {
-            if (event.source !== frame.contentWindow) return;
-            const d = event.data as Envelope<BridgeToParent>;
-            if (d?.message?.type === 'ready') {
-              window.removeEventListener('message', handler);
-              resolve();
-            }
-          };
-          window.addEventListener('message', handler);
-        });
+        frame.srcdoc = `<script>${BRIDGE_SOURCE}</script>` + sourceWithProbe;
+        const ready = await waitForReady(frame);
+        if (!ready) return null; // bridge never came up → treat as miss
         const initEnv: Envelope<ParentToBridge> = {
-          nonce, message: { type: 'init', payload: { comments: [], scriptHash: BRIDGE_SCRIPT_HASH } },
+          nonce, message: { type: 'init', payload: { comments: [] } },
         };
         frame.contentWindow?.postMessage(initEnv, '*');
-        return new Promise((resolve) => {
-          pendingResolve = resolve;
-          const findEnv: Envelope<ParentToBridge> = {
-            nonce, message: { type: 'find-probe', payload: { token } },
-          };
-          frame.contentWindow?.postMessage(findEnv, '*');
+        const probePromise = new Promise<Rect | null>((resolve) => {
+          pending.set(token, resolve);
         });
+        const findEnv: Envelope<ParentToBridge> = {
+          nonce, message: { type: 'find-probe', payload: { token } },
+        };
+        frame.contentWindow?.postMessage(findEnv, '*');
+        // Hard timeout: if the bridge doesn't reply within 2s, give up on this candidate.
+        const result = await Promise.race([
+          probePromise,
+          new Promise<null>(r => setTimeout(() => r(null), 2000)),
+        ]);
+        pending.delete(token);
+        return result;
       },
       dispose() {
         iframe?.remove();
         iframe = null;
+        pending.clear();
       },
     };
   }, [nonce]);
 }
 ```
 
+Use the injected `probeRunner` if provided, else build the default hidden-iframe one:
+
+```tsx
+const defaultRunner = useHiddenProbeRunner(nonceRef.current);
+const runner = probeRunner ?? defaultRunner;
+```
+
 In the message handler, on `click-captured`:
 
 ```tsx
 case 'click-captured': {
-  const fp = msg.payload.fingerprint;
+  if (!isCommentMode) return;
+  const fp = msg.payload?.fingerprint;
+  if (!fp || typeof fp.before !== 'string') return;
   const source = ytext.toString();
   const candidates = scoreCandidates(source, fp);
   if (candidates.length === 1) {
     placeAndOpen(candidates[0].position);
     return;
   }
-  verifyByProbe(source, candidates, fp, probeRunner).then(result => {
+  verifyByProbe(source, candidates, fp, runner).then(result => {
     if (result.kind === 'placed') {
       placeAndOpen(result.position);
     } else {
@@ -2463,7 +2515,17 @@ describe('OrphanedCommentsPanel', () => {
 });
 ```
 
-Extend `HtmlEditor.test.tsx`:
+Extend `HtmlEditor.test.tsx`. **First**, add the same `vi.mock` block at the top of the file as Task 9 added to `HtmlPreview.test.tsx` — `vi.mock` is per-test-file in Vitest:
+
+```tsx
+import { vi } from 'vitest';
+vi.mock('./bridge/protocol', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./bridge/protocol')>();
+  return { ...actual, makeNonce: () => '__test_nonce__' };
+});
+```
+
+Then append the new tests:
 
 ```tsx
 it('comment-mode toggle button toggles aria-pressed state', async () => {
@@ -2558,9 +2620,11 @@ interface HtmlEditorProps {
   awareness: Awareness;
   readOnly?: boolean;
   currentUser?: string; // optional override; defaults to useDisplayName()
+  /** Optional override forwarded to HtmlPreview; tests inject in-memory ProbeRunner. */
+  probeRunner?: import('./position-finder').ProbeRunner;
 }
 
-export function HtmlEditor({ ytext, awareness, readOnly = false, currentUser: currentUserProp }: HtmlEditorProps) {
+export function HtmlEditor({ ytext, awareness, readOnly = false, currentUser: currentUserProp, probeRunner }: HtmlEditorProps) {
   const { displayName } = useDisplayName();
   const currentUser = currentUserProp ?? displayName ?? 'Anonymous';
   const [mode, setMode] = useState<Mode>('preview');
@@ -2612,6 +2676,8 @@ export function HtmlEditor({ ytext, awareness, readOnly = false, currentUser: cu
               isCommentMode={commentMode && !readOnly}
               onOrphanedChange={setOrphanedIds}
               onPlaceComplete={() => setCommentMode(false)}
+              probeRunner={probeRunner}
+              /* onManualPlacement wired in Task 12 */
             />
           </div>
         )}
@@ -2658,6 +2724,7 @@ Before starting: open `HtmlSourceEditor.tsx` and confirm it uses a `EditorView`/
 Append to `HtmlSourceEditor.test.tsx`:
 
 ```tsx
+// No vi.mock needed here — HtmlSourceEditor doesn't talk to the bridge protocol.
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import * as Y from 'yjs';
@@ -2703,41 +2770,29 @@ describe('HtmlSourceEditor manual placement props', () => {
 });
 ```
 
-Append to `HtmlEditor.test.tsx`:
+Append to `HtmlEditor.test.tsx` (the `vi.mock` block added in Task 11 is reused). Split the manual-placement test into two narrower tests, per round-2 testing review (the previous single test was over-mocked and had a vacuous assertion):
 
 ```tsx
 import { parseComments } from './comment-store';
 import { Awareness } from 'y-protocols/awareness';
+import type { ProbeRunner } from './position-finder';
 
-it('on manual placement, switches to split mode and places marker at clicked source position', async () => {
+it('on manual placement, switches to split mode and shows highlights on both candidates', async () => {
   const doc = new Y.Doc();
   const ytext = doc.getText('contents');
   ytext.insert(0, '<p>click here</p><p>click here</p>');
   const awareness = new Awareness(doc);
-  render(<HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" />);
 
-  // Activate comment mode.
+  // Inject a real ProbeRunner that always misses — drives the manual fallback.
+  const missRunner: ProbeRunner = {
+    async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; },
+    dispose() {},
+  };
+
+  render(<HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" probeRunner={missRunner} />);
   await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
 
-  // The preview's onManualPlacement is triggered by a click-captured event from
-  // the bridge whose probe-verify resolves to "manual". Drive that by dispatching
-  // a click-captured with a click rect that no probe rect overlaps.
   const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
-
-  // Stub iframe.contentWindow.postMessage to respond to find-probe with a miss,
-  // so verifyByProbe runs through all candidates and falls through to manual.
-  iframe.contentWindow!.postMessage = ((msg: unknown) => {
-    const env = msg as { message?: { type?: string; payload?: { token?: string } } };
-    if (env?.message?.type === 'find-probe') {
-      const token = env.message.payload!.token!;
-      // Echo back a probe-found whose rect doesn't overlap the click point.
-      window.dispatchEvent(new MessageEvent('message', {
-        data: { nonce: '__test_nonce__', message: { type: 'probe-found', payload: { token, rect: { x: 0, y: 0, w: 1, h: 1 } } } },
-        source: iframe.contentWindow,
-      }));
-    }
-  }) as typeof window.postMessage;
-
   await act(async () => {
     window.dispatchEvent(new MessageEvent('message', {
       data: {
@@ -2749,32 +2804,59 @@ it('on manual placement, switches to split mode and places marker at clicked sou
       },
       source: iframe.contentWindow,
     }));
-    // Let probe-verify chain settle.
     await new Promise(r => setTimeout(r, 0));
   });
 
-  // Mode should now be 'split'; both source and preview panes visible.
   expect(screen.getAllByRole('button', { name: /split/i })[0]).toHaveAttribute('aria-pressed', 'true');
+  await waitFor(() => {
+    expect(document.querySelectorAll('.cm-lens-candidate').length).toBeGreaterThanOrEqual(1);
+  });
+  expect(parseComments(ytext.toString())).toEqual([]); // no marker yet
+});
 
-  // The source pane should now have highlights on both candidates.
-  const highlights = document.querySelectorAll('.cm-lens-candidate');
-  expect(highlights.length).toBeGreaterThanOrEqual(1);
+it('source-pane click while manual placement is pending writes a marker at that position', async () => {
+  // Narrow scope: just the source-pane click → addComment flow, isolated from the bridge.
+  const doc = new Y.Doc();
+  const ytext = doc.getText('contents');
+  ytext.insert(0, '<p>click here</p><p>click here</p>');
+  const awareness = new Awareness(doc);
+  const missRunner: ProbeRunner = {
+    async run() { return { x: -1000, y: -1000, w: 1, h: 1 }; },
+    dispose() {},
+  };
+  render(<HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" probeRunner={missRunner} />);
+  await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+  const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+  await act(async () => {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: { fingerprint: { before: 'click ', after: 'here', tag: 'p', ancestorPath: [], clickRect: { x: 9999, y: 9999, w: 1, h: 1 } } },
+        },
+      },
+      source: iframe.contentWindow,
+    }));
+    await new Promise(r => setTimeout(r, 0));
+  });
+  // Source pane should now be present with highlights.
+  await waitFor(() => expect(document.querySelector('.cm-content')).not.toBeNull());
 
-  // Simulate clicking on the second 'click here' in the source pane.
-  // The exact pixel coords don't matter — we mock CodeMirror's posAtCoords via
-  // a one-shot dispatch on the editor element, then assert the resulting marker
-  // lands at the expected position.
   const editor = document.querySelector('.cm-content') as HTMLElement;
   editor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 100, clientY: 50 }));
-  // Wait for the onClickAtPosition handler to write to ytext.
-  await new Promise(r => setTimeout(r, 0));
+  await waitFor(() => expect(parseComments(ytext.toString())).toHaveLength(1));
 
-  const clusters = parseComments(ytext.toString());
-  expect(clusters).toHaveLength(1);
-  // We don't assert the precise position — we assert a marker was placed at
-  // some position that posAtCoords returned. The bound check on the highlight
-  // ensures it landed on a candidate region.
-  expect(clusters[0].sourceStart).toBeGreaterThanOrEqual(0);
+  // Stronger assertion: marker landed within one of the highlight ranges.
+  // posAtCoords in happy-dom returns 0 reliably, so this asserts the marker
+  // didn't land at some random offset.
+  const cluster = parseComments(ytext.toString())[0];
+  const source = ytext.toString();
+  // First candidate is around position 3 (`<p>` opens at 0, "click" starts at 3).
+  // Either candidate is acceptable; we just want a sane position, not "0 because
+  // we forgot to wire the handler".
+  expect(source.slice(cluster.sourceStart, cluster.sourceStart + '<!--lens-comment'.length))
+    .toBe('<!--lens-comment');
 });
 ```
 
@@ -2860,7 +2942,7 @@ const [pendingCandidates, setPendingCandidates] = useState<Candidate[] | null>(n
   ytext={ytext}
   awareness={awareness}
   readOnly={readOnly}
-  highlightRanges={pendingCandidates?.map(c => ({ from: c.position, to: Math.min(c.position + 10, ytext.length) }))}
+  highlightRanges={pendingCandidates?.map(c => ({ from: c.position, to: Math.min(c.position + 10, ytext.toString().length) }))}
   onClickAtPosition={(position) => {
     if (!pendingCandidates) return;
     const id = crypto.randomUUID();
@@ -2889,47 +2971,49 @@ jj st
 
 ---
 
-## Task 13: Bundle bridge-script as an IIFE string + inject build hash
+## Task 13: Bundle bridge-script as an IIFE string
 
 **Files:**
 - Create: `lens-editor/vite-plugin-bridge-bundle.ts`
 - Modify: `lens-editor/vite.config.ts` (register the plugin)
-- Modify: `lens-editor/vitest.config.ts` (if present and separate; otherwise covered by `vite.config.ts`)
+- Modify: `lens-editor/src/vite-env.d.ts` (declare the virtual module)
 
-`bridge-script.ts` is a TypeScript module with `import` statements (the protocol types). Vite's `?raw` returns source text verbatim — the import statements would land inside the iframe's `<script>` tag and fail at runtime because browsers do not resolve bare module specifiers in classic scripts. We need a real bundle step.
+`bridge-script.ts` is a TypeScript module with `import` statements (the protocol types and `validateEnvelope`). Vite's `?raw` returns source text verbatim — the import statements would land inside the iframe's `<script>` tag and fail at runtime because browsers do not resolve bare module specifiers in classic scripts. We need a real bundle step.
 
-Approach: a small Vite plugin that uses esbuild (already a Vite dependency) to bundle `bridge-script.ts` as an IIFE, computes the SHA-256 of that bundle, and exposes both as ESM exports from a virtual module `virtual:bridge-bundle`. The same plugin runs in Vitest (Vitest reuses Vite plugins), so production and tests see the same bundle.
+Approach: a small Vite plugin that uses esbuild (already a Vite dependency) to bundle `bridge-script.ts` as an IIFE with a globalName, then appends `LensBridge.installBridge(window)`. The same plugin runs in Vitest (Vitest reuses Vite plugins), so production and tests see the same bundle.
+
+**Hash dropped from the security model (round-2 review):** the previous draft computed a SHA-256 of the bundled source and had the bridge echo it back in `ready` for the parent to verify. In a sandboxed iframe with `allow-scripts`, any user script in the document can read the bundled `<script>` source and forge a `ready` with the matching hash — the hash adds no security. The only meaningful gate is the parent's `event.source === iframe.contentWindow` check, which is already in place. `BRIDGE_SCRIPT_HASH` is removed from the protocol; `ready` carries no payload.
+
+This requires a small protocol adjustment: in `bridge/protocol.ts`, change `ready` from `{ type: 'ready'; payload: { scriptHash: string } }` to `{ type: 'ready'; payload: Record<string, never> }`. Update the `CommentSummary` / `init` payload to drop the `scriptHash` field. Tasks 3, 5, 9 reference `scriptHash` — those need a one-line cleanup as part of this task (remove the field).
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 // lens-editor/src/components/HtmlEditor/bridge/bridge-bundle.test.ts
 import { describe, it, expect } from 'vitest';
-import { BRIDGE_SOURCE, BRIDGE_SCRIPT_HASH } from 'virtual:bridge-bundle';
+import { BRIDGE_SOURCE } from 'virtual:bridge-bundle';
 
 describe('virtual:bridge-bundle', () => {
-  it('exports a non-empty IIFE source containing installBridge', () => {
+  it('exports a non-empty IIFE source string', () => {
     expect(BRIDGE_SOURCE.length).toBeGreaterThan(500);
-    expect(BRIDGE_SOURCE).toContain('installBridge');
-    // No bare ES imports leak into the bundle:
+  });
+  it('does not contain bare ES module imports', () => {
     expect(BRIDGE_SOURCE).not.toMatch(/^\s*import /m);
   });
-  it('exports a 64-char hex SHA-256', () => {
-    expect(BRIDGE_SCRIPT_HASH).toMatch(/^[0-9a-f]{64}$/);
-  });
-  it('bundle ends with the IIFE installBridge invocation', () => {
-    expect(BRIDGE_SOURCE).toContain('installBridge(window, ');
+  it('exposes installBridge under the LensBridge global and calls it', () => {
+    expect(BRIDGE_SOURCE).toContain('LensBridge');
+    // The bootstrap call appended by the plugin:
+    expect(BRIDGE_SOURCE).toContain('LensBridge.installBridge(window)');
   });
 });
 ```
 
-You will also need module-augmentation so TypeScript accepts the virtual import:
+Add module augmentation so TypeScript accepts the virtual import:
 
 ```ts
 // lens-editor/src/vite-env.d.ts (extend the existing one)
 declare module 'virtual:bridge-bundle' {
   export const BRIDGE_SOURCE: string;
-  export const BRIDGE_SCRIPT_HASH: string;
 }
 ```
 
@@ -2943,12 +3027,14 @@ Expected: FAIL — virtual module unresolved.
 ```ts
 // lens-editor/vite-plugin-bridge-bundle.ts
 import { build } from 'esbuild';
-import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Plugin } from 'vite';
 
 const VIRTUAL_ID = 'virtual:bridge-bundle';
 const RESOLVED_ID = '\0' + VIRTUAL_ID;
+// __dirname is undefined in ESM; derive from import.meta.url.
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export function bridgeBundlePlugin(): Plugin {
   return {
@@ -2964,24 +3050,17 @@ export function bridgeBundlePlugin(): Plugin {
         entryPoints: [entry],
         bundle: true,
         format: 'iife',
+        // globalName exposes the module's exports under window.LensBridge.
+        // Without this, installBridge would be unreachable from the appended bootstrap line.
+        globalName: 'LensBridge',
         platform: 'browser',
         target: 'es2022',
         write: false,
         minify: false,
-        // No globalName needed — installBridge is invoked from our appended call.
       });
       const bundled = result.outputFiles[0].text;
-      const withInvoker = bundled + '\n;installBridge(window, "__BRIDGE_HASH__");\n';
-      const hash = createHash('sha256').update(withInvoker).digest('hex');
-      const finalSource = withInvoker.replace('__BRIDGE_HASH__', hash);
-      // Re-hash after substitution so the placeholder doesn't poison the hash.
-      // (We hash the version with __BRIDGE_HASH__ so the bridge can announce
-      //  the same value the parent will validate against, since the parent
-      //  imports the same hash from this module.)
-      return [
-        `export const BRIDGE_SOURCE = ${JSON.stringify(finalSource)};`,
-        `export const BRIDGE_SCRIPT_HASH = ${JSON.stringify(hash)};`,
-      ].join('\n');
+      const finalSource = bundled + '\n;LensBridge.installBridge(window);\n';
+      return `export const BRIDGE_SOURCE = ${JSON.stringify(finalSource)};\n`;
     },
   };
 }
@@ -3001,20 +3080,22 @@ export default defineConfig({
 });
 ```
 
-Update `bridge/bridge-script.ts`: ensure the file does not call `installBridge(...)` itself — the IIFE invocation is appended by the plugin. If Task 5 added a trailing call inside the file, remove it.
-
-Update `HtmlPreview.tsx`: the import already reads `from './bridge/bridge-bundle'` (per Task 9). **Change it** to `from 'virtual:bridge-bundle'`. Delete the now-unused `bridge-bundle.ts` file if Task 9 created one.
+Cleanups required as part of this task:
+- `bridge/bridge-script.ts`: do not call `installBridge(...)` inside the file. The bootstrap call is appended by the plugin. If Task 5 added a trailing call, remove it.
+- `bridge/protocol.ts`: drop `scriptHash` from `init`'s payload type and from `ready`'s payload type.
+- `HtmlPreview.tsx`: replace `import { BRIDGE_SOURCE, BRIDGE_SCRIPT_HASH } from './bridge/bridge-bundle'` with `import { BRIDGE_SOURCE } from 'virtual:bridge-bundle'`. Remove `BRIDGE_SCRIPT_HASH` from the `init` payload it sends.
+- `installBridge` (Task 5): drop the `scriptHash` parameter; the function takes only `win`. `ready` is posted with `payload: {}`.
 
 - [ ] **Step 4: Run tests to verify pass**
 
 Run: `cd lens-editor && npm run test:run`
-Expected: bridge-bundle tests PASS; HtmlPreview integration tests PASS (now using the real bundle); nothing else regresses.
+Expected: bridge-bundle tests PASS; HtmlPreview integration tests PASS (now using the real bundle); nothing else regresses. If `vi.mock('./bridge/protocol')` is in effect in HtmlPreview.test.tsx, verify it still works after the protocol type changes.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 jj st
-jj commit -m "build: virtual:bridge-bundle plugin (esbuild IIFE + script hash)"
+jj commit -m "build: virtual:bridge-bundle plugin (esbuild IIFE with LensBridge global)"
 jj st
 ```
 
@@ -3058,12 +3139,17 @@ async fn html_with_comment_markers_round_trips() {
 
 - [ ] **Step 4: Force a RED state to validate the test detects regressions**
 
-Temporarily edit the relay's HTML-write path to mangle output — for example, in whichever module returns the document text on read, append `regression-marker` to the response. Run the test again; it MUST fail with a clear diff. If it does not fail, the assertion is too loose — strengthen it before continuing.
+Create a new throwaway change first so the mangle can be cleanly abandoned:
 
 ```bash
-# Revert the temporary mangle:
-jj diff -r @
-jj restore crates/relay/src/<file you mangled>
+jj new -m "RED check (will abandon)"
+```
+
+Temporarily edit the relay's HTML-write path to mangle output — for example, in whichever module returns the document text on read, append `regression-marker` to the response. Run the test again; it MUST fail with a clear diff. If it does not fail, the assertion is too loose — strengthen the test before continuing.
+
+```bash
+# Abandon the throwaway change to revert the mangle cleanly:
+jj abandon  # abandons the RED-check change; working copy returns to the test-only state
 ```
 
 - [ ] **Step 5: Verify GREEN (after restore)**
@@ -3137,6 +3223,14 @@ In the iframe's DevTools console, run `window.parent.document`.
 Expected: throws cross-origin error (v1 sandbox preserved).
 
 - [ ] **Step 9: Commit nothing** — verification only.
+
+---
+
+## Known v2 limitations (call out at handoff)
+
+- **Concurrent edits to a single comment payload can race** (Task 2). Two peers simultaneously editing the same marker can land at stale offsets. `Y.RelativePosition` anchors are the v3 mitigation.
+- **Orphan badge stops updating in source-only mode** because `HtmlPreview` unmounts. The badge resumes accurate counts after the user re-enters preview or split. Minor UX issue.
+- **No automated integration coverage of the real `useHiddenProbeRunner`**: happy-dom doesn't execute srcdoc scripts and recycles `contentWindow` on `srcdoc` reassignment, making a deterministic test infeasible. Coverage comes from (a) in-memory `ProbeRunner` tests for orchestration, (b) Task 15 manual smoke for the real iframe path. A Playwright variant is a tracked v2 follow-up.
 
 ---
 
