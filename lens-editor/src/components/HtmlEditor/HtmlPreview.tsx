@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import { BRIDGE_SOURCE } from 'virtual:bridge-bundle';
 import { CommentThread } from './CommentThread';
@@ -28,6 +28,8 @@ interface HtmlPreviewProps {
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
+type ProbeViewportSize = { width: number; height: number };
+type ProbeViewportSizeGetter = () => ProbeViewportSize;
 type PendingProbe = {
   frame: HTMLIFrameElement;
   resolve: (rect: Rect | null) => void;
@@ -35,6 +37,8 @@ type PendingProbe = {
   readyTimer: ReturnType<typeof setTimeout>;
   probeTimer: ReturnType<typeof setTimeout> | null;
 };
+
+const DEFAULT_PROBE_VIEWPORT_SIZE: ProbeViewportSize = { width: 1024, height: 768 };
 
 function summarizeComments(source: string): CommentSummary[] {
   return parseComments(source).map(cluster => ({
@@ -110,17 +114,34 @@ function injectBridge(source: string): string {
   return `${source.slice(0, insertAt)}${script}${source.slice(insertAt)}`;
 }
 
+function normalizeProbeViewportSize(size?: ProbeViewportSize): ProbeViewportSize {
+  const width = size?.width;
+  const height = size?.height;
+  return {
+    width: typeof width === 'number' && Number.isFinite(width) && width > 0
+      ? width
+      : DEFAULT_PROBE_VIEWPORT_SIZE.width,
+    height: typeof height === 'number' && Number.isFinite(height) && height > 0
+      ? height
+      : DEFAULT_PROBE_VIEWPORT_SIZE.height,
+  };
+}
+
 // Exported for the parent-side probe lifecycle tests and for future reuse by callers
 // that need the same hidden-iframe ProbeRunner contract outside HtmlPreview.
 // eslint-disable-next-line react-refresh/only-export-components
-export function useHiddenProbeRunner(nonce: string): ProbeRunner {
+export function useHiddenProbeRunner(
+  nonce: string,
+  getViewportSize?: ProbeViewportSizeGetter,
+): ProbeRunner {
   const pendingRef = useRef(new Map<string, PendingProbe>());
 
   const runner = useMemo<ProbeRunner>(() => {
     function createIframe(): HTMLIFrameElement {
       const iframe = document.createElement('iframe');
+      const { width, height } = normalizeProbeViewportSize(getViewportSize?.());
       iframe.setAttribute('sandbox', 'allow-scripts');
-      iframe.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;visibility:hidden;';
+      iframe.style.cssText = `position:fixed;left:-9999px;top:-9999px;width:${width}px;height:${height}px;visibility:hidden;`;
       document.body.appendChild(iframe);
       return iframe;
     }
@@ -184,7 +205,7 @@ export function useHiddenProbeRunner(nonce: string): ProbeRunner {
         for (const token of Array.from(pendingRef.current.keys())) settle(token, null);
       },
     };
-  }, [nonce]);
+  }, [getViewportSize, nonce]);
 
   useEffect(() => () => runner.dispose(), [runner]);
 
@@ -212,7 +233,14 @@ export function HtmlPreview({
   const mountedRef = useRef(true);
   const isCommentModeRef = useRef(isCommentMode);
   const placementGenerationRef = useRef(0);
-  const defaultProbeRunner = useHiddenProbeRunner(nonce);
+  const getProbeViewportSize = useCallback(() => {
+    const iframe = iframeRef.current;
+    return normalizeProbeViewportSize({
+      width: iframe?.clientWidth ?? 0,
+      height: iframe?.clientHeight ?? 0,
+    });
+  }, []);
+  const defaultProbeRunner = useHiddenProbeRunner(nonce, getProbeViewportSize);
   const activeProbeRunner = probeRunner ?? defaultProbeRunner;
 
   useEffect(() => {

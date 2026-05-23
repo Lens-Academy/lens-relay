@@ -692,6 +692,24 @@ describe('HtmlPreview click-to-place', () => {
 });
 
 describe('useHiddenProbeRunner orchestration (parent-side)', () => {
+  it('sizes the hidden probe iframe to the visible preview viewport', async () => {
+    vi.useRealTimers();
+    const { result, unmount } = renderHook(() => useHiddenProbeRunner(
+      '__test_nonce__',
+      () => ({ width: 640, height: 360 })
+    ));
+
+    const pending = result.current.run('<body><!--lens-probe TV--></body>', 'TV');
+
+    await waitFor(() => expect(document.querySelectorAll('iframe[style*="-9999px"]')).toHaveLength(1));
+    const frame = document.querySelector('iframe[style*="-9999px"]') as HTMLIFrameElement;
+    expect(frame.style.width).toBe('640px');
+    expect(frame.style.height).toBe('360px');
+
+    unmount();
+    await expect(pending).resolves.toBeNull();
+  });
+
   it('resolves concurrent .run() calls to their respective rects and disposes cleanly', async () => {
     vi.useRealTimers();
     const { result, unmount } = renderHook(() => useHiddenProbeRunner('__test_nonce__'));
