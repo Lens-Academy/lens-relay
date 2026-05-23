@@ -247,23 +247,10 @@ export function ContentPanel({
     enableCriticMarkup: sectionEditorCriticMarkup,
     initialSuggestionMode: suggestionMode,
     commentBadgeMap: editorCommentBadgeMap,
-    // Inline `cm-comment-badge` clicks inside the active section editor
-    // bubble through here. The position is already absolute (the bridge in
-    // createSectionEditorView added the section's offset). We synthesize a
-    // minimal CriticMarkupRange so the parent's existing handler signature
-    // doesn't have to change.
-    onCommentBadgeClick: onClickCriticRange
-      ? (absoluteFrom: number) => {
-          onClickCriticRange({
-            type: 'comment',
-            from: absoluteFrom,
-            to: absoluteFrom,
-            contentFrom: absoluteFrom,
-            contentTo: absoluteFrom,
-            content: '',
-          });
-        }
-      : undefined,
+    // Badge clicks dispatch absolute Y.Text offsets via the commentOffsetTranslator
+    // Facet configured in createSectionEditorView. CommentsLayer (mounted in Task 9)
+    // picks up the comment-badge-focus event directly.
+    yTextOffsetBase: editRange.from,
     // Mod-Shift-m inside the section editor → flush the current cursor
     // position upward (so the sidebar's `insertAtPos` is current) then
     // signal the parent to open its add-comment UI.

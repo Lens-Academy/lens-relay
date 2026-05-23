@@ -32,6 +32,19 @@ export const canAcceptRejectFacet = Facet.define<boolean, boolean>({
   combine: (values) => values.length > 0 ? values[0] : true,
 });
 
+/**
+ * Translates a local editor position (inside this CodeMirror view) to the
+ * absolute Y.Text offset that CommentsLayer expects. The file editor uses
+ * the identity function (its view IS the whole Y.Text). Section editors in
+ * the course editor configure this to add their slice's base offset.
+ */
+export const commentOffsetTranslator = Facet.define<
+  (local: number) => number,
+  (local: number) => number
+>({
+  combine: (vals) => vals[0] ?? ((n) => n),
+});
+
 // Author context - can be set externally
 let currentAuthor = 'anonymous';
 
@@ -378,6 +391,8 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       const threads = parseThreads(ranges);
       // Map each comment range's `from` to its badge info
       const commentBadgeMap = new Map<number, { badgeNumber: number; isFirst: boolean; threadFrom: number }>();
+      // Translator from local CM positions to absolute Y.Text offsets.
+      const translateOffset = view.state.facet(commentOffsetTranslator);
       const suppliedBadgeMap = view.state.field(commentBadgeMapField);
       if (suppliedBadgeMap) {
         for (const range of ranges) {
@@ -460,7 +475,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
                 from: range.from,
                 to: range.from,
                 deco: Decoration.widget({
-                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, badgeInfo.threadFrom),
+                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom)),
                   side: -1,
                 }),
               });
@@ -486,7 +501,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
               from: range.from,
               to: range.to,
               deco: Decoration.replace({
-                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, badgeInfo.threadFrom),
+                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom)),
               }),
             });
           } else {

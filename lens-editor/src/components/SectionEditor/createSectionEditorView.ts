@@ -15,6 +15,7 @@ import { ySectionSync, ySectionUndoManagerKeymap } from './y-section-sync';
 import { remoteCursorTheme } from '../Editor/remoteCursorTheme';
 import {
   criticMarkupExtension,
+  commentOffsetTranslator,
   toggleSuggestionMode,
 } from '../Editor/extensions/criticmarkup';
 import type { CriticMarkupCommentBadgeInfo } from '../Editor/extensions/criticmarkup';
@@ -55,12 +56,11 @@ export function createSectionEditorView(opts: {
    *  positions. Used by course editor fields to preserve document-wide
    *  comment numbering while only a slice is mounted in CodeMirror. */
   commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
-  /** Fired when the user clicks an inline `cm-comment-badge` widget rendered
-   *  by the criticmarkup plugin. The argument is the absolute Y.Text position
-   *  of the comment thread (translated from the section editor's local
-   *  position). Caller is expected to focus the thread in their own UI
-   *  (e.g. open a sidebar). */
-  onCommentBadgeClick?: (absoluteFrom: number) => void;
+  /** Where this section's slice starts in the underlying Y.Text. Badge widgets
+   *  and badge-click events will dispatch this value + local position so that
+   *  CommentsLayer (which holds a reference to the full Y.Text) can match them.
+   *  Defaults to `sectionFrom` when omitted (the same offset used for sync). */
+  yTextOffsetBase?: number;
   /** Fired when the user invokes the "Add Comment" keyboard shortcut
    *  (Mod-Shift-m) inside this section editor. Caller is expected to open
    *  whatever UI it uses to author the comment (the EduEditor sidebar, in
@@ -77,7 +77,7 @@ export function createSectionEditorView(opts: {
     enableCriticMarkup = false,
     initialSuggestionMode = false,
     commentBadgeMap,
-    onCommentBadgeClick,
+    yTextOffsetBase,
     onRequestAddComment,
   } = opts;
 
@@ -106,8 +106,17 @@ export function createSectionEditorView(opts: {
   const editTo = trimSectionEnd(fullText, sectionFrom, sectionTo);
   const sectionText = fullText.slice(sectionFrom, editTo);
 
+  // Where this section's slice starts in the underlying Y.Text. Defaults to
+  // sectionFrom (which is also used by ySectionSync). Callers can override via
+  // yTextOffsetBase if they have a different mapping.
+  const offsetBase = yTextOffsetBase ?? sectionFrom;
+
   const criticMarkupExtensions = enableCriticMarkup
-    ? [criticMarkupExtension({ canAcceptReject: true, commentBadgeMap }), keymap.of(criticMarkupKeymap)]
+    ? [
+        criticMarkupExtension({ canAcceptReject: true, commentBadgeMap }),
+        commentOffsetTranslator.of((localPos) => offsetBase + localPos),
+        keymap.of(criticMarkupKeymap),
+      ]
     : [];
 
   const view = new EditorView({
@@ -144,33 +153,6 @@ export function createSectionEditorView(opts: {
   // (false) gets overridden by the user's persisted choice.
   if (enableCriticMarkup && initialSuggestionMode) {
     view.dispatch({ effects: toggleSuggestionMode.of(true) });
-  }
-
-  // Bridge the criticmarkup plugin's `comment-badge-focus` CustomEvent (fired
-  // when the user clicks a `cm-comment-badge` widget) into the React layer.
-  // The event is dispatched on `document` with detail: { threadFrom: number }.
-  // Translate the local CodeMirror position to an absolute Y.Text position by
-  // adding the section's start offset.
-  //
-  // TODO(unified-comments task 9): once CommentsLayer is mounted in the course
-  // editor, this listener becomes redundant — CommentsLayer handles badge focus
-  // directly via its own document listener. Remove this listener and the
-  // `onCommentBadgeClick` opt entirely as part of Task 9.
-  if (enableCriticMarkup && onCommentBadgeClick) {
-    const handler = (e: Event) => {
-      const localFrom = (e as CustomEvent<{ threadFrom: number }>).detail?.threadFrom;
-      if (localFrom != null) {
-        onCommentBadgeClick(sectionFrom + localFrom);
-      }
-    };
-    document.addEventListener('comment-badge-focus', handler);
-    // Tear down with the view so we don't leak the listener if anything
-    // else holds onto view.dom longer than expected.
-    const origDestroy = view.destroy.bind(view);
-    view.destroy = () => {
-      document.removeEventListener('comment-badge-focus', handler);
-      origDestroy();
-    };
   }
 
   return view;

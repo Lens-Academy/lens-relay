@@ -26,10 +26,10 @@ interface UseSectionEditorOpts {
    *  Keeps section-editor badges numbered consistently with document-level
    *  comment UI. */
   commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
-  /** Fires when the user clicks an inline comment badge (`cm-comment-badge`)
-   *  in the editor. The argument is the absolute Y.Text position of the
-   *  thread, translated from the section editor's local position. */
-  onCommentBadgeClick?: (absoluteFrom: number) => void;
+  /** Where this section's slice starts in the underlying Y.Text. Badge click
+   *  events dispatch this value + local position so CommentsLayer can match
+   *  them. Defaults to sectionFrom when omitted. */
+  yTextOffsetBase?: number;
   /** Fires when the user invokes the "Add Comment" keyboard shortcut inside
    *  the section editor (Mod-Shift-m). */
   onRequestAddComment?: () => void;
@@ -65,13 +65,11 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       enableCriticMarkup,
       initialSuggestionMode,
       commentBadgeMap,
+      yTextOffsetBase,
     } = optsRef.current;
 
     // Read the latest callback at click time so we don't capture a stale
     // reference if the parent re-binds it.
-    const onCommentBadgeClick = (absoluteFrom: number) => {
-      optsRef.current.onCommentBadgeClick?.(absoluteFrom);
-    };
     const onRequestAddComment = () => {
       optsRef.current.onRequestAddComment?.();
     };
@@ -85,7 +83,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       enableCriticMarkup,
       initialSuggestionMode,
       commentBadgeMap,
-      onCommentBadgeClick,
+      yTextOffsetBase,
       onRequestAddComment,
     });
 
