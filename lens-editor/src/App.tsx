@@ -10,6 +10,7 @@ import { NavigationContext, useNavigation } from './contexts/NavigationContext';
 import { DisplayNameProvider } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 import { SidebarContext } from './contexts/SidebarContext';
+import { HeaderActionsProvider, type HeaderCommentsControl } from './contexts/HeaderActionsContext';
 import { useMultiFolderMetadata } from './hooks/useMultiFolderMetadata';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
@@ -433,13 +434,18 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
   const leftCollapsed = collapsedState['left-sidebar'] ?? false;
   const rightCollapsed = collapsedState['right-sidebar'] ?? false;
   const commentMarginCollapsed = collapsedState['comment-margin'] ?? false;
+  const [headerCommentsControl, setHeaderCommentsControl] = useState<HeaderCommentsControl | null>(null);
+  const commentsOpen = headerCommentsControl?.isOpen ?? !commentMarginCollapsed;
+  const commentsTitle = headerCommentsControl?.title ?? 'Toggle comments';
+  const handleToggleComments = headerCommentsControl?.onToggle ?? (() => manager.toggle('comment-margin'));
 
   return (
     <AuthProvider role={role} folderUuid={folderUuid} isAllFolders={isAllFolders}>
       <DisplayNameProvider>
         <DisplayNamePrompt />
         <SidebarContext.Provider value={{ manager, headerStage }}>
-        <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
+          <HeaderActionsProvider onCommentsControlChange={setHeaderCommentsControl}>
+            <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
           <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}
             <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
@@ -463,13 +469,13 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
               <div className="flex items-center gap-4 flex-shrink-0">
                 <div id="header-controls" className="flex items-center gap-4" />
                 <button
-                  onClick={() => manager.toggle('comment-margin')}
-                  title="Toggle comments"
+                  onClick={handleToggleComments}
+                  title={commentsTitle}
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    {!commentMarginCollapsed && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
+                    {commentsOpen && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
                   </svg>
                 </button>
                 <button
@@ -528,7 +534,8 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
             recentFiles={recentFiles}
             onSelect={handleQuickSwitcherSelect}
           />
-        </NavigationContext.Provider>
+            </NavigationContext.Provider>
+          </HeaderActionsProvider>
         </SidebarContext.Provider>
       </DisplayNameProvider>
     </AuthProvider>

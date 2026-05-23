@@ -1,15 +1,3 @@
-/**
- * Suggestion-mode toggle for the EduEditor — plain-state variant of
- * SuggestionModeToggle that doesn't need a CodeMirror EditorView. The mode
- * is held in EduEditor and forwarded to whichever per-section editor
- * happens to be active.
- *
- * Role rules mirror the markdown editor:
- *  - view: locked Read-Only badge.
- *  - suggest: locked Suggest badge; mode is forced ON.
- *  - edit: full toggle.
- */
-
 import { useEffect } from 'react';
 import { SegmentedToggle, type SegmentedValue } from '../SegmentedToggle';
 import { useAuth } from '../../contexts/AuthContext';
@@ -39,20 +27,21 @@ function ViewIcon() {
   );
 }
 
-interface EduSuggestionModeToggleProps {
+interface SuggestionModeControlProps {
   isSuggestionMode: boolean;
   onChange: (next: boolean) => void;
   iconOnly?: boolean;
+  disabled?: boolean;
 }
 
-export function EduSuggestionModeToggle({
+export function SuggestionModeControl({
   isSuggestionMode,
   onChange,
   iconOnly = false,
-}: EduSuggestionModeToggleProps) {
+  disabled = false,
+}: SuggestionModeControlProps) {
   const { role } = useAuth();
 
-  // Force suggest-only users into suggestion mode.
   useEffect(() => {
     if (role === 'suggest' && !isSuggestionMode) {
       onChange(true);
@@ -61,10 +50,7 @@ export function EduSuggestionModeToggle({
 
   if (role === 'view') {
     return (
-      <span
-        className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-100 text-red-800"
-        title="Read-Only"
-      >
+      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-red-100 text-red-800" title="Read-Only">
         {iconOnly ? <ViewIcon /> : 'Read-Only'}
       </span>
     );
@@ -72,14 +58,15 @@ export function EduSuggestionModeToggle({
 
   if (role === 'suggest') {
     return (
-      <span
-        className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-amber-100 text-amber-800"
-        title="Suggest + Comment Only"
-      >
+      <span className="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium bg-amber-100 text-amber-800" title="Suggest + Comment Only">
         {iconOnly ? <SuggestIcon /> : 'Suggest + Comment Only'}
       </span>
     );
   }
+
+  const handleChange = (value: SegmentedValue) => {
+    onChange(value === 'left');
+  };
 
   return (
     <SegmentedToggle
@@ -88,7 +75,8 @@ export function EduSuggestionModeToggle({
       leftTitle="Suggesting"
       rightTitle="Editing"
       value={isSuggestionMode ? 'left' : 'right'}
-      onChange={(value: SegmentedValue) => onChange(value === 'left')}
+      onChange={handleChange}
+      disabled={disabled}
       ariaLabel="Toggle between suggesting and editing mode"
     />
   );

@@ -1,15 +1,19 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
+import { useHeaderCommentsControl } from '../../contexts/HeaderActionsContext';
+import { useSidebar } from '../../contexts/SidebarContext';
 import { parseSections } from '../SectionEditor/parseSections';
 import type { Section } from '../SectionEditor/parseSections';
 import { ModuleTreeEditor } from './ModuleTreeEditor';
 import { ContentPanel, type ContentScope } from './ContentPanel';
 import { CourseOverview } from './CourseOverview';
 import { RELAY_ID } from '../../lib/constants';
-import { EduSuggestionModeToggle } from './EduSuggestionModeToggle';
+import { SuggestionModeControl } from '../SuggestionModeToggle/SuggestionModeControl';
+import { OverflowMenu } from '../OverflowMenu';
 import { EduCommentsSidebar } from './EduCommentsSidebar';
 import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
@@ -45,6 +49,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const { metadata } = useNavigation();
   const { canWrite } = useAuth();
   const { displayName } = useDisplayName();
+  const { headerStage } = useSidebar();
 
   // Comment authorship — the markdown editor's AwarenessInitializer sets
   // currentAuthor from the displayName, but it only mounts inside the
@@ -100,6 +105,14 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
       return next;
     });
   }, []);
+
+  const commentsControl = useMemo(() => ({
+    isOpen: commentsSidebarOpen,
+    onToggle: handleSidebarToggle,
+    title: commentsSidebarOpen ? 'Hide comments' : 'Show comments',
+  }), [commentsSidebarOpen, handleSidebarToggle]);
+
+  useHeaderCommentsControl(commentsControl);
 
   const handleClickCriticRange = useCallback((range: CriticMarkupRange) => {
     if (range.type !== 'comment') return;
@@ -241,29 +254,30 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const criticMarkupEnabled = canWrite;
 
   const activeDocId = scope?.docId ?? null;
+  const portalTarget = typeof document === 'undefined'
+    ? null
+    : document.getElementById('header-controls');
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex-none flex items-center justify-end gap-3 px-4 py-2 border-b border-gray-200 bg-white">
-        <EduSuggestionModeToggle
-          isSuggestionMode={isSuggestionMode}
-          onChange={handleSuggestionModeChange}
-        />
-        <button
-          type="button"
-          onClick={handleSidebarToggle}
-          className={`inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium border transition-colors ${
-            commentsSidebarOpen
-              ? 'bg-blue-50 text-blue-700 border-blue-200'
-              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-          }`}
-          aria-pressed={commentsSidebarOpen}
-          title={commentsSidebarOpen ? 'Hide comments' : 'Show comments'}
-        >
-          {'\u{1F4AC}'} Comments
-        </button>
-      </div>
-
+      {portalTarget && createPortal(
+        headerStage === 'overflow' ? (
+          <OverflowMenu>
+            <SuggestionModeControl
+              isSuggestionMode={isSuggestionMode}
+              onChange={handleSuggestionModeChange}
+              iconOnly
+            />
+          </OverflowMenu>
+        ) : (
+          <SuggestionModeControl
+            isSuggestionMode={isSuggestionMode}
+            onChange={handleSuggestionModeChange}
+            iconOnly={headerStage !== 'full'}
+          />
+        ),
+        portalTarget
+      )}
       <div className="flex-1 flex overflow-hidden">
         <div className="w-[420px] min-w-[420px] border-r-2 border-gray-200 bg-[#fbfaf7] overflow-y-auto p-4">
           {isCourseMode ? (
