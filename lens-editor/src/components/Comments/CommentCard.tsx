@@ -16,6 +16,8 @@ import { ConfirmDialog } from '../ConfirmDialog';
 export interface CommentCardProps {
   thread: CommentThread;
   top: number;
+  /** 1-indexed comment number, matching the inline badge in the prose. */
+  number?: number;
   focused: boolean;
   currentUserName: string;
   onFocus: (threadFrom: number) => void;
@@ -30,7 +32,7 @@ export interface CommentCardProps {
 const CARD_BORDER = '#e8e5df';
 
 export function CommentCard(props: CommentCardProps): ReactElement {
-  const { thread, top, focused, currentUserName, onFocus, onReply, onEdit, onDelete } = props;
+  const { thread, top, number, focused, currentUserName, onFocus, onReply, onEdit, onDelete } = props;
 
   const [showReplyForm, setShowReplyForm] = useState(false);
 
@@ -53,10 +55,10 @@ export function CommentCard(props: CommentCardProps): ReactElement {
     <div
       className={`comments-card${focused ? ' comments-card--focused' : ''} bg-white rounded-lg border overflow-hidden transition-shadow`}
       style={{
-        position: 'absolute',
-        top: `${top}px`,
-        right: 0,
-        width: '100%',
+        // Positioning is owned by the parent (CommentsLayer wraps each card in
+        // an absolutely-positioned div). The card flows normally inside its
+        // wrapper so the wrapper auto-sizes to the card's measured height —
+        // critical for ResizeObserver-driven re-layout.
         borderColor: focused ? undefined : CARD_BORDER,
         outline: focused ? '2px solid #3b82f6' : undefined,
         outlineOffset: focused ? '-1px' : undefined,
@@ -65,8 +67,34 @@ export function CommentCard(props: CommentCardProps): ReactElement {
       data-thread-from={thread.from}
       onClick={handleCardClick}
     >
+      {/* Number badge (matches the inline numbered superscript in the prose) */}
+      {number != null && (
+        <div
+          className="px-3 pt-2 pb-0 flex items-center gap-2"
+          style={{ fontSize: 11, color: focused ? '#2563eb' : '#9ca3af', fontWeight: 600 }}
+        >
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minWidth: 18,
+              height: 18,
+              padding: '0 6px',
+              borderRadius: 9,
+              fontSize: 10,
+              background: focused ? '#2563eb' : '#fef3c7',
+              color: focused ? '#fff' : '#92400e',
+              fontWeight: 700,
+            }}
+          >
+            {number}
+          </span>
+        </div>
+      )}
+
       {/* Root comment */}
-      <div className="px-3 pt-3">
+      <div className="px-3 pt-2">
         <CommentRow
           comment={root}
           rangeIndex={0}

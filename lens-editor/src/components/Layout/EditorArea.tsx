@@ -297,7 +297,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         <div
           id="comment-margin"
           className={`overflow-hidden flex-shrink-0 relative ${commentMarginCollapsed ? '' : 'border-l border-gray-100 bg-gray-50/50'}`}
-          style={{ width: commentMarginCollapsed ? 0 : manager.getWidth('comment-margin') }}
+          style={{ width: commentMarginCollapsed ? 0 : Math.max(320, manager.getWidth('comment-margin')) }}
         >
           {editorView && (
             <CommentsLayer

@@ -33,7 +33,6 @@ import {
 import type { CommentThread } from '../../lib/criticmarkup-parser';
 
 // ── Layout constants ─────────────────────────────────────────────────────────
-const COLUMN_WIDTH = 320;
 const CARD_GAP = 10;
 const DEFAULT_CARD_HEIGHT = 100;
 /**
@@ -75,6 +74,10 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     currentUserName,
     insertCursorPos,
   } = props;
+
+  // Layer DOM ref — used to translate viewport-y coords (returned by resolveAnchorY)
+  // into layer-relative-y (what wrapper.style.top expects).
+  const layerRef = useRef<HTMLDivElement | null>(null);
 
   // ── Y.Text subscription ──────────────────────────────────────────────────
   // Force a re-render whenever the Y.Text content changes.
@@ -250,9 +253,66 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
       });
     }
 
-    setLayoutMap(computeWeightedLayout({ items, gap: CARD_GAP }));
+    const result = computeWeightedLayout({ items, gap: CARD_GAP });
+
+    // Edge clamping: keep visible-anchor cards inside the visible margin slot.
+    // Two rules:
+    //   1) When at the top of the editor scroll, the topmost in-viewport card
+    //      should never sit above the filter strip (otherwise the user sees
+    //      no card for the first comment they're reading).
+    //   2) Symmetric at the bottom — the bottommost in-viewport card should
+    //      not extend below the viewport bottom.
+    //   3) In the middle of the doc, if the in-viewport block happens to fit
+    //      the slot but PAV pushed it off one edge, nudge the block back in.
+    const stripBottom = (layerRef.current?.firstElementChild as HTMLElement | null)?.getBoundingClientRect()
+      .bottom ?? viewport.top;
+    const minTop = stripBottom + 4;
+    const maxBottom = viewport.top + viewport.height - 4;
+
+    const inViewport = items
+      .filter((it) => {
+        const vy = it.anchorY - viewport.top;
+        return vy >= 0 && vy <= viewport.height;
+      })
+      .sort((a, b) => a.anchorY - b.anchorY);
+
+    if (inViewport.length > 0) {
+      const first = inViewport[0];
+      const last = inViewport[inViewport.length - 1];
+      const firstPos = result.get(first.key);
+      const lastBot = (result.get(last.key) ?? 0) + last.height;
+
+      const sc = scrollContainerRef.current;
+      const atTop = sc ? sc.scrollTop < 30 : false;
+      const atBottom = sc ? sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 30 : false;
+      const blockSpan = lastBot - (firstPos ?? 0);
+      const slot = maxBottom - minTop;
+
+      let shift = 0;
+      if (atTop && firstPos != null && firstPos < minTop) {
+        shift = minTop - firstPos;
+      } else if (atBottom && lastBot > maxBottom) {
+        shift = maxBottom - lastBot;
+      } else if (blockSpan <= slot) {
+        if (firstPos != null && firstPos < minTop) shift = minTop - firstPos;
+        else if (lastBot > maxBottom) shift = maxBottom - lastBot;
+      }
+
+      if (shift !== 0) {
+        for (const k of result.keys()) {
+          result.set(k, result.get(k)! + shift);
+        }
+      }
+    }
+
+    setLayoutMap(result);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredThreadKeys, focusedThreadKey, layoutTick]);
+
+  // ── Badge numbering ───────────────────────────────────────────────────────
+  // 1-indexed by document order (matches the inline criticmarkup badge numbers).
+  const threadNumbers = new Map<number, number>();
+  allThreads.forEach((t, i) => threadNumbers.set(t.from, i + 1));
 
   // ── CRUD callbacks ────────────────────────────────────────────────────────
   const handleFocus = (threadFrom: number) => setFocusedThreadKey(threadFrom);
@@ -276,12 +336,14 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div
+      ref={layerRef}
       className="comments-layer"
       style={{
         position: 'absolute',
         top: 0,
+        left: 0,
         right: 0,
-        width: COLUMN_WIDTH,
+        bottom: 0,
         pointerEvents: 'none',
         // Establish stacking context so children can use z-index if needed.
         isolation: 'isolate',
@@ -385,13 +447,19 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
       )}
 
       {/* ── Cards area ─────────────────────────────────────────────────── */}
-      {/* Relative container so absolute-positioned wrappers are placed correctly. */}
-      <div style={{ position: 'relative', pointerEvents: 'none' }}>
+      {/* Relative container fills the layer so absolute wrappers are positioned
+          in the layer's coord space. We subtract the layer's viewport-y from
+          each card's computed y (which is in viewport-y from resolveAnchorY)
+          so wrapper.style.top is in the right frame of reference. */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         {filteredThreads.map((thread) => {
           const anchorY = resolveAnchorY(thread.from);
           if (anchorY == null) return null; // hidden (not in rendered range)
 
-          const top = layoutMap.get(thread.from) ?? anchorY;
+          const layoutY = layoutMap.get(thread.from) ?? anchorY;
+          // Translate viewport-y → layer-relative-y.
+          const layerTop = layerRef.current?.getBoundingClientRect().top ?? 0;
+          const top = layoutY - layerTop;
 
           return (
             <div
@@ -401,8 +469,8 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
               style={{
                 position: 'absolute',
                 top,
+                left: 0,
                 right: 0,
-                width: '100%',
                 pointerEvents: 'auto',
               }}
               onClick={(e) => e.stopPropagation()}
@@ -410,6 +478,7 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
               <CommentCard
                 thread={thread}
                 top={0}
+                number={threadNumbers.get(thread.from)}
                 focused={focusedThreadKey === thread.from}
                 currentUserName={currentUserName}
                 onFocus={handleFocus}
