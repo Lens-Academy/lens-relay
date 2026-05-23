@@ -283,6 +283,53 @@ describe('HtmlEditor', () => {
     expect(parseComments(ytext.toString())[0].comment.author).toBe('Luc');
   });
 
+  it('toolbar click-to-place keeps comment mode active until composer submit', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>click here</p>');
+    const awareness = new Awareness(doc);
+
+    render(
+      <DisplayNameProvider>
+        <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" />
+      </DisplayNameProvider>
+    );
+    await userEvent.click(screen.getByRole('button', { name: /comment mode/i }));
+
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'click-captured',
+          payload: {
+            fingerprint: {
+              before: 'click ',
+              after: 'here',
+              tag: 'p',
+              ancestorPath: [],
+              clickRect: { x: 20, y: 30, w: 100, h: 20 },
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
+    expect(ytext.toString()).not.toContain('lens-comment');
+    expect(screen.getByRole('button', { name: /comment mode/i })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.change(screen.getByPlaceholderText(/add a comment/i), {
+      target: { value: 'toolbar body' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+    const clusters = parseComments(ytext.toString());
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].comment.body).toBe('toolbar body');
+    expect(screen.getByRole('button', { name: /comment mode/i })).toHaveAttribute('aria-pressed', 'false');
+  });
+
   it('clears stale orphan badge in source-only mode after the orphan marker is removed', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');

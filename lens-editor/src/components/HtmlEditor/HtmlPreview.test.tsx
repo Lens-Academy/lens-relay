@@ -570,15 +570,10 @@ describe('HtmlPreview click-to-place', () => {
     }
   });
 
-  it('opens composer when bridge reports a click whose fingerprint uniquely matches source', async () => {
+  it('toolbar click-to-place opens composer before writing marker', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
-    ytext.insert(0, '<p>unique words here</p>');
-    const onPlace = vi.fn();
-    const runner: ProbeRunner = {
-      run: vi.fn(async () => null),
-      dispose() {},
-    };
+    ytext.insert(0, '<p>click here</p>');
 
     render(
       <HtmlPreview
@@ -586,9 +581,7 @@ describe('HtmlPreview click-to-place', () => {
         currentUser="me@x"
         origin={Symbol()}
         debounceMs={0}
-        isCommentMode={true}
-        onPlaceComplete={onPlace}
-        probeRunner={runner}
+        isCommentMode
       />
     );
     const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
@@ -600,11 +593,11 @@ describe('HtmlPreview click-to-place', () => {
           type: 'click-captured',
           payload: {
             fingerprint: {
-              before: 'unique ',
-              after: 'words',
+              before: 'click ',
+              after: 'here',
               tag: 'p',
               ancestorPath: [],
-              clickRect: { x: 0, y: 0, w: 10, h: 10 },
+              clickRect: { x: 20, y: 30, w: 100, h: 20 },
             },
           },
         },
@@ -612,9 +605,7 @@ describe('HtmlPreview click-to-place', () => {
     });
 
     expect(screen.getByPlaceholderText(/add a comment/i)).toBeInTheDocument();
-    expect(parseComments(ytext.toString())).toEqual([]);
-    expect(onPlace).not.toHaveBeenCalled();
-    expect(runner.run).not.toHaveBeenCalled();
+    expect(ytext.toString()).not.toContain('lens-comment');
   });
 
   it('ignores click-captured when comment mode is disabled or fingerprint shape is invalid', async () => {
