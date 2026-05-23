@@ -1,0 +1,98 @@
+<h2>Overflow strategy — three UX approaches</h2>
+<p class="subtitle">Many comments, not enough margin. How do we keep the sidebar honest about what's on screen?</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:10px;background:#fafafa">
+      <div style="display:flex;gap:6px;height:240px;font-size:10px">
+        <div style="flex:1;border:1px solid #d4d0c8;background:#fffdf6;padding:6px;position:relative;overflow:hidden">
+          <div style="color:#bbb">¹ comment up there</div>
+          <div>&nbsp;</div>
+          <div style="background:#fff3a8;padding:1px">² in view</div>
+          <div style="background:#fff3a8;padding:1px;outline:2px dashed #2563eb;outline-offset:1px">³ ← pivot (40%)</div>
+          <div style="background:#fff3a8;padding:1px">⁴ in view</div>
+          <div style="background:#fff3a8;padding:1px">⁵ in view</div>
+          <div>&nbsp;</div>
+          <div style="color:#bbb">⁶ below</div>
+          <div style="position:absolute;left:0;right:0;top:30%;height:60%;border:1px dashed #2563eb;pointer-events:none"></div>
+        </div>
+        <div style="flex:0.9;position:relative;background:#f7f5ef">
+          <div style="position:absolute;top:0;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px;color:#888">c1</div>
+          <div style="position:absolute;top:32px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c2</div>
+          <div style="position:absolute;top:64px;left:3px;right:3px;background:#fff;border:2px solid #2563eb;border-radius:3px;padding:2px 4px">c3 ⭐</div>
+          <div style="position:absolute;top:100px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c4</div>
+          <div style="position:absolute;top:132px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c5</div>
+          <div style="position:absolute;top:180px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px;color:#888">c6</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Reading-anchor algorithm</h3>
+      <p>The comment whose anchor sits closest to 40% viewport height becomes the implicit pivot. examind-style two-pass packs everything around it. End-of-doc: switch to bottom-aligned packing when the last comment becomes the pivot. User-clicked focus overrides the implicit pivot.</p>
+      <p style="font-size:11px;color:#777"><strong>Pro:</strong> minimal UI, smooth scroll. <strong>Con:</strong> cards can still drift several lines from anchor in dense regions — no explicit signal that "comment 1 is up there."</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:10px;background:#fafafa">
+      <div style="display:flex;gap:6px;height:240px;font-size:10px">
+        <div style="flex:1;border:1px solid #d4d0c8;background:#fffdf6;padding:6px;position:relative;overflow:hidden">
+          <div style="color:#bbb">¹ above</div>
+          <div>&nbsp;</div>
+          <div style="background:#fff3a8;padding:1px">² in view</div>
+          <div style="background:#fff3a8;padding:1px">³ in view</div>
+          <div style="background:#fff3a8;padding:1px">⁴ in view</div>
+          <div>&nbsp;</div>
+          <div style="color:#bbb">⁵ below</div>
+          <div style="color:#bbb">⁶ below</div>
+        </div>
+        <div style="flex:0.9;position:relative;background:#f7f5ef">
+          <div style="position:absolute;top:0;left:3px;right:3px;background:#fff;border:1px solid #2563eb;border-radius:3px;padding:2px 4px;color:#2563eb;text-align:center;font-weight:600">↑ 1 above</div>
+          <div style="position:absolute;top:50px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c2</div>
+          <div style="position:absolute;top:90px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c3</div>
+          <div style="position:absolute;top:130px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c4</div>
+          <div style="position:absolute;bottom:0;left:3px;right:3px;background:#fff;border:1px solid #2563eb;border-radius:3px;padding:2px 4px;color:#2563eb;text-align:center;font-weight:600">↓ 2 below</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Viewport-only + bucket indicators</h3>
+      <p>The sidebar shows only comments whose anchors are in the visible viewport. Off-screen comments collapse into small clickable indicators at top/bottom: "↑ 3 above" jumps the editor to scroll the next batch into view. No drift, no overlap — just honest 1:1 visibility.</p>
+      <p style="font-size:11px;color:#777"><strong>Pro:</strong> sidebar literally can't lie. <strong>Con:</strong> cards fade in/out as you scroll — feels less continuous; requires the indicator UI.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:10px;background:#fafafa">
+      <div style="display:flex;gap:6px;height:240px;font-size:10px">
+        <div style="flex:1;border:1px solid #d4d0c8;background:#fffdf6;padding:6px;position:relative;overflow:hidden">
+          <div style="color:#bbb">¹ above</div>
+          <div>&nbsp;</div>
+          <div style="background:#fff3a8;padding:1px">² in view</div>
+          <div style="background:#fff3a8;padding:1px;outline:2px dashed #2563eb;outline-offset:1px">³ ← pivot</div>
+          <div style="background:#fff3a8;padding:1px">⁴ in view</div>
+          <div style="background:#fff3a8;padding:1px">⁵ in view</div>
+          <div>&nbsp;</div>
+          <div style="color:#bbb">⁶ far below</div>
+        </div>
+        <div style="flex:0.9;position:relative;background:#f7f5ef">
+          <div style="position:absolute;top:0;left:3px;right:3px;background:#fff;border:1px solid #2563eb;border-radius:3px;padding:2px 4px;color:#2563eb;text-align:center;font-weight:600">↑ 1</div>
+          <div style="position:absolute;top:30px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c2</div>
+          <div style="position:absolute;top:62px;left:3px;right:3px;background:#fff;border:2px solid #2563eb;border-radius:3px;padding:2px 4px">c3 ⭐</div>
+          <div style="position:absolute;top:98px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c4</div>
+          <div style="position:absolute;top:130px;left:3px;right:3px;background:#fff;border:1px solid #e8e5df;border-radius:3px;padding:2px 4px">c5</div>
+          <div style="position:absolute;bottom:0;left:3px;right:3px;background:#fff;border:1px solid #2563eb;border-radius:3px;padding:2px 4px;color:#2563eb;text-align:center;font-weight:600">↓ 1</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C — Reading-anchor + overflow buckets (hybrid)</h3>
+      <p>Default to A's reading-anchor packing. If a card would have to drift more than a threshold (say 200px) from its true anchor — or would land outside the visible margin column at all — drop it into a small bucket indicator at top or bottom. Click the indicator to scroll the editor so those comments come into view.</p>
+      <p style="font-size:11px;color:#777"><strong>Pro:</strong> smooth in the common case, honest at the extremes. <strong>Con:</strong> most code; one more rule (the drift threshold) to tune.</p>
+    </div>
+  </div>
+
+</div>
+
+<p class="subtitle" style="margin-top:14px">All three share: (1) explicit user-selected focus always wins as pivot; (2) doc-end uses bottom-aligned packing.</p>
