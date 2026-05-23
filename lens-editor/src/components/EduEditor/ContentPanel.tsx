@@ -176,6 +176,14 @@ export function ContentPanel({
     position: { x: number; y: number };
   } | null>(null);
 
+  // Document-wide comment badge map — keyed by ABSOLUTE Y.Text positions.
+  // Built once per docText change and sliced per field/section so badge
+  // numbers stay linear across the same document, including while a single
+  // field is open in CodeMirror.
+  const globalBadgeMap = criticMarkupEnabled
+    ? buildGlobalCommentBadgeMap(docText)
+    : new Map();
+
   // Compute the editing range
   const editRange = (() => {
     if (editingIndex === null && !editingFmField) return { from: 0, to: 0 };
@@ -226,6 +234,9 @@ export function ContentPanel({
     editingSectionType === 'chat' ||
     editingSectionType === 'question';
   const sectionEditorCriticMarkup = criticMarkupEnabled && sectionAllowsCriticMarkup;
+  const editorCommentBadgeMap = sectionEditorCriticMarkup
+    ? sliceCommentBadgeMap(globalBadgeMap, editRange.from, Math.max(0, editRange.to - editRange.from))
+    : undefined;
 
   const { mountRef, viewRef: sectionViewRef } = useSectionEditor({
     ytext: ytextRef.current,
@@ -235,6 +246,7 @@ export function ContentPanel({
     editKey,
     enableCriticMarkup: sectionEditorCriticMarkup,
     initialSuggestionMode: suggestionMode,
+    commentBadgeMap: editorCommentBadgeMap,
     // Inline `cm-comment-badge` clicks inside the active section editor
     // bubble through here. The position is already absolute (the bridge in
     // createSectionEditorView added the section's offset). We synthesize a
@@ -606,15 +618,6 @@ export function ContentPanel({
     visibleFrom = rangeFrom + 1; // skip the root header itself — it's in the toolbar
     visibleTo = rangeTo;
   }
-
-  // Document-wide comment badge map — keyed by ABSOLUTE Y.Text positions.
-  // Built once per docText change and sliced per-section so badge numbers
-  // stay linear across sections of the same document. Only computed when
-  // criticmarkup is enabled to avoid pointless work for view-only users.
-  const globalBadgeMap = criticMarkupEnabled
-    ? buildGlobalCommentBadgeMap(docText)
-    : new Map();
-
 
   return (
     <div>

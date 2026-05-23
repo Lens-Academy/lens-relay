@@ -18,6 +18,7 @@ import {
   toggleSuggestionMode,
   focusedThreadField,
 } from '../Editor/extensions/criticmarkup';
+import type { CriticMarkupCommentBadgeInfo } from '../Editor/extensions/criticmarkup';
 import { criticMarkupKeymap } from '../Editor/extensions/criticmarkup-commands';
 
 /**
@@ -51,6 +52,10 @@ export function createSectionEditorView(opts: {
   parent: HTMLElement;
   enableCriticMarkup?: boolean;
   initialSuggestionMode?: boolean;
+  /** Local comment badge map for this section slice, keyed by local source
+   *  positions. Used by course editor fields to preserve document-wide
+   *  comment numbering while only a slice is mounted in CodeMirror. */
+  commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
   /** Fired when the user clicks an inline `cm-comment-badge` widget rendered
    *  by the criticmarkup plugin. The argument is the absolute Y.Text position
    *  of the comment thread (translated from the section editor's local
@@ -72,6 +77,7 @@ export function createSectionEditorView(opts: {
     parent,
     enableCriticMarkup = false,
     initialSuggestionMode = false,
+    commentBadgeMap,
     onCommentBadgeClick,
     onRequestAddComment,
   } = opts;
@@ -102,7 +108,7 @@ export function createSectionEditorView(opts: {
   const sectionText = fullText.slice(sectionFrom, editTo);
 
   const criticMarkupExtensions = enableCriticMarkup
-    ? [criticMarkupExtension({ canAcceptReject: true }), keymap.of(criticMarkupKeymap)]
+    ? [criticMarkupExtension({ canAcceptReject: true, commentBadgeMap }), keymap.of(criticMarkupKeymap)]
     : [];
 
   const view = new EditorView({

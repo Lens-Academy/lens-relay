@@ -3,6 +3,8 @@ import type { EditorView } from 'codemirror';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { createSectionEditorView } from '../components/SectionEditor/createSectionEditorView';
+import type { CriticMarkupCommentBadgeInfo } from '../components/Editor/extensions/criticmarkup';
+import { setCommentBadgeMap } from '../components/Editor/extensions/criticmarkup';
 
 interface UseSectionEditorOpts {
   ytext: Y.Text | null;
@@ -20,6 +22,10 @@ interface UseSectionEditorOpts {
   /** Initial suggestion mode for criticmarkup-enabled editors. Ignored when
    *  enableCriticMarkup is false. */
   initialSuggestionMode?: boolean;
+  /** Local comment badge map for the edited slice, keyed by local positions.
+   *  Keeps section-editor badges numbered consistently with document-level
+   *  comment UI. */
+  commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
   /** Fires when the user clicks an inline comment badge (`cm-comment-badge`)
    *  in the editor. The argument is the absolute Y.Text position of the
    *  thread, translated from the section editor's local position. */
@@ -58,6 +64,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       awareness,
       enableCriticMarkup,
       initialSuggestionMode,
+      commentBadgeMap,
     } = optsRef.current;
 
     // Read the latest callback at click time so we don't capture a stale
@@ -77,6 +84,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       parent: mountRef.current,
       enableCriticMarkup,
       initialSuggestionMode,
+      commentBadgeMap,
       onCommentBadgeClick,
       onRequestAddComment,
     });
@@ -90,6 +98,13 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opts.active, opts.editKey, opts.enableCriticMarkup, opts.initialSuggestionMode]);
+
+  useEffect(() => {
+    if (!opts.enableCriticMarkup || !viewRef.current) return;
+    viewRef.current.dispatch({
+      effects: setCommentBadgeMap.of(opts.commentBadgeMap ?? null),
+    });
+  }, [opts.enableCriticMarkup, opts.commentBadgeMap]);
 
   return { mountRef, viewRef };
 }
