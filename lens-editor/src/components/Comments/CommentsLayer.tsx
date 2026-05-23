@@ -32,6 +32,17 @@ import {
 } from '../../lib/ytext-comment-ops';
 import type { CommentThread } from '../../lib/criticmarkup-parser';
 
+// ── Layout constants ─────────────────────────────────────────────────────────
+const COLUMN_WIDTH = 320;
+const CARD_GAP = 10;
+const DEFAULT_CARD_HEIGHT = 100;
+/**
+ * Cards within ACTIVE_WINDOW_MULTIPLIER viewports above the visible area, and
+ * (ACTIVE_WINDOW_MULTIPLIER + 1) viewports below, are kept in the layout.
+ * Cards outside that window receive weight = 0 (effectively hidden).
+ */
+const ACTIVE_WINDOW_MULTIPLIER = 2;
+
 export interface CommentsLayerProps {
   /** Y.Text containing the document content. */
   yText: Y.Text;
@@ -66,10 +77,10 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
   } = props;
 
   // ── Y.Text subscription ──────────────────────────────────────────────────
-  // We track a version counter so changes to Y.Text trigger re-renders.
-  const [textVersion, setTextVersion] = useState(0);
+  // Force a re-render whenever the Y.Text content changes.
+  const [, forceRerender] = useState(0);
   useEffect(() => {
-    const handler = () => setTextVersion((v) => v + 1);
+    const handler = () => forceRerender((v) => v + 1);
     yText.observe(handler);
     return () => yText.unobserve(handler);
   }, [yText]);
@@ -80,12 +91,11 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
   }, [yText]);
 
   // ── Thread parsing ────────────────────────────────────────────────────────
-  // textVersion is consumed here to ensure re-parse on Y.Text changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const allThreads: CommentThread[] = useCommentsFromText(
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    textVersion >= 0 ? yText.toString() : '',
-  ).filter((t) => t.comments[0]?.type === 'comment');
+  // useCommentsFromText is a plain function (not a hook), so calling it here
+  // with the current Y.Text snapshot is safe and idiomatic.
+  const allThreads: CommentThread[] = useCommentsFromText(yText.toString()).filter(
+    (t) => t.comments[0]?.type === 'comment',
+  );
 
   // ── Focus state ───────────────────────────────────────────────────────────
   const [focusedThreadKey, setFocusedThreadKey] = useState<number | null>(null);
@@ -104,7 +114,11 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     }
   }, [focusedThreadKey, editorRootRef]);
 
-  // Listen for comment-badge-focus CustomEvents from the criticmarkup extension.
+  // Listens for `comment-badge-focus` events dispatched by the criticmarkup
+  // extension's badge widget click handler. The extension was updated in Task 6
+  // of the unified-comments work to dispatch on `document` with
+  // `detail: { threadFrom }`; this listener will silently no-op until that
+  // change is in place.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ threadFrom: number }>).detail;
@@ -215,10 +229,9 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
       let weight = clamp01(1 - Math.abs(vy - mid) / (mid === 0 ? 1 : mid));
 
       // Zero out weight for threads far outside the active window.
-      if (
-        anchorY < viewport.top - 2 * viewport.height ||
-        anchorY > viewport.top + 3 * viewport.height
-      ) {
+      const windowAbove = ACTIVE_WINDOW_MULTIPLIER * viewport.height;
+      const windowBelow = (ACTIVE_WINDOW_MULTIPLIER + 1) * viewport.height;
+      if (anchorY < viewport.top - windowAbove || anchorY > viewport.top + windowBelow) {
         weight = 0;
       }
 
@@ -230,12 +243,12 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
       items.push({
         key: thread.from,
         anchorY,
-        height: cardHeightsRef.current.get(thread.from) ?? 100,
+        height: cardHeightsRef.current.get(thread.from) ?? DEFAULT_CARD_HEIGHT,
         weight,
       });
     }
 
-    setLayoutMap(computeWeightedLayout({ items, gap: 10 }));
+    setLayoutMap(computeWeightedLayout({ items, gap: CARD_GAP }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredThreadKeys, focusedThreadKey, layoutTick]);
 
@@ -266,7 +279,7 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
         position: 'absolute',
         top: 0,
         right: 0,
-        width: 320,
+        width: COLUMN_WIDTH,
         pointerEvents: 'none',
         // Establish stacking context so children can use z-index if needed.
         isolation: 'isolate',
