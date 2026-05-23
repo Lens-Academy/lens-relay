@@ -45,7 +45,7 @@ export function TutorInstructions({
   const onContainerClick = (e: ReactMouseEvent) => {
     if (handleClickRange) {
       const target = e.target as HTMLElement;
-      if (target.closest('[data-cm-from]')) return;
+      if (target.closest('.cm-comment-anchor')) return;
     }
     onEdit?.();
   };
