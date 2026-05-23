@@ -11,6 +11,7 @@ function renderThread(initial: string, options: {
   currentUser?: string;
   threadId?: string;
   onClose?: () => void;
+  readOnly?: boolean;
 } = {}) {
   const doc = new Y.Doc();
   const ytext = doc.getText('contents');
@@ -22,6 +23,7 @@ function renderThread(initial: string, options: {
       origin={ORIGIN}
       threadId={options.threadId ?? 'c1'}
       currentUser={options.currentUser ?? 'me@x'}
+      readOnly={options.readOnly}
       onClose={options.onClose ?? (() => {})}
     />
   );
@@ -142,6 +144,21 @@ describe('CommentThread', () => {
 
     expect(parseComments(ytext.toString())).toEqual([]);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('read-only mode shows thread content but hides mutation controls', () => {
+    renderThread(
+      '<!--lens-comment {"id":"c1","author":"me@x","ts":"t","body":"mine"}-->' +
+      '<!--lens-reply {"id":"r1","parent":"c1","author":"me@x","ts":"t1","body":"reply"}-->',
+      { currentUser: 'me@x', readOnly: true }
+    );
+
+    expect(screen.getByText('mine')).toBeInTheDocument();
+    expect(screen.getByText('reply')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /reply/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /send/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
   });
 
   it('pressing Escape calls onClose', async () => {

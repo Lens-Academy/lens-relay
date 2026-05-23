@@ -24,6 +24,7 @@ interface HtmlPreviewProps {
   onPlaceComplete?: (commentId: string) => void;
   onManualPlacement?: (candidates: Candidate[]) => void;
   probeRunner?: ProbeRunner;
+  readOnly?: boolean;
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -200,6 +201,7 @@ export function HtmlPreview({
   onPlaceComplete,
   onManualPlacement,
   probeRunner,
+  readOnly = false,
 }: HtmlPreviewProps) {
   const [content, setContent] = useState(() => ytext.toString());
   const [debounced, setDebounced] = useState(content);
@@ -375,6 +377,7 @@ export function HtmlPreview({
             origin={origin}
             threadId={openThreadId}
             currentUser={currentUser}
+            readOnly={readOnly}
             onClose={() => setOpenThreadId(null)}
           />
         </div>

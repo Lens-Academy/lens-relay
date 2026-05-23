@@ -15,6 +15,7 @@ interface CommentThreadProps {
   threadId: string;
   currentUser: string;
   onClose: () => void;
+  readOnly?: boolean;
 }
 
 type MessageMarker = CommentMarker | ReplyMarker;
@@ -48,11 +49,13 @@ function Message({
   currentUser,
   onEdit,
   onDelete,
+  readOnly,
 }: {
   msg: MessageMarker;
   currentUser: string;
   onEdit: (body: string) => void;
   onDelete: () => void;
+  readOnly: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(msg.body);
@@ -104,7 +107,7 @@ function Message({
         <div className="mt-1 whitespace-pre-wrap text-sm text-gray-800">{msg.body}</div>
       )}
 
-      {isOwn && !editing && (
+      {isOwn && !editing && !readOnly && (
         <div className="mt-2 flex gap-3">
           <button
             type="button"
@@ -131,7 +134,7 @@ function Message({
   );
 }
 
-export function CommentThread({ ytext, origin, threadId, currentUser, onClose }: CommentThreadProps) {
+export function CommentThread({ ytext, origin, threadId, currentUser, onClose, readOnly = false }: CommentThreadProps) {
   const snapshot = useCommentSnapshot(ytext, threadId);
   const [reply, setReply] = useState('');
 
@@ -190,6 +193,7 @@ export function CommentThread({ ytext, origin, threadId, currentUser, onClose }:
       <Message
         msg={snapshot.comment}
         currentUser={currentUser}
+        readOnly={readOnly}
         onEdit={body => editMessage(ytext, origin, { id: snapshot.comment.id, newBody: body })}
         onDelete={() => {
           deleteMessage(ytext, origin, snapshot.comment.id);
@@ -202,29 +206,32 @@ export function CommentThread({ ytext, origin, threadId, currentUser, onClose }:
           key={replyMarker.id}
           msg={replyMarker}
           currentUser={currentUser}
+          readOnly={readOnly}
           onEdit={body => editMessage(ytext, origin, { id: replyMarker.id, newBody: body })}
           onDelete={() => deleteMessage(ytext, origin, replyMarker.id)}
         />
       ))}
 
-      <form className="border-t border-gray-100 p-3" onSubmit={submitReply}>
-        <textarea
-          aria-label="Reply"
-          placeholder="Reply..."
-          className="w-full rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-400"
-          value={reply}
-          onChange={event => setReply(event.target.value)}
-        />
-        <div className="mt-2 flex justify-end">
-          <button
-            type="submit"
-            className="rounded bg-gray-900 px-3 py-1 text-xs text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-300"
-            disabled={reply.trim() === ''}
-          >
-            Send
-          </button>
-        </div>
-      </form>
+      {!readOnly && (
+        <form className="border-t border-gray-100 p-3" onSubmit={submitReply}>
+          <textarea
+            aria-label="Reply"
+            placeholder="Reply..."
+            className="w-full rounded border border-gray-300 px-2 py-1 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-gray-400"
+            value={reply}
+            onChange={event => setReply(event.target.value)}
+          />
+          <div className="mt-2 flex justify-end">
+            <button
+              type="submit"
+              className="rounded bg-gray-900 px-3 py-1 text-xs text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-300"
+              disabled={reply.trim() === ''}
+            >
+              Send
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }

@@ -87,6 +87,30 @@ describe('HtmlPreview bridge integration', () => {
     expect(screen.getByText('question')).toBeInTheDocument();
   });
 
+  it('opens existing comment threads read-only without allowing edits or replies', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>Hi</p><!--lens-comment {"id":"c1","author":"me@x","ts":"t","body":"question"}-->');
+
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} readOnly />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: { type: 'dot-clicked', payload: { id: 'c1' } },
+      });
+    });
+
+    expect(screen.getByText('question')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /reply/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /send/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    expect(parseComments(ytext.toString())[0].comment.body).toBe('question');
+    expect(parseComments(ytext.toString())[0].replies).toEqual([]);
+  });
+
   it('ignores bridge messages from sources other than the iframe contentWindow', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
