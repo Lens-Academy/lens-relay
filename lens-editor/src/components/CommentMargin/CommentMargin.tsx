@@ -4,7 +4,7 @@ import { useComments } from '../CommentsPanel/useComments';
 import { CommentCard } from './CommentCard';
 import { NewCommentCard } from './NewCommentCard';
 import { insertCommentAt, scrollToPosition } from '../../lib/comment-utils';
-import { focusedThreadField, focusCommentThread } from '../Editor/extensions/criticmarkup';
+// TODO(unified-comments task 10): delete with the rest of CommentMargin
 import {
   resolveOverlaps,
   resolveOverlapsAnchored,
@@ -39,7 +39,7 @@ export function CommentMargin({
   const mapper: PositionMapper = positionMapper ?? ((pos) => view.lineBlockAt(pos).top);
 
   const threads = useComments(view);
-  const focusedThreadFrom = view.state.field(focusedThreadField);
+  const focusedThreadFrom: number | null = null; // TODO(unified-comments task 10): delete with CommentMargin
   const [showNewComment, setShowNewComment] = useState(false);
   const [newCommentY, setNewCommentY] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -180,16 +180,9 @@ export function CommentMargin({
               badgeNumber={badgeNumber}
               focused={focusedThreadFrom === thread.from}
               onFocus={() => {
-                const current = view.state.field(focusedThreadField);
-                if (current === thread.from) {
-                  // Toggle off — no scroll needed
-                  view.dispatch({ effects: focusCommentThread.of(null) });
-                } else {
-                  // Focus + scroll in one dispatch to avoid clobbering
-                  scrollToPosition(view, thread.comments[0].contentFrom, [
-                    focusCommentThread.of(thread.from),
-                  ]);
-                }
+                // TODO(unified-comments task 10): delete with CommentMargin
+                // Focus now managed by CommentsLayer via CustomEvent; no-op here
+                scrollToPosition(view, thread.comments[0].contentFrom, []);
               }}
               onReply={(content) => handleReply(thread.to, content)}
               onScrollToComment={() => {}}

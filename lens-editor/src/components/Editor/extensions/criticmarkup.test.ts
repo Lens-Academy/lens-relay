@@ -4,7 +4,7 @@ import { EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
-import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, focusCommentThread } from './criticmarkup';
+import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
 
 describe('CriticMarkup Extension', () => {
@@ -830,7 +830,7 @@ describe('CriticMarkup Extension', () => {
       expect(badge?.getAttribute('data-thread-from')).toBe('6');
     });
 
-    it('dispatches focusCommentThread effect on badge click', () => {
+    it('dispatches comment-badge-focus CustomEvent on badge click', () => {
       const { view, cleanup: c } = createCriticMarkupEditor(
         'hello {>>a comment<<} end',
         0
@@ -840,24 +840,14 @@ describe('CriticMarkup Extension', () => {
       const badge = view.contentDOM.querySelector('.cm-comment-badge') as HTMLElement;
       expect(badge).not.toBeNull();
 
-      // Listen for the effect
       let receivedFrom: number | undefined;
-      const originalDispatch = view.dispatch.bind(view);
-      view.dispatch = (...args: Parameters<typeof view.dispatch>) => {
-        for (const arg of args) {
-          if (arg && typeof arg === 'object' && 'effects' in arg) {
-            const effects = Array.isArray(arg.effects) ? arg.effects : [arg.effects];
-            for (const effect of effects) {
-              if (effect && effect.is && effect.is(focusCommentThread)) {
-                receivedFrom = effect.value;
-              }
-            }
-          }
-        }
-        return originalDispatch(...args);
+      const handler = (e: Event) => {
+        receivedFrom = (e as CustomEvent<{ threadFrom: number }>).detail?.threadFrom;
       };
+      document.addEventListener('comment-badge-focus', handler);
 
       badge.click();
+      document.removeEventListener('comment-badge-focus', handler);
       expect(receivedFrom).toBe(6); // thread.from
     });
   });

@@ -16,7 +16,6 @@ import { remoteCursorTheme } from '../Editor/remoteCursorTheme';
 import {
   criticMarkupExtension,
   toggleSuggestionMode,
-  focusedThreadField,
 } from '../Editor/extensions/criticmarkup';
 import type { CriticMarkupCommentBadgeInfo } from '../Editor/extensions/criticmarkup';
 import { criticMarkupKeymap } from '../Editor/extensions/criticmarkup-commands';
@@ -149,23 +148,22 @@ export function createSectionEditorView(opts: {
 
   // Bridge the criticmarkup plugin's `comment-badge-focus` CustomEvent (fired
   // when the user clicks a `cm-comment-badge` widget) into the React layer.
-  // The plugin's stopPropagation prevents normal DOM bubbling from reaching
-  // any container click handler, so we must subscribe to the custom event
-  // directly. Translate the local CodeMirror position to an absolute Y.Text
-  // position by adding the section's start offset.
+  // The event is dispatched on `document` with detail: { threadFrom: number }.
+  // Translate the local CodeMirror position to an absolute Y.Text position by
+  // adding the section's start offset.
   if (enableCriticMarkup && onCommentBadgeClick) {
-    const handler = () => {
-      const localFrom = view.state.field(focusedThreadField);
+    const handler = (e: Event) => {
+      const localFrom = (e as CustomEvent<{ threadFrom: number }>).detail?.threadFrom;
       if (localFrom != null) {
         onCommentBadgeClick(sectionFrom + localFrom);
       }
     };
-    view.dom.addEventListener('comment-badge-focus', handler);
+    document.addEventListener('comment-badge-focus', handler);
     // Tear down with the view so we don't leak the listener if anything
     // else holds onto view.dom longer than expected.
     const origDestroy = view.destroy.bind(view);
     view.destroy = () => {
-      view.dom.removeEventListener('comment-badge-focus', handler);
+      document.removeEventListener('comment-badge-focus', handler);
       origDestroy();
     };
   }
