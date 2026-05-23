@@ -106,7 +106,7 @@ Lens preprocesses the user's HTML before setting `srcdoc`:
 1. If source contains `<head>` (case-insensitive), inject `<script>BRIDGE_SOURCE</script>` as the first child of `<head>`.
 2. Otherwise, prepend `<script>BRIDGE_SOURCE</script>\n` to the source.
 
-Browsers' tolerant HTML parsing accepts both forms. The injected script is a single build-time-bundled module, identical across docs, with a build-time hash used by the parent to confirm "ready" messages come from a script Lens shipped (and not a user-script masquerading).
+Browsers' tolerant HTML parsing accepts both forms. The injected script is a single build-time-bundled module, identical across docs.
 
 ### Postmessage protocol
 
@@ -116,7 +116,7 @@ All messages are JSON objects with `type`, `nonce`, and `payload` fields.
 
 | Type | Payload | Purpose |
 |---|---|---|
-| `init` | `{ nonce, comments: [{id, ...}] }` | Sent after iframe load. Provides the per-iframe nonce for message authentication; lists known comments so bridge can render dots. |
+| `init` | `{ nonce, comments: [{id, ...}] }` | Sent after iframe load. Provides the per-iframe nonce used to bind later messages to this iframe/channel; lists known comments so bridge can render dots. |
 | `enable-click-to-place` | `{}` | Switch bridge into "next click is a placement gesture" mode. |
 | `disable-click-to-place` | `{}` | Cancel placement mode. |
 | `find-probe` | `{ token }` | (Hidden iframe only) Locate `<!--lens-probe TOKEN-->`, report rect of nearest rendered neighbor. |
@@ -127,17 +127,19 @@ All messages are JSON objects with `type`, `nonce`, and `payload` fields.
 
 | Type | Payload | Purpose |
 |---|---|---|
-| `ready` | `{ scriptHash }` | Confirms bridge loaded; echoes its build hash. Parent verifies hash matches expected. |
+| `ready` | `{}` | Confirms bridge loaded; carries no payload. Parent accepts it only from the expected `event.source`; no script hash is used. |
 | `click-captured` | `{ fingerprint }` | Click handler fired during placement mode; fingerprint as described above. |
 | `dot-clicked` | `{ id }` | User clicked a comment dot overlay. |
 | `probe-found` | `{ token, rect | null }` | Response to `find-probe`. `rect: null` if token not found. |
 | `comments-rendered` | `{ found: [id], orphaned: [id] }` | After each rendering pass, reports which comment ids had/lacked DOM anchors. |
 
-### Authentication
+### Channel validation and security
 
-Each iframe gets a unique 16-byte hex nonce on init. Parent ignores any postMessage whose `event.source !== iframe.contentWindow` or whose `nonce` field doesn't match the one assigned to that iframe. Bridge stores the nonce from `init` and ignores any subsequent parent message whose nonce doesn't match.
+Each iframe gets a unique 16-byte hex nonce on init. Parent ignores any postMessage whose `event.source !== iframe.contentWindow` or whose `nonce` field doesn't match the one assigned to that iframe. Bridge stores the nonce from `init` and ignores any subsequent parent message whose nonce doesn't match. Together, `event.source` and nonce identify the iframe/channel and protect the parent from messages sent by unrelated outside windows.
 
-The `ready` message from the bridge is a special case: it's sent before `init`, so it carries no nonce. Parent validates `event.source` and the `scriptHash` field on `ready`, then replies with `init` carrying the nonce.
+The nonce is not authentication of Lens-controlled bridge code. Scripts running inside the same sandboxed iframe can observe and reuse the nonce. Parent handlers must treat every bridge payload as untrusted: gate mutations by editor state and document permissions, validate payload shapes before use, and never rely on the nonce as proof that a message was produced by Lens code.
+
+The `ready` message from the bridge is a special case: it's sent before `init`, so it carries no nonce. Parent validates `event.source`, then replies with `init` carrying the nonce.
 
 ### Rendering dots
 
@@ -181,8 +183,8 @@ Verification step: confirm that `lens-comment` and `lens-reply` markers in sourc
 
 **New files:**
 
-- `src/components/HtmlEditor/bridge/bridge-script.ts` — the injected bridge source as a template literal (built into a string at compile time, with the build hash inlined).
-- `src/components/HtmlEditor/bridge/protocol.ts` — message types, nonce/hash helpers, shared between parent and bridge.
+- `src/components/HtmlEditor/bridge/bridge-script.ts` — the injected bridge source built into a string at compile time.
+- `src/components/HtmlEditor/bridge/protocol.ts` — message types plus nonce/envelope helpers, shared between parent and bridge.
 - `src/components/HtmlEditor/CommentThread.tsx` — popover UI (thread display, reply input, edit/delete on own messages).
 - `src/components/HtmlEditor/comment-store.ts` — pure functions: parse markers out of a source string, serialize comments back, atomic edit/delete helpers that operate on `Y.Text`.
 - `src/components/HtmlEditor/position-finder.ts` — fingerprint scoring, probe-verify orchestration, hidden-iframe lifecycle.
@@ -217,7 +219,7 @@ Verification step: confirm that `lens-comment` and `lens-reply` markers in sourc
 - Message round-trip with valid nonce → handled.
 - Wrong nonce → ignored (no handler called).
 - Wrong source → ignored.
-- `ready` validates `scriptHash` against expected build hash.
+- `ready` with the expected iframe source is accepted; script hash verification is intentionally absent.
 
 **Bridge integration (component test in happy-dom):**
 
@@ -259,7 +261,7 @@ Verification step: confirm that `lens-comment` and `lens-reply` markers in sourc
 - **Resolve state:** none in v2.
 - **Position-finding:** fingerprint-first, probe-verify fallback, manual split-source last resort.
 - **Probe-verify mechanism:** hidden iframe with same sandbox, re-render per candidate (up to 5).
-- **Bridge:** injected at top of srcdoc; nonce-authenticated postMessage RPC; build-hash-verified at `ready`.
+- **Bridge:** injected at top of srcdoc; postMessage RPC scoped by `event.source` and per-iframe nonce after `ready`.
 - **Preview UI:** inline 💬 dots at anchors + floating popover for threads.
 - **Create flow:** comment-mode toggle + click in preview.
 - **Source UI:** raw marker text in CodeMirror; orphans shown in sidebar.
