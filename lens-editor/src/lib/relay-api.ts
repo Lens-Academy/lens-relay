@@ -6,7 +6,7 @@ import { RELAY_ID } from './constants';
 
 // Transaction origin identifier - Obsidian uses this pattern to identify
 // the source of Y.js changes and avoid processing its own updates
-const LENS_EDITOR_ORIGIN = 'lens-editor';
+export const LENS_EDITOR_ORIGIN = 'lens-editor';
 
 /**
  * Get share token for relay proxy auth.
