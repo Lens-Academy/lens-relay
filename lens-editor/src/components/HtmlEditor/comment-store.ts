@@ -1,3 +1,5 @@
+import type * as Y from 'yjs';
+
 export interface CommentMarker {
   kind: 'comment';
   id: string;
@@ -136,4 +138,157 @@ export function parseComments(source: string): CommentCluster[] {
     }
   }
   return clusters;
+}
+
+export interface AddCommentInput {
+  id: string;
+  author: string;
+  ts: string;
+  body: string;
+  position: number;
+}
+
+export function addComment(ytext: Y.Text, origin: unknown, input: AddCommentInput): void {
+  const marker = serializeComment({
+    kind: 'comment',
+    id: input.id,
+    author: input.author,
+    ts: input.ts,
+    body: input.body,
+  });
+  ytext.doc!.transact(() => {
+    ytext.insert(input.position, marker);
+  }, origin);
+}
+
+export interface AddReplyInput {
+  id: string;
+  parent: string;
+  author: string;
+  ts: string;
+  body: string;
+}
+
+export function addReply(ytext: Y.Text, origin: unknown, input: AddReplyInput): void {
+  const source = ytext.toString();
+  const clusters = parseComments(source);
+  const cluster = clusters.find(c => c.comment.id === input.parent);
+  if (!cluster) throw new Error(`addReply: no parent comment with id ${input.parent}`);
+  const insertAt = cluster.sourceEnd;
+  const marker = serializeReply({
+    kind: 'reply',
+    id: input.id,
+    parent: input.parent,
+    author: input.author,
+    ts: input.ts,
+    body: input.body,
+  });
+  ytext.doc!.transact(() => {
+    ytext.insert(insertAt, marker);
+  }, origin);
+}
+
+interface MessageLocation {
+  start: number;
+  end: number;
+  kind: 'comment' | 'reply';
+  current: CommentMarker | ReplyMarker;
+}
+
+function payloadMatchesComment(payload: Record<string, string> | null, comment: CommentMarker): boolean {
+  return payload?.id === comment.id &&
+    payload.author === comment.author &&
+    payload.ts === comment.ts &&
+    payload.body === comment.body;
+}
+
+function payloadMatchesReply(payload: Record<string, string> | null, reply: ReplyMarker): boolean {
+  return payload?.id === reply.id &&
+    payload.parent === reply.parent &&
+    payload.author === reply.author &&
+    payload.ts === reply.ts &&
+    payload.body === reply.body;
+}
+
+function findValidReplyInCluster(source: string, cluster: CommentCluster, reply: ReplyMarker): MessageLocation | null {
+  let from = cluster.sourceStart;
+  while (from < cluster.sourceEnd) {
+    const found = findNextMarker(source, from);
+    if (!found || found.start >= cluster.sourceEnd) return null;
+    from = found.markerEnd;
+    if (found.markerEnd > cluster.sourceEnd || found.kind !== 'reply') continue;
+    const payload = parsePayload(source.slice(found.payloadStart, found.payloadEnd));
+    if (!payloadMatchesReply(payload, reply)) continue;
+    return {
+      start: found.start,
+      end: found.markerEnd,
+      kind: 'reply',
+      current: reply,
+    };
+  }
+  return null;
+}
+
+function findMessage(source: string, id: string): MessageLocation | null {
+  const clusters = parseComments(source);
+  for (const cluster of clusters) {
+    if (cluster.comment.id === id) {
+      const found = findNextMarker(source, cluster.sourceStart);
+      if (!found || found.start !== cluster.sourceStart || found.kind !== 'comment') return null;
+      const payload = parsePayload(source.slice(found.payloadStart, found.payloadEnd));
+      if (!payloadMatchesComment(payload, cluster.comment)) return null;
+      return {
+        start: found.start,
+        end: found.markerEnd,
+        kind: 'comment',
+        current: cluster.comment,
+      };
+    }
+    const reply = cluster.replies.find(r => r.id === id);
+    if (!reply) continue;
+    return findValidReplyInCluster(source, cluster, reply);
+  }
+  return null;
+}
+
+function findDeleteTarget(source: string, id: string): { start: number; end: number } | null {
+  const clusters = parseComments(source);
+  for (const cluster of clusters) {
+    if (cluster.comment.id === id) {
+      return { start: cluster.sourceStart, end: cluster.sourceEnd };
+    }
+    const reply = cluster.replies.find(r => r.id === id);
+    if (!reply) continue;
+    const loc = findValidReplyInCluster(source, cluster, reply);
+    if (!loc) throw new Error(`deleteMessage: reply ${id} bounds not found`);
+    return { start: loc.start, end: loc.end };
+  }
+  return null;
+}
+
+export interface EditMessageInput {
+  id: string;
+  newBody: string;
+}
+
+export function editMessage(ytext: Y.Text, origin: unknown, input: EditMessageInput): void {
+  const source = ytext.toString();
+  const loc = findMessage(source, input.id);
+  if (!loc) throw new Error(`editMessage: no message with id ${input.id}`);
+  const replacement = loc.kind === 'comment'
+    ? serializeComment({ ...(loc.current as CommentMarker), body: input.newBody })
+    : serializeReply({ ...(loc.current as ReplyMarker), body: input.newBody });
+  ytext.doc!.transact(() => {
+    ytext.delete(loc.start, loc.end - loc.start);
+    ytext.insert(loc.start, replacement);
+  }, origin);
+}
+
+export function deleteMessage(ytext: Y.Text, origin: unknown, id: string): void {
+  const source = ytext.toString();
+  const target = findDeleteTarget(source, id);
+  if (!target) throw new Error(`deleteMessage: no message with id ${id}`);
+  ytext.doc!.transact(() => {
+    ytext.delete(target.start, target.end - target.start);
+  }, origin);
 }
