@@ -22,6 +22,13 @@ describe('renderMarkdownWithCriticMarkup', () => {
     expect(ins?.textContent).toContain('added');
   });
 
+  it('keeps inline additions in the same paragraph flow', () => {
+    const { container } = render(<>{renderMarkdownWithCriticMarkup('Before {++added++} after.')}</>);
+
+    expect(container.querySelector('p')).toBeNull();
+    expect(container.innerHTML).toMatch(/^Before\s*<ins[\s\S]*<\/ins>\s*after\.$/);
+  });
+
   it('wraps deletions in a <del> with the cm-deletion class', () => {
     const { container } = render(<>{renderMarkdownWithCriticMarkup('Before {--removed--} after.')}</>);
     const del = container.querySelector('del.cm-deletion');

@@ -240,8 +240,9 @@ export function sliceCommentBadgeMap(
 
 /**
  * Render a markdown source string with criticmarkup ranges visualized inline.
- * Plain segments around the criticmarkup ranges are rendered as block
- * markdown; criticmarkup ranges are rendered as styled inline spans.
+ * Plain segments around the criticmarkup ranges are rendered inline so
+ * criticmarkup in the middle of a sentence does not split the sentence into
+ * separate paragraphs.
  *
  * Limitation: a criticmarkup range that spans multiple block boundaries
  * (rare in practice) will not preserve flow across the boundary. Authors
@@ -273,7 +274,7 @@ export function renderMarkdownWithCriticMarkup(
     }
     if (range.from > cursor) {
       const plain = source.slice(cursor, range.from);
-      nodes.push(<BlockMarkdown key={`p-${key++}`} source={plain} />);
+      nodes.push(<InlineMarkdown key={`p-${key++}`} source={plain} />);
     }
     nodes.push(
       <CriticMarkupSpan
@@ -289,7 +290,7 @@ export function renderMarkdownWithCriticMarkup(
   }
   if (cursor < source.length) {
     const plain = source.slice(cursor);
-    nodes.push(<BlockMarkdown key={`p-${key++}`} source={plain} />);
+    nodes.push(<InlineMarkdown key={`p-${key++}`} source={plain} />);
   }
 
   return <>{nodes}</>;
