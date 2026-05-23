@@ -40,6 +40,24 @@ describe('HtmlSourceEditor', () => {
     expect(container.querySelectorAll('.cm-lens-candidate').length).toBeGreaterThanOrEqual(2);
   });
 
+  it('renders unsorted highlight decorations without crashing', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>alpha</p><p>beta</p><p>beta</p>');
+    const awareness = new Awareness(doc);
+
+    const { container } = render(
+      <HtmlSourceEditor
+        ytext={ytext}
+        awareness={awareness}
+        highlightRanges={[{ from: 24, to: 28 }, { from: 15, to: 19 }]}
+      />,
+    );
+
+    expect(container.querySelector('.cm-editor')).not.toBeNull();
+    expect(container.querySelectorAll('.cm-lens-candidate').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('updates highlight decorations without recreating the editor', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');

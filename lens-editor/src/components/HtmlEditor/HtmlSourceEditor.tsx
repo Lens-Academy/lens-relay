@@ -63,6 +63,7 @@ const highlightField = StateField.define<DecorationSet>({
               to: Math.max(0, Math.min(range.to, docLength)),
             }))
             .filter(range => range.to > range.from)
+            .sort((a, b) => a.from - b.from || a.to - b.to)
             .map(range => Decoration.mark({ class: 'cm-lens-candidate' }).range(range.from, range.to)),
         );
       }
