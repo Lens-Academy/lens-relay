@@ -100,13 +100,13 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     });
   }, [editorView, isSourceMode, isSuggestionMode]);
 
-  // Open comment margin when a comment badge is clicked
+  // Open comment margin when a comment badge is clicked.
+  // Badge clicks are dispatched on `document` by the criticmarkup extension.
   useEffect(() => {
-    if (!editorView) return;
     const handler = () => manager.expand('comment-margin');
-    editorView.dom.addEventListener('comment-badge-focus', handler);
-    return () => editorView.dom.removeEventListener('comment-badge-focus', handler);
-  }, [editorView, manager.expand]);
+    document.addEventListener('comment-badge-focus', handler);
+    return () => document.removeEventListener('comment-badge-focus', handler);
+  }, [manager.expand]);
 
   // Auto-collapse comment margin on notes without comments (after initial Y.Doc sync)
   const initialCommentCheckRef = useRef(false);

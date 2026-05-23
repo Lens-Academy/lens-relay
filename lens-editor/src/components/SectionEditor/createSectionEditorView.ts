@@ -151,6 +151,11 @@ export function createSectionEditorView(opts: {
   // The event is dispatched on `document` with detail: { threadFrom: number }.
   // Translate the local CodeMirror position to an absolute Y.Text position by
   // adding the section's start offset.
+  //
+  // TODO(unified-comments task 9): once CommentsLayer is mounted in the course
+  // editor, this listener becomes redundant — CommentsLayer handles badge focus
+  // directly via its own document listener. Remove this listener and the
+  // `onCommentBadgeClick` opt entirely as part of Task 9.
   if (enableCriticMarkup && onCommentBadgeClick) {
     const handler = (e: Event) => {
       const localFrom = (e as CustomEvent<{ threadFrom: number }>).detail?.threadFrom;

@@ -78,9 +78,11 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
 
   // ── Y.Text subscription ──────────────────────────────────────────────────
   // Force a re-render whenever the Y.Text content changes.
-  const [, forceRerender] = useState(0);
+  // `textRevision` is also used as a dep in the class-toggle effect below so
+  // that the focused badge class re-attaches after decoration rebuilds.
+  const [textRevision, setTextRevision] = useState(0);
   useEffect(() => {
-    const handler = () => forceRerender((v) => v + 1);
+    const handler = () => setTextRevision((v) => v + 1);
     yText.observe(handler);
     return () => yText.unobserve(handler);
   }, [yText]);
@@ -112,7 +114,7 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
         .querySelectorAll(`.cm-comment-badge[data-thread-from="${focusedThreadKey}"]`)
         .forEach((el) => el.classList.add('cm-comment-badge--focused'));
     }
-  }, [focusedThreadKey, editorRootRef]);
+  }, [focusedThreadKey, editorRootRef, textRevision]);
 
   // Listens for `comment-badge-focus` events dispatched by the criticmarkup
   // extension's badge widget click handler. The extension was updated in Task 6
