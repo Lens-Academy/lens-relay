@@ -453,23 +453,11 @@
   background-color: rgba(59, 130, 246, 0.3);
 }
 
-/* Focused comment badge in editor - dark blue fill */
-.cm-comment-focused-line .cm-comment-badge {
-  background-color: #1d4ed8;
-  color: #ffffff;
-  border-color: #1d4ed8;
-}
-
 /* Focused badge class toggled externally by CommentsLayer */
 .cm-comment-badge.cm-comment-badge--focused {
   background-color: #2563eb;
   color: #ffffff;
   border-color: #2563eb;
-}
-
-/* Focused comment thread line highlight in editor */
-.cm-comment-focused-line {
-  background-color: rgba(75, 85, 99, 0.08);
 }
 
 /* ToC heading flash highlight */
