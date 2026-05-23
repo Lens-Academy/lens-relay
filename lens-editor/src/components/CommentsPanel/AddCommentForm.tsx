@@ -7,6 +7,10 @@ interface AddCommentFormProps {
   placeholder?: string;
   submitLabel?: string;
   autoFocus?: boolean;
+  /** Pre-populates the textarea — used by the comments sidebar's Edit flow so
+   *  the user sees the existing comment text and can amend it instead of
+   *  retyping from scratch. Defaults to empty (the new-comment flow). */
+  initialValue?: string;
 }
 
 export function AddCommentForm({
@@ -15,13 +19,22 @@ export function AddCommentForm({
   placeholder = 'Add a comment...',
   submitLabel = 'Add',
   autoFocus = true,
+  initialValue = '',
 }: AddCommentFormProps) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (autoFocus && textareaRef.current) {
       textareaRef.current.focus();
+      // Place caret at end of any pre-populated value so the user can
+      // immediately keep typing without selecting first.
+      const len = textareaRef.current.value.length;
+      try {
+        textareaRef.current.setSelectionRange(len, len);
+      } catch {
+        // Some browsers reject setSelectionRange on certain element states.
+      }
     }
   }, [autoFocus]);
 

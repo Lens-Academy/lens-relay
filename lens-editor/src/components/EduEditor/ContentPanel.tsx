@@ -19,6 +19,14 @@ import {
   QuestionRenderer,
   HeadingRenderer,
 } from './ContentPanel/renderers';
+import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
+import {
+  buildGlobalCommentBadgeMap,
+  sliceCommentBadgeMap,
+} from '../../lib/criticmarkup-render';
+import { ContextMenu } from '../Editor/ContextMenu';
+import type { ContextMenuItem } from '../Editor/extensions/criticmarkup-context-menu';
+import { getContextMenuItems } from '../Editor/extensions/criticmarkup-context-menu';
 
 export type ContentScope =
   | { kind: 'full-doc'; docId: string; docName: string; docPath: string }
@@ -26,6 +34,36 @@ export type ContentScope =
 
 interface ContentPanelProps {
   scope: ContentScope | null;
+  /** Master switch for the criticmarkup feature inside this panel. When false,
+   *  text/heading sections render exactly as before. When true, criticmarkup
+   *  syntax is rendered inline, the section editor gets the criticmarkup
+   *  extension stack, and clicks on criticmarkup ranges fire onClickCriticRange. */
+  criticMarkupEnabled?: boolean;
+  /** Initial suggestion mode for criticmarkup-enabled section editors. */
+  suggestionMode?: boolean;
+  /** Called when the active section editor's cursor moves (or the editor
+   *  closes). The argument is the absolute Y.Text offset, or null when no
+   *  section editor is active. EduEditor uses this to drive the comments
+   *  sidebar's "+ Add Comment" button. */
+  onCommentInsertPosChange?: (pos: number | null) => void;
+  /** Called when the user clicks an inline criticmarkup span — typically a
+   *  comment marker — in a rendered (non-editing) section. */
+  onClickCriticRange?: (range: CriticMarkupRange) => void;
+  /** Called when the user invokes the "Add Comment" entry point — either the
+   *  Ctrl/Cmd+Shift+M shortcut inside the active section editor or the
+   *  right-click "Add Comment" menu item. The current cursor position has
+   *  already been reported up via onCommentInsertPosChange, so the parent
+   *  just needs to open its add-comment UI. */
+  onRequestAddComment?: () => void;
+  /** Ref to the scroll container ContentPanel renders inside. Used as the
+   *  IntersectionObserver root so the scroll-spy can resolve which comment
+   *  markers are currently visible. */
+  scrollRootRef?: React.RefObject<HTMLElement | null>;
+  /** Fires when the topmost-visible comment marker in the scroll container
+   *  changes. Argument is the marker's absolute Y.Text position, or null
+   *  when none are visible. EduEditor uses this to keep the sidebar
+   *  auto-scrolled to the comments for the section currently on screen. */
+  onVisibleCommentChange?: (absoluteFrom: number | null) => void;
 }
 
 /**
@@ -109,7 +147,16 @@ function proseFieldForType(type: string): string | null {
   return null;
 }
 
-export function ContentPanel({ scope }: ContentPanelProps) {
+export function ContentPanel({
+  scope,
+  criticMarkupEnabled = false,
+  suggestionMode = false,
+  onCommentInsertPosChange,
+  onClickCriticRange,
+  onRequestAddComment,
+  scrollRootRef,
+  onVisibleCommentChange,
+}: ContentPanelProps) {
   const { getOrConnect } = useDocConnection();
   const { metadata, folderNames } = useNavigation();
   const [sections, setSections] = useState<Section[]>([]);
@@ -117,7 +164,25 @@ export function ContentPanel({ scope }: ContentPanelProps) {
   const [frontmatter, setFrontmatter] = useState<Map<string, string>>(new Map());
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingFmField, setEditingFmField] = useState<string | null>(null); // frontmatter field name being edited
+  // Latest Y.Text string — kept in state so the document-wide comment badge
+  // map recomputes on every doc change (including inserts from other clients).
+  const [docText, setDocText] = useState<string>('');
   const ytextRef = useRef<Y.Text | null>(null);
+
+  // Right-click context menu state for the active section editor. Mirrors
+  // the markdown editor's ContextMenu flow.
+  const [contextMenu, setContextMenu] = useState<{
+    items: ContextMenuItem[];
+    position: { x: number; y: number };
+  } | null>(null);
+
+  // Document-wide comment badge map — keyed by ABSOLUTE Y.Text positions.
+  // Built once per docText change and sliced per field/section so badge
+  // numbers stay linear across the same document, including while a single
+  // field is open in CodeMirror.
+  const globalBadgeMap = criticMarkupEnabled
+    ? buildGlobalCommentBadgeMap(docText)
+    : new Map();
 
   // Compute the editing range
   const editRange = (() => {
@@ -154,13 +219,154 @@ export function ContentPanel({ scope }: ContentPanelProps) {
 
   const editKey = editingFmField ?? (editingIndex !== null ? `section-${editingIndex}` : null);
 
-  const { mountRef } = useSectionEditor({
+  // Only opt the section editor into criticmarkup for free-text section types.
+  // Frontmatter-field edits and structured field edits stay plain.
+  const editingSectionType: string | null = (() => {
+    if (editingIndex === null) return null;
+    return sections[editingIndex]?.type ?? null;
+  })();
+  // Any section whose visible content is free-form prose should get the
+  // criticmarkup extension stack in its section editor — so comments and
+  // suggestions added there render as widgets, not raw markup.
+  const sectionAllowsCriticMarkup =
+    editingSectionType === 'text' ||
+    editingSectionType === 'heading' ||
+    editingSectionType === 'chat' ||
+    editingSectionType === 'question';
+  const sectionEditorCriticMarkup = criticMarkupEnabled && sectionAllowsCriticMarkup;
+  const editorCommentBadgeMap = sectionEditorCriticMarkup
+    ? sliceCommentBadgeMap(globalBadgeMap, editRange.from, Math.max(0, editRange.to - editRange.from))
+    : undefined;
+
+  const { mountRef, viewRef: sectionViewRef } = useSectionEditor({
     ytext: ytextRef.current,
     sectionFrom: editRange.from,
     sectionTo: editRange.to,
     active: isEditing,
     editKey,
+    enableCriticMarkup: sectionEditorCriticMarkup,
+    initialSuggestionMode: suggestionMode,
+    commentBadgeMap: editorCommentBadgeMap,
+    // Inline `cm-comment-badge` clicks inside the active section editor
+    // bubble through here. The position is already absolute (the bridge in
+    // createSectionEditorView added the section's offset). We synthesize a
+    // minimal CriticMarkupRange so the parent's existing handler signature
+    // doesn't have to change.
+    onCommentBadgeClick: onClickCriticRange
+      ? (absoluteFrom: number) => {
+          onClickCriticRange({
+            type: 'comment',
+            from: absoluteFrom,
+            to: absoluteFrom,
+            contentFrom: absoluteFrom,
+            contentTo: absoluteFrom,
+            content: '',
+          });
+        }
+      : undefined,
+    // Mod-Shift-m inside the section editor → flush the current cursor
+    // position upward (so the sidebar's `insertAtPos` is current) then
+    // signal the parent to open its add-comment UI.
+    onRequestAddComment: onRequestAddComment
+      ? () => {
+          const view = sectionViewRef.current;
+          if (view && onCommentInsertPosChange) {
+            onCommentInsertPosChange(editRange.from + view.state.selection.main.head);
+          }
+          onRequestAddComment();
+        }
+      : undefined,
   });
+
+  // Right-click handler for the active criticmarkup-enabled section editor.
+  // Builds a context menu that combines criticmarkup actions (Accept/Reject
+  // when the click lands inside a markup range) with an always-present
+  // "Add Comment" item — same UX as the markdown editor's ContextMenu.
+  const handleSectionContextMenu = (e: React.MouseEvent) => {
+    if (!sectionEditorCriticMarkup) return;
+    const view = sectionViewRef.current;
+    if (!view) return;
+    const clickPos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (clickPos == null) return;
+
+    const markupItems = getContextMenuItems(view, clickPos);
+    const items: ContextMenuItem[] = [...markupItems];
+    if (onRequestAddComment) {
+      items.push({
+        label: 'Add Comment',
+        shortcut: 'Ctrl+Shift+M',
+        action: () => {
+          // Move the cursor to the right-clicked position so the new comment
+          // anchors there, then push the absolute position up to the
+          // sidebar (synchronously — relying on focus/keyup events would miss
+          // a programmatic dispatch).
+          view.dispatch({ selection: { anchor: clickPos } });
+          view.focus();
+          onCommentInsertPosChange?.(editRange.from + clickPos);
+          onRequestAddComment();
+        },
+      });
+    }
+
+    if (items.length === 0) return;
+
+    e.preventDefault();
+    setContextMenu({ items, position: { x: e.clientX, y: e.clientY } });
+  };
+
+  // Bubble the active editor's absolute cursor position to the parent so the
+  // comments sidebar knows where "+ Add Comment" should insert. Listens to the
+  // CodeMirror view's update events; tears down when the editor closes.
+  useEffect(() => {
+    if (!onCommentInsertPosChange) return;
+
+    if (!isEditing) {
+      onCommentInsertPosChange(null);
+      return;
+    }
+
+    // Wait one frame for useSectionEditor's mount to land, then attach a
+    // selection-change listener.
+    let cancelled = false;
+    const tick = requestAnimationFrame(() => {
+      if (cancelled) return;
+      const view = sectionViewRef.current;
+      if (!view) {
+        onCommentInsertPosChange(editRange.from);
+        return;
+      }
+
+      const reportPos = () => {
+        const head = view.state.selection.main.head;
+        onCommentInsertPosChange(editRange.from + head);
+      };
+      reportPos();
+
+      const dom = view.dom;
+      const onSelect = () => reportPos();
+      dom.addEventListener('keyup', onSelect);
+      dom.addEventListener('mouseup', onSelect);
+      dom.addEventListener('focus', onSelect, true);
+
+      // Stash teardown on a sentinel so the cleanup below can reach it.
+      (dom as HTMLElement & { __cmCleanup?: () => void }).__cmCleanup = () => {
+        dom.removeEventListener('keyup', onSelect);
+        dom.removeEventListener('mouseup', onSelect);
+        dom.removeEventListener('focus', onSelect, true);
+      };
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(tick);
+      const view = sectionViewRef.current;
+      const dom = view?.dom as (HTMLElement & { __cmCleanup?: () => void }) | undefined;
+      dom?.__cmCleanup?.();
+      onCommentInsertPosChange(null);
+      // Close any lingering context menu when the editor unmounts.
+      setContextMenu(null);
+    };
+  }, [isEditing, editRange.from, onCommentInsertPosChange, sectionViewRef]);
 
   const docId = scope?.docId ?? null;
 
@@ -179,6 +385,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
 
       const update = () => {
         const text = ytext.toString();
+        setDocText(text);
         const parsed = parseSections(text);
         setSections(parsed);
 
@@ -199,6 +406,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
 
     setSynced(false);
     setSections([]);
+    setDocText('');
     setEditingIndex(null);
     setEditingFmField(null);
     const cleanupPromise = connect();
@@ -207,6 +415,172 @@ export function ContentPanel({ scope }: ContentPanelProps) {
       cleanupPromise.then(cleanup => cleanup?.());
     };
   }, [docId, getOrConnect]);
+
+  // Scroll-spy: watch comment markers in the content scroll container and
+  // report a single "active" one upward. The sidebar uses this to follow
+  // along as the user reads.
+  //
+  // Active-comment selection is *direction-aware* — this is the rule that
+  // matches the way readers actually navigate prose:
+  //   - Scrolling down  → `max(absoluteFrom)` of visible markers
+  //                       (the deepest comment you've reached)
+  //   - Scrolling up    → `min(absoluteFrom)` of visible markers
+  //                       (earlier comments coming back into view)
+  //   - Idle / just     → `min(absoluteFrom)` of visible markers
+  //     opened a lens     (first comment of the new section, after a 200ms
+  //                       no-scroll period or when new comment elements
+  //                       just appeared via a lens switch).
+  //
+  // We also proactively reap ghost entries from the observed set: when
+  // React re-renders the prose, old span DOM nodes are detached but
+  // IntersectionObserver never fires a "leave" callback for them. Without
+  // cleanup they'd haunt `observed` forever, anchoring the active to a
+  // stale render's positions.
+  //
+  // Two kinds of markers contribute:
+  //   1. Rendered prose pills (`.cm-comment-anchor[data-cm-absolute-from]`)
+  //      from CriticMarkupSpan — value is already absolute.
+  //   2. Active CodeMirror badges (`.cm-comment-badge[data-thread-from]`)
+  //      inside the section editor — value is local; we translate by adding
+  //      `editRange.from` (the section's absolute Y.Text offset).
+  useEffect(() => {
+    const root = scrollRootRef?.current;
+    if (!root || !onVisibleCommentChange || !criticMarkupEnabled) return;
+
+    const sectionAbsFromRef = { current: editRange.from };
+    sectionAbsFromRef.current = editRange.from;
+
+    const observed = new Map<Element, number>();
+    let lastReported: number | null = null;
+    let direction: 'up' | 'down' | 'none' = 'none';
+    let prevScrollTop = root.scrollTop;
+    let stableTimeout: number | null = null;
+
+    const resolveAbsoluteFrom = (el: Element): number | null => {
+      const explicit = (el as HTMLElement).dataset.cmAbsoluteFrom;
+      if (explicit != null && explicit !== '') {
+        const n = parseInt(explicit, 10);
+        if (!isNaN(n)) return n;
+      }
+      if (el.classList.contains('cm-comment-badge')) {
+        const local = (el as HTMLElement).dataset.threadFrom;
+        if (local != null) {
+          const n = parseInt(local, 10);
+          if (!isNaN(n)) return sectionAbsFromRef.current + n;
+        }
+      }
+      return null;
+    };
+
+    const cleanGhosts = () => {
+      for (const el of Array.from(observed.keys())) {
+        if (!root.contains(el)) observed.delete(el);
+      }
+    };
+
+    const pickActive = (): number | null => {
+      if (observed.size === 0) return null;
+      let result: number | null = null;
+      for (const v of observed.values()) {
+        if (result === null) { result = v; continue; }
+        if (direction === 'down') {
+          if (v > result) result = v;
+        } else {
+          if (v < result) result = v;
+        }
+      }
+      return result;
+    };
+
+    const report = () => {
+      cleanGhosts();
+      const next = pickActive();
+      if (next !== lastReported) {
+        lastReported = next;
+        onVisibleCommentChange(next);
+      }
+    };
+
+    const intersectionObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const abs = resolveAbsoluteFrom(entry.target);
+            if (abs != null) observed.set(entry.target, abs);
+          } else {
+            observed.delete(entry.target);
+          }
+        }
+        report();
+      },
+      { root, threshold: 0 }
+    );
+
+    const seen = new WeakSet<Element>();
+    const scan = () => {
+      cleanGhosts();
+      const els = root.querySelectorAll<HTMLElement>(
+        '[data-cm-absolute-from], .cm-comment-badge'
+      );
+      els.forEach((el) => {
+        if (seen.has(el) && root.contains(el)) return;
+        seen.add(el);
+        intersectionObserver.observe(el);
+      });
+      report();
+    };
+
+    scan();
+
+    const isMarkerNode = (el: Element): boolean =>
+      el.matches?.('[data-cm-absolute-from], .cm-comment-anchor, .cm-comment-badge') === true ||
+      el.querySelector?.('[data-cm-absolute-from], .cm-comment-anchor, .cm-comment-badge') !== null;
+
+    const mutationObserver = new MutationObserver((records) => {
+      // When new comment markers appear (lens switch, section editor opening,
+      // doc swap) reset direction to 'none' so the next pick uses `min` —
+      // the user just navigated, they haven't started scrolling the new view
+      // yet, so they expect to see the first comment of the new content.
+      let sawNewMarker = false;
+      outer: for (const r of records) {
+        for (const node of r.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          if (isMarkerNode(node as Element)) { sawNewMarker = true; break outer; }
+        }
+      }
+      if (sawNewMarker) direction = 'none';
+      scan();
+    });
+    mutationObserver.observe(root, { childList: true, subtree: true });
+
+    const onScroll = () => {
+      const now = root.scrollTop;
+      if (now > prevScrollTop) direction = 'down';
+      else if (now < prevScrollTop) direction = 'up';
+      prevScrollTop = now;
+
+      // After 200ms of no scroll, drop back to the idle rule so that if the
+      // user lands on a long block of prose without scrolling further, the
+      // active doesn't stay "pinned to deepest reached."
+      if (stableTimeout != null) window.clearTimeout(stableTimeout);
+      stableTimeout = window.setTimeout(() => {
+        direction = 'none';
+        report();
+      }, 200);
+
+      report();
+    };
+
+    root.addEventListener('scroll', onScroll, { passive: true });
+
+    return () => {
+      intersectionObserver.disconnect();
+      mutationObserver.disconnect();
+      root.removeEventListener('scroll', onScroll);
+      if (stableTimeout != null) window.clearTimeout(stableTimeout);
+      observed.clear();
+    };
+  }, [scrollRootRef, onVisibleCommentChange, criticMarkupEnabled, editRange.from, docId]);
 
   // Null scope: show placeholder
   if (!scope) {
@@ -232,7 +606,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
 
   const tldr = frontmatter.get('tldr');
 
-  // Derive platform URL for "Show on Website" link
+  // Derive platform URL for the published lensacademy.org link
   const folderName = lensPath ? getFolderNameFromPath(lensPath, folderNames) : null;
   const originalPath = lensPath && folderName ? getOriginalPath(lensPath, folderName) : null;
   const platformUrl = originalPath ? getPlatformUrl(originalPath) : null;
@@ -256,7 +630,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
           onClick={() => openDocInNewTab(RELAY_ID, docUuidFromCompoundId(scope.docId), metadata)}
           className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
         >
-          Show Raw Markdown
+          Open in File Editor
         </button>
         {platformUrl && (
           <a
@@ -265,7 +639,7 @@ export function ContentPanel({ scope }: ContentPanelProps) {
             rel="noopener noreferrer"
             className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
           >
-            Show on Website
+            Show on Lensacademy.org
           </a>
         )}
       </div>
@@ -331,7 +705,11 @@ export function ContentPanel({ scope }: ContentPanelProps) {
                   Done
                 </button>
               </div>
-              <div ref={mountRef} style={{ minHeight: '60px' }} />
+              <div
+                ref={mountRef}
+                onContextMenu={handleSectionContextMenu}
+                style={{ minHeight: '60px' }}
+              />
             </div>
           );
         }
@@ -339,11 +717,24 @@ export function ContentPanel({ scope }: ContentPanelProps) {
         // Text section
         if (section.type === 'text') {
           const content = fields.get('content') ?? '';
+          // Compute the absolute Y.Text offset of the content field so we
+          // can slice the global badge map into local positions inside
+          // `content`. Each badge entry carries its own absoluteFrom so the
+          // inline span can call onClickCriticRange with absolute positions
+          // directly — no fragile arithmetic in the bubble path, which is
+          // important because parseFields may shift positions vs. the source.
+          const [contentAbsFrom] = getFieldValueRange(section.content, section.from, 'content');
+          const localBadgeMap = criticMarkupEnabled
+            ? sliceCommentBadgeMap(globalBadgeMap, contentAbsFrom, content.length)
+            : undefined;
           return (
             <TextRenderer
               key={i}
               content={content}
               onStartEdit={() => startEditingSection(i)}
+              enableCriticMarkup={criticMarkupEnabled}
+              onClickCriticRange={onClickCriticRange}
+              commentBadgeMap={localBadgeMap}
             />
           );
         }
@@ -351,12 +742,19 @@ export function ContentPanel({ scope }: ContentPanelProps) {
         // Chat section
         if (section.type === 'chat') {
           const instructions = fields.get('instructions') ?? '';
+          const [instructionsAbsFrom] = getFieldValueRange(section.content, section.from, 'instructions');
+          const instructionsBadgeMap = criticMarkupEnabled
+            ? sliceCommentBadgeMap(globalBadgeMap, instructionsAbsFrom, instructions.length)
+            : undefined;
           return (
             <ChatRenderer
               key={i}
               title={section.label}
               instructions={instructions}
               onStartEdit={() => startEditingSection(i)}
+              enableCriticMarkup={criticMarkupEnabled}
+              onClickCriticRange={onClickCriticRange}
+              commentBadgeMap={instructionsBadgeMap}
             />
           );
         }
@@ -443,6 +841,20 @@ export function ContentPanel({ scope }: ContentPanelProps) {
           const assessmentInstructions = fields.get('assessment-instructions');
           const enforceVoice = fields.get('enforce-voice');
           const maxChars = fields.get('max-chars');
+          // Per-field badge maps: the question section's content and
+          // assessment-instructions live at different absolute Y.Text
+          // offsets within the same section, so we slice the global map
+          // twice.
+          const [questionContentAbsFrom] = getFieldValueRange(section.content, section.from, 'content');
+          const contentBadgeMap = criticMarkupEnabled
+            ? sliceCommentBadgeMap(globalBadgeMap, questionContentAbsFrom, content.length)
+            : undefined;
+          const assessmentBadgeMap = criticMarkupEnabled && assessmentInstructions
+            ? (() => {
+                const [absFrom] = getFieldValueRange(section.content, section.from, 'assessment-instructions');
+                return sliceCommentBadgeMap(globalBadgeMap, absFrom, assessmentInstructions.length);
+              })()
+            : undefined;
           return (
             <QuestionRenderer
               key={i}
@@ -451,6 +863,10 @@ export function ContentPanel({ scope }: ContentPanelProps) {
               enforceVoice={enforceVoice}
               maxChars={maxChars}
               onStartEdit={() => startEditingSection(i)}
+              enableCriticMarkup={criticMarkupEnabled}
+              onClickCriticRange={onClickCriticRange}
+              contentBadgeMap={contentBadgeMap}
+              assessmentBadgeMap={assessmentBadgeMap}
             />
           );
         }
@@ -467,19 +883,31 @@ export function ContentPanel({ scope }: ContentPanelProps) {
           );
         }
 
-        // Article/video reference heading and generic heading
+        // Article/video reference heading and generic heading. Only the
+        // generic 'heading' type takes criticmarkup styling — ref labels
+        // come from another doc's title and aren't user-edited prose.
         if (section.type === 'article-ref' || section.type === 'video-ref' || section.type === 'heading') {
+          const isPlainHeading = section.type === 'heading';
           return (
             <HeadingRenderer
               key={i}
               label={section.label}
               onStartEdit={() => startEditingSection(i)}
+              enableCriticMarkup={criticMarkupEnabled && isPlainHeading}
+              onClickCriticRange={isPlainHeading ? onClickCriticRange : undefined}
             />
           );
         }
 
         return null;
       })}
+      {contextMenu && (
+        <ContextMenu
+          items={contextMenu.items}
+          position={contextMenu.position}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }

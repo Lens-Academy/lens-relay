@@ -1,11 +1,32 @@
 import { TutorInstructions } from '../../TutorInstructions';
+import type { CommentBadgeInfo } from '../../../../lib/criticmarkup-render';
+import type { CriticMarkupRange } from '../../../../lib/criticmarkup-parser';
 
 interface ChatRendererProps {
   title: string;
   instructions: string;
   onStartEdit: () => void;
+  enableCriticMarkup?: boolean;
+  onClickCriticRange?: (range: CriticMarkupRange) => void;
+  commentBadgeMap?: Map<number, CommentBadgeInfo>;
 }
 
-export function ChatRenderer({ title, instructions, onStartEdit }: ChatRendererProps) {
-  return <TutorInstructions title={title} instructions={instructions} onEdit={onStartEdit} />;
+export function ChatRenderer({
+  title,
+  instructions,
+  onStartEdit,
+  enableCriticMarkup,
+  onClickCriticRange,
+  commentBadgeMap,
+}: ChatRendererProps) {
+  return (
+    <TutorInstructions
+      title={title}
+      instructions={instructions}
+      onEdit={onStartEdit}
+      enableCriticMarkup={enableCriticMarkup}
+      onClickCriticRange={onClickCriticRange}
+      commentBadgeMap={commentBadgeMap}
+    />
+  );
 }

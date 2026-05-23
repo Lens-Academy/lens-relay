@@ -21,6 +21,12 @@ import type { ViewUpdate, DecorationSet } from '@codemirror/view';
 import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
 import { parse, parseThreads, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
+export interface CriticMarkupCommentBadgeInfo {
+  badgeNumber: number;
+  isFirstInThread: boolean;
+  absoluteFrom: number;
+}
+
 /** Facet controlling whether accept/reject buttons are shown. Defaults to true. */
 export const canAcceptRejectFacet = Facet.define<boolean, boolean>({
   combine: (values) => values.length > 0 ? values[0] : true,
@@ -69,6 +75,18 @@ export const toggleSuggestionMode = StateEffect.define<boolean>();
  * Carries the thread's `from` position for focusing the comment card.
  */
 export const focusCommentThread = StateEffect.define<number | null>();
+
+export const setCommentBadgeMap = StateEffect.define<Map<number, CriticMarkupCommentBadgeInfo> | null>();
+
+export const commentBadgeMapField = StateField.define<Map<number, CriticMarkupCommentBadgeInfo> | null>({
+  create() { return null; },
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setCommentBadgeMap)) return e.value;
+    }
+    return value;
+  },
+});
 
 /**
  * StateField tracking which comment thread is focused (by `from` position).
@@ -364,7 +382,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       }
       for (const tr of update.transactions) {
         for (const e of tr.effects) {
-          if (e.is(focusCommentThread)) {
+          if (e.is(focusCommentThread) || e.is(setCommentBadgeMap)) {
             this.decorations = this.buildDecorations(update.view);
             return;
           }
@@ -382,18 +400,34 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       // Line decorations are added separately (must not be mixed into mark sort)
       const lineDecos: Array<{ from: number; deco: Decoration }> = [];
 
-      // Build comment thread info for badge numbering
+      // Build comment thread info for badge numbering. Section editors can
+      // provide a badge map sliced from the full document, so an open field
+      // keeps the same comment numbers as the course comments sidebar.
       const threads = parseThreads(ranges);
       // Map each comment range's `from` to its badge info
       const commentBadgeMap = new Map<number, { badgeNumber: number; isFirst: boolean; threadFrom: number }>();
-      for (let ti = 0; ti < threads.length; ti++) {
-        const thread = threads[ti];
-        for (let ci = 0; ci < thread.comments.length; ci++) {
-          commentBadgeMap.set(thread.comments[ci].from, {
-            badgeNumber: ti + 1,
-            isFirst: ci === 0,
-            threadFrom: thread.from,
+      const suppliedBadgeMap = view.state.field(commentBadgeMapField);
+      if (suppliedBadgeMap) {
+        for (const range of ranges) {
+          if (range.type !== 'comment') continue;
+          const supplied = suppliedBadgeMap.get(range.from);
+          if (!supplied) continue;
+          commentBadgeMap.set(range.from, {
+            badgeNumber: supplied.badgeNumber,
+            isFirst: supplied.isFirstInThread,
+            threadFrom: range.from,
           });
+        }
+      } else {
+        for (let ti = 0; ti < threads.length; ti++) {
+          const thread = threads[ti];
+          for (let ci = 0; ci < thread.comments.length; ci++) {
+            commentBadgeMap.set(thread.comments[ci].from, {
+              badgeNumber: ti + 1,
+              isFirst: ci === 0,
+              threadFrom: thread.from,
+            });
+          }
         }
       }
 
@@ -1045,13 +1079,15 @@ export const criticMarkupCompartment = new Compartment();
  */
 interface CriticMarkupOptions {
   canAcceptReject?: boolean;
+  commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
 }
 
 export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
-  const { canAcceptReject = true } = options;
+  const { canAcceptReject = true, commentBadgeMap = null } = options;
   return [
     canAcceptRejectFacet.of(canAcceptReject),
     criticMarkupField,
+    commentBadgeMapField.init(() => commentBadgeMap),
     suggestionModeField,
     focusedThreadField,
     suggestionModeFilter,
