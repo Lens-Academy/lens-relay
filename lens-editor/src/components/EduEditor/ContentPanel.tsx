@@ -1,7 +1,9 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, type ReactNode } from 'react';
 import type { Section } from '../SectionEditor/parseSections';
+import { findOrphanCommentOffsets } from './orphan-comments';
+import { OrphanCommentAnchors } from './OrphanCommentAnchors';
 import { parseSections } from '../SectionEditor/parseSections';
-import { parseFields, parseFrontmatterFields } from '../../lib/parseFields';
+import { parseFields, parseFrontmatterFields, getFieldValueRange } from '../../lib/parseFields';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { useSectionEditor } from '../../hooks/useSectionEditor';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -82,48 +84,6 @@ interface ContentPanelProps {
  * Returns [from, to) offsets into the full Y.Text.
  * If the field isn't found, falls back to the whole section range.
  */
-function getFieldValueRange(
-  sectionContent: string,
-  sectionFrom: number,
-  fieldName: string,
-): [number, number] {
-  // Find the field line: `fieldName::` optionally followed by value on same line
-  const pattern = new RegExp(`^${fieldName}::(?:\\s(.*))?$`, 'm');
-  const match = pattern.exec(sectionContent);
-  if (!match) return [sectionFrom, sectionFrom + sectionContent.length];
-
-  const fieldLineEnd = match.index + match[0].length;
-
-  // Value starts after the field line (or on the same line if inline)
-  const inlineValue = match[1]?.trim();
-  let valueStart: number;
-  if (inlineValue) {
-    // Inline value: `content:: the actual text`
-    valueStart = match.index + match[0].indexOf(inlineValue);
-  } else {
-    // Multi-line: value starts on the next line
-    valueStart = fieldLineEnd + 1; // skip the \n
-  }
-
-  // Value ends at the next field line or end of section content
-  const rest = sectionContent.slice(valueStart);
-  const nextField = rest.match(/^\w[\w-]*::(?:\s|$)/m);
-  let valueEnd: number;
-  if (nextField) {
-    // Trim trailing newlines before the next field
-    let end = valueStart + nextField.index!;
-    while (end > valueStart && sectionContent[end - 1] === '\n') end--;
-    valueEnd = end;
-  } else {
-    // Trim trailing newlines at section end
-    let end = sectionContent.length;
-    while (end > valueStart && sectionContent[end - 1] === '\n') end--;
-    valueEnd = end;
-  }
-
-  return [sectionFrom + valueStart, sectionFrom + valueEnd];
-}
-
 /**
  * Find the absolute Y.Text range of a YAML frontmatter field's value.
  * Handles both `key: value` and `key: "quoted value"` on a single line.
@@ -197,6 +157,21 @@ export function ContentPanel({
   const globalBadgeMap = criticMarkupEnabled
     ? buildGlobalCommentBadgeMap(docText)
     : new Map();
+
+  // Map sectionIndex → absolute offsets of comments that fall OUTSIDE any
+  // rendered field value (headings, blank lines, sections with no field).
+  // Used to emit invisible anchor elements so CommentsLayer can place a card
+  // for these comments even though they have no inline marker.
+  const orphansBySection = (() => {
+    const map = new Map<number, number[]>();
+    if (!criticMarkupEnabled) return map;
+    for (const o of findOrphanCommentOffsets(docText, sections)) {
+      const arr = map.get(o.sectionIndex);
+      if (arr) arr.push(o.absFrom);
+      else map.set(o.sectionIndex, [o.absFrom]);
+    }
+    return map;
+  })();
 
   // Compute the editing range
   const editRange = (() => {
@@ -705,7 +680,8 @@ export function ContentPanel({
       {sections
         .map((section, i) => ({ section, i }))
         .filter(({ i }) => i >= visibleFrom && i < visibleTo)
-        .map(({ section, i }) => {
+        .flatMap(({ section, i }): ReactNode[] => {
+        const sectionEl = ((): ReactNode => {
         if (section.type === 'frontmatter') return null;
 
         const fields = parseFields(section.content);
@@ -920,6 +896,15 @@ export function ContentPanel({
         }
 
         return null;
+        })();
+
+        if (sectionEl == null) return [];
+        const orphans = orphansBySection.get(i) ?? [];
+        if (orphans.length === 0) return [sectionEl];
+        return [
+          <OrphanCommentAnchors key={`anchors-${i}`} offsets={orphans} />,
+          sectionEl,
+        ];
       })}
       {contextMenu && (
         <ContextMenu
