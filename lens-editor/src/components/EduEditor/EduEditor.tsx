@@ -362,44 +362,50 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
           )}
         </div>
 
-        {/* Content area: scrollable container with relative positioning so
-            CommentsLayer can sit as an absolute overlay in the margin. */}
-        <div
-          ref={contentScrollRef}
-          className="flex-1 overflow-y-auto relative"
-          style={{ background: '#faf8f3' }}
-        >
+        {/* Content + comments. Sub-flex so the comments column sits beside the
+            content rather than overlaying it. The content scroll container
+            owns vertical scrolling; CommentsLayer listens to its scroll events
+            but lives in a sibling div so it doesn't cover the prose. */}
+        <div className="flex-1 flex overflow-hidden">
           <div
-            ref={contentPanelWrapperRef}
-            className="max-w-[720px] mx-auto py-8 px-10 h-full"
+            ref={contentScrollRef}
+            className="flex-1 overflow-y-auto"
+            style={{ background: '#faf8f3' }}
           >
-            <ContentPanel
-              scope={scope}
-              criticMarkupEnabled={criticMarkupEnabled}
-              suggestionMode={isSuggestionMode}
-              onClickCriticRange={handleClickCriticRange}
-              onRequestAddComment={handleRequestAddComment}
-              scrollRootRef={contentScrollRef}
-              onYTextChange={handleYTextChange}
-              onSectionViewChange={handleSectionViewChange}
-            />
+            <div
+              ref={contentPanelWrapperRef}
+              className="max-w-[720px] mx-auto py-8 px-10 h-full"
+            >
+              <ContentPanel
+                scope={scope}
+                criticMarkupEnabled={criticMarkupEnabled}
+                suggestionMode={isSuggestionMode}
+                onClickCriticRange={handleClickCriticRange}
+                onRequestAddComment={handleRequestAddComment}
+                scrollRootRef={contentScrollRef}
+                onYTextChange={handleYTextChange}
+                onSectionViewChange={handleSectionViewChange}
+              />
+            </div>
           </div>
 
-          {/* CommentsLayer: margin overlay aligned to the content panel. Shown
-              when the user toggles comments on (via the header button) and a
-              doc Y.Text is active. */}
           {commentsVisible && activeYText && (
-            <CommentsLayer
-              yText={activeYText}
-              resolveAnchorY={resolveAnchorY}
-              getViewportRect={getViewportRect}
-              scrollContainerRef={contentScrollRef}
-              editorRootRef={contentPanelWrapperRef}
-              currentUserName={displayName ?? ''}
-              // TODO(unified-comments): route the most-recently-focused section editor's
-              // cursor through here so the column's Add button works in the course editor.
-              insertCursorPos={null}
-            />
+            <div
+              className="w-[320px] shrink-0 relative border-l border-gray-200"
+              style={{ background: '#faf8f3' }}
+            >
+              <CommentsLayer
+                yText={activeYText}
+                resolveAnchorY={resolveAnchorY}
+                getViewportRect={getViewportRect}
+                scrollContainerRef={contentScrollRef}
+                editorRootRef={contentPanelWrapperRef}
+                currentUserName={displayName ?? ''}
+                // TODO(unified-comments): route the most-recently-focused section editor's
+                // cursor through here so the column's Add button works in the course editor.
+                insertCursorPos={null}
+              />
+            </div>
           )}
         </div>
       </div>
