@@ -234,6 +234,25 @@ describe('y-section-sync', () => {
       expect(conf.sectionFrom).toBe(3);
       expect(conf.sectionTo).toBe(6);
     });
+
+    it('external replacement ending at sectionTo updates CM', () => {
+      const source = 'content:: Hello {++world++}\n#### Next\n';
+      const sectionFrom = 'content:: '.length;
+      const sectionTo = 'content:: Hello {++world++}'.length;
+      const { ydoc, ytext, view } = tracked(setup(source, sectionFrom, sectionTo));
+      const markupFrom = source.indexOf('{++world++}');
+      const markupTo = markupFrom + '{++world++}'.length;
+
+      ydoc.transact(() => {
+        ytext.delete(markupFrom, markupTo - markupFrom);
+        ytext.insert(markupFrom, 'world');
+      });
+
+      expect(ytext.toString()).toBe('content:: Hello world\n#### Next\n');
+      expect(view.state.doc.toString()).toBe('Hello world');
+      const conf = view.state.facet(ySectionSyncFacet);
+      expect(conf.sectionTo).toBe(sectionTo - '{++world++}'.length + 'world'.length);
+    });
   });
 
   describe('consistency', () => {

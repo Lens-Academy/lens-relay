@@ -1452,7 +1452,7 @@ impl LinkIndexer {
     /// Content docs debounce as before (typing produces rapid updates).
     pub async fn run_worker(
         self: Arc<Self>,
-        mut rx: mpsc::Receiver<String>,
+        rx: &mut mpsc::Receiver<String>,
         docs: Arc<DashMap<String, DocWithSyncKv>>,
         doc_resolver: Arc<DocumentResolver>,
     ) {

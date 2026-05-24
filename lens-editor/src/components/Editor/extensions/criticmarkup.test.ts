@@ -1,8 +1,10 @@
 // src/components/Editor/extensions/criticmarkup.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { Transaction } from '@codemirror/state';
+import { EditorState, Transaction } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { markdown } from '@codemirror/lang-markdown';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
-import { criticMarkupField, toggleSuggestionMode, suggestionModeField, focusCommentThread } from './criticmarkup';
+import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, focusCommentThread } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
 
 describe('CriticMarkup Extension', () => {
@@ -784,6 +786,25 @@ describe('CriticMarkup Extension', () => {
       expect(badges.length).toBe(2);
       expect(badges[0].textContent).toBe('1');
       expect(badges[1].textContent).toBe('2');
+    });
+
+    it('uses supplied badge numbers when editing a document slice', () => {
+      const state = EditorState.create({
+        doc: 'field {>>second field comment<<} end',
+        extensions: [
+          markdown(),
+          criticMarkupExtension({
+            commentBadgeMap: new Map([
+              [6, { badgeNumber: 2, isFirstInThread: true, absoluteFrom: 106 }],
+            ]),
+          }),
+        ],
+      });
+      const view = new EditorView({ state, parent: document.body });
+      cleanup = () => view.destroy();
+
+      const badge = view.contentDOM.querySelector('.cm-comment-badge');
+      expect(badge?.textContent).toBe('2');
     });
 
     it('uses single badge for adjacent comments (thread)', () => {

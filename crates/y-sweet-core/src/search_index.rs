@@ -272,16 +272,18 @@ fn render_snippet_with_mark(snippet: &tantivy::snippet::Snippet, full_body: &str
         result.push_str(&escape_html(&fragment[pos..]));
     }
 
-    // Add "..." indicators when the fragment is truncated
+    // Add "..." indicators when the fragment is truncated.
+    // Use char-boundary-safe snapping for the 20-byte windows so multi-byte
+    // chars (`→`, `—`, emoji) near the slice edges don't panic.
     if !fragment.is_empty() && fragment.len() < full_body.len() {
-        let prefix_len = 20.min(fragment.len());
-        let is_at_start = full_body.starts_with(&fragment[..prefix_len]);
+        let prefix_end = snap_char_boundary_backward(fragment, 20.min(fragment.len()));
+        let is_at_start = full_body.starts_with(&fragment[..prefix_end]);
         if !is_at_start {
             result = format!("...{}", result);
         }
 
-        let suffix_len = 20.min(fragment.len());
-        let is_at_end = full_body.ends_with(&fragment[fragment.len() - suffix_len..]);
+        let suffix_start = snap_char_boundary_forward(fragment, fragment.len().saturating_sub(20));
+        let is_at_end = full_body.ends_with(&fragment[suffix_start..]);
         if !is_at_end {
             result.push_str("...");
         }
@@ -1013,5 +1015,40 @@ mod tests {
             "adding same doc_id twice should result in exactly 1 result, got {}",
             results.len()
         );
+    }
+
+    // === Bug A: UTF-8 boundary panic replication ===
+    //
+    // This is a bug-replication test, not an API test. It exercises the
+    // real public path — SearchIndex::search() → render_snippet_with_mark
+    // — with content engineered to trigger the slice-on-non-char-boundary
+    // panic at search_index.rs:278/284. Today: panics. After fix: returns
+    // results normally.
+
+    #[test]
+    fn search_does_not_panic_when_snippet_boundary_lands_in_multibyte_char() {
+        let index = create_index();
+        // Body layout (bytes):
+        //   0..18:   18 ASCII chars  ("aaaaaaaaaaaaaaaaaa")
+        //   18..21:  "→" (U+2192, 3 bytes E2 86 92)
+        //   21..28:  " tutor "
+        //   28..230+: padding to push body length past 200 bytes
+        // If tantivy emits fragment = body[0..200], then fragment[..20]
+        // starts inside the `→` and the old code panics with
+        // "byte index 20 is not a char boundary; it is inside '→'".
+        let mut body = String::new();
+        body.push_str("aaaaaaaaaaaaaaaaaa"); // 18 bytes
+        body.push('→'); // bytes 18..21
+        body.push_str(" tutor "); // bytes 21..28
+                                  // Pad to well over 200 bytes so the snippet is a proper substring.
+        for _ in 0..300 {
+            body.push('z');
+        }
+        index.add_document("doc1", "Doc", &body, "Lens").unwrap();
+
+        // Today this panics in render_snippet_with_mark. After the fix,
+        // returns 1 result.
+        let results = index.search("tutor", 10).unwrap();
+        assert_eq!(results.len(), 1);
     }
 }

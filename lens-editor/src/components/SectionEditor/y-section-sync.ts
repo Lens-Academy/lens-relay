@@ -76,8 +76,7 @@ class YSectionSyncPluginValue {
       }
 
       const delta = event.delta;
-      const changes: { from: number; to: number; insert: string }[] = [];
-      let pos = 0; // position in OLD Y.Text
+      let pos = 0; // position in the Y.Text as transformed by prior delta ops
 
       for (const d of delta) {
         if (d.retain != null) {
@@ -85,7 +84,6 @@ class YSectionSyncPluginValue {
         } else if (d.delete != null) {
           const delFrom = pos;
           const delTo = pos + d.delete;
-          pos += d.delete;
 
           // Compute overlap with section
           const overlapFrom = Math.max(delFrom, this.conf.sectionFrom);
@@ -101,11 +99,13 @@ class YSectionSyncPluginValue {
             // Part of the delete is inside the section
             const cmFrom = overlapFrom - this.conf.sectionFrom;
             const cmTo = overlapTo - this.conf.sectionFrom;
-            // Adjust cmFrom/cmTo for any already-applied offset shifts
-            changes.push({
-              from: cmFrom,
-              to: cmTo,
-              insert: '',
+            view.dispatch({
+              changes: {
+                from: cmFrom,
+                to: cmTo,
+                insert: '',
+              },
+              annotations: [ySectionSyncAnnotation.of(this.conf)],
             });
             this.conf.sectionTo -= overlapTo - overlapFrom;
           }
@@ -121,23 +121,22 @@ class YSectionSyncPluginValue {
             // Insert within section (inclusive boundaries so undo of
             // deletes at section start/end correctly updates the view)
             const cmPos = pos - this.conf.sectionFrom;
-            changes.push({ from: cmPos, to: cmPos, insert: insertText });
+            view.dispatch({
+              changes: { from: cmPos, to: cmPos, insert: insertText },
+              annotations: [ySectionSyncAnnotation.of(this.conf)],
+            });
             this.conf.sectionTo += insertLen;
           } else if (pos < this.conf.sectionFrom) {
             // Insert before section → shift offsets
             this.conf.sectionFrom += insertLen;
             this.conf.sectionTo += insertLen;
           }
-          // Insert after sectionTo → ignore
-          // Note: insert does NOT advance pos
+          // Insert after sectionTo → ignore. Inserts advance the mutable
+          // document cursor; deletes do not. This matches Yjs/Quill delta
+          // application semantics and keeps replacement deltas like
+          // delete+insert at the same position inside the section.
+          pos += insertLen;
         }
-      }
-
-      if (changes.length > 0) {
-        view.dispatch({
-          changes,
-          annotations: [ySectionSyncAnnotation.of(this.conf)],
-        });
       }
     };
 

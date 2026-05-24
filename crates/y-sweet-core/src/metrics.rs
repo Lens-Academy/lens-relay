@@ -24,6 +24,11 @@ pub struct RelayMetrics {
 
     // Object store metrics
     pub s3_requests_total: CounterVec,
+
+    // Worker supervisor metrics (Bug C)
+    pub worker_panics_total: CounterVec,
+    pub worker_panic_budget_exceeded_total: CounterVec,
+    pub worker_alive: GaugeVec,
 }
 
 static RELAY_METRICS: OnceLock<Result<Arc<RelayMetrics>, prometheus::Error>> = OnceLock::new();
@@ -167,6 +172,34 @@ impl RelayMetrics {
         )?;
         registry.register(Box::new(s3_requests_total.clone()))?;
 
+        // Worker supervisor metrics
+        let worker_panics_total = CounterVec::new(
+            Opts::new(
+                "relay_server_worker_panics_total",
+                "Total panics observed by worker supervisors, labelled by worker name",
+            ),
+            &["worker"],
+        )?;
+        registry.register(Box::new(worker_panics_total.clone()))?;
+
+        let worker_panic_budget_exceeded_total = CounterVec::new(
+            Opts::new(
+                "relay_server_worker_panic_budget_exceeded_total",
+                "Number of times a worker exceeded its panic budget and triggered process exit",
+            ),
+            &["worker"],
+        )?;
+        registry.register(Box::new(worker_panic_budget_exceeded_total.clone()))?;
+
+        let worker_alive = GaugeVec::new(
+            Opts::new(
+                "relay_server_worker_alive",
+                "1 if the worker's supervisor task is still running and processing; 0 if it has decided to exit the process",
+            ),
+            &["worker"],
+        )?;
+        registry.register(Box::new(worker_alive.clone()))?;
+
         Ok(Arc::new(Self {
             webhook_requests_total,
             webhook_request_duration_seconds,
@@ -182,6 +215,9 @@ impl RelayMetrics {
             debounced_queue_length,
             http_auth_errors_total,
             s3_requests_total,
+            worker_panics_total,
+            worker_panic_budget_exceeded_total,
+            worker_alive,
         }))
     }
 
@@ -280,6 +316,23 @@ impl RelayMetrics {
             .with_label_values(&[method, outcome])
             .inc();
     }
+
+    // Worker supervisor metrics methods
+    pub fn record_worker_panic(&self, worker: &str) {
+        self.worker_panics_total.with_label_values(&[worker]).inc();
+    }
+
+    pub fn record_worker_budget_exceeded(&self, worker: &str) {
+        self.worker_panic_budget_exceeded_total
+            .with_label_values(&[worker])
+            .inc();
+    }
+
+    pub fn set_worker_alive(&self, worker: &str, alive: bool) {
+        self.worker_alive
+            .with_label_values(&[worker])
+            .set(if alive { 1.0 } else { 0.0 });
+    }
 }
 
 impl Default for RelayMetrics {
@@ -346,6 +399,63 @@ mod tests {
             .with_label_values(&["prefix_mismatch", "403", "/doc/new", "POST"])
             .get();
         assert_eq!(prefix, 1.0);
+    }
+
+    /// Observability for Bug C (worker supervisor): supervisor.rs needs
+    /// three new metrics so operators can see panic activity. Test asserts
+    /// that the fields exist with the documented shape (labels) and that
+    /// the helper methods increment them.
+    ///
+    /// Today: fields don't exist on RelayMetrics → compile error.
+    /// After: counters increment, gauge sets.
+    #[test]
+    fn test_worker_observability_metrics() {
+        let metrics = RelayMetrics::new_for_test().unwrap();
+
+        metrics.record_worker_panic("link_indexer");
+        metrics.record_worker_panic("link_indexer");
+        metrics.record_worker_panic("search_index");
+
+        assert_eq!(
+            metrics
+                .worker_panics_total
+                .with_label_values(&["link_indexer"])
+                .get(),
+            2.0
+        );
+        assert_eq!(
+            metrics
+                .worker_panics_total
+                .with_label_values(&["search_index"])
+                .get(),
+            1.0
+        );
+
+        metrics.record_worker_budget_exceeded("link_indexer");
+        assert_eq!(
+            metrics
+                .worker_panic_budget_exceeded_total
+                .with_label_values(&["link_indexer"])
+                .get(),
+            1.0
+        );
+
+        metrics.set_worker_alive("link_indexer", true);
+        assert_eq!(
+            metrics
+                .worker_alive
+                .with_label_values(&["link_indexer"])
+                .get(),
+            1.0
+        );
+        metrics.set_worker_alive("link_indexer", false);
+        assert_eq!(
+            metrics
+                .worker_alive
+                .with_label_values(&["link_indexer"])
+                .get(),
+            0.0
+        );
     }
 
     #[test]
