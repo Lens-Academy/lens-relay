@@ -410,7 +410,7 @@ describe('HtmlPreview bridge integration', () => {
     }
   });
 
-  it('restores the same scroll coordinates again after the replacement iframe becomes visible', async () => {
+  it('activates the replacement iframe immediately when the hidden restore reaches the intended scroll', async () => {
     vi.useFakeTimers();
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
@@ -455,10 +455,7 @@ describe('HtmlPreview bridge integration', () => {
       await act(async () => {});
 
       expect(container.querySelector('iframe[data-preview-frame-state="active"]')).toBe(replacementFrame);
-      expect(posted).toContainEqual({
-        nonce: '__test_nonce__',
-        message: { type: 'restore-scroll', payload: { x: 0, y: 320 } },
-      });
+      expect(posted).toEqual([]);
     } finally {
       spy.mockRestore();
     }
@@ -508,11 +505,82 @@ describe('HtmlPreview bridge integration', () => {
       await act(async () => { vi.runAllTimers(); });
       await act(async () => {});
 
-      expect(container.querySelector('iframe[data-preview-frame-state="active"]')).toBe(replacementFrame);
+      expect(container.querySelector('iframe[data-preview-frame-state="active"]')).toBe(activeFrame);
+      expect(replacementFrame).toHaveAttribute('data-preview-frame-state', 'settling');
       expect(posted).toContainEqual({
         nonce: '__test_nonce__',
         message: { type: 'restore-scroll', payload: { x: 0, y: 1697 } },
       });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps the old iframe visible while the promoted replacement settles at the intended scroll', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>first</p>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 1697, scrollWidth: 500, clientWidth: 500, scrollHeight: 2600, clientHeight: 903 } },
+      });
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>second</p>');
+    });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => {});
+
+    const replacementFrame = container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement;
+    const posted: unknown[] = [];
+    const spy = vi.spyOn(replacementFrame.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { posted.push(msg); }) as typeof window.postMessage
+    );
+
+    try {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { nonce: '', message: { type: 'ready', payload: {} } },
+          source: replacementFrame.contentWindow,
+        }));
+      });
+      posted.length = 0;
+
+      await act(async () => {
+        dispatchFromBridge(replacementFrame, {
+          nonce: '__test_nonce__',
+          message: { type: 'scroll-state', payload: { x: 0, y: 479, scrollWidth: 500, clientWidth: 500, scrollHeight: 1382, clientHeight: 903 } },
+        });
+      });
+      await act(async () => { vi.runAllTimers(); });
+      await act(async () => {});
+
+      const framesWhileSettling = Array.from(container.querySelectorAll('iframe')) as HTMLIFrameElement[];
+      expect(framesWhileSettling).toHaveLength(2);
+      expect(activeFrame).toHaveAttribute('data-preview-frame-state', 'active');
+      expect(replacementFrame).toHaveAttribute('data-preview-frame-state', 'settling');
+      expect(replacementFrame).toHaveClass('opacity-0');
+      expect(posted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'restore-scroll', payload: { x: 0, y: 1697 } },
+      });
+
+      await act(async () => {
+        dispatchFromBridge(replacementFrame, {
+          nonce: '__test_nonce__',
+          message: { type: 'scroll-state', payload: { x: 0, y: 1697, scrollWidth: 500, clientWidth: 500, scrollHeight: 2600, clientHeight: 903 } },
+        });
+      });
+
+      const finalFrames = Array.from(container.querySelectorAll('iframe')) as HTMLIFrameElement[];
+      expect(finalFrames).toHaveLength(1);
+      expect(finalFrames[0]).toBe(replacementFrame);
+      expect(finalFrames[0]).toHaveAttribute('data-preview-frame-state', 'active');
     } finally {
       spy.mockRestore();
     }

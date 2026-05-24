@@ -50,7 +50,7 @@ interface PendingPlacementMenu {
 interface PreviewFrame {
   id: number;
   srcDoc: string;
-  state: 'active' | 'loading';
+  state: 'active' | 'loading' | 'settling';
 }
 type PendingProbe = {
   frame: HTMLIFrameElement;
@@ -127,6 +127,19 @@ function isPreviewScrollState(value: unknown): value is PreviewScrollState {
 
 function isPlacementTrigger(value: unknown): value is PreviewPlacementTrigger {
   return value === 'contextmenu' || value === 'selection' || value === 'toolbar';
+}
+
+function isCloseScroll(actual: PreviewScroll, expected: PreviewScroll): boolean {
+  return Math.abs(actual.x - expected.x) < 2 && Math.abs(actual.y - expected.y) < 2;
+}
+
+function isClampedCloseScroll(actual: PreviewScrollState, expected: PreviewScroll): boolean {
+  const maxX = Math.max(0, actual.scrollWidth - actual.clientWidth);
+  const maxY = Math.max(0, actual.scrollHeight - actual.clientHeight);
+  return isCloseScroll(actual, {
+    x: Math.max(0, Math.min(maxX, expected.x)),
+    y: Math.max(0, Math.min(maxY, expected.y)),
+  });
 }
 
 function isPlacementRequestPayload(
@@ -508,11 +521,13 @@ export function HtmlPreview({
 
   useEffect(() => {
     const pending = postActivationRestoreRef.current;
-    if (!pending || pending.frameId !== activeFrameIdRef.current) return;
+    if (!pending) return;
+    const pendingFrame = frames.find(frame => frame.id === pending.frameId);
+    if (pendingFrame?.state !== 'settling') return;
     postActivationRestoreRef.current = null;
     requestAnimationFrame(() => {
       if (!mountedRef.current) return;
-      if (activeFrameIdRef.current !== pending.frameId) return;
+      if (framesRef.current.find(frame => frame.id === pending.frameId)?.state !== 'settling') return;
       postToFrame(pending.frameId, { type: 'restore-scroll', payload: pending.scroll });
     });
   }, [frames, postToFrame]);
@@ -529,6 +544,17 @@ export function HtmlPreview({
   }, []);
 
   const activateRestoredFrame = useCallback((frameId: number): void => {
+    restoringFrameIdRef.current = null;
+    restoringScrollRef.current = null;
+    postActivationRestoreRef.current = null;
+    setFrames(currentFrames => {
+      const target = currentFrames.find(frame => frame.id === frameId);
+      if (!target) return currentFrames;
+      return [{ ...target, state: 'active' }];
+    });
+  }, []);
+
+  const settleRestoredFrame = useCallback((frameId: number): void => {
     const intendedScroll = restoringScrollRef.current?.frameId === frameId
       ? restoringScrollRef.current.scroll
       : { x: lastKnownScrollRef.current.x, y: lastKnownScrollRef.current.y };
@@ -537,11 +563,14 @@ export function HtmlPreview({
       scroll: intendedScroll,
     };
     restoringFrameIdRef.current = null;
-    restoringScrollRef.current = null;
     setFrames(currentFrames => {
+      const activeFrame = currentFrames.find(frame => frame.state === 'active') ?? currentFrames[0];
       const target = currentFrames.find(frame => frame.id === frameId);
       if (!target) return currentFrames;
-      return [{ ...target, state: 'active' }];
+      return [
+        ...(activeFrame && activeFrame.id !== frameId ? [activeFrame] : []),
+        { ...target, state: 'settling' },
+      ];
     });
   }, []);
 
@@ -623,7 +652,18 @@ export function HtmlPreview({
         if (frame.state === 'active') {
           lastKnownScrollRef.current = message.payload;
         }
-        if (restoringFrameIdRef.current === frame.id) activateRestoredFrame(frame.id);
+        if (restoringFrameIdRef.current === frame.id) {
+          const intended = restoringScrollRef.current?.frameId === frame.id
+            ? restoringScrollRef.current.scroll
+            : { x: lastKnownScrollRef.current.x, y: lastKnownScrollRef.current.y };
+          if (isCloseScroll(message.payload, intended)) activateRestoredFrame(frame.id);
+          else settleRestoredFrame(frame.id);
+        } else if (frame.state === 'settling') {
+          const intended = restoringScrollRef.current?.frameId === frame.id
+            ? restoringScrollRef.current.scroll
+            : { x: lastKnownScrollRef.current.x, y: lastKnownScrollRef.current.y };
+          if (isClampedCloseScroll(message.payload, intended)) activateRestoredFrame(frame.id);
+        }
         return;
       }
 
@@ -681,6 +721,7 @@ export function HtmlPreview({
     openComposer,
     readOnly,
     resolvePlacementForAction,
+    settleRestoredFrame,
     ytext,
   ]);
 
@@ -713,7 +754,7 @@ export function HtmlPreview({
           data-preview-frame-state={frame.state}
           className={[
             'absolute inset-0 h-full w-full border-0 bg-white',
-            frame.state === 'loading' ? 'pointer-events-none opacity-0' : '',
+            frame.state === 'loading' || frame.state === 'settling' ? 'pointer-events-none opacity-0' : '',
           ].join(' ')}
         />
       ))}
