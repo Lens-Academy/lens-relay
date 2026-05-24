@@ -123,7 +123,7 @@ describe('renderDots', () => {
   it('creates an overlay root and one dot per comment, returns found/orphaned ids', () => {
     const summaries: CommentSummary[] = [{ id: 'c1', body: 'x', replies: 0 }];
     const result = renderDots(document, summaries);
-    expect(result).toEqual({ found: ['c1'], orphaned: [] });
+    expect(result).toEqual(expect.objectContaining({ found: ['c1'], orphaned: [] }));
     const root = document.querySelector('[data-lens-overlay="true"]');
     expect(root).not.toBeNull();
     expect(root!.querySelectorAll('.lens-comment-dot')).toHaveLength(1);
@@ -134,7 +134,7 @@ describe('renderDots', () => {
       { id: 'c1', body: 'x', replies: 0 },
       { id: 'gone', body: 'y', replies: 0 },
     ];
-    expect(renderDots(document, summaries)).toEqual({ found: ['c1'], orphaned: ['gone'] });
+    expect(renderDots(document, summaries)).toEqual(expect.objectContaining({ found: ['c1'], orphaned: ['gone'] }));
   });
 
   it('reuses overlay root across calls (idempotent)', () => {
@@ -448,5 +448,200 @@ describe('findProbe', () => {
   it('returns null when token not found', () => {
     setupBody('<p>nothing here</p>');
     expect(findProbe(document, 'TOKEN')).toBeNull();
+  });
+});
+
+// New tests for Task 8 additions
+describe('renderDots rects', () => {
+  beforeEach(() => {
+    setupBody('<p>before</p><!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}--><p id="t">after</p>');
+    stubRenderedRect(document.getElementById('t')!);
+  });
+
+  it('returns rects with bounding rect data for rendered anchor ids', () => {
+    const summaries: CommentSummary[] = [{ id: 'c1', body: 'x', replies: 0 }];
+    const result = renderDots(document, summaries);
+    expect(result.rects).toHaveLength(1);
+    expect(result.rects[0]).toEqual({ id: 'c1', x: 10, y: 20, w: 100, h: 30 });
+  });
+
+  it('does not include orphaned comments in rects', () => {
+    const summaries: CommentSummary[] = [
+      { id: 'c1', body: 'x', replies: 0 },
+      { id: 'gone', body: 'y', replies: 0 },
+    ];
+    const result = renderDots(document, summaries);
+    expect(result.rects.map(r => r.id)).toEqual(['c1']);
+  });
+});
+
+describe('installBridge layoutVersion and scroll-state', () => {
+  let sent: Array<{ nonce: string; message: import('./protocol').BridgeToParent }> = [];
+  let cleanup: (() => void) | null = null;
+
+  beforeEach(() => {
+    sent = [];
+    cleanup = null;
+    setupBody('<p>before</p><!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}--><p id="t">after</p>');
+    stubRenderedRect(document.getElementById('t')!);
+    vi.spyOn(window.parent, 'postMessage').mockImplementation((msg: unknown) => {
+      sent.push(msg as { nonce: string; message: import('./protocol').BridgeToParent });
+    });
+    cleanup = installBridge(window);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    vi.restoreAllMocks();
+  });
+
+  function dispatchToBridge(message: import('./protocol').ParentToBridge, nonce = 'N'): void {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { nonce, message },
+      source: window.parent,
+    }));
+  }
+
+  it('comments-rendered payload includes rects with rendered anchor bounding rects', () => {
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    const rendered = sent.find(e => e.message.type === 'comments-rendered');
+    expect(rendered).toBeDefined();
+    const payload = (rendered!.message as Extract<import('./protocol').BridgeToParent, { type: 'comments-rendered' }>).payload;
+    expect(payload.rects).toHaveLength(1);
+    expect(payload.rects[0]).toEqual({ id: 'c1', x: 10, y: 20, w: 100, h: 30 });
+  });
+
+  it('layoutVersion bumps on each rebuildDots call', () => {
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    const r1 = sent.find(e => e.message.type === 'comments-rendered');
+    const v1 = (r1!.message as Extract<import('./protocol').BridgeToParent, { type: 'comments-rendered' }>).payload.layoutVersion;
+
+    sent = [];
+    dispatchToBridge({ type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    const r2 = sent.find(e => e.message.type === 'comments-rendered');
+    const v2 = (r2!.message as Extract<import('./protocol').BridgeToParent, { type: 'comments-rendered' }>).payload.layoutVersion;
+
+    expect(v2).toBeGreaterThan(v1);
+  });
+
+  it('scroll-state carries the current layoutVersion', () => {
+    vi.useFakeTimers();
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    const rendered = sent.find(e => e.message.type === 'comments-rendered');
+    const lv = (rendered!.message as Extract<import('./protocol').BridgeToParent, { type: 'comments-rendered' }>).payload.layoutVersion;
+
+    sent = [];
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      return window.setTimeout(() => cb(0), 0);
+    });
+    window.dispatchEvent(new Event('scroll'));
+    vi.runAllTimers();
+    raf.mockRestore();
+
+    const scrollState = sent.find(e => e.message.type === 'scroll-state');
+    expect(scrollState).toBeDefined();
+    const ssPayload = (scrollState!.message as Extract<import('./protocol').BridgeToParent, { type: 'scroll-state' }>).payload;
+    expect(ssPayload.layoutVersion).toBe(lv);
+    vi.useRealTimers();
+  });
+});
+
+describe('installBridge set-focused-comment', () => {
+  let sent: Array<{ nonce: string; message: import('./protocol').BridgeToParent }> = [];
+  let cleanup: (() => void) | null = null;
+
+  beforeEach(() => {
+    sent = [];
+    cleanup = null;
+    setupBody('<p>before</p><!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}--><p id="t">after</p>');
+    stubRenderedRect(document.getElementById('t')!);
+    vi.spyOn(window.parent, 'postMessage').mockImplementation((msg: unknown) => {
+      sent.push(msg as { nonce: string; message: import('./protocol').BridgeToParent });
+    });
+    cleanup = installBridge(window);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    vi.restoreAllMocks();
+  });
+
+  function dispatchToBridge(message: import('./protocol').ParentToBridge, nonce = 'N'): void {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { nonce, message },
+      source: window.parent,
+    }));
+  }
+
+  it('set-focused-comment adds data-comment-focused to the matching dot', () => {
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'set-focused-comment', payload: { id: 'c1' } });
+
+    const dot = document.querySelector('.lens-comment-dot[data-comment-id="c1"]') as HTMLElement | null;
+    expect(dot).not.toBeNull();
+    expect(dot!.dataset.commentFocused).toBe('');
+  });
+
+  it('set-focused-comment with null clears the focused state', () => {
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'set-focused-comment', payload: { id: 'c1' } });
+    dispatchToBridge({ type: 'set-focused-comment', payload: { id: null } });
+
+    const dot = document.querySelector('.lens-comment-dot[data-comment-id="c1"]') as HTMLElement | null;
+    expect(dot).not.toBeNull();
+    expect(dot!.dataset.commentFocused).toBeUndefined();
+  });
+
+  it('rebuildDots re-applies data-comment-focused to the focused id', () => {
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'set-focused-comment', payload: { id: 'c1' } });
+
+    // Trigger rebuild by sending set-comments
+    dispatchToBridge({ type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+
+    const dot = document.querySelector('.lens-comment-dot[data-comment-id="c1"]') as HTMLElement | null;
+    expect(dot).not.toBeNull();
+    expect(dot!.dataset.commentFocused).toBe('');
+  });
+});
+
+describe('installBridge details toggle re-emit', () => {
+  let sent: Array<{ nonce: string; message: import('./protocol').BridgeToParent }> = [];
+  let cleanup: (() => void) | null = null;
+
+  beforeEach(() => {
+    sent = [];
+    cleanup = null;
+    setupBody('<details><summary>s</summary><p>content</p></details><!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}--><p id="t">after</p>');
+    stubRenderedRect(document.getElementById('t')!);
+    vi.spyOn(window.parent, 'postMessage').mockImplementation((msg: unknown) => {
+      sent.push(msg as { nonce: string; message: import('./protocol').BridgeToParent });
+    });
+    cleanup = installBridge(window);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    vi.restoreAllMocks();
+  });
+
+  function dispatchToBridge(message: import('./protocol').ParentToBridge, nonce = 'N'): void {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { nonce, message },
+      source: window.parent,
+    }));
+  }
+
+  it('toggling a <details> element causes a fresh comments-rendered', () => {
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    sent = [];
+
+    const detailsEl = document.querySelector('details')!;
+    // The listener uses capture phase and checks e.target.tagName === 'DETAILS'
+    const toggleEvent = new Event('toggle', { bubbles: false });
+    Object.defineProperty(toggleEvent, 'target', { value: detailsEl });
+    document.dispatchEvent(toggleEvent);
+
+    expect(sent.filter(e => e.message.type === 'comments-rendered')).toHaveLength(1);
   });
 });

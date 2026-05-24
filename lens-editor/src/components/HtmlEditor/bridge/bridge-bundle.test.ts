@@ -33,6 +33,10 @@ describe('virtual:bridge-bundle', () => {
         observe() {}
         disconnect() {}
       },
+      ResizeObserver: class {
+        observe() {}
+        disconnect() {}
+      },
       parent: {
         postMessage: () => {},
       },

@@ -2,12 +2,17 @@ import {
   validateEnvelope,
   type Envelope,
   type BridgeToParent,
+  type CommentRect,
   type CommentSummary,
   type Fingerprint,
   type ParentToBridge,
   type PreviewScrollState,
   type PreviewUiState,
 } from './protocol';
+
+// A) Monotonic layoutVersion bumped on each rebuildDots call
+let layoutVersion = 0;
+function bumpLayoutVersion(): void { layoutVersion++; }
 
 export const OVERLAY_ROOT_ID = 'lens-comment-overlay-root';
 const OVERLAY_ROOT_MARKER = 'v1';
@@ -274,17 +279,19 @@ function removeOwnedOverlayRoot(doc: Document): void {
   overlayRoots.delete(doc);
 }
 
-export function renderDots(doc: Document, comments: CommentSummary[]): { found: string[]; orphaned: string[] } {
+export function renderDots(doc: Document, comments: CommentSummary[]): { found: string[]; orphaned: string[]; rects: CommentRect[] } {
   const root = ensureOverlayRoot(doc);
   const inlineFound = renderInlineMarkers(doc, comments);
   const presentNodes = findCommentNodes(doc);
   const byId = new Map(presentNodes.map(c => [c.id, c]));
   const found: string[] = [];
   const orphaned: string[] = [];
+  const rects: CommentRect[] = [];
   root.innerHTML = '';
   for (const summary of comments) {
     if (inlineFound.has(summary.id)) {
       found.push(summary.id);
+      // Inline-matched comments: no separate anchor — omit from rects array
       continue;
     }
     const present = byId.get(summary.id);
@@ -301,8 +308,9 @@ export function renderDots(doc: Document, comments: CommentSummary[]): { found: 
     dot.setAttribute('aria-label', `Comment: ${summary.body.slice(0, 60)}`);
     root.appendChild(dot);
     found.push(summary.id);
+    rects.push({ id: summary.id, x: rect.x, y: rect.y, w: rect.width, h: rect.height });
   }
-  return { found, orphaned };
+  return { found, orphaned, rects };
 }
 
 function describeAncestors(el: Element): Array<{ tag: string; index: number }> {
@@ -450,11 +458,39 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     dotRoot?.addEventListener('click', markerClickListener);
   }
 
+  // E) Focus state for set-focused-comment
+  let lastFocusedId: string | null = null;
+  function applyFocusToDots(): void {
+    const root = getOwnedOverlayRoot(doc);
+    if (!root) return;
+    root.querySelectorAll('[data-comment-focused]').forEach(el => {
+      delete (el as HTMLElement).dataset.commentFocused;
+    });
+    if (lastFocusedId != null) {
+      root.querySelectorAll<HTMLElement>('.lens-comment-dot').forEach(el => {
+        if (el.dataset.commentId === lastFocusedId) el.dataset.commentFocused = '';
+      });
+    }
+  }
+
+  // C) rebuildDots posts the extended payload
   function rebuildDots(comments: CommentSummary[]): void {
     suppressRenderMutations = true;
+    bumpLayoutVersion();
     const result = renderDots(doc, comments);
-    postToParent({ type: 'comments-rendered', payload: result });
+    const baselineScrollY = win.scrollY;
+    postToParent({
+      type: 'comments-rendered',
+      payload: {
+        found: result.found,
+        orphaned: result.orphaned,
+        rects: result.rects,
+        baselineScrollY,
+        layoutVersion,
+      },
+    });
     wireDotRoot();
+    applyFocusToDots();
   }
 
   function rebuildDotsWhenBodyReady(comments: CommentSummary[]): void {
@@ -497,6 +533,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       clientWidth,
       scrollHeight,
       clientHeight,
+      layoutVersion,
     };
   }
   const postScrollState = (): void => {
@@ -643,6 +680,13 @@ export function installBridge(win: Window & typeof globalThis): () => void {
         if (!isPreviewUiState(msg.payload)) return;
         restoreUiState(doc, msg.payload);
         break;
+      case 'set-focused-comment': {
+        const id = msg.payload?.id;
+        if (id !== null && typeof id !== 'string') return;
+        lastFocusedId = id;
+        applyFocusToDots();
+        break;
+      }
       case 'init':
         break;
     }
@@ -797,6 +841,29 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   doc.addEventListener('DOMContentLoaded', domReadyListener);
   setupBodyDependentWork();
 
+  // F) Re-emit triggers for layout-only changes
+
+  // ResizeObserver on body for font/image-load reflow and CSS-only geometry changes
+  const bodyResizeObserver = new win.ResizeObserver(() => {
+    if (nonce !== null) rebuildDotsWhenBodyReady(lastComments);
+  });
+  const bodyForObserve = getBody();
+  if (bodyForObserve) bodyResizeObserver.observe(bodyForObserve);
+
+  // <details> toggle (capture phase — toggle does not bubble)
+  const toggleListener = (e: Event): void => {
+    if ((e.target as HTMLElement | null)?.tagName === 'DETAILS') {
+      if (nonce !== null) rebuildDotsWhenBodyReady(lastComments);
+    }
+  };
+  doc.addEventListener('toggle', toggleListener, true);
+
+  // Iframe resize
+  const resizeListener = (): void => {
+    if (nonce !== null) rebuildDotsWhenBodyReady(lastComments);
+  };
+  win.addEventListener('resize', resizeListener);
+
   const cleanup = (): void => {
     win.removeEventListener('message', messageListener);
     win.removeEventListener('click', clickListener, true);
@@ -805,6 +872,9 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     win.removeEventListener('contextmenu', contextMenuListener, true);
     win.removeEventListener('mouseup', selectionListener);
     win.removeEventListener('scroll', scheduleScrollState);
+    win.removeEventListener('resize', resizeListener);
+    bodyResizeObserver.disconnect();
+    doc.removeEventListener('toggle', toggleListener, true);
     if (scrollFrame !== null) {
       win.cancelAnimationFrame(scrollFrame);
       scrollFrame = null;
