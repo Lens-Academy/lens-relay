@@ -22,11 +22,35 @@ export interface PreviewScroll {
   y: number;
 }
 
+export interface CommentRect {
+  id: string;
+  y: number;
+  x: number;
+  w: number;
+  h: number;
+}
+
+export interface CommentsRenderedPayload {
+  found: string[];
+  orphaned: string[];
+  rects: CommentRect[];
+  /** Iframe scroll-y at the moment rects were measured. The parent uses this
+   *  with the latest scroll-state to derive viewport-y from delta. */
+  baselineScrollY: number;
+  /** Monotonic counter bumped on every layout-affecting change. The parent
+   *  discards scroll-state messages whose layoutVersion doesn't match. */
+  layoutVersion: number;
+}
+
 export interface PreviewScrollState extends PreviewScroll {
   scrollWidth: number;
   clientWidth: number;
   scrollHeight: number;
   clientHeight: number;
+  /** Echo of the bridge's latest layoutVersion. The parent uses this to
+   *  discard scroll-state messages that race ahead of the corresponding
+   *  comments-rendered message. */
+  layoutVersion: number;
 }
 
 export interface PreviewScrollRatio {
@@ -62,7 +86,8 @@ export type ParentToBridge =
   | { type: 'restore-scroll'; payload: PreviewScroll }
   | { type: 'restore-scroll-ratio'; payload: PreviewScrollRatio }
   | { type: 'capture-ui-state'; payload: Record<string, never> }
-  | { type: 'restore-ui-state'; payload: PreviewUiState };
+  | { type: 'restore-ui-state'; payload: PreviewUiState }
+  | { type: 'set-focused-comment'; payload: { id: string | null } };
 
 export type BridgeToParent =
   | { type: 'ready'; payload: Record<string, never> }
@@ -72,7 +97,7 @@ export type BridgeToParent =
   | { type: 'scroll-state'; payload: PreviewScrollState }
   | { type: 'ui-state'; payload: PreviewUiState }
   | { type: 'probe-found'; payload: { token: string; rect: { x: number; y: number; w: number; h: number } | null } }
-  | { type: 'comments-rendered'; payload: { found: string[]; orphaned: string[] } };
+  | { type: 'comments-rendered'; payload: CommentsRenderedPayload };
 
 export interface Envelope<M> {
   nonce: string;

@@ -56,7 +56,7 @@ describe('validateEnvelope', () => {
   it('accepts scroll-state bridge messages', () => {
     const msg: BridgeToParent = {
       type: 'scroll-state',
-      payload: { x: 0, y: 140, scrollWidth: 900, clientWidth: 300, scrollHeight: 2000, clientHeight: 500 },
+      payload: { x: 0, y: 140, scrollWidth: 900, clientWidth: 300, scrollHeight: 2000, clientHeight: 500, layoutVersion: 1 },
     };
     const env: Envelope<BridgeToParent> = { nonce: 'n', message: msg };
     expect(validateEnvelope(env, 'n')).toEqual(msg);
@@ -76,6 +76,42 @@ describe('validateEnvelope', () => {
       type: 'restore-scroll-ratio',
       payload: { xRatio: 0, yRatio: 0.5 },
     };
+    const env: Envelope<ParentToBridge> = { nonce: 'n', message: msg };
+    expect(validateEnvelope(env, 'n')).toEqual(msg);
+  });
+
+  it('accepts comments-rendered with rects, baselineScrollY, layoutVersion', () => {
+    const msg: BridgeToParent = {
+      type: 'comments-rendered',
+      payload: {
+        found: ['a'],
+        orphaned: ['b'],
+        rects: [{ id: 'a', y: 100, x: 0, w: 12, h: 12 }],
+        baselineScrollY: 50,
+        layoutVersion: 3,
+      },
+    };
+    const env: Envelope<BridgeToParent> = { nonce: 'n', message: msg };
+    expect(validateEnvelope(env, 'n')).toEqual(msg);
+  });
+
+  it('accepts scroll-state with layoutVersion', () => {
+    const msg: BridgeToParent = {
+      type: 'scroll-state',
+      payload: { x: 0, y: 140, scrollWidth: 900, clientWidth: 300, scrollHeight: 2000, clientHeight: 500, layoutVersion: 7 },
+    };
+    const env: Envelope<BridgeToParent> = { nonce: 'n', message: msg };
+    expect(validateEnvelope(env, 'n')).toEqual(msg);
+  });
+
+  it('accepts set-focused-comment with an id', () => {
+    const msg: ParentToBridge = { type: 'set-focused-comment', payload: { id: 'abc' } };
+    const env: Envelope<ParentToBridge> = { nonce: 'n', message: msg };
+    expect(validateEnvelope(env, 'n')).toEqual(msg);
+  });
+
+  it('accepts set-focused-comment with id: null (clear focus)', () => {
+    const msg: ParentToBridge = { type: 'set-focused-comment', payload: { id: null } };
     const env: Envelope<ParentToBridge> = { nonce: 'n', message: msg };
     expect(validateEnvelope(env, 'n')).toEqual(msg);
   });
