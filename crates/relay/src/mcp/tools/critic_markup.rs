@@ -13,9 +13,7 @@ pub enum Span {
 }
 
 /// Suggestion-only delimiters (excludes comment delimiters which AI is allowed to use).
-const SUGGESTION_DELIMITERS: &[&str] = &[
-    "{--", "--}", "{++", "++}", "{~~", "~~}", "{==", "==}",
-];
+const SUGGESTION_DELIMITERS: &[&str] = &["{--", "--}", "{++", "++}", "{~~", "~~}", "{==", "==}"];
 
 /// Check if text contains CriticMarkup suggestion delimiters. Returns an error message if found.
 /// Comment delimiters (`{>>`, `<<}`) are allowed — AI can read and write comments.
@@ -2119,20 +2117,15 @@ mod tests {
     #[test]
     fn validate_comments_preserved_ok() {
         // Same comment in both → OK
-        let result = validate_comment_preservation(
-            "Hello {>>note<<} world",
-            "Goodbye {>>note<<} world",
-        );
+        let result =
+            validate_comment_preservation("Hello {>>note<<} world", "Goodbye {>>note<<} world");
         assert!(result.is_ok());
     }
 
     #[test]
     fn validate_comments_non_ai_removed_rejected() {
         // Non-AI comment removed → rejected
-        let result = validate_comment_preservation(
-            "Hello {>>note<<} world",
-            "Hello world",
-        );
+        let result = validate_comment_preservation("Hello {>>note<<} world", "Hello world");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("comment"));
     }
@@ -2140,10 +2133,8 @@ mod tests {
     #[test]
     fn validate_comments_non_ai_modified_rejected() {
         // Non-AI comment content changed → rejected
-        let result = validate_comment_preservation(
-            "Hello {>>note<<} world",
-            "Hello {>>different<<} world",
-        );
+        let result =
+            validate_comment_preservation("Hello {>>note<<} world", "Hello {>>different<<} world");
         assert!(result.is_err());
     }
 
@@ -2180,10 +2171,7 @@ mod tests {
     #[test]
     fn validate_comments_no_metadata_treated_as_non_ai() {
         // Comment without metadata is protected (non-AI)
-        let result = validate_comment_preservation(
-            "Hello {>>note<<} world",
-            "Hello world",
-        );
+        let result = validate_comment_preservation("Hello {>>note<<} world", "Hello world");
         assert!(result.is_err());
     }
 
@@ -2191,14 +2179,33 @@ mod tests {
     fn merge_edit_around_comment() {
         // Editing text that spans a comment should preserve the comment
         let raw = "Hello {>>nice<<} world";
-        let result = merge_edit(raw, "Hello {>>nice<<} world", "Goodbye {>>nice<<} world", "AI", 100).unwrap();
+        let result = merge_edit(
+            raw,
+            "Hello {>>nice<<} world",
+            "Goodbye {>>nice<<} world",
+            "AI",
+            100,
+        )
+        .unwrap();
         let final_raw = apply_merge(raw, &result);
         let final_raw_stripped = strip_metadata(&final_raw);
         // Comment should be preserved, only Hello→Goodbye changed
-        assert!(final_raw_stripped.contains("{>>nice<<}"), "Comment should be preserved: {}", final_raw_stripped);
-        assert!(final_raw_stripped.contains("{--Hello--}") || final_raw_stripped.contains("{--Hello --}"),
-            "Should have deletion of Hello: {}", final_raw_stripped);
-        assert!(final_raw_stripped.contains("{++Goodbye"), "Should have insertion of Goodbye: {}", final_raw_stripped);
+        assert!(
+            final_raw_stripped.contains("{>>nice<<}"),
+            "Comment should be preserved: {}",
+            final_raw_stripped
+        );
+        assert!(
+            final_raw_stripped.contains("{--Hello--}")
+                || final_raw_stripped.contains("{--Hello --}"),
+            "Should have deletion of Hello: {}",
+            final_raw_stripped
+        );
+        assert!(
+            final_raw_stripped.contains("{++Goodbye"),
+            "Should have insertion of Goodbye: {}",
+            final_raw_stripped
+        );
     }
 
     #[test]

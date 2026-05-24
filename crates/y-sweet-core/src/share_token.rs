@@ -31,7 +31,7 @@ impl ShareRole {
             1 => Some(ShareRole::Edit),
             2 => Some(ShareRole::Suggest),
             3 => Some(ShareRole::View),
-        _ => None,
+            _ => None,
         }
     }
 }
@@ -46,8 +46,8 @@ pub struct ShareTokenPayload {
 #[derive(Debug, Clone, PartialEq)]
 pub struct McpAccess {
     pub writable: bool,
-    pub folder_uuid: Option<String>,  // None = all folders
-    pub folder_name: Option<String>,  // Resolved later, not in token
+    pub folder_uuid: Option<String>, // None = all folders
+    pub folder_name: Option<String>, // Resolved later, not in token
 }
 
 impl ShareTokenPayload {
@@ -116,8 +116,8 @@ fn unpack_payload(buf: &[u8]) -> Option<ShareTokenPayload> {
 }
 
 fn compute_hmac(payload: &[u8], secret: &str) -> [u8; SIG_LEN] {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC accepts any key length");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(payload);
     let result = mac.finalize().into_bytes();
     let mut sig = [0u8; SIG_LEN];
@@ -292,8 +292,7 @@ mod tests {
         let payload = make_test_payload(ShareRole::View);
         let token = sign_share_token(&payload, DEV_SECRET);
         // Even though token matches legacy key, signed token takes priority
-        let access =
-            decode_mcp_key(&token, Some(DEV_SECRET), Some(&token)).expect("should decode");
+        let access = decode_mcp_key(&token, Some(DEV_SECRET), Some(&token)).expect("should decode");
         // Signed token says View = read-only
         assert!(!access.writable);
         assert_eq!(access.folder_uuid, Some(TEST_FOLDER.to_string()));
@@ -302,8 +301,7 @@ mod tests {
     #[test]
     fn decode_mcp_key_falls_back_to_legacy() {
         let legacy = "my-legacy-api-key";
-        let access =
-            decode_mcp_key(legacy, Some(DEV_SECRET), Some(legacy)).expect("should decode");
+        let access = decode_mcp_key(legacy, Some(DEV_SECRET), Some(legacy)).expect("should decode");
         assert!(access.writable);
         assert!(access.folder_uuid.is_none());
     }

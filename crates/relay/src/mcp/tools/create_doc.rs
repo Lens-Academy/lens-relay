@@ -152,7 +152,11 @@ mod tests {
             }),
         )
         .await;
-        assert!(result.is_ok(), "MD create should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "MD create should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -170,7 +174,11 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "HTML create should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "HTML create should succeed: {:?}",
+            result.err()
+        );
         assert!(result.unwrap().contains("Created Lens/page.html"));
 
         let doc_info = server
@@ -186,7 +194,9 @@ mod tests {
         let awareness = content_doc.awareness();
         let guard = awareness.read().unwrap();
         let txn = guard.doc.transact();
-        let text = txn.get_text("contents").expect("contents text should exist");
+        let text = txn
+            .get_text("contents")
+            .expect("contents text should exist");
         assert_eq!(text.get_string(&txn), "<h1>Hello</h1>");
 
         let folder_doc = server
@@ -219,7 +229,10 @@ mod tests {
         .await;
 
         let error = result.expect_err("unsupported extension should be rejected");
-        assert!(error.contains(".html"), "error should mention .html: {error}");
+        assert!(
+            error.contains(".html"),
+            "error should mention .html: {error}"
+        );
         assert!(error.contains(".md"), "error should mention .md: {error}");
     }
 }
