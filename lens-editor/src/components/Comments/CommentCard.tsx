@@ -46,7 +46,6 @@ export function CommentCard(props: CommentCardProps): ReactElement {
         outlineOffset: focused ? '-1px' : undefined,
         boxShadow: focused ? '0 1px 3px rgba(0,0,0,0.12)' : undefined,
       }}
-      data-thread-from={thread.from}
       onClick={handleCardClick}
     >
       {/* Number badge — palette matches the inline .cm-comment-badge in the prose. */}

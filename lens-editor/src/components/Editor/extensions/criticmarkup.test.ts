@@ -827,7 +827,7 @@ describe('CriticMarkup Extension', () => {
       cleanup = c;
 
       const badge = view.contentDOM.querySelector('.cm-comment-badge');
-      expect(badge?.getAttribute('data-thread-from')).toBe('6');
+      expect(badge?.getAttribute('data-comment-from')).toBe('6');
     });
 
     it('dispatches comment-badge-focus CustomEvent on badge click', () => {

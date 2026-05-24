@@ -469,12 +469,10 @@ export function ContentPanel({
   // cleanup they'd haunt `observed` forever, anchoring the active to a
   // stale render's positions.
   //
-  // Two kinds of markers contribute:
-  //   1. Rendered prose pills (`.cm-comment-anchor[data-cm-absolute-from]`)
-  //      from CriticMarkupSpan — value is already absolute.
-  //   2. Active CodeMirror badges (`.cm-comment-badge[data-thread-from]`)
-  //      inside the section editor — value is ABSOLUTE (already translated
-  //      by the commentOffsetTranslator Facet at decoration time in Task 8).
+  // Markers are any element carrying `data-comment-from` — both rendered
+  // prose pills (CriticMarkupSpan) and active CodeMirror badges. The value
+  // is always absolute (the CM badge widget runs offsets through
+  // commentOffsetTranslator before stamping the attribute).
   useEffect(() => {
     const root = scrollRootRef?.current;
     if (!root || !onVisibleCommentChange || !criticMarkupEnabled) return;
@@ -486,19 +484,10 @@ export function ContentPanel({
     let stableTimeout: number | null = null;
 
     const resolveAbsoluteFrom = (el: Element): number | null => {
-      const explicit = (el as HTMLElement).dataset.cmAbsoluteFrom;
-      if (explicit != null && explicit !== '') {
-        const n = parseInt(explicit, 10);
-        if (!isNaN(n)) return n;
-      }
-      if (el.classList.contains('cm-comment-badge')) {
-        const abs = (el as HTMLElement).dataset.threadFrom;
-        if (abs != null) {
-          const n = parseInt(abs, 10);
-          if (!isNaN(n)) return n; // already absolute (translated by commentOffsetTranslator Facet)
-        }
-      }
-      return null;
+      const v = (el as HTMLElement).dataset.commentFrom;
+      if (v == null || v === '') return null;
+      const n = parseInt(v, 10);
+      return isNaN(n) ? null : n;
     };
 
     const cleanGhosts = () => {
@@ -548,9 +537,7 @@ export function ContentPanel({
     const seen = new WeakSet<Element>();
     const scan = () => {
       cleanGhosts();
-      const els = root.querySelectorAll<HTMLElement>(
-        '[data-cm-absolute-from], .cm-comment-badge'
-      );
+      const els = root.querySelectorAll<HTMLElement>('[data-comment-from]');
       els.forEach((el) => {
         if (seen.has(el) && root.contains(el)) return;
         seen.add(el);
@@ -562,8 +549,8 @@ export function ContentPanel({
     scan();
 
     const isMarkerNode = (el: Element): boolean =>
-      el.matches?.('[data-cm-absolute-from], .cm-comment-anchor, .cm-comment-badge') === true ||
-      el.querySelector?.('[data-cm-absolute-from], .cm-comment-anchor, .cm-comment-badge') !== null;
+      el.matches?.('[data-comment-from]') === true ||
+      el.querySelector?.('[data-comment-from]') !== null;
 
     const mutationObserver = new MutationObserver((records) => {
       // When new comment markers appear (lens switch, section editor opening,

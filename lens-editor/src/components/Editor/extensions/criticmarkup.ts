@@ -117,7 +117,7 @@ class CommentBadgeWidget extends WidgetType {
     const span = document.createElement('span');
     span.className = 'cm-comment-badge';
     span.textContent = String(this.number);
-    span.dataset.threadFrom = String(this.threadFrom);
+    span.dataset.commentFrom = String(this.threadFrom);
     return span;
   }
 
@@ -352,7 +352,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         } else if (target.classList.contains('cm-comment-badge')) {
           e.preventDefault();
           e.stopPropagation();
-          const threadFrom = parseInt(target.dataset.threadFrom ?? '', 10);
+          const threadFrom = parseInt(target.dataset.commentFrom ?? '', 10);
           if (!isNaN(threadFrom)) {
             document.dispatchEvent(new CustomEvent('comment-badge-focus', { detail: { threadFrom } }));
           }

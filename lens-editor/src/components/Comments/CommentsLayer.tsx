@@ -1,9 +1,9 @@
 /**
  * CommentsLayer — shared container for comment cards in the margin.
  *
- * Subscribes to Y.Text, lays out cards using weighted PAV, and owns focus state
- * (kept in sync with the inline .cm-comment-badge / .cm-comment-anchor markers
- * via the `comment-badge-focus` CustomEvent on document).
+ * Subscribes to Y.Text, lays out cards using weighted PAV, and owns focus
+ * state (kept in sync with inline markers — any element with
+ * `data-comment-from` — via the `comment-badge-focus` CustomEvent on document).
  */
 
 import {
@@ -99,18 +99,13 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
   useEffect(() => {
     const root = editorRootRef?.current;
     if (!root) return;
-    root
-      .querySelectorAll('.cm-comment-badge--focused, .cm-comment-anchor--focused')
-      .forEach((el) => {
-        el.classList.remove('cm-comment-badge--focused', 'cm-comment-anchor--focused');
-      });
+    root.querySelectorAll('[data-comment-focused]').forEach((el) => {
+      delete (el as HTMLElement).dataset.commentFocused;
+    });
     if (focusedThreadKey != null) {
       root
-        .querySelectorAll(`.cm-comment-badge[data-thread-from="${focusedThreadKey}"]`)
-        .forEach((el) => el.classList.add('cm-comment-badge--focused'));
-      root
-        .querySelectorAll(`.cm-comment-anchor[data-cm-absolute-from="${focusedThreadKey}"]`)
-        .forEach((el) => el.classList.add('cm-comment-anchor--focused'));
+        .querySelectorAll(`[data-comment-from="${focusedThreadKey}"]`)
+        .forEach((el) => { (el as HTMLElement).dataset.commentFocused = ''; });
     }
   }, [focusedThreadKey, editorRootRef, textRevision]);
 

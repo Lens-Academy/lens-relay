@@ -162,7 +162,7 @@ function CriticMarkupSpan({
           onClick={handleClick}
           data-cm-from={range.from}
           data-cm-to={range.to}
-          data-cm-absolute-from={absoluteFrom}
+          data-comment-from={absoluteFrom}
           data-cm-comment-number={badgeNumber}
         >
           {label}

@@ -44,24 +44,15 @@ export function resolveAnchorYFromSectionViews(
 
 /**
  * Resolve a Y.Text offset to a screen y by scanning the editor root for an
- * inline anchor element. Searches both flavors: `.cm-comment-badge` (CM
- * widget) and `.cm-comment-anchor` (read-mode React span). Both carry
- * absolute offsets. Returns null if nothing matches; use as a fallback to
+ * inline marker with `data-comment-from`. Use as a fallback to
  * `resolveAnchorYFromSectionViews`.
  */
 export function resolveAnchorYFromDOM(
   root: HTMLElement,
   offset: number,
 ): number | null {
-  const cm = root.querySelector(
-    `.cm-comment-badge[data-thread-from="${offset}"]`,
+  const el = root.querySelector(
+    `[data-comment-from="${offset}"]`,
   ) as HTMLElement | null;
-  if (cm) return cm.getBoundingClientRect().top;
-
-  const react = root.querySelector(
-    `.cm-comment-anchor[data-cm-absolute-from="${offset}"]`,
-  ) as HTMLElement | null;
-  if (react) return react.getBoundingClientRect().top;
-
-  return null;
+  return el ? el.getBoundingClientRect().top : null;
 }

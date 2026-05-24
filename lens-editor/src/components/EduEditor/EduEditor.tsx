@@ -85,7 +85,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   // IntersectionObserver's root.
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   // The content panel's wrapper div — CommentsLayer uses it as editorRootRef
-  // to toggle .cm-comment-badge--focused on badges inside it.
+  // to toggle [data-comment-focused] on markers inside it.
   const contentPanelWrapperRef = useRef<HTMLDivElement | null>(null);
 
   // Active Y.Text for the currently selected doc (set by ContentPanel via
@@ -140,11 +140,8 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
     sectionViewsRef.current = entry ? [entry] : [];
   }, []);
 
-  // Stable callbacks for CommentsLayer — wrapped once so they don't cause
-  // layout-effect re-runs on every parent render.
-  // Chain: try CM section views first (edit mode), fall back to DOM anchor
-  // scanning (read mode — where no CM view is mounted but React-rendered
-  // .cm-comment-anchor spans with data-cm-absolute-from attributes exist).
+  // Try CM section views first (edit mode); fall back to DOM scanning for
+  // read-mode sections where no CM view is mounted.
   const resolveAnchorY = useCallback((offset: number) => {
     const cm = resolveAnchorYFromSectionViews(sectionViewsRef.current, offset);
     if (cm != null) return cm;
