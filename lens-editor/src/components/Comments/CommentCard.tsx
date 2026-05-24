@@ -1,20 +1,19 @@
 import { useState, type ReactElement } from 'react';
-import type { CommentThread, CriticMarkupRange } from '../../lib/criticmarkup-parser';
-import { decodeCommentContent } from '../../lib/criticmarkup-parser';
+import type { ThreadView, MessageView, ThreadKey } from './types';
 import { formatTimestamp } from '../../lib/format-timestamp';
 import { AddCommentForm } from './AddCommentForm';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 export interface CommentCardProps {
-  thread: CommentThread;
+  thread: ThreadView;
   /** 1-indexed comment number, matching the inline badge in the prose. */
   number?: number;
   focused: boolean;
   currentUserName: string;
-  onFocus: (threadFrom: number) => void;
-  onReply: (threadEndPos: number, content: string) => void;
-  onEdit: (rangeIndex: number, newContent: string) => void;
-  onDelete: (rangeIndex: number) => void;
+  onFocus: (key: ThreadKey) => void;
+  onReply: (thread: ThreadView, body: string) => void;
+  onEdit: (message: MessageView, newBody: string) => void;
+  onDelete: (message: MessageView) => void;
 }
 
 const CARD_BORDER = '#e8e5df';
@@ -24,16 +23,16 @@ export function CommentCard(props: CommentCardProps): ReactElement {
 
   const [showReplyForm, setShowReplyForm] = useState(false);
 
-  const root = thread.comments[0];
-  const replies = thread.comments.slice(1);
+  const root = thread.root;
+  const replies = thread.replies;
 
   const handleCardClick = () => {
     // Interactive subtrees stopPropagation, so any click reaching here is on the card body.
-    onFocus(thread.from);
+    onFocus(thread.key);
   };
 
   const handleReplySubmit = (content: string) => {
-    onReply(thread.to, content);
+    onReply(thread, content);
     setShowReplyForm(false);
   };
 
@@ -78,9 +77,7 @@ export function CommentCard(props: CommentCardProps): ReactElement {
       {/* Root comment */}
       <div className="px-3 pt-2">
         <CommentRow
-          comment={root}
-          rangeIndex={0}
-          currentUserName={currentUserName}
+          message={root}
           onEdit={onEdit}
           onDelete={onDelete}
         />
@@ -92,12 +89,10 @@ export function CommentCard(props: CommentCardProps): ReactElement {
           className="ml-3 mr-3 mb-2 mt-2 border-l-2 pl-3"
           style={{ borderColor: CARD_BORDER }}
         >
-          {replies.map((reply, idx) => (
-            <div key={`reply-${reply.from}-${idx}`} className="py-1">
+          {replies.map((reply) => (
+            <div key={reply.id} className="py-1">
               <CommentRow
-                comment={reply}
-                rangeIndex={idx + 1}
-                currentUserName={currentUserName}
+                message={reply}
                 onEdit={onEdit}
                 onDelete={onDelete}
               />
@@ -137,7 +132,7 @@ export function CommentCard(props: CommentCardProps): ReactElement {
             onSubmit={handleReplySubmit}
             onCancel={() => setShowReplyForm(false)}
             placeholder="Write a reply..."
-            submitLabel="Reply"
+            submitLabel="Send"
           />
         </div>
       )}
@@ -151,21 +146,16 @@ export function CommentCard(props: CommentCardProps): ReactElement {
 // ---------------------------------------------------------------------------
 
 interface CommentRowProps {
-  comment: CriticMarkupRange;
-  rangeIndex: number;
-  currentUserName: string;
-  onEdit: (rangeIndex: number, newContent: string) => void;
-  onDelete: (rangeIndex: number) => void;
+  message: MessageView;
+  onEdit: (message: MessageView, newBody: string) => void;
+  onDelete: (message: MessageView) => void;
 }
 
-function CommentRow({ comment, rangeIndex, currentUserName, onEdit, onDelete }: CommentRowProps) {
+function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
   const [editing, setEditing] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const author = comment.metadata?.author || 'Anonymous';
-  const timestamp = comment.metadata?.timestamp;
-  const isOwn = comment.metadata?.author === currentUserName;
-  const display = decodeCommentContent(comment.content);
+  const { author, body, timestamp, canModify } = message;
 
   if (editing) {
     return (
@@ -176,13 +166,13 @@ function CommentRow({ comment, rangeIndex, currentUserName, onEdit, onDelete }: 
       >
         <AddCommentForm
           onSubmit={(content) => {
-            onEdit(rangeIndex, content);
+            onEdit(message, content);
             setEditing(false);
           }}
           onCancel={() => setEditing(false)}
           placeholder="Edit comment..."
           submitLabel="Save"
-          initialValue={display}
+          initialValue={body}
         />
       </div>
     );
@@ -196,8 +186,8 @@ function CommentRow({ comment, rangeIndex, currentUserName, onEdit, onDelete }: 
           <span className="text-[11px] text-gray-400">{formatTimestamp(timestamp)}</span>
         )}
       </div>
-      <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">{display}</p>
-      {isOwn && (
+      <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">{body}</p>
+      {canModify && (
         <div className="mt-1 flex items-center gap-2">
           <button
             type="button"
@@ -227,7 +217,7 @@ function CommentRow({ comment, rangeIndex, currentUserName, onEdit, onDelete }: 
             description="Are you sure you want to delete this comment? This cannot be undone."
             onConfirm={() => {
               setDeleteOpen(false);
-              onDelete(rangeIndex);
+              onDelete(message);
             }}
             confirmLabel="Delete"
           />

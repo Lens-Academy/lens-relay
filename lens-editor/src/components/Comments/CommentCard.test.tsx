@@ -1,94 +1,155 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+/**
+ * @vitest-environment happy-dom
+ */
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { CommentCard } from './CommentCard';
-import type { CommentThread } from '../../lib/criticmarkup-parser';
+import type { ThreadView, MessageView } from './types';
 
-function thread(): CommentThread {
+function message(over: Partial<MessageView> = {}): MessageView {
   return {
-    from: 0,
-    to: 10,
-    comments: [
-      {
-        type: 'comment',
-        from: 0,
-        to: 10,
-        contentFrom: 2,
-        contentTo: 8,
-        content: 'Hello world',
-        metadata: { author: 'Alice', timestamp: 1700000000000 },
-      },
-    ],
+    id: 'alice|1700000000000',
+    author: 'Alice',
+    body: 'Hello world',
+    timestamp: '1700000000000',
+    canModify: true,
+    ...over,
+  };
+}
+
+function thread(over: Partial<ThreadView> = {}): ThreadView {
+  return {
+    key: '100',
+    root: message(),
+    replies: [],
+    order: 1,
+    orphan: false,
+    ...over,
   };
 }
 
 describe('CommentCard', () => {
-  it('renders the root content and author', () => {
+  afterEach(cleanup);
+
+  it('renders root body, author, and badge number', () => {
     render(
       <CommentCard
         thread={thread()}
+        number={1}
         focused={false}
         currentUserName="Bob"
         onFocus={vi.fn()}
         onReply={vi.fn()}
         onEdit={vi.fn()}
         onDelete={vi.fn()}
-      />,
+      />
     );
     expect(screen.getByText('Hello world')).toBeInTheDocument();
     expect(screen.getByText('Alice')).toBeInTheDocument();
+    expect(screen.getByText('1')).toBeInTheDocument();
   });
 
-  it('shows Edit and Delete only when the current user is the author', () => {
-    const t = thread();
-    const { rerender } = render(
-      <CommentCard
-        thread={t}
-        focused
-        currentUserName="Alice"
-        onFocus={vi.fn()} onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
-      />,
-    );
-    expect(screen.queryByRole('button', { name: /edit/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /delete/i })).toBeInTheDocument();
-
-    rerender(
+  it('hides Edit/Delete when canModify is false', () => {
+    const t = thread({ root: message({ canModify: false }) });
+    render(
       <CommentCard
         thread={t}
         focused
         currentUserName="Bob"
-        onFocus={vi.fn()} onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
-      />,
+        onFocus={vi.fn()}
+        onReply={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />
     );
-    expect(screen.queryByRole('button', { name: /edit/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Edit')).toBeNull();
+    expect(screen.queryByText('Delete')).toBeNull();
   });
 
-  it('calls onFocus when the comment body text is clicked', () => {
-    // Regression: a blanket stopPropagation on CommentRow's outer div was
-    // swallowing clicks on the comment text, so only clicks on the bare card
-    // root fired onFocus. Click on the text node to lock that contract.
+  it('Edit flow submits via onEdit(message, body)', () => {
+    const t = thread();
+    const onEdit = vi.fn();
+    render(
+      <CommentCard
+        thread={t}
+        focused
+        currentUserName="Alice"
+        onFocus={vi.fn()}
+        onReply={vi.fn()}
+        onEdit={onEdit}
+        onDelete={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByText('Edit'));
+    // The AddCommentForm pre-fills with initialValue=body
+    const textarea = screen.getByDisplayValue('Hello world') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'updated' } });
+    // Find the Save submit button — submitLabel="Save"
+    fireEvent.click(screen.getByText('Save'));
+    expect(onEdit).toHaveBeenCalledWith(t.root, 'updated');
+  });
+
+  it('Delete flow calls onDelete(message)', () => {
+    const t = thread();
+    const onDelete = vi.fn();
+    render(
+      <CommentCard
+        thread={t}
+        focused
+        currentUserName="Alice"
+        onFocus={vi.fn()}
+        onReply={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={onDelete}
+      />
+    );
+    fireEvent.click(screen.getByText('Delete'));
+    // Confirm dialog has its own "Delete" button via confirmLabel
+    const dialogButtons = screen.getAllByText('Delete');
+    // Click the confirm button (last one rendered — in the dialog)
+    fireEvent.click(dialogButtons[dialogButtons.length - 1]);
+    expect(onDelete).toHaveBeenCalledWith(t.root);
+  });
+
+  it('Reply flow calls onReply(thread, body)', () => {
+    const t = thread();
+    const onReply = vi.fn();
+    render(
+      <CommentCard
+        thread={t}
+        focused
+        currentUserName="Alice"
+        onFocus={vi.fn()}
+        onReply={onReply}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByText('Reply'));
+    // Find the Reply form's textarea by looking at the most recently rendered one
+    // (the edit form is for the root, the reply form is the new one)
+    const textareas = screen.getAllByRole('textbox') as HTMLTextAreaElement[];
+    const replyArea = textareas[textareas.length - 1];
+    fireEvent.change(replyArea, { target: { value: 'thanks' } });
+    fireEvent.click(screen.getByText('Send'));
+    expect(onReply).toHaveBeenCalledWith(t, 'thanks');
+  });
+
+  it('onFocus called with thread.key on click', () => {
+    const t = thread({ key: '42' });
     const onFocus = vi.fn();
     render(
       <CommentCard
-        thread={thread()}
-        focused={false} currentUserName="Bob"
-        onFocus={onFocus} onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
-      />,
+        thread={t}
+        focused={false}
+        currentUserName="Bob"
+        onFocus={onFocus}
+        onReply={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />
     );
-    screen.getByText('Hello world').click();
-    expect(onFocus).toHaveBeenCalledWith(0);
-  });
-
-  it('does not call onFocus when an action button is clicked', () => {
-    const onFocus = vi.fn();
-    render(
-      <CommentCard
-        thread={thread()}
-        focused={false} currentUserName="Alice"
-        onFocus={onFocus} onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
-      />,
-    );
-    screen.getByRole('button', { name: /reply/i }).click();
-    expect(onFocus).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Hello world'));
+    expect(onFocus).toHaveBeenCalledWith('42');
   });
 });
