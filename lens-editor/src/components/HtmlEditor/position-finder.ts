@@ -53,20 +53,42 @@ const VOID_TAGS = new Set([
 ]);
 
 export function scoreCandidates(source: string, fp: Fingerprint): Candidate[] {
-  const needle = fp.before + fp.after;
-  if (needle.length === 0) return [];
-  const out: Candidate[] = [];
-  let from = 0;
-  while (true) {
-    const idx = source.indexOf(needle, from);
-    if (idx === -1) break;
-    const position = idx + fp.before.length;
-    const score = fp.before.length + fp.after.length + ancestorBonus(source, position, fp);
-    out.push({ position, score });
-    from = idx + 1;
+  const candidatesByPosition = new Map<number, Candidate>();
+  for (const context of candidateContexts(fp)) {
+    const needle = context.before + context.after;
+    if (needle.length === 0) continue;
+    let from = 0;
+    while (true) {
+      const idx = source.indexOf(needle, from);
+      if (idx === -1) break;
+      const position = idx + context.before.length;
+      const score = context.before.length + context.after.length + context.bonus + ancestorBonus(source, position, fp);
+      const existing = candidatesByPosition.get(position);
+      if (!existing || score > existing.score) candidatesByPosition.set(position, { position, score });
+      from = idx + 1;
+    }
   }
+  const out = Array.from(candidatesByPosition.values());
   out.sort((a, b) => b.score - a.score || a.position - b.position);
   return out.slice(0, MAX_CANDIDATES);
+}
+
+function candidateContexts(fp: Fingerprint): Array<{ before: string; after: string; bonus: number }> {
+  const out: Array<{ before: string; after: string; bonus: number }> = [];
+  const seen = new Set<string>();
+  for (const size of [Number.POSITIVE_INFINITY, 10, 5]) {
+    const before = size === Number.POSITIVE_INFINITY ? fp.before : fp.before.slice(-size);
+    const after = size === Number.POSITIVE_INFINITY ? fp.after : fp.after.slice(0, size);
+    const key = `${before}\0${after}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      before,
+      after,
+      bonus: 0,
+    });
+  }
+  return out;
 }
 
 export function makeProbeToken(): string {

@@ -874,6 +874,84 @@ describe('HtmlPreview click-to-place', () => {
     expect(screen.queryByPlaceholderText(/add a comment/i)).not.toBeInTheDocument();
   });
 
+  it('add marker uses shortened context when rendered list text differs from source markdown', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    const source = '<div>Specific details like:\n     - file names\n     - full code snippets</div>';
+    ytext.insert(0, source);
+
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'placement-requested',
+          payload: {
+            trigger: 'contextmenu',
+            fingerprint: {
+              before: 'Specific details like:file ',
+              after: 'namesfull code snippets',
+              tag: 'li',
+              ancestorPath: [{ tag: 'li', index: 0 }],
+              clickRect: { x: 20, y: 30, w: 120, h: 20 },
+            },
+            point: { x: 20, y: 30 },
+            scroll: { x: 0, y: 100 },
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add marker' }));
+      await Promise.resolve();
+    });
+
+    expect(ytext.toString()).toBe(source.replace('file names', 'file [[@1]]names'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows a visible placement error when add marker cannot find a source match', async () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>foo</p>');
+
+    render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'placement-requested',
+          payload: {
+            trigger: 'contextmenu',
+            fingerprint: {
+              before: 'missing ',
+              after: 'text',
+              tag: 'p',
+              ancestorPath: [{ tag: 'p', index: 0 }],
+              clickRect: { x: 20, y: 30, w: 120, h: 20 },
+            },
+            point: { x: 20, y: 30 },
+            scroll: { x: 0, y: 100 },
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Add marker' }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/couldn't find/i);
+    expect(ytext.toString()).toBe('<p>foo</p>');
+  });
+
   it('read-only placement requests do not open composer or mutate source', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');

@@ -48,6 +48,10 @@ interface PendingPlacementMenu {
   scroll: PreviewScroll;
   source: string;
 }
+interface PlacementError {
+  point: PreviewPoint;
+  message: string;
+}
 interface PreviewFrame {
   id: number;
   srcDoc: string;
@@ -313,6 +317,7 @@ export function HtmlPreview({
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const [pendingComment, setPendingComment] = useState<PendingPreviewComment | null>(null);
   const [pendingPlacementMenu, setPendingPlacementMenu] = useState<PendingPlacementMenu | null>(null);
+  const [placementError, setPlacementError] = useState<PlacementError | null>(null);
   const [nonce] = useState(() => makeNonce());
   const frameRefs = useRef(new Map<number, HTMLIFrameElement>());
   const nextFrameIdRef = useRef(2);
@@ -372,6 +377,7 @@ export function HtmlPreview({
     placementGenerationRef.current += 1;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Comment-mode changes intentionally invalidate any in-progress composer before it can submit at a stale placement.
     setPendingComment(null);
+    setPlacementError(null);
   }, [isCommentMode]);
 
   useEffect(() => {
@@ -381,6 +387,7 @@ export function HtmlPreview({
       // eslint-disable-next-line react-hooks/set-state-in-effect -- Entering read-only must synchronously remove UI that could mutate source.
       setPendingComment(null);
       setPendingPlacementMenu(null);
+      setPlacementError(null);
     }
   }, [readOnly]);
 
@@ -392,6 +399,7 @@ export function HtmlPreview({
         placementGenerationRef.current += 1;
         setPendingComment(null);
         setPendingPlacementMenu(null);
+        setPlacementError(null);
       }
       setContent(nextSource);
     };
@@ -460,6 +468,7 @@ export function HtmlPreview({
     const candidates = scoreCandidates(source, fingerprint);
     if (candidates.length === 1) {
       if (!shouldStayCurrent()) return;
+      setPlacementError(null);
       onResolved(candidates[0].position, source);
       return;
     }
@@ -467,12 +476,21 @@ export function HtmlPreview({
     void verifyByProbe(source, candidates, fingerprint, activeProbeRunner).then(result => {
       if (!shouldStayCurrent()) return;
       if (result.kind === 'placed') {
+        setPlacementError(null);
         onResolved(result.position, source);
       } else {
         onManualPlacement?.(result.candidates);
+        setPlacementError({
+          point,
+          message: "Couldn't find the matching source location. Try a shorter selection or place the marker closer to plain text.",
+        });
       }
     }).catch(() => {
       if (!shouldStayCurrent()) return;
+      setPlacementError({
+        point,
+        message: "Couldn't verify the source location. Try again near plain text.",
+      });
     });
   }, [activeProbeRunner, onManualPlacement, ytext]);
 
@@ -480,6 +498,7 @@ export function HtmlPreview({
     if (!pendingPlacementMenu || readOnly) return;
     const placement = pendingPlacementMenu;
     setPendingPlacementMenu(null);
+    setPlacementError(null);
 
     const generation = placementGenerationRef.current + 1;
     placementGenerationRef.current = generation;
@@ -503,6 +522,7 @@ export function HtmlPreview({
     if (!pendingPlacementMenu || readOnly) return;
     const placement = pendingPlacementMenu;
     setPendingPlacementMenu(null);
+    setPlacementError(null);
 
     const generation = placementGenerationRef.current + 1;
     placementGenerationRef.current = generation;
@@ -659,6 +679,7 @@ export function HtmlPreview({
 
       placementGenerationRef.current += 1;
       setPendingComment(null);
+      setPlacementError(null);
       setPendingPlacementMenu({
         fingerprint: payload.fingerprint,
         point: payload.point,
@@ -810,6 +831,19 @@ export function HtmlPreview({
           >
             Add marker
           </button>
+        </div>
+      )}
+      {placementError && (
+        <div
+          role="alert"
+          className="absolute max-w-72 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 shadow"
+          style={{
+            left: Math.max(8, placementError.point.x),
+            top: Math.max(8, placementError.point.y),
+            zIndex: 20,
+          }}
+        >
+          {placementError.message}
         </div>
       )}
       {pendingComment && (

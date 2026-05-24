@@ -27,6 +27,19 @@ describe('scoreCandidates', () => {
     expect(scoreCandidates('<p>foo</p>', fp({ before: 'bar', after: 'baz' }))).toEqual([]);
   });
 
+  it('falls back to shorter before/after windows when full rendered context is not in source', () => {
+    const src = '<div>Specific details like:\n     - file names\n     - full code snippets</div>';
+    const result = scoreCandidates(src, fp({
+      before: 'Specific details like:file ',
+      after: 'namesfull code snippets',
+      tag: 'li',
+      ancestorPath: [{ tag: 'li', index: 0 }],
+    }));
+
+    expect(result.length).toBeGreaterThan(0);
+    expect(src.slice(result[0].position, result[0].position + 'names'.length)).toBe('names');
+  });
+
   it('ranks the candidate whose open-tag stack matches the fingerprint ancestors first', () => {
     const src = '<main><p>click here</p></main><aside><p>click here</p></aside>';
     const result = scoreCandidates(src, fp({
