@@ -35,6 +35,10 @@ import type { CommentThread } from '../../lib/criticmarkup-parser';
 // ── Layout constants ─────────────────────────────────────────────────────────
 const CARD_GAP = 10;
 const DEFAULT_CARD_HEIGHT = 100;
+/** Padding (px) between the column edges and the first/last card when clamped. */
+const EDGE_PADDING = 12;
+/** Distance (px) of editor scroll over which the at-top / at-bottom clamp fades in. */
+const EDGE_TRANSITION_PX = 250;
 /**
  * Cards within ACTIVE_WINDOW_MULTIPLIER viewports above the visible area, and
  * (ACTIVE_WINDOW_MULTIPLIER + 1) viewports below, are kept in the layout.
@@ -133,12 +137,8 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     return () => document.removeEventListener('comment-badge-focus', handler);
   }, []);
 
-  // ── Filter state (All / Mine) ─────────────────────────────────────────────
-  const [filter, setFilter] = useState<'all' | 'mine'>('all');
-  const filteredThreads =
-    filter === 'mine'
-      ? allThreads.filter((t) => t.comments[0]?.metadata?.author === currentUserName)
-      : allThreads;
+  // No filter strip — all comments for the open doc are shown in document order.
+  const filteredThreads = allThreads;
 
   // ── Add-comment form ──────────────────────────────────────────────────────
   const [showAddForm, setShowAddForm] = useState(false);
@@ -255,19 +255,19 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
 
     const result = computeWeightedLayout({ items, gap: CARD_GAP });
 
-    // Edge clamping: keep visible-anchor cards inside the visible margin slot.
-    // Two rules:
-    //   1) When at the top of the editor scroll, the topmost in-viewport card
-    //      should never sit above the filter strip (otherwise the user sees
-    //      no card for the first comment they're reading).
-    //   2) Symmetric at the bottom — the bottommost in-viewport card should
-    //      not extend below the viewport bottom.
-    //   3) In the middle of the doc, if the in-viewport block happens to fit
-    //      the slot but PAV pushed it off one edge, nudge the block back in.
-    const stripBottom = (layerRef.current?.firstElementChild as HTMLElement | null)?.getBoundingClientRect()
-      .bottom ?? viewport.top;
-    const minTop = stripBottom + 4;
-    const maxBottom = viewport.top + viewport.height - 4;
+    // Edge clamping with a smooth scroll-position gradient.
+    //
+    // Conceptually there are three regimes:
+    //   - near the top of the editor scroll  → pin the first in-viewport card to minTop
+    //   - near the bottom                    → pin the last in-viewport card to maxBottom
+    //   - in the middle                      → no edge clamp; cards sit at PAV positions
+    //
+    // To avoid a discontinuity when crossing a threshold, both corrections are
+    // applied with a weight that fades linearly across EDGE_TRANSITION_PX. At
+    // scrollTop=0, topness=1 (full top correction); after EDGE_TRANSITION_PX,
+    // topness=0 (no top correction). Symmetric at the bottom.
+    const minTop = viewport.top + EDGE_PADDING;
+    const maxBottom = viewport.top + viewport.height - EDGE_PADDING;
 
     const inViewport = items
       .filter((it) => {
@@ -283,20 +283,19 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
       const lastBot = (result.get(last.key) ?? 0) + last.height;
 
       const sc = scrollContainerRef.current;
-      const atTop = sc ? sc.scrollTop < 30 : false;
-      const atBottom = sc ? sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 30 : false;
-      const blockSpan = lastBot - (firstPos ?? 0);
-      const slot = maxBottom - minTop;
+      const scrollTop = sc?.scrollTop ?? 0;
+      const scrollMax = sc ? Math.max(0, sc.scrollHeight - sc.clientHeight) : 0;
+      const topness = clamp01((EDGE_TRANSITION_PX - scrollTop) / EDGE_TRANSITION_PX);
+      const botness = clamp01(
+        (scrollTop - (scrollMax - EDGE_TRANSITION_PX)) / EDGE_TRANSITION_PX,
+      );
 
-      let shift = 0;
-      if (atTop && firstPos != null && firstPos < minTop) {
-        shift = minTop - firstPos;
-      } else if (atBottom && lastBot > maxBottom) {
-        shift = maxBottom - lastBot;
-      } else if (blockSpan <= slot) {
-        if (firstPos != null && firstPos < minTop) shift = minTop - firstPos;
-        else if (lastBot > maxBottom) shift = maxBottom - lastBot;
-      }
+      const topShift = firstPos != null && firstPos < minTop ? minTop - firstPos : 0;
+      const botShift = lastBot > maxBottom ? maxBottom - lastBot : 0;
+
+      // Blended shift: positive (down) near the top, negative (up) near the bottom,
+      // zero in the middle. If both apply (very short doc), they partially cancel.
+      const shift = topShift * topness + botShift * botness;
 
       if (shift !== 0) {
         for (const k of result.keys()) {
@@ -355,63 +354,31 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
         }
       }}
     >
-      {/* ── Strip: filter + add button ─────────────────────────────────── */}
-      <div
-        className="comments-layer__strip"
-        style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Segmented filter control */}
-        <div
+      {/* Floating Add button — pinned to the top-right of the column, above all cards. */}
+      {insertCursorPos != null && !showAddForm && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setShowAddForm(true); }}
           style={{
-            display: 'flex',
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            zIndex: 2,
+            pointerEvents: 'auto',
+            fontSize: 12,
+            padding: '2px 10px',
+            background: '#3b82f6',
+            color: '#fff',
+            border: 'none',
             borderRadius: 6,
-            overflow: 'hidden',
-            border: '1px solid #d1d5db',
-            flexShrink: 0,
+            cursor: 'pointer',
+            fontWeight: 600,
+            boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
           }}
         >
-          {(['all', 'mine'] as const).map((val) => (
-            <button
-              key={val}
-              type="button"
-              onClick={() => setFilter(val)}
-              style={{
-                padding: '2px 10px',
-                fontSize: 12,
-                background: filter === val ? '#3b82f6' : '#fff',
-                color: filter === val ? '#fff' : '#6b7280',
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: filter === val ? 600 : 400,
-              }}
-            >
-              {val === 'all' ? 'All' : 'Mine'}
-            </button>
-          ))}
-        </div>
-
-        {/* Add button (only when insertCursorPos is provided) */}
-        {insertCursorPos != null && !showAddForm && (
-          <button
-            type="button"
-            onClick={() => setShowAddForm(true)}
-            style={{
-              marginLeft: 'auto',
-              fontSize: 12,
-              padding: '2px 10px',
-              background: '#3b82f6',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 6,
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
-          >
-            + Add
-          </button>
-        )}
-      </div>
+          + Add
+        </button>
+      )}
 
       {/* ── Add form (floating at top of column) ───────────────────────── */}
       {showAddForm && insertCursorPos != null && (
