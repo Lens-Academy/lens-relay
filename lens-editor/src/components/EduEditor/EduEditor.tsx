@@ -391,7 +391,6 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 scrollContainerRef={contentScrollRef}
                 editorRootRef={contentPanelWrapperRef}
                 currentUserName={displayName ?? ''}
-                insertCursorPos={null}
               />
             </div>
           )}

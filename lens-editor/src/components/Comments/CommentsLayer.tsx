@@ -41,6 +41,9 @@ const ACTIVE_WINDOW_MULTIPLIER = 2;
 export interface CommentsLayerHandle {
   /** Toggles focus on the thread at `absFrom`: if already focused, clears it. */
   focusThread(absFrom: number): void;
+  /** Opens the add-comment form anchored at the cursor returned by
+   *  `getInsertCursorPos`. No-op if the getter is omitted or returns null. */
+  openAddForm(): void;
 }
 
 export interface CommentsLayerProps {
@@ -56,8 +59,12 @@ export interface CommentsLayerProps {
   editorRootRef?: RefObject<HTMLElement | null>;
   /** Current user's display name for owner detection. */
   currentUserName: string;
-  /** Where new "Add" inserts. If omitted, no Add button is shown. */
-  insertCursorPos?: number | null;
+  /** Called when the user opens the add-comment form (via the "+ Add" button
+   *  or the `openAddForm` handle method) to determine the insertion offset.
+   *  Read at click/trigger time so the result reflects the live cursor rather
+   *  than a render-time snapshot. If omitted, no Add button is shown and
+   *  `openAddForm` is a no-op. */
+  getInsertCursorPos?: () => number | null;
 }
 
 /** Clamp a value to [0, 1]. */
@@ -73,8 +80,15 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     scrollContainerRef,
     editorRootRef,
     currentUserName,
-    insertCursorPos,
+    getInsertCursorPos,
   } = props;
+
+  // getInsertCursorPos identity may change every render (callers commonly pass
+  // an inline arrow). Mirror through a ref so handle methods and click handlers
+  // always see the latest function without us having to thread it into
+  // useImperativeHandle deps.
+  const getInsertCursorPosRef = useRef(getInsertCursorPos);
+  getInsertCursorPosRef.current = getInsertCursorPos;
 
   const layerRef = useRef<HTMLDivElement | null>(null);
 
@@ -105,6 +119,12 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     focusThread(absFrom: number) {
       setFocusedThreadKey(focusedThreadKey === absFrom ? null : absFrom);
     },
+    openAddForm() {
+      const pos = getInsertCursorPosRef.current?.();
+      if (pos == null) return;
+      setPendingInsertPos(pos);
+      setShowAddForm(true);
+    },
   }), [focusedThreadKey]);
 
   useEffect(() => {
@@ -121,12 +141,17 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
   }, [focusedThreadKey, editorRootRef, textRevision]);
 
   const [showAddForm, setShowAddForm] = useState(false);
+  // Captured at the moment the form opens, so a cursor move while typing
+  // doesn't relocate the insertion target.
+  const [pendingInsertPos, setPendingInsertPos] = useState<number | null>(null);
 
   const handleAddSubmit = (content: string) => {
-    if (insertCursorPos == null) return;
-    insertCommentInYText(yText, content, insertCursorPos);
+    const pos = pendingInsertPos;
+    if (pos == null) return;
+    insertCommentInYText(yText, content, pos);
     setShowAddForm(false);
-    setFocusedThreadKey(insertCursorPos);
+    setPendingInsertPos(null);
+    setFocusedThreadKey(pos);
   };
 
   const cardHeightsRef = useRef(new Map<number, number>());
@@ -320,10 +345,16 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
         }
       }}
     >
-      {insertCursorPos != null && !showAddForm && (
+      {getInsertCursorPos != null && !showAddForm && (
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); setShowAddForm(true); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            const pos = getInsertCursorPosRef.current?.();
+            if (pos == null) return;
+            setPendingInsertPos(pos);
+            setShowAddForm(true);
+          }}
           style={{
             position: 'absolute',
             top: 8,
@@ -345,7 +376,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
         </button>
       )}
 
-      {showAddForm && insertCursorPos != null && (
+      {showAddForm && pendingInsertPos != null && (
         <div
           style={{ pointerEvents: 'auto', padding: '0 8px 8px' }}
           onClick={(e) => e.stopPropagation()}
@@ -353,7 +384,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
           <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden' }}>
             <AddCommentForm
               onSubmit={handleAddSubmit}
-              onCancel={() => setShowAddForm(false)}
+              onCancel={() => { setShowAddForm(false); setPendingInsertPos(null); }}
               placeholder="Add a comment..."
               submitLabel="Add"
               autoFocus

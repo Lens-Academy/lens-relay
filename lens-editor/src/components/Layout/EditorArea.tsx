@@ -76,7 +76,6 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     return root ? resolveAnchorYFromDOM(root as HTMLElement, offset) : null;
   }, [editorView]);
 
-  const [addCommentTrigger, setAddCommentTrigger] = useState(0);
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
   const [isSuggestionMode, setIsSuggestionMode] = useState(false);
@@ -103,9 +102,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   // Callback for Y.Doc sync completion
   const handleSynced = useCallback(() => setSynced(true), []);
 
+  const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
   const handleRequestAddComment = useCallback(() => {
     manager.expand('comment-margin');
-    setAddCommentTrigger(v => v + 1);
+    commentsLayerRef.current?.openAddForm();
   }, [manager.expand]);
 
   // Track suggestion mode from editor state
@@ -133,7 +133,6 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     });
   }, [editorView, isSourceMode, isSuggestionMode]);
 
-  const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
   const handleCommentClick = useCallback((absFrom: number) => {
     manager.expand('comment-margin');
     commentsLayerRef.current?.focusThread(absFrom);
@@ -306,7 +305,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               scrollContainerRef={scrollContainerRef}
               editorRootRef={editorRootRef}
               currentUserName={displayName ?? 'anonymous'}
-              insertCursorPos={editorView.state.selection.main.head}
+              getInsertCursorPos={() => editorView.state.selection.main.head}
             />
           )}
         </div>
