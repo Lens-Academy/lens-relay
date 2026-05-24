@@ -218,6 +218,74 @@ describe('HtmlPreview bridge integration', () => {
     expect(orphans.at(-1)).toEqual(['c1']);
   });
 
+  it('applies comments-rendered reports from a replacement iframe when it becomes active', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>first</p><!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->');
+    const orphans: string[][] = [];
+
+    const { container } = render(
+      <HtmlPreview
+        ytext={ytext}
+        currentUser="me@x"
+        origin={Symbol()}
+        debounceMs={0}
+        onOrphanedChange={ids => orphans.push(ids)}
+      />
+    );
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'comments-rendered',
+          payload: { found: [], orphaned: ['c1'] },
+        },
+      });
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 0, scrollWidth: 500, clientWidth: 500, scrollHeight: 1000, clientHeight: 500 } },
+      });
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, '<p>second [[@comment:c1]]<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}--></p>');
+    });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => {});
+
+    const replacementFrame = container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement;
+    expect(replacementFrame).not.toBeNull();
+
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { nonce: '', message: { type: 'ready', payload: {} } },
+        source: replacementFrame.contentWindow,
+      }));
+    });
+
+    await act(async () => {
+      dispatchFromBridge(replacementFrame, {
+        nonce: '__test_nonce__',
+        message: {
+          type: 'comments-rendered',
+          payload: { found: ['c1'], orphaned: [] },
+        },
+      });
+    });
+    expect(orphans.at(-1)).toEqual(['c1']);
+
+    await act(async () => {
+      dispatchFromBridge(replacementFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 0, scrollWidth: 500, clientWidth: 500, scrollHeight: 1000, clientHeight: 500 } },
+      });
+    });
+
+    expect(container.querySelector('iframe[data-preview-frame-state="active"]')).toBe(replacementFrame);
+    expect(orphans.at(-1)).toEqual([]);
+  });
+
   it('responds to bridge ready by posting init back to the iframe contentWindow', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');

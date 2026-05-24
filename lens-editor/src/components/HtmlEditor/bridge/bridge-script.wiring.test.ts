@@ -141,6 +141,127 @@ describe('installBridge', () => {
     expect((rendered!.message as Extract<BridgeToParent, { type: 'comments-rendered' }>).payload.found).toEqual(['c1']);
   });
 
+  it('after receiving init, upgrades visible comment anchors into inline buttons', () => {
+    document.body.innerHTML = '<p>Hello [[@comment:c1]] world</p>';
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    const cleanup = installBridge(window as Window & typeof globalThis);
+    cleanups.push(cleanup);
+
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+
+    expect(document.body.textContent).toBe('Hello ! world');
+    expect(document.querySelectorAll('.lens-comment-inline-marker')).toHaveLength(1);
+    const marker = document.querySelector('.lens-comment-inline-marker') as HTMLElement;
+    expect(marker.tagName).toBe('BUTTON');
+    expect(marker.getAttribute('type')).toBe('button');
+    expect(marker.getAttribute('role')).toBe('button');
+    expect(marker.tabIndex).toBe(0);
+    expect(document.getElementById('lens-comment-inline-marker-style')?.textContent).toContain('background: #dc2626');
+    expect(document.querySelectorAll('.lens-comment-dot')).toHaveLength(0);
+    const rendered = sent.find(e => e.message.type === 'comments-rendered');
+    expect((rendered!.message as Extract<BridgeToParent, { type: 'comments-rendered' }>).payload.found).toEqual(['c1']);
+  });
+
+  it('upgrades comment anchors inside chat transcript details markup into inline buttons', () => {
+    document.body.innerHTML = `
+      <details class="turn user" open>
+        <summary>user <span class="ts">2026-02-16T13:57:08.367Z</span></summary>
+        <div class="md">This summary should be thorough[[@comment:c1]]<!--lens-comment {"id":"c1","author":"Test","ts":"2026-05-24T09:09:24.118Z","body":"thorough yeah"}--> in capturing details.</div>
+      </details>
+    `;
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    const cleanup = installBridge(window as Window & typeof globalThis);
+    cleanups.push(cleanup);
+
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'thorough yeah', replies: 0 }] } });
+
+    const marker = document.querySelector('.lens-comment-inline-marker') as HTMLButtonElement | null;
+    expect(marker).not.toBeNull();
+    expect(marker?.tagName).toBe('BUTTON');
+    expect(marker?.textContent).toBe('!');
+    expect(document.querySelectorAll('.lens-comment-dot')).toHaveLength(0);
+    expect(document.body.textContent).toContain('This summary should be thorough! in capturing details.');
+  });
+
+  it('waits until DOMContentLoaded before replacing markers so page scripts can render raw source', () => {
+    Object.defineProperty(document, 'readyState', { value: 'loading', configurable: true });
+    document.body.innerHTML = '<div class="md">This summary should be thorough[[@comment:c1]] in capturing details.</div>';
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    const cleanup = installBridge(window as Window & typeof globalThis);
+    cleanups.push(cleanup);
+
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'thorough yeah', replies: 0 }] } });
+    expect(document.querySelector('.lens-comment-inline-marker')).toBeNull();
+
+    const md = document.querySelector('.md') as HTMLElement;
+    md.innerHTML = `<p>${md.textContent}</p>`;
+    Object.defineProperty(document, 'readyState', { value: 'interactive', configurable: true });
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+
+    const marker = document.querySelector('.lens-comment-inline-marker') as HTMLButtonElement | null;
+    expect(marker).not.toBeNull();
+    expect(marker?.tagName).toBe('BUTTON');
+    expect(document.body.textContent).toContain('This summary should be thorough! in capturing details.');
+  });
+
+  it('on inline marker click, posts dot-clicked with the comment id', () => {
+    document.body.innerHTML = '<p>Hello [[@comment:c1]] world</p>';
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    const cleanup = installBridge(window as Window & typeof globalThis);
+    cleanups.push(cleanup);
+
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    const marker = document.querySelector('.lens-comment-inline-marker') as HTMLElement;
+    marker.click();
+
+    const clicked = sent.find(e => e.message.type === 'dot-clicked');
+    expect(clicked).toBeDefined();
+    expect((clicked!.message as Extract<BridgeToParent, { type: 'dot-clicked' }>).payload.id).toBe('c1');
+  });
+
+  it('on inline marker keyboard activation, posts dot-clicked with the comment id', () => {
+    document.body.innerHTML = '<p>Hello [[@comment:c1]] world</p>';
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    const cleanup = installBridge(window as Window & typeof globalThis);
+    cleanups.push(cleanup);
+
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    const marker = document.querySelector('.lens-comment-inline-marker') as HTMLElement;
+    marker.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    const clicked = sent.find(e => e.message.type === 'dot-clicked');
+    expect(clicked).toBeDefined();
+    expect((clicked!.message as Extract<BridgeToParent, { type: 'dot-clicked' }>).payload.id).toBe('c1');
+  });
+
+  it('inline marker clicks do not place a new comment while click-to-place is armed', () => {
+    document.body.innerHTML = '<p>Hello [[@comment:c1]] world</p>';
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    const cleanup = installBridge(window as Window & typeof globalThis);
+    cleanups.push(cleanup);
+
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'enable-click-to-place', payload: {} });
+    sent = [];
+    const marker = document.querySelector('.lens-comment-inline-marker') as HTMLElement;
+    marker.click();
+
+    expect(sent.some(e => e.message.type === 'dot-clicked')).toBe(true);
+    expect(sent.some(e => e.message.type === 'click-captured')).toBe(false);
+  });
+
   it('cleanup removes owned overlay UI and leaves old dots inert', () => {
     arm();
     dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });

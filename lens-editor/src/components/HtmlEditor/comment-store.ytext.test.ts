@@ -24,7 +24,7 @@ describe('addComment', () => {
       id: 'c1', author: 'luc', ts: 't1', body: 'why?', position: 14,
     });
     const after = ytext.toString();
-    expect(after).toContain('<p>Hello world<!--lens-comment ');
+    expect(after).toContain('<p>Hello world[[@comment:c1]]<!--lens-comment ');
     expect(parseComments(after)).toHaveLength(1);
     expect(parseComments(after)[0].comment.body).toBe('why?');
   });

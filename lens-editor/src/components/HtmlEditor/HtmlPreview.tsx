@@ -35,6 +35,7 @@ type PreviewScroll = { x: number; y: number };
 type PreviewPlacementTrigger = 'contextmenu' | 'selection' | 'toolbar';
 type ProbeViewportSize = { width: number; height: number };
 type ProbeViewportSizeGetter = () => ProbeViewportSize;
+type CommentsRenderedPayload = { found: string[]; orphaned: string[] };
 interface PendingPreviewComment {
   position: number;
   point: PreviewPoint;
@@ -127,6 +128,12 @@ function isPreviewScrollState(value: unknown): value is PreviewScrollState {
 
 function isPlacementTrigger(value: unknown): value is PreviewPlacementTrigger {
   return value === 'contextmenu' || value === 'selection' || value === 'toolbar';
+}
+
+function isCommentsRenderedPayload(value: unknown): value is CommentsRenderedPayload {
+  return isObject(value)
+    && Array.isArray(value.found)
+    && Array.isArray(value.orphaned);
 }
 
 function isCloseScroll(actual: PreviewScroll, expected: PreviewScroll): boolean {
@@ -328,6 +335,7 @@ export function HtmlPreview({
   const restoringFrameIdRef = useRef<number | null>(null);
   const restoringScrollRef = useRef<{ frameId: number; scroll: PreviewScroll } | null>(null);
   const postActivationRestoreRef = useRef<{ frameId: number; scroll: PreviewScroll } | null>(null);
+  const pendingCommentsRenderedRef = useRef(new Map<number, CommentsRenderedPayload>());
   const diagnosticMarkerIndexRef = useRef(1);
   const getActiveIframe = useCallback(() => {
     return frameRefs.current.get(activeFrameIdRef.current) ?? null;
@@ -345,6 +353,10 @@ export function HtmlPreview({
   useEffect(() => {
     framesRef.current = frames;
     activeFrameIdRef.current = frames.find(frame => frame.state === 'active')?.id ?? frames[0]?.id ?? 1;
+    const liveFrameIds = new Set(frames.map(frame => frame.id));
+    for (const frameId of Array.from(pendingCommentsRenderedRef.current.keys())) {
+      if (!liveFrameIds.has(frameId)) pendingCommentsRenderedRef.current.delete(frameId);
+    }
   }, [frames]);
 
   useEffect(() => {
@@ -543,16 +555,25 @@ export function HtmlPreview({
     return null;
   }, []);
 
+  const applyCommentsRendered = useCallback((payload: CommentsRenderedPayload): void => {
+    onOrphanedChange?.(payload.orphaned.filter((id): id is string => typeof id === 'string'));
+  }, [onOrphanedChange]);
+
   const activateRestoredFrame = useCallback((frameId: number): void => {
     restoringFrameIdRef.current = null;
     restoringScrollRef.current = null;
     postActivationRestoreRef.current = null;
+    const pendingCommentsRendered = pendingCommentsRenderedRef.current.get(frameId);
+    if (pendingCommentsRendered) {
+      pendingCommentsRenderedRef.current.delete(frameId);
+      applyCommentsRendered(pendingCommentsRendered);
+    }
     setFrames(currentFrames => {
       const target = currentFrames.find(frame => frame.id === frameId);
       if (!target) return currentFrames;
       return [{ ...target, state: 'active' }];
     });
-  }, []);
+  }, [applyCommentsRendered]);
 
   const settleRestoredFrame = useCallback((frameId: number): void => {
     const intendedScroll = restoringScrollRef.current?.frameId === frameId
@@ -667,16 +688,23 @@ export function HtmlPreview({
         return;
       }
 
+      if (message.type === 'comments-rendered') {
+        if (!isCommentsRenderedPayload(message.payload)) return;
+        if (frame.state === 'active') {
+          pendingCommentsRenderedRef.current.delete(frame.id);
+          applyCommentsRendered(message.payload);
+        } else {
+          pendingCommentsRenderedRef.current.set(frame.id, message.payload);
+        }
+        return;
+      }
+
       if (frame.state !== 'active') return;
 
       switch (message.type) {
         case 'dot-clicked':
           if (!isObject(message.payload) || typeof message.payload.id !== 'string') return;
           setOpenThreadId(message.payload.id);
-          break;
-        case 'comments-rendered':
-          if (!isObject(message.payload) || !Array.isArray(message.payload.orphaned)) return;
-          onOrphanedChange?.(message.payload.orphaned.filter((id): id is string => typeof id === 'string'));
           break;
         case 'click-captured':
           handleClickCaptured(message.payload);
@@ -712,6 +740,7 @@ export function HtmlPreview({
   }, [
     currentUser,
     activateRestoredFrame,
+    applyCommentsRendered,
     findFrameIdByWindow,
     initializeFrame,
     isCommentMode,

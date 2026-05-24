@@ -10,6 +10,8 @@ import {
 
 export const OVERLAY_ROOT_ID = 'lens-comment-overlay-root';
 const OVERLAY_ROOT_MARKER = 'v1';
+const INLINE_MARKER_ATTRIBUTE = 'data-lens-inline-comment-marker';
+const INLINE_MARKER_STYLE_ID = 'lens-comment-inline-marker-style';
 const overlayRoots = new WeakMap<Document, HTMLDivElement>();
 const BRIDGE_STATE_KEY = '__lensBridgeInstallState';
 
@@ -95,6 +97,114 @@ function isUsableRenderedElement(el: Element): boolean {
   return rect.width > 0 || rect.height > 0;
 }
 
+function isSkippableTextContainer(el: Element | null): boolean {
+  if (!el) return true;
+  return el.tagName === 'SCRIPT'
+    || el.tagName === 'STYLE'
+    || el.tagName === 'TEXTAREA'
+    || el.tagName === 'TITLE'
+    || el.hasAttribute('data-lens-overlay')
+    || el.hasAttribute(INLINE_MARKER_ATTRIBUTE);
+}
+
+function ensureInlineMarkerStyle(doc: Document): void {
+  if (doc.getElementById(INLINE_MARKER_STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = INLINE_MARKER_STYLE_ID;
+  style.textContent = `
+.lens-comment-inline-marker[${INLINE_MARKER_ATTRIBUTE}="true"] {
+  appearance: none !important;
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  vertical-align: middle !important;
+  width: 1.15em !important;
+  height: 1.15em !important;
+  margin: 0 4px !important;
+  padding: 0 !important;
+  border: 2px solid #7c2d12 !important;
+  border-radius: 999px !important;
+  background: #dc2626 !important;
+  color: white !important;
+  font-family: Arial, sans-serif !important;
+  font-size: 0.75em !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+  box-shadow: 0 0 0 2px white, 0 1px 3px rgba(0,0,0,0.35) !important;
+  user-select: none !important;
+}
+.lens-comment-inline-marker[${INLINE_MARKER_ATTRIBUTE}="true"]:focus {
+  outline: 2px solid #2563eb !important;
+  outline-offset: 1px !important;
+}
+`;
+  (doc.head ?? doc.documentElement).appendChild(style);
+}
+
+function makeInlineMarker(doc: Document, summary: CommentSummary): HTMLElement {
+  const marker = doc.createElement('button');
+  marker.className = 'lens-comment-inline-marker';
+  marker.dataset.commentId = summary.id;
+  marker.setAttribute(INLINE_MARKER_ATTRIBUTE, 'true');
+  marker.setAttribute('type', 'button');
+  marker.setAttribute('role', 'button');
+  marker.tabIndex = 0;
+  marker.setAttribute('aria-label', `Comment: ${summary.body.slice(0, 60)}`);
+  marker.textContent = '!';
+  return marker;
+}
+
+function renderInlineMarkers(doc: Document, comments: CommentSummary[]): Set<string> {
+  ensureInlineMarkerStyle(doc);
+  const byId = new Map(comments.map(comment => [comment.id, comment]));
+  const found = new Set<string>();
+  for (const existing of Array.from(doc.querySelectorAll<HTMLElement>(`[${INLINE_MARKER_ATTRIBUTE}="true"]`))) {
+    const id = existing.dataset.commentId;
+    if (id && byId.has(id)) found.add(id);
+  }
+
+  const view = doc.defaultView;
+  const showText = view?.NodeFilter.SHOW_TEXT ?? NodeFilter.SHOW_TEXT;
+  const walker = doc.createTreeWalker(doc.body, showText, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (isSkippableTextContainer(parent)) return NodeFilter.FILTER_REJECT;
+      return node.textContent?.includes('[[@comment:') === true
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const nodes: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    nodes.push(node as Text);
+  }
+
+  const anchorPattern = /\[\[@comment:([^\]]+)\]\]/g;
+  for (const node of nodes) {
+    const text = node.textContent ?? '';
+    anchorPattern.lastIndex = 0;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let changed = false;
+    const fragment = doc.createDocumentFragment();
+    while ((match = anchorPattern.exec(text)) !== null) {
+      const summary = byId.get(match[1]);
+      if (!summary) continue;
+      if (match.index > lastIndex) fragment.append(text.slice(lastIndex, match.index));
+      fragment.append(makeInlineMarker(doc, summary));
+      found.add(summary.id);
+      lastIndex = match.index + match[0].length;
+      changed = true;
+    }
+    if (!changed) continue;
+    if (lastIndex < text.length) fragment.append(text.slice(lastIndex));
+    node.replaceWith(fragment);
+  }
+  return found;
+}
+
 export function findAnchorElement(commentNode: Comment): Element | null {
   const elementNode = commentNode.ownerDocument.defaultView?.Node.ELEMENT_NODE ?? Node.ELEMENT_NODE;
   let sib: Node | null = commentNode.nextSibling;
@@ -137,12 +247,17 @@ function removeOwnedOverlayRoot(doc: Document): void {
 
 export function renderDots(doc: Document, comments: CommentSummary[]): { found: string[]; orphaned: string[] } {
   const root = ensureOverlayRoot(doc);
+  const inlineFound = renderInlineMarkers(doc, comments);
   const presentNodes = findCommentNodes(doc);
   const byId = new Map(presentNodes.map(c => [c.id, c]));
   const found: string[] = [];
   const orphaned: string[] = [];
   root.innerHTML = '';
   for (const summary of comments) {
+    if (inlineFound.has(summary.id)) {
+      found.push(summary.id);
+      continue;
+    }
     const present = byId.get(summary.id);
     if (!present) { orphaned.push(summary.id); continue; }
     const anchor = findAnchorElement(present.node);
@@ -270,22 +385,40 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     return doc.body;
   }
 
-  const dotClickListener = (event: MouseEvent): void => {
+  function findInlineMarker(target: Element): HTMLElement | null {
+    return target.closest<HTMLElement>(`.lens-comment-inline-marker[${INLINE_MARKER_ATTRIBUTE}="true"]`);
+  }
+
+  const markerClickListener = (event: MouseEvent): void => {
     const target = event.target;
     if (!(target instanceof win.Element)) return;
     const dot = target.closest<HTMLElement>('.lens-comment-dot');
-    if (!dot || dotRoot?.contains(dot) !== true) return;
+    const inlineMarker = findInlineMarker(target);
+    const marker = dotRoot?.contains(dot) === true ? dot : inlineMarker;
+    if (!marker) return;
     event.stopPropagation();
-    const id = dot.dataset.commentId;
+    const id = marker.dataset.commentId;
+    if (id) postToParent({ type: 'dot-clicked', payload: { id } });
+  };
+
+  const markerKeyListener = (event: KeyboardEvent): void => {
+    const target = event.target;
+    if (!(target instanceof win.Element)) return;
+    const marker = findInlineMarker(target);
+    if (!marker) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    event.stopPropagation();
+    const id = marker.dataset.commentId;
     if (id) postToParent({ type: 'dot-clicked', payload: { id } });
   };
 
   function wireDotRoot(): void {
     const root = getOwnedOverlayRoot(doc);
     if (root === dotRoot) return;
-    dotRoot?.removeEventListener('click', dotClickListener);
+    dotRoot?.removeEventListener('click', markerClickListener);
     dotRoot = root;
-    dotRoot?.addEventListener('click', dotClickListener);
+    dotRoot?.addEventListener('click', markerClickListener);
   }
 
   function rebuildDots(comments: CommentSummary[]): void {
@@ -296,7 +429,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   }
 
   function rebuildDotsWhenBodyReady(comments: CommentSummary[]): void {
-    if (!getBody()) {
+    if (!getBody() || doc.readyState === 'loading') {
       pendingBodyRender = true;
       return;
     }
@@ -484,7 +617,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     const target = event.target;
     if (!(target instanceof win.Element)) return;
     const ownedOverlayRoot = getOwnedOverlayRoot(doc);
-    if (ownedOverlayRoot?.contains(target)) return;
+    if (ownedOverlayRoot?.contains(target) || findInlineMarker(target)) return;
     event.preventDefault();
     event.stopPropagation();
     clickToPlaceArmed = false;
@@ -498,6 +631,8 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     postToParent({ type: 'click-captured', payload: { fingerprint } });
   };
   win.addEventListener('click', clickListener, true);
+  win.addEventListener('click', markerClickListener, true);
+  win.addEventListener('keydown', markerKeyListener, true);
 
   const contextMenuListener = (event: MouseEvent): void => {
     const target = event.target;
@@ -628,6 +763,8 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   const cleanup = (): void => {
     win.removeEventListener('message', messageListener);
     win.removeEventListener('click', clickListener, true);
+    win.removeEventListener('click', markerClickListener, true);
+    win.removeEventListener('keydown', markerKeyListener, true);
     win.removeEventListener('contextmenu', contextMenuListener, true);
     win.removeEventListener('mouseup', selectionListener);
     win.removeEventListener('scroll', scheduleScrollState);
@@ -644,7 +781,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       selectionTimer = null;
     }
     doc.removeEventListener('DOMContentLoaded', domReadyListener);
-    dotRoot?.removeEventListener('click', dotClickListener);
+    dotRoot?.removeEventListener('click', markerClickListener);
     dotRoot = null;
     removeOwnedOverlayRoot(doc);
     observer.disconnect();

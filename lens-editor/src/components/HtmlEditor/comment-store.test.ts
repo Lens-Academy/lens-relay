@@ -1,14 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import {
+  addComment,
+  deleteMessage,
+  editMessage,
   parsePayload,
   parseComments,
+  serializeCommentAnchor,
   serializeComment,
   serializeReply,
   type CommentMarker,
   type ReplyMarker,
 } from './comment-store';
+import * as Y from 'yjs';
 
 describe('serializeComment', () => {
+  it('emits a visible inline anchor for comment placement', () => {
+    expect(serializeCommentAnchor('c1')).toBe('[[@comment:c1]]');
+  });
+
   it('emits an HTML comment node with JSON payload', () => {
     const marker: CommentMarker = {
       kind: 'comment',
@@ -90,6 +99,15 @@ describe('parseComments', () => {
     expect(src.slice(result[0].sourceStart, result[0].sourceEnd)).toBe(marker);
   });
 
+  it('parses an anchored parent comment with source bounds including the anchor', () => {
+    const anchor = '[[@comment:c1]]';
+    const marker = '<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->';
+    const src = `before ${anchor}${marker} after`;
+    const result = parseComments(src);
+    expect(result).toHaveLength(1);
+    expect(src.slice(result[0].sourceStart, result[0].sourceEnd)).toBe(`${anchor}${marker}`);
+  });
+
   it('clusters replies with their parent', () => {
     const src =
       '<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->' +
@@ -131,5 +149,52 @@ describe('parseComments', () => {
     const src = '<!--lens-comment {not json}-->' +
       '<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"ok"}-->';
     expect(parseComments(src).map(c => c.comment.id)).toEqual(['c1']);
+  });
+});
+
+describe('comment mutations', () => {
+  function makeText(source: string) {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('html');
+    ytext.insert(0, source);
+    return ytext;
+  }
+
+  it('addComment inserts a visible anchor immediately before the metadata marker', () => {
+    const ytext = makeText('<p>Hello world</p>');
+    addComment(ytext, null, {
+      id: 'c1',
+      author: 'a',
+      ts: 't',
+      body: 'x',
+      position: 8,
+    });
+
+    expect(ytext.toString()).toBe(
+      '<p>Hello[[@comment:c1]]<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}--> world</p>'
+    );
+  });
+
+  it('editMessage preserves an anchored comment marker', () => {
+    const ytext = makeText(
+      '<p>Hello[[@comment:c1]]<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"old"}--> world</p>'
+    );
+
+    editMessage(ytext, null, { id: 'c1', newBody: 'new' });
+
+    expect(ytext.toString()).toBe(
+      '<p>Hello[[@comment:c1]]<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"new"}--> world</p>'
+    );
+  });
+
+  it('deleteMessage removes the visible anchor with the parent comment cluster', () => {
+    const ytext = makeText(
+      '<p>Hello[[@comment:c1]]<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->' +
+      '<!--lens-reply {"id":"r1","parent":"c1","author":"b","ts":"t2","body":"y"}--> world</p>'
+    );
+
+    deleteMessage(ytext, null, 'c1');
+
+    expect(ytext.toString()).toBe('<p>Hello world</p>');
   });
 });

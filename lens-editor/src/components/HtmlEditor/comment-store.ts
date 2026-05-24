@@ -20,7 +20,7 @@ export interface ReplyMarker {
 export interface CommentCluster {
   comment: CommentMarker;
   replies: ReplyMarker[];
-  /** Inclusive start index in source of the parent comment marker. */
+  /** Inclusive start index in source of the parent comment anchor, or marker when no anchor exists. */
   sourceStart: number;
   /** Exclusive end index in source of the last marker in the cluster (parent or last reply). */
   sourceEnd: number;
@@ -33,6 +33,10 @@ function encodePayload<T extends Record<string, unknown>>(payload: T): string {
 export function serializeComment(m: CommentMarker): string {
   const { id, author, ts, body } = m;
   return `<!--lens-comment ${encodePayload({ id, author, ts, body })}-->`;
+}
+
+export function serializeCommentAnchor(id: string): string {
+  return `[[@comment:${id}]]`;
 }
 
 export function serializeReply(m: ReplyMarker): string {
@@ -121,10 +125,14 @@ export function parseComments(source: string): CommentCluster[] {
     if (!payload) continue;
     if (found.kind === 'comment') {
       if (!payload.id || !payload.author || !payload.ts || payload.body === undefined) continue;
+      const anchor = serializeCommentAnchor(payload.id);
+      const anchorStart = source.slice(Math.max(0, found.start - anchor.length), found.start) === anchor
+        ? found.start - anchor.length
+        : found.start;
       const cluster: CommentCluster = {
         comment: { kind: 'comment', id: payload.id, author: payload.author, ts: payload.ts, body: payload.body },
         replies: [],
-        sourceStart: found.start,
+        sourceStart: anchorStart,
         sourceEnd: found.markerEnd,
       };
       clusters.push(cluster);
@@ -149,7 +157,7 @@ export interface AddCommentInput {
 }
 
 export function addComment(ytext: Y.Text, origin: unknown, input: AddCommentInput): void {
-  const marker = serializeComment({
+  const marker = serializeCommentAnchor(input.id) + serializeComment({
     kind: 'comment',
     id: input.id,
     author: input.author,
@@ -234,7 +242,7 @@ function findMessage(source: string, id: string): MessageLocation | null {
   for (const cluster of clusters) {
     if (cluster.comment.id === id) {
       const found = findNextMarker(source, cluster.sourceStart);
-      if (!found || found.start !== cluster.sourceStart || found.kind !== 'comment') return null;
+      if (!found || found.start >= cluster.sourceEnd || found.kind !== 'comment') return null;
       const payload = parsePayload(source.slice(found.payloadStart, found.payloadEnd));
       if (!payloadMatchesComment(payload, cluster.comment)) return null;
       return {
