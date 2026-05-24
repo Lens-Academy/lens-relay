@@ -1,13 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { LENS_EDITOR_ORIGIN } from '../../lib/relay-api';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { HtmlSourceEditor } from './HtmlSourceEditor';
 import { HtmlPreview } from './HtmlPreview';
-import { OrphanedCommentsPanel } from './OrphanedCommentsPanel';
 import { NewCommentCard } from './NewCommentCard';
 import { addComment, parseComments } from './comment-store';
+import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
+import {
+  useThreadsFromHtmlYText,
+  makeIframeScrollSource,
+  effectiveY,
+  type AnchorState,
+  type IframeScrollState,
+} from './htmlCommentsAdapter';
 import type { Candidate, ProbeRunner } from './position-finder';
 
 type Mode = 'source' | 'preview' | 'split';
@@ -51,7 +58,6 @@ export function HtmlEditor({
   const currentUser = currentUserProp ?? displayName ?? 'Anonymous';
   const [mode, setMode] = useState<Mode>('preview');
   const [commentMode, setCommentMode] = useState(false);
-  const [orphanedIds, setOrphanedIds] = useState<string[]>([]);
   const [pendingCandidates, setPendingCandidates] = useState<Candidate[] | null>(null);
   const [manualComposer, setManualComposer] = useState<{
     position: number;
@@ -62,11 +68,40 @@ export function HtmlEditor({
   const sourceWrapperRef = useRef<HTMLDivElement>(null);
   const activePendingCandidates = !readOnly && commentMode ? pendingCandidates : null;
 
+  // --- CommentsLayer integration ---
+  const commentsLayerRef = useRef<CommentsLayerHandle>(null);
+  const previewWrapperRef = useRef<HTMLDivElement>(null);
+
+  const [anchorState, setAnchorState] = useState<AnchorState>(() => new Map());
+  const baselineScrollYRef = useRef(0);
+  const currentScrollYRef = useRef(0);
+  const layoutVersionRef = useRef(0);
+
+  const iframeScrollStateRef = useRef<IframeScrollState>({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
+  const scrollSource = useMemo(() => makeIframeScrollSource(() => iframeScrollStateRef.current), []);
+
+  const [focusedCommentId, setFocusedCommentId] = useState<string | null>(null);
+
+  const { threads, callbacks } = useThreadsFromHtmlYText(ytext, anchorState, currentUser);
+
+  const resolveAnchorY = (key: string): number | null => {
+    const r = anchorState.get(key);
+    if (!r) return null;
+    const iframeTop = previewWrapperRef.current?.getBoundingClientRect().top ?? 0;
+    return effectiveY(r, baselineScrollYRef.current, currentScrollYRef.current, iframeTop);
+  };
+
+  const getViewportRect = () => {
+    const r = previewWrapperRef.current?.getBoundingClientRect();
+    return { top: r?.top ?? 0, height: r?.height ?? 0 };
+  };
+
+  // Derive orphan count from threads for the toolbar badge
+  const orphanCount = threads.filter(t => t.orphan).length;
+
   useEffect(() => {
     const syncFromSource = () => {
       const source = ytext.toString();
-      const existingCommentIds = new Set(parseComments(source).map(cluster => cluster.comment.id));
-      setOrphanedIds(ids => ids.filter(id => existingCommentIds.has(id)));
       if (pendingSourceRef.current !== null && pendingSourceRef.current !== source) {
         pendingSourceRef.current = null;
         setPendingCandidates(null);
@@ -123,9 +158,9 @@ export function HtmlEditor({
             Comment
           </button>
         )}
-        {orphanedIds.length > 0 && (
+        {orphanCount > 0 && (
           <span className="ml-2 rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-            {orphanedIds.length} orphan{orphanedIds.length === 1 ? '' : 's'}
+            {orphanCount} orphan{orphanCount === 1 ? '' : 's'}
           </span>
         )}
       </div>
@@ -189,13 +224,15 @@ export function HtmlEditor({
           </div>
         )}
         {mode !== 'source' && (
-          <div className={mode === 'split' ? 'min-w-0 flex-1 border-l border-gray-200' : 'min-w-0 flex-1'}>
+          <div
+            ref={previewWrapperRef}
+            className={mode === 'split' ? 'min-w-0 flex-1 border-l border-gray-200' : 'min-w-0 flex-1'}
+          >
             <HtmlPreview
               ytext={ytext}
               currentUser={currentUser}
               origin={LENS_EDITOR_ORIGIN}
               isCommentMode={commentMode && !readOnly}
-              onOrphanedChange={setOrphanedIds}
               onPlaceComplete={() => setCommentMode(false)}
               onManualPlacement={(candidates) => {
                 if (readOnly || !commentMode) return;
@@ -206,14 +243,52 @@ export function HtmlEditor({
               }}
               probeRunner={probeRunner}
               readOnly={readOnly}
+              onDotClicked={(id) => {
+                setFocusedCommentId(id);
+                commentsLayerRef.current?.focusThread(id);
+              }}
+              onCommentAdded={(id) => {
+                setFocusedCommentId(id);
+                commentsLayerRef.current?.focusThread(id);
+              }}
+              onCommentsRendered={(payload) => {
+                const newState = new Map<string, { y: number; x: number; w: number; h: number }>();
+                for (const r of payload.rects) newState.set(r.id, { y: r.y, x: r.x, w: r.w, h: r.h });
+                setAnchorState(newState);
+                baselineScrollYRef.current = payload.baselineScrollY;
+                layoutVersionRef.current = payload.layoutVersion;
+                scrollSource.notify();
+              }}
+              onScrollState={(payload) => {
+                if (payload.layoutVersion !== layoutVersionRef.current) return;
+                currentScrollYRef.current = payload.y;
+                iframeScrollStateRef.current = {
+                  scrollTop: payload.y,
+                  scrollHeight: payload.scrollHeight,
+                  clientHeight: payload.clientHeight,
+                };
+                scrollSource.notify();
+              }}
+              focusedCommentId={focusedCommentId}
             />
           </div>
         )}
-        <OrphanedCommentsPanel
-          ytext={ytext}
-          orphanedIds={orphanedIds}
-          onJumpToSource={() => setMode('source')}
-        />
+        {mode !== 'source' && (
+          <div className="w-80 flex-shrink-0 border-l border-gray-200 bg-gray-50/50 relative">
+            <CommentsLayer
+              ref={commentsLayerRef}
+              threads={threads}
+              resolveAnchorY={resolveAnchorY}
+              getViewportRect={getViewportRect}
+              scrollSource={scrollSource}
+              currentUserName={currentUser}
+              onFocusChange={(key) => setFocusedCommentId(key)}
+              onReply={callbacks.onReply}
+              onEdit={callbacks.onEdit}
+              onDelete={callbacks.onDelete}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

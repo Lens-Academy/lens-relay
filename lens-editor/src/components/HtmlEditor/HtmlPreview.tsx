@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import { BRIDGE_SOURCE } from 'virtual:bridge-bundle';
 import { NewCommentCard } from './NewCommentCard';
-import { CommentThread } from './CommentThread';
 import { addComment, parseComments } from './comment-store';
 import { scoreCandidates, verifyByProbe, type Candidate, type ProbeRunner } from './position-finder';
 import {
@@ -10,6 +9,7 @@ import {
   validateEnvelope,
   type BridgeToParent,
   type CommentSummary,
+  type CommentsRenderedPayload,
   type Envelope,
   type Fingerprint,
   type ParentToBridge,
@@ -28,6 +28,16 @@ interface HtmlPreviewProps {
   onManualPlacement?: (candidates: Candidate[]) => void;
   probeRunner?: ProbeRunner;
   readOnly?: boolean;
+  /** Called when the bridge reports a dot click. Parent owns the focus state. */
+  onDotClicked?: (id: string) => void;
+  /** Called after a comment is successfully added from the placement flow. */
+  onCommentAdded?: (id: string) => void;
+  /** Raw bridge comments-rendered payload — parent uses it to update AnchorState. */
+  onCommentsRendered?: (payload: CommentsRenderedPayload) => void;
+  /** Raw bridge scroll-state payload (with layoutVersion). */
+  onScrollState?: (payload: PreviewScrollState) => void;
+  /** When this changes, HtmlPreview posts set-focused-comment to the bridge. */
+  focusedCommentId?: string | null;
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -36,7 +46,6 @@ type PreviewScroll = { x: number; y: number };
 type PreviewPlacementTrigger = 'contextmenu' | 'selection' | 'toolbar';
 type ProbeViewportSize = { width: number; height: number };
 type ProbeViewportSizeGetter = () => ProbeViewportSize;
-type CommentsRenderedPayload = { found: string[]; orphaned: string[] };
 interface PendingPreviewComment {
   position: number;
   point: PreviewPoint;
@@ -122,13 +131,21 @@ function isPoint(value: unknown): value is PreviewPoint {
 }
 
 function isPreviewScrollState(value: unknown): value is PreviewScrollState {
-  return isObject(value)
-    && typeof value.x === 'number'
+  if (!isObject(value)) return false;
+  return typeof value.x === 'number'
     && typeof value.y === 'number'
     && typeof value.scrollWidth === 'number'
     && typeof value.clientWidth === 'number'
     && typeof value.scrollHeight === 'number'
     && typeof value.clientHeight === 'number';
+}
+
+/** Normalise a PreviewScrollState so layoutVersion is always a number. */
+function normalizeScrollState(value: PreviewScrollState): PreviewScrollState {
+  return {
+    ...value,
+    layoutVersion: typeof value.layoutVersion === 'number' ? value.layoutVersion : 0,
+  };
 }
 
 function isPreviewUiState(value: unknown): value is PreviewUiState {
@@ -146,9 +163,22 @@ function isPlacementTrigger(value: unknown): value is PreviewPlacementTrigger {
 }
 
 function isCommentsRenderedPayload(value: unknown): value is CommentsRenderedPayload {
-  return isObject(value)
-    && Array.isArray(value.found)
-    && Array.isArray(value.orphaned);
+  if (!isObject(value)) return false;
+  if (!Array.isArray(value.found) || !Array.isArray(value.orphaned)) return false;
+  // rects, baselineScrollY, layoutVersion are present in modern bridge payloads.
+  // Default to empty/zero for older bridge versions so the guard stays forward-compatible.
+  return true;
+}
+
+/** Normalise a CommentsRenderedPayload so callers always get the full shape. */
+function normalizeCommentsRendered(payload: CommentsRenderedPayload): CommentsRenderedPayload {
+  return {
+    found: payload.found,
+    orphaned: payload.orphaned,
+    rects: Array.isArray(payload.rects) ? payload.rects : [],
+    baselineScrollY: typeof payload.baselineScrollY === 'number' ? payload.baselineScrollY : 0,
+    layoutVersion: typeof payload.layoutVersion === 'number' ? payload.layoutVersion : 0,
+  };
 }
 
 function isCloseScroll(actual: PreviewScroll, expected: PreviewScroll): boolean {
@@ -321,6 +351,11 @@ export function HtmlPreview({
   onManualPlacement,
   probeRunner,
   readOnly = false,
+  onDotClicked,
+  onCommentAdded,
+  onCommentsRendered,
+  onScrollState,
+  focusedCommentId,
 }: HtmlPreviewProps) {
   const [content, setContent] = useState(() => ytext.toString());
   const [debounced, setDebounced] = useState(content);
@@ -329,7 +364,6 @@ export function HtmlPreview({
     srcDoc: injectBridge(content),
     state: 'active',
   }]);
-  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const [pendingComment, setPendingComment] = useState<PendingPreviewComment | null>(null);
   const [pendingPlacementMenu, setPendingPlacementMenu] = useState<PendingPlacementMenu | null>(null);
   const [placementError, setPlacementError] = useState<PlacementError | null>(null);
@@ -650,8 +684,10 @@ export function HtmlPreview({
   }, []);
 
   const applyCommentsRendered = useCallback((payload: CommentsRenderedPayload): void => {
-    onOrphanedChange?.(payload.orphaned.filter((id): id is string => typeof id === 'string'));
-  }, [onOrphanedChange]);
+    const normalized = normalizeCommentsRendered(payload);
+    onOrphanedChange?.(normalized.orphaned.filter((id): id is string => typeof id === 'string'));
+    onCommentsRendered?.(normalized);
+  }, [onOrphanedChange, onCommentsRendered]);
 
   const activateRestoredFrame = useCallback((frameId: number): void => {
     restoringFrameIdRef.current = null;
@@ -760,20 +796,22 @@ export function HtmlPreview({
     function handleMessage(message: BridgeToParent, frame: PreviewFrame) {
       if (message.type === 'scroll-state') {
         if (!isPreviewScrollState(message.payload)) return;
+        const scrollPayload = normalizeScrollState(message.payload);
         if (frame.state === 'active') {
-          lastKnownScrollRef.current = message.payload;
+          lastKnownScrollRef.current = scrollPayload;
+          onScrollState?.(scrollPayload);
         }
         if (restoringFrameIdRef.current === frame.id) {
           const intended = restoringScrollRef.current?.frameId === frame.id
             ? restoringScrollRef.current.scroll
             : { x: lastKnownScrollRef.current.x, y: lastKnownScrollRef.current.y };
-          if (isCloseScroll(message.payload, intended)) activateRestoredFrame(frame.id);
+          if (isCloseScroll(scrollPayload, intended)) activateRestoredFrame(frame.id);
           else settleRestoredFrame(frame.id);
         } else if (frame.state === 'settling') {
           const intended = restoringScrollRef.current?.frameId === frame.id
             ? restoringScrollRef.current.scroll
             : { x: lastKnownScrollRef.current.x, y: lastKnownScrollRef.current.y };
-          if (isClampedCloseScroll(message.payload, intended)) activateRestoredFrame(frame.id);
+          if (isClampedCloseScroll(scrollPayload, intended)) activateRestoredFrame(frame.id);
         }
         return;
       }
@@ -810,7 +848,7 @@ export function HtmlPreview({
       switch (message.type) {
         case 'dot-clicked':
           if (!isObject(message.payload) || typeof message.payload.id !== 'string') return;
-          setOpenThreadId(message.payload.id);
+          onDotClicked?.(message.payload.id);
           break;
         case 'click-captured':
           handleClickCaptured(message.payload);
@@ -852,7 +890,9 @@ export function HtmlPreview({
     initializeFrame,
     isCommentMode,
     nonce,
+    onDotClicked,
     onOrphanedChange,
+    onScrollState,
     origin,
     openComposer,
     readOnly,
@@ -875,6 +915,13 @@ export function HtmlPreview({
       payload: {},
     });
   }, [isCommentMode, postToAllFrames]);
+
+  useEffect(() => {
+    postToAllFrames({
+      type: 'set-focused-comment',
+      payload: { id: focusedCommentId ?? null },
+    });
+  }, [focusedCommentId, postToAllFrames]);
 
   return (
     <div className="relative h-full w-full">
@@ -954,7 +1001,7 @@ export function HtmlPreview({
               position: pendingComment.position,
             });
             setPendingComment(null);
-            setOpenThreadId(id);
+            onCommentAdded?.(id);
             onPlaceComplete?.(id);
           }}
           onCancel={() => setPendingComment(null)}
@@ -966,18 +1013,6 @@ export function HtmlPreview({
             zIndex: 20,
           }}
         />
-      )}
-      {openThreadId && (
-        <div className="absolute right-4 top-4 z-10">
-          <CommentThread
-            ytext={ytext}
-            origin={origin}
-            threadId={openThreadId}
-            currentUser={currentUser}
-            readOnly={readOnly}
-            onClose={() => setOpenThreadId(null)}
-          />
-        </div>
       )}
     </div>
   );
