@@ -296,7 +296,15 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
       })
       .sort((a, b) => a.anchorY - b.anchorY);
 
-    if (inViewport.length > 0) {
+    // Skip the edge clamp when a thread is focused and in the viewport: its
+    // hard pin (Infinity weight) keeps it at its anchor, and a global shift
+    // would translate the focused card away. The other in-viewport cards
+    // arrange around it via PAV; that takes priority over keeping the first /
+    // last card fully on screen.
+    const focusedInViewport =
+      focusedThreadKey != null && inViewport.some((it) => it.key === focusedThreadKey);
+
+    if (inViewport.length > 0 && !focusedInViewport) {
       const first = inViewport[0];
       const last = inViewport[inViewport.length - 1];
       const firstPos = result.get(first.key);
