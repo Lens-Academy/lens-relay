@@ -901,8 +901,16 @@ export function ContentPanel({
         if (sectionEl == null) return [];
         const orphans = orphansBySection.get(i) ?? [];
         if (orphans.length === 0) return [sectionEl];
+        const anchorEntries = orphans.map((absFrom) => ({
+          absFrom,
+          badgeNumber: globalBadgeMap.get(absFrom)?.badgeNumber,
+        }));
         return [
-          <OrphanCommentAnchors key={`anchors-${i}`} offsets={orphans} />,
+          <OrphanCommentAnchors
+            key={`anchors-${i}`}
+            anchors={anchorEntries}
+            onCommentClick={onCommentClick}
+          />,
           sectionEl,
         ];
       })}

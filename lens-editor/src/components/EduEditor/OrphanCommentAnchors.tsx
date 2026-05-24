@@ -1,27 +1,41 @@
+interface OrphanCommentAnchor {
+  /** Absolute Y.Text offset of the comment marker. */
+  absFrom: number;
+  /** Comment number (1-indexed by document order); omitted if unknown. */
+  badgeNumber?: number;
+}
+
 interface OrphanCommentAnchorsProps {
-  /** Absolute Y.Text offsets of comments to anchor. */
-  offsets: number[];
+  anchors: OrphanCommentAnchor[];
+  /** Called when a badge is clicked, with the comment's absolute offset. */
+  onCommentClick?: (absFrom: number) => void;
 }
 
 /**
- * Renders zero-size invisible elements with `data-comment-from` set to each
- * offset. The comment-margin layer scans the DOM for these attributes
- * (`resolveAnchorYFromDOM`) and uses their screen-y to place the card —
- * giving comments outside any rendered field a real anchor near where their
- * containing section starts.
+ * Visible numbered badges for comments that fall outside any rendered field
+ * value (heading lines, blank lines, sections with no field). Sits at the
+ * top of the section's rendered block; provides both a click target for
+ * focusing the thread AND a `data-comment-from` element so the
+ * CommentsLayer DOM-fallback resolver can place a card here.
  */
-export function OrphanCommentAnchors({ offsets }: OrphanCommentAnchorsProps) {
-  if (offsets.length === 0) return null;
+export function OrphanCommentAnchors({ anchors, onCommentClick }: OrphanCommentAnchorsProps) {
+  if (anchors.length === 0) return null;
   return (
-    <>
-      {offsets.map((offset) => (
+    <div className="flex flex-wrap gap-1 mb-1">
+      {anchors.map(({ absFrom, badgeNumber }) => (
         <span
-          key={offset}
-          data-comment-from={offset}
-          style={{ display: 'block', height: 0, width: 0 }}
-          aria-hidden
-        />
+          key={absFrom}
+          data-comment-from={absFrom}
+          className="cm-comment-anchor inline-flex items-center justify-center align-baseline px-1.5 min-w-4.5 h-4.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-semibold cursor-pointer select-none hover:bg-blue-200"
+          title="Comment on heading"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCommentClick?.(absFrom);
+          }}
+        >
+          {badgeNumber ?? '\u{1F4AC}'}
+        </span>
       ))}
-    </>
+    </div>
   );
 }
