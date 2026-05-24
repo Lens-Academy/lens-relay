@@ -2,8 +2,8 @@
  * CommentsLayer — shared container for comment cards in the margin.
  *
  * Subscribes to Y.Text, lays out cards using weighted PAV, and owns focus
- * state (kept in sync with inline markers — any element with
- * `data-comment-from` — via the `comment-badge-focus` CustomEvent on document).
+ * state. Editor mounts call the imperative `focusThread` on the layer's ref
+ * when an inline marker (any element with `data-comment-from`) is clicked.
  */
 
 import {
@@ -11,6 +11,8 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
+  useImperativeHandle,
+  forwardRef,
   type RefObject,
   type ReactElement,
 } from 'react';
@@ -36,6 +38,11 @@ const EDGE_TRANSITION_PX = 250;
 /** Cards beyond N viewports above (and N+1 below) get weight 0 (no pull). */
 const ACTIVE_WINDOW_MULTIPLIER = 2;
 
+export interface CommentsLayerHandle {
+  /** Toggles focus on the thread at `absFrom`: if already focused, clears it. */
+  focusThread(absFrom: number): void;
+}
+
 export interface CommentsLayerProps {
   /** Y.Text containing the document content. */
   yText: Y.Text;
@@ -58,7 +65,7 @@ function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
 }
 
-export function CommentsLayer(props: CommentsLayerProps): ReactElement {
+export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>(function CommentsLayer(props, handleRef): ReactElement {
   const {
     yText,
     resolveAnchorY,
@@ -90,11 +97,15 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
   );
 
   const [focusedThreadKey, setFocusedThreadKey] = useState<number | null>(null);
-  // Ref mirror: the document-level listener below would otherwise need a
-  // functional updater to read fresh state — but StrictMode double-invokes
-  // those, breaking a non-idempotent toggle.
-  const focusedKeyRef = useRef<number | null>(null);
-  useEffect(() => { focusedKeyRef.current = focusedThreadKey; }, [focusedThreadKey]);
+
+  // The handle closes over the current render's focusedThreadKey, so each
+  // toggle decision uses fresh state without a functional updater (which
+  // StrictMode would double-invoke).
+  useImperativeHandle(handleRef, () => ({
+    focusThread(absFrom: number) {
+      setFocusedThreadKey(focusedThreadKey === absFrom ? null : absFrom);
+    },
+  }), [focusedThreadKey]);
 
   useEffect(() => {
     const root = editorRootRef?.current;
@@ -108,16 +119,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
         .forEach((el) => { (el as HTMLElement).dataset.commentFocused = ''; });
     }
   }, [focusedThreadKey, editorRootRef, textRevision]);
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ threadFrom: number }>).detail;
-      const current = focusedKeyRef.current;
-      setFocusedThreadKey(current === detail.threadFrom ? null : detail.threadFrom);
-    };
-    document.addEventListener('comment-badge-focus', handler);
-    return () => document.removeEventListener('comment-badge-focus', handler);
-  }, []);
 
   const [showAddForm, setShowAddForm] = useState(false);
 
@@ -417,4 +418,4 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
       </div>
     </div>
   );
-}
+});

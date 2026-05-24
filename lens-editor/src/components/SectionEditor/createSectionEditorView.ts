@@ -16,6 +16,7 @@ import { remoteCursorTheme } from '../Editor/remoteCursorTheme';
 import {
   criticMarkupExtension,
   commentOffsetTranslator,
+  commentClickCallback,
   toggleSuggestionMode,
 } from '../Editor/extensions/criticmarkup';
 import type { CriticMarkupCommentBadgeInfo } from '../Editor/extensions/criticmarkup';
@@ -67,6 +68,9 @@ export function createSectionEditorView(opts: {
    *  our case). The current cursor position can be read from the view at
    *  callback time. Only registered when `enableCriticMarkup` is true. */
   onRequestAddComment?: () => void;
+  /** Fires when a comment badge is clicked in this section editor, with the
+   *  absolute Y.Text offset (already translated through commentOffsetTranslator). */
+  onCommentClick?: (absFrom: number) => void;
 }): EditorView {
   const {
     ytext,
@@ -79,6 +83,7 @@ export function createSectionEditorView(opts: {
     commentBadgeMap,
     yTextOffsetBase,
     onRequestAddComment,
+    onCommentClick,
   } = opts;
 
   // Add-comment keyboard shortcut. Mirrors the markdown editor's
@@ -112,6 +117,7 @@ export function createSectionEditorView(opts: {
     ? [
         criticMarkupExtension({ canAcceptReject: true, commentBadgeMap }),
         commentOffsetTranslator.of((localPos) => offsetBase + localPos),
+        ...(onCommentClick ? [commentClickCallback.of(onCommentClick)] : []),
         keymap.of(criticMarkupKeymap),
       ]
     : [];

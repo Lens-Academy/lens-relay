@@ -23,6 +23,7 @@ interface TutorInstructionsProps {
    *  sites that don't yet pass these props. */
   enableCriticMarkup?: boolean;
   onClickCriticRange?: (range: CriticMarkupRange) => void;
+  onCommentClick?: (absFrom: number) => void;
   commentBadgeMap?: Map<number, CommentBadgeInfo>;
 }
 
@@ -32,6 +33,7 @@ export function TutorInstructions({
   onEdit,
   enableCriticMarkup = false,
   onClickCriticRange,
+  onCommentClick,
   commentBadgeMap,
 }: TutorInstructionsProps) {
   // `title` is currently unused by design (the label says "Chat Segment"
@@ -71,6 +73,7 @@ export function TutorInstructions({
         {enableCriticMarkup
           ? renderMarkdownWithCriticMarkup(instructions, {
               onClickRange: handleClickRange,
+              onMarkerClick: onCommentClick,
               commentBadgeMap,
             })
           : <ReactMarkdown remarkPlugins={[remarkBreaks]}>{preserveBlankLines(instructions)}</ReactMarkdown>}

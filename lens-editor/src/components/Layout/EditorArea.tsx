@@ -17,7 +17,7 @@ import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
-import { CommentsLayer } from '../Comments/CommentsLayer';
+import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
@@ -133,12 +133,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     });
   }, [editorView, isSourceMode, isSuggestionMode]);
 
-  // Open comment margin when a comment badge is clicked.
-  // Badge clicks are dispatched on `document` by the criticmarkup extension.
-  useEffect(() => {
-    const handler = () => manager.expand('comment-margin');
-    document.addEventListener('comment-badge-focus', handler);
-    return () => document.removeEventListener('comment-badge-focus', handler);
+  const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
+  const handleCommentClick = useCallback((absFrom: number) => {
+    manager.expand('comment-margin');
+    commentsLayerRef.current?.focusThread(absFrom);
   }, [manager.expand]);
 
   // Auto-collapse comment margin on notes without comments (after initial Y.Doc sync)
@@ -280,6 +278,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onSynced={handleSynced}
               onNavigate={onNavigate}
               onRequestAddComment={handleRequestAddComment}
+              onCommentClick={handleCommentClick}
               metadata={metadata}
               currentFilePath={currentFilePath}
             />
@@ -300,6 +299,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         >
           {editorView && (
             <CommentsLayer
+              ref={commentsLayerRef}
               yText={yText}
               resolveAnchorY={resolveAnchorY}
               getViewportRect={getViewportRect}

@@ -8,6 +8,7 @@ interface ChatRendererProps {
   onStartEdit: () => void;
   enableCriticMarkup?: boolean;
   onClickCriticRange?: (range: CriticMarkupRange) => void;
+  onCommentClick?: (absFrom: number) => void;
   commentBadgeMap?: Map<number, CommentBadgeInfo>;
 }
 
@@ -17,6 +18,7 @@ export function ChatRenderer({
   onStartEdit,
   enableCriticMarkup,
   onClickCriticRange,
+  onCommentClick,
   commentBadgeMap,
 }: ChatRendererProps) {
   return (
@@ -26,6 +28,7 @@ export function ChatRenderer({
       onEdit={onStartEdit}
       enableCriticMarkup={enableCriticMarkup}
       onClickCriticRange={onClickCriticRange}
+      onCommentClick={onCommentClick}
       commentBadgeMap={commentBadgeMap}
     />
   );

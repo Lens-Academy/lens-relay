@@ -45,6 +45,15 @@ export const commentOffsetTranslator = Facet.define<
   combine: (vals) => vals[0] ?? ((n) => n),
 });
 
+/**
+ * Callbacks invoked when the user clicks a comment badge in this editor view.
+ * Receives the absolute Y.Text offset (already passed through
+ * commentOffsetTranslator). Unlike the other facets in this file, this one
+ * defines no `combine` — the facet value is the array of all registrations
+ * and each one is invoked.
+ */
+export const commentClickCallback = Facet.define<(absFrom: number) => void>();
+
 // Author context - can be set externally
 let currentAuthor = 'anonymous';
 
@@ -352,9 +361,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         } else if (target.classList.contains('cm-comment-badge')) {
           e.preventDefault();
           e.stopPropagation();
-          const threadFrom = parseInt(target.dataset.commentFrom ?? '', 10);
-          if (!isNaN(threadFrom)) {
-            document.dispatchEvent(new CustomEvent('comment-badge-focus', { detail: { threadFrom } }));
+          const absFrom = parseInt(target.dataset.commentFrom ?? '', 10);
+          if (!isNaN(absFrom)) {
+            view.state.facet(commentClickCallback).forEach((cb) => cb(absFrom));
           }
         }
       });

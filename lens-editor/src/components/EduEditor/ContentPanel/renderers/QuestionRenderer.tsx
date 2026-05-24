@@ -18,6 +18,7 @@ interface QuestionRendererProps {
   /** Click handler for inline criticmarkup spans — typically a comment
    *  marker — so EduEditor can focus the matching thread in the sidebar. */
   onClickCriticRange?: (range: CriticMarkupRange) => void;
+  onCommentClick?: (absFrom: number) => void;
   /** Badge map keyed by LOCAL positions inside the `content` field. */
   contentBadgeMap?: Map<number, CommentBadgeInfo>;
   /** Badge map keyed by LOCAL positions inside the `assessmentInstructions`
@@ -33,6 +34,7 @@ export function QuestionRenderer({
   onStartEdit,
   enableCriticMarkup = false,
   onClickCriticRange,
+  onCommentClick,
   contentBadgeMap,
   assessmentBadgeMap,
 }: QuestionRendererProps) {
@@ -69,6 +71,7 @@ export function QuestionRenderer({
         {enableCriticMarkup
           ? renderMarkdownWithCriticMarkup(content, {
               onClickRange: handleClickRange,
+              onMarkerClick: onCommentClick,
               commentBadgeMap: contentBadgeMap,
             })
           : content}
@@ -80,6 +83,7 @@ export function QuestionRenderer({
             {enableCriticMarkup
               ? renderMarkdownWithCriticMarkup(assessmentInstructions, {
                   onClickRange: handleClickRange,
+                  onMarkerClick: onCommentClick,
                   commentBadgeMap: assessmentBadgeMap,
                 })
               : assessmentInstructions}

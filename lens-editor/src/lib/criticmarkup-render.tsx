@@ -35,21 +35,19 @@ function BlockMarkdown({ source }: { source: string }) {
 
 interface CriticMarkupSpanProps {
   range: CriticMarkupRange;
-  /** The thread's display number, e.g. 1, 2, 3 — only meaningful for comment
-   *  ranges that are the first comment in their thread. */
   badgeNumber?: number;
   /** True for the first comment in a thread (anchor); false for replies (which
    *  are hidden in the inline view since they live in the sidebar). */
   isFirstInThread?: boolean;
-  /** Absolute Y.Text position of this range. When present, used in place of
-   *  the local `range.from` when invoking `onClickRange` so callers receive
-   *  positions consistent with the document-wide thread list. */
+  /** Absolute Y.Text position of this range. Used in place of the local
+   *  `range.from` when invoking callbacks so callers receive positions
+   *  consistent with the document-wide thread list. */
   absoluteFrom?: number;
-  /**
-   * When provided, called with the range's source position so callers (e.g.
-   * the comments sidebar) can react to a click. Optional.
-   */
+  /** Fires for any criticmarkup range click (addition/deletion/etc.). */
   onClickRange?: (range: CriticMarkupRange) => void;
+  /** Fires for comment-range clicks with the absolute offset. Comments-sidebar
+   *  hookup goes here; CommentsLayer toggles focus on the matching thread. */
+  onMarkerClick?: (absFrom: number) => void;
 }
 
 /**
@@ -63,19 +61,12 @@ function CriticMarkupSpan({
   isFirstInThread,
   absoluteFrom,
   onClickRange,
+  onMarkerClick,
 }: CriticMarkupSpanProps) {
-  // For comment ranges, always dispatch the focus CustomEvent that
-  // CommentsLayer listens for (same shape as the CM widget badge handler),
-  // so read-mode anchor pills trigger card focus even when no onClickRange
-  // consumer is wired. For non-comment ranges, fall through to onClickRange.
   const handleClick = (e: React.MouseEvent) => {
     if (range.type === 'comment' && absoluteFrom != null) {
       e.stopPropagation();
-      document.dispatchEvent(
-        new CustomEvent('comment-badge-focus', {
-          detail: { threadFrom: absoluteFrom },
-        }),
-      );
+      onMarkerClick?.(absoluteFrom);
       if (onClickRange) {
         const delta = absoluteFrom - range.from;
         onClickRange({
@@ -186,6 +177,8 @@ export interface CommentBadgeInfo {
 
 interface RenderOpts {
   onClickRange?: (range: CriticMarkupRange) => void;
+  /** Fires for comment-anchor clicks with the absolute Y.Text offset. */
+  onMarkerClick?: (absFrom: number) => void;
   /**
    * Pre-computed badge info keyed by LOCAL `range.from` (i.e. position in
    * the `source` string passed to this function). Authored by the caller so
@@ -288,6 +281,7 @@ export function renderMarkdownWithCriticMarkup(
         isFirstInThread={badge?.isFirstInThread}
         absoluteFrom={badge?.absoluteFrom}
         onClickRange={opts.onClickRange}
+        onMarkerClick={opts.onMarkerClick}
       />
     );
     cursor = range.to;
@@ -337,6 +331,7 @@ export function renderHeadingWithCriticMarkup(
         isFirstInThread={badge?.isFirstInThread}
         absoluteFrom={badge?.absoluteFrom}
         onClickRange={opts.onClickRange}
+        onMarkerClick={opts.onMarkerClick}
       />
     );
     cursor = range.to;

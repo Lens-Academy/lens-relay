@@ -50,6 +50,9 @@ interface ContentPanelProps {
   /** Called when the user clicks an inline criticmarkup span — typically a
    *  comment marker — in a rendered (non-editing) section. */
   onClickCriticRange?: (range: CriticMarkupRange) => void;
+  /** Called when the user clicks a comment marker (read or edit mode) with the
+   *  absolute Y.Text offset. Wired through to CommentsLayer.focusThread. */
+  onCommentClick?: (absFrom: number) => void;
   /** Called when the user invokes the "Add Comment" entry point — either the
    *  Ctrl/Cmd+Shift+M shortcut inside the active section editor or the
    *  right-click "Add Comment" menu item. The current cursor position has
@@ -161,6 +164,7 @@ export function ContentPanel({
   suggestionMode = false,
   onCommentInsertPosChange,
   onClickCriticRange,
+  onCommentClick,
   onRequestAddComment,
   scrollRootRef,
   onVisibleCommentChange,
@@ -257,13 +261,8 @@ export function ContentPanel({
     enableCriticMarkup: sectionEditorCriticMarkup,
     initialSuggestionMode: suggestionMode,
     commentBadgeMap: editorCommentBadgeMap,
-    // Badge clicks dispatch absolute Y.Text offsets via the commentOffsetTranslator
-    // Facet configured in createSectionEditorView. CommentsLayer (mounted in Task 9)
-    // picks up the comment-badge-focus event directly.
     yTextOffsetBase: editRange.from,
-    // Mod-Shift-m inside the section editor → flush the current cursor
-    // position upward (so the sidebar's `insertAtPos` is current) then
-    // signal the parent to open its add-comment UI.
+    // Mod-Shift-m → flush cursor position upward then open the add-comment UI.
     onRequestAddComment: onRequestAddComment
       ? () => {
           const view = sectionViewRef.current;
@@ -273,6 +272,7 @@ export function ContentPanel({
           onRequestAddComment();
         }
       : undefined,
+    onCommentClick,
   });
 
   // Right-click handler for the active criticmarkup-enabled section editor.
@@ -750,6 +750,7 @@ export function ContentPanel({
               onStartEdit={() => startEditingSection(i)}
               enableCriticMarkup={criticMarkupEnabled}
               onClickCriticRange={onClickCriticRange}
+              onCommentClick={onCommentClick}
               commentBadgeMap={localBadgeMap}
             />
           );
@@ -770,6 +771,7 @@ export function ContentPanel({
               onStartEdit={() => startEditingSection(i)}
               enableCriticMarkup={criticMarkupEnabled}
               onClickCriticRange={onClickCriticRange}
+              onCommentClick={onCommentClick}
               commentBadgeMap={instructionsBadgeMap}
             />
           );
@@ -881,6 +883,7 @@ export function ContentPanel({
               onStartEdit={() => startEditingSection(i)}
               enableCriticMarkup={criticMarkupEnabled}
               onClickCriticRange={onClickCriticRange}
+              onCommentClick={onCommentClick}
               contentBadgeMap={contentBadgeMap}
               assessmentBadgeMap={assessmentBadgeMap}
             />
@@ -911,6 +914,7 @@ export function ContentPanel({
               onStartEdit={() => startEditingSection(i)}
               enableCriticMarkup={criticMarkupEnabled && isPlainHeading}
               onClickCriticRange={isPlainHeading ? onClickCriticRange : undefined}
+              onCommentClick={isPlainHeading ? onCommentClick : undefined}
             />
           );
         }

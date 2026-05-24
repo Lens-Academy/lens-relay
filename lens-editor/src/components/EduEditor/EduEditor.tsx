@@ -15,7 +15,7 @@ import { CourseOverview } from './CourseOverview';
 import { RELAY_ID } from '../../lib/constants';
 import { SuggestionModeControl } from '../SuggestionModeToggle/SuggestionModeControl';
 import { OverflowMenu } from '../OverflowMenu';
-import { CommentsLayer } from '../Comments/CommentsLayer';
+import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
 import { resolveAnchorYFromSectionViews, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
@@ -131,6 +131,12 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   }, [ensureCommentsVisible]);
 
   const handleRequestAddComment = ensureCommentsVisible;
+
+  const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
+  const handleCommentClick = useCallback((absFrom: number) => {
+    ensureCommentsVisible();
+    commentsLayerRef.current?.focusThread(absFrom);
+  }, [ensureCommentsVisible]);
 
   const handleYTextChange = useCallback((ytext: Y.Text | null) => {
     setActiveYText(ytext);
@@ -363,6 +369,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 criticMarkupEnabled={criticMarkupEnabled}
                 suggestionMode={isSuggestionMode}
                 onClickCriticRange={handleClickCriticRange}
+                onCommentClick={handleCommentClick}
                 onRequestAddComment={handleRequestAddComment}
                 scrollRootRef={contentScrollRef}
                 onYTextChange={handleYTextChange}
@@ -377,6 +384,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
               style={{ background: '#faf8f3' }}
             >
               <CommentsLayer
+                ref={commentsLayerRef}
                 yText={activeYText}
                 resolveAnchorY={resolveAnchorY}
                 getViewportRect={getViewportRect}

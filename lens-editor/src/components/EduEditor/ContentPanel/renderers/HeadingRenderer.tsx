@@ -16,6 +16,7 @@ interface HeadingRendererProps {
    */
   enableCriticMarkup?: boolean;
   onClickCriticRange?: (range: CriticMarkupRange) => void;
+  onCommentClick?: (absFrom: number) => void;
   /** Pre-computed badge info keyed by LOCAL `range.from` (positions in
    *  `label`). Authored by ContentPanel from a document-wide global map. */
   commentBadgeMap?: Map<number, CommentBadgeInfo>;
@@ -27,6 +28,7 @@ export function HeadingRenderer({
   onStartEdit,
   enableCriticMarkup = false,
   onClickCriticRange,
+  onCommentClick,
   commentBadgeMap,
 }: HeadingRendererProps) {
   const handleClickRange = onClickCriticRange
@@ -53,6 +55,7 @@ export function HeadingRenderer({
         {enableCriticMarkup
           ? renderHeadingWithCriticMarkup(label, {
               onClickRange: handleClickRange,
+              onMarkerClick: onCommentClick,
               commentBadgeMap,
             })
           : label}

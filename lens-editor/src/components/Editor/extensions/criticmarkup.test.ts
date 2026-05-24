@@ -4,7 +4,7 @@ import { EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
-import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField } from './criticmarkup';
+import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
 
 describe('CriticMarkup Extension', () => {
@@ -830,24 +830,23 @@ describe('CriticMarkup Extension', () => {
       expect(badge?.getAttribute('data-comment-from')).toBe('6');
     });
 
-    it('dispatches comment-badge-focus CustomEvent on badge click', () => {
-      const { view, cleanup: c } = createCriticMarkupEditor(
-        'hello {>>a comment<<} end',
-        0
-      );
-      cleanup = c;
+    it('invokes commentClickCallback Facet on badge click with the absolute offset', () => {
+      let receivedFrom: number | undefined;
+      const state = EditorState.create({
+        doc: 'hello {>>a comment<<} end',
+        selection: { anchor: 0 },
+        extensions: [
+          markdown(),
+          criticMarkupExtension(),
+          commentClickCallback.of((absFrom) => { receivedFrom = absFrom; }),
+        ],
+      });
+      const view = new EditorView({ state, parent: document.body });
+      cleanup = () => view.destroy();
 
       const badge = view.contentDOM.querySelector('.cm-comment-badge') as HTMLElement;
       expect(badge).not.toBeNull();
-
-      let receivedFrom: number | undefined;
-      const handler = (e: Event) => {
-        receivedFrom = (e as CustomEvent<{ threadFrom: number }>).detail?.threadFrom;
-      };
-      document.addEventListener('comment-badge-focus', handler);
-
       badge.click();
-      document.removeEventListener('comment-badge-focus', handler);
       expect(receivedFrom).toBe(6); // thread.from
     });
   });

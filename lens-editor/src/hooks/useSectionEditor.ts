@@ -33,6 +33,9 @@ interface UseSectionEditorOpts {
   /** Fires when the user invokes the "Add Comment" keyboard shortcut inside
    *  the section editor (Mod-Shift-m). */
   onRequestAddComment?: () => void;
+  /** Fires when a comment badge inside the section editor is clicked, with
+   *  the absolute Y.Text offset. */
+  onCommentClick?: (absFrom: number) => void;
 }
 
 /**
@@ -68,10 +71,14 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       yTextOffsetBase,
     } = optsRef.current;
 
-    // Read the latest callback at click time so we don't capture a stale
-    // reference if the parent re-binds it.
+    // Read latest callbacks at fire time so we don't capture stale references
+    // when the parent re-binds — the Facet captures the function at view
+    // construction, so direct passing of opts.onCommentClick would freeze.
     const onRequestAddComment = () => {
       optsRef.current.onRequestAddComment?.();
+    };
+    const onCommentClick = (absFrom: number) => {
+      optsRef.current.onCommentClick?.(absFrom);
     };
 
     const view = createSectionEditorView({
@@ -85,6 +92,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       commentBadgeMap,
       yTextOffsetBase,
       onRequestAddComment,
+      onCommentClick,
     });
 
     viewRef.current = view;

@@ -158,6 +158,23 @@ describe('renderMarkdownWithCriticMarkup with badge map', () => {
     expect(anchors.length).toBe(1);
   });
 
+  it('fires onMarkerClick exactly once per comment-anchor click with the absolute offset', () => {
+    const calls: number[] = [];
+    const { container } = render(
+      <>
+        {renderMarkdownWithCriticMarkup('Hi {>>note<<} there.', {
+          commentBadgeMap: new Map([
+            [3, { badgeNumber: 1, isFirstInThread: true, absoluteFrom: 1003 }],
+          ]),
+          onMarkerClick: (absFrom) => { calls.push(absFrom); },
+        })}
+      </>
+    );
+    const anchor = container.querySelector('.cm-comment-anchor') as HTMLElement;
+    anchor.click();
+    expect(calls).toEqual([1003]);
+  });
+
   it('fires onClickRange with absolute positions for comment ranges', () => {
     let received: { from: number; to: number; type: string } | null = null;
     const { container } = render(

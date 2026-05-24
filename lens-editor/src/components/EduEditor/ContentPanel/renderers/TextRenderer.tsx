@@ -18,18 +18,10 @@ function preserveBlankLines(text: string): string {
 interface TextRendererProps {
   content: string;
   onStartEdit: () => void;
-  /**
-   * When true, criticmarkup syntax in the content is rendered with inline
-   * styling. Existing call sites that don't opt in keep the previous
-   * react-markdown rendering.
-   */
   enableCriticMarkup?: boolean;
-  /** Optional click handler for a criticmarkup range — used by the comments
-   *  sidebar to focus a thread. */
   onClickCriticRange?: (range: CriticMarkupRange) => void;
-  /** Pre-computed badge info keyed by LOCAL `range.from` (i.e. positions in
-   *  this renderer's `content` string). Authored by ContentPanel from a
-   *  document-wide global map so badge numbers stay linear across sections. */
+  /** Fires for comment-marker clicks with the absolute Y.Text offset. */
+  onCommentClick?: (absFrom: number) => void;
   commentBadgeMap?: Map<number, CommentBadgeInfo>;
 }
 
@@ -38,6 +30,7 @@ export function TextRenderer({
   onStartEdit,
   enableCriticMarkup = false,
   onClickCriticRange,
+  onCommentClick,
   commentBadgeMap,
 }: TextRendererProps) {
   const handleClickRange = onClickCriticRange
@@ -67,6 +60,7 @@ export function TextRenderer({
         {enableCriticMarkup
           ? renderMarkdownWithCriticMarkup(content, {
               onClickRange: handleClickRange,
+              onMarkerClick: onCommentClick,
               commentBadgeMap,
             })
           : <ReactMarkdown remarkPlugins={[remarkBreaks]}>{preserveBlankLines(content)}</ReactMarkdown>}
