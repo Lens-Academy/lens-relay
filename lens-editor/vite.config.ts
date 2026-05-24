@@ -4,6 +4,7 @@ import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
+import { bridgeBundlePlugin } from './vite-plugin-bridge-bundle';
 
 // Extract workspace number from directory name (e.g., "lens-editor-ws2" → 2)
 // or parent directory (e.g., "ws2/lens-editor" → 2).
@@ -330,7 +331,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

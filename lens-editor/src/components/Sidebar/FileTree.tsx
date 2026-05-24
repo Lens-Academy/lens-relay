@@ -1,11 +1,15 @@
 import { useState, useRef, useCallback, useEffect, useMemo, createContext, useContext } from 'react';
 import { Tree, TreeApi, type NodeApi } from 'react-arborist';
+import { createDragDropManager } from 'dnd-core';
+import { HTML5Backend } from 'react-dnd-html5-backend';
 import { FileTreeNode } from './FileTreeNode';
 import { StickyScrollOverlay } from './StickyScrollOverlay';
 import type { TreeNode } from '../../lib/tree-utils';
 
 const DragTargetCtx = createContext<string | null>(null);
 export const useDragTarget = () => useContext(DragTargetCtx);
+
+const sharedDndManager = createDragDropManager(HTML5Backend);
 
 /** Find the tree node ID whose docId matches the compound activeDocId. */
 function findNodeIdByDocId(nodes: TreeNode[], activeDocId: string): string | null {
@@ -170,8 +174,10 @@ export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileT
         width="100%"
         height={treeHeight}
         overscanCount={5}
-        disableDrag={(data: TreeNode) => !data || data.isFolder}
+        dndManager={sharedDndManager}
+        disableDrag={(data: TreeNode) => !onMove || !data || data.isFolder}
         disableDrop={({ parentNode, dragNodes }) => {
+          if (!onMove) return true;
           // Reject drops on leaf nodes (files); allow folders and synthetic root
           if (!parentNode.isInternal) return true;
           // No-op: dropping onto current parent

@@ -9,13 +9,16 @@ import type { TreeNode } from '../../lib/tree-utils';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } from '../../lib/tree-utils';
 import { createDocument, createFolder, deleteDocument, movePath } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
+import { nextUntitledHtmlName } from '../../lib/untitled-name';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab } from '../../lib/url-utils';
+import { renamePreservingExtension } from '../../lib/filename-utils';
 
 export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -23,6 +26,7 @@ export function Sidebar() {
 
   // Get metadata from NavigationContext (needed early for doc ID resolution)
   const { metadata, folderDocs, folderNames, onNavigate, justCreatedRef } = useNavigation();
+  const { canWrite } = useAuth();
 
   // Derive active doc ID from URL path (first segment is the doc UUID — may be short)
   const location = useLocation();
@@ -124,7 +128,7 @@ export function Sidebar() {
     const oldName = parts[parts.length - 1];
     parts[parts.length - 1] = isFolder
       ? newName
-      : oldName.endsWith('.md') && !newName.endsWith('.md') ? `${newName}.md` : newName;
+      : renamePreservingExtension(oldName, newName);
     const newPath = parts.join('/');
     try {
       await movePath(prefixedOldPath.slice(1), newPath);
@@ -164,6 +168,28 @@ export function Sidebar() {
       onNavigate(compoundDocId);
     } catch (error) {
       console.error('Failed to create document:', error);
+    }
+  }, [folderDocs, folderNames, metadata, onNavigate, justCreatedRef]);
+
+  const handleInstantCreateHtml = useCallback(async (folderPath: string) => {
+    const folderName = getFolderNameFromPath(folderPath, folderNames);
+    if (!folderName) return;
+    const doc = folderDocs.get(folderName);
+    if (!doc) return;
+
+    const originalFolderPath = getOriginalPath(folderPath, folderName);
+    const baseName = nextUntitledHtmlName(folderPath, metadata);
+    const path = originalFolderPath === '' || originalFolderPath === '/'
+      ? `/${baseName}`
+      : `${originalFolderPath}/${baseName}`;
+
+    try {
+      const id = await createDocument(doc, path, 'file');
+      justCreatedRef.current = true;
+      const compoundDocId = `${RELAY_ID}-${id}`;
+      onNavigate(compoundDocId);
+    } catch (error) {
+      console.error('Failed to create HTML document:', error);
     }
   }, [folderDocs, folderNames, metadata, onNavigate, justCreatedRef]);
 
@@ -344,12 +370,13 @@ export function Sidebar() {
                   value={{
                     editingPath,
                     onEditingChange: setEditingPath,
-                    onRequestRename: (path) => setEditingPath(path),
-                    onRequestDelete: (path, name) => setDeleteTarget({ path, name }),
-                    onRequestMove: handleMoveRequest,
-                    onRenameSubmit: handleRenameSubmit,
-                    onCreateDocument: handleInstantCreate,
-                    onCreateFolder: handleCreateFolder,
+                    onRequestRename: canWrite ? (path) => setEditingPath(path) : undefined,
+                    onRequestDelete: canWrite ? (path, name) => setDeleteTarget({ path, name }) : undefined,
+                    onRequestMove: canWrite ? handleMoveRequest : undefined,
+                    onRenameSubmit: canWrite ? handleRenameSubmit : undefined,
+                    onCreateDocument: canWrite ? handleInstantCreate : undefined,
+                    onCreateHtmlDocument: canWrite ? handleInstantCreateHtml : undefined,
+                    onCreateFolder: canWrite ? handleCreateFolder : undefined,
                     onOpenNewTab: handleOpenNewTab,
                     activeDocId,
                   }}
@@ -357,7 +384,7 @@ export function Sidebar() {
                   <FileTree
                     data={filteredTree}
                     onSelect={handleSelect}
-                    onMove={handleDragMove}
+                    onMove={canWrite ? handleDragMove : undefined}
                     openAll={!!fileFilter}
                     activeDocId={activeDocId}
                   />

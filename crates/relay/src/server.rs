@@ -2320,7 +2320,6 @@ impl Server {
                     new_path
                 )));
             }
-            let id = link_indexer::extract_id_from_filemeta_entry(&value, &txn).unwrap_or_default();
             let fields = link_indexer::extract_filemeta_fields(&value, &txn);
 
             let filemeta = txn.get_or_insert_map("filemeta_v0");
@@ -2328,7 +2327,6 @@ impl Server {
             filemeta.remove(&mut txn, old_path.as_str());
             docs_map.remove(&mut txn, old_path.as_str());
             filemeta.insert(&mut txn, new_path, yrs::Any::Map(fields.clone().into()));
-            docs_map.insert(&mut txn, new_path, yrs::Any::String(id.to_string().into()));
             sync_kv
         };
 
@@ -2531,11 +2529,15 @@ impl Server {
                     destination.as_str(),
                     yrs::Any::Map(fields.clone().into()),
                 );
-                docs_map.insert(
-                    &mut txn,
-                    destination.as_str(),
-                    yrs::Any::String(id.to_string().into()),
-                );
+                if entry_type == "folder" {
+                    if !id.is_empty() {
+                        docs_map.insert(
+                            &mut txn,
+                            destination.as_str(),
+                            yrs::Any::String(id.to_string().into()),
+                        );
+                    }
+                }
                 if source == &old_path {
                     continue;
                 }
@@ -6155,7 +6157,7 @@ mod test {
         ));
         assert_eq!(
             legacy_docs_value(&server, &folder_doc_id, "/renamed.timestamps.json"),
-            Some("22222222-2222-4222-8222-222222222222".to_string())
+            None
         );
     }
 
@@ -6172,6 +6174,11 @@ mod test {
                     "33333333-3333-4333-8333-333333333333",
                     "markdown",
                 ),
+                (
+                    "/Old/Page.html",
+                    "44444444-4444-4444-8444-444444444444",
+                    "file",
+                ),
             ],
         )
         .await;
@@ -6184,8 +6191,10 @@ mod test {
 
         assert!(!filemeta_has(&server, &folder_doc_id, "/Old"));
         assert!(!filemeta_has(&server, &folder_doc_id, "/Old/Child.md"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Old/Page.html"));
         assert!(filemeta_has(&server, &folder_doc_id, "/New"));
         assert!(filemeta_has(&server, &folder_doc_id, "/New/Child.md"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/New/Page.html"));
         assert_eq!(
             legacy_docs_value(&server, &folder_doc_id, "/New"),
             Some("22222222-2222-4222-8222-222222222222".to_string())
@@ -6194,9 +6203,17 @@ mod test {
             legacy_docs_value(&server, &folder_doc_id, "/New/Child.md"),
             Some("33333333-3333-4333-8333-333333333333".to_string())
         );
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/New/Page.html"),
+            None
+        );
         assert_eq!(legacy_docs_value(&server, &folder_doc_id, "/Old"), None);
         assert_eq!(
             legacy_docs_value(&server, &folder_doc_id, "/Old/Child.md"),
+            None
+        );
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/Old/Page.html"),
             None
         );
     }

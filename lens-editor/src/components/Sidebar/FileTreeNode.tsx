@@ -53,8 +53,9 @@ export function FileTreeNode({
   }, [isEditing, node.data.name]);
 
   const handleRename = () => {
+    if (!ctx.onRequestRename) return;
     blurGuardRef.current = true; // Arm guard before state change
-    ctx.onRequestRename?.(node.data.path);
+    ctx.onRequestRename(node.data.path);
     ctx.onEditingChange(node.data.path);
     setEditValue(node.data.name);
   };
@@ -214,11 +215,12 @@ export function FileTreeNode({
         </span>
       )}
 
-      {/* Create menu (new file / new folder) for folders */}
-      {isFolder && (ctx.onCreateDocument || ctx.onCreateFolder) && (
+      {/* Create menu (new file / new HTML file / new folder) for folders */}
+      {isFolder && (ctx.onCreateDocument || ctx.onCreateHtmlDocument || ctx.onCreateFolder) && (
         <CreateMenu
           folderName={node.data.name}
           onCreateDocument={ctx.onCreateDocument ? () => ctx.onCreateDocument!(node.data.path) : undefined}
+          onCreateHtmlDocument={ctx.onCreateHtmlDocument ? () => ctx.onCreateHtmlDocument!(node.data.path) : undefined}
           onCreateFolder={ctx.onCreateFolder ? () => ctx.onCreateFolder!(node.data.path) : undefined}
         />
       )}

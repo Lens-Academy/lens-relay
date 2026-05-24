@@ -7,15 +7,17 @@ import type { FileMetadata } from '../hooks/useFolderMetadata';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-vi.mock('../App', () => ({
-  RELAY_ID: 'cb696037-0f72-4e93-8717-4e433129d789',
-}));
+const mockProviderConstructor = vi.hoisted(() => vi.fn());
 
 // Mock YSweetProvider and getClientToken to avoid real network connections.
 // These are exercised by createDocument -> initializeContentDocument which
 // connects to the content doc to add initial content for Obsidian sync.
 vi.mock('@y-sweet/client', () => ({
   YSweetProvider: class MockYSweetProvider {
+    constructor(...args: unknown[]) {
+      mockProviderConstructor(...args);
+    }
+
     on(event: string, callback: () => void) {
       // Immediately trigger 'synced' event so initializeContentDocument completes
       if (event === 'synced') {
@@ -47,6 +49,7 @@ describe('relay-api', () => {
     legacyDocs = doc.getMap<string>('docs');
     localStorage.clear();
     mockFetch.mockReset();
+    mockProviderConstructor.mockReset();
     // Default: successful server response
     mockFetch.mockResolvedValue({ ok: true });
   });
@@ -101,6 +104,19 @@ describe('relay-api', () => {
       await createDocument(doc, '/Diagram.canvas', 'canvas');
 
       expect(filemeta.get('/Diagram.canvas')!.type).toBe('canvas');
+    });
+
+    it('creates file documents without legacy docs entry or content initialization', async () => {
+      legacyDocs.set('/Page.html', 'old-md-id');
+
+      const id = await createDocument(doc, '/Page.html', 'file');
+      const meta = filemeta.get('/Page.html');
+
+      expect(meta).toEqual({ id, type: 'file', version: 0 });
+      expect(legacyDocs.has('/Page.html')).toBe(false);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockFetch.mock.calls[0][0]).toBe('/api/relay/doc/new');
+      expect(mockProviderConstructor).not.toHaveBeenCalled();
     });
 
     it('calls server /doc/new endpoint before adding to filemeta', async () => {

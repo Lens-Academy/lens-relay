@@ -78,6 +78,10 @@ pub async fn execute(
         session.read_docs.insert(doc_info.doc_id.clone());
     }
 
+    if blob::is_raw_ytext_file(file_path) {
+        return Ok(format_cat_n(&content, offset, limit));
+    }
+
     // Parse CriticMarkup and return accepted view
     let spans = super::critic_markup::parse(&content);
     let accepted = super::critic_markup::accepted_view(&spans);
@@ -211,6 +215,29 @@ mod accepted_view_tests {
             "Plain doc should have no footer: {}",
             result
         );
+    }
+
+    #[tokio::test]
+    async fn read_html_returns_raw_source_without_criticmarkup_processing() {
+        let server = build_test_server(&[(
+            "/Page.html",
+            "uuid-html",
+            "<p>{--literal--}{++markers++}</p>",
+        )])
+        .await;
+        let sid = setup_session_no_reads(&server);
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Page.html", "session_id": sid,
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.contains("<p>{--literal--}{++markers++}</p>"));
+        assert!(!result.contains("[Pending suggestions]"));
     }
 }
 
