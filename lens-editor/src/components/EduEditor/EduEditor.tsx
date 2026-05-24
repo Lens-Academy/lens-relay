@@ -120,16 +120,14 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
 
   const handleClickCriticRange = useCallback((range: CriticMarkupRange) => {
     if (range.type !== 'comment') return;
-    // Ensure CommentsLayer is visible so the user can see the focused card.
+    // Open the sidebar so the focused card is visible. The focus event itself
+    // is dispatched by CriticMarkupSpan (read mode) and the criticmarkup
+    // extension's badge widget (edit mode) — dispatching here too would
+    // double-fire and cancel the toggle.
     if (!commentsVisible) {
       setCommentsVisible(true);
       writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, true);
     }
-    // CommentsLayer listens for `comment-badge-focus` CustomEvents dispatched
-    // by the criticmarkup extension's badge widget; focus is managed there.
-    // We also dispatch one here so clicking a rendered prose pill (which fires
-    // onClickCriticRange) also focuses the matching card.
-    document.dispatchEvent(new CustomEvent('comment-badge-focus', { detail: { threadFrom: range.from } }));
   }, [commentsVisible]);
 
   // The Mod-Shift-m shortcut and the right-click "Add Comment" menu route here.

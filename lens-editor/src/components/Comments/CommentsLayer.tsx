@@ -117,17 +117,25 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
   const focusedKeyRef = useRef<number | null>(null);
   useEffect(() => { focusedKeyRef.current = focusedThreadKey; }, [focusedThreadKey]);
 
-  // Toggle .cm-comment-badge--focused class on matching badges in the editor root.
+  // Toggle the focused class on matching markers in the editor root —
+  // .cm-comment-badge (edit mode, CodeMirror widget) and .cm-comment-anchor
+  // (read mode, React-rendered span). Both flavors use the same focused class
+  // and key off their respective offset attribute.
   useEffect(() => {
     const root = editorRootRef?.current;
     if (!root) return;
     root
-      .querySelectorAll('.cm-comment-badge--focused')
-      .forEach((el) => el.classList.remove('cm-comment-badge--focused'));
+      .querySelectorAll('.cm-comment-badge--focused, .cm-comment-anchor--focused')
+      .forEach((el) => {
+        el.classList.remove('cm-comment-badge--focused', 'cm-comment-anchor--focused');
+      });
     if (focusedThreadKey != null) {
       root
         .querySelectorAll(`.cm-comment-badge[data-thread-from="${focusedThreadKey}"]`)
         .forEach((el) => el.classList.add('cm-comment-badge--focused'));
+      root
+        .querySelectorAll(`.cm-comment-anchor[data-cm-absolute-from="${focusedThreadKey}"]`)
+        .forEach((el) => el.classList.add('cm-comment-anchor--focused'));
     }
   }, [focusedThreadKey, editorRootRef, textRevision]);
 
@@ -453,8 +461,9 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
               style={{
                 position: 'absolute',
                 top,
-                left: 0,
-                right: 0,
+                // Inset so a focused card's outline isn't clipped by the column.
+                left: 4,
+                right: 4,
                 pointerEvents: 'auto',
               }}
               onClick={(e) => e.stopPropagation()}

@@ -460,6 +460,14 @@
   border-color: #2563eb;
 }
 
+/* Read-mode comment anchor (React-rendered) — same focused look as the
+   in-editor badge. Tailwind utilities on the element set the base color;
+   these overrides take effect when CommentsLayer adds the focused class. */
+.cm-comment-anchor.cm-comment-anchor--focused {
+  background-color: #2563eb;
+  color: #ffffff;
+}
+
 /* ToC heading flash highlight */
 .cm-heading-flash {
   background-color: rgba(250, 204, 21, 0.25);
