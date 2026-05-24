@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
+import type { EditorView } from '@codemirror/view';
 import {
   resolveAnchorYFromView,
   resolveAnchorYFromSectionViews,
@@ -6,22 +7,22 @@ import {
   type SectionViewEntry,
 } from './anchor-resolver';
 
-function makeView(coordsByPos: Map<number, { top: number; bottom: number }>) {
+function makeView(coordsByPos: Map<number, { top: number; bottom: number }>): EditorView {
   return {
     coordsAtPos: (pos: number) => coordsByPos.get(pos) ?? null,
     scrollDOM: { getBoundingClientRect: () => ({ top: 0 }) } as Element,
-  } as const;
+  } as unknown as EditorView;
 }
 
 describe('resolveAnchorYFromView', () => {
   it('returns the top y from coordsAtPos', () => {
     const view = makeView(new Map([[42, { top: 123, bottom: 145 }]]));
-    expect(resolveAnchorYFromView(view as any, 42)).toBe(123);
+    expect(resolveAnchorYFromView(view, 42)).toBe(123);
   });
 
   it('returns null when coordsAtPos returns null', () => {
     const view = makeView(new Map());
-    expect(resolveAnchorYFromView(view as any, 42)).toBeNull();
+    expect(resolveAnchorYFromView(view, 42)).toBeNull();
   });
 });
 
@@ -30,8 +31,8 @@ describe('resolveAnchorYFromSectionViews', () => {
     const viewA = makeView(new Map([[5, { top: 100, bottom: 120 }]]));
     const viewB = makeView(new Map([[3, { top: 250, bottom: 270 }]]));
     const entries: SectionViewEntry[] = [
-      { view: viewA as any, yTextFrom: 0,  yTextTo: 50 },
-      { view: viewB as any, yTextFrom: 50, yTextTo: 100 },
+      { view: viewA, yTextFrom: 0,  yTextTo: 50 },
+      { view: viewB, yTextFrom: 50, yTextTo: 100 },
     ];
     // Offset 53 falls in viewB; local pos = 53 - 50 = 3.
     expect(resolveAnchorYFromSectionViews(entries, 53)).toBe(250);
@@ -42,7 +43,7 @@ describe('resolveAnchorYFromSectionViews', () => {
   it('returns null when no section owns the offset', () => {
     const viewA = makeView(new Map());
     const entries: SectionViewEntry[] = [
-      { view: viewA as any, yTextFrom: 0, yTextTo: 50 },
+      { view: viewA, yTextFrom: 0, yTextTo: 50 },
     ];
     expect(resolveAnchorYFromSectionViews(entries, 999)).toBeNull();
   });

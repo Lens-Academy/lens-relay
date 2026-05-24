@@ -37,11 +37,11 @@ function Harness(props: {
 describe('CommentsLayer', () => {
   beforeEach(() => {
     // Default no-op stub; individual tests can replace if they need callbacks.
-    (globalThis as any).ResizeObserver = class {
+    globalThis.ResizeObserver = class {
       observe() {}
       unobserve() {}
       disconnect() {}
-    };
+    } as unknown as typeof ResizeObserver;
   });
 
   it('renders the empty-state message when the Y.Text has no comments', () => {
