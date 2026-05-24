@@ -39,11 +39,11 @@ export function CommentCard(props: CommentCardProps): ReactElement {
   const root = thread.comments[0];
   const replies = thread.comments.slice(1);
 
-  const handleCardClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    // Only fire onFocus when clicking directly on the card, not on interactive elements.
-    if (e.target === e.currentTarget) {
-      onFocus(thread.from);
-    }
+  const handleCardClick = () => {
+    // Interactive subtrees (CommentRow, Reply form, Reply/Edit/Delete buttons)
+    // call e.stopPropagation(), so any click that reaches the card root is on
+    // non-interactive area and should toggle focus.
+    onFocus(thread.from);
   };
 
   const handleReplySubmit = (content: string) => {
@@ -83,8 +83,11 @@ export function CommentCard(props: CommentCardProps): ReactElement {
               padding: '0 6px',
               borderRadius: 9,
               fontSize: 10,
-              background: focused ? '#2563eb' : '#fef3c7',
-              color: focused ? '#fff' : '#92400e',
+              // Match the inline .cm-comment-badge palette so the sidebar
+              // number and the in-prose pill read as the same identifier.
+              background: focused ? '#2563eb' : 'rgba(59, 130, 246, 0.15)',
+              color: focused ? '#fff' : '#2563eb',
+              border: focused ? '1px solid #2563eb' : '1px solid rgba(59, 130, 246, 0.3)',
               fontWeight: 700,
             }}
           >
@@ -207,7 +210,7 @@ function CommentRow({ comment, rangeIndex, currentUserName, onEdit, onDelete }: 
   }
 
   return (
-    <div className="comment-item" onClick={(e) => e.stopPropagation()}>
+    <div className="comment-item">
       <div className="flex items-baseline gap-2 mb-0.5">
         <span className="text-[13px] font-semibold text-gray-900">{author}</span>
         {timestamp && (

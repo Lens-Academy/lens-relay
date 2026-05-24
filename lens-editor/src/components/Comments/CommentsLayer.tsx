@@ -108,6 +108,14 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
 
   // ── Focus state ───────────────────────────────────────────────────────────
   const [focusedThreadKey, setFocusedThreadKey] = useState<number | null>(null);
+  // Ref mirror of focusedThreadKey for use in the document-level event
+  // listener below. We deliberately avoid the functional updater form
+  // `setFocusedThreadKey(prev => prev === X ? null : X)` because under
+  // React.StrictMode (dev) updaters are double-invoked; a non-idempotent
+  // toggle then flips back to its original value on the second invocation
+  // and state appears not to change.
+  const focusedKeyRef = useRef<number | null>(null);
+  useEffect(() => { focusedKeyRef.current = focusedThreadKey; }, [focusedThreadKey]);
 
   // Toggle .cm-comment-badge--focused class on matching badges in the editor root.
   useEffect(() => {
@@ -131,7 +139,11 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ threadFrom: number }>).detail;
-      setFocusedThreadKey(detail.threadFrom);
+      // Toggle off if clicking the focused badge again. Read current state
+      // from the ref (see focusedKeyRef comment) instead of using a
+      // functional updater, which would be double-invoked by StrictMode.
+      const current = focusedKeyRef.current;
+      setFocusedThreadKey(current === detail.threadFrom ? null : detail.threadFrom);
     };
     document.addEventListener('comment-badge-focus', handler);
     return () => document.removeEventListener('comment-badge-focus', handler);
@@ -314,7 +326,12 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
   allThreads.forEach((t, i) => threadNumbers.set(t.from, i + 1));
 
   // ── CRUD callbacks ────────────────────────────────────────────────────────
-  const handleFocus = (threadFrom: number) => setFocusedThreadKey(threadFrom);
+  const handleFocus = (threadFrom: number) => {
+    // Direct read of focusedThreadKey is safe here (handler is recreated each
+    // render), and avoids the StrictMode-double-invoke bug that breaks the
+    // functional-updater form.
+    setFocusedThreadKey(focusedThreadKey === threadFrom ? null : threadFrom);
+  };
 
   const handleReply = (threadEndPos: number, content: string) => {
     replyInYText(yText, content, threadEndPos);
