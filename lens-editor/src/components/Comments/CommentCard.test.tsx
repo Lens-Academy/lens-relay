@@ -26,7 +26,6 @@ describe('CommentCard', () => {
     render(
       <CommentCard
         thread={thread()}
-        top={100}
         focused={false}
         currentUserName="Bob"
         onFocus={vi.fn()}
@@ -44,7 +43,6 @@ describe('CommentCard', () => {
     const { rerender } = render(
       <CommentCard
         thread={t}
-        top={0}
         focused
         currentUserName="Alice"
         onFocus={vi.fn()} onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
@@ -56,7 +54,6 @@ describe('CommentCard', () => {
     rerender(
       <CommentCard
         thread={t}
-        top={0}
         focused
         currentUserName="Bob"
         onFocus={vi.fn()} onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
@@ -66,16 +63,32 @@ describe('CommentCard', () => {
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
   });
 
-  it('calls onFocus when the card is clicked', async () => {
+  it('calls onFocus when the comment body text is clicked', () => {
+    // Regression: a blanket stopPropagation on CommentRow's outer div was
+    // swallowing clicks on the comment text, so only clicks on the bare card
+    // root fired onFocus. Click on the text node to lock that contract.
     const onFocus = vi.fn();
-    const { container } = render(
+    render(
       <CommentCard
         thread={thread()}
-        top={0} focused={false} currentUserName="Bob"
+        focused={false} currentUserName="Bob"
         onFocus={onFocus} onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
       />,
     );
-    (container.firstChild as HTMLElement).click();
+    screen.getByText('Hello world').click();
     expect(onFocus).toHaveBeenCalledWith(0);
+  });
+
+  it('does not call onFocus when an action button is clicked', () => {
+    const onFocus = vi.fn();
+    render(
+      <CommentCard
+        thread={thread()}
+        focused={false} currentUserName="Alice"
+        onFocus={onFocus} onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
+      />,
+    );
+    screen.getByRole('button', { name: /reply/i }).click();
+    expect(onFocus).not.toHaveBeenCalled();
   });
 });

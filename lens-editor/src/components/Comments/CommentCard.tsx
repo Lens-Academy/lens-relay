@@ -1,11 +1,3 @@
-/**
- * CommentCard — renders a single thread (root comment + replies) at an
- * absolute vertical position in the margin.
- *
- * No layout logic lives here: the caller passes `top` and this component
- * simply renders at that position. The CommentsLayer container owns layout.
- */
-
 import { useState, type ReactElement } from 'react';
 import type { CommentThread, CriticMarkupRange } from '../../lib/criticmarkup-parser';
 import { decodeCommentContent } from '../../lib/criticmarkup-parser';
@@ -15,24 +7,20 @@ import { ConfirmDialog } from '../ConfirmDialog';
 
 export interface CommentCardProps {
   thread: CommentThread;
-  top: number;
   /** 1-indexed comment number, matching the inline badge in the prose. */
   number?: number;
   focused: boolean;
   currentUserName: string;
   onFocus: (threadFrom: number) => void;
-  /** Reply to the thread; threadEndPos is thread.to. */
   onReply: (threadEndPos: number, content: string) => void;
-  /** Edit comment at thread.comments[rangeIndex]. */
   onEdit: (rangeIndex: number, newContent: string) => void;
-  /** Delete comment at thread.comments[rangeIndex]. */
   onDelete: (rangeIndex: number) => void;
 }
 
 const CARD_BORDER = '#e8e5df';
 
 export function CommentCard(props: CommentCardProps): ReactElement {
-  const { thread, top, number, focused, currentUserName, onFocus, onReply, onEdit, onDelete } = props;
+  const { thread, number, focused, currentUserName, onFocus, onReply, onEdit, onDelete } = props;
 
   const [showReplyForm, setShowReplyForm] = useState(false);
 
@@ -40,9 +28,7 @@ export function CommentCard(props: CommentCardProps): ReactElement {
   const replies = thread.comments.slice(1);
 
   const handleCardClick = () => {
-    // Interactive subtrees (CommentRow, Reply form, Reply/Edit/Delete buttons)
-    // call e.stopPropagation(), so any click that reaches the card root is on
-    // non-interactive area and should toggle focus.
+    // Interactive subtrees stopPropagation, so any click reaching here is on the card body.
     onFocus(thread.from);
   };
 
@@ -55,10 +41,6 @@ export function CommentCard(props: CommentCardProps): ReactElement {
     <div
       className={`comments-card${focused ? ' comments-card--focused' : ''} bg-white rounded-lg border overflow-hidden transition-shadow`}
       style={{
-        // Positioning is owned by the parent (CommentsLayer wraps each card in
-        // an absolutely-positioned div). The card flows normally inside its
-        // wrapper so the wrapper auto-sizes to the card's measured height —
-        // critical for ResizeObserver-driven re-layout.
         borderColor: focused ? undefined : CARD_BORDER,
         outline: focused ? '2px solid #3b82f6' : undefined,
         outlineOffset: focused ? '-1px' : undefined,
@@ -67,7 +49,7 @@ export function CommentCard(props: CommentCardProps): ReactElement {
       data-thread-from={thread.from}
       onClick={handleCardClick}
     >
-      {/* Number badge (matches the inline numbered superscript in the prose) */}
+      {/* Number badge — palette matches the inline .cm-comment-badge in the prose. */}
       {number != null && (
         <div
           className="px-3 pt-2 pb-0 flex items-center gap-2"
@@ -83,8 +65,6 @@ export function CommentCard(props: CommentCardProps): ReactElement {
               padding: '0 6px',
               borderRadius: 9,
               fontSize: 10,
-              // Match the inline .cm-comment-badge palette so the sidebar
-              // number and the in-prose pill read as the same identifier.
               background: focused ? '#2563eb' : 'rgba(59, 130, 246, 0.15)',
               color: focused ? '#fff' : '#2563eb',
               border: focused ? '1px solid #2563eb' : '1px solid rgba(59, 130, 246, 0.3)',

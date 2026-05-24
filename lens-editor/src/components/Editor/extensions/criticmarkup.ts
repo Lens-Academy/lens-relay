@@ -612,9 +612,6 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
               }),
             });
           }
-        } else if (!cursorInside && !isBulkSelection) {
-          // Check if this is the addition part of a pair where cursor is in the deletion
-          // (handled by the deletion's branch above — skip to avoid duplicate)
         }
       }
 

@@ -103,7 +103,6 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   // Callback for Y.Doc sync completion
   const handleSynced = useCallback(() => setSynced(true), []);
 
-  // Callback for "Add Comment" from editor context menu
   const handleRequestAddComment = useCallback(() => {
     manager.expand('comment-margin');
     setAddCommentTrigger(v => v + 1);

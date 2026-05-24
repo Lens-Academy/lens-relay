@@ -106,9 +106,6 @@ export function createSectionEditorView(opts: {
   const editTo = trimSectionEnd(fullText, sectionFrom, sectionTo);
   const sectionText = fullText.slice(sectionFrom, editTo);
 
-  // Where this section's slice starts in the underlying Y.Text. Defaults to
-  // sectionFrom (which is also used by ySectionSync). Callers can override via
-  // yTextOffsetBase if they have a different mapping.
   const offsetBase = yTextOffsetBase ?? sectionFrom;
 
   const criticMarkupExtensions = enableCriticMarkup

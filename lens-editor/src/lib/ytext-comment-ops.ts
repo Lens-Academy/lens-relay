@@ -50,7 +50,7 @@ export function replyInYText(ytext: Y.Text, content: string, threadEndPos: numbe
  * checks before invoking.
  */
 export function deleteRangeInYText(ytext: Y.Text, range: CriticMarkupRange): void {
-  ytext.doc?.transact(() => {
+  ytext.doc!.transact(() => {
     ytext.delete(range.from, range.to - range.from);
   });
 }
@@ -67,7 +67,7 @@ export function editRangeContentInYText(
 ): void {
   // For comments, the stored content is escaped (same encoding rules).
   const encoded = range.type === 'comment' ? encodeCommentContent(newContent) : newContent;
-  ytext.doc?.transact(() => {
+  ytext.doc!.transact(() => {
     const existingLength = range.contentTo - range.contentFrom;
     ytext.delete(range.contentFrom, existingLength);
     ytext.insert(range.contentFrom, encoded);

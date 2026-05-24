@@ -1,4 +1,3 @@
-// src/components/CommentsPanel/AddCommentForm.tsx
 import { useState, useRef, useEffect } from 'react';
 
 interface AddCommentFormProps {
@@ -7,9 +6,7 @@ interface AddCommentFormProps {
   placeholder?: string;
   submitLabel?: string;
   autoFocus?: boolean;
-  /** Pre-populates the textarea — used by the comments sidebar's Edit flow so
-   *  the user sees the existing comment text and can amend it instead of
-   *  retyping from scratch. Defaults to empty (the new-comment flow). */
+  /** Pre-populates the textarea (used by the Edit flow). */
   initialValue?: string;
 }
 
@@ -27,14 +24,8 @@ export function AddCommentForm({
   useEffect(() => {
     if (autoFocus && textareaRef.current) {
       textareaRef.current.focus();
-      // Place caret at end of any pre-populated value so the user can
-      // immediately keep typing without selecting first.
       const len = textareaRef.current.value.length;
-      try {
-        textareaRef.current.setSelectionRange(len, len);
-      } catch {
-        // Some browsers reject setSelectionRange on certain element states.
-      }
+      textareaRef.current.setSelectionRange(len, len);
     }
   }, [autoFocus]);
 

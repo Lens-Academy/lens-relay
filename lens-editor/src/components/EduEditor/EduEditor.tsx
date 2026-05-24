@@ -118,37 +118,24 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
 
   useHeaderCommentsControl(commentsControl);
 
+  const ensureCommentsVisible = useCallback(() => {
+    if (!commentsVisible) {
+      setCommentsVisible(true);
+      writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, true);
+    }
+  }, [commentsVisible]);
+
   const handleClickCriticRange = useCallback((range: CriticMarkupRange) => {
     if (range.type !== 'comment') return;
-    // Open the sidebar so the focused card is visible. The focus event itself
-    // is dispatched by CriticMarkupSpan (read mode) and the criticmarkup
-    // extension's badge widget (edit mode) — dispatching here too would
-    // double-fire and cancel the toggle.
-    if (!commentsVisible) {
-      setCommentsVisible(true);
-      writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, true);
-    }
-  }, [commentsVisible]);
+    ensureCommentsVisible();
+  }, [ensureCommentsVisible]);
 
-  // The Mod-Shift-m shortcut and the right-click "Add Comment" menu route here.
-  // CommentsLayer's Add button is hidden (insertCursorPos={null}), so we just
-  // ensure comments are visible — the user can add via the criticmarkup extension
-  // within each section editor.
-  const handleRequestAddComment = useCallback(() => {
-    if (!commentsVisible) {
-      setCommentsVisible(true);
-      writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, true);
-    }
-  }, [commentsVisible]);
+  const handleRequestAddComment = ensureCommentsVisible;
 
-  // Callback for ContentPanel to report the active doc's Y.Text.
   const handleYTextChange = useCallback((ytext: Y.Text | null) => {
     setActiveYText(ytext);
   }, []);
 
-  // Callback for ContentPanel to report the active section editor view.
-  // CommentsLayer uses the list (at most one entry at a time) for multi-view
-  // anchor resolution via resolveAnchorYFromSectionViews.
   const handleSectionViewChange = useCallback((entry: SectionViewEntry | null) => {
     sectionViewsRef.current = entry ? [entry] : [];
   }, []);
@@ -399,8 +386,6 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 scrollContainerRef={contentScrollRef}
                 editorRootRef={contentPanelWrapperRef}
                 currentUserName={displayName ?? ''}
-                // TODO(unified-comments): route the most-recently-focused section editor's
-                // cursor through here so the column's Add button works in the course editor.
                 insertCursorPos={null}
               />
             </div>

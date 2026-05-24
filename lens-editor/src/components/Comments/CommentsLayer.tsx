@@ -1,14 +1,9 @@
 /**
  * CommentsLayer — shared container for comment cards in the margin.
  *
- * Responsibilities:
- * - Subscribe to Y.Text changes and parse comment threads.
- * - Compute weighted-PAV layout (non-overlapping positions) on scroll/resize/data change.
- * - Render CommentCard instances via Option-B wrapper divs (positioned absolutely;
- *   CommentCard receives top=0 and positions relative to its wrapper).
- * - Own focus state; toggle .cm-comment-badge--focused on the editor root.
- * - Listen for comment-badge-focus CustomEvents dispatched by the criticmarkup extension.
- * - Wire all CRUD operations through ytext-comment-ops.ts.
+ * Subscribes to Y.Text, lays out cards using weighted PAV, and owns focus state
+ * (kept in sync with the inline .cm-comment-badge / .cm-comment-anchor markers
+ * via the `comment-badge-focus` CustomEvent on document).
  */
 
 import {
@@ -32,18 +27,13 @@ import {
 } from '../../lib/ytext-comment-ops';
 import type { CommentThread } from '../../lib/criticmarkup-parser';
 
-// ── Layout constants ─────────────────────────────────────────────────────────
 const CARD_GAP = 10;
 const DEFAULT_CARD_HEIGHT = 100;
-/** Padding (px) between the column edges and the first/last card when clamped. */
+/** Padding between the column edges and the first/last card when clamped. */
 const EDGE_PADDING = 12;
-/** Distance (px) of editor scroll over which the at-top / at-bottom clamp fades in. */
+/** Scroll distance over which the at-top / at-bottom clamp fades in. */
 const EDGE_TRANSITION_PX = 250;
-/**
- * Cards within ACTIVE_WINDOW_MULTIPLIER viewports above the visible area, and
- * (ACTIVE_WINDOW_MULTIPLIER + 1) viewports below, are kept in the layout.
- * Cards outside that window receive weight = 0 (effectively hidden).
- */
+/** Cards beyond N viewports above (and N+1 below) get weight 0 (no pull). */
 const ACTIVE_WINDOW_MULTIPLIER = 2;
 
 export interface CommentsLayerProps {
@@ -79,14 +69,10 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     insertCursorPos,
   } = props;
 
-  // Layer DOM ref — used to translate viewport-y coords (returned by resolveAnchorY)
-  // into layer-relative-y (what wrapper.style.top expects).
   const layerRef = useRef<HTMLDivElement | null>(null);
 
-  // ── Y.Text subscription ──────────────────────────────────────────────────
-  // Force a re-render whenever the Y.Text content changes.
-  // `textRevision` is also used as a dep in the class-toggle effect below so
-  // that the focused badge class re-attaches after decoration rebuilds.
+  // Bump on every Y.Text mutation; also a dep of the class-toggle effect so the
+  // focused class re-attaches after CM decoration rebuilds.
   const [textRevision, setTextRevision] = useState(0);
   useEffect(() => {
     const handler = () => setTextRevision((v) => v + 1);
@@ -94,33 +80,22 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     return () => yText.unobserve(handler);
   }, [yText]);
 
-  // Clear focus when yText reference changes (e.g. navigating to a new doc).
+  // Clear focus when navigating to a different doc.
   useEffect(() => {
     setFocusedThreadKey(null);
   }, [yText]);
 
-  // ── Thread parsing ────────────────────────────────────────────────────────
-  // useCommentsFromText is a plain function (not a hook), so calling it here
-  // with the current Y.Text snapshot is safe and idiomatic.
   const allThreads: CommentThread[] = useCommentsFromText(yText.toString()).filter(
     (t) => t.comments[0]?.type === 'comment',
   );
 
-  // ── Focus state ───────────────────────────────────────────────────────────
   const [focusedThreadKey, setFocusedThreadKey] = useState<number | null>(null);
-  // Ref mirror of focusedThreadKey for use in the document-level event
-  // listener below. We deliberately avoid the functional updater form
-  // `setFocusedThreadKey(prev => prev === X ? null : X)` because under
-  // React.StrictMode (dev) updaters are double-invoked; a non-idempotent
-  // toggle then flips back to its original value on the second invocation
-  // and state appears not to change.
+  // Ref mirror: the document-level listener below would otherwise need a
+  // functional updater to read fresh state — but StrictMode double-invokes
+  // those, breaking a non-idempotent toggle.
   const focusedKeyRef = useRef<number | null>(null);
   useEffect(() => { focusedKeyRef.current = focusedThreadKey; }, [focusedThreadKey]);
 
-  // Toggle the focused class on matching markers in the editor root —
-  // .cm-comment-badge (edit mode, CodeMirror widget) and .cm-comment-anchor
-  // (read mode, React-rendered span). Both flavors use the same focused class
-  // and key off their respective offset attribute.
   useEffect(() => {
     const root = editorRootRef?.current;
     if (!root) return;
@@ -139,17 +114,9 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     }
   }, [focusedThreadKey, editorRootRef, textRevision]);
 
-  // Listens for `comment-badge-focus` events dispatched by the criticmarkup
-  // extension's badge widget click handler. The extension was updated in Task 6
-  // of the unified-comments work to dispatch on `document` with
-  // `detail: { threadFrom }`; this listener will silently no-op until that
-  // change is in place.
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ threadFrom: number }>).detail;
-      // Toggle off if clicking the focused badge again. Read current state
-      // from the ref (see focusedKeyRef comment) instead of using a
-      // functional updater, which would be double-invoked by StrictMode.
       const current = focusedKeyRef.current;
       setFocusedThreadKey(current === detail.threadFrom ? null : detail.threadFrom);
     };
@@ -157,29 +124,21 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     return () => document.removeEventListener('comment-badge-focus', handler);
   }, []);
 
-  // No filter strip — all comments for the open doc are shown in document order.
-  const filteredThreads = allThreads;
-
-  // ── Add-comment form ──────────────────────────────────────────────────────
   const [showAddForm, setShowAddForm] = useState(false);
 
   const handleAddSubmit = (content: string) => {
     if (insertCursorPos == null) return;
     insertCommentInYText(yText, content, insertCursorPos);
     setShowAddForm(false);
-    // Focus the newly inserted comment (its from offset = insertCursorPos).
     setFocusedThreadKey(insertCursorPos);
   };
 
-  // ── Card height tracking ──────────────────────────────────────────────────
   const cardHeightsRef = useRef(new Map<number, number>());
   const [layoutTick, setLayoutTick] = useState(0);
 
-  // ResizeObserver map: threadFrom → observer (for cleanup).
   const observersRef = useRef(new Map<number, ResizeObserver>());
 
   const attachObserver = (el: HTMLDivElement | null, threadFrom: number) => {
-    // Clean up any existing observer for this thread.
     const existing = observersRef.current.get(threadFrom);
     if (existing) {
       existing.disconnect();
@@ -201,7 +160,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     observersRef.current.set(threadFrom, ro);
   };
 
-  // Clean up all observers on unmount.
   useEffect(() => {
     return () => {
       observersRef.current.forEach((ro) => ro.disconnect());
@@ -209,7 +167,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     };
   }, []);
 
-  // ── Scroll / viewport resize triggers ────────────────────────────────────
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
@@ -234,18 +191,17 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     };
   }, [scrollContainerRef]);
 
-  // ── Layout computation ────────────────────────────────────────────────────
   const [layoutMap, setLayoutMap] = useState<Map<number, number>>(new Map());
 
-  // Stable keys for layout dependency — only changes when thread set or filter changes.
-  const filteredThreadKeys = filteredThreads.map((t) => t.from).join(',');
+  // Stable dep for the layout effect — changes only when the thread set changes.
+  const threadKeys = allThreads.map((t) => t.from).join(',');
 
   useLayoutEffect(() => {
     const viewport = getViewportRect();
     const mid = viewport.height / 2;
 
     const items: LayoutItem[] = [];
-    for (const thread of filteredThreads) {
+    for (const thread of allThreads) {
       const anchorY = resolveAnchorY(thread.from);
       if (anchorY == null) continue; // not currently rendered — skip
 
@@ -275,17 +231,10 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
 
     const result = computeWeightedLayout({ items, gap: CARD_GAP });
 
-    // Edge clamping with a smooth scroll-position gradient.
-    //
-    // Conceptually there are three regimes:
-    //   - near the top of the editor scroll  → pin the first in-viewport card to minTop
-    //   - near the bottom                    → pin the last in-viewport card to maxBottom
-    //   - in the middle                      → no edge clamp; cards sit at PAV positions
-    //
-    // To avoid a discontinuity when crossing a threshold, both corrections are
-    // applied with a weight that fades linearly across EDGE_TRANSITION_PX. At
-    // scrollTop=0, topness=1 (full top correction); after EDGE_TRANSITION_PX,
-    // topness=0 (no top correction). Symmetric at the bottom.
+    // Edge clamp: near the top/bottom of the doc, shift all cards so the
+    // first/last in-viewport card doesn't go off screen. Blended linearly over
+    // EDGE_TRANSITION_PX (no discontinuity). Skipped when a thread is focused
+    // in the viewport — its hard pin to its anchor takes precedence.
     const minTop = viewport.top + EDGE_PADDING;
     const maxBottom = viewport.top + viewport.height - EDGE_PADDING;
 
@@ -296,11 +245,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
       })
       .sort((a, b) => a.anchorY - b.anchorY);
 
-    // Skip the edge clamp when a thread is focused and in the viewport: its
-    // hard pin (Infinity weight) keeps it at its anchor, and a global shift
-    // would translate the focused card away. The other in-viewport cards
-    // arrange around it via PAV; that takes priority over keeping the first /
-    // last card fully on screen.
     const focusedInViewport =
       focusedThreadKey != null && inViewport.some((it) => it.key === focusedThreadKey);
 
@@ -320,9 +264,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
 
       const topShift = firstPos != null && firstPos < minTop ? minTop - firstPos : 0;
       const botShift = lastBot > maxBottom ? maxBottom - lastBot : 0;
-
-      // Blended shift: positive (down) near the top, negative (up) near the bottom,
-      // zero in the middle. If both apply (very short doc), they partially cancel.
       const shift = topShift * topness + botShift * botness;
 
       if (shift !== 0) {
@@ -334,18 +275,15 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
 
     setLayoutMap(result);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredThreadKeys, focusedThreadKey, layoutTick]);
+  }, [threadKeys, focusedThreadKey, layoutTick]);
 
-  // ── Badge numbering ───────────────────────────────────────────────────────
-  // 1-indexed by document order (matches the inline criticmarkup badge numbers).
+  // 1-indexed by document order — matches the inline badge numbers.
   const threadNumbers = new Map<number, number>();
   allThreads.forEach((t, i) => threadNumbers.set(t.from, i + 1));
 
-  // ── CRUD callbacks ────────────────────────────────────────────────────────
   const handleFocus = (threadFrom: number) => {
-    // Direct read of focusedThreadKey is safe here (handler is recreated each
-    // render), and avoids the StrictMode-double-invoke bug that breaks the
-    // functional-updater form.
+    // Direct read is safe here (handler is recreated each render); avoids the
+    // StrictMode-double-invoke bug that breaks the functional-updater form.
     setFocusedThreadKey(focusedThreadKey === threadFrom ? null : threadFrom);
   };
 
@@ -365,7 +303,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
     deleteRangeInYText(yText, range);
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div
       ref={layerRef}
@@ -387,7 +324,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
         }
       }}
     >
-      {/* Floating Add button — pinned to the top-right of the column, above all cards. */}
       {insertCursorPos != null && !showAddForm && (
         <button
           type="button"
@@ -413,7 +349,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
         </button>
       )}
 
-      {/* ── Add form (floating at top of column) ───────────────────────── */}
       {showAddForm && insertCursorPos != null && (
         <div
           style={{ pointerEvents: 'auto', padding: '0 8px 8px' }}
@@ -431,8 +366,7 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
         </div>
       )}
 
-      {/* ── Empty state ────────────────────────────────────────────────── */}
-      {filteredThreads.length === 0 && (
+      {allThreads.length === 0 && (
         <div
           style={{
             pointerEvents: 'none',
@@ -446,18 +380,14 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
         </div>
       )}
 
-      {/* ── Cards area ─────────────────────────────────────────────────── */}
-      {/* Relative container fills the layer so absolute wrappers are positioned
-          in the layer's coord space. We subtract the layer's viewport-y from
-          each card's computed y (which is in viewport-y from resolveAnchorY)
-          so wrapper.style.top is in the right frame of reference. */}
+      {/* layoutY is in viewport-y (from resolveAnchorY); subtract layer's
+          viewport top to get the layer-relative position the wrapper needs. */}
       <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        {filteredThreads.map((thread) => {
+        {allThreads.map((thread) => {
           const anchorY = resolveAnchorY(thread.from);
-          if (anchorY == null) return null; // hidden (not in rendered range)
+          if (anchorY == null) return null;
 
           const layoutY = layoutMap.get(thread.from) ?? anchorY;
-          // Translate viewport-y → layer-relative-y.
           const layerTop = layerRef.current?.getBoundingClientRect().top ?? 0;
           const top = layoutY - layerTop;
 
@@ -478,7 +408,6 @@ export function CommentsLayer(props: CommentsLayerProps): ReactElement {
             >
               <CommentCard
                 thread={thread}
-                top={0}
                 number={threadNumbers.get(thread.from)}
                 focused={focusedThreadKey === thread.from}
                 currentUserName={currentUserName}
