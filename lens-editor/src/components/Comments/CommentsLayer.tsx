@@ -20,6 +20,7 @@ import * as Y from 'yjs';
 import { CommentCard } from './CommentCard';
 import { AddCommentForm } from './AddCommentForm';
 import { useCommentsFromText } from './useCommentsFromText';
+import { useScrollSource } from './useScrollSource';
 import { computeWeightedLayout, type LayoutItem } from '../../lib/weighted-pav-layout';
 import {
   insertCommentInYText,
@@ -82,6 +83,8 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     currentUserName,
     getInsertCursorPos,
   } = props;
+
+  const scrollSource = useScrollSource(scrollContainerRef);
 
   // getInsertCursorPos identity may change every render (callers commonly pass
   // an inline arrow). Mirror through a ref so handle methods and click handlers
@@ -189,9 +192,6 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
   }, []);
 
   useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
     let rafId: number | null = null;
     const bump = () => {
       if (rafId != null) return; // already queued
@@ -200,17 +200,9 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
         setLayoutTick((t) => t + 1);
       });
     };
-
-    container.addEventListener('scroll', bump, { passive: true });
-    const ro = new ResizeObserver(bump);
-    ro.observe(container);
-
-    return () => {
-      container.removeEventListener('scroll', bump);
-      ro.disconnect();
-      if (rafId != null) cancelAnimationFrame(rafId);
-    };
-  }, [scrollContainerRef]);
+    const unsub = scrollSource.subscribe(bump);
+    return () => { unsub(); if (rafId != null) cancelAnimationFrame(rafId); };
+  }, [scrollSource]);
 
   const [layoutMap, setLayoutMap] = useState<Map<number, number>>(new Map());
 
@@ -275,9 +267,8 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
       const firstPos = result.get(first.key);
       const lastBot = (result.get(last.key) ?? 0) + last.height;
 
-      const sc = scrollContainerRef.current;
-      const scrollTop = sc?.scrollTop ?? 0;
-      const scrollMax = sc ? Math.max(0, sc.scrollHeight - sc.clientHeight) : 0;
+      const scrollTop = scrollSource.getScrollTop();
+      const scrollMax = Math.max(0, scrollSource.getScrollHeight() - scrollSource.getClientHeight());
       const topness = clamp01((EDGE_TRANSITION_PX - scrollTop) / EDGE_TRANSITION_PX);
       const botness = clamp01(
         (scrollTop - (scrollMax - EDGE_TRANSITION_PX)) / EDGE_TRANSITION_PX,
