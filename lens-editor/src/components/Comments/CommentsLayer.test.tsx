@@ -1,64 +1,138 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { useRef } from 'react';
-import * as Y from 'yjs';
-import { CommentsLayer } from './CommentsLayer';
+/**
+ * @vitest-environment happy-dom
+ */
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
+import { createRef } from 'react';
+import { CommentsLayer, type CommentsLayerHandle } from './CommentsLayer';
+import type { ThreadView, MessageView, ScrollSource } from './types';
 
-function makeYDoc(initialText: string) {
-  const doc = new Y.Doc();
-  const yt = doc.getText('contents');
-  yt.insert(0, initialText);
-  return { doc, yt };
+beforeEach(() => {
+  (globalThis as any).ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+});
+afterEach(cleanup);
+
+function fakeScrollSource(initial: { scrollTop?: number; scrollHeight?: number; clientHeight?: number } = {}): ScrollSource & { fire(): void } {
+  const subs = new Set<() => void>();
+  return {
+    getScrollTop: () => initial.scrollTop ?? 0,
+    getScrollHeight: () => initial.scrollHeight ?? 1000,
+    getClientHeight: () => initial.clientHeight ?? 500,
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+    fire() { subs.forEach(fn => fn()); },
+  };
 }
 
-// Renders CommentsLayer with a real scroll-container div so the layer's
-// scroll/resize effect doesn't early-return (which would silently disable
-// the layout pipeline). Tests can override `scrollTop`/`scrollHeight` on
-// the element to exercise the edge-clamp.
-function Harness(props: {
-  yt: Y.Text;
-  resolveAnchorY: (offset: number) => number | null;
-  viewport?: { top: number; height: number };
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  return (
-    <div ref={ref} style={{ height: 800 }}>
-      <CommentsLayer
-        yText={props.yt}
-        resolveAnchorY={props.resolveAnchorY}
-        getViewportRect={() => props.viewport ?? { top: 0, height: 800 }}
-        scrollContainerRef={ref}
-        currentUserName="Bob"
-      />
-    </div>
-  );
+function msg(over: Partial<MessageView> = {}): MessageView {
+  return { id: 'alice|1', author: 'Alice', body: 'hi', timestamp: '1', canModify: true, ...over };
+}
+
+function thread(over: Partial<ThreadView> = {}): ThreadView {
+  return { key: '100', root: msg(), replies: [], order: 1, orphan: false, ...over };
 }
 
 describe('CommentsLayer', () => {
-  beforeEach(() => {
-    // Default no-op stub; individual tests can replace if they need callbacks.
-    (globalThis as any).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
-  });
-
-  it('renders the empty-state message when the Y.Text has no comments', () => {
-    const { yt } = makeYDoc('Just plain prose.');
-    const { container } = render(<Harness yt={yt} resolveAnchorY={() => 0} />);
-    expect(container.querySelectorAll('[data-comment-thread]')).toHaveLength(0);
+  it('renders empty-state when there are no threads', () => {
+    const ss = fakeScrollSource();
+    render(
+      <CommentsLayer
+        threads={[]}
+        resolveAnchorY={() => 0}
+        getViewportRect={() => ({ top: 0, height: 800 })}
+        scrollSource={ss}
+        currentUserName="Bob"
+        onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
+      />
+    );
     expect(screen.getByText(/no comments yet/i)).toBeInTheDocument();
   });
 
-  it('renders a card for each comment with the resolver-supplied y', () => {
-    const meta = JSON.stringify({ author: 'Alice', timestamp: 1700000000000 });
-    const { yt } = makeYDoc(`Hello {>>{${meta}}@@first<<} world.`);
-    const { container } = render(<Harness yt={yt} resolveAnchorY={() => 222} />);
+  it('renders an anchored card with the resolver y', () => {
+    const ss = fakeScrollSource();
+    const { container } = render(
+      <CommentsLayer
+        threads={[thread()]}
+        resolveAnchorY={() => 222}
+        getViewportRect={() => ({ top: 0, height: 800 })}
+        scrollSource={ss}
+        currentUserName="Bob"
+        onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
+      />
+    );
+    const wrapper = container.querySelector('[data-comment-thread="100"]') as HTMLElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper.style.top).toBe('222px');
+  });
 
-    const wrappers = container.querySelectorAll('[data-comment-thread]');
-    expect(wrappers.length).toBe(1);
-    // Layer fills its parent (top:0 in viewport), so layoutY=222 → top=222px.
-    expect((wrappers[0] as HTMLElement).style.top).toBe('222px');
+  it('renders orphans in the orphan section, not the anchored layout', () => {
+    const ss = fakeScrollSource();
+    const o = thread({ key: 'uuid-1', orphan: true });
+    const a = thread({ key: '200', orphan: false });
+    render(
+      <CommentsLayer
+        threads={[a, o]}
+        resolveAnchorY={() => 100}
+        getViewportRect={() => ({ top: 0, height: 800 })}
+        scrollSource={ss}
+        currentUserName="Bob"
+        onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/orphans/i)).toBeInTheDocument();
+    // Anchored card has inline top style; orphan card does not.
+    const anchored = document.querySelector('[data-comment-thread="200"]') as HTMLElement;
+    const orphan = document.querySelector('[data-comment-thread="uuid-1"]') as HTMLElement;
+    expect(anchored.style.top).toBe('100px');
+    expect(orphan.style.top).toBe('');
+  });
+
+  it('imperative focusThread is idempotent', () => {
+    const ss = fakeScrollSource();
+    const ref = createRef<CommentsLayerHandle>();
+    const onFocusChange = vi.fn();
+    render(
+      <CommentsLayer
+        ref={ref}
+        threads={[thread()]}
+        resolveAnchorY={() => 100}
+        getViewportRect={() => ({ top: 0, height: 800 })}
+        scrollSource={ss}
+        currentUserName="Bob"
+        onFocusChange={onFocusChange}
+        onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
+      />
+    );
+    act(() => { ref.current!.focusThread('100'); });
+    expect(onFocusChange).toHaveBeenLastCalledWith('100');
+    act(() => { ref.current!.focusThread('100'); });
+    // Idempotent: second call same key should not toggle off. Last call still '100'.
+    expect(onFocusChange).toHaveBeenLastCalledWith('100');
+  });
+
+  it('clicking the empty layer background clears focus', () => {
+    const ss = fakeScrollSource();
+    const ref = createRef<CommentsLayerHandle>();
+    const onFocusChange = vi.fn();
+    const { container } = render(
+      <CommentsLayer
+        ref={ref}
+        threads={[thread()]}
+        resolveAnchorY={() => 100}
+        getViewportRect={() => ({ top: 0, height: 800 })}
+        scrollSource={ss}
+        currentUserName="Bob"
+        onFocusChange={onFocusChange}
+        onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
+      />
+    );
+    act(() => { ref.current!.focusThread('100'); });
+    onFocusChange.mockClear();
+    const layer = container.querySelector('.comments-layer') as HTMLElement;
+    fireEvent.click(layer);
+    expect(onFocusChange).toHaveBeenLastCalledWith(null);
   });
 });

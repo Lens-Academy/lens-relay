@@ -18,6 +18,8 @@ import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
+import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
+import { useScrollSource } from '../Comments/useScrollSource';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
@@ -67,7 +69,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     return { top: rect.top, height: rect.height };
   }, [editorView]);
 
-  const resolveAnchorY = useCallback((offset: number) => {
+  const resolveAnchorYByOffset = useCallback((offset: number) => {
     if (editorView) {
       const cm = resolveAnchorYFromView(editorView, offset);
       if (cm != null) return cm;
@@ -75,6 +77,15 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const root = editorRootRef.current;
     return root ? resolveAnchorYFromDOM(root as HTMLElement, offset) : null;
   }, [editorView]);
+
+  // Adapter: convert ThreadKey (string) back to numeric offset for the resolver.
+  const resolveAnchorY = useCallback((key: string) => resolveAnchorYByOffset(Number(key)), [resolveAnchorYByOffset]);
+
+  // Thread data and mutation callbacks from the criticmarkup adapter.
+  const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous');
+
+  // ScrollSource wrapping the editor's scroll container.
+  const scrollSource = useScrollSource(scrollContainerRef as React.RefObject<HTMLElement | null>);
 
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
@@ -135,7 +146,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
   const handleCommentClick = useCallback((absFrom: number) => {
     manager.expand('comment-margin');
-    commentsLayerRef.current?.focusThread(absFrom);
+    commentsLayerRef.current?.focusThread(String(absFrom));
   }, [manager.expand]);
 
   // Auto-collapse comment margin on notes without comments (after initial Y.Doc sync)
@@ -299,13 +310,17 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           {editorView && (
             <CommentsLayer
               ref={commentsLayerRef}
-              yText={yText}
+              threads={threads}
               resolveAnchorY={resolveAnchorY}
               getViewportRect={getViewportRect}
-              scrollContainerRef={scrollContainerRef}
+              scrollSource={scrollSource}
               editorRootRef={editorRootRef}
               currentUserName={displayName ?? 'anonymous'}
-              getInsertCursorPos={() => editorView.state.selection.main.head}
+              onReply={callbacks.onReply}
+              onEdit={callbacks.onEdit}
+              onDelete={callbacks.onDelete}
+              onAddComment={callbacks.onAddComment}
+              getInsertKey={editorView ? () => String(editorView.state.selection.main.head) : undefined}
             />
           )}
         </div>

@@ -17,6 +17,8 @@ import { SuggestionModeControl } from '../SuggestionModeToggle/SuggestionModeCon
 import { OverflowMenu } from '../OverflowMenu';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
+import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
+import { useScrollSource } from '../Comments/useScrollSource';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
 import { resolveAnchorYFromSectionViews, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import type { SectionViewEntry } from '../../lib/anchor-resolver';
@@ -89,8 +91,18 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const contentPanelWrapperRef = useRef<HTMLDivElement | null>(null);
 
   // Active Y.Text for the currently selected doc (set by ContentPanel via
-  // onYTextChange callback). CommentsLayer subscribes to this directly.
+  // onYTextChange callback).
   const [activeYText, setActiveYText] = useState<Y.Text | null>(null);
+
+  // Stable fallback Y.Text so hooks can be called unconditionally.
+  const fallbackYText = useMemo(() => new Y.Doc().getText('contents'), []);
+  const effectiveYText = activeYText ?? fallbackYText;
+
+  // Thread data and mutation callbacks from the criticmarkup adapter.
+  const { threads, callbacks } = useThreadsFromYText(effectiveYText, displayName ?? '');
+
+  // ScrollSource wrapping the content scroll container.
+  const scrollSource = useScrollSource(contentScrollRef);
 
   // Currently mounted section editor view. ContentPanel reports it via
   // onSectionViewChange so CommentsLayer can resolve comment anchor positions
@@ -158,7 +170,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
 
   const handleCommentClick = useCallback((absFrom: number) => {
     ensureCommentsVisible();
-    commentsLayerRef.current?.focusThread(absFrom);
+    commentsLayerRef.current?.focusThread(String(absFrom));
   }, [ensureCommentsVisible]);
 
   const handleYTextChange = useCallback((ytext: Y.Text | null) => {
@@ -171,12 +183,15 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
 
   // Try CM section views first (edit mode); fall back to DOM scanning for
   // read-mode sections where no CM view is mounted.
-  const resolveAnchorY = useCallback((offset: number) => {
+  const resolveAnchorYByOffset = useCallback((offset: number) => {
     const cm = resolveAnchorYFromSectionViews(sectionViewsRef.current, offset);
     if (cm != null) return cm;
     const root = contentPanelWrapperRef.current;
     return root ? resolveAnchorYFromDOM(root, offset) : null;
   }, []);
+
+  // Adapter: convert ThreadKey (string) back to numeric offset for the resolver.
+  const resolveAnchorY = useCallback((key: string) => resolveAnchorYByOffset(Number(key)), [resolveAnchorYByOffset]);
 
   const getViewportRect = useCallback(() => {
     const rect = contentScrollRef.current?.getBoundingClientRect();
@@ -409,13 +424,17 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
             >
               <CommentsLayer
                 ref={commentsLayerRef}
-                yText={activeYText}
+                threads={threads}
                 resolveAnchorY={resolveAnchorY}
                 getViewportRect={getViewportRect}
-                scrollContainerRef={contentScrollRef}
+                scrollSource={scrollSource}
                 editorRootRef={contentPanelWrapperRef}
                 currentUserName={displayName ?? ''}
-                getInsertCursorPos={() => commentInsertPosRef.current}
+                onReply={callbacks.onReply}
+                onEdit={callbacks.onEdit}
+                onDelete={callbacks.onDelete}
+                onAddComment={callbacks.onAddComment}
+                getInsertKey={() => commentInsertPosRef.current != null ? String(commentInsertPosRef.current) : null}
               />
             </div>
           )}

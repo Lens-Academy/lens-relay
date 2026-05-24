@@ -1,9 +1,8 @@
 /**
  * CommentsLayer — shared container for comment cards in the margin.
  *
- * Subscribes to Y.Text, lays out cards using weighted PAV, and owns focus
- * state. Editor mounts call the imperative `focusThread` on the layer's ref
- * when an inline marker (any element with `data-comment-from`) is clicked.
+ * Accepts a pre-built ThreadView[] from the caller (via criticmarkupAdapter or
+ * any other source) and owns focus state + PAV layout. No yText dependency.
  */
 
 import {
@@ -16,19 +15,10 @@ import {
   type RefObject,
   type ReactElement,
 } from 'react';
-import * as Y from 'yjs';
 import { CommentCard } from './CommentCard';
 import { AddCommentForm } from './AddCommentForm';
-import { useCommentsFromText } from './useCommentsFromText';
-import { useScrollSource } from './useScrollSource';
 import { computeWeightedLayout, type LayoutItem } from '../../lib/weighted-pav-layout';
-import {
-  insertCommentInYText,
-  replyInYText,
-  editRangeContentInYText,
-  deleteRangeInYText,
-} from '../../lib/ytext-comment-ops';
-import type { CommentThread } from '../../lib/criticmarkup-parser';
+import type { ThreadKey, ThreadView, MessageView, ScrollSource } from './types';
 
 const CARD_GAP = 10;
 const DEFAULT_CARD_HEIGHT = 100;
@@ -40,32 +30,33 @@ const EDGE_TRANSITION_PX = 250;
 const ACTIVE_WINDOW_MULTIPLIER = 2;
 
 export interface CommentsLayerHandle {
-  /** Toggles focus on the thread at `absFrom`: if already focused, clears it. */
-  focusThread(absFrom: number): void;
+  /** Idempotent set (not toggle). Focusing same key twice is a no-op. */
+  focusThread(key: ThreadKey): void;
   /** Opens the add-comment form anchored at the cursor returned by
-   *  `getInsertCursorPos`. No-op if the getter is omitted or returns null. */
+   *  `getInsertKey`. No-op if the getter is omitted or returns null. */
   openAddForm(): void;
 }
 
 export interface CommentsLayerProps {
-  /** Y.Text containing the document content. */
-  yText: Y.Text;
-  /** Resolve a Y.Text offset to a screen y, or null if not currently rendered. */
-  resolveAnchorY: (offset: number) => number | null;
+  threads: ThreadView[];
+  /** Resolve a thread key to a screen y, or null if not currently rendered. */
+  resolveAnchorY: (key: ThreadKey) => number | null;
   /** Current visible viewport in the same coordinate space as resolveAnchorY. */
   getViewportRect: () => { top: number; height: number };
-  /** Scroll container shared with the editor; the column listens to its scroll. */
-  scrollContainerRef: RefObject<HTMLElement | null>;
-  /** Editor root element; the layer toggles a CSS class on matching badges when focus changes. */
+  /** ScrollSource wired to the editor scroll container. */
+  scrollSource: ScrollSource;
+  /** Editor root element; the layer toggles data-comment-focused on matching badges. */
   editorRootRef?: RefObject<HTMLElement | null>;
   /** Current user's display name for owner detection. */
   currentUserName: string;
-  /** Called when the user opens the add-comment form (via the "+ Add" button
-   *  or the `openAddForm` handle method) to determine the insertion offset.
-   *  Read at click/trigger time so the result reflects the live cursor rather
-   *  than a render-time snapshot. If omitted, no Add button is shown and
-   *  `openAddForm` is a no-op. */
-  getInsertCursorPos?: () => number | null;
+  /** Called when focused thread changes (or clears). */
+  onFocusChange?: (key: ThreadKey | null) => void;
+  onReply: (thread: ThreadView, body: string) => void;
+  onEdit: (message: MessageView, newBody: string) => void;
+  onDelete: (message: MessageView) => void;
+  /** Add-comment UI shown only when both provided. */
+  getInsertKey?: () => ThreadKey | null;
+  onAddComment?: (key: ThreadKey, body: string) => void;
 }
 
 /** Clamp a value to [0, 1]. */
@@ -75,61 +66,54 @@ function clamp01(x: number): number {
 
 export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>(function CommentsLayer(props, handleRef): ReactElement {
   const {
-    yText,
+    threads,
     resolveAnchorY,
     getViewportRect,
-    scrollContainerRef,
+    scrollSource,
     editorRootRef,
     currentUserName,
-    getInsertCursorPos,
+    onFocusChange,
+    onReply,
+    onEdit,
+    onDelete,
+    getInsertKey,
+    onAddComment,
   } = props;
 
-  const scrollSource = useScrollSource(scrollContainerRef);
-
-  // getInsertCursorPos identity may change every render (callers commonly pass
+  // getInsertKey identity may change every render (callers commonly pass
   // an inline arrow). Mirror through a ref so handle methods and click handlers
-  // always see the latest function without us having to thread it into
-  // useImperativeHandle deps.
-  const getInsertCursorPosRef = useRef(getInsertCursorPos);
-  getInsertCursorPosRef.current = getInsertCursorPos;
+  // always see the latest function without threading it into deps.
+  const getInsertKeyRef = useRef(getInsertKey);
+  getInsertKeyRef.current = getInsertKey;
 
   const layerRef = useRef<HTMLDivElement | null>(null);
 
-  // Bump on every Y.Text mutation; also a dep of the class-toggle effect so the
-  // focused class re-attaches after CM decoration rebuilds.
-  const [textRevision, setTextRevision] = useState(0);
-  useEffect(() => {
-    const handler = () => setTextRevision((v) => v + 1);
-    yText.observe(handler);
-    return () => yText.unobserve(handler);
-  }, [yText]);
+  const [focusedThreadKey, setFocusedThreadKey] = useState<ThreadKey | null>(null);
 
-  // Clear focus when navigating to a different doc.
-  useEffect(() => {
-    setFocusedThreadKey(null);
-  }, [yText]);
+  // Helper: set focus and fire callback.
+  const applyFocus = (key: ThreadKey | null) => {
+    setFocusedThreadKey(key);
+    onFocusChange?.(key);
+  };
 
-  const allThreads: CommentThread[] = useCommentsFromText(yText.toString()).filter(
-    (t) => t.comments[0]?.type === 'comment',
-  );
-
-  const [focusedThreadKey, setFocusedThreadKey] = useState<number | null>(null);
-
-  // The handle closes over the current render's focusedThreadKey, so each
-  // toggle decision uses fresh state without a functional updater (which
-  // StrictMode would double-invoke).
+  // The handle closes over the current render's focusedThreadKey so toggle
+  // logic uses fresh state.
   useImperativeHandle(handleRef, () => ({
-    focusThread(absFrom: number) {
-      setFocusedThreadKey(focusedThreadKey === absFrom ? null : absFrom);
+    focusThread(key: ThreadKey) {
+      // Idempotent set — focusing same key twice is a no-op.
+      if (key !== focusedThreadKey) {
+        applyFocus(key);
+      }
     },
     openAddForm() {
-      const pos = getInsertCursorPosRef.current?.();
-      if (pos == null) return;
-      setPendingInsertPos(pos);
+      const key = getInsertKeyRef.current?.();
+      if (key == null) return;
+      setPendingInsertKey(key);
       setShowAddForm(true);
     },
-  }), [focusedThreadKey]);
+  }), [focusedThreadKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Toggle the data-comment-focused attribute on matching badges in the editor.
   useEffect(() => {
     const root = editorRootRef?.current;
     if (!root) return;
@@ -141,47 +125,47 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
         .querySelectorAll(`[data-comment-from="${focusedThreadKey}"]`)
         .forEach((el) => { (el as HTMLElement).dataset.commentFocused = ''; });
     }
-  }, [focusedThreadKey, editorRootRef, textRevision]);
+  }, [focusedThreadKey, editorRootRef]);
 
   const [showAddForm, setShowAddForm] = useState(false);
   // Captured at the moment the form opens, so a cursor move while typing
   // doesn't relocate the insertion target.
-  const [pendingInsertPos, setPendingInsertPos] = useState<number | null>(null);
+  const [pendingInsertKey, setPendingInsertKey] = useState<ThreadKey | null>(null);
 
   const handleAddSubmit = (content: string) => {
-    const pos = pendingInsertPos;
-    if (pos == null) return;
-    insertCommentInYText(yText, content, pos);
+    const key = pendingInsertKey;
+    if (key == null || !onAddComment) return;
+    onAddComment(key, content);
     setShowAddForm(false);
-    setPendingInsertPos(null);
-    setFocusedThreadKey(pos);
+    setPendingInsertKey(null);
+    applyFocus(key);
   };
 
-  const cardHeightsRef = useRef(new Map<number, number>());
+  const cardHeightsRef = useRef(new Map<ThreadKey, number>());
   const [layoutTick, setLayoutTick] = useState(0);
 
-  const observersRef = useRef(new Map<number, ResizeObserver>());
+  const observersRef = useRef(new Map<ThreadKey, ResizeObserver>());
 
-  const attachObserver = (el: HTMLDivElement | null, threadFrom: number) => {
-    const existing = observersRef.current.get(threadFrom);
+  const attachObserver = (el: HTMLDivElement | null, key: ThreadKey) => {
+    const existing = observersRef.current.get(key);
     if (existing) {
       existing.disconnect();
-      observersRef.current.delete(threadFrom);
+      observersRef.current.delete(key);
     }
     if (!el) return;
 
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const h = entry.contentRect.height;
-        const prev = cardHeightsRef.current.get(threadFrom);
+        const prev = cardHeightsRef.current.get(key);
         if (prev !== h) {
-          cardHeightsRef.current.set(threadFrom, h);
+          cardHeightsRef.current.set(key, h);
           setLayoutTick((t) => t + 1);
         }
       }
     });
     ro.observe(el);
-    observersRef.current.set(threadFrom, ro);
+    observersRef.current.set(key, ro);
   };
 
   useEffect(() => {
@@ -204,18 +188,25 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     return () => { unsub(); if (rafId != null) cancelAnimationFrame(rafId); };
   }, [scrollSource]);
 
-  const [layoutMap, setLayoutMap] = useState<Map<number, number>>(new Map());
+  const [layoutMap, setLayoutMap] = useState<Map<ThreadKey, number>>(new Map());
+
+  // Split anchored vs orphan threads.
+  const anchored = threads.filter(t => !t.orphan);
+  const orphans = threads.filter(t => t.orphan);
 
   // Stable dep for the layout effect — changes only when the thread set changes.
-  const threadKeys = allThreads.map((t) => t.from).join(',');
+  const threadKeys = threads.map((t) => t.key).join(',');
+
+  // Viewport height from the caller — used to size the sticky anchored region.
+  const viewportHeight = getViewportRect().height;
 
   useLayoutEffect(() => {
     const viewport = getViewportRect();
     const mid = viewport.height / 2;
 
     const items: LayoutItem[] = [];
-    for (const thread of allThreads) {
-      const anchorY = resolveAnchorY(thread.from);
+    for (const thread of anchored) {
+      const anchorY = resolveAnchorY(thread.key);
       if (anchorY == null) continue; // not currently rendered — skip
 
       // Distance-based weight.
@@ -230,14 +221,14 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
       }
 
       // Focused thread is a hard pin.
-      if (thread.from === focusedThreadKey) {
+      if (thread.key === focusedThreadKey) {
         weight = Number.POSITIVE_INFINITY;
       }
 
       items.push({
-        key: thread.from,
+        key: thread.key,
         anchorY,
-        height: cardHeightsRef.current.get(thread.from) ?? DEFAULT_CARD_HEIGHT,
+        height: cardHeightsRef.current.get(thread.key) ?? DEFAULT_CARD_HEIGHT,
         weight,
       });
     }
@@ -289,135 +280,108 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadKeys, focusedThreadKey, layoutTick]);
 
-  // 1-indexed by document order — matches the inline badge numbers.
-  const threadNumbers = new Map<number, number>();
-  allThreads.forEach((t, i) => threadNumbers.set(t.from, i + 1));
-
-  const handleFocus = (threadFrom: number) => {
-    // Direct read is safe here (handler is recreated each render); avoids the
-    // StrictMode-double-invoke bug that breaks the functional-updater form.
-    setFocusedThreadKey(focusedThreadKey === threadFrom ? null : threadFrom);
+  const handleFocus = (key: ThreadKey) => {
+    // Toggle on click: clicking the focused thread unfocuses it.
+    const next = focusedThreadKey === key ? null : key;
+    applyFocus(next);
   };
 
-  const handleReply = (threadEndPos: number, content: string) => {
-    replyInYText(yText, content, threadEndPos);
-  };
-
-  const handleEdit = (thread: CommentThread) => (rangeIndex: number, newContent: string) => {
-    const range = thread.comments[rangeIndex];
-    if (!range) return;
-    editRangeContentInYText(yText, range, newContent);
-  };
-
-  const handleDelete = (thread: CommentThread) => (rangeIndex: number) => {
-    const range = thread.comments[rangeIndex];
-    if (!range) return;
-    deleteRangeInYText(yText, range);
-  };
+  const showAddButton = getInsertKey != null && onAddComment != null && !showAddForm;
 
   return (
     <div
       ref={layerRef}
-      className="comments-layer"
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        pointerEvents: 'none',
-        // Establish stacking context so children can use z-index if needed.
-        isolation: 'isolate',
-      }}
+      className="comments-layer flex flex-col h-full overflow-y-auto"
       onClick={(e) => {
-        // Click on the layer background (not a card) clears focus.
         if (e.target === e.currentTarget) {
-          setFocusedThreadKey(null);
+          applyFocus(null);
         }
       }}
     >
-      {getInsertCursorPos != null && !showAddForm && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            const pos = getInsertCursorPosRef.current?.();
-            if (pos == null) return;
-            setPendingInsertPos(pos);
-            setShowAddForm(true);
-          }}
-          style={{
-            position: 'absolute',
-            top: 8,
-            right: 8,
-            zIndex: 2,
-            pointerEvents: 'auto',
-            fontSize: 12,
-            padding: '2px 10px',
-            background: '#3b82f6',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontWeight: 600,
-            boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
-          }}
-        >
-          + Add
-        </button>
-      )}
+      {/* Anchored region — sticky pinned to top of outer scroll */}
+      <div
+        className="comments-layer__anchored relative w-full self-start"
+        style={{ position: 'sticky', top: 0, height: viewportHeight, flexShrink: 0 }}
+      >
+        {showAddButton && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              const key = getInsertKeyRef.current?.();
+              if (key == null) return;
+              setPendingInsertKey(key);
+              setShowAddForm(true);
+            }}
+            style={{
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              zIndex: 2,
+              pointerEvents: 'auto',
+              fontSize: 12,
+              padding: '2px 10px',
+              background: '#3b82f6',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontWeight: 600,
+              boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+            }}
+          >
+            + Add
+          </button>
+        )}
 
-      {showAddForm && pendingInsertPos != null && (
-        <div
-          style={{ pointerEvents: 'auto', padding: '0 8px 8px', position: 'relative', zIndex: 2 }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
-            <AddCommentForm
-              onSubmit={handleAddSubmit}
-              onCancel={() => { setShowAddForm(false); setPendingInsertPos(null); }}
-              placeholder="Add a comment..."
-              submitLabel="Add"
-              autoFocus
-            />
+        {showAddForm && pendingInsertKey != null && (
+          <div
+            style={{ pointerEvents: 'auto', padding: '0 8px 8px', position: 'relative', zIndex: 2 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+              <AddCommentForm
+                onSubmit={handleAddSubmit}
+                onCancel={() => { setShowAddForm(false); setPendingInsertKey(null); }}
+                placeholder="Add a comment..."
+                submitLabel="Add"
+                autoFocus
+              />
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {allThreads.length === 0 && (
-        <div
-          style={{
-            pointerEvents: 'none',
-            padding: '40px 16px',
-            textAlign: 'center',
-            color: '#9ca3af',
-            fontSize: 13,
-          }}
-        >
-          No comments yet. Select text and click Add.
-        </div>
-      )}
+        {anchored.length === 0 && orphans.length === 0 && (
+          <div
+            style={{
+              pointerEvents: 'none',
+              padding: '40px 16px',
+              textAlign: 'center',
+              color: '#9ca3af',
+              fontSize: 13,
+            }}
+          >
+            No comments yet. Select text and click Add.
+          </div>
+        )}
 
-      {/* layoutY is in viewport-y (from resolveAnchorY); subtract layer's
-          viewport top to get the layer-relative position the wrapper needs. */}
-      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        {allThreads.map((thread) => {
-          const anchorY = resolveAnchorY(thread.from);
+        {/* Absolute-positioned anchored cards */}
+        {anchored.map((thread) => {
+          const anchorY = resolveAnchorY(thread.key);
           if (anchorY == null) return null;
 
-          const layoutY = layoutMap.get(thread.from) ?? anchorY;
+          const layoutY = layoutMap.get(thread.key) ?? anchorY;
           const layerTop = layerRef.current?.getBoundingClientRect().top ?? 0;
           const top = layoutY - layerTop;
 
           return (
             <div
-              key={thread.from}
-              data-comment-thread={thread.from}
-              ref={(el) => attachObserver(el, thread.from)}
+              key={thread.key}
+              data-comment-thread={thread.key}
+              ref={(el) => attachObserver(el, thread.key)}
               style={{
                 position: 'absolute',
                 top,
-                // Inset so a focused card's outline isn't clipped by the column.
                 left: 4,
                 right: 4,
                 pointerEvents: 'auto',
@@ -426,18 +390,39 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
             >
               <CommentCard
                 thread={thread}
-                number={threadNumbers.get(thread.from)}
-                focused={focusedThreadKey === thread.from}
+                number={thread.order}
+                focused={focusedThreadKey === thread.key}
                 currentUserName={currentUserName}
                 onFocus={handleFocus}
-                onReply={handleReply}
-                onEdit={handleEdit(thread)}
-                onDelete={handleDelete(thread)}
+                onReply={(t, body) => onReply(t, body)}
+                onEdit={(msg, body) => onEdit(msg, body)}
+                onDelete={(msg) => onDelete(msg)}
               />
             </div>
           );
         })}
       </div>
+
+      {/* Orphan region */}
+      {orphans.length > 0 && (
+        <div className="comments-layer__orphans px-2 py-3 border-t border-gray-100">
+          <div className="text-xs font-medium text-gray-500 mb-2">Orphans</div>
+          {orphans.map(t => (
+            <div key={t.key} data-comment-thread={t.key} className="mb-2">
+              <CommentCard
+                thread={t}
+                number={t.order}
+                focused={focusedThreadKey === t.key}
+                currentUserName={currentUserName}
+                onFocus={handleFocus}
+                onReply={(thread, body) => onReply(thread, body)}
+                onEdit={(msg, body) => onEdit(msg, body)}
+                onDelete={(msg) => onDelete(msg)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 });
