@@ -6,6 +6,7 @@ import {
   type Fingerprint,
   type ParentToBridge,
   type PreviewScrollState,
+  type PreviewUiState,
 } from './protocol';
 
 export const OVERLAY_ROOT_ID = 'lens-comment-overlay-root';
@@ -58,6 +59,34 @@ function isEmptyObjectPayload(payload: unknown): payload is Record<string, never
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function captureUiState(doc: Document): PreviewUiState {
+  const details = Array.from(doc.querySelectorAll('details')) as HTMLDetailsElement[];
+  return {
+    details: details
+      .map((node, index) => ({ path: [index], open: node.open }))
+      .filter(item => item.open),
+  };
+}
+
+function isPreviewUiState(value: unknown): value is PreviewUiState {
+  if (!isObject(value) || !Array.isArray(value.details)) return false;
+  return value.details.every((item) => {
+    if (!isObject(item) || !Array.isArray(item.path) || typeof item.open !== 'boolean') return false;
+    return item.path.every(Number.isInteger);
+  });
+}
+
+function restoreUiState(doc: Document, state: PreviewUiState): void {
+  const details = Array.from(doc.querySelectorAll('details')) as HTMLDetailsElement[];
+  for (const item of state.details) {
+    const index = item.path[0];
+    if (!Number.isInteger(index)) continue;
+    const node = details[index];
+    if (!node) continue;
+    node.open = item.open;
+  }
 }
 
 export interface FoundComment {
@@ -606,6 +635,14 @@ export function installBridge(win: Window & typeof globalThis): () => void {
         restoreScrollRatio(Math.max(0, Math.min(1, xRatio)), Math.max(0, Math.min(1, yRatio)));
         break;
       }
+      case 'capture-ui-state':
+        if (!isEmptyObjectPayload(msg.payload)) return;
+        postToParent({ type: 'ui-state', payload: captureUiState(doc) });
+        break;
+      case 'restore-ui-state':
+        if (!isPreviewUiState(msg.payload)) return;
+        restoreUiState(doc, msg.payload);
+        break;
       case 'init':
         break;
     }

@@ -244,6 +244,43 @@ describe('installBridge', () => {
     expect((clicked!.message as Extract<BridgeToParent, { type: 'dot-clicked' }>).payload.id).toBe('c1');
   });
 
+  it('captures details open state by structural path', () => {
+    document.body.innerHTML = '<details><summary>A</summary></details><details open><summary>B</summary></details>';
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    const cleanup = installBridge(window as Window & typeof globalThis);
+    cleanups.push(cleanup);
+
+    dispatchToBridge({ type: 'init', payload: { comments: [] } });
+    dispatchToBridge({ type: 'capture-ui-state', payload: {} } as unknown as ParentToBridge);
+
+    const state = sent.find(e => e.message.type === 'ui-state');
+    expect(state?.message).toMatchObject({
+      type: 'ui-state',
+      payload: { details: [{ path: [1], open: true }] },
+    });
+  });
+
+  it('restores details open state by structural path', () => {
+    document.body.innerHTML = '<details><summary>A</summary></details><details><summary>B</summary></details>';
+    postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(
+      ((env: Envelope<BridgeToParent>) => { sent.push(env); }) as typeof window.parent.postMessage,
+    );
+    const cleanup = installBridge(window as Window & typeof globalThis);
+    cleanups.push(cleanup);
+
+    dispatchToBridge({ type: 'init', payload: { comments: [] } });
+    dispatchToBridge({
+      type: 'restore-ui-state',
+      payload: { details: [{ path: [1], open: true }] },
+    } as unknown as ParentToBridge);
+
+    const details = Array.from(document.querySelectorAll('details')) as HTMLDetailsElement[];
+    expect(details[0].open).toBe(false);
+    expect(details[1].open).toBe(true);
+  });
+
   it('inline marker clicks do not place a new comment while click-to-place is armed', () => {
     document.body.innerHTML = '<p>Hello [[@comment:c1]] world</p>';
     postSpy = vi.spyOn(window.parent, 'postMessage').mockImplementation(

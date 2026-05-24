@@ -34,6 +34,15 @@ export interface PreviewScrollRatio {
   yRatio: number;
 }
 
+export interface DetailsStateItem {
+  path: number[];
+  open: boolean;
+}
+
+export interface PreviewUiState {
+  details: DetailsStateItem[];
+}
+
 export type PlacementTrigger = 'contextmenu' | 'selection' | 'toolbar';
 
 export interface PlacementRequest {
@@ -51,7 +60,9 @@ export type ParentToBridge =
   | { type: 'highlight-comment'; payload: { id: string } }
   | { type: 'set-comments'; payload: { comments: CommentSummary[] } }
   | { type: 'restore-scroll'; payload: PreviewScroll }
-  | { type: 'restore-scroll-ratio'; payload: PreviewScrollRatio };
+  | { type: 'restore-scroll-ratio'; payload: PreviewScrollRatio }
+  | { type: 'capture-ui-state'; payload: Record<string, never> }
+  | { type: 'restore-ui-state'; payload: PreviewUiState };
 
 export type BridgeToParent =
   | { type: 'ready'; payload: Record<string, never> }
@@ -59,6 +70,7 @@ export type BridgeToParent =
   | { type: 'dot-clicked'; payload: { id: string } }
   | { type: 'placement-requested'; payload: PlacementRequest }
   | { type: 'scroll-state'; payload: PreviewScrollState }
+  | { type: 'ui-state'; payload: PreviewUiState }
   | { type: 'probe-found'; payload: { token: string; rect: { x: number; y: number; w: number; h: number } | null } }
   | { type: 'comments-rendered'; payload: { found: string[]; orphaned: string[] } };
 

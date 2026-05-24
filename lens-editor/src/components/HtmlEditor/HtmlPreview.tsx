@@ -14,6 +14,7 @@ import {
   type Fingerprint,
   type ParentToBridge,
   type PreviewScrollState,
+  type PreviewUiState,
 } from './bridge/protocol';
 
 interface HtmlPreviewProps {
@@ -130,6 +131,16 @@ function isPreviewScrollState(value: unknown): value is PreviewScrollState {
     && typeof value.clientHeight === 'number';
 }
 
+function isPreviewUiState(value: unknown): value is PreviewUiState {
+  if (!isObject(value) || !Array.isArray(value.details)) return false;
+  return value.details.every(item => (
+    isObject(item)
+    && Array.isArray(item.path)
+    && item.path.every(Number.isInteger)
+    && typeof item.open === 'boolean'
+  ));
+}
+
 function isPlacementTrigger(value: unknown): value is PreviewPlacementTrigger {
   return value === 'contextmenu' || value === 'selection' || value === 'toolbar';
 }
@@ -195,6 +206,10 @@ function injectBridge(source: string): string {
 
   const insertAt = headMatch.index + headMatch[0].length;
   return `${source.slice(0, insertAt)}${script}${source.slice(insertAt)}`;
+}
+
+function hasDetailsElementMarkup(source: string): boolean {
+  return /<details\b/i.test(source);
 }
 
 function normalizeProbeViewportSize(size?: ProbeViewportSize): ProbeViewportSize {
@@ -329,6 +344,11 @@ export function HtmlPreview({
   const readOnlyRef = useRef(readOnly);
   const placementGenerationRef = useRef(0);
   const pendingRestoreScrollRef = useRef<PreviewScroll | null>(null);
+  const lastUiStateRef = useRef<PreviewUiState | null>(null);
+  const pendingUiStateRestoreRef = useRef<PreviewUiState | null>(null);
+  const pendingUiStateCaptureRef = useRef(false);
+  const deferredRestoreFrameIdRef = useRef<number | null>(null);
+  const uiStateCaptureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastKnownScrollRef = useRef<PreviewScrollState>({
     x: 0,
     y: 0,
@@ -355,6 +375,35 @@ export function HtmlPreview({
   const defaultProbeRunner = useHiddenProbeRunner(nonce, getProbeViewportSize);
   const activeProbeRunner = probeRunner ?? defaultProbeRunner;
 
+  const postToFrame = useCallback((frameId: number, message: ParentToBridge): void => {
+    postToBridge(frameRefs.current.get(frameId) ?? null, nonce, message);
+  }, [nonce]);
+
+  const restoreFrameLayout = useCallback((frame: PreviewFrame): void => {
+    const uiState = pendingUiStateRestoreRef.current ?? lastUiStateRef.current;
+    if (uiState) {
+      postToFrame(frame.id, { type: 'restore-ui-state', payload: uiState });
+    }
+    if (frame.state === 'loading') {
+      restoringFrameIdRef.current = frame.id;
+      const pendingScroll = pendingRestoreScrollRef.current;
+      const scroll = pendingScroll ?? lastKnownScrollRef.current;
+      const restoreScroll = { x: scroll.x, y: scroll.y };
+      restoringScrollRef.current = { frameId: frame.id, scroll: restoreScroll };
+      postToFrame(frame.id, { type: 'restore-scroll', payload: restoreScroll });
+      pendingRestoreScrollRef.current = null;
+    } else {
+      const scroll = pendingRestoreScrollRef.current ?? lastKnownScrollRef.current;
+      postToFrame(frame.id, { type: 'restore-scroll', payload: { x: scroll.x, y: scroll.y } });
+    }
+  }, [postToFrame]);
+
+  const clearUiStateCaptureTimer = useCallback((): void => {
+    if (uiStateCaptureTimerRef.current === null) return;
+    clearTimeout(uiStateCaptureTimerRef.current);
+    uiStateCaptureTimerRef.current = null;
+  }, []);
+
   useEffect(() => {
     framesRef.current = frames;
     activeFrameIdRef.current = frames.find(frame => frame.state === 'active')?.id ?? frames[0]?.id ?? 1;
@@ -369,8 +418,9 @@ export function HtmlPreview({
     return () => {
       mountedRef.current = false;
       placementGenerationRef.current += 1;
+      clearUiStateCaptureTimer();
     };
-  }, []);
+  }, [clearUiStateCaptureTimer]);
 
   useEffect(() => {
     isCommentModeRef.current = isCommentMode;
@@ -417,6 +467,30 @@ export function HtmlPreview({
 
   useEffect(() => {
     const nextSrcDoc = injectBridge(debounced);
+    const activeFrame = framesRef.current.find(frame => frame.state === 'active') ?? framesRef.current[0];
+    const shouldCaptureUiState = activeFrame?.srcDoc !== nextSrcDoc
+      && (hasDetailsElementMarkup(activeFrame?.srcDoc ?? '') || hasDetailsElementMarkup(nextSrcDoc));
+    if (shouldCaptureUiState) {
+      pendingUiStateCaptureRef.current = true;
+      clearUiStateCaptureTimer();
+      postToBridge(frameRefs.current.get(activeFrameIdRef.current) ?? null, nonce, {
+        type: 'capture-ui-state',
+        payload: {},
+      });
+      uiStateCaptureTimerRef.current = setTimeout(() => {
+        uiStateCaptureTimerRef.current = null;
+        pendingUiStateCaptureRef.current = false;
+        const frameId = deferredRestoreFrameIdRef.current;
+        if (frameId === null) return;
+        deferredRestoreFrameIdRef.current = null;
+        const frame = framesRef.current.find(candidate => candidate.id === frameId);
+        if (frame) restoreFrameLayout(frame);
+      }, 100);
+    } else {
+      pendingUiStateCaptureRef.current = false;
+      deferredRestoreFrameIdRef.current = null;
+      clearUiStateCaptureTimer();
+    }
     setFrames(currentFrames => {
       const activeFrame = currentFrames.find(frame => frame.state === 'active') ?? currentFrames[0];
       if (activeFrame?.srcDoc === nextSrcDoc) {
@@ -424,6 +498,10 @@ export function HtmlPreview({
         restoringScrollRef.current = null;
         postActivationRestoreRef.current = null;
         pendingRestoreScrollRef.current = null;
+        pendingUiStateRestoreRef.current = null;
+        pendingUiStateCaptureRef.current = false;
+        deferredRestoreFrameIdRef.current = null;
+        clearUiStateCaptureTimer();
         return activeFrame.state === 'active' && currentFrames.length === 1
           ? currentFrames
           : [{ ...activeFrame, state: 'active' }];
@@ -446,7 +524,7 @@ export function HtmlPreview({
         },
       ];
     });
-  }, [debounced]);
+  }, [clearUiStateCaptureTimer, debounced, nonce, restoreFrameLayout]);
 
   const openComposer = useCallback((
     position: number,
@@ -547,10 +625,6 @@ export function HtmlPreview({
     );
   }, [pendingPlacementMenu, readOnly, resolvePlacementForAction, ytext]);
 
-  const postToFrame = useCallback((frameId: number, message: ParentToBridge): void => {
-    postToBridge(frameRefs.current.get(frameId) ?? null, nonce, message);
-  }, [nonce]);
-
   useEffect(() => {
     const pending = postActivationRestoreRef.current;
     if (!pending) return;
@@ -583,6 +657,8 @@ export function HtmlPreview({
     restoringFrameIdRef.current = null;
     restoringScrollRef.current = null;
     postActivationRestoreRef.current = null;
+    pendingUiStateRestoreRef.current = null;
+    deferredRestoreFrameIdRef.current = null;
     const pendingCommentsRendered = pendingCommentsRenderedRef.current.get(frameId);
     if (pendingCommentsRendered) {
       pendingCommentsRenderedRef.current.delete(frameId);
@@ -624,19 +700,12 @@ export function HtmlPreview({
       type: isCommentModeRef.current ? 'enable-click-to-place' : 'disable-click-to-place',
       payload: {},
     });
-    if (frame.state === 'loading') {
-      restoringFrameIdRef.current = frame.id;
-      const pendingScroll = pendingRestoreScrollRef.current;
-      const scroll = pendingScroll ?? lastKnownScrollRef.current;
-      const restoreScroll = { x: scroll.x, y: scroll.y };
-      restoringScrollRef.current = { frameId: frame.id, scroll: restoreScroll };
-      postToFrame(frame.id, { type: 'restore-scroll', payload: restoreScroll });
-      pendingRestoreScrollRef.current = null;
-    } else {
-      const scroll = pendingRestoreScrollRef.current ?? lastKnownScrollRef.current;
-      postToFrame(frame.id, { type: 'restore-scroll', payload: { x: scroll.x, y: scroll.y } });
+    if (frame.state === 'loading' && pendingUiStateCaptureRef.current) {
+      deferredRestoreFrameIdRef.current = frame.id;
+      return;
     }
-  }, [postToFrame, ytext]);
+    restoreFrameLayout(frame);
+  }, [postToFrame, restoreFrameLayout, ytext]);
 
   useEffect(() => {
     function resolveCommentPlacement(
@@ -709,6 +778,22 @@ export function HtmlPreview({
         return;
       }
 
+      if (message.type === 'ui-state') {
+        if (frame.state !== 'active') return;
+        if (!isPreviewUiState(message.payload)) return;
+        pendingUiStateCaptureRef.current = false;
+        clearUiStateCaptureTimer();
+        lastUiStateRef.current = message.payload;
+        pendingUiStateRestoreRef.current = message.payload;
+        const deferredFrameId = deferredRestoreFrameIdRef.current;
+        if (deferredFrameId !== null) {
+          deferredRestoreFrameIdRef.current = null;
+          const deferredFrame = framesRef.current.find(candidate => candidate.id === deferredFrameId);
+          if (deferredFrame) restoreFrameLayout(deferredFrame);
+        }
+        return;
+      }
+
       if (message.type === 'comments-rendered') {
         if (!isCommentsRenderedPayload(message.payload)) return;
         if (frame.state === 'active') {
@@ -762,6 +847,7 @@ export function HtmlPreview({
     currentUser,
     activateRestoredFrame,
     applyCommentsRendered,
+    clearUiStateCaptureTimer,
     findFrameIdByWindow,
     initializeFrame,
     isCommentMode,
@@ -771,6 +857,7 @@ export function HtmlPreview({
     openComposer,
     readOnly,
     resolvePlacementForAction,
+    restoreFrameLayout,
     settleRestoredFrame,
     ytext,
   ]);

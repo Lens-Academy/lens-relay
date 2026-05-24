@@ -478,6 +478,136 @@ describe('HtmlPreview bridge integration', () => {
     }
   });
 
+  it('restores details UI state to replacement iframe after source changes', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<details><summary>A</summary></details><details><summary>B</summary></details>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+    const activePosted: unknown[] = [];
+    const activeSpy = vi.spyOn(activeFrame.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { activePosted.push(msg); }) as typeof window.postMessage
+    );
+
+    try {
+      await act(async () => {
+        dispatchFromBridge(activeFrame, {
+          nonce: '__test_nonce__',
+          message: { type: 'scroll-state', payload: { x: 0, y: 0, scrollWidth: 500, clientWidth: 500, scrollHeight: 1000, clientHeight: 500 } },
+        });
+        ytext.insert(ytext.length, 'x');
+      });
+      await act(async () => { vi.advanceTimersByTime(0); });
+      await act(async () => {});
+
+      expect(activePosted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'capture-ui-state', payload: {} },
+      });
+
+      await act(async () => {
+        dispatchFromBridge(activeFrame, {
+          nonce: '__test_nonce__',
+          message: { type: 'ui-state', payload: { details: [{ path: [1], open: true }] } },
+        } as unknown as Envelope<BridgeToParent>);
+      });
+
+      const replacementFrame = container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement;
+      expect(replacementFrame).not.toBeNull();
+      const replacementPosted: unknown[] = [];
+      const replacementSpy = vi.spyOn(replacementFrame.contentWindow!, 'postMessage').mockImplementation(
+        ((msg: unknown) => { replacementPosted.push(msg); }) as typeof window.postMessage
+      );
+
+      try {
+        await act(async () => {
+          window.dispatchEvent(new MessageEvent('message', {
+            data: { nonce: '', message: { type: 'ready', payload: {} } },
+            source: replacementFrame.contentWindow,
+          }));
+        });
+
+        expect(replacementPosted).toContainEqual({
+          nonce: '__test_nonce__',
+          message: { type: 'restore-ui-state', payload: { details: [{ path: [1], open: true }] } },
+        });
+      } finally {
+        replacementSpy.mockRestore();
+      }
+    } finally {
+      activeSpy.mockRestore();
+    }
+  });
+
+  it('waits for details UI state before restoring replacement iframe scroll', async () => {
+    vi.useFakeTimers();
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<details><summary>A</summary></details><details><summary>B</summary><p>expanded content</p></details>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} currentUser="me@x" origin={Symbol()} debounceMs={0} />);
+    const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
+
+    await act(async () => {
+      dispatchFromBridge(activeFrame, {
+        nonce: '__test_nonce__',
+        message: { type: 'scroll-state', payload: { x: 0, y: 320, scrollWidth: 500, clientWidth: 500, scrollHeight: 1600, clientHeight: 800 } },
+      });
+      ytext.insert(ytext.length, 'x');
+    });
+    await act(async () => { vi.advanceTimersByTime(0); });
+    await act(async () => {});
+
+    const replacementFrame = container.querySelector('iframe[data-preview-frame-state="loading"]') as HTMLIFrameElement;
+    expect(replacementFrame).not.toBeNull();
+    const replacementPosted: unknown[] = [];
+    const replacementSpy = vi.spyOn(replacementFrame.contentWindow!, 'postMessage').mockImplementation(
+      ((msg: unknown) => { replacementPosted.push(msg); }) as typeof window.postMessage
+    );
+
+    try {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { nonce: '', message: { type: 'ready', payload: {} } },
+          source: replacementFrame.contentWindow,
+        }));
+      });
+
+      expect(replacementPosted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'init', payload: { comments: [] } },
+      });
+      expect(replacementPosted).not.toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'restore-scroll', payload: { x: 0, y: 320 } },
+      });
+
+      await act(async () => {
+        dispatchFromBridge(activeFrame, {
+          nonce: '__test_nonce__',
+          message: { type: 'ui-state', payload: { details: [{ path: [1], open: true }] } },
+        } as unknown as Envelope<BridgeToParent>);
+      });
+
+      const restoreUiIndex = replacementPosted.findIndex(message => JSON.stringify(message).includes('"restore-ui-state"'));
+      const restoreScrollIndex = replacementPosted.findIndex(message => JSON.stringify(message).includes('"restore-scroll"'));
+      expect(restoreUiIndex).toBeGreaterThanOrEqual(0);
+      expect(restoreScrollIndex).toBeGreaterThan(restoreUiIndex);
+      expect(replacementPosted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'restore-ui-state', payload: { details: [{ path: [1], open: true }] } },
+      });
+      expect(replacementPosted).toContainEqual({
+        nonce: '__test_nonce__',
+        message: { type: 'restore-scroll', payload: { x: 0, y: 320 } },
+      });
+    } finally {
+      replacementSpy.mockRestore();
+    }
+  });
+
   it('activates the replacement iframe immediately when the hidden restore reaches the intended scroll', async () => {
     vi.useFakeTimers();
     const doc = new Y.Doc();
