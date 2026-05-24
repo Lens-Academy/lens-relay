@@ -378,10 +378,10 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
 
       {showAddForm && pendingInsertPos != null && (
         <div
-          style={{ pointerEvents: 'auto', padding: '0 8px 8px' }}
+          style={{ pointerEvents: 'auto', padding: '0 8px 8px', position: 'relative', zIndex: 2 }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden' }}>
+          <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
             <AddCommentForm
               onSubmit={handleAddSubmit}
               onCancel={() => { setShowAddForm(false); setPendingInsertPos(null); }}
