@@ -130,9 +130,32 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
     ensureCommentsVisible();
   }, [ensureCommentsVisible]);
 
-  const handleRequestAddComment = ensureCommentsVisible;
-
   const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
+
+  // Absolute insertion position pushed up by the active section editor via
+  // ContentPanel's onCommentInsertPosChange. Tracked in a ref so reading it
+  // from getInsertCursorPos doesn't require re-rendering on every cursor move.
+  const commentInsertPosRef = useRef<number | null>(null);
+  const handleCommentInsertPosChange = useCallback((pos: number | null) => {
+    commentInsertPosRef.current = pos;
+  }, []);
+
+  // openAddForm runs only after the sidebar is visible AND the CommentsLayer
+  // ref is attached. handleRequestAddComment may run while the sidebar is
+  // still hidden (first render after ensureCommentsVisible flips state), so
+  // we defer to an effect.
+  const [pendingOpenAddForm, setPendingOpenAddForm] = useState(false);
+  const handleRequestAddComment = useCallback(() => {
+    ensureCommentsVisible();
+    setPendingOpenAddForm(true);
+  }, [ensureCommentsVisible]);
+  useEffect(() => {
+    if (!pendingOpenAddForm) return;
+    if (!commentsLayerRef.current) return;
+    commentsLayerRef.current.openAddForm();
+    setPendingOpenAddForm(false);
+  }, [pendingOpenAddForm, commentsVisible, activeYText]);
+
   const handleCommentClick = useCallback((absFrom: number) => {
     ensureCommentsVisible();
     commentsLayerRef.current?.focusThread(absFrom);
@@ -371,6 +394,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 onClickCriticRange={handleClickCriticRange}
                 onCommentClick={handleCommentClick}
                 onRequestAddComment={handleRequestAddComment}
+                onCommentInsertPosChange={handleCommentInsertPosChange}
                 scrollRootRef={contentScrollRef}
                 onYTextChange={handleYTextChange}
                 onSectionViewChange={handleSectionViewChange}
@@ -391,6 +415,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 scrollContainerRef={contentScrollRef}
                 editorRootRef={contentPanelWrapperRef}
                 currentUserName={displayName ?? ''}
+                getInsertCursorPos={() => commentInsertPosRef.current}
               />
             </div>
           )}
