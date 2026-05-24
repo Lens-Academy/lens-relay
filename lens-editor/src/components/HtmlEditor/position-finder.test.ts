@@ -40,6 +40,45 @@ describe('scoreCandidates', () => {
     expect(src.slice(result[0].position, result[0].position + 'names'.length)).toBe('names');
   });
 
+  it('finds rendered text context split by inline code tags', () => {
+    const src = '<p>Use the <code>folder_config</code> value carefully.</p>';
+    const result = scoreCandidates(src, fp({
+      before: 'Use the folder_config',
+      after: ' value carefully.',
+      tag: 'p',
+      ancestorPath: [{ tag: 'p', index: 0 }],
+    }));
+
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].position).toBe(src.indexOf(' value carefully.'));
+  });
+
+  it('finds rendered text context split by non-rendered markdown delimiters', () => {
+    const src = '<div class="md">Root cause identified: `folder_config` Y.Map with **important** details.</div>';
+    const result = scoreCandidates(src, fp({
+      before: 'Y.Map with ',
+      after: 'important details.',
+      tag: 'p',
+      ancestorPath: [{ tag: 'div', index: 0 }],
+    }));
+
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].position).toBe(src.indexOf('important'));
+  });
+
+  it('finds rendered text context decoded from HTML entities', () => {
+    const src = '<div class="md">TestOb doesn&#x27;t show as backlink in README.</div>';
+    const result = scoreCandidates(src, fp({
+      before: 'TestOb doesn',
+      after: "'t show as backlink",
+      tag: 'p',
+      ancestorPath: [{ tag: 'div', index: 0 }],
+    }));
+
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].position).toBe(src.indexOf('&#x27;'));
+  });
+
   it('ranks the candidate whose open-tag stack matches the fingerprint ancestors first', () => {
     const src = '<main><p>click here</p></main><aside><p>click here</p></aside>';
     const result = scoreCandidates(src, fp({

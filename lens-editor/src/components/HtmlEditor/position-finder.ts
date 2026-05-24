@@ -51,9 +51,14 @@ const VOID_TAGS = new Set([
   'track',
   'wbr',
 ]);
+const MARKDOWN_DELIMITER_CHARS = new Set(['`', '*', '_', '~']);
 
 export function scoreCandidates(source: string, fp: Fingerprint): Candidate[] {
   const candidatesByPosition = new Map<number, Candidate>();
+  const addCandidate = (position: number, score: number): void => {
+    const existing = candidatesByPosition.get(position);
+    if (!existing || score > existing.score) candidatesByPosition.set(position, { position, score });
+  };
   for (const context of candidateContexts(fp)) {
     const needle = context.before + context.after;
     if (needle.length === 0) continue;
@@ -63,14 +68,101 @@ export function scoreCandidates(source: string, fp: Fingerprint): Candidate[] {
       if (idx === -1) break;
       const position = idx + context.before.length;
       const score = context.before.length + context.after.length + context.bonus + ancestorBonus(source, position, fp);
-      const existing = candidatesByPosition.get(position);
-      if (!existing || score > existing.score) candidatesByPosition.set(position, { position, score });
+      addCandidate(position, score);
+      from = idx + 1;
+    }
+  }
+  const rendered = renderTextIndex(source);
+  for (const context of candidateContexts(fp)) {
+    const needle = context.before + context.after;
+    if (needle.length === 0) continue;
+    let from = 0;
+    while (true) {
+      const idx = rendered.text.indexOf(needle, from);
+      if (idx === -1) break;
+      const renderedPosition = idx + context.before.length;
+      const position = rendered.boundaries[renderedPosition];
+      if (position !== undefined) {
+        const score = context.before.length + context.after.length + context.bonus + ancestorBonus(source, position, fp);
+        addCandidate(position, score);
+      }
       from = idx + 1;
     }
   }
   const out = Array.from(candidatesByPosition.values());
   out.sort((a, b) => b.score - a.score || a.position - b.position);
   return out.slice(0, MAX_CANDIDATES);
+}
+
+function renderTextIndex(source: string): { text: string; boundaries: number[] } {
+  let text = '';
+  const boundaries: number[] = [0];
+  let i = 0;
+  while (i < source.length) {
+    if (source.startsWith('<!--', i)) {
+      const end = source.indexOf('-->', i + 4);
+      i = end === -1 ? source.length : end + 3;
+      boundaries[text.length] = i;
+      continue;
+    }
+    if (source[i] === '<') {
+      const end = source.indexOf('>', i + 1);
+      i = end === -1 ? source.length : end + 1;
+      boundaries[text.length] = i;
+      continue;
+    }
+    if (MARKDOWN_DELIMITER_CHARS.has(source[i])) {
+      const delimiter = source[i];
+      while (source[i] === delimiter) i += 1;
+      boundaries[text.length] = i;
+      continue;
+    }
+    const entity = decodeHtmlEntityAt(source, i);
+    if (entity) {
+      for (const char of entity.text) {
+        boundaries[text.length] = i;
+        text += char;
+        boundaries[text.length] = entity.end;
+      }
+      i = entity.end;
+      continue;
+    }
+    boundaries[text.length] = i;
+    text += source[i];
+    i += 1;
+    boundaries[text.length] = i;
+  }
+  boundaries[text.length] = source.length;
+  return { text, boundaries };
+}
+
+function decodeHtmlEntityAt(source: string, position: number): { text: string; end: number } | null {
+  if (source[position] !== '&') return null;
+  const semi = source.indexOf(';', position + 1);
+  if (semi === -1 || semi - position > 32) return null;
+  const body = source.slice(position + 1, semi);
+  const numeric = /^#(\d+)$/.exec(body);
+  if (numeric) {
+    const codePoint = Number(numeric[1]);
+    if (!Number.isFinite(codePoint)) return null;
+    return { text: String.fromCodePoint(codePoint), end: semi + 1 };
+  }
+  const hex = /^#x([0-9a-f]+)$/i.exec(body);
+  if (hex) {
+    const codePoint = Number.parseInt(hex[1], 16);
+    if (!Number.isFinite(codePoint)) return null;
+    return { text: String.fromCodePoint(codePoint), end: semi + 1 };
+  }
+  const named: Record<string, string> = {
+    amp: '&',
+    apos: "'",
+    gt: '>',
+    lt: '<',
+    nbsp: ' ',
+    quot: '"',
+  };
+  const text = named[body];
+  return text ? { text, end: semi + 1 } : null;
 }
 
 function candidateContexts(fp: Fingerprint): Array<{ before: string; after: string; bonus: number }> {
