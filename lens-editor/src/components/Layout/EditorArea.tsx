@@ -52,13 +52,17 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const ydoc = useYDoc();
   const yText: Y.Text = useMemo(() => ydoc.getText('contents'), [ydoc]);
 
-  // Stable refs for CommentsLayer scroll/editor DOM elements
+  // Refs to the editor's scroll DOM and root, mirrored from editorView state.
+  // Assigned during render (not in a useEffect) so children mounted on the
+  // same commit see them populated — React commits children's effects before
+  // the parent's, and CommentsLayer's scroll-listener effect bails if these
+  // are null. Dev's StrictMode double-invoke previously masked this on the
+  // second run; production builds skip the second run, so the listener never
+  // attached. The values are deterministic from editorView state.
   const scrollContainerRef = useRef<HTMLElement | null>(null);
   const editorRootRef = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    scrollContainerRef.current = editorView ? editorView.scrollDOM : null;
-    editorRootRef.current = editorView ? editorView.dom : null;
-  }, [editorView]);
+  scrollContainerRef.current = editorView ? editorView.scrollDOM : null;
+  editorRootRef.current = editorView ? editorView.dom : null;
 
   // Stable callbacks for CommentsLayer
   const getViewportRect = useCallback(() => {
