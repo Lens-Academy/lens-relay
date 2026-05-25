@@ -290,6 +290,77 @@ export default defineConfig(() => {
   }
 
   /**
+   * Dev-only plugin to proxy blob downloads from presigned R2 URLs server-side,
+   * mirroring the prod-server /api/blob-fetch endpoint. Needed for dev:local:r2.
+   */
+  function blobFetchPlugin(): Plugin {
+    return {
+      name: 'blob-fetch',
+      configureServer(server) {
+        server.middlewares.use('/api/blob-fetch', async (req, res) => {
+          if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+          const urlParam = new URL(req.url || '', 'http://localhost').searchParams.get('url');
+          if (!urlParam) { res.writeHead(400); res.end('url required'); return; }
+          let parsed: URL;
+          try { parsed = new URL(urlParam); } catch { res.writeHead(400); res.end('invalid url'); return; }
+          if (!parsed.hostname.endsWith('.r2.cloudflarestorage.com')) {
+            res.writeHead(400); res.end('url not allowed'); return;
+          }
+          try {
+            const resp = await fetch(urlParam);
+            if (!resp.ok) { res.writeHead(502); res.end(`Upstream error: ${resp.status}`); return; }
+            const contentType = resp.headers.get('content-type') ?? 'application/octet-stream';
+            const body = Buffer.from(await resp.arrayBuffer());
+            res.writeHead(200, { 'Content-Type': contentType });
+            res.end(body);
+          } catch (err) {
+            res.writeHead(502);
+            res.end(`Fetch failed: ${err}`);
+          }
+        });
+      },
+    };
+  }
+
+  /**
+   * Dev-only plugin to proxy blob uploads to presigned R2 URLs server-side,
+   * avoiding CORS when the relay returns an absolute R2 upload URL.
+   */
+  function blobUploadPlugin(): Plugin {
+    return {
+      name: 'blob-upload',
+      configureServer(server) {
+        server.middlewares.use('/api/blob-upload', async (req, res) => {
+          if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+          const urlParam = new URL(req.url || '', 'http://localhost').searchParams.get('url');
+          if (!urlParam) { res.writeHead(400); res.end('url required'); return; }
+          let parsed: URL;
+          try { parsed = new URL(urlParam); } catch { res.writeHead(400); res.end('invalid url'); return; }
+          if (!parsed.hostname.endsWith('.r2.cloudflarestorage.com')) {
+            res.writeHead(400); res.end('url not allowed'); return;
+          }
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const body = Buffer.concat(chunks);
+          const contentType = req.headers['content-type'] ?? 'application/octet-stream';
+          try {
+            const resp = await fetch(urlParam, {
+              method: 'PUT',
+              headers: { 'Content-Type': contentType, 'Content-Length': String(body.byteLength) },
+              body,
+            });
+            res.writeHead(resp.ok ? 200 : 502);
+            res.end(resp.ok ? '' : `Upstream error: ${resp.status}`);
+          } catch (err) {
+            res.writeHead(502);
+            res.end(`Upload failed: ${err}`);
+          }
+        });
+      },
+    };
+  }
+
+  /**
    * Dev-only plugin to serve blob files directly from the filesystem store.
    * In production, blobs are served via presigned R2 URLs. In local dev with
    * a filesystem store, we serve them directly to avoid auth complexity.
@@ -331,7 +402,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

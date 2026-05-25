@@ -25,4 +25,14 @@ describe('pickEditor', () => {
   it('returns "markdown" when filePath is null (no entry yet - default editor)', () => {
     expect(pickEditor(null, null)).toBe('markdown');
   });
+
+  it('returns "image" for image entries with a hash', () => {
+    expect(pickEditor('/attachments/photo.png', { type: 'image', id: 'x', version: 0, hash: 'abc', mimetype: 'image/png' }))
+      .toBe('image');
+  });
+
+  it('returns "markdown" for image entries without a hash', () => {
+    expect(pickEditor('/attachments/photo.png', { type: 'image', id: 'x', version: 0 }))
+      .toBe('markdown');
+  });
 });

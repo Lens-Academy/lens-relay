@@ -26,6 +26,7 @@ import { applySuggestionAction } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { BlobDocumentView } from './components/BlobViewer';
+import { ImageDocumentView } from './components/ImageDocumentView';
 import { HtmlEditor } from './components/HtmlEditor';
 import { findPathByUuid } from './lib/uuid-to-path';
 import { QuickSwitcher } from './components/QuickSwitcher';
@@ -261,6 +262,12 @@ function DocumentView() {
         <div className="text-sm text-gray-500">Loading document...</div>
       </main>
     );
+  }
+
+  // Image files — render inline image viewer, no Y.Doc sync
+  if (editorKind === 'image' && fileEntry?.hash && filePath) {
+    const fileName = filePath.split('/').pop() ?? undefined;
+    return <ImageDocumentView docId={activeDocId} hash={fileEntry.hash} fileName={fileName} />;
   }
 
   // Blob files (proper blob with hash) — render read-only viewer, no Y.Doc sync

@@ -75,10 +75,34 @@ app.get('/api/blob-fetch', async (c) => {
   try {
     const resp = await fetch(url);
     if (!resp.ok) return c.text(`Upstream error: ${resp.status}`, 502);
-    const body = await resp.text();
-    return c.text(body);
+    const contentType = resp.headers.get('content-type') ?? 'application/octet-stream';
+    const body = await resp.arrayBuffer();
+    return c.body(body, 200, { 'Content-Type': contentType });
   } catch (err) {
     return c.text(`Fetch failed: ${err}`, 502);
+  }
+});
+
+// Blob upload proxy — PUTs to presigned R2 URLs server-side to avoid CORS
+app.post('/api/blob-upload', async (c) => {
+  const url = c.req.query('url');
+  if (!url) return c.json({ error: 'url parameter required' }, 400);
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { return c.json({ error: 'invalid url' }, 400); }
+  if (!parsed.hostname.endsWith('.r2.cloudflarestorage.com'))
+    return c.json({ error: 'url not allowed' }, 400);
+  const body = await c.req.arrayBuffer();
+  const contentType = c.req.header('content-type') ?? 'application/octet-stream';
+  try {
+    const resp = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType, 'Content-Length': String(body.byteLength) },
+      body,
+    });
+    if (!resp.ok) return c.text(`Upstream error: ${resp.status}`, 502);
+    return c.text('', 200);
+  } catch (err) {
+    return c.text(`Upload failed: ${err}`, 502);
   }
 });
 

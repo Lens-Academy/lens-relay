@@ -27,7 +27,7 @@ import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '@y-sweet/react'
-import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment } from './extensions/livePreview';
+import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment, updateImageEmbedContext } from './extensions/livePreview';
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
 import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
@@ -43,6 +43,7 @@ import { resolvePageName } from '../../lib/document-resolver';
 import { openDocInNewTab } from '../../lib/url-utils';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
+import { imagePasteExtension } from './extensions/imagePaste';
 
 // List indentation keymap - Tab/Shift+Tab to indent/de-indent
 const listIndentKeymap = keymap.of([
@@ -62,6 +63,7 @@ interface EditorProps {
   onCommentClick?: (absFrom: number) => void;
   metadata?: FolderMetadata;
   currentFilePath?: string;
+  getFolderDoc?: () => Y.Doc | null;
 }
 
 /**
@@ -102,7 +104,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath }: EditorProps) {
+export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath, getFolderDoc }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -206,10 +208,11 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // This is separate from the editor creation effect to avoid recreating the editor
   useEffect(() => {
     updateWikilinkContext(wikilinkContextRef.current);
+    updateImageEmbedContext(metadata ? { metadata, relayId: RELAY_ID, currentFilePath } : undefined);
     viewRef.current?.dispatch({
       effects: wikilinkMetadataChanged.of(undefined),
     });
-  }, [metadata, onNavigate]);
+  }, [metadata, onNavigate, currentFilePath]);
 
   // Update Harper folder gate when the active file changes
   useEffect(() => {
@@ -328,6 +331,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         criticMarkupExtension({ canAcceptReject }),
         commentClickCallback.of((absFrom) => onCommentClickRef.current?.(absFrom)),
         harperLinter,
+        ...(!readOnly && getFolderDoc
+          ? [imagePasteExtension({ getFolderDoc, getCurrentFilePath })]
+          : []),
         Prec.highest(keymap.of([{
           key: 'Mod-Shift-m',
           run: () => {
