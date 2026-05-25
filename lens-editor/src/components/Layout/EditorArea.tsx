@@ -84,8 +84,9 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   // Thread data and mutation callbacks from the criticmarkup adapter.
   const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous');
 
-  // ScrollSource wrapping the editor's scroll container.
-  const scrollSource = useScrollSource(scrollContainerRef as React.RefObject<HTMLElement | null>);
+  // ScrollSource wrapping the editor's scroll container. Pass the live element
+  // (not the ref) so the hook re-attaches when editorView arrives.
+  const scrollSource = useScrollSource(editorView ? (editorView.scrollDOM as HTMLElement) : null);
 
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);

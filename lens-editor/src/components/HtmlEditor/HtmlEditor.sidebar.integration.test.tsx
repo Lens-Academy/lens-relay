@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe('HtmlEditor sidebar integration', () => {
-  it('renders existing comments in the sidebar (orphan section pre-bridge)', () => {
+  it('renders existing comments in the sidebar (orphan-pinned pre-bridge)', () => {
     const { ytext, awareness } = setup();
     addComment(ytext, 'origin', { id: 'c1', author: 'alice', ts: 't', body: 'hi there', position: 12 });
 
@@ -41,9 +41,11 @@ describe('HtmlEditor sidebar integration', () => {
       </DisplayNameProvider>
     );
 
-    // Sidebar shows the comment under Orphans (no bridge in happy-dom → AnchorState empty → orphan)
-    expect(screen.getByText(/orphans/i)).toBeInTheDocument();
+    // Sidebar shows the comment. In happy-dom the bridge never fires, so the
+    // anchor state stays empty and the thread is `orphan: true` — it pins to
+    // viewport.top instead of a real anchor, but renders identically.
     expect(screen.getByText('hi there')).toBeInTheDocument();
+    expect(document.querySelector('[data-comment-thread="c1"]')).not.toBeNull();
   });
 
   it('Reply via sidebar appends to the cluster', () => {

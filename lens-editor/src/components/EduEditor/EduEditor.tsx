@@ -84,8 +84,14 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
     readBoolFromLocalStorage(COMMENTS_VISIBLE_KEY, false)
   );
   // Ref to the main content scroll container; ContentPanel needs it as the
-  // IntersectionObserver's root.
+  // IntersectionObserver's root. Backed by state so `useScrollSource` re-attaches
+  // when the element mounts.
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  const [contentScrollEl, setContentScrollEl] = useState<HTMLDivElement | null>(null);
+  const setContentScroll = useCallback((el: HTMLDivElement | null) => {
+    contentScrollRef.current = el;
+    setContentScrollEl(el);
+  }, []);
   // The content panel's wrapper div — CommentsLayer uses it as editorRootRef
   // to toggle [data-comment-focused] on markers inside it.
   const contentPanelWrapperRef = useRef<HTMLDivElement | null>(null);
@@ -102,7 +108,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const { threads, callbacks } = useThreadsFromYText(effectiveYText, displayName ?? '');
 
   // ScrollSource wrapping the content scroll container.
-  const scrollSource = useScrollSource(contentScrollRef);
+  const scrollSource = useScrollSource(contentScrollEl);
 
   // Currently mounted section editor view. ContentPanel reports it via
   // onSectionViewChange so CommentsLayer can resolve comment anchor positions
@@ -394,7 +400,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
             but lives in a sibling div so it doesn't cover the prose. */}
         <div className="flex-1 flex overflow-hidden">
           <div
-            ref={contentScrollRef}
+            ref={setContentScroll}
             className="flex-1 overflow-y-auto"
             style={{ background: '#faf8f3' }}
           >

@@ -68,7 +68,7 @@ describe('CommentsLayer', () => {
     expect(wrapper.style.top).toBe('222px');
   });
 
-  it('renders orphans in the orphan section, not the anchored layout', () => {
+  it('orphans render alongside anchored cards, pinned to viewport.top', () => {
     const ss = fakeScrollSource();
     const o = thread({ key: 'uuid-1', orphan: true });
     const a = thread({ key: '200', orphan: false });
@@ -76,18 +76,22 @@ describe('CommentsLayer', () => {
       <CommentsLayer
         threads={[a, o]}
         resolveAnchorY={() => 100}
-        getViewportRect={() => ({ top: 0, height: 800 })}
+        getViewportRect={() => ({ top: 50, height: 800 })}
         scrollSource={ss}
         currentUserName="Bob"
         onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
       />
     );
-    expect(screen.getByText(/orphans/i)).toBeInTheDocument();
-    // Anchored card has inline top style; orphan card does not.
+    // Both render as positioned cards. Anchored pins to resolveAnchorY (100);
+    // orphan pins to viewport.top (50). PAV may shift either if they collide,
+    // but the orphan card must be rendered (no "Orphans" section header).
     const anchored = document.querySelector('[data-comment-thread="200"]') as HTMLElement;
     const orphan = document.querySelector('[data-comment-thread="uuid-1"]') as HTMLElement;
-    expect(anchored.style.top).toBe('100px');
-    expect(orphan.style.top).toBe('');
+    expect(anchored).not.toBeNull();
+    expect(orphan).not.toBeNull();
+    expect(anchored.style.position).toBe('absolute');
+    expect(orphan.style.position).toBe('absolute');
+    expect(screen.queryByText(/orphans/i)).toBeNull();
   });
 
   it('imperative focusThread is idempotent', () => {

@@ -190,35 +190,41 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
 
   const [layoutMap, setLayoutMap] = useState<Map<ThreadKey, number>>(new Map());
 
-  // Split anchored vs orphan threads.
-  const anchored = threads.filter(t => !t.orphan);
-  const orphans = threads.filter(t => t.orphan);
-
   // Stable dep for the layout effect — changes only when the thread set changes.
   const threadKeys = threads.map((t) => t.key).join(',');
 
-  // Viewport height from the caller — used to size the sticky anchored region.
-  const viewportHeight = getViewportRect().height;
+  // Resolve a thread's screen-y. Orphans (anchor not currently rendered) pin
+  // synthetically to the top of the visible editor area, so they appear at
+  // the top of the sidebar and PAV stacks any subsequent ones below them.
+  const anchorYFor = (thread: ThreadView, viewport: { top: number; height: number }): number | null => {
+    if (thread.orphan) return viewport.top;
+    return resolveAnchorY(thread.key);
+  };
 
   useLayoutEffect(() => {
     const viewport = getViewportRect();
     const mid = viewport.height / 2;
 
     const items: LayoutItem[] = [];
-    for (const thread of anchored) {
-      const anchorY = resolveAnchorY(thread.key);
-      if (anchorY == null) continue; // not currently rendered — skip
+    for (const thread of threads) {
+      const anchorY = anchorYFor(thread, viewport);
+      if (anchorY == null) continue; // anchor unresolvable AND not orphan-pinned — skip
 
-      // Distance-based weight.
-      const vy = anchorY - viewport.top;
-      let weight = clamp01(1 - Math.abs(vy - mid) / (mid === 0 ? 1 : mid));
-
-      // Zero out weight for threads far outside the active window.
+      // Skip threads far outside the active window entirely. They render at
+      // their natural anchorY (off-screen) via the layoutMap.get(...) ?? anchorY
+      // fallback. Including them with weight=0 would corrupt the PAV layout —
+      // when *all* items have weight 0, the merge logic stacks them all at the
+      // topmost anchorY, which can push early cards into the visible area when
+      // the viewport sits in a gap between comments.
       const windowAbove = ACTIVE_WINDOW_MULTIPLIER * viewport.height;
       const windowBelow = (ACTIVE_WINDOW_MULTIPLIER + 1) * viewport.height;
       if (anchorY < viewport.top - windowAbove || anchorY > viewport.top + windowBelow) {
-        weight = 0;
+        continue;
       }
+
+      // Distance-based weight inside the active window.
+      const vy = anchorY - viewport.top;
+      let weight = clamp01(1 - Math.abs(vy - mid) / (mid === 0 ? 1 : mid));
 
       // Focused thread is a hard pin.
       if (thread.key === focusedThreadKey) {
@@ -288,141 +294,126 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
 
   const showAddButton = getInsertKey != null && onAddComment != null && !showAddForm;
 
+  const currentViewport = getViewportRect();
+
   return (
     <div
       ref={layerRef}
-      className="comments-layer flex flex-col h-full overflow-y-auto"
+      className="comments-layer"
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        pointerEvents: 'none',
+        isolation: 'isolate',
+      }}
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           applyFocus(null);
         }
       }}
     >
-      {/* Anchored region — sticky pinned to top of outer scroll */}
-      <div
-        className="comments-layer__anchored relative w-full self-start"
-        style={{ position: 'sticky', top: 0, height: viewportHeight, flexShrink: 0 }}
-      >
-        {showAddButton && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              const key = getInsertKeyRef.current?.();
-              if (key == null) return;
-              setPendingInsertKey(key);
-              setShowAddForm(true);
-            }}
-            style={{
-              position: 'absolute',
-              top: 8,
-              right: 8,
-              zIndex: 2,
-              pointerEvents: 'auto',
-              fontSize: 12,
-              padding: '2px 10px',
-              background: '#3b82f6',
-              color: '#fff',
-              border: 'none',
-              borderRadius: 6,
-              cursor: 'pointer',
-              fontWeight: 600,
-              boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
-            }}
-          >
-            + Add
-          </button>
-        )}
+      {showAddButton && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            const key = getInsertKeyRef.current?.();
+            if (key == null) return;
+            setPendingInsertKey(key);
+            setShowAddForm(true);
+          }}
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            zIndex: 2,
+            pointerEvents: 'auto',
+            fontSize: 12,
+            padding: '2px 10px',
+            background: '#3b82f6',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            cursor: 'pointer',
+            fontWeight: 600,
+            boxShadow: '0 1px 2px rgba(0,0,0,0.08)',
+          }}
+        >
+          + Add
+        </button>
+      )}
 
-        {showAddForm && pendingInsertKey != null && (
-          <div
-            style={{ pointerEvents: 'auto', padding: '0 8px 8px', position: 'relative', zIndex: 2 }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
-              <AddCommentForm
-                onSubmit={handleAddSubmit}
-                onCancel={() => { setShowAddForm(false); setPendingInsertKey(null); }}
-                placeholder="Add a comment..."
-                submitLabel="Add"
-                autoFocus
-              />
-            </div>
+      {showAddForm && pendingInsertKey != null && (
+        <div
+          style={{ pointerEvents: 'auto', padding: '0 8px 8px', position: 'relative', zIndex: 2 }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ border: '1px solid #d1d5db', borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+            <AddCommentForm
+              onSubmit={handleAddSubmit}
+              onCancel={() => { setShowAddForm(false); setPendingInsertKey(null); }}
+              placeholder="Add a comment..."
+              submitLabel="Add"
+              autoFocus
+            />
           </div>
-        )}
-
-        {anchored.length === 0 && orphans.length === 0 && (
-          <div
-            style={{
-              pointerEvents: 'none',
-              padding: '40px 16px',
-              textAlign: 'center',
-              color: '#9ca3af',
-              fontSize: 13,
-            }}
-          >
-            No comments yet. Select text and click Add.
-          </div>
-        )}
-
-        {/* Absolute-positioned anchored cards */}
-        {anchored.map((thread) => {
-          const anchorY = resolveAnchorY(thread.key);
-          if (anchorY == null) return null;
-
-          const layoutY = layoutMap.get(thread.key) ?? anchorY;
-          const layerTop = layerRef.current?.getBoundingClientRect().top ?? 0;
-          const top = layoutY - layerTop;
-
-          return (
-            <div
-              key={thread.key}
-              data-comment-thread={thread.key}
-              ref={(el) => attachObserver(el, thread.key)}
-              style={{
-                position: 'absolute',
-                top,
-                left: 4,
-                right: 4,
-                pointerEvents: 'auto',
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <CommentCard
-                thread={thread}
-                number={thread.order}
-                focused={focusedThreadKey === thread.key}
-                currentUserName={currentUserName}
-                onFocus={handleFocus}
-                onReply={(t, body) => onReply(t, body)}
-                onEdit={(msg, body) => onEdit(msg, body)}
-                onDelete={(msg) => onDelete(msg)}
-              />
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Orphan region */}
-      {orphans.length > 0 && (
-        <div className="comments-layer__orphans px-2 py-3 border-t border-gray-100">
-          <div className="text-xs font-medium text-gray-500 mb-2">Orphans</div>
-          {orphans.map(t => (
-            <div key={t.key} data-comment-thread={t.key} className="mb-2">
-              <CommentCard
-                thread={t}
-                number={t.order}
-                focused={focusedThreadKey === t.key}
-                currentUserName={currentUserName}
-                onFocus={handleFocus}
-                onReply={(thread, body) => onReply(thread, body)}
-                onEdit={(msg, body) => onEdit(msg, body)}
-                onDelete={(msg) => onDelete(msg)}
-              />
-            </div>
-          ))}
         </div>
       )}
+
+      {threads.length === 0 && (
+        <div
+          style={{
+            pointerEvents: 'none',
+            padding: '40px 16px',
+            textAlign: 'center',
+            color: '#9ca3af',
+            fontSize: 13,
+          }}
+        >
+          No comments yet. Select text and click Add.
+        </div>
+      )}
+
+      {/* Cards. Orphans use a synthetic anchor at viewport.top so they cluster
+       *  at the top of the sidebar; anchored cards track their text via PAV. */}
+      {threads.map((thread) => {
+        const anchorY = anchorYFor(thread, currentViewport);
+        if (anchorY == null) return null;
+
+        const layoutY = layoutMap.get(thread.key) ?? anchorY;
+        const layerTop = layerRef.current?.getBoundingClientRect().top ?? 0;
+        const top = layoutY - layerTop;
+
+        return (
+          <div
+            key={thread.key}
+            data-comment-thread={thread.key}
+            ref={(el) => attachObserver(el, thread.key)}
+            style={{
+              position: 'absolute',
+              top,
+              left: 4,
+              right: 4,
+              pointerEvents: 'auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <CommentCard
+              thread={thread}
+              number={thread.order}
+              focused={focusedThreadKey === thread.key}
+              currentUserName={currentUserName}
+              onFocus={handleFocus}
+              onReply={(t, body) => onReply(t, body)}
+              onEdit={(msg, body) => onEdit(msg, body)}
+              onDelete={(msg) => onDelete(msg)}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 });
