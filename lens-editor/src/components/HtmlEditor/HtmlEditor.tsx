@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { LENS_EDITOR_ORIGIN } from '../../lib/relay-api';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
+import { useHeaderCommentsControl } from '../../contexts/HeaderActionsContext';
 import { HtmlSourceEditor } from './HtmlSourceEditor';
 import { HtmlPreview } from './HtmlPreview';
 import { NewCommentCard } from './NewCommentCard';
@@ -33,6 +34,15 @@ const modes: Array<{ id: Mode; label: string }> = [
   { id: 'split', label: 'Split' },
 ];
 
+const COMMENTS_VISIBLE_KEY = 'lens-html-editor-comments-visible';
+
+function readCommentsVisible(): boolean {
+  if (typeof localStorage === 'undefined') return true;
+  const raw = localStorage.getItem(COMMENTS_VISIBLE_KEY);
+  if (raw === null) return true;
+  return raw === 'true';
+}
+
 function makeCommentId(): string {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   const bytes = new Uint8Array(16);
@@ -58,6 +68,25 @@ export function HtmlEditor({
   const currentUser = currentUserProp ?? displayName ?? 'Anonymous';
   const [mode, setMode] = useState<Mode>('preview');
   const [commentMode, setCommentMode] = useState(false);
+  const [commentsVisible, setCommentsVisible] = useState(readCommentsVisible);
+
+  const handleToggleComments = useCallback(() => {
+    setCommentsVisible(prev => {
+      const next = !prev;
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(COMMENTS_VISIBLE_KEY, String(next));
+      }
+      return next;
+    });
+  }, []);
+
+  const commentsControl = useMemo(() => ({
+    isOpen: commentsVisible,
+    onToggle: handleToggleComments,
+    title: commentsVisible ? 'Hide comments' : 'Show comments',
+  }), [commentsVisible, handleToggleComments]);
+
+  useHeaderCommentsControl(commentsControl);
   const [pendingCandidates, setPendingCandidates] = useState<Candidate[] | null>(null);
   const [manualComposer, setManualComposer] = useState<{
     position: number;
@@ -142,22 +171,6 @@ export function HtmlEditor({
             {label}
           </button>
         ))}
-        {!readOnly && (
-          <button
-            type="button"
-            aria-label="Comment mode"
-            aria-pressed={commentMode}
-            onClick={() => setCommentMode(active => !active)}
-            className={[
-              'ml-2 rounded px-3 py-1.5 text-sm font-medium transition-colors',
-              commentMode
-                ? 'bg-amber-500 text-white'
-                : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900',
-            ].join(' ')}
-          >
-            Comment
-          </button>
-        )}
         {orphanCount > 0 && (
           <span className="ml-2 rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
             {orphanCount} orphan{orphanCount === 1 ? '' : 's'}
@@ -165,7 +178,7 @@ export function HtmlEditor({
         )}
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {mode !== 'preview' && (
           <div ref={sourceWrapperRef} className="relative min-w-0 flex-1">
             <HtmlSourceEditor
@@ -273,8 +286,8 @@ export function HtmlEditor({
             />
           </div>
         )}
-        {mode !== 'source' && (
-          <div className="w-80 flex-shrink-0 border-l border-gray-200 bg-gray-50/50 relative">
+        {mode !== 'source' && commentsVisible && (
+          <div className="w-80 flex-shrink-0 border-l border-gray-200 bg-gray-50/50 relative overflow-hidden">
             <CommentsLayer
               ref={commentsLayerRef}
               threads={threads}
