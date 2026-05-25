@@ -6,7 +6,11 @@ use y_sweet_core::share_token::McpAccess;
 use yrs::{Any, Doc, GetString, Map, ReadTxn, Text, Transact, WriteTxn};
 
 fn default_access() -> McpAccess {
-    McpAccess { writable: true, folder_uuid: None, folder_name: None }
+    McpAccess {
+        writable: true,
+        folder_uuid: None,
+        folder_name: None,
+    }
 }
 
 pub(crate) const RELAY_ID: &str = "cb696037-0f72-4e93-8717-4e433129d789";
@@ -144,9 +148,7 @@ pub(crate) async fn build_blob_test_server_with_file(
 
     let server = Arc::new(
         Server::new_without_workers(
-            Some(Box::new(MemoryStore {
-                data: store_data,
-            })),
+            Some(Box::new(MemoryStore { data: store_data })),
             Duration::from_secs(60),
             None,
             None,

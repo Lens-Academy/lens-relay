@@ -1,0 +1,96 @@
+<h2>How should a point-anchor look in the prose?</h2>
+<p class="subtitle">Comments are point-based, not range-based. Pick how the anchor shows up inline.</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Gutter marker only (no inline glyph)</h3>
+      <p>Nothing in the prose itself. A small dot/speech-bubble icon appears in the left gutter on the line containing the anchor. Card sits in the right margin, vertically aligned with that line. Hovering the card brightens the gutter dot; hovering the dot brightens the card.</p>
+      <div style="margin-top:10px;display:flex;gap:6px;font-family:monospace;font-size:12px;line-height:1.7">
+        <div style="width:18px;color:#bbb;text-align:right;padding-right:4px;border-right:1px solid #eee">
+          <div>·</div>
+          <div style="color:#d4b800">●</div>
+          <div>·</div>
+        </div>
+        <div style="flex:1;padding-left:8px">
+          <div>Lens supports offline editing by</div>
+          <div>buffering local writes until</div>
+          <div>the device reconnects.</div>
+        </div>
+        <div style="width:120px;border:1px solid #e8e5df;border-radius:4px;padding:4px 6px;font-size:10px;background:#fff;font-family:sans-serif">
+          <div style="color:#888">Bob</div>
+          <div>clarify "buffering"</div>
+        </div>
+      </div>
+      <p style="font-size:11px;color:#777;margin-top:8px">Cleanest reading experience — prose is untouched.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Inline caret / pin at the exact point</h3>
+      <p>A tiny coloured caret or speech-bubble icon sits *inside* the text, at the exact character offset. Like Figma pins or Notion's inline comment marker. Reader sees precisely where the comment attaches.</p>
+      <div style="margin-top:10px;display:flex;gap:6px;font-family:monospace;font-size:12px;line-height:1.7">
+        <div style="flex:1">
+          <div>Lens supports offline editing by</div>
+          <div>buffering<span style="color:#d4b800;font-family:sans-serif;font-size:10px;background:#fff3a8;border-radius:3px;padding:0 3px;margin:0 2px;vertical-align:middle">💬</span>local writes until</div>
+          <div>the device reconnects.</div>
+        </div>
+        <div style="width:120px;border:1px solid #e8e5df;border-radius:4px;padding:4px 6px;font-size:10px;background:#fff;font-family:sans-serif">
+          <div style="color:#888">Bob</div>
+          <div>clarify "buffering"</div>
+        </div>
+      </div>
+      <p style="font-size:11px;color:#777;margin-top:8px">Most precise. Some reading disruption — the glyph nudges text.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Soft inline mark + gutter marker</h3>
+      <p>A faint vertical bar between two characters at the anchor point (think: cursor-shaped, but coloured and persistent). Plus the gutter dot from option A. Minimal visual weight, but you can still tell exactly where it attaches without nudging text.</p>
+      <div style="margin-top:10px;display:flex;gap:6px;font-family:monospace;font-size:12px;line-height:1.7">
+        <div style="width:18px;color:#bbb;text-align:right;padding-right:4px;border-right:1px solid #eee">
+          <div>·</div>
+          <div style="color:#d4b800">●</div>
+          <div>·</div>
+        </div>
+        <div style="flex:1;padding-left:8px">
+          <div>Lens supports offline editing by</div>
+          <div>buffering<span style="display:inline-block;width:2px;height:14px;background:#d4b800;vertical-align:middle;margin:0 1px"></span>local writes until</div>
+          <div>the device reconnects.</div>
+        </div>
+        <div style="width:120px;border:1px solid #e8e5df;border-radius:4px;padding:4px 6px;font-size:10px;background:#fff;font-family:sans-serif">
+          <div style="color:#888">Bob</div>
+          <div>clarify "buffering"</div>
+        </div>
+      </div>
+      <p style="font-size:11px;color:#777;margin-top:8px">Compromise: precise without disrupting layout.</p>
+    </div>
+  </div>
+
+  <div class="option" data-choice="d" onclick="toggleSelect(this)">
+    <div class="letter">D</div>
+    <div class="content">
+      <h3>Card alignment only — no marker at all</h3>
+      <p>Nothing inline, nothing in the gutter. The card sits in the right margin, vertically aligned with the line containing the anchor. Communication is purely positional. Hovering the card *temporarily* shows a soft mark (option C's vertical bar) at the exact point, then it fades.</p>
+      <div style="margin-top:10px;display:flex;gap:6px;font-family:monospace;font-size:12px;line-height:1.7">
+        <div style="flex:1">
+          <div>Lens supports offline editing by</div>
+          <div>buffering local writes until</div>
+          <div>the device reconnects.</div>
+        </div>
+        <div style="width:120px;border:1px solid #e8e5df;border-radius:4px;padding:4px 6px;font-size:10px;background:#fff;font-family:sans-serif">
+          <div style="color:#888">Bob</div>
+          <div>clarify "buffering"</div>
+        </div>
+      </div>
+      <p style="font-size:11px;color:#777;margin-top:8px">Quietest. Risk: hard to find which line a comment refers to without hovering.</p>
+    </div>
+  </div>
+
+</div>

@@ -403,8 +403,8 @@ fn tool_error(msg: &str) -> Value {
 
 #[cfg(test)]
 mod integration_tests {
-    use super::{create_doc, edit, glob, grep, read};
     use super::test_helpers::*;
+    use super::{create_doc, edit, glob, grep, read};
     use serde_json::json;
 
     #[test]
@@ -415,7 +415,10 @@ mod integration_tests {
             .find(|tool| tool["name"] == "move")
             .expect("move tool should be present");
 
-        assert_eq!(move_tool["inputSchema"]["required"], json!(["new_path", "session_id"]));
+        assert_eq!(
+            move_tool["inputSchema"]["required"],
+            json!(["new_path", "session_id"])
+        );
         assert!(move_tool["inputSchema"]["properties"]["path"].is_object());
         assert!(move_tool["inputSchema"]["properties"]["file_path"].is_object());
     }

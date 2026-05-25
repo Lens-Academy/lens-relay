@@ -35,7 +35,7 @@ import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
 import { remoteCursorTheme } from './remoteCursorTheme';
-import { criticMarkupExtension, focusCommentThread } from './extensions/criticmarkup';
+import { criticMarkupExtension, commentClickCallback } from './extensions/criticmarkup';
 import { ContextMenu } from './ContextMenu';
 import { getContextMenuItems } from './extensions/criticmarkup-context-menu';
 import type { ContextMenuItem } from './extensions/criticmarkup-context-menu';
@@ -59,6 +59,8 @@ interface EditorProps {
   onSynced?: () => void;
   onNavigate?: (docId: string) => void;
   onRequestAddComment?: () => void;
+  /** Fires when a comment badge is clicked, with the absolute Y.Text offset. */
+  onCommentClick?: (absFrom: number) => void;
   metadata?: FolderMetadata;
   currentFilePath?: string;
   getFolderDoc?: () => Y.Doc | null;
@@ -102,7 +104,7 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, metadata, currentFilePath, getFolderDoc }: EditorProps) {
+export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath, getFolderDoc }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const ydoc = useYDoc();
@@ -133,6 +135,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // Store onRequestAddComment in ref to avoid re-creating callback
   const onRequestAddCommentRef = useRef(onRequestAddComment);
   onRequestAddCommentRef.current = onRequestAddComment;
+
+  const onCommentClickRef = useRef(onCommentClick);
+  onCommentClickRef.current = onCommentClick;
 
   // Context menu handler - uses click position, not cursor position
   const handleContextMenu = useCallback(
@@ -324,6 +329,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         remoteCursorTheme,
         criticMarkupExtension({ canAcceptReject }),
+        commentClickCallback.of((absFrom) => onCommentClickRef.current?.(absFrom)),
         harperLinter,
         ...(!readOnly && getFolderDoc
           ? [imagePasteExtension({ getFolderDoc, getCurrentFilePath })]
@@ -373,14 +379,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
             textDecoration: 'none !important',
           },
         }),
-        // Notify parent of document changes and comment focus (for ToC + comment margin updates)
+        // Notify parent of document changes (for ToC + comment margin updates)
         ...(onDocChange ? [EditorView.updateListener.of((update) => {
           if (update.docChanged) { onDocChange(); return; }
-          for (const tr of update.transactions) {
-            for (const e of tr.effects) {
-              if (e.is(focusCommentThread)) { onDocChange(); return; }
-            }
-          }
         })] : []),
       ],
     });

@@ -376,8 +376,82 @@ fn search_is_ready(entry: &link_indexer::PendingEntry) -> bool {
         || entry.first_queued.elapsed() >= SEARCH_DEBOUNCE
 }
 
+/// Handle the outcome of a supervised worker. CleanExit logs INFO and stops.
+/// BudgetExceeded logs CRITICAL with the panic context and exits the process
+/// so Docker `restart: unless-stopped` cycles the container.
+const WORKER_PRE_EXIT_DELAY: Duration = Duration::from_secs(30);
+
+/// Why the pre-exit wait unblocked. Used for logging only; either path
+/// ends in `process::exit(1)`.
+#[derive(Debug, PartialEq, Eq)]
+enum WorkerExitReason {
+    DelayElapsed,
+    CancellationRequested,
+}
+
+/// Wait up to `delay` for either the time to elapse or the cancellation
+/// token to fire. Returns which fired so the caller can log. Extracted
+/// from `graceful_exit_after_delay` to be unit-testable without
+/// triggering `process::exit`.
+async fn wait_for_worker_exit_signal(
+    cancellation_token: CancellationToken,
+    delay: Duration,
+) -> WorkerExitReason {
+    tokio::select! {
+        _ = tokio::time::sleep(delay) => WorkerExitReason::DelayElapsed,
+        _ = cancellation_token.cancelled() => WorkerExitReason::CancellationRequested,
+    }
+}
+
+/// Pre-exit window: sleeps for WORKER_PRE_EXIT_DELAY (30s) so Prometheus
+/// scrapers see `worker_alive=0` before the container restart cycle.
+/// A SIGTERM during the window cancels the token and we exit immediately.
+/// Always terminates in `process::exit(1)`.
+async fn graceful_exit_after_delay(cancellation_token: CancellationToken) {
+    let reason = wait_for_worker_exit_signal(cancellation_token, WORKER_PRE_EXIT_DELAY).await;
+    match reason {
+        WorkerExitReason::DelayElapsed => {
+            tracing::error!("Pre-exit delay elapsed; calling process::exit(1)");
+        }
+        WorkerExitReason::CancellationRequested => {
+            tracing::warn!("Cancellation requested during pre-exit delay; exiting immediately");
+        }
+    }
+    std::process::exit(1);
+}
+
+async fn handle_worker_outcome(
+    name: &'static str,
+    outcome: crate::supervisor::SupervisorOutcome,
+    metrics: &RelayMetrics,
+    status: &crate::worker_status::WorkerStatusMap,
+    cancellation_token: CancellationToken,
+) {
+    use crate::supervisor::SupervisorOutcome;
+    crate::supervisor::apply_outcome(name, &outcome, metrics, status);
+    match outcome {
+        SupervisorOutcome::CleanExit => {
+            tracing::info!(worker = name, "exited cleanly (channel closed)");
+        }
+        SupervisorOutcome::BudgetExceeded {
+            count,
+            first_msg,
+            last_msg,
+        } => {
+            tracing::error!(
+                worker = name,
+                panic_count = count,
+                first_panic_msg = %first_msg,
+                last_panic_msg = %last_msg,
+                "CRITICAL: panic budget exceeded; exiting process for container restart"
+            );
+            graceful_exit_after_delay(cancellation_token).await;
+        }
+    }
+}
+
 async fn search_worker(
-    mut rx: tokio::sync::mpsc::Receiver<String>,
+    rx: &mut tokio::sync::mpsc::Receiver<String>,
     search_index: Arc<SearchIndex>,
     docs: Arc<DashMap<String, DocWithSyncKv>>,
     pending: Arc<DashMap<String, link_indexer::PendingEntry>>,
@@ -647,6 +721,8 @@ pub struct Server {
     last_dirty_signal: Arc<AtomicU64>,
     /// Timestamp (epoch ms) of the most recent successful persist of any doc.
     last_successful_persist: Arc<AtomicU64>,
+    /// Cross-channel state shared between worker supervisor and /ready endpoint.
+    pub(crate) worker_status: Arc<crate::worker_status::WorkerStatusMap>,
 }
 
 /// Holds channel receivers for background workers.
@@ -751,7 +827,9 @@ impl Server {
         if mcp_api_key.is_some() || share_token_secret.is_some() {
             tracing::info!("MCP endpoint enabled (MCP_API_KEY or SHARE_TOKEN_SECRET is set)");
         } else {
-            tracing::info!("MCP endpoint disabled (neither MCP_API_KEY nor SHARE_TOKEN_SECRET set)");
+            tracing::info!(
+                "MCP endpoint disabled (neither MCP_API_KEY nor SHARE_TOKEN_SECRET set)"
+            );
         }
 
         let server = Self {
@@ -778,6 +856,7 @@ impl Server {
             share_token_secret,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
+            worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
         };
 
         let receivers = WorkerReceivers {
@@ -815,33 +894,47 @@ impl Server {
             indexer.clear_pending();
         }
 
-        // Spawn background worker for link indexing
+        // Spawn supervised link indexing worker.
         if let Some(ref indexer) = self.link_indexer {
             let docs_for_indexer = self.docs.clone();
             let indexer_for_worker = indexer.clone();
             let resolver_for_indexer = self.doc_resolver.clone();
+            let metrics_for_indexer = self.metrics.clone();
+            let metrics_for_hook = self.metrics.clone();
+            let status_for_indexer = self.worker_status.clone();
+            let status_for_hook = self.worker_status.clone();
+            let cancel_for_indexer = self.cancellation_token.clone();
+            self.metrics.set_worker_alive("link_indexer", true);
+            self.worker_status.register("link_indexer");
             tokio::spawn(async move {
-                let result = std::panic::AssertUnwindSafe(indexer_for_worker.run_worker(
-                    index_rx,
-                    docs_for_indexer,
-                    resolver_for_indexer,
-                ));
-                if let Err(e) = futures::FutureExt::catch_unwind(result).await {
-                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = e.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "unknown panic payload".to_string()
-                    };
-                    tracing::error!("CRITICAL: Link indexer worker panicked: {msg}. Backlink indexing is now dead — restart the server.");
-                } else {
-                    tracing::error!("CRITICAL: Link indexer worker exited unexpectedly (channel closed). Backlink indexing is now dead.");
-                }
+                let outcome = crate::supervisor::supervise(
+                    "link_indexer",
+                    &mut index_rx,
+                    |rx| {
+                        let indexer = indexer_for_worker.clone();
+                        let docs = docs_for_indexer.clone();
+                        let resolver = resolver_for_indexer.clone();
+                        Box::pin(async move { indexer.run_worker(rx, docs, resolver).await })
+                    },
+                    move |worker, msg, _attempt, _budget| {
+                        metrics_for_hook.record_worker_panic(worker);
+                        status_for_hook.record_panic("link_indexer", msg);
+                        let _ = worker;
+                    },
+                )
+                .await;
+                handle_worker_outcome(
+                    "link_indexer",
+                    outcome,
+                    &metrics_for_indexer,
+                    &status_for_indexer,
+                    cancel_for_indexer,
+                )
+                .await;
             });
         }
 
-        // Spawn background worker for search index updates
+        // Spawn supervised search index worker.
         if let Some((mut search_rx, search_pending)) = search_rx {
             // Drain stale search messages too (startup_reindex builds the search index)
             let mut search_drained = 0usize;
@@ -858,25 +951,38 @@ impl Server {
             if let Some(ref si) = self.search_index {
                 let si_for_worker = si.clone();
                 let docs_for_search = self.docs.clone();
+                let metrics_for_search = self.metrics.clone();
+                let metrics_for_hook = self.metrics.clone();
+                let status_for_search = self.worker_status.clone();
+                let status_for_hook = self.worker_status.clone();
+                let cancel_for_search = self.cancellation_token.clone();
+                self.metrics.set_worker_alive("search_index", true);
+                self.worker_status.register("search_index");
                 tokio::spawn(async move {
-                    let result = std::panic::AssertUnwindSafe(search_worker(
-                        search_rx,
-                        si_for_worker,
-                        docs_for_search,
-                        search_pending,
-                    ));
-                    if let Err(e) = futures::FutureExt::catch_unwind(result).await {
-                        let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                            s.to_string()
-                        } else if let Some(s) = e.downcast_ref::<String>() {
-                            s.clone()
-                        } else {
-                            "unknown panic payload".to_string()
-                        };
-                        tracing::error!("CRITICAL: Search index worker panicked: {msg}. Search indexing is now dead — restart the server.");
-                    } else {
-                        tracing::error!("CRITICAL: Search index worker exited unexpectedly (channel closed). Search indexing is now dead.");
-                    }
+                    let outcome = crate::supervisor::supervise(
+                        "search_index",
+                        &mut search_rx,
+                        |rx| {
+                            let si = si_for_worker.clone();
+                            let docs = docs_for_search.clone();
+                            let pending = search_pending.clone();
+                            Box::pin(async move { search_worker(rx, si, docs, pending).await })
+                        },
+                        move |worker, msg, _attempt, _budget| {
+                            metrics_for_hook.record_worker_panic(worker);
+                            status_for_hook.record_panic("search_index", msg);
+                            let _ = worker;
+                        },
+                    )
+                    .await;
+                    handle_worker_outcome(
+                        "search_index",
+                        outcome,
+                        &metrics_for_search,
+                        &status_for_search,
+                        cancel_for_search,
+                    )
+                    .await;
                 });
             }
         }
@@ -1025,8 +1131,7 @@ impl Server {
 
     /// Whether the search index has finished its initial build.
     pub fn search_is_ready(&self) -> bool {
-        self.search_ready
-            .load(std::sync::atomic::Ordering::Acquire)
+        self.search_ready.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Get the link indexer, if enabled.
@@ -1368,10 +1473,7 @@ impl Server {
 
             let mut map = std::collections::HashMap::new();
             map.insert("id".to_string(), yrs::Any::String(uuid.clone().into()));
-            map.insert(
-                "type".to_string(),
-                yrs::Any::String(file_type.into()),
-            );
+            map.insert("type".to_string(), yrs::Any::String(file_type.into()));
             map.insert("version".to_string(), yrs::Any::Number(0.0));
             filemeta.insert(&mut txn, in_folder_path, yrs::Any::Map(map.into()));
             // Only write legacy docs map for markdown files (Obsidian compat)
@@ -1479,7 +1581,9 @@ impl Server {
         let uuid = {
             let awareness = {
                 let Some(doc_ref) = docs.get(&folder_doc_id) else {
-                    return Err(CreateDocumentError::Internal("Folder doc not loaded".into()));
+                    return Err(CreateDocumentError::Internal(
+                        "Folder doc not loaded".into(),
+                    ));
                 };
                 doc_ref.awareness()
             }; // DashMap shard lock released
@@ -1591,8 +1695,7 @@ impl Server {
             let filemeta = txn.get_or_insert_map("filemeta_v0");
 
             // Read the existing Any::Map entry, update hash, and re-insert
-            if let Some(yrs::Out::Any(yrs::Any::Map(old_map))) =
-                filemeta.get(&txn, in_folder_path)
+            if let Some(yrs::Out::Any(yrs::Any::Map(old_map))) = filemeta.get(&txn, in_folder_path)
             {
                 let mut new_map = std::collections::HashMap::new();
                 for (k, v) in old_map.iter() {
@@ -1602,11 +1705,7 @@ impl Server {
                         new_map.insert(k.to_string(), v.clone());
                     }
                 }
-                filemeta.insert(
-                    &mut txn,
-                    in_folder_path,
-                    yrs::Any::Map(new_map.into()),
-                );
+                filemeta.insert(&mut txn, in_folder_path, yrs::Any::Map(new_map.into()));
             } else {
                 return Err(format!("Filemeta entry not found for {}", in_folder_path));
             }
@@ -1617,11 +1716,7 @@ impl Server {
             let folder_sync_kv = self.docs().get(folder_doc_id).map(|r| r.sync_kv());
             if let Some(sync_kv) = folder_sync_kv {
                 if let Err(e) = sync_kv.persist().await {
-                    tracing::error!(
-                        "Failed to persist folder doc {}: {:?}",
-                        folder_doc_id,
-                        e
-                    );
+                    tracing::error!("Failed to persist folder doc {}: {:?}", folder_doc_id, e);
                 }
             }
         }
@@ -1724,9 +1819,9 @@ impl Server {
         // 5. Update filemeta_v0 (type "file" with hash, no legacy docs entry)
         {
             let awareness = {
-                let doc_ref = docs.get(&folder_doc_id).ok_or_else(|| {
-                    CreateDocumentError::Internal("Folder doc not loaded".into())
-                })?;
+                let doc_ref = docs
+                    .get(&folder_doc_id)
+                    .ok_or_else(|| CreateDocumentError::Internal("Folder doc not loaded".into()))?;
                 doc_ref.awareness()
             };
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
@@ -2207,10 +2302,9 @@ impl Server {
             .ok_or_else(|| MoveDocumentError::NotFound(format!("Path not found: {}", path)))?;
 
         let folder_sync_kv = {
-            let doc_ref = self
-                .docs
-                .get(&info.folder_doc_id)
-                .ok_or_else(|| MoveDocumentError::Internal("Source folder doc not loaded".into()))?;
+            let doc_ref = self.docs.get(&info.folder_doc_id).ok_or_else(|| {
+                MoveDocumentError::Internal("Source folder doc not loaded".into())
+            })?;
             let sync_kv = doc_ref.sync_kv();
             let awareness = doc_ref.awareness();
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
@@ -2221,8 +2315,8 @@ impl Server {
             let value = filemeta
                 .get(&txn, &old_path)
                 .ok_or_else(|| MoveDocumentError::NotFound(format!("Path not found: {}", path)))?;
-            let entry_type = link_indexer::extract_type_from_filemeta_entry(&value, &txn)
-                .unwrap_or_default();
+            let entry_type =
+                link_indexer::extract_type_from_filemeta_entry(&value, &txn).unwrap_or_default();
             if entry_type == "markdown" || entry_type == "folder" {
                 return Err(MoveDocumentError::BadRequest(format!(
                     "{} is not a non-markdown file",
@@ -2235,29 +2329,21 @@ impl Server {
                     new_path
                 )));
             }
-            let id = link_indexer::extract_id_from_filemeta_entry(&value, &txn)
-                .unwrap_or_default();
             let fields = link_indexer::extract_filemeta_fields(&value, &txn);
 
             let filemeta = txn.get_or_insert_map("filemeta_v0");
             let docs_map = txn.get_or_insert_map("docs");
             filemeta.remove(&mut txn, old_path.as_str());
             docs_map.remove(&mut txn, old_path.as_str());
-            filemeta.insert(
-                &mut txn,
-                new_path,
-                yrs::Any::Map(fields.clone().into()),
-            );
-            docs_map.insert(
-                &mut txn,
-                new_path,
-                yrs::Any::String(id.to_string().into()),
-            );
+            filemeta.insert(&mut txn, new_path, yrs::Any::Map(fields.clone().into()));
             sync_kv
         };
 
         if let Err(e) = folder_sync_kv.persist().await {
-            tracing::error!("Failed to persist folder doc after file metadata move: {:?}", e);
+            tracing::error!(
+                "Failed to persist folder doc after file metadata move: {:?}",
+                e
+            );
         }
 
         self.doc_resolver.rebuild(&self.docs);
@@ -2346,10 +2432,9 @@ impl Server {
             String,
             std::collections::HashMap<String, yrs::Any>,
         )> = {
-            let doc_ref = self
-                .docs
-                .get(&source_folder_doc_id)
-                .ok_or_else(|| MoveDocumentError::Internal("Source folder doc not loaded".into()))?;
+            let doc_ref = self.docs.get(&source_folder_doc_id).ok_or_else(|| {
+                MoveDocumentError::Internal("Source folder doc not loaded".into())
+            })?;
             let awareness = doc_ref.awareness();
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
@@ -2402,9 +2487,8 @@ impl Server {
                     )));
                 }
                 if let Some(value) = filemeta.get(&txn, source_path) {
-                    let entry_type =
-                        link_indexer::extract_type_from_filemeta_entry(&value, &txn)
-                            .unwrap_or_default();
+                    let entry_type = link_indexer::extract_type_from_filemeta_entry(&value, &txn)
+                        .unwrap_or_default();
                     let id = link_indexer::extract_id_from_filemeta_entry(&value, &txn)
                         .unwrap_or_default();
                     let fields = link_indexer::extract_filemeta_fields(&value, &txn);
@@ -2429,10 +2513,9 @@ impl Server {
         }
 
         let folder_sync_kv = {
-            let doc_ref = self
-                .docs
-                .get(&source_folder_doc_id)
-                .ok_or_else(|| MoveDocumentError::Internal("Source folder doc not loaded".into()))?;
+            let doc_ref = self.docs.get(&source_folder_doc_id).ok_or_else(|| {
+                MoveDocumentError::Internal("Source folder doc not loaded".into())
+            })?;
             let sync_kv = doc_ref.sync_kv();
             let awareness = doc_ref.awareness();
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
@@ -2455,11 +2538,15 @@ impl Server {
                     destination.as_str(),
                     yrs::Any::Map(fields.clone().into()),
                 );
-                docs_map.insert(
-                    &mut txn,
-                    destination.as_str(),
-                    yrs::Any::String(id.to_string().into()),
-                );
+                if entry_type == "folder" {
+                    if !id.is_empty() {
+                        docs_map.insert(
+                            &mut txn,
+                            destination.as_str(),
+                            yrs::Any::String(id.to_string().into()),
+                        );
+                    }
+                }
                 if source == &old_path {
                     continue;
                 }
@@ -2541,6 +2628,7 @@ impl Server {
             share_token_secret: None,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
+            worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
         })
     }
 
@@ -2573,6 +2661,7 @@ impl Server {
             share_token_secret: None,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
+            worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
         });
         server
     }
@@ -2703,6 +2792,7 @@ impl Server {
             let doc_key_for_indexer = doc_id.to_string();
             let docs = self.docs.clone();
             let doc_id_for_callback = doc_id.to_string();
+            let metrics_for_callback = self.metrics.clone();
             // Capture parent awareness to keep it alive (prevents GC while subdoc exists)
             let _parent_awareness = parent_awareness_guard;
 
@@ -2754,8 +2844,25 @@ impl Server {
                             if let Some(ref indexer) = link_indexer_for_callback {
                                 let indexer = indexer.clone();
                                 let doc_key = doc_key_for_indexer.clone();
+                                let metrics = metrics_for_callback.clone();
                                 tokio::spawn(async move {
-                                    indexer.on_document_update(&doc_key).await;
+                                    let doc_key_for_log = doc_key.clone();
+                                    if let Some(msg) = crate::supervisor::run_with_panic_recovery(
+                                        "on_document_update",
+                                        &metrics,
+                                        async move {
+                                            indexer.on_document_update(&doc_key).await;
+                                        },
+                                    )
+                                    .await
+                                    {
+                                        tracing::error!(
+                                            worker = "on_document_update",
+                                            doc = %doc_key_for_log,
+                                            panic_msg = %msg,
+                                            "fire-and-forget task panicked; one update lost"
+                                        );
+                                    }
                                 });
                             }
 
@@ -4059,9 +4166,36 @@ async fn check_store_deprecated(
     check_store(auth_header, State(server_state)).await
 }
 
-/// Always returns a 200 OK response, as long as we are listening.
-async fn ready() -> Result<Json<Value>, AppError> {
-    Ok(Json(json!({"ok": true})))
+#[derive(serde::Serialize)]
+struct ReadyResponse {
+    ok: bool,
+    workers: Vec<WorkerReadiness>,
+}
+
+#[derive(serde::Serialize)]
+struct WorkerReadiness {
+    name: String,
+    alive: bool,
+    panics_in_window: u32,
+}
+
+/// Always returns 200 OK as long as the process is listening. The body
+/// reports per-worker liveness so operators can distinguish "process up
+/// but a worker has died" from "fully healthy". `ok` is true iff every
+/// registered worker is still alive; an empty worker set is vacuously OK.
+async fn ready(State(server): State<Arc<Server>>) -> Json<ReadyResponse> {
+    let workers: Vec<WorkerReadiness> = server
+        .worker_status
+        .snapshot()
+        .into_iter()
+        .map(|(name, alive, panics_in_window)| WorkerReadiness {
+            name: name.to_string(),
+            alive,
+            panics_in_window,
+        })
+        .collect();
+    let ok = workers.iter().all(|w| w.alive);
+    Json(ReadyResponse { ok, workers })
 }
 
 async fn handle_open_by_path(
@@ -4175,10 +4309,9 @@ async fn handle_suggestions(
 
     // Get path mapping from filemeta_v0
     let path_map = {
-        let doc_ref = server_state
-            .docs
-            .get(folder_id)
-            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder doc not loaded")))?;
+        let doc_ref = server_state.docs.get(folder_id).ok_or_else(|| {
+            AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder doc not loaded"))
+        })?;
         let awareness = doc_ref.awareness();
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
@@ -4347,7 +4480,10 @@ async fn handle_upsert_document(
             Err(CreateDocumentError::NotFound(msg)) => {
                 Err(AppError::new(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
             }
-            Err(e) => Err(AppError::new(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))),
+            Err(e) => Err(AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                anyhow!("{}", e),
+            )),
         }
     } else {
         // Markdown/other → Y.Doc (existing behavior with upsert semantics)
@@ -4377,7 +4513,10 @@ async fn handle_upsert_document(
             Err(CreateDocumentError::NotFound(msg)) => {
                 Err(AppError::new(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
             }
-            Err(e) => Err(AppError::new(StatusCode::INTERNAL_SERVER_ERROR, anyhow!("{}", e))),
+            Err(e) => Err(AppError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                anyhow!("{}", e),
+            )),
         }
     }
 }
@@ -5910,11 +6049,7 @@ mod test {
             .is_some()
     }
 
-    fn legacy_docs_value(
-        server: &Arc<Server>,
-        folder_doc_id: &str,
-        path: &str,
-    ) -> Option<String> {
+    fn legacy_docs_value(server: &Arc<Server>, folder_doc_id: &str, path: &str) -> Option<String> {
         let doc_ref = server.docs().get(folder_doc_id).unwrap();
         let awareness = doc_ref.awareness();
         let guard = awareness.read().unwrap();
@@ -5955,7 +6090,10 @@ mod test {
         (status, body)
     }
 
-    async fn post_check_video_ids(server: &Arc<Server>, body: JsonValue) -> (StatusCode, JsonValue) {
+    async fn post_check_video_ids(
+        server: &Arc<Server>,
+        body: JsonValue,
+    ) -> (StatusCode, JsonValue) {
         let response = server
             .routes()
             .oneshot(
@@ -5980,7 +6118,11 @@ mod test {
         let folder_doc_id = insert_test_folder_doc(
             &server,
             "Relay Folder 1",
-            &[("/Old.md", "11111111-1111-4111-8111-111111111111", "markdown")],
+            &[(
+                "/Old.md",
+                "11111111-1111-4111-8111-111111111111",
+                "markdown",
+            )],
         )
         .await;
         insert_test_content_doc(&server, "11111111-1111-4111-8111-111111111111", "Old").await;
@@ -6040,14 +6182,8 @@ mod test {
         .await;
 
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            body["found"]["GMTDrG3hYJ0"],
-            "/video_transcripts/Short.md"
-        );
-        assert_eq!(
-            body["found"]["Nl7-bRFSZBs"],
-            "/video_transcripts/Normal.md"
-        );
+        assert_eq!(body["found"]["GMTDrG3hYJ0"], "/video_transcripts/Short.md");
+        assert_eq!(body["found"]["Nl7-bRFSZBs"], "/video_transcripts/Normal.md");
     }
 
     #[tokio::test]
@@ -6121,7 +6257,7 @@ mod test {
         ));
         assert_eq!(
             legacy_docs_value(&server, &folder_doc_id, "/renamed.timestamps.json"),
-            Some("22222222-2222-4222-8222-222222222222".to_string())
+            None
         );
     }
 
@@ -6133,7 +6269,16 @@ mod test {
             "Relay Folder 1",
             &[
                 ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
-                ("/Old/Child.md", "33333333-3333-4333-8333-333333333333", "markdown"),
+                (
+                    "/Old/Child.md",
+                    "33333333-3333-4333-8333-333333333333",
+                    "markdown",
+                ),
+                (
+                    "/Old/Page.html",
+                    "44444444-4444-4444-8444-444444444444",
+                    "file",
+                ),
             ],
         )
         .await;
@@ -6146,8 +6291,10 @@ mod test {
 
         assert!(!filemeta_has(&server, &folder_doc_id, "/Old"));
         assert!(!filemeta_has(&server, &folder_doc_id, "/Old/Child.md"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Old/Page.html"));
         assert!(filemeta_has(&server, &folder_doc_id, "/New"));
         assert!(filemeta_has(&server, &folder_doc_id, "/New/Child.md"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/New/Page.html"));
         assert_eq!(
             legacy_docs_value(&server, &folder_doc_id, "/New"),
             Some("22222222-2222-4222-8222-222222222222".to_string())
@@ -6156,8 +6303,19 @@ mod test {
             legacy_docs_value(&server, &folder_doc_id, "/New/Child.md"),
             Some("33333333-3333-4333-8333-333333333333".to_string())
         );
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/New/Page.html"),
+            None
+        );
         assert_eq!(legacy_docs_value(&server, &folder_doc_id, "/Old"), None);
-        assert_eq!(legacy_docs_value(&server, &folder_doc_id, "/Old/Child.md"), None);
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/Old/Child.md"),
+            None
+        );
+        assert_eq!(
+            legacy_docs_value(&server, &folder_doc_id, "/Old/Page.html"),
+            None
+        );
     }
 
     #[tokio::test]
@@ -6173,8 +6331,7 @@ mod test {
             )],
         )
         .await;
-        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article")
-            .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article").await;
 
         let result = server
             .move_path("Relay Folder 1/articles", "/renamed", None)
@@ -6183,7 +6340,11 @@ mod test {
 
         assert_eq!(result.old_path, "/articles");
         assert_eq!(result.new_path, "/renamed");
-        assert!(!filemeta_has(&server, &folder_doc_id, "/articles/Article.md"));
+        assert!(!filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/articles/Article.md"
+        ));
         assert!(filemeta_has(&server, &folder_doc_id, "/renamed/Article.md"));
         assert_eq!(
             legacy_docs_value(&server, &folder_doc_id, "/articles/Article.md"),
@@ -6215,17 +6376,19 @@ mod test {
             ],
         )
         .await;
-        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article")
-            .await;
-        insert_test_content_doc(&server, "44444444-4444-4444-8444-444444444444", "Existing")
-            .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article").await;
+        insert_test_content_doc(&server, "44444444-4444-4444-8444-444444444444", "Existing").await;
 
         let result = server
             .move_path("Relay Folder 1/articles", "/renamed", None)
             .await;
 
         assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
-        assert!(filemeta_has(&server, &folder_doc_id, "/articles/Article.md"));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/articles/Article.md"
+        ));
         assert!(filemeta_has(&server, &folder_doc_id, "/renamed/Article.md"));
     }
 
@@ -6249,8 +6412,7 @@ mod test {
             ],
         )
         .await;
-        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article")
-            .await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Article").await;
         insert_test_content_doc(
             &server,
             "44444444-4444-4444-8444-444444444444",
@@ -6284,8 +6446,16 @@ mod test {
             "Relay Folder 1",
             &[
                 ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
-                ("/Old/Child.md", "33333333-3333-4333-8333-333333333333", "markdown"),
-                ("/Backlinker.md", "44444444-4444-4444-8444-444444444444", "markdown"),
+                (
+                    "/Old/Child.md",
+                    "33333333-3333-4333-8333-333333333333",
+                    "markdown",
+                ),
+                (
+                    "/Backlinker.md",
+                    "44444444-4444-4444-8444-444444444444",
+                    "markdown",
+                ),
             ],
         )
         .await;
@@ -6323,7 +6493,11 @@ mod test {
             "Relay Folder 1",
             &[
                 ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
-                ("/Old/Child.md", "33333333-3333-4333-8333-333333333333", "markdown"),
+                (
+                    "/Old/Child.md",
+                    "33333333-3333-4333-8333-333333333333",
+                    "markdown",
+                ),
             ],
         )
         .await;
@@ -6345,7 +6519,11 @@ mod test {
             "Relay Folder 1",
             &[
                 ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
-                ("/Existing", "55555555-5555-4555-8555-555555555555", "folder"),
+                (
+                    "/Existing",
+                    "55555555-5555-4555-8555-555555555555",
+                    "folder",
+                ),
             ],
         )
         .await;
@@ -6367,22 +6545,23 @@ mod test {
             "Relay Folder 1",
             &[
                 ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
-                ("/Old/Child.md", "33333333-3333-4333-8333-333333333333", "markdown"),
-                ("/New/Child.md", "44444444-4444-4444-8444-444444444444", "markdown"),
+                (
+                    "/Old/Child.md",
+                    "33333333-3333-4333-8333-333333333333",
+                    "markdown",
+                ),
+                (
+                    "/New/Child.md",
+                    "44444444-4444-4444-8444-444444444444",
+                    "markdown",
+                ),
             ],
         )
         .await;
         insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "Child").await;
-        insert_test_content_doc(
-            &server,
-            "44444444-4444-4444-8444-444444444444",
-            "Existing",
-        )
-        .await;
+        insert_test_content_doc(&server, "44444444-4444-4444-8444-444444444444", "Existing").await;
 
-        let result = server
-            .move_path("Relay Folder 1/Old", "/New", None)
-            .await;
+        let result = server.move_path("Relay Folder 1/Old", "/New", None).await;
 
         assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
         assert!(filemeta_has(&server, &folder_doc_id, "/Old"));
@@ -6476,7 +6655,11 @@ mod test {
         let folder_doc_id = insert_test_folder_doc(
             &server,
             "Relay Folder 1",
-            &[("/Old.md", "11111111-1111-4111-8111-111111111111", "markdown")],
+            &[(
+                "/Old.md",
+                "11111111-1111-4111-8111-111111111111",
+                "markdown",
+            )],
         )
         .await;
         insert_test_content_doc(&server, "11111111-1111-4111-8111-111111111111", "Old").await;
@@ -6525,7 +6708,11 @@ mod test {
             "Relay Folder 1",
             &[
                 ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
-                ("/Existing", "55555555-5555-4555-8555-555555555555", "folder"),
+                (
+                    "/Existing",
+                    "55555555-5555-4555-8555-555555555555",
+                    "folder",
+                ),
             ],
         )
         .await;
@@ -7501,6 +7688,102 @@ mod test {
             wait_result.is_ok(),
             "Persistence workers should terminate after GC, but they hung"
         );
+    }
+
+    // === graceful_exit_after_delay pre-exit wait ===
+    //
+    // Bug C escalation: when the supervisor decides to exit, we want a
+    // 30s pre-exit window so Prometheus scrapers see `worker_alive=0`
+    // and operators get a heads-up before the container restart cycle.
+    // A SIGTERM (docker stop) must collapse the window — the
+    // cancellation_token cancels and we exit immediately. These tests
+    // pin down both branches without invoking `process::exit`.
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wait_for_worker_exit_signal_returns_delay_elapsed_when_no_cancel() {
+        let token = tokio_util::sync::CancellationToken::new();
+        let reason = wait_for_worker_exit_signal(token, std::time::Duration::from_millis(20)).await;
+        assert_eq!(reason, WorkerExitReason::DelayElapsed);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wait_for_worker_exit_signal_returns_cancellation_when_token_fires() {
+        let token = tokio_util::sync::CancellationToken::new();
+        let token_for_cancel = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            token_for_cancel.cancel();
+        });
+        // Use a long delay so cancellation must be what unblocks us.
+        let reason = wait_for_worker_exit_signal(token, std::time::Duration::from_secs(30)).await;
+        assert_eq!(reason, WorkerExitReason::CancellationRequested);
+    }
+
+    /// Sanity: an already-cancelled token returns immediately, no wait.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wait_for_worker_exit_signal_returns_immediately_when_already_cancelled() {
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel();
+        let start = std::time::Instant::now();
+        let reason = wait_for_worker_exit_signal(token, std::time::Duration::from_secs(30)).await;
+        let elapsed = start.elapsed();
+        assert_eq!(reason, WorkerExitReason::CancellationRequested);
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "already-cancelled token must not wait out the delay; took {:?}",
+            elapsed
+        );
+    }
+
+    // === /ready worker readiness ===
+    //
+    // Per the resilience design, /ready must report per-worker liveness
+    // and recent panic counts so operators have a single endpoint that
+    // surfaces supervisor state. The endpoint's existing "{ok: true}"
+    // shape is preserved for backward compatibility, plus a new
+    // "workers" array.
+
+    #[tokio::test]
+    async fn ready_reports_registered_workers_with_panic_counts() {
+        let server = Server::new_for_test();
+        server.worker_status.register("link_indexer");
+        server.worker_status.record_panic("link_indexer", "boom");
+
+        let Json(resp) = ready(State(server)).await;
+        let json = serde_json::to_value(&resp).unwrap();
+
+        assert_eq!(json["ok"], true, "all workers alive -> ok:true");
+        let workers = json["workers"].as_array().expect("workers array");
+        let li = workers
+            .iter()
+            .find(|w| w["name"] == "link_indexer")
+            .expect("link_indexer entry");
+        assert_eq!(li["alive"], true);
+        assert_eq!(li["panics_in_window"], 1);
+    }
+
+    #[tokio::test]
+    async fn ready_returns_ok_false_when_any_worker_dead() {
+        let server = Server::new_for_test();
+        server.worker_status.register("link_indexer");
+        server.worker_status.register("search_index");
+        server.worker_status.mark_dead("link_indexer");
+
+        let Json(resp) = ready(State(server)).await;
+        let json = serde_json::to_value(&resp).unwrap();
+
+        assert_eq!(json["ok"], false, "dead worker -> ok:false");
+    }
+
+    #[tokio::test]
+    async fn ready_with_no_workers_is_ok() {
+        // No workers registered (e.g., link_indexer disabled). Vacuously OK.
+        let server = Server::new_for_test();
+        let Json(resp) = ready(State(server)).await;
+        let json = serde_json::to_value(&resp).unwrap();
+
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["workers"].as_array().unwrap().len(), 0);
     }
 }
 

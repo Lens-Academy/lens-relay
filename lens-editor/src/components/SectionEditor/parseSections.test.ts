@@ -205,6 +205,13 @@ describe('parseSections', () => {
     expect(sections[0].label).toBe('Chat');
   });
 
+  it('classifies "#### Text" with a trailing comment as text (comment markup ignored for classification)', () => {
+    const text = '#### Text {>>{"author":"X","timestamp":1}@@hi<<}\ncontent:: body\n';
+    const sections = parseSections(text);
+    expect(sections[0].type).toBe('text');
+    expect(sections[0].label).toBe('Text');
+  });
+
   it('classifies ### Article: and ### Video: as article-ref and video-ref', () => {
     const text = '### Article: Some Article\nsource:: [[../articles/foo]]\n### Video: Some Video\nsource:: [[../video_transcripts/bar]]';
     const sections = parseSections(text);

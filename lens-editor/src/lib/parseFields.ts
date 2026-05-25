@@ -71,6 +71,45 @@ export function parseFrontmatterFields(text: string): Map<string, string> {
   return fields;
 }
 
+/**
+ * Compute the absolute Y.Text offset range [from, to) of a named field's
+ * value within a section. Returns the section's full range if the field
+ * isn't present.
+ */
+export function getFieldValueRange(
+  sectionContent: string,
+  sectionFrom: number,
+  fieldName: string,
+): [number, number] {
+  const pattern = new RegExp(`^${fieldName}::(?:\\s(.*))?$`, 'm');
+  const match = pattern.exec(sectionContent);
+  if (!match) return [sectionFrom, sectionFrom + sectionContent.length];
+
+  const fieldLineEnd = match.index + match[0].length;
+  const inlineValue = match[1]?.trim();
+  let valueStart: number;
+  if (inlineValue) {
+    valueStart = match.index + match[0].indexOf(inlineValue);
+  } else {
+    valueStart = fieldLineEnd + 1;
+  }
+
+  const rest = sectionContent.slice(valueStart);
+  const nextField = rest.match(/^\w[\w-]*::(?:\s|$)/m);
+  let valueEnd: number;
+  if (nextField) {
+    let end = valueStart + nextField.index!;
+    while (end > valueStart && sectionContent[end - 1] === '\n') end--;
+    valueEnd = end;
+  } else {
+    let end = sectionContent.length;
+    while (end > valueStart && sectionContent[end - 1] === '\n') end--;
+    valueEnd = end;
+  }
+
+  return [sectionFrom + valueStart, sectionFrom + valueEnd];
+}
+
 function stripQuotes(s: string): string {
   if (s.startsWith('"') && s.endsWith('"')) {
     return s.slice(1, -1);

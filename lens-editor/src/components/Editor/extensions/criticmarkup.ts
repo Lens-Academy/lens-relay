@@ -21,10 +21,38 @@ import type { ViewUpdate, DecorationSet } from '@codemirror/view';
 import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
 import { parse, parseThreads, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
+export interface CriticMarkupCommentBadgeInfo {
+  badgeNumber: number;
+  isFirstInThread: boolean;
+  absoluteFrom: number;
+}
+
 /** Facet controlling whether accept/reject buttons are shown. Defaults to true. */
 export const canAcceptRejectFacet = Facet.define<boolean, boolean>({
   combine: (values) => values.length > 0 ? values[0] : true,
 });
+
+/**
+ * Translates a local editor position (inside this CodeMirror view) to the
+ * absolute Y.Text offset that CommentsLayer expects. The file editor uses
+ * the identity function (its view IS the whole Y.Text). Section editors in
+ * the course editor configure this to add their slice's base offset.
+ */
+export const commentOffsetTranslator = Facet.define<
+  (local: number) => number,
+  (local: number) => number
+>({
+  combine: (vals) => vals[0] ?? ((n) => n),
+});
+
+/**
+ * Callbacks invoked when the user clicks a comment badge in this editor view.
+ * Receives the absolute Y.Text offset (already passed through
+ * commentOffsetTranslator). Unlike the other facets in this file, this one
+ * defines no `combine` — the facet value is the array of all registrations
+ * and each one is invoked.
+ */
+export const commentClickCallback = Facet.define<(absFrom: number) => void>();
 
 // Author context - can be set externally
 let currentAuthor = 'anonymous';
@@ -64,24 +92,13 @@ const LINE_CLASSES: Partial<Record<CriticMarkupRange['type'], string>> = {
  */
 export const toggleSuggestionMode = StateEffect.define<boolean>();
 
-/**
- * StateEffect dispatched when a comment badge is clicked.
- * Carries the thread's `from` position for focusing the comment card.
- */
-export const focusCommentThread = StateEffect.define<number | null>();
+export const setCommentBadgeMap = StateEffect.define<Map<number, CriticMarkupCommentBadgeInfo> | null>();
 
-/**
- * StateField tracking which comment thread is focused (by `from` position).
- * Updated when a comment badge is clicked or a card is focused in the margin.
- */
-export const focusedThreadField = StateField.define<number | null>({
+export const commentBadgeMapField = StateField.define<Map<number, CriticMarkupCommentBadgeInfo> | null>({
   create() { return null; },
   update(value, tr) {
     for (const e of tr.effects) {
-      if (e.is(focusCommentThread)) return e.value;
-    }
-    if (value !== null && tr.docChanged) {
-      return tr.changes.mapPos(value);
+      if (e.is(setCommentBadgeMap)) return e.value;
     }
     return value;
   },
@@ -109,7 +126,7 @@ class CommentBadgeWidget extends WidgetType {
     const span = document.createElement('span');
     span.className = 'cm-comment-badge';
     span.textContent = String(this.number);
-    span.dataset.threadFrom = String(this.threadFrom);
+    span.dataset.commentFrom = String(this.threadFrom);
     return span;
   }
 
@@ -344,14 +361,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         } else if (target.classList.contains('cm-comment-badge')) {
           e.preventDefault();
           e.stopPropagation();
-          const currentFocused = view.state.field(focusedThreadField);
-          const threadFrom = parseInt(target.dataset.threadFrom ?? '', 10);
-          if (!isNaN(threadFrom)) {
-            const focusing = currentFocused !== threadFrom;
-            view.dispatch({ effects: focusCommentThread.of(focusing ? threadFrom : null) });
-            if (focusing) {
-              view.dom.dispatchEvent(new CustomEvent('comment-badge-focus'));
-            }
+          const absFrom = parseInt(target.dataset.commentFrom ?? '', 10);
+          if (!isNaN(absFrom)) {
+            view.state.facet(commentClickCallback).forEach((cb) => cb(absFrom));
           }
         }
       });
@@ -364,7 +376,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       }
       for (const tr of update.transactions) {
         for (const e of tr.effects) {
-          if (e.is(focusCommentThread)) {
+          if (e.is(setCommentBadgeMap)) {
             this.decorations = this.buildDecorations(update.view);
             return;
           }
@@ -382,34 +394,34 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       // Line decorations are added separately (must not be mixed into mark sort)
       const lineDecos: Array<{ from: number; deco: Decoration }> = [];
 
-      // Build comment thread info for badge numbering
+      // Build comment thread info for badge numbering. Section editors can
+      // provide a badge map sliced from the full document, so an open field
+      // keeps the same comment numbers as the course comments sidebar.
       const threads = parseThreads(ranges);
       // Map each comment range's `from` to its badge info
       const commentBadgeMap = new Map<number, { badgeNumber: number; isFirst: boolean; threadFrom: number }>();
-      for (let ti = 0; ti < threads.length; ti++) {
-        const thread = threads[ti];
-        for (let ci = 0; ci < thread.comments.length; ci++) {
-          commentBadgeMap.set(thread.comments[ci].from, {
-            badgeNumber: ti + 1,
-            isFirst: ci === 0,
-            threadFrom: thread.from,
+      // Translator from local CM positions to absolute Y.Text offsets.
+      const translateOffset = view.state.facet(commentOffsetTranslator);
+      const suppliedBadgeMap = view.state.field(commentBadgeMapField);
+      if (suppliedBadgeMap) {
+        for (const range of ranges) {
+          if (range.type !== 'comment') continue;
+          const supplied = suppliedBadgeMap.get(range.from);
+          if (!supplied) continue;
+          commentBadgeMap.set(range.from, {
+            badgeNumber: supplied.badgeNumber,
+            isFirst: supplied.isFirstInThread,
+            threadFrom: range.from,
           });
         }
-      }
-
-      // Focused comment thread highlight
-      const focusedFrom = view.state.field(focusedThreadField);
-      if (focusedFrom !== null) {
-        const focusedThread = threads.find(t => t.from === focusedFrom);
-        if (focusedThread) {
-          const doc = view.state.doc;
-          const startLine = doc.lineAt(focusedThread.from).number;
-          const endLine = doc.lineAt(focusedThread.to).number;
-          for (let ln = startLine; ln <= endLine; ln++) {
-            const line = doc.line(ln);
-            lineDecos.push({
-              from: line.from,
-              deco: Decoration.line({ class: 'cm-comment-focused-line' }),
+      } else {
+        for (let ti = 0; ti < threads.length; ti++) {
+          const thread = threads[ti];
+          for (let ci = 0; ci < thread.comments.length; ci++) {
+            commentBadgeMap.set(thread.comments[ci].from, {
+              badgeNumber: ti + 1,
+              isFirst: ci === 0,
+              threadFrom: thread.from,
             });
           }
         }
@@ -472,7 +484,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
                 from: range.from,
                 to: range.from,
                 deco: Decoration.widget({
-                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, badgeInfo.threadFrom),
+                  widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom)),
                   side: -1,
                 }),
               });
@@ -498,7 +510,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
               from: range.from,
               to: range.to,
               deco: Decoration.replace({
-                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, badgeInfo.threadFrom),
+                widget: new CommentBadgeWidget(badgeInfo.badgeNumber, translateOffset(badgeInfo.threadFrom)),
               }),
             });
           } else {
@@ -609,9 +621,6 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
               }),
             });
           }
-        } else if (!cursorInside && !isBulkSelection) {
-          // Check if this is the addition part of a pair where cursor is in the deletion
-          // (handled by the deletion's branch above — skip to avoid duplicate)
         }
       }
 
@@ -1045,15 +1054,16 @@ export const criticMarkupCompartment = new Compartment();
  */
 interface CriticMarkupOptions {
   canAcceptReject?: boolean;
+  commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
 }
 
 export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
-  const { canAcceptReject = true } = options;
+  const { canAcceptReject = true, commentBadgeMap = null } = options;
   return [
     canAcceptRejectFacet.of(canAcceptReject),
     criticMarkupField,
+    commentBadgeMapField.init(() => commentBadgeMap),
     suggestionModeField,
-    focusedThreadField,
     suggestionModeFilter,
     criticMarkupCompartment.of(criticMarkupPlugin),
     keymap.of(criticMarkupKeymap),

@@ -1452,7 +1452,7 @@ impl LinkIndexer {
     /// Content docs debounce as before (typing produces rapid updates).
     pub async fn run_worker(
         self: Arc<Self>,
-        mut rx: mpsc::Receiver<String>,
+        rx: &mut mpsc::Receiver<String>,
         docs: Arc<DashMap<String, DocWithSyncKv>>,
         doc_resolver: Arc<DocumentResolver>,
     ) {
@@ -1560,6 +1560,40 @@ impl LinkIndexer {
 
         if folder_doc_ids.is_empty() {
             return Err(anyhow::anyhow!("No folder docs found for indexing"));
+        }
+
+        let mut doc_path: Option<String> = None;
+        for fid in folder_doc_ids {
+            let awareness = match docs.get(fid) {
+                Some(r) => r.awareness(),
+                None => continue,
+            };
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            if let Some(filemeta) = txn.get_map("filemeta_v0") {
+                if let Some(path) = find_path_for_uuid(&filemeta, &txn, doc_uuid) {
+                    doc_path = Some(path);
+                    break;
+                }
+            }
+        }
+
+        if doc_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(".html"))
+        {
+            // v1 wikilink extraction is Markdown-oriented; HTML can contain false
+            // positives in attributes, scripts, and styles.
+            let empty_targets = HashSet::new();
+            for fid in folder_doc_ids {
+                let awareness = match docs.get(fid) {
+                    Some(r) => r.awareness(),
+                    None => continue,
+                };
+                let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+                apply_backlink_diff(&guard.doc, doc_uuid, &empty_targets);
+            }
+            return Ok(());
         }
 
         // Phase 1: Extract content text under a short-lived read lock.
@@ -4750,6 +4784,129 @@ mod tests {
             .expect("backlinks_v0 should exist");
         let ideas_backlinks = read_backlinks_array(&backlinks, &txn, ideas_uuid);
         assert_eq!(ideas_backlinks, vec![notes_uuid]);
+    }
+
+    #[tokio::test]
+    async fn index_document_skips_html_files() {
+        use crate::doc_sync::DocWithSyncKv;
+        use dashmap::DashMap;
+        use std::collections::HashMap;
+        use yrs::{Any, Map, ReadTxn, Text, Transact};
+
+        let relay_id = "cb696037-0f72-4e93-8717-4e433129d789";
+        let folder_uuid = "b0000001-0000-4000-8000-000000000001";
+        let html_uuid = "a0000001-0000-4000-8000-000000000001";
+        let notes_uuid = "a0000002-0000-4000-8000-000000000002";
+        let extra_uuid = "a0000003-0000-4000-8000-000000000003";
+
+        let folder_id = format!("{}-{}", relay_id, folder_uuid);
+        let html_id = format!("{}-{}", relay_id, html_uuid);
+        let notes_id = format!("{}-{}", relay_id, notes_uuid);
+        let extra_id = format!("{}-{}", relay_id, extra_uuid);
+
+        let docs: DashMap<String, DocWithSyncKv> = DashMap::new();
+
+        let folder = DocWithSyncKv::new(&folder_id, None, || (), None)
+            .await
+            .unwrap();
+        {
+            let awareness = folder.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Lens".into()));
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+
+            let mut html_entry = HashMap::new();
+            html_entry.insert("id".to_string(), Any::String(html_uuid.into()));
+            html_entry.insert("type".to_string(), Any::String("file".into()));
+            html_entry.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/page.html", Any::Map(html_entry.into()));
+
+            let mut notes_entry = HashMap::new();
+            notes_entry.insert("id".to_string(), Any::String(notes_uuid.into()));
+            notes_entry.insert("type".to_string(), Any::String("markdown".into()));
+            notes_entry.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/notes.md", Any::Map(notes_entry.into()));
+
+            let mut extra_entry = HashMap::new();
+            extra_entry.insert("id".to_string(), Any::String(extra_uuid.into()));
+            extra_entry.insert("type".to_string(), Any::String("markdown".into()));
+            extra_entry.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, "/extra.md", Any::Map(extra_entry.into()));
+
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.insert(&mut txn, notes_uuid, vec![Any::String(html_uuid.into())]);
+        }
+        docs.insert(folder_id.clone(), folder);
+
+        let html = DocWithSyncKv::new(&html_id, None, || (), None)
+            .await
+            .unwrap();
+        {
+            let awareness = html.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, "<a href=\"[[notes]]\">Link</a>");
+        }
+        docs.insert(html_id.clone(), html);
+
+        let notes = DocWithSyncKv::new(&notes_id, None, || (), None)
+            .await
+            .unwrap();
+        {
+            let awareness = notes.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, "See [[extra]] for details");
+        }
+        docs.insert(notes_id.clone(), notes);
+
+        let extra = DocWithSyncKv::new(&extra_id, None, || (), None)
+            .await
+            .unwrap();
+        docs.insert(extra_id.clone(), extra);
+
+        let (indexer, _rx) = LinkIndexer::new();
+        let folder_doc_ids = vec![folder_id.clone()];
+
+        let html_result = indexer.index_document(&html_id, &docs, &folder_doc_ids);
+        assert!(
+            html_result.is_ok(),
+            "indexing .html should not error: {:?}",
+            html_result.err()
+        );
+
+        let notes_result = indexer.index_document(&notes_id, &docs, &folder_doc_ids);
+        assert!(
+            notes_result.is_ok(),
+            "indexing .md should not error: {:?}",
+            notes_result.err()
+        );
+
+        let folder_ref = docs.get(&folder_id).unwrap();
+        let folder_awareness = folder_ref.awareness();
+        let guard = folder_awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        let backlinks = txn
+            .get_map("backlinks_v0")
+            .expect("backlinks_v0 should exist after indexing");
+
+        let extra_backlinks = read_backlinks_array(&backlinks, &txn, extra_uuid);
+        assert_eq!(
+            extra_backlinks,
+            vec![notes_uuid],
+            "/notes.md's [[extra]] wikilink must produce a backlink on extra_uuid"
+        );
+
+        let notes_backlinks = read_backlinks_array(&backlinks, &txn, notes_uuid);
+        assert!(
+            notes_backlinks.is_empty(),
+            "skipped .html doc must not produce a backlink on /notes.md (got {:?})",
+            notes_backlinks
+        );
     }
 
     // === ensure_ancestor_folders tests ===

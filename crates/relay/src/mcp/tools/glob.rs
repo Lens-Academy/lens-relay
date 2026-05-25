@@ -53,9 +53,9 @@ pub fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
     use y_sweet_core::doc_resolver::DocumentResolver;
     use yrs::{Any, Doc, Map, Transact, WriteTxn};
-    use std::collections::HashMap;
 
     const RELAY_ID: &str = "cb696037-0f72-4e93-8717-4e433129d789";
     const FOLDER_UUID: &str = "aaaa0000-0000-0000-0000-000000000000";
@@ -94,10 +94,8 @@ mod tests {
     #[test]
     fn glob_scoped_subfolder_pattern() {
         // Bug: "subfolder/*" with path="Lens" should match "Lens/subfolder/file.md"
-        let server = build_test_server(&[
-            ("/subfolder/file.md", "uuid-1"),
-            ("/other.md", "uuid-2"),
-        ]);
+        let server =
+            build_test_server(&[("/subfolder/file.md", "uuid-1"), ("/other.md", "uuid-2")]);
 
         let result = execute(&server, &json!({"pattern": "subfolder/*", "path": "Lens"})).unwrap();
         assert!(
@@ -118,7 +116,10 @@ mod tests {
         let server = build_test_server(&[("/subfolder/file.md", "uuid-1")]);
 
         let result = execute(&server, &json!({"pattern": "subfolder/*"})).unwrap();
-        assert_eq!(result, "No matches found.", "Without scope, subfolder/* shouldn't match Lens/subfolder/file.md");
+        assert_eq!(
+            result, "No matches found.",
+            "Without scope, subfolder/* shouldn't match Lens/subfolder/file.md"
+        );
 
         let result = execute(&server, &json!({"pattern": "Lens/subfolder/*"})).unwrap();
         assert!(
@@ -131,10 +132,7 @@ mod tests {
     #[test]
     fn glob_scoped_wildcard_still_works() {
         // Regression: **/*.md with scope should still work
-        let server = build_test_server(&[
-            ("/subfolder/file.md", "uuid-1"),
-            ("/top.md", "uuid-2"),
-        ]);
+        let server = build_test_server(&[("/subfolder/file.md", "uuid-1"), ("/top.md", "uuid-2")]);
 
         let result = execute(&server, &json!({"pattern": "**/*.md", "path": "Lens"})).unwrap();
         assert!(result.contains("Lens/subfolder/file.md"), "got: {}", result);
@@ -144,13 +142,15 @@ mod tests {
     #[test]
     fn glob_scoped_direct_children_only() {
         // "*.md" with scope should match direct children only
-        let server = build_test_server(&[
-            ("/subfolder/nested.md", "uuid-1"),
-            ("/top.md", "uuid-2"),
-        ]);
+        let server =
+            build_test_server(&[("/subfolder/nested.md", "uuid-1"), ("/top.md", "uuid-2")]);
 
         let result = execute(&server, &json!({"pattern": "*.md", "path": "Lens"})).unwrap();
         assert!(result.contains("Lens/top.md"), "got: {}", result);
-        assert!(!result.contains("nested.md"), "*.md should not match nested files, got: {}", result);
+        assert!(
+            !result.contains("nested.md"),
+            "*.md should not match nested files, got: {}",
+            result
+        );
     }
 }

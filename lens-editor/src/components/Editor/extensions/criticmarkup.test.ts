@@ -1,8 +1,10 @@
 // src/components/Editor/extensions/criticmarkup.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
-import { Transaction } from '@codemirror/state';
+import { EditorState, Transaction } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { markdown } from '@codemirror/lang-markdown';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
-import { criticMarkupField, toggleSuggestionMode, suggestionModeField, focusCommentThread } from './criticmarkup';
+import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
 
 describe('CriticMarkup Extension', () => {
@@ -786,6 +788,25 @@ describe('CriticMarkup Extension', () => {
       expect(badges[1].textContent).toBe('2');
     });
 
+    it('uses supplied badge numbers when editing a document slice', () => {
+      const state = EditorState.create({
+        doc: 'field {>>second field comment<<} end',
+        extensions: [
+          markdown(),
+          criticMarkupExtension({
+            commentBadgeMap: new Map([
+              [6, { badgeNumber: 2, isFirstInThread: true, absoluteFrom: 106 }],
+            ]),
+          }),
+        ],
+      });
+      const view = new EditorView({ state, parent: document.body });
+      cleanup = () => view.destroy();
+
+      const badge = view.contentDOM.querySelector('.cm-comment-badge');
+      expect(badge?.textContent).toBe('2');
+    });
+
     it('uses single badge for adjacent comments (thread)', () => {
       const { view, cleanup: c } = createCriticMarkupEditor(
         'hello {>>first<<}{>>reply<<} end',
@@ -806,36 +827,25 @@ describe('CriticMarkup Extension', () => {
       cleanup = c;
 
       const badge = view.contentDOM.querySelector('.cm-comment-badge');
-      expect(badge?.getAttribute('data-thread-from')).toBe('6');
+      expect(badge?.getAttribute('data-comment-from')).toBe('6');
     });
 
-    it('dispatches focusCommentThread effect on badge click', () => {
-      const { view, cleanup: c } = createCriticMarkupEditor(
-        'hello {>>a comment<<} end',
-        0
-      );
-      cleanup = c;
+    it('invokes commentClickCallback Facet on badge click with the absolute offset', () => {
+      let receivedFrom: number | undefined;
+      const state = EditorState.create({
+        doc: 'hello {>>a comment<<} end',
+        selection: { anchor: 0 },
+        extensions: [
+          markdown(),
+          criticMarkupExtension(),
+          commentClickCallback.of((absFrom) => { receivedFrom = absFrom; }),
+        ],
+      });
+      const view = new EditorView({ state, parent: document.body });
+      cleanup = () => view.destroy();
 
       const badge = view.contentDOM.querySelector('.cm-comment-badge') as HTMLElement;
       expect(badge).not.toBeNull();
-
-      // Listen for the effect
-      let receivedFrom: number | undefined;
-      const originalDispatch = view.dispatch.bind(view);
-      view.dispatch = (...args: Parameters<typeof view.dispatch>) => {
-        for (const arg of args) {
-          if (arg && typeof arg === 'object' && 'effects' in arg) {
-            const effects = Array.isArray(arg.effects) ? arg.effects : [arg.effects];
-            for (const effect of effects) {
-              if (effect && effect.is && effect.is(focusCommentThread)) {
-                receivedFrom = effect.value;
-              }
-            }
-          }
-        }
-        return originalDispatch(...args);
-      };
-
       badge.click();
       expect(receivedFrom).toBe(6); // thread.from
     });

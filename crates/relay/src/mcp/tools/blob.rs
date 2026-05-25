@@ -29,11 +29,7 @@ pub async fn read_blob(
 }
 
 /// Write a blob to the store at key `files/{doc_id}/{hash}`, returning the SHA-256 hex hash.
-pub async fn write_blob(
-    server: &Arc<Server>,
-    doc_id: &str,
-    data: &[u8],
-) -> Result<String, String> {
+pub async fn write_blob(server: &Arc<Server>, doc_id: &str, data: &[u8]) -> Result<String, String> {
     let store = server
         .store()
         .as_ref()
@@ -52,6 +48,12 @@ pub async fn write_blob(
 /// Returns true if `path` has a `.json` extension (case-insensitive).
 pub fn is_blob_file(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".json")
+}
+
+/// Returns true if `path` should be edited as raw collaborative Y.Text,
+/// without markdown/CriticMarkup processing.
+pub fn is_raw_ytext_file(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".html")
 }
 
 #[cfg(test)]
@@ -164,5 +166,14 @@ mod tests {
         assert!(!is_blob_file("config.toml"));
         assert!(!is_blob_file("json")); // no dot
         assert!(!is_blob_file("file.jsonl"));
+    }
+
+    #[test]
+    fn is_raw_ytext_file_detects_html() {
+        assert!(is_raw_ytext_file("page.html"));
+        assert!(is_raw_ytext_file("Lens/Page.HTML"));
+        assert!(!is_raw_ytext_file("notes.md"));
+        assert!(!is_raw_ytext_file("data.json"));
+        assert!(!is_raw_ytext_file("html"));
     }
 }

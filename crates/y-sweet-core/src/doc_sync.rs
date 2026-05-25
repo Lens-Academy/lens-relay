@@ -148,7 +148,11 @@ impl DocWithSyncKv {
     /// The mutations trigger the update observer, which marks SyncKv dirty so
     /// the compacted state will be persisted on the next flush.
     pub fn compact_user_data(&self) -> CompactionResult {
-        let awareness_guard = self.awareness.read().unwrap();
+        // EXCLUSIVE: compact_user_data does internal transact_mut on the
+        // doc; a shared lock would allow a concurrent awareness.read() to
+        // open transact() and panic with yrs SharedAcqFailed (prod incident
+        // 2026-05-18).
+        let awareness_guard = self.awareness.write().unwrap_or_else(|e| e.into_inner());
         let doc = &awareness_guard.doc;
         crate::permanent_user_data::compact_user_data(doc)
     }
@@ -157,7 +161,10 @@ impl DocWithSyncKv {
     /// This is a no-op if the client_id is already registered for that user.
     /// Returns true if a new registration was written.
     pub fn register_client_id(&self, user_id: &str, client_id: u64) -> bool {
-        let awareness_guard = self.awareness.read().unwrap();
+        // EXCLUSIVE: this function does transact_mut on the doc; a shared
+        // lock allows concurrent readers to hit SharedAcqFailed. See
+        // compact_user_data for the same fix.
+        let awareness_guard = self.awareness.write().unwrap_or_else(|e| e.into_inner());
         let doc = &awareness_guard.doc;
 
         // get_or_insert_map takes a write txn internally, call before any read txn.

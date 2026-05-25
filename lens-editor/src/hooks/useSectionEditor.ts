@@ -3,6 +3,8 @@ import type { EditorView } from 'codemirror';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { createSectionEditorView } from '../components/SectionEditor/createSectionEditorView';
+import type { CriticMarkupCommentBadgeInfo } from '../components/Editor/extensions/criticmarkup';
+import { setCommentBadgeMap } from '../components/Editor/extensions/criticmarkup';
 
 interface UseSectionEditorOpts {
   ytext: Y.Text | null;
@@ -14,6 +16,26 @@ interface UseSectionEditorOpts {
    *  two fields (both active=true) won't remount the editor. */
   editKey?: string | null;
   awareness?: Awareness;
+  /** Opt in to the criticmarkup extension stack. Default false so existing
+   *  callers keep their current behavior. */
+  enableCriticMarkup?: boolean;
+  /** Initial suggestion mode for criticmarkup-enabled editors. Ignored when
+   *  enableCriticMarkup is false. */
+  initialSuggestionMode?: boolean;
+  /** Local comment badge map for the edited slice, keyed by local positions.
+   *  Keeps section-editor badges numbered consistently with document-level
+   *  comment UI. */
+  commentBadgeMap?: Map<number, CriticMarkupCommentBadgeInfo>;
+  /** Where this section's slice starts in the underlying Y.Text. Badge click
+   *  events dispatch this value + local position so CommentsLayer can match
+   *  them. Defaults to sectionFrom when omitted. */
+  yTextOffsetBase?: number;
+  /** Fires when the user invokes the "Add Comment" keyboard shortcut inside
+   *  the section editor (Mod-Shift-m). */
+  onRequestAddComment?: () => void;
+  /** Fires when a comment badge inside the section editor is clicked, with
+   *  the absolute Y.Text offset. */
+  onCommentClick?: (absFrom: number) => void;
 }
 
 /**
@@ -38,7 +60,26 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
     }
     if (!opts.active || !mountRef.current || !optsRef.current.ytext) return;
 
-    const { ytext, sectionFrom, sectionTo, awareness } = optsRef.current;
+    const {
+      ytext,
+      sectionFrom,
+      sectionTo,
+      awareness,
+      enableCriticMarkup,
+      initialSuggestionMode,
+      commentBadgeMap,
+      yTextOffsetBase,
+    } = optsRef.current;
+
+    // Read latest callbacks at fire time so we don't capture stale references
+    // when the parent re-binds — the Facet captures the function at view
+    // construction, so direct passing of opts.onCommentClick would freeze.
+    const onRequestAddComment = () => {
+      optsRef.current.onRequestAddComment?.();
+    };
+    const onCommentClick = (absFrom: number) => {
+      optsRef.current.onCommentClick?.(absFrom);
+    };
 
     const view = createSectionEditorView({
       ytext: ytext!,
@@ -46,6 +87,12 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       sectionTo,
       awareness,
       parent: mountRef.current,
+      enableCriticMarkup,
+      initialSuggestionMode,
+      commentBadgeMap,
+      yTextOffsetBase,
+      onRequestAddComment,
+      onCommentClick,
     });
 
     viewRef.current = view;
@@ -56,7 +103,14 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts.active, opts.editKey]);
+  }, [opts.active, opts.editKey, opts.enableCriticMarkup, opts.initialSuggestionMode]);
 
-  return { mountRef };
+  useEffect(() => {
+    if (!opts.enableCriticMarkup || !viewRef.current) return;
+    viewRef.current.dispatch({
+      effects: setCommentBadgeMap.of(opts.commentBadgeMap ?? null),
+    });
+  }, [opts.enableCriticMarkup, opts.commentBadgeMap]);
+
+  return { mountRef, viewRef };
 }

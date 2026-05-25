@@ -24,6 +24,10 @@ export function checkProxyAccess(
   query: string,
   auth: ProxyAuthResult,
 ): { allowed: boolean; reason?: string } {
+  if (auth.payload.role === 'view' && method !== 'GET') {
+    return { allowed: false, reason: 'Write access required' };
+  }
+
   if (auth.isAllFolders) return { allowed: true };
 
   const folder = auth.payload.folder;
@@ -100,6 +104,10 @@ export function checkProxyAccessWithBody(
   body?: unknown,
   allowedFolderName?: string,
 ): { allowed: boolean; reason?: string } {
+  if (auth.payload.role === 'view' && method !== 'GET') {
+    return { allowed: false, reason: 'Write access required' };
+  }
+
   if (auth.isAllFolders) return { allowed: true };
 
   if (method === 'POST' && path === '/move') {

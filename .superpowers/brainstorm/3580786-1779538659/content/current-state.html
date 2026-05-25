@@ -1,0 +1,87 @@
+<h2>What we have today</h2>
+<p class="subtitle">Two unrelated comment UIs. Different layouts, different code paths, different bugs.</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">File editor — <code>CommentMargin</code> (floating cards)</div>
+    <div class="mockup-body">
+      <div style="display:flex;gap:8px;height:380px;font-size:11px">
+        <div style="flex:2;border:1px solid #d4d0c8;background:#fffdf6;padding:10px;overflow:hidden;line-height:1.6">
+          <div style="font-weight:600;margin-bottom:6px">main.md</div>
+          <div># Welcome to Lens</div>
+          <div>&nbsp;</div>
+          <div>Lens is a <span style="background:#fff3a8;border-bottom:2px solid #d4b800">collaborative editor</span> for…</div>
+          <div>&nbsp;</div>
+          <div>The system uses <span style="background:#fff3a8;border-bottom:2px solid #d4b800">CRDTs</span> to merge edits…</div>
+          <div>&nbsp;</div>
+          <div>Try opening this in <span style="background:#fff3a8;border-bottom:2px solid #d4b800">two tabs</span> to test sync.</div>
+        </div>
+        <div style="flex:1.3;position:relative">
+          <div style="position:absolute;top:28px;left:0;right:0;background:#fff;border:1px solid #e8e5df;border-radius:6px;padding:6px 8px;box-shadow:0 1px 3px rgba(0,0,0,0.06)">
+            <div style="font-size:10px;color:#888">Luc · 2d</div>
+            <div>nice phrasing here</div>
+          </div>
+          <div style="position:absolute;top:90px;left:0;right:0;background:#fff;border:1px solid #e8e5df;border-radius:6px;padding:6px 8px;box-shadow:0 1px 3px rgba(0,0,0,0.06)">
+            <div style="font-size:10px;color:#888">Bob · 2d</div>
+            <div>clarify what CRDT means?</div>
+            <div style="font-size:10px;color:#888;margin-top:4px">↳ Alice: linked it</div>
+          </div>
+          <div style="position:absolute;top:200px;left:0;right:0;background:#fff;border:2px solid #2563eb;border-radius:6px;padding:6px 8px;box-shadow:0 1px 3px rgba(0,0,0,0.06)">
+            <div style="font-size:10px;color:#2563eb;font-weight:600">Luc · 1d · FOCUSED</div>
+            <div>does this still work in offline mode?</div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:#a33;line-height:1.5">
+        <strong>Bugs:</strong> cards overlap on first paint • focus highlight jumps after edits • stale height cache after deletes • scroll sync drifts • can't edit/delete own comments
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Course editor — <code>EduCommentsSidebar</code> (right panel)</div>
+    <div class="mockup-body">
+      <div style="display:flex;gap:8px;height:380px;font-size:11px">
+        <div style="flex:0.6;border:1px solid #d4d0c8;background:#f7f5ef;padding:8px;line-height:1.7">
+          <div style="font-weight:600;margin-bottom:4px">Modules</div>
+          <div style="padding-left:6px">▸ Intro</div>
+          <div style="padding-left:6px;background:#e8e2d2;border-radius:3px;padding-top:2px;padding-bottom:2px">▾ Sync</div>
+          <div style="padding-left:18px;color:#555">CRDTs</div>
+          <div style="padding-left:18px;color:#555;background:#dcd4be;border-radius:3px">Offline</div>
+          <div style="padding-left:6px">▸ Auth</div>
+        </div>
+        <div style="flex:1.6;border:1px solid #d4d0c8;background:#fffdf6;padding:10px;line-height:1.6">
+          <div style="font-weight:600;margin-bottom:6px">Offline mode</div>
+          <div>Lens supports offline editing by…</div>
+          <div>&nbsp;</div>
+          <div>When the device reconnects…</div>
+        </div>
+        <div style="flex:1.2;border:1px solid #d4d0c8;background:#faf8f3;padding:8px">
+          <div style="display:flex;justify-content:space-between;font-weight:600;margin-bottom:6px">
+            <span>Comments</span>
+            <span style="color:#666">+ Add</span>
+          </div>
+          <div style="background:#fff;border:1px solid #e8e5df;border-radius:5px;padding:6px;margin-bottom:6px">
+            <div style="font-size:10px;color:#888">Luc · 2d</div>
+            <div>add diagram here</div>
+            <div style="border-left:2px solid #ddd;padding-left:6px;margin-top:4px;color:#555">
+              <div style="font-size:10px;color:#888">Bob · 2d</div>
+              <div>on it</div>
+            </div>
+          </div>
+          <div style="background:#fff;border:1px solid #e8e5df;border-radius:5px;padding:6px">
+            <div style="font-size:10px;color:#888">Alice · 1d</div>
+            <div>typo: recoonects</div>
+            <div style="margin-top:4px;font-size:10px;color:#2563eb">Reply · Edit · Delete</div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:#2a7;line-height:1.5">
+        <strong>Better:</strong> full CRUD • stable layout • clear thread visual • scroll-spy highlight<br>
+        <strong>But:</strong> no inline anchor visible in text · separate code path · only one panel mode
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:18px">Same underlying storage: CriticMarkup ranges in the Y.Text. Two completely different React trees rendering it.</p>

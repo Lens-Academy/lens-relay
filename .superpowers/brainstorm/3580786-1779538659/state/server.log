@@ -1,0 +1,4 @@
+{"type":"server-started","port":63675,"host":"0.0.0.0","url_host":"dev.vps","url":"http://dev.vps:63675","screen_dir":"/home/penguin/code/lens-relay/ws2/.superpowers/brainstorm/3580786-1779538659/content","state_dir":"/home/penguin/code/lens-relay/ws2/.superpowers/brainstorm/3580786-1779538659/state"}
+{"type":"screen-added","file":"/home/penguin/code/lens-relay/ws2/.superpowers/brainstorm/3580786-1779538659/content/current-state.html"}
+{"type":"screen-added","file":"/home/penguin/code/lens-relay/ws2/.superpowers/brainstorm/3580786-1779538659/content/anchor-options.html"}
+{"type":"server-stopped","reason":"idle timeout"}

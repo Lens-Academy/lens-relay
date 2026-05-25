@@ -2,6 +2,8 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
 import { EditorState, StateEffect } from '@codemirror/state';
+import { useYDoc } from '@y-sweet/react';
+import * as Y from 'yjs';
 import { criticMarkupField, suggestionModeField } from '../Editor/extensions/criticmarkup';
 import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
 import { SourceSuggestionBanner } from '../SourceSuggestionBanner/SourceSuggestionBanner';
@@ -15,7 +17,7 @@ import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
-import { CommentMargin } from '../CommentMargin';
+import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
@@ -24,7 +26,9 @@ import { useHasDiscussion } from '../DiscussionPanel/useHasDiscussion';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSidebar } from '../../contexts/SidebarContext';
+import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
+import { resolveAnchorYFromView, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
@@ -41,8 +45,41 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const { metadata, onNavigate, folderDocs } = useNavigation();
   const { canWrite, canEdit } = useAuth();
   const { manager, headerStage } = useSidebar();
+  const { displayName } = useDisplayName();
   const hasDiscussion = useHasDiscussion();
-  const [addCommentTrigger, setAddCommentTrigger] = useState(0);
+
+  // Y.Text for the document content (same field name used by Editor.tsx)
+  const ydoc = useYDoc();
+  const yText: Y.Text = useMemo(() => ydoc.getText('contents'), [ydoc]);
+
+  // Refs to the editor's scroll DOM and root, mirrored from editorView state.
+  // Assigned during render (not in a useEffect) so children mounted on the
+  // same commit see them populated — React commits children's effects before
+  // the parent's, and CommentsLayer's scroll-listener effect bails if these
+  // are null. Dev's StrictMode double-invoke previously masked this on the
+  // second run; production builds skip the second run, so the listener never
+  // attached. The values are deterministic from editorView state.
+  const scrollContainerRef = useRef<HTMLElement | null>(null);
+  const editorRootRef = useRef<HTMLElement | null>(null);
+  scrollContainerRef.current = editorView ? editorView.scrollDOM : null;
+  editorRootRef.current = editorView ? editorView.dom : null;
+
+  // Stable callbacks for CommentsLayer
+  const getViewportRect = useCallback(() => {
+    if (!editorView) return { top: 0, height: 0 };
+    const rect = editorView.scrollDOM.getBoundingClientRect();
+    return { top: rect.top, height: rect.height };
+  }, [editorView]);
+
+  const resolveAnchorY = useCallback((offset: number) => {
+    if (editorView) {
+      const cm = resolveAnchorYFromView(editorView, offset);
+      if (cm != null) return cm;
+    }
+    const root = editorRootRef.current;
+    return root ? resolveAnchorYFromDOM(root as HTMLElement, offset) : null;
+  }, [editorView]);
+
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
   const [isSuggestionMode, setIsSuggestionMode] = useState(false);
@@ -82,10 +119,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   // Callback for Y.Doc sync completion
   const handleSynced = useCallback(() => setSynced(true), []);
 
-  // Callback for "Add Comment" from editor context menu
+  const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
   const handleRequestAddComment = useCallback(() => {
     manager.expand('comment-margin');
-    setAddCommentTrigger(v => v + 1);
+    commentsLayerRef.current?.openAddForm();
   }, [manager.expand]);
 
   // Track suggestion mode from editor state
@@ -113,13 +150,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     });
   }, [editorView, isSourceMode, isSuggestionMode]);
 
-  // Open comment margin when a comment badge is clicked
-  useEffect(() => {
-    if (!editorView) return;
-    const handler = () => manager.expand('comment-margin');
-    editorView.dom.addEventListener('comment-badge-focus', handler);
-    return () => editorView.dom.removeEventListener('comment-badge-focus', handler);
-  }, [editorView, manager.expand]);
+  const handleCommentClick = useCallback((absFrom: number) => {
+    manager.expand('comment-margin');
+    commentsLayerRef.current?.focusThread(absFrom);
+  }, [manager.expand]);
 
   // Auto-collapse comment margin on notes without comments (after initial Y.Doc sync)
   const initialCommentCheckRef = useRef(false);
@@ -260,6 +294,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onSynced={handleSynced}
               onNavigate={onNavigate}
               onRequestAddComment={handleRequestAddComment}
+              onCommentClick={handleCommentClick}
               metadata={metadata}
               currentFilePath={currentFilePath}
               getFolderDoc={getFolderDoc}
@@ -276,14 +311,19 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         />
         <div
           id="comment-margin"
-          className={`overflow-hidden flex-shrink-0 ${commentMarginCollapsed ? '' : 'border-l border-gray-100 bg-gray-50/50'}`}
-          style={{ width: commentMarginCollapsed ? 0 : manager.getWidth('comment-margin') }}
+          className={`overflow-hidden flex-shrink-0 relative ${commentMarginCollapsed ? '' : 'border-l border-gray-100 bg-gray-50/50'}`}
+          style={{ width: commentMarginCollapsed ? 0 : Math.max(320, manager.getWidth('comment-margin')) }}
         >
           {editorView && (
-            <CommentMargin
-              view={editorView}
-              stateVersion={stateVersion}
-              addCommentTrigger={addCommentTrigger}
+            <CommentsLayer
+              ref={commentsLayerRef}
+              yText={yText}
+              resolveAnchorY={resolveAnchorY}
+              getViewportRect={getViewportRect}
+              scrollContainerRef={scrollContainerRef}
+              editorRootRef={editorRootRef}
+              currentUserName={displayName ?? 'anonymous'}
+              getInsertCursorPos={() => editorView.state.selection.main.head}
             />
           )}
         </div>

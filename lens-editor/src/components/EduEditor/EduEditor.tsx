@@ -1,12 +1,46 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import * as Y from 'yjs';
 import { useDocConnection } from '../../hooks/useDocConnection';
 import { useNavigation } from '../../contexts/NavigationContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { useDisplayName } from '../../contexts/DisplayNameContext';
+import { useHeaderCommentsControl } from '../../contexts/HeaderActionsContext';
+import { useSidebar } from '../../contexts/SidebarContext';
 import { parseSections } from '../SectionEditor/parseSections';
 import type { Section } from '../SectionEditor/parseSections';
 import { ModuleTreeEditor } from './ModuleTreeEditor';
 import { ContentPanel, type ContentScope } from './ContentPanel';
 import { CourseOverview } from './CourseOverview';
 import { RELAY_ID } from '../../lib/constants';
+import { SuggestionModeControl } from '../SuggestionModeToggle/SuggestionModeControl';
+import { OverflowMenu } from '../OverflowMenu';
+import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
+import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
+import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
+import { resolveAnchorYFromSectionViews, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
+import type { SectionViewEntry } from '../../lib/anchor-resolver';
+
+const SUGGESTION_MODE_KEY = 'edu-editor:suggestion-mode';
+const COMMENTS_VISIBLE_KEY = 'edu-editor:comments-visible';
+
+function readBoolFromLocalStorage(key: string, defaultValue: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return defaultValue;
+    return raw === 'true';
+  } catch {
+    return defaultValue;
+  }
+}
+
+function writeBoolToLocalStorage(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    // localStorage unavailable (private mode etc.) — silent fallback.
+  }
+}
 
 interface EduEditorProps {
   moduleDocId: string;
@@ -16,6 +50,20 @@ interface EduEditorProps {
 export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const { getOrConnect, disconnectAll } = useDocConnection();
   const { metadata } = useNavigation();
+  const { canWrite } = useAuth();
+  const { displayName } = useDisplayName();
+  const { headerStage } = useSidebar();
+
+  // Comment authorship — the markdown editor's AwarenessInitializer sets
+  // currentAuthor from the displayName, but it only mounts inside the
+  // /:docUuid/* route. EduEditor lives in a different route, so we have to
+  // wire the same setter ourselves; otherwise comments authored here are
+  // attributed to the default 'anonymous'.
+  useEffect(() => {
+    if (displayName) {
+      setCurrentAuthor(displayName);
+    }
+  }, [displayName]);
   const [docSections, setDocSections] = useState<Section[]>([]);
   const [synced, setSynced] = useState(false);
   const [scope, setScope] = useState<ContentScope | null>(null);
@@ -25,6 +73,115 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const [selectedModuleName, setSelectedModuleName] = useState('');
   const [selectedModuleSections, setSelectedModuleSections] = useState<Section[]>([]);
   const [selectedModuleSynced, setSelectedModuleSynced] = useState(false);
+
+  // Suggestion-mode and comments-layer visibility, persisted across refreshes.
+  const [isSuggestionMode, setIsSuggestionMode] = useState(() =>
+    readBoolFromLocalStorage(SUGGESTION_MODE_KEY, false)
+  );
+  const [commentsVisible, setCommentsVisible] = useState(() =>
+    readBoolFromLocalStorage(COMMENTS_VISIBLE_KEY, false)
+  );
+  // Ref to the main content scroll container; ContentPanel needs it as the
+  // IntersectionObserver's root.
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  // The content panel's wrapper div — CommentsLayer uses it as editorRootRef
+  // to toggle [data-comment-focused] on markers inside it.
+  const contentPanelWrapperRef = useRef<HTMLDivElement | null>(null);
+
+  // Active Y.Text for the currently selected doc (set by ContentPanel via
+  // onYTextChange callback). CommentsLayer subscribes to this directly.
+  const [activeYText, setActiveYText] = useState<Y.Text | null>(null);
+
+  // Currently mounted section editor view. ContentPanel reports it via
+  // onSectionViewChange so CommentsLayer can resolve comment anchor positions
+  // using the multi-view resolver.
+  const sectionViewsRef = useRef<SectionViewEntry[]>([]);
+
+  const handleSuggestionModeChange = useCallback((next: boolean) => {
+    setIsSuggestionMode(next);
+    writeBoolToLocalStorage(SUGGESTION_MODE_KEY, next);
+  }, []);
+
+  const handleCommentsToggle = useCallback(() => {
+    setCommentsVisible(prev => {
+      const next = !prev;
+      writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, next);
+      return next;
+    });
+  }, []);
+
+  const commentsControl = useMemo(() => ({
+    isOpen: commentsVisible,
+    onToggle: handleCommentsToggle,
+    title: commentsVisible ? 'Hide comments' : 'Show comments',
+  }), [commentsVisible, handleCommentsToggle]);
+
+  useHeaderCommentsControl(commentsControl);
+
+  const ensureCommentsVisible = useCallback(() => {
+    if (!commentsVisible) {
+      setCommentsVisible(true);
+      writeBoolToLocalStorage(COMMENTS_VISIBLE_KEY, true);
+    }
+  }, [commentsVisible]);
+
+  const handleClickCriticRange = useCallback((range: CriticMarkupRange) => {
+    if (range.type !== 'comment') return;
+    ensureCommentsVisible();
+  }, [ensureCommentsVisible]);
+
+  const commentsLayerRef = useRef<CommentsLayerHandle | null>(null);
+
+  // Absolute insertion position pushed up by the active section editor via
+  // ContentPanel's onCommentInsertPosChange. Tracked in a ref so reading it
+  // from getInsertCursorPos doesn't require re-rendering on every cursor move.
+  const commentInsertPosRef = useRef<number | null>(null);
+  const handleCommentInsertPosChange = useCallback((pos: number | null) => {
+    commentInsertPosRef.current = pos;
+  }, []);
+
+  // openAddForm runs only after the sidebar is visible AND the CommentsLayer
+  // ref is attached. handleRequestAddComment may run while the sidebar is
+  // still hidden (first render after ensureCommentsVisible flips state), so
+  // we defer to an effect.
+  const [pendingOpenAddForm, setPendingOpenAddForm] = useState(false);
+  const handleRequestAddComment = useCallback(() => {
+    ensureCommentsVisible();
+    setPendingOpenAddForm(true);
+  }, [ensureCommentsVisible]);
+  useEffect(() => {
+    if (!pendingOpenAddForm) return;
+    if (!commentsLayerRef.current) return;
+    commentsLayerRef.current.openAddForm();
+    setPendingOpenAddForm(false);
+  }, [pendingOpenAddForm, commentsVisible, activeYText]);
+
+  const handleCommentClick = useCallback((absFrom: number) => {
+    ensureCommentsVisible();
+    commentsLayerRef.current?.focusThread(absFrom);
+  }, [ensureCommentsVisible]);
+
+  const handleYTextChange = useCallback((ytext: Y.Text | null) => {
+    setActiveYText(ytext);
+  }, []);
+
+  const handleSectionViewChange = useCallback((entry: SectionViewEntry | null) => {
+    sectionViewsRef.current = entry ? [entry] : [];
+  }, []);
+
+  // Try CM section views first (edit mode); fall back to DOM scanning for
+  // read-mode sections where no CM view is mounted.
+  const resolveAnchorY = useCallback((offset: number) => {
+    const cm = resolveAnchorYFromSectionViews(sectionViewsRef.current, offset);
+    if (cm != null) return cm;
+    const root = contentPanelWrapperRef.current;
+    return root ? resolveAnchorYFromDOM(root, offset) : null;
+  }, []);
+
+  const getViewportRect = useCallback(() => {
+    const rect = contentScrollRef.current?.getBoundingClientRect();
+    return rect ? { top: rect.top, height: rect.height } : { top: 0, height: 0 };
+  }, []);
 
   const isCourseMode = docSections.some(s => s.type === 'module-ref');
 
@@ -134,59 +291,134 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const moduleTreePath = isCourseMode ? selectedModulePath : (sourcePath ?? '');
   const moduleTreeDocId = isCourseMode ? (selectedModuleDocId ?? undefined) : moduleDocId;
 
-  return (
-    <div className="h-full flex">
-      <div className="w-[420px] min-w-[420px] border-r-2 border-gray-200 bg-[#fbfaf7] overflow-y-auto p-4">
-        {isCourseMode ? (
-          <>
-            <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-3 pb-2 border-b border-gray-200">
-              Course
-            </div>
-            <CourseOverview
-              courseSections={docSections}
-              coursePath={sourcePath ?? ''}
-              metadata={metadata}
-              selectedModuleDocId={selectedModuleDocId}
-              onSelectModule={handleSelectModule}
-            />
-            {selectedModuleDocId && (
-              <>
-                <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mt-4 mb-3 pt-3 pb-2 border-t border-b border-gray-200">
-                  {selectedModuleName}
-                </div>
-                {selectedModuleSynced ? (
-                  <ModuleTreeEditor
-                    moduleSections={moduleTreeSections}
-                    modulePath={moduleTreePath}
-                    moduleDocId={moduleTreeDocId}
-                    activeSelection={activeSelection}
-                    onSelect={handleSelect}
-                  />
-                ) : (
-                  <div className="text-xs text-gray-400 italic py-2">Loading module...</div>
-                )}
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-3 pb-2 border-b border-gray-200">
-              {sourcePath?.split('/').pop()?.replace(/\.md$/, '') ?? 'Module'}
-            </div>
-            <ModuleTreeEditor
-              moduleSections={moduleTreeSections}
-              modulePath={moduleTreePath}
-              moduleDocId={moduleTreeDocId}
-              activeSelection={activeSelection}
-              onSelect={handleSelect}
-            />
-          </>
-        )}
-      </div>
+  // The criticmarkup feature is gated on the user being able to edit-or-suggest
+  // (edit + suggest roles). View-only users can still see existing markup if
+  // it's in the source, but the toggle is locked.
+  // Enable for edit AND suggest roles — suggest users need the criticmarkup
+  // extension so comments and inline `{++ ++}` / `{-- --}` suggestions render
+  // as widgets, not raw markup. (Previously gated on canEdit which excluded
+  // suggest-role entirely.)
+  const criticMarkupEnabled = canWrite;
 
-      <div className="flex-1 overflow-y-auto" style={{ background: '#faf8f3' }}>
-        <div className="max-w-[720px] mx-auto py-8 px-10 h-full">
-          <ContentPanel scope={scope} />
+  const portalTarget = typeof document === 'undefined'
+    ? null
+    : document.getElementById('header-controls');
+
+  return (
+    <div className="h-full flex flex-col">
+      {portalTarget && createPortal(
+        headerStage === 'overflow' ? (
+          <OverflowMenu>
+            <SuggestionModeControl
+              isSuggestionMode={isSuggestionMode}
+              onChange={handleSuggestionModeChange}
+              iconOnly
+            />
+          </OverflowMenu>
+        ) : (
+          <SuggestionModeControl
+            isSuggestionMode={isSuggestionMode}
+            onChange={handleSuggestionModeChange}
+            iconOnly={headerStage !== 'full'}
+          />
+        ),
+        portalTarget
+      )}
+      <div className="flex-1 flex overflow-hidden">
+        <div className="w-[420px] min-w-[420px] border-r-2 border-gray-200 bg-[#fbfaf7] overflow-y-auto p-4">
+          {isCourseMode ? (
+            <>
+              <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-3 pb-2 border-b border-gray-200">
+                Course
+              </div>
+              <CourseOverview
+                courseSections={docSections}
+                coursePath={sourcePath ?? ''}
+                metadata={metadata}
+                selectedModuleDocId={selectedModuleDocId}
+                onSelectModule={handleSelectModule}
+              />
+              {selectedModuleDocId && (
+                <>
+                  <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mt-4 mb-3 pt-3 pb-2 border-t border-b border-gray-200">
+                    {selectedModuleName}
+                  </div>
+                  {selectedModuleSynced ? (
+                    <ModuleTreeEditor
+                      moduleSections={moduleTreeSections}
+                      modulePath={moduleTreePath}
+                      moduleDocId={moduleTreeDocId}
+                      activeSelection={activeSelection}
+                      onSelect={handleSelect}
+                    />
+                  ) : (
+                    <div className="text-xs text-gray-400 italic py-2">Loading module...</div>
+                  )}
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="text-[11px] uppercase tracking-wider text-gray-500 font-semibold mb-3 pb-2 border-b border-gray-200">
+                {sourcePath?.split('/').pop()?.replace(/\.md$/, '') ?? 'Module'}
+              </div>
+              <ModuleTreeEditor
+                moduleSections={moduleTreeSections}
+                modulePath={moduleTreePath}
+                moduleDocId={moduleTreeDocId}
+                activeSelection={activeSelection}
+                onSelect={handleSelect}
+              />
+            </>
+          )}
+        </div>
+
+        {/* Content + comments. Sub-flex so the comments column sits beside the
+            content rather than overlaying it. The content scroll container
+            owns vertical scrolling; CommentsLayer listens to its scroll events
+            but lives in a sibling div so it doesn't cover the prose. */}
+        <div className="flex-1 flex overflow-hidden">
+          <div
+            ref={contentScrollRef}
+            className="flex-1 overflow-y-auto"
+            style={{ background: '#faf8f3' }}
+          >
+            <div
+              ref={contentPanelWrapperRef}
+              className="max-w-[720px] mx-auto py-8 px-10 h-full"
+            >
+              <ContentPanel
+                scope={scope}
+                criticMarkupEnabled={criticMarkupEnabled}
+                suggestionMode={isSuggestionMode}
+                onClickCriticRange={handleClickCriticRange}
+                onCommentClick={handleCommentClick}
+                onRequestAddComment={handleRequestAddComment}
+                onCommentInsertPosChange={handleCommentInsertPosChange}
+                scrollRootRef={contentScrollRef}
+                onYTextChange={handleYTextChange}
+                onSectionViewChange={handleSectionViewChange}
+              />
+            </div>
+          </div>
+
+          {commentsVisible && activeYText && (
+            <div
+              className="w-[320px] shrink-0 relative border-l border-gray-200"
+              style={{ background: '#faf8f3' }}
+            >
+              <CommentsLayer
+                ref={commentsLayerRef}
+                yText={activeYText}
+                resolveAnchorY={resolveAnchorY}
+                getViewportRect={getViewportRect}
+                scrollContainerRef={contentScrollRef}
+                editorRootRef={contentPanelWrapperRef}
+                currentUserName={displayName ?? ''}
+                getInsertCursorPos={() => commentInsertPosRef.current}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

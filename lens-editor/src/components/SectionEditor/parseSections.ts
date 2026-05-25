@@ -158,7 +158,8 @@ function classifyHeader(title: string, level: number): string {
 }
 
 function stripCriticMarkup(text: string): string {
-  let result = text.replace(/\{--[\s\S]*?--\}/g, '');
+  let result = text.replace(/\{>>[\s\S]*?<<\}/g, '');
+  result = result.replace(/\{--[\s\S]*?--\}/g, '');
   result = result.replace(/\{\+\+([\s\S]*?)\+\+\}/g, '$1');
   result = result.replace(/^.*?@@/, '');
   return result.trim() || text;

@@ -21,11 +21,15 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
         return create_blob_file(server, file_path, content).await;
     }
 
+    if file_path.ends_with(".html") {
+        return create_html_file(server, file_path, content).await;
+    }
+
     // --- Markdown path (existing behavior) ---
     super::critic_markup::reject_if_contains_markup(content, "content")?;
 
     if !file_path.ends_with(".md") {
-        return Err("file_path must end with '.md' or '.json'".to_string());
+        return Err("file_path must end with one of: .md, .html, .json".to_string());
     }
 
     let md_content = if content.is_empty() { "_" } else { content };
@@ -40,6 +44,25 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
 
     let _result = server
         .create_document(folder_name, &in_folder_path, md_content)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(format!("Created {}", file_path))
+}
+
+async fn create_html_file(
+    server: &Arc<Server>,
+    file_path: &str,
+    content: &str,
+) -> Result<String, String> {
+    let slash_pos = file_path
+        .find('/')
+        .ok_or_else(|| "file_path must include a folder name".to_string())?;
+    let folder_name = &file_path[..slash_pos];
+    let in_folder_path = format!("/{}", &file_path[slash_pos + 1..]);
+
+    server
+        .create_document_direct(folder_name, &in_folder_path, content)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -129,6 +152,87 @@ mod tests {
             }),
         )
         .await;
-        assert!(result.is_ok(), "MD create should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "MD create should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_html_uses_direct_path() {
+        use y_sweet_core::link_indexer::extract_type_from_filemeta_entry;
+        use yrs::{GetString, Map, ReadTxn, Transact};
+
+        let server = build_blob_test_server_with_folder().await;
+        let result = execute(
+            &server,
+            &json!({
+                "file_path": "Lens/page.html",
+                "content": "<h1>Hello</h1>",
+            }),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "HTML create should succeed: {:?}",
+            result.err()
+        );
+        assert!(result.unwrap().contains("Created Lens/page.html"));
+
+        let doc_info = server
+            .doc_resolver()
+            .resolve_path("Lens/page.html")
+            .expect("path should resolve");
+        assert_eq!(doc_info.hash, None, "HTML should not be stored as a blob");
+
+        let content_doc = server
+            .docs()
+            .get(&doc_info.doc_id)
+            .expect("content doc should be loaded");
+        let awareness = content_doc.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        let text = txn
+            .get_text("contents")
+            .expect("contents text should exist");
+        assert_eq!(text.get_string(&txn), "<h1>Hello</h1>");
+
+        let folder_doc = server
+            .docs()
+            .get(&doc_info.folder_doc_id)
+            .expect("folder doc should be loaded");
+        let awareness = folder_doc.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        let filemeta = txn
+            .get_map("filemeta_v0")
+            .expect("filemeta_v0 should exist");
+        let entry = filemeta
+            .get(&txn, "/page.html")
+            .expect("HTML filemeta entry should exist");
+        let entry_type = extract_type_from_filemeta_entry(&entry, &txn);
+        assert_eq!(entry_type.as_deref(), Some("file"));
+    }
+
+    #[tokio::test]
+    async fn create_unsupported_extension_rejected() {
+        let server = build_blob_test_server_with_folder().await;
+        let result = execute(
+            &server,
+            &json!({
+                "file_path": "Lens/page.xyz",
+                "content": "Hello world",
+            }),
+        )
+        .await;
+
+        let error = result.expect_err("unsupported extension should be rejected");
+        assert!(
+            error.contains(".html"),
+            "error should mention .html: {error}"
+        );
+        assert!(error.contains(".md"), "error should mention .md: {error}");
     }
 }

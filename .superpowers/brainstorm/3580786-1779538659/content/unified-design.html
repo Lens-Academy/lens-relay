@@ -1,0 +1,91 @@
+<h2>Unified comments — same UI in both editors</h2>
+<p class="subtitle">Margin cards scroll-locked to the prose. Numbered badge marks each anchor inline. One shared component, one focus state.</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">File editor</div>
+    <div class="mockup-body">
+      <div style="display:flex;gap:0;height:400px;font-size:11px;background:#fffdf6">
+        <div style="flex:0.15;border-right:1px solid #eee;color:#bbb;text-align:right;padding:10px 4px;font-family:monospace;line-height:1.7">
+          1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11<br>12
+        </div>
+        <div style="flex:2;padding:10px;line-height:1.7;font-family:Georgia,serif">
+          <div style="font-weight:600">Welcome to Lens</div>
+          <div>&nbsp;</div>
+          <div>Lens is a collaborative editor<sup style="background:#fff3a8;color:#7a5a00;padding:0 4px;border-radius:8px;font-size:9px;font-family:sans-serif">¹</sup> for…</div>
+          <div>&nbsp;</div>
+          <div>The system uses CRDTs<sup style="background:#fff3a8;color:#7a5a00;padding:0 4px;border-radius:8px;font-size:9px;font-family:sans-serif">²</sup> to merge edits</div>
+          <div>safely across devices.</div>
+          <div>&nbsp;</div>
+          <div>Try opening this in two tabs<sup style="background:#2563eb;color:#fff;padding:0 4px;border-radius:8px;font-size:9px;font-family:sans-serif">³</sup> to test sync.</div>
+        </div>
+        <div style="flex:1.5;position:relative;background:#f7f5ef;border-left:1px solid #e8e2d2">
+          <div style="position:absolute;top:6px;left:6px;right:6px;display:flex;gap:4px;font-size:10px">
+            <span style="background:#fff;border:1px solid #d4d0c8;border-radius:10px;padding:1px 8px;font-weight:600">All</span>
+            <span style="color:#888;padding:1px 8px">Mine</span>
+          </div>
+          <div style="position:absolute;top:60px;left:6px;right:6px;background:#fff;border:1px solid #e8e5df;border-radius:5px;padding:6px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+            <div style="font-size:10px;color:#888">Luc · 2d</div>
+            <div>nice phrasing</div>
+          </div>
+          <div style="position:absolute;top:130px;left:6px;right:6px;background:#fff;border:1px solid #e8e5df;border-radius:5px;padding:6px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+            <div style="font-size:10px;color:#888">Bob · 2d</div>
+            <div>clarify CRDT?</div>
+            <div style="border-left:2px solid #ddd;padding-left:6px;margin-top:4px;font-size:10px;color:#555">
+              <div style="color:#888">Alice · 2d</div>
+              <div>linked it</div>
+            </div>
+          </div>
+          <div style="position:absolute;top:240px;left:6px;right:6px;background:#fff;border:2px solid #2563eb;border-radius:5px;padding:6px 8px;box-shadow:0 2px 6px rgba(37,99,235,0.15)">
+            <div style="font-size:10px;color:#2563eb;font-weight:600">Luc · 1d</div>
+            <div>offline mode?</div>
+            <div style="display:flex;gap:6px;margin-top:4px;font-size:10px;color:#2563eb">
+              <span>Reply</span><span>Edit</span><span>Delete</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">Course editor (viewing one LO)</div>
+    <div class="mockup-body">
+      <div style="display:flex;gap:0;height:400px;font-size:11px">
+        <div style="flex:0.7;background:#f7f5ef;border-right:1px solid #e8e2d2;padding:8px;line-height:1.7">
+          <div style="font-weight:600;margin-bottom:4px">Modules</div>
+          <div>▸ Intro</div>
+          <div>▾ Sync</div>
+          <div style="padding-left:14px;color:#555">CRDTs</div>
+          <div style="padding-left:14px;background:#e8e2d2;border-radius:3px">Offline</div>
+          <div>▸ Auth</div>
+        </div>
+        <div style="flex:2;padding:10px;line-height:1.7;font-family:Georgia,serif;background:#fffdf6">
+          <div style="font-weight:600">Offline mode</div>
+          <div>&nbsp;</div>
+          <div>Lens supports offline editing<sup style="background:#fff3a8;color:#7a5a00;padding:0 4px;border-radius:8px;font-size:9px;font-family:sans-serif">¹</sup></div>
+          <div>by buffering local writes until</div>
+          <div>the device reconnects<sup style="background:#2563eb;color:#fff;padding:0 4px;border-radius:8px;font-size:9px;font-family:sans-serif">²</sup>.</div>
+          <div>&nbsp;</div>
+          <div>Conflicts resolve via CRDT merge.</div>
+        </div>
+        <div style="flex:1.5;position:relative;background:#f7f5ef;border-left:1px solid #e8e2d2">
+          <div style="position:absolute;top:6px;left:6px;right:6px;display:flex;gap:4px;font-size:10px">
+            <span style="background:#fff;border:1px solid #d4d0c8;border-radius:10px;padding:1px 8px;font-weight:600">All</span>
+            <span style="color:#888;padding:1px 8px">Mine</span>
+          </div>
+          <div style="position:absolute;top:90px;left:6px;right:6px;background:#fff;border:1px solid #e8e5df;border-radius:5px;padding:6px 8px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
+            <div style="font-size:10px;color:#888">Bob · 1d</div>
+            <div>clarify "buffering"</div>
+          </div>
+          <div style="position:absolute;top:170px;left:6px;right:6px;background:#fff;border:2px solid #2563eb;border-radius:5px;padding:6px 8px;box-shadow:0 2px 6px rgba(37,99,235,0.15)">
+            <div style="font-size:10px;color:#2563eb;font-weight:600">Alice · 1d</div>
+            <div>what about partial sync?</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:14px">Same React component on the right of both. Cards target the y-coordinate of their anchor's badge; stack downward when they collide. Focused card highlighted blue; its badge gets the same colour.</p>

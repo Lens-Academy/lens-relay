@@ -140,7 +140,11 @@ mod tests {
     use super::*;
 
     fn default_access() -> McpAccess {
-        McpAccess { writable: true, folder_uuid: None, folder_name: None }
+        McpAccess {
+            writable: true,
+            folder_uuid: None,
+            folder_name: None,
+        }
     }
 
     #[test]
