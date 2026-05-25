@@ -44,7 +44,7 @@ import { RELAY_ID, PANEL_CONFIG } from '../../App';
 export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
-  const { metadata, onNavigate } = useNavigation();
+  const { metadata, onNavigate, folderDocs } = useNavigation();
   const { canWrite, canEdit } = useAuth();
   const { manager, headerStage } = useSidebar();
   const { displayName } = useDisplayName();
@@ -98,6 +98,19 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const uuid = currentDocId.slice(RELAY_ID.length + 1);
     return findPathByUuid(uuid, metadata) ?? undefined;
   }, [currentDocId, metadata]);
+
+  // Stable refs for upload getters (avoids stale closures in imagePasteExtension)
+  const folderDocsRef = useRef<Map<string, import('yjs').Doc>>(new Map());
+  folderDocsRef.current = folderDocs;
+  const currentFilePathForUploadRef = useRef<string | undefined>(undefined);
+  currentFilePathForUploadRef.current = currentFilePath;
+
+  const getFolderDoc = useCallback(() => {
+    const fp = currentFilePathForUploadRef.current;
+    if (!fp) return null;
+    const folderName = fp.split('/').filter(Boolean)[0];
+    return folderName ? (folderDocsRef.current.get(folderName) ?? null) : null;
+  }, []);
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -292,6 +305,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onCommentClick={handleCommentClick}
               metadata={metadata}
               currentFilePath={currentFilePath}
+              getFolderDoc={getFolderDoc}
             />
           </div>
         </div>

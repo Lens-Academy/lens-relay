@@ -62,11 +62,7 @@ pub async fn handle_mcp_post(
     handle_mcp_post_inner(server, access, body).await
 }
 
-async fn handle_mcp_post_inner(
-    server: Arc<Server>,
-    access: McpAccess,
-    body: String,
-) -> Response {
+async fn handle_mcp_post_inner(server: Arc<Server>, access: McpAccess, body: String) -> Response {
     // Parse JSON body
     let value: Value = match serde_json::from_str(&body) {
         Ok(v) => v,

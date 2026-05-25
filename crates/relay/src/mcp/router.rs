@@ -136,7 +136,11 @@ mod tests {
     use serde_json::json;
 
     fn default_access() -> McpAccess {
-        McpAccess { writable: true, folder_uuid: None, folder_name: None }
+        McpAccess {
+            writable: true,
+            folder_uuid: None,
+            folder_name: None,
+        }
     }
 
     fn make_request(id: Value, method: &str, params: Option<Value>) -> JsonRpcRequest {
@@ -486,7 +490,10 @@ mod tests {
         );
 
         let edit_resp = dispatch_request(&server, &edit_req, &default_access()).await;
-        assert!(edit_resp.error.is_none(), "edit should succeed at protocol level");
+        assert!(
+            edit_resp.error.is_none(),
+            "edit should succeed at protocol level"
+        );
 
         let edit_result = edit_resp.result.unwrap();
         assert_eq!(
@@ -579,7 +586,9 @@ mod tests {
         let req = make_request(
             json!(51),
             "tools/call",
-            Some(json!({"name": "read", "arguments": {"file_path": "Lens/Test.md", "session_id": &sid}})),
+            Some(
+                json!({"name": "read", "arguments": {"file_path": "Lens/Test.md", "session_id": &sid}}),
+            ),
         );
         let resp = dispatch_request(&server, &req, &scoped_access).await;
         let result = resp.result.unwrap();
@@ -623,7 +632,9 @@ mod tests {
 
         // Allocate one, then evict everything via cleanup.
         let stale_sid = server.mcp_sessions.create_session(default_access());
-        server.mcp_sessions.cleanup_stale(std::time::Duration::from_secs(0));
+        server
+            .mcp_sessions
+            .cleanup_stale(std::time::Duration::from_secs(0));
         assert!(server.mcp_sessions.get_session(&stale_sid).is_none());
 
         // Calling the tool yields a brand new id.

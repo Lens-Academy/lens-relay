@@ -65,12 +65,12 @@ vi.mock('../Editor/extensions/harper', () => ({
 }));
 
 beforeAll(() => {
-  if (!(globalThis as any).ResizeObserver) {
-    (globalThis as any).ResizeObserver = class {
+  if (!globalThis.ResizeObserver) {
+    globalThis.ResizeObserver = class {
       observe() {}
       unobserve() {}
       disconnect() {}
-    };
+    } as unknown as typeof ResizeObserver;
   }
 });
 

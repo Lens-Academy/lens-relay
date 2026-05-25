@@ -11,11 +11,11 @@ describe('writeFileMeta', () => {
 
     writeFileMeta(folder, '/page.html', 'uuid-html-1', 'file');
 
-    const entry = filemeta.get('/page.html') as any;
+    const entry = filemeta.get('/page.html') as { type: string; id: string; version: number } | undefined;
     expect(entry).toBeDefined();
-    expect(entry.type).toBe('file');
-    expect(entry.id).toBe('uuid-html-1');
-    expect(entry.version).toBe(0);
+    expect(entry!.type).toBe('file');
+    expect(entry!.id).toBe('uuid-html-1');
+    expect(entry!.version).toBe(0);
     expect(legacyDocs.has('/page.html')).toBe(false);
   });
 
@@ -27,10 +27,10 @@ describe('writeFileMeta', () => {
 
     writeFileMeta(folder, '/page.html', 'uuid-html-1', 'file');
 
-    const entry = filemeta.get('/page.html') as any;
+    const entry = filemeta.get('/page.html') as { type: string; id: string; version: number } | undefined;
     expect(entry).toBeDefined();
-    expect(entry.type).toBe('file');
-    expect(entry.id).toBe('uuid-html-1');
+    expect(entry!.type).toBe('file');
+    expect(entry!.id).toBe('uuid-html-1');
     expect(legacyDocs.has('/page.html')).toBe(false);
   });
 
@@ -41,10 +41,10 @@ describe('writeFileMeta', () => {
 
     writeFileMeta(folder, '/note.md', 'uuid-md-1', 'markdown');
 
-    const entry = filemeta.get('/note.md') as any;
+    const entry = filemeta.get('/note.md') as { type: string; id: string; version: number } | undefined;
     expect(entry).toBeDefined();
-    expect(entry.type).toBe('markdown');
-    expect(entry.id).toBe('uuid-md-1');
+    expect(entry!.type).toBe('markdown');
+    expect(entry!.id).toBe('uuid-md-1');
     expect(legacyDocs.get('/note.md')).toBe('uuid-md-1');
   });
 
@@ -55,7 +55,7 @@ describe('writeFileMeta', () => {
 
     writeFileMeta(folder, '/board.canvas', 'uuid-canvas-1', 'canvas');
 
-    const entry = filemeta.get('/board.canvas') as any;
+    const entry = filemeta.get('/board.canvas') as { type: string; id: string; version: number } | undefined;
     expect(entry?.type).toBe('canvas');
     expect(legacyDocs.has('/board.canvas')).toBe(false);
   });

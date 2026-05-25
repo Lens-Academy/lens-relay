@@ -1578,7 +1578,10 @@ impl LinkIndexer {
             }
         }
 
-        if doc_path.as_deref().is_some_and(|path| path.ends_with(".html")) {
+        if doc_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(".html"))
+        {
             // v1 wikilink extraction is Markdown-oriented; HTML can contain false
             // positives in attributes, scripts, and styles.
             let empty_targets = HashSet::new();
@@ -4833,11 +4836,7 @@ mod tests {
             filemeta.insert(&mut txn, "/extra.md", Any::Map(extra_entry.into()));
 
             let backlinks = txn.get_or_insert_map("backlinks_v0");
-            backlinks.insert(
-                &mut txn,
-                notes_uuid,
-                vec![Any::String(html_uuid.into())],
-            );
+            backlinks.insert(&mut txn, notes_uuid, vec![Any::String(html_uuid.into())]);
         }
         docs.insert(folder_id.clone(), folder);
 

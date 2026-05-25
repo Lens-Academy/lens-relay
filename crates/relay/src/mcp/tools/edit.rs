@@ -54,10 +54,7 @@ fn find_old_string_in_accepted<'a>(
     file_path: &str,
 ) -> Result<(usize, String), String> {
     // Try exact match first
-    let exact: Vec<usize> = accepted
-        .match_indices(old_string)
-        .map(|(i, _)| i)
-        .collect();
+    let exact: Vec<usize> = accepted.match_indices(old_string).map(|(i, _)| i).collect();
 
     match exact.len() {
         1 => return Ok((exact[0], old_string.to_string())),
@@ -96,8 +93,7 @@ fn find_old_string_in_accepted<'a>(
         1 => {
             // Map normalized byte offsets back to original accepted string
             let orig_start = map_norm_offset_to_original(accepted, norm_matches[0]);
-            let orig_end =
-                map_norm_offset_to_original(accepted, norm_matches[0] + norm_old.len());
+            let orig_end = map_norm_offset_to_original(accepted, norm_matches[0] + norm_old.len());
             let actual_text = accepted[orig_start..orig_end].to_string();
             Ok((orig_start, actual_text))
         }
@@ -237,8 +233,7 @@ pub async fn execute(
         let current_raw = text.get_string(&txn);
         let current_spans = critic_markup::parse(&current_raw);
         let current_accepted = critic_markup::accepted_view(&current_spans);
-        let actual =
-            current_accepted.get(match_start..match_start + effective_old.len());
+        let actual = current_accepted.get(match_start..match_start + effective_old.len());
         if actual != Some(&effective_old) {
             return Err(
                 "Document changed since last read. Please re-read and try again.".to_string(),
@@ -246,14 +241,9 @@ pub async fn execute(
         }
 
         // Recompute merge against current raw (in case of concurrent changes)
-        let final_merge = critic_markup::merge_edit(
-            &current_raw,
-            &effective_old,
-            new_string,
-            "AI",
-            timestamp,
-        )
-        .map_err(|e| format!("Error: {}", e))?;
+        let final_merge =
+            critic_markup::merge_edit(&current_raw, &effective_old, new_string, "AI", timestamp)
+                .map_err(|e| format!("Error: {}", e))?;
 
         // Targeted replacement in Y.Doc
         text.remove_range(
@@ -365,8 +355,8 @@ async fn edit_blob_file(
         .as_ref()
         .ok_or_else(|| format!("Error: No file hash for blob: {}", file_path))?;
     let data = blob::read_blob(server, &doc_info.doc_id, hash).await?;
-    let content = String::from_utf8(data)
-        .map_err(|_| format!("Error: {} is not valid UTF-8", file_path))?;
+    let content =
+        String::from_utf8(data).map_err(|_| format!("Error: {} is not valid UTF-8", file_path))?;
 
     // 2. Find old_string (must be unique)
     let matches: Vec<usize> = content.match_indices(old_string).map(|(i, _)| i).collect();
@@ -468,8 +458,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_html_replaces_raw_ytext_without_criticmarkup() {
-        let server =
-            build_test_server(&[("/Page.html", "uuid-html", "<h1>Hello</h1>")]).await;
+        let server = build_test_server(&[("/Page.html", "uuid-html", "<h1>Hello</h1>")]).await;
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-html");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -493,8 +482,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_html_allows_literal_criticmarkup_like_text() {
-        let server =
-            build_test_server(&[("/Page.html", "uuid-html", "<p>placeholder</p>")]).await;
+        let server = build_test_server(&[("/Page.html", "uuid-html", "<p>placeholder</p>")]).await;
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-html");
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -509,7 +497,11 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "edit should allow raw HTML text: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "edit should allow raw HTML text: {:?}",
+            result
+        );
         assert_eq!(read_doc_content(&server, &doc_id), "<p>{++literal++}</p>");
     }
 
@@ -1022,12 +1014,8 @@ mod tests {
 
     #[tokio::test]
     async fn edit_around_comment_preserves_it() {
-        let server = build_test_server(&[(
-            "/Doc.md",
-            "uuid-doc",
-            "Hello {>>nice point<<} world",
-        )])
-        .await;
+        let server =
+            build_test_server(&[("/Doc.md", "uuid-doc", "Hello {>>nice point<<} world")]).await;
         let doc_id = format!("{}-uuid-doc", RELAY_ID);
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -1042,9 +1030,17 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "edit around comment should succeed, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "edit around comment should succeed, got: {:?}",
+            result
+        );
         let raw = read_doc_content(&server, &doc_id);
-        assert!(raw.contains("{>>nice point<<}"), "Comment should be preserved: {}", raw);
+        assert!(
+            raw.contains("{>>nice point<<}"),
+            "Comment should be preserved: {}",
+            raw
+        );
         let spans = critic_markup::parse(&raw);
         assert_eq!(
             critic_markup::accepted_view(&spans),
@@ -1054,12 +1050,8 @@ mod tests {
 
     #[tokio::test]
     async fn edit_rejects_removing_non_ai_comment() {
-        let server = build_test_server(&[(
-            "/Doc.md",
-            "uuid-doc",
-            "Hello {>>human note<<} world",
-        )])
-        .await;
+        let server =
+            build_test_server(&[("/Doc.md", "uuid-doc", "Hello {>>human note<<} world")]).await;
         let doc_id = format!("{}-uuid-doc", RELAY_ID);
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -1076,7 +1068,11 @@ mod tests {
 
         assert!(result.is_err(), "should reject removing non-AI comment");
         let err = result.unwrap_err();
-        assert!(err.contains("comment"), "Error should mention comment: {}", err);
+        assert!(
+            err.contains("comment"),
+            "Error should mention comment: {}",
+            err
+        );
     }
 
     #[tokio::test]
@@ -1101,17 +1097,16 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "removing AI comment should succeed, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "removing AI comment should succeed, got: {:?}",
+            result
+        );
     }
 
     #[tokio::test]
     async fn edit_allows_adding_comment() {
-        let server = build_test_server(&[(
-            "/Doc.md",
-            "uuid-doc",
-            "Hello world",
-        )])
-        .await;
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "Hello world")]).await;
         let doc_id = format!("{}-uuid-doc", RELAY_ID);
         let sid = setup_session_with_read(&server, &doc_id);
 
@@ -1126,9 +1121,17 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "adding comment should succeed, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "adding comment should succeed, got: {:?}",
+            result
+        );
         let raw = read_doc_content(&server, &doc_id);
-        assert!(raw.contains("observation"), "Comment should be in doc: {}", raw);
+        assert!(
+            raw.contains("observation"),
+            "Comment should be in doc: {}",
+            raw
+        );
     }
 }
 
@@ -1141,12 +1144,9 @@ mod blob_edit_tests {
 
     #[tokio::test]
     async fn edit_json_replaces_text() {
-        let server = build_blob_test_server_with_file(
-            "/data.json",
-            "uuid-json",
-            r#"{"key": "old_value"}"#,
-        )
-        .await;
+        let server =
+            build_blob_test_server_with_file("/data.json", "uuid-json", r#"{"key": "old_value"}"#)
+                .await;
         let sid = setup_session_with_read(&server, &format!("{}-uuid-json", RELAY_ID));
         let result = execute(
             &server,
@@ -1166,7 +1166,10 @@ mod blob_edit_tests {
             .doc_resolver()
             .get_file_hash("Lens/data.json")
             .unwrap();
-        let doc_info = server.doc_resolver().resolve_path("Lens/data.json").unwrap();
+        let doc_info = server
+            .doc_resolver()
+            .resolve_path("Lens/data.json")
+            .unwrap();
         let data = blob::read_blob(&server, &doc_info.doc_id, &new_hash)
             .await
             .unwrap();
@@ -1176,12 +1179,9 @@ mod blob_edit_tests {
 
     #[tokio::test]
     async fn edit_json_requires_read_first() {
-        let server = build_blob_test_server_with_file(
-            "/data.json",
-            "uuid-json",
-            r#"{"key": "value"}"#,
-        )
-        .await;
+        let server =
+            build_blob_test_server_with_file("/data.json", "uuid-json", r#"{"key": "value"}"#)
+                .await;
         let sid = setup_session_no_reads(&server);
         let result = execute(
             &server,
@@ -1200,12 +1200,9 @@ mod blob_edit_tests {
 
     #[tokio::test]
     async fn edit_json_no_criticmarkup() {
-        let server = build_blob_test_server_with_file(
-            "/data.json",
-            "uuid-json",
-            r#"{"key": "value"}"#,
-        )
-        .await;
+        let server =
+            build_blob_test_server_with_file("/data.json", "uuid-json", r#"{"key": "value"}"#)
+                .await;
         let sid = setup_session_with_read(&server, &format!("{}-uuid-json", RELAY_ID));
         execute(
             &server,
@@ -1224,7 +1221,10 @@ mod blob_edit_tests {
             .doc_resolver()
             .get_file_hash("Lens/data.json")
             .unwrap();
-        let doc_info = server.doc_resolver().resolve_path("Lens/data.json").unwrap();
+        let doc_info = server
+            .doc_resolver()
+            .resolve_path("Lens/data.json")
+            .unwrap();
         let data = blob::read_blob(&server, &doc_info.doc_id, &new_hash)
             .await
             .unwrap();
@@ -1235,12 +1235,9 @@ mod blob_edit_tests {
 
     #[tokio::test]
     async fn edit_json_old_string_not_found() {
-        let server = build_blob_test_server_with_file(
-            "/data.json",
-            "uuid-json",
-            r#"{"key": "value"}"#,
-        )
-        .await;
+        let server =
+            build_blob_test_server_with_file("/data.json", "uuid-json", r#"{"key": "value"}"#)
+                .await;
         let sid = setup_session_with_read(&server, &format!("{}-uuid-json", RELAY_ID));
         let result = execute(
             &server,

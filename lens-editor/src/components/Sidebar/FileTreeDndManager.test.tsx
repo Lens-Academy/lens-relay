@@ -11,7 +11,7 @@ const capturedTreeProps = vi.hoisted(() => [] as Array<Record<string, unknown>>)
 vi.mock('react-arborist', async () => {
   const React = await import('react');
   return {
-    Tree: React.forwardRef((_props: Record<string, unknown>, _ref) => {
+    Tree: React.forwardRef((_props: Record<string, unknown>) => {
       capturedTreeProps.push(_props);
       return <div role="tree" />;
     }),

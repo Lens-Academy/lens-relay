@@ -29,11 +29,7 @@ pub async fn read_blob(
 }
 
 /// Write a blob to the store at key `files/{doc_id}/{hash}`, returning the SHA-256 hex hash.
-pub async fn write_blob(
-    server: &Arc<Server>,
-    doc_id: &str,
-    data: &[u8],
-) -> Result<String, String> {
+pub async fn write_blob(server: &Arc<Server>, doc_id: &str, data: &[u8]) -> Result<String, String> {
     let store = server
         .store()
         .as_ref()
