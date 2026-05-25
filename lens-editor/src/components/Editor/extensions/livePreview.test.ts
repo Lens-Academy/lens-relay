@@ -196,18 +196,18 @@ describe('livePreview - wikilinks', () => {
     expect(widget!.classList.contains('unresolved')).toBe(false);
   });
 
-  it('replaces ![[Page]] embed with widget when cursor outside', () => {
+  it('replaces ![[Page]] embed with image widget when cursor outside', () => {
     const content = '![[Page Name]] more';
     const { view, cleanup: c } = createTestEditor(content, 19);
     cleanup = c;
-    expect(hasClass(view, 'cm-wikilink-widget')).toBe(true);
+    expect(hasClass(view, 'cm-image-widget')).toBe(true);
   });
 
-  it('widget displays page name for embed syntax', () => {
+  it('image embed widget displays filename for embed syntax', () => {
     const content = '![[My Page]] end';
     const { view, cleanup: c } = createTestEditor(content, 16, createRealContext());
     cleanup = c;
-    const widgets = view.contentDOM.querySelectorAll('.cm-wikilink-widget');
+    const widgets = view.contentDOM.querySelectorAll('.cm-image-widget');
     expect(widgets.length).toBe(1);
     expect(widgets[0].textContent).toBe('My Page');
   });
@@ -787,13 +787,13 @@ describe('livePreview - inline images', () => {
     expect(hasClass(view, 'cm-link-widget')).toBe(true);
   });
 
-  it('does not interfere with wikilink embeds', () => {
+  it('renders ![[Page]] wikilink embeds as image widgets', () => {
     const content = '![[My Page]] end';
     const { view, cleanup: c } = createTestEditor(content, content.length);
     cleanup = c;
 
-    expect(hasClass(view, 'cm-image-widget')).toBe(false);
-    expect(hasClass(view, 'cm-wikilink-widget')).toBe(true);
+    expect(hasClass(view, 'cm-image-widget')).toBe(true);
+    expect(hasClass(view, 'cm-wikilink-widget')).toBe(false);
   });
 
   it('cursor move toggles between widget and raw markdown', () => {

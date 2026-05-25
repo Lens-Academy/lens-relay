@@ -4,17 +4,26 @@ import { LocalLinter, BinaryModule, SuggestionKind } from 'harper.js';
 import type { Linter, Lint } from 'harper.js';
 import wasmUrl from 'harper.js/dist/harper_wasm_bg.wasm?url';
 
-// Singleton linter instance — eagerly initialized on module load so WASM
-// dictionary construction runs in parallel with page load / Y.js sync.
-const harperReady: Promise<Linter> = (async () => {
-  const binary = BinaryModule.create(wasmUrl);
-  const linterInstance = new LocalLinter({ binary });
-  await linterInstance.setup();
-  return linterInstance;
-})();
+// Singleton linter promise — created lazily on first access. We then kick off
+// init eagerly below in non-test builds so WASM dictionary construction runs
+// in parallel with page load / Y.js sync. Skipping the kickoff under vitest
+// avoids unhandled-rejection failures when happy-dom can't fetch the WASM URL.
+let harperReady: Promise<Linter> | null = null;
 
 function getHarper(): Promise<Linter> {
+  if (!harperReady) {
+    harperReady = (async () => {
+      const binary = BinaryModule.create(wasmUrl);
+      const linterInstance = new LocalLinter({ binary });
+      await linterInstance.setup();
+      return linterInstance;
+    })();
+  }
   return harperReady;
+}
+
+if (import.meta.env.MODE !== 'test') {
+  void getHarper();
 }
 
 /**

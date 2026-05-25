@@ -31,10 +31,12 @@ vi.mock('../../App', () => ({
 
 // Mock auth to hit relay server directly (bypasses Vite proxy)
 vi.mock('../../lib/auth', () => {
-  // Inline port detection (can't reference outer scope from hoisted vi.mock)
+  // Inline port detection (can't reference outer scope from hoisted vi.mock).
+  // Matches workspace from directory suffix (-wsN) or parent name (wsN/lens-editor).
   const _path = require('path');
-  const _dir = _path.basename(_path.resolve(__dirname, '../../..'));
-  const _m = _dir.match(/-ws(\d+)$/);
+  const _projectDir = _path.basename(_path.resolve(__dirname, '../../..'));
+  const _parentDir = _path.basename(_path.resolve(__dirname, '../../../..'));
+  const _m = _projectDir.match(/-ws(\d+)$/) || _parentDir.match(/^ws(\d+)$/);
   const _port = 8090 + ((_m ? parseInt(_m[1], 10) : 1) - 1) * 100;
   const _url = process.env.RELAY_URL || `http://localhost:${_port}`;
 
