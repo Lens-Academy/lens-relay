@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { ComponentProps } from 'react';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, act, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { EditorView } from 'codemirror';
@@ -128,9 +128,21 @@ async function openManualSourceComposer(
 // (header action, keyboard shortcut, or sidebar affordance) lands, switch
 // the helpers to drive it and re-enable these tests.
 describe('HtmlEditor', () => {
+  beforeEach(() => {
+    // HtmlEditor portals view-mode controls into #header-controls (the global
+    // header slot owned by App.tsx). Tests render the component in isolation,
+    // so we provide a stand-in element to receive the portaled controls.
+    if (!document.getElementById('header-controls')) {
+      const target = document.createElement('div');
+      target.id = 'header-controls';
+      document.body.appendChild(target);
+    }
+  });
+
   afterEach(() => {
     cleanup();
     localStorage.clear();
+    document.getElementById('header-controls')?.remove();
   });
 
   it('defaults to preview mode (iframe visible, source pane hidden)', () => {

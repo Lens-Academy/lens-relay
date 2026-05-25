@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { LENS_EDITOR_ORIGIN } from '../../lib/relay-api';
@@ -152,31 +153,48 @@ export function HtmlEditor({
     setManualComposer(null);
   }, [commentMode, readOnly]);
 
+  const portalTarget = typeof document === 'undefined'
+    ? null
+    : document.getElementById('header-controls');
+
+  const headerControls = (
+    <div className="flex items-center gap-3">
+      <div
+        role="group"
+        aria-label="HTML view mode"
+        className="inline-flex items-center rounded bg-gray-200 p-0.5"
+      >
+        {modes.map(({ id, label }) => {
+          const active = mode === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setMode(id)}
+              className={[
+                'rounded px-3 py-1 text-xs font-medium transition-colors',
+                active
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700',
+              ].join(' ')}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {orphanCount > 0 && (
+        <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+          {orphanCount} orphan{orphanCount === 1 ? '' : 's'}
+        </span>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex h-full w-full flex-col bg-white">
-      <div className="flex items-center gap-1 border-b border-gray-200 px-3 py-2">
-        {modes.map(({ id, label }) => (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={mode === id}
-            onClick={() => setMode(id)}
-            className={[
-              'rounded px-3 py-1.5 text-sm font-medium transition-colors',
-              mode === id
-                ? 'bg-gray-900 text-white'
-                : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900',
-            ].join(' ')}
-          >
-            {label}
-          </button>
-        ))}
-        {orphanCount > 0 && (
-          <span className="ml-2 rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-            {orphanCount} orphan{orphanCount === 1 ? '' : 's'}
-          </span>
-        )}
-      </div>
+      {portalTarget && createPortal(headerControls, portalTarget)}
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {mode !== 'preview' && (
