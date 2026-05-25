@@ -116,21 +116,23 @@ export async function uploadAttachment({
   }
   const { uploadUrl } = await uploadUrlRes.json() as { uploadUrl: string };
 
-  // For local dev the relay returns a relative path (/f/{doc}/upload?hash=...) to avoid
-  // mixed-content issues when the Vite dev server runs on https. Route it through the proxy.
-  const absoluteUploadUrl = uploadUrl.startsWith('http')
-    ? uploadUrl
-    : `/api/relay${uploadUrl}`;
-  const uploadHeaders: Record<string, string> = { 'Content-Type': file.type };
-  if (!uploadUrl.startsWith('http')) {
-    Object.assign(uploadHeaders, relayHeaders());
+  // Route the upload through the server-side proxy to avoid CORS.
+  // - Absolute R2 URLs: POST to /api/blob-upload?url=... (server PUTs to R2)
+  // - Relative URLs (local filesystem dev): PUT via /api/relay proxy with auth token
+  let putRes: Response;
+  if (uploadUrl.startsWith('http')) {
+    putRes = await fetch(`/api/blob-upload?url=${encodeURIComponent(uploadUrl)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    });
+  } else {
+    putRes = await fetch(`/api/relay${uploadUrl}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type, ...relayHeaders() },
+      body: file,
+    });
   }
-
-  const putRes = await fetch(absoluteUploadUrl, {
-    method: 'PUT',
-    headers: uploadHeaders,
-    body: file,
-  });
   if (!putRes.ok) {
     const body = await putRes.text().catch(() => '(could not read body)');
     console.error('[uploadAttachment] blob PUT failed', { status: putRes.status, body });
