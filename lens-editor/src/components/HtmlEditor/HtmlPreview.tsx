@@ -367,6 +367,7 @@ export function HtmlPreview({
   }]);
   const [pendingComment, setPendingComment] = useState<PendingPreviewComment | null>(null);
   const [pendingPlacementMenu, setPendingPlacementMenu] = useState<PendingPlacementMenu | null>(null);
+  const placementMenuRef = useRef<HTMLDivElement | null>(null);
   const [placementError, setPlacementError] = useState<PlacementError | null>(null);
   const [nonce] = useState(() => makeNonce());
   const frameRefs = useRef(new Map<number, HTMLIFrameElement>());
@@ -475,6 +476,25 @@ export function HtmlPreview({
       setPlacementError(null);
     }
   }, [readOnly]);
+
+  useEffect(() => {
+    if (!pendingPlacementMenu) return;
+    const dismiss = () => setPendingPlacementMenu(null);
+    const handleMouseDown = (event: MouseEvent) => {
+      const menu = placementMenuRef.current;
+      if (menu && event.target instanceof Node && menu.contains(event.target)) return;
+      dismiss();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') dismiss();
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [pendingPlacementMenu]);
 
   useEffect(() => {
     const sync = () => {
@@ -941,29 +961,38 @@ export function HtmlPreview({
         />
       ))}
       {pendingPlacementMenu && (
-        <div
-          className="absolute min-w-40 rounded-md border border-gray-200 bg-white py-1 shadow-lg"
-          style={{
-            left: Math.max(8, pendingPlacementMenu.point.x),
-            top: Math.max(8, pendingPlacementMenu.point.y),
-            zIndex: 20,
-          }}
-        >
-          <button
-            type="button"
-            className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-            onClick={handleCreateCommentFromMenu}
+        <>
+          <div
+            aria-hidden="true"
+            className="absolute inset-0"
+            style={{ zIndex: 19 }}
+            onMouseDown={() => setPendingPlacementMenu(null)}
+          />
+          <div
+            ref={placementMenuRef}
+            className="absolute min-w-40 rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+            style={{
+              left: Math.max(8, pendingPlacementMenu.point.x),
+              top: Math.max(8, pendingPlacementMenu.point.y),
+              zIndex: 20,
+            }}
           >
-            Create comment
-          </button>
-          <button
-            type="button"
-            className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-            onClick={handleAddMarkerFromMenu}
-          >
-            Add marker
-          </button>
-        </div>
+            <button
+              type="button"
+              className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+              onClick={handleCreateCommentFromMenu}
+            >
+              Create comment
+            </button>
+            <button
+              type="button"
+              className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+              onClick={handleAddMarkerFromMenu}
+            >
+              Add marker
+            </button>
+          </div>
+        </>
       )}
       {placementError && (
         <div
