@@ -5184,6 +5184,25 @@ async fn handle_file_download_url(
     // Get token
     let token = get_token_from_header(auth_header);
 
+    // Local dev fast path: no authenticator configured → accept any download, validate hash only.
+    if server_state.authenticator.is_none() {
+        let hash = params.hash.ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                anyhow!("hash query parameter required"),
+            )
+        })?;
+        if !validate_file_hash(&hash) {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                anyhow!("Invalid file hash format"),
+            ));
+        }
+        let Json(response) =
+            generate_file_download_url(&server_state, &doc_id, &hash, &host.to_string()).await?;
+        return Ok(Json(response));
+    }
+
     // Check if we have authentication configured
     if let Some(authenticator) = &server_state.authenticator {
         if let Some(token) = token.as_deref() {

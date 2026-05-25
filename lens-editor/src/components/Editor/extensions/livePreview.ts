@@ -33,6 +33,7 @@ import { RangeSetBuilder, Compartment, EditorSelection, StateEffect } from '@cod
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
+const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
 
 // CSS classes for heading sizes
 const HEADING_CLASSES: Record<string, string> = {
@@ -336,7 +337,7 @@ class ImageEmbedWidget extends WidgetType {
     const relayId = imageEmbedContext?.relayId ?? '';
     const compoundDocId = `${relayId}-${this.docId}`;
 
-    if (USE_LOCAL_RELAY) {
+    if (USE_LOCAL_RELAY && !USE_LOCAL_R2) {
       // /api/blob/ is served by the blobServePlugin directly from the filesystem store
       // without auth — can be used as img.src unlike /api/relay/blob/ which requires X-Share-Token.
       return `/api/blob/${compoundDocId}/${this.hash}`;

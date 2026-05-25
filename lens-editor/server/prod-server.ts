@@ -75,8 +75,9 @@ app.get('/api/blob-fetch', async (c) => {
   try {
     const resp = await fetch(url);
     if (!resp.ok) return c.text(`Upstream error: ${resp.status}`, 502);
-    const body = await resp.text();
-    return c.text(body);
+    const contentType = resp.headers.get('content-type') ?? 'application/octet-stream';
+    const body = await resp.arrayBuffer();
+    return c.body(body, 200, { 'Content-Type': contentType });
   } catch (err) {
     return c.text(`Fetch failed: ${err}`, 502);
   }
