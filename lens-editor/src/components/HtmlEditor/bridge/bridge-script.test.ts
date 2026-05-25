@@ -121,7 +121,7 @@ describe('renderDots', () => {
   });
 
   it('creates an overlay root and one dot per comment, returns found/orphaned ids', () => {
-    const summaries: CommentSummary[] = [{ id: 'c1', body: 'x', replies: 0 }];
+    const summaries: CommentSummary[] = [{ id: 'c1', body: 'x', replies: 0, order: 1 }];
     const result = renderDots(document, summaries);
     expect(result).toEqual(expect.objectContaining({ found: ['c1'], orphaned: [] }));
     const root = document.querySelector('[data-lens-overlay="true"]');
@@ -131,15 +131,15 @@ describe('renderDots', () => {
 
   it('reports orphaned ids for comments whose marker is missing from DOM', () => {
     const summaries: CommentSummary[] = [
-      { id: 'c1', body: 'x', replies: 0 },
-      { id: 'gone', body: 'y', replies: 0 },
+      { id: 'c1', body: 'x', replies: 0, order: 1 },
+      { id: 'gone', body: 'y', replies: 0, order: 2 },
     ];
     expect(renderDots(document, summaries)).toEqual(expect.objectContaining({ found: ['c1'], orphaned: ['gone'] }));
   });
 
   it('reuses overlay root across calls (idempotent)', () => {
-    renderDots(document, [{ id: 'c1', body: 'x', replies: 0 }]);
-    renderDots(document, [{ id: 'c1', body: 'x', replies: 0 }]);
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
     expect(document.querySelectorAll('#lens-comment-overlay-root')).toHaveLength(1);
   });
 
@@ -151,8 +151,8 @@ describe('renderDots', () => {
     );
     stubRenderedRect(document.getElementById('t')!);
 
-    renderDots(document, [{ id: 'c1', body: 'x', replies: 0 }]);
-    renderDots(document, [{ id: 'c1', body: 'x', replies: 0 }]);
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
 
     const userRoot = document.getElementById('lens-comment-overlay-root')!;
     expect(userRoot.textContent).toBe('user content');
@@ -170,7 +170,7 @@ describe('renderDots', () => {
     );
     stubRenderedRect(document.getElementById('t')!);
 
-    renderDots(document, [{ id: 'c1', body: 'x', replies: 0 }]);
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
 
     const userRoot = document.getElementById('lens-comment-overlay-root')!;
     expect(userRoot.textContent).toBe('user content');
@@ -189,7 +189,7 @@ describe('renderDots', () => {
     );
     stubRenderedRect(document.getElementById('t')!);
 
-    renderDots(document, [{ id: 'c1', body: 'x', replies: 0 }]);
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
 
     const userRoot = document.getElementById('lens-comment-overlay-root')!;
     expect(userRoot.textContent).toBe('user content');
@@ -200,11 +200,11 @@ describe('renderDots', () => {
   });
 
   it('creates a new owned overlay root if the previous owned root was removed', () => {
-    renderDots(document, [{ id: 'c1', body: 'x', replies: 0 }]);
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
     const firstRoot = document.querySelector('[data-lens-overlay-root="v1"]')!;
     firstRoot.remove();
 
-    renderDots(document, [{ id: 'c1', body: 'x', replies: 0 }]);
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
 
     const roots = document.querySelectorAll('[data-lens-overlay-root="v1"]');
     expect(roots).toHaveLength(1);
@@ -459,7 +459,7 @@ describe('renderDots rects', () => {
   });
 
   it('returns rects with bounding rect data for rendered anchor ids', () => {
-    const summaries: CommentSummary[] = [{ id: 'c1', body: 'x', replies: 0 }];
+    const summaries: CommentSummary[] = [{ id: 'c1', body: 'x', replies: 0, order: 1 }];
     const result = renderDots(document, summaries);
     expect(result.rects).toHaveLength(1);
     expect(result.rects[0]).toEqual({ id: 'c1', x: 10, y: 20, w: 100, h: 30 });
@@ -467,11 +467,42 @@ describe('renderDots rects', () => {
 
   it('does not include orphaned comments in rects', () => {
     const summaries: CommentSummary[] = [
-      { id: 'c1', body: 'x', replies: 0 },
-      { id: 'gone', body: 'y', replies: 0 },
+      { id: 'c1', body: 'x', replies: 0, order: 1 },
+      { id: 'gone', body: 'y', replies: 0, order: 2 },
     ];
     const result = renderDots(document, summaries);
     expect(result.rects.map(r => r.id)).toEqual(['c1']);
+  });
+
+  it('reports a rect for inline-anchored comments (not as orphans)', () => {
+    setupBody('<p>hello [[@comment:c1]] world</p><!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->');
+    const summaries: CommentSummary[] = [{ id: 'c1', body: 'x', replies: 0, order: 1 }];
+    const result = renderDots(document, summaries);
+    expect(result.found).toEqual(['c1']);
+    expect(result.orphaned).toEqual([]);
+    expect(result.rects.map(r => r.id)).toEqual(['c1']);
+  });
+
+  it('renders inline marker text as the comment order, not "!"', () => {
+    setupBody('<p>before [[@comment:c1]][[@comment:c2]] after</p>');
+    const summaries: CommentSummary[] = [
+      { id: 'c1', body: 'first', replies: 0, order: 1 },
+      { id: 'c2', body: 'second', replies: 0, order: 2 },
+    ];
+    renderDots(document, summaries);
+    const markers = Array.from(
+      document.querySelectorAll<HTMLElement>('.lens-comment-inline-marker[data-lens-inline-comment-marker="true"]'),
+    );
+    expect(markers.map(m => m.textContent)).toEqual(['1', '2']);
+  });
+
+  it('updates existing inline marker text when order changes', () => {
+    setupBody('<p>[[@comment:c1]]</p>');
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 1 }]);
+    const marker = document.querySelector<HTMLElement>('.lens-comment-inline-marker[data-lens-inline-comment-marker="true"]')!;
+    expect(marker.textContent).toBe('1');
+    renderDots(document, [{ id: 'c1', body: 'x', replies: 0, order: 3 }]);
+    expect(marker.textContent).toBe('3');
   });
 });
 
@@ -503,7 +534,7 @@ describe('installBridge layoutVersion and scroll-state', () => {
   }
 
   it('comments-rendered payload includes rects with rendered anchor bounding rects', () => {
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const rendered = sent.find(e => e.message.type === 'comments-rendered');
     expect(rendered).toBeDefined();
     const payload = (rendered!.message as Extract<import('./protocol').BridgeToParent, { type: 'comments-rendered' }>).payload;
@@ -512,12 +543,12 @@ describe('installBridge layoutVersion and scroll-state', () => {
   });
 
   it('layoutVersion bumps on each rebuildDots call', () => {
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const r1 = sent.find(e => e.message.type === 'comments-rendered');
     const v1 = (r1!.message as Extract<import('./protocol').BridgeToParent, { type: 'comments-rendered' }>).payload.layoutVersion;
 
     sent = [];
-    dispatchToBridge({ type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const r2 = sent.find(e => e.message.type === 'comments-rendered');
     const v2 = (r2!.message as Extract<import('./protocol').BridgeToParent, { type: 'comments-rendered' }>).payload.layoutVersion;
 
@@ -526,7 +557,7 @@ describe('installBridge layoutVersion and scroll-state', () => {
 
   it('scroll-state carries the current layoutVersion', () => {
     vi.useFakeTimers();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const rendered = sent.find(e => e.message.type === 'comments-rendered');
     const lv = (rendered!.message as Extract<import('./protocol').BridgeToParent, { type: 'comments-rendered' }>).payload.layoutVersion;
 
@@ -574,7 +605,7 @@ describe('installBridge set-focused-comment', () => {
   }
 
   it('set-focused-comment adds data-comment-focused to the matching dot', () => {
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     dispatchToBridge({ type: 'set-focused-comment', payload: { id: 'c1' } });
 
     const dot = document.querySelector('.lens-comment-dot[data-comment-id="c1"]') as HTMLElement | null;
@@ -583,7 +614,7 @@ describe('installBridge set-focused-comment', () => {
   });
 
   it('set-focused-comment with null clears the focused state', () => {
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     dispatchToBridge({ type: 'set-focused-comment', payload: { id: 'c1' } });
     dispatchToBridge({ type: 'set-focused-comment', payload: { id: null } });
 
@@ -593,11 +624,11 @@ describe('installBridge set-focused-comment', () => {
   });
 
   it('rebuildDots re-applies data-comment-focused to the focused id', () => {
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     dispatchToBridge({ type: 'set-focused-comment', payload: { id: 'c1' } });
 
     // Trigger rebuild by sending set-comments
-    dispatchToBridge({ type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
 
     const dot = document.querySelector('.lens-comment-dot[data-comment-id="c1"]') as HTMLElement | null;
     expect(dot).not.toBeNull();
@@ -633,7 +664,7 @@ describe('installBridge details toggle re-emit', () => {
   }
 
   it('toggling a <details> element causes a fresh comments-rendered', () => {
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     sent = [];
 
     const detailsEl = document.querySelector('details')!;

@@ -34,7 +34,8 @@ function isCommentSummary(value: unknown): value is CommentSummary {
   const summary = value as Partial<CommentSummary>;
   return typeof summary.id === 'string'
     && typeof summary.body === 'string'
-    && typeof summary.replies === 'number';
+    && typeof summary.replies === 'number'
+    && typeof summary.order === 'number';
 }
 
 function readCommentsFromInit(message: ParentToBridge): CommentSummary[] | null {
@@ -153,21 +154,25 @@ function ensureInlineMarkerStyle(doc: Document): void {
   align-items: center !important;
   justify-content: center !important;
   vertical-align: middle !important;
-  width: 1.15em !important;
-  height: 1.15em !important;
-  margin: 0 4px !important;
-  padding: 0 !important;
-  border: 2px solid #7c2d12 !important;
+  min-width: 1.25em !important;
+  height: 1.25em !important;
+  padding: 0 0.35em !important;
+  margin: 0 3px !important;
+  border: 1px solid rgba(59, 130, 246, 0.3) !important;
   border-radius: 999px !important;
-  background: #dc2626 !important;
-  color: white !important;
+  background: rgba(59, 130, 246, 0.15) !important;
+  color: #2563eb !important;
   font-family: Arial, sans-serif !important;
   font-size: 0.75em !important;
   font-weight: 700 !important;
   line-height: 1 !important;
   cursor: pointer !important;
-  box-shadow: 0 0 0 2px white, 0 1px 3px rgba(0,0,0,0.35) !important;
   user-select: none !important;
+}
+.lens-comment-inline-marker[${INLINE_MARKER_ATTRIBUTE}="true"][data-comment-focused] {
+  background: #2563eb !important;
+  border-color: #2563eb !important;
+  color: #fff !important;
 }
 .lens-comment-inline-marker[${INLINE_MARKER_ATTRIBUTE}="true"]:focus {
   outline: 2px solid #2563eb !important;
@@ -181,12 +186,13 @@ function makeInlineMarker(doc: Document, summary: CommentSummary): HTMLElement {
   const marker = doc.createElement('button');
   marker.className = 'lens-comment-inline-marker';
   marker.dataset.commentId = summary.id;
+  marker.dataset.commentOrder = String(summary.order);
   marker.setAttribute(INLINE_MARKER_ATTRIBUTE, 'true');
   marker.setAttribute('type', 'button');
   marker.setAttribute('role', 'button');
   marker.tabIndex = 0;
-  marker.setAttribute('aria-label', `Comment: ${summary.body.slice(0, 60)}`);
-  marker.textContent = '!';
+  marker.setAttribute('aria-label', `Comment ${summary.order}: ${summary.body.slice(0, 60)}`);
+  marker.textContent = String(summary.order);
   return marker;
 }
 
@@ -196,7 +202,16 @@ function renderInlineMarkers(doc: Document, comments: CommentSummary[]): Set<str
   const found = new Set<string>();
   for (const existing of Array.from(doc.querySelectorAll<HTMLElement>(`[${INLINE_MARKER_ATTRIBUTE}="true"]`))) {
     const id = existing.dataset.commentId;
-    if (id && byId.has(id)) found.add(id);
+    if (!id) continue;
+    const summary = byId.get(id);
+    if (!summary) continue;
+    found.add(id);
+    const orderStr = String(summary.order);
+    if (existing.dataset.commentOrder !== orderStr) {
+      existing.dataset.commentOrder = orderStr;
+      existing.textContent = orderStr;
+      existing.setAttribute('aria-label', `Comment ${summary.order}: ${summary.body.slice(0, 60)}`);
+    }
   }
 
   const view = doc.defaultView;
@@ -291,7 +306,13 @@ export function renderDots(doc: Document, comments: CommentSummary[]): { found: 
   for (const summary of comments) {
     if (inlineFound.has(summary.id)) {
       found.push(summary.id);
-      // Inline-matched comments: no separate anchor — omit from rects array
+      const markerEl = doc.querySelector<HTMLElement>(
+        `.lens-comment-inline-marker[${INLINE_MARKER_ATTRIBUTE}="true"][data-comment-id="${CSS.escape(summary.id)}"]`,
+      );
+      if (markerEl) {
+        const r = markerEl.getBoundingClientRect();
+        rects.push({ id: summary.id, x: r.x, y: r.y, w: r.width, h: r.height });
+      }
       continue;
     }
     const present = byId.get(summary.id);
@@ -462,14 +483,16 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   let lastFocusedId: string | null = null;
   function applyFocusToDots(): void {
     const root = getOwnedOverlayRoot(doc);
-    if (!root) return;
-    root.querySelectorAll('[data-comment-focused]').forEach(el => {
-      delete (el as HTMLElement).dataset.commentFocused;
-    });
-    if (lastFocusedId != null) {
-      root.querySelectorAll<HTMLElement>('.lens-comment-dot').forEach(el => {
-        if (el.dataset.commentId === lastFocusedId) el.dataset.commentFocused = '';
-      });
+    const focusableSelector = `.lens-comment-dot, .lens-comment-inline-marker[${INLINE_MARKER_ATTRIBUTE}="true"]`;
+    const focusables: HTMLElement[] = [];
+    if (root) focusables.push(...Array.from(root.querySelectorAll<HTMLElement>(focusableSelector)));
+    if (doc.body) focusables.push(...Array.from(doc.body.querySelectorAll<HTMLElement>(`.lens-comment-inline-marker[${INLINE_MARKER_ATTRIBUTE}="true"]`)));
+    for (const el of focusables) {
+      if (lastFocusedId != null && el.dataset.commentId === lastFocusedId) {
+        el.dataset.commentFocused = '';
+      } else {
+        delete el.dataset.commentFocused;
+      }
     }
   }
 

@@ -22,7 +22,6 @@ interface HtmlPreviewProps {
   currentUser?: string;
   origin?: unknown;
   debounceMs?: number;
-  onOrphanedChange?: (orphanedIds: string[]) => void;
   isCommentMode?: boolean;
   onPlaceComplete?: (commentId: string) => void;
   onManualPlacement?: (candidates: Candidate[]) => void;
@@ -78,10 +77,11 @@ type PendingProbe = {
 const DEFAULT_PROBE_VIEWPORT_SIZE: ProbeViewportSize = { width: 1024, height: 768 };
 
 function summarizeComments(source: string): CommentSummary[] {
-  return parseComments(source).map(cluster => ({
+  return parseComments(source).map((cluster, i) => ({
     id: cluster.comment.id,
     body: cluster.comment.body,
     replies: cluster.replies.length,
+    order: i + 1,
   }));
 }
 
@@ -172,9 +172,11 @@ function isCommentsRenderedPayload(value: unknown): value is CommentsRenderedPay
 
 /** Normalise a CommentsRenderedPayload so callers always get the full shape. */
 function normalizeCommentsRendered(payload: CommentsRenderedPayload): CommentsRenderedPayload {
+  const onlyStrings = (xs: unknown): string[] =>
+    Array.isArray(xs) ? xs.filter((x): x is string => typeof x === 'string') : [];
   return {
-    found: payload.found,
-    orphaned: payload.orphaned,
+    found: onlyStrings(payload.found),
+    orphaned: onlyStrings(payload.orphaned),
     rects: Array.isArray(payload.rects) ? payload.rects : [],
     baselineScrollY: typeof payload.baselineScrollY === 'number' ? payload.baselineScrollY : 0,
     layoutVersion: typeof payload.layoutVersion === 'number' ? payload.layoutVersion : 0,
@@ -345,7 +347,6 @@ export function HtmlPreview({
   currentUser = 'Anonymous',
   origin,
   debounceMs = 300,
-  onOrphanedChange,
   isCommentMode = false,
   onPlaceComplete,
   onManualPlacement,
@@ -684,10 +685,8 @@ export function HtmlPreview({
   }, []);
 
   const applyCommentsRendered = useCallback((payload: CommentsRenderedPayload): void => {
-    const normalized = normalizeCommentsRendered(payload);
-    onOrphanedChange?.(normalized.orphaned.filter((id): id is string => typeof id === 'string'));
-    onCommentsRendered?.(normalized);
-  }, [onOrphanedChange, onCommentsRendered]);
+    onCommentsRendered?.(normalizeCommentsRendered(payload));
+  }, [onCommentsRendered]);
 
   const activateRestoredFrame = useCallback((frameId: number): void => {
     restoringFrameIdRef.current = null;
@@ -891,7 +890,6 @@ export function HtmlPreview({
     isCommentMode,
     nonce,
     onDotClicked,
-    onOrphanedChange,
     onScrollState,
     origin,
     openComposer,

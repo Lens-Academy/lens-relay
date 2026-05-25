@@ -10,6 +10,8 @@ export interface CommentSummary {
   id: string;
   body: string;
   replies: number;
+  /** 1-indexed document order; mirrors the sidebar card's badge number. */
+  order: number;
 }
 
 export interface ViewportPoint {

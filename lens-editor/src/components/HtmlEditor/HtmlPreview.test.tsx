@@ -306,7 +306,7 @@ describe('HtmlPreview bridge integration', () => {
       );
       expect(init).toBeDefined();
       expect(init?.nonce).toBe('__test_nonce__');
-      expect(init?.message.payload).toEqual({ comments: [{ id: 'c1', body: 'x', replies: 0 }] });
+      expect(init?.message.payload).toEqual({ comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] });
     } finally {
       spy.mockRestore();
     }

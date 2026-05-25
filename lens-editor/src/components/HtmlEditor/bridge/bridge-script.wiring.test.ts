@@ -96,7 +96,7 @@ describe('installBridge', () => {
 
     const initEnv: Envelope<ParentToBridge> = {
       nonce: 'NONCE',
-      message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } },
+      message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } },
     };
     expect(() => {
       earlyWin.dispatchEvent(new earlyWin.MessageEvent('message', { data: initEnv, source: earlyWin.parent }));
@@ -132,7 +132,7 @@ describe('installBridge', () => {
     arm();
     const initEnv: Envelope<ParentToBridge> = {
       nonce: 'NONCE',
-      message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } },
+      message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } },
     };
     window.dispatchEvent(new MessageEvent('message', { data: initEnv, source: window.parent }));
     expect(document.querySelectorAll('.lens-comment-dot')).toHaveLength(1);
@@ -149,16 +149,16 @@ describe('installBridge', () => {
     const cleanup = installBridge(window as Window & typeof globalThis);
     cleanups.push(cleanup);
 
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
 
-    expect(document.body.textContent).toBe('Hello ! world');
+    expect(document.body.textContent).toBe('Hello 1 world');
     expect(document.querySelectorAll('.lens-comment-inline-marker')).toHaveLength(1);
     const marker = document.querySelector('.lens-comment-inline-marker') as HTMLElement;
     expect(marker.tagName).toBe('BUTTON');
     expect(marker.getAttribute('type')).toBe('button');
     expect(marker.getAttribute('role')).toBe('button');
     expect(marker.tabIndex).toBe(0);
-    expect(document.getElementById('lens-comment-inline-marker-style')?.textContent).toContain('background: #dc2626');
+    expect(document.getElementById('lens-comment-inline-marker-style')?.textContent).toContain('rgba(59, 130, 246, 0.15)');
     expect(document.querySelectorAll('.lens-comment-dot')).toHaveLength(0);
     const rendered = sent.find(e => e.message.type === 'comments-rendered');
     expect((rendered!.message as Extract<BridgeToParent, { type: 'comments-rendered' }>).payload.found).toEqual(['c1']);
@@ -177,14 +177,14 @@ describe('installBridge', () => {
     const cleanup = installBridge(window as Window & typeof globalThis);
     cleanups.push(cleanup);
 
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'thorough yeah', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'thorough yeah', replies: 0, order: 1 }] } });
 
     const marker = document.querySelector('.lens-comment-inline-marker') as HTMLButtonElement | null;
     expect(marker).not.toBeNull();
     expect(marker?.tagName).toBe('BUTTON');
-    expect(marker?.textContent).toBe('!');
+    expect(marker?.textContent).toBe('1');
     expect(document.querySelectorAll('.lens-comment-dot')).toHaveLength(0);
-    expect(document.body.textContent).toContain('This summary should be thorough! in capturing details.');
+    expect(document.body.textContent).toContain('This summary should be thorough1 in capturing details.');
   });
 
   it('waits until DOMContentLoaded before replacing markers so page scripts can render raw source', () => {
@@ -196,7 +196,7 @@ describe('installBridge', () => {
     const cleanup = installBridge(window as Window & typeof globalThis);
     cleanups.push(cleanup);
 
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'thorough yeah', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'thorough yeah', replies: 0, order: 1 }] } });
     expect(document.querySelector('.lens-comment-inline-marker')).toBeNull();
 
     const md = document.querySelector('.md') as HTMLElement;
@@ -207,7 +207,7 @@ describe('installBridge', () => {
     const marker = document.querySelector('.lens-comment-inline-marker') as HTMLButtonElement | null;
     expect(marker).not.toBeNull();
     expect(marker?.tagName).toBe('BUTTON');
-    expect(document.body.textContent).toContain('This summary should be thorough! in capturing details.');
+    expect(document.body.textContent).toContain('This summary should be thorough1 in capturing details.');
   });
 
   it('on inline marker click, posts dot-clicked with the comment id', () => {
@@ -218,7 +218,7 @@ describe('installBridge', () => {
     const cleanup = installBridge(window as Window & typeof globalThis);
     cleanups.push(cleanup);
 
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const marker = document.querySelector('.lens-comment-inline-marker') as HTMLElement;
     marker.click();
 
@@ -235,7 +235,7 @@ describe('installBridge', () => {
     const cleanup = installBridge(window as Window & typeof globalThis);
     cleanups.push(cleanup);
 
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const marker = document.querySelector('.lens-comment-inline-marker') as HTMLElement;
     marker.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
@@ -289,7 +289,7 @@ describe('installBridge', () => {
     const cleanup = installBridge(window as Window & typeof globalThis);
     cleanups.push(cleanup);
 
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     dispatchToBridge({ type: 'enable-click-to-place', payload: {} });
     sent = [];
     const marker = document.querySelector('.lens-comment-inline-marker') as HTMLElement;
@@ -301,7 +301,7 @@ describe('installBridge', () => {
 
   it('cleanup removes owned overlay UI and leaves old dots inert', () => {
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const cleanup = cleanups.pop()!;
     const dot = document.querySelector('.lens-comment-dot') as HTMLElement;
     sent = [];
@@ -322,7 +322,7 @@ describe('installBridge', () => {
     }));
     const sentCountAfterInit = sent.length;
     window.dispatchEvent(new MessageEvent('message', {
-      data: { nonce: 'WRONG', message: { type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } } },
+      data: { nonce: 'WRONG', message: { type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } } },
       source: window.parent,
     }));
     expect(sent.length).toBe(sentCountAfterInit);
@@ -341,7 +341,7 @@ describe('installBridge', () => {
   it('on dot click, posts dot-clicked with the comment id', () => {
     arm();
     window.dispatchEvent(new MessageEvent('message', {
-      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } } },
+      data: { nonce: 'NONCE', message: { type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } } },
       source: window.parent,
     }));
     const dot = document.querySelector('.lens-comment-dot') as HTMLElement;
@@ -485,7 +485,7 @@ describe('installBridge', () => {
   it('does not post selection placement from owned overlay mouseup with lingering selection', async () => {
     vi.useFakeTimers();
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const target = document.getElementById('t')!;
     const dot = document.querySelector('.lens-comment-dot') as HTMLElement;
     sent = [];
@@ -624,7 +624,7 @@ describe('installBridge', () => {
     if (typeof cleanup === 'function') cleanups.push(cleanup);
     sent = [];
 
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     expect(sent.filter(e => e.message.type === 'comments-rendered')).toHaveLength(1);
 
     const dot = document.querySelector('.lens-comment-dot') as HTMLElement;
@@ -643,7 +643,7 @@ describe('installBridge', () => {
   it('highlight-comment handles selector-significant comment ids without selector lookup failure', () => {
     const id = 'weird"]id';
     arm(id);
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id, body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id, body: 'x', replies: 0, order: 1 }] } });
     const dot = document.querySelector('.lens-comment-dot') as HTMLElement;
     const animate = vi.fn();
     dot.animate = animate;
@@ -657,7 +657,7 @@ describe('installBridge', () => {
   it('cleanup during pending mutation debounce prevents stale comments-rendered', async () => {
     vi.useFakeTimers();
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     sent = [];
 
     document.body.appendChild(document.createElement('section'));
@@ -673,7 +673,7 @@ describe('installBridge', () => {
 
   it('old dot listeners do not survive reinstall before new init', () => {
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const oldDot = document.querySelector('.lens-comment-dot') as HTMLElement;
     const cleanup = installBridge(window as Window & typeof globalThis);
     if (typeof cleanup === 'function') cleanups.push(cleanup);
@@ -687,7 +687,7 @@ describe('installBridge', () => {
   it('mutations to user elements that spoof overlay attributes still schedule comments-rendered rebuilds', async () => {
     vi.useFakeTimers();
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     sent = [];
 
     const spoofed = document.createElement('div');
@@ -702,7 +702,7 @@ describe('installBridge', () => {
   it('owned overlay-only mutations do not schedule comments-rendered rebuilds', async () => {
     vi.useFakeTimers();
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     sent = [];
 
     const ownedOverlayRoot = document.querySelector('[data-lens-overlay-root="v1"]')!;
@@ -716,7 +716,7 @@ describe('installBridge', () => {
   it('owned overlay root removal schedules rebuild and recreates dots', async () => {
     vi.useFakeTimers();
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const firstRoot = document.querySelector('[data-lens-overlay-root="v1"]')!;
     sent = [];
 
@@ -732,10 +732,10 @@ describe('installBridge', () => {
   it('set-comments rerender does not loop from removed owned dot nodes', async () => {
     vi.useFakeTimers();
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     sent = [];
 
-    dispatchToBridge({ type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'set-comments', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     await flushMutationObserver();
     for (let i = 0; i < 5; i++) {
       vi.advanceTimersByTime(100);
@@ -791,7 +791,7 @@ describe('installBridge', () => {
 
   it('ignores malformed highlight-comment after init without throwing', () => {
     arm();
-    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0 }] } });
+    dispatchToBridge({ type: 'init', payload: { comments: [{ id: 'c1', body: 'x', replies: 0, order: 1 }] } });
     const dot = document.querySelector('.lens-comment-dot') as HTMLElement;
     const animate = vi.fn();
     dot.animate = animate;
