@@ -5165,7 +5165,9 @@ async fn handle_file_upload_url(
             }
         };
         let full_url = format!("{}{}?token={}", base_url, url, upload_token);
-        Ok(Json(FileUploadUrlResponse { upload_url: full_url }))
+        Ok(Json(FileUploadUrlResponse {
+            upload_url: full_url,
+        }))
     } else {
         // S3/cloud storage URL - return as-is
         Ok(Json(FileUploadUrlResponse { upload_url: url }))
@@ -7409,7 +7411,9 @@ mod test {
         assert!(response
             .upload_url
             .contains(&format!("/f/{}/upload", doc_id)));
-        assert!(!response.upload_url.contains(&format!("token={}", server_token)));
+        assert!(!response
+            .upload_url
+            .contains(&format!("token={}", server_token)));
         assert!(response.upload_url.contains("token="));
     }
 
@@ -7949,7 +7953,10 @@ async fn handle_file_upload_raw(
     // Local dev fast path: no authenticator → validate by hash only (no token required).
     if server_state.authenticator.is_none() {
         let hash = params.hash.as_deref().ok_or_else(|| {
-            AppError::new(StatusCode::BAD_REQUEST, anyhow!("hash query parameter required"))
+            AppError::new(
+                StatusCode::BAD_REQUEST,
+                anyhow!("hash query parameter required"),
+            )
         })?;
         if !validate_file_hash(hash) {
             return Err(AppError::new(
