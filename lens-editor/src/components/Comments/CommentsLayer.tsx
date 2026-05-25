@@ -30,8 +30,12 @@ const EDGE_TRANSITION_PX = 250;
 const ACTIVE_WINDOW_MULTIPLIER = 2;
 
 export interface CommentsLayerHandle {
-  /** Idempotent set (not toggle). Focusing same key twice is a no-op. */
+  /** Idempotent set (not toggle). Focusing same key twice is a no-op.
+   *  Use for programmatic focus (e.g. just-created comments) where unfocus is undesired. */
   focusThread(key: ThreadKey): void;
+  /** Toggle focus: focuses the thread, or unfocuses if it is already focused.
+   *  Use for user-driven badge clicks so they mirror sidebar-card click behaviour. */
+  toggleFocus(key: ThreadKey): void;
   /** Opens the add-comment form anchored at the cursor returned by
    *  `getInsertKey`. No-op if the getter is omitted or returns null. */
   openAddForm(): void;
@@ -101,6 +105,9 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
       if (key !== focusedThreadKey) {
         applyFocus(key);
       }
+    },
+    toggleFocus(key: ThreadKey) {
+      applyFocus(focusedThreadKey === key ? null : key);
     },
     openAddForm() {
       const key = getInsertKeyRef.current?.();

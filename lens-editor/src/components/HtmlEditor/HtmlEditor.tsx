@@ -244,8 +244,8 @@ export function HtmlEditor({
               probeRunner={probeRunner}
               readOnly={readOnly}
               onDotClicked={(id) => {
-                setFocusedCommentId(id);
-                commentsLayerRef.current?.focusThread(id);
+                setFocusedCommentId(prev => (prev === id ? null : id));
+                commentsLayerRef.current?.toggleFocus(id);
               }}
               onCommentAdded={(id) => {
                 setFocusedCommentId(id);

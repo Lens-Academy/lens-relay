@@ -113,6 +113,29 @@ describe('CommentsLayer', () => {
     expect(onFocusChange).toHaveBeenLastCalledWith('100');
   });
 
+  it('imperative toggleFocus toggles focus on/off for the same key', () => {
+    const ss = fakeScrollSource();
+    const ref = createRef<CommentsLayerHandle>();
+    const onFocusChange = vi.fn();
+    render(
+      <CommentsLayer
+        ref={ref}
+        threads={[thread()]}
+        resolveAnchorY={() => 100}
+        getViewportRect={() => ({ top: 0, height: 800 })}
+        scrollSource={ss}
+        onFocusChange={onFocusChange}
+        onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
+      />
+    );
+    act(() => { ref.current!.toggleFocus('100'); });
+    expect(onFocusChange).toHaveBeenLastCalledWith('100');
+    act(() => { ref.current!.toggleFocus('100'); });
+    expect(onFocusChange).toHaveBeenLastCalledWith(null);
+    act(() => { ref.current!.toggleFocus('100'); });
+    expect(onFocusChange).toHaveBeenLastCalledWith('100');
+  });
+
   it('clicking the empty layer background clears focus', () => {
     const ss = fakeScrollSource();
     const ref = createRef<CommentsLayerHandle>();

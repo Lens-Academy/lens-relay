@@ -147,7 +147,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
   const handleCommentClick = useCallback((absFrom: number) => {
     manager.expand('comment-margin');
-    commentsLayerRef.current?.focusThread(String(absFrom));
+    commentsLayerRef.current?.toggleFocus(String(absFrom));
   }, [manager.expand]);
 
   // Auto-collapse comment margin on notes without comments (after initial Y.Doc sync)

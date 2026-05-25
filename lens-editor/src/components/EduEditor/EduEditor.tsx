@@ -176,7 +176,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
 
   const handleCommentClick = useCallback((absFrom: number) => {
     ensureCommentsVisible();
-    commentsLayerRef.current?.focusThread(String(absFrom));
+    commentsLayerRef.current?.toggleFocus(String(absFrom));
   }, [ensureCommentsVisible]);
 
   const handleYTextChange = useCallback((ytext: Y.Text | null) => {
