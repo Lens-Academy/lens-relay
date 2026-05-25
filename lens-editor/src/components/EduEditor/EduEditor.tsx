@@ -435,7 +435,6 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 getViewportRect={getViewportRect}
                 scrollSource={scrollSource}
                 editorRootRef={contentPanelWrapperRef}
-                currentUserName={displayName ?? ''}
                 onReply={callbacks.onReply}
                 onEdit={callbacks.onEdit}
                 onDelete={callbacks.onDelete}

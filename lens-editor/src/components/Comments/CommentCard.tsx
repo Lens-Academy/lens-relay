@@ -9,7 +9,6 @@ export interface CommentCardProps {
   /** 1-indexed comment number, matching the inline badge in the prose. */
   number?: number;
   focused: boolean;
-  currentUserName: string;
   onFocus: (key: ThreadKey) => void;
   onReply: (thread: ThreadView, body: string) => void;
   onEdit: (message: MessageView, newBody: string) => void;
@@ -19,7 +18,7 @@ export interface CommentCardProps {
 const CARD_BORDER = '#e8e5df';
 
 export function CommentCard(props: CommentCardProps): ReactElement {
-  const { thread, number, focused, currentUserName, onFocus, onReply, onEdit, onDelete } = props;
+  const { thread, number, focused, onFocus, onReply, onEdit, onDelete } = props;
 
   const [showReplyForm, setShowReplyForm] = useState(false);
 

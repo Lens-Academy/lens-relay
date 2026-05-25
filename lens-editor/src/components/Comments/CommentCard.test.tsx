@@ -37,7 +37,6 @@ describe('CommentCard', () => {
         thread={thread()}
         number={1}
         focused={false}
-        currentUserName="Bob"
         onFocus={vi.fn()}
         onReply={vi.fn()}
         onEdit={vi.fn()}
@@ -55,7 +54,6 @@ describe('CommentCard', () => {
       <CommentCard
         thread={t}
         focused
-        currentUserName="Bob"
         onFocus={vi.fn()}
         onReply={vi.fn()}
         onEdit={vi.fn()}
@@ -73,7 +71,6 @@ describe('CommentCard', () => {
       <CommentCard
         thread={t}
         focused
-        currentUserName="Alice"
         onFocus={vi.fn()}
         onReply={vi.fn()}
         onEdit={onEdit}
@@ -96,7 +93,6 @@ describe('CommentCard', () => {
       <CommentCard
         thread={t}
         focused
-        currentUserName="Alice"
         onFocus={vi.fn()}
         onReply={vi.fn()}
         onEdit={vi.fn()}
@@ -118,7 +114,6 @@ describe('CommentCard', () => {
       <CommentCard
         thread={t}
         focused
-        currentUserName="Alice"
         onFocus={vi.fn()}
         onReply={onReply}
         onEdit={vi.fn()}
@@ -142,7 +137,6 @@ describe('CommentCard', () => {
       <CommentCard
         thread={t}
         focused={false}
-        currentUserName="Bob"
         onFocus={onFocus}
         onReply={vi.fn()}
         onEdit={vi.fn()}

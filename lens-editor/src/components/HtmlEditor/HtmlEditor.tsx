@@ -281,7 +281,6 @@ export function HtmlEditor({
               resolveAnchorY={resolveAnchorY}
               getViewportRect={getViewportRect}
               scrollSource={scrollSource}
-              currentUserName={currentUser}
               onFocusChange={(key) => setFocusedCommentId(key)}
               onReply={callbacks.onReply}
               onEdit={callbacks.onEdit}

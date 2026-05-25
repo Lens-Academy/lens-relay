@@ -54,13 +54,13 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const ydoc = useYDoc();
   const yText: Y.Text = useMemo(() => ydoc.getText('contents'), [ydoc]);
 
-  // Stable refs for CommentsLayer scroll/editor DOM elements
-  const scrollContainerRef = useRef<HTMLElement | null>(null);
+  // Ref to the editor DOM for CommentsLayer's [data-comment-from] focus toggle.
+  // Assigned during render (not in a useEffect) so children mounted on the
+  // same commit see it populated — children's mount effects run before the
+  // parent's. (The scroll container is consumed via `useScrollSource` with the
+  // live element value, so it doesn't need a ref.)
   const editorRootRef = useRef<HTMLElement | null>(null);
-  useEffect(() => {
-    scrollContainerRef.current = editorView ? editorView.scrollDOM : null;
-    editorRootRef.current = editorView ? editorView.dom : null;
-  }, [editorView]);
+  editorRootRef.current = editorView ? editorView.dom : null;
 
   // Stable callbacks for CommentsLayer
   const getViewportRect = useCallback(() => {
@@ -316,7 +316,6 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               getViewportRect={getViewportRect}
               scrollSource={scrollSource}
               editorRootRef={editorRootRef}
-              currentUserName={displayName ?? 'anonymous'}
               onReply={callbacks.onReply}
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}

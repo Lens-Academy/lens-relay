@@ -181,11 +181,11 @@ describe('HtmlPreview bridge integration', () => {
     expect(screen.queryByText('x')).toBeNull();
   });
 
-  it('calls onOrphanedChange with reported string orphan ids', async () => {
+  it('forwards comments-rendered payloads via onCommentsRendered', async () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->');
-    const orphans: string[][] = [];
+    const reports: Array<{ found: string[]; orphaned: string[] }> = [];
 
     render(
       <HtmlPreview
@@ -193,7 +193,7 @@ describe('HtmlPreview bridge integration', () => {
         currentUser="me@x"
         origin={Symbol()}
         debounceMs={0}
-        onOrphanedChange={ids => orphans.push(ids)}
+        onCommentsRendered={r => reports.push({ found: r.found, orphaned: r.orphaned })}
       />
     );
     const iframe = screen.getByTitle('HTML preview') as HTMLIFrameElement;
@@ -208,7 +208,7 @@ describe('HtmlPreview bridge integration', () => {
       });
     });
 
-    expect(orphans.at(-1)).toEqual(['c1']);
+    expect(reports.at(-1)?.orphaned).toEqual(['c1']);
   });
 
   it('applies comments-rendered reports from a replacement iframe when it becomes active', async () => {
@@ -216,7 +216,7 @@ describe('HtmlPreview bridge integration', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<p>first</p><!--lens-comment {"id":"c1","author":"a","ts":"t","body":"x"}-->');
-    const orphans: string[][] = [];
+    const reports: Array<{ found: string[]; orphaned: string[] }> = [];
 
     const { container } = render(
       <HtmlPreview
@@ -224,7 +224,7 @@ describe('HtmlPreview bridge integration', () => {
         currentUser="me@x"
         origin={Symbol()}
         debounceMs={0}
-        onOrphanedChange={ids => orphans.push(ids)}
+        onCommentsRendered={r => reports.push({ found: r.found, orphaned: r.orphaned })}
       />
     );
     const activeFrame = screen.getByTitle('HTML preview') as HTMLIFrameElement;
@@ -266,7 +266,9 @@ describe('HtmlPreview bridge integration', () => {
         },
       });
     });
-    expect(orphans.at(-1)).toEqual(['c1']);
+    // Replacement frame's report is buffered until the frame activates;
+    // the last applied report is still the one from the active frame above.
+    expect(reports.at(-1)?.orphaned).toEqual(['c1']);
 
     await act(async () => {
       dispatchFromBridge(replacementFrame, {
@@ -276,7 +278,7 @@ describe('HtmlPreview bridge integration', () => {
     });
 
     expect(container.querySelector('iframe[data-preview-frame-state="active"]')).toBe(replacementFrame);
-    expect(orphans.at(-1)).toEqual([]);
+    expect(reports.at(-1)?.orphaned).toEqual([]);
   });
 
   it('responds to bridge ready by posting init back to the iframe contentWindow', async () => {

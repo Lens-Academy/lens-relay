@@ -47,8 +47,6 @@ export interface CommentsLayerProps {
   scrollSource: ScrollSource;
   /** Editor root element; the layer toggles data-comment-focused on matching badges. */
   editorRootRef?: RefObject<HTMLElement | null>;
-  /** Current user's display name for owner detection. */
-  currentUserName: string;
   /** Called when focused thread changes (or clears). */
   onFocusChange?: (key: ThreadKey | null) => void;
   onReply: (thread: ThreadView, body: string) => void;
@@ -71,7 +69,6 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     getViewportRect,
     scrollSource,
     editorRootRef,
-    currentUserName,
     onFocusChange,
     onReply,
     onEdit,
@@ -405,7 +402,6 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
               thread={thread}
               number={thread.order}
               focused={focusedThreadKey === thread.key}
-              currentUserName={currentUserName}
               onFocus={handleFocus}
               onReply={(t, body) => onReply(t, body)}
               onEdit={(msg, body) => onEdit(msg, body)}

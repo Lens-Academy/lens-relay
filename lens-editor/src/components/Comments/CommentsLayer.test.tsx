@@ -44,7 +44,6 @@ describe('CommentsLayer', () => {
         resolveAnchorY={() => 0}
         getViewportRect={() => ({ top: 0, height: 800 })}
         scrollSource={ss}
-        currentUserName="Bob"
         onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
       />
     );
@@ -59,7 +58,6 @@ describe('CommentsLayer', () => {
         resolveAnchorY={() => 222}
         getViewportRect={() => ({ top: 0, height: 800 })}
         scrollSource={ss}
-        currentUserName="Bob"
         onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
       />
     );
@@ -78,7 +76,6 @@ describe('CommentsLayer', () => {
         resolveAnchorY={() => 100}
         getViewportRect={() => ({ top: 50, height: 800 })}
         scrollSource={ss}
-        currentUserName="Bob"
         onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
       />
     );
@@ -105,7 +102,6 @@ describe('CommentsLayer', () => {
         resolveAnchorY={() => 100}
         getViewportRect={() => ({ top: 0, height: 800 })}
         scrollSource={ss}
-        currentUserName="Bob"
         onFocusChange={onFocusChange}
         onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
       />
@@ -128,7 +124,6 @@ describe('CommentsLayer', () => {
         resolveAnchorY={() => 100}
         getViewportRect={() => ({ top: 0, height: 800 })}
         scrollSource={ss}
-        currentUserName="Bob"
         onFocusChange={onFocusChange}
         onReply={vi.fn()} onEdit={vi.fn()} onDelete={vi.fn()}
       />
