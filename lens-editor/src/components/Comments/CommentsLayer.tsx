@@ -210,6 +210,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     const mid = viewport.height / 2;
 
     const items: LayoutItem[] = [];
+    let anyPositiveWeight = false;
     for (const thread of threads) {
       const anchorY = anchorYFor(thread, viewport);
       if (anchorY == null) continue; // anchor unresolvable AND not orphan-pinned — skip
@@ -235,6 +236,8 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
         weight = Number.POSITIVE_INFINITY;
       }
 
+      if (weight > 0) anyPositiveWeight = true;
+
       items.push({
         key: thread.key,
         anchorY,
@@ -243,7 +246,19 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
       });
     }
 
-    const result = computeWeightedLayout({ items, gap: CARD_GAP });
+    // If no item is in the viewport and no focused thread is pinned, every
+    // weight is 0. computeWeightedLayout's all-zero merge branch collapses
+    // every overlapping card onto the topmost anchorY and stacks the rest
+    // downward — which, with cards 1-25 anchored ~2000px above the viewport,
+    // drags the deep end of the stack visibly into the sidebar. Side-effect:
+    // as you scroll through a gap between comments, the badges visible in the
+    // sidebar slowly drift through the whole pre-gap range (1 → 25) until the
+    // next comment enters the viewport and PAV gets a real pull again.
+    // Bypass the layout entirely in this case — every card stays at its
+    // natural off-viewport anchorY, where it isn't visible to the user.
+    const result = anyPositiveWeight
+      ? computeWeightedLayout({ items, gap: CARD_GAP })
+      : new Map(items.map((it) => [it.key, it.anchorY]));
 
     // Edge clamp: near the top/bottom of the doc, shift all cards so the
     // first/last in-viewport card doesn't go off screen. Blended linearly over
