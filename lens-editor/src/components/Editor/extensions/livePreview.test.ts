@@ -196,20 +196,50 @@ describe('livePreview - wikilinks', () => {
     expect(widget!.classList.contains('unresolved')).toBe(false);
   });
 
-  it('replaces ![[Page]] embed with image widget when cursor outside', () => {
-    const content = '![[Page Name]] more';
+  it('replaces ![[image.png]] embed with image widget when cursor outside', () => {
+    const content = '![[photo.png]] more';
     const { view, cleanup: c } = createTestEditor(content, 19);
     cleanup = c;
     expect(hasClass(view, 'cm-image-widget')).toBe(true);
   });
 
   it('image embed widget displays filename for embed syntax', () => {
-    const content = '![[My Page]] end';
-    const { view, cleanup: c } = createTestEditor(content, 16, createRealContext());
+    const content = '![[diagram.png]] end';
+    const { view, cleanup: c } = createTestEditor(content, 20, createRealContext());
     cleanup = c;
     const widgets = view.contentDOM.querySelectorAll('.cm-image-widget');
     expect(widgets.length).toBe(1);
-    expect(widgets[0].textContent).toBe('My Page');
+    expect(widgets[0].textContent).toBe('diagram.png');
+  });
+
+  it('renders ![[note]] without image extension as wikilink, not image', () => {
+    const content = '![[../Lenses/Facilitator - M1 Welcome]] more';
+    const { view, cleanup: c } = createTestEditor(content, content.length, createRealContext());
+    cleanup = c;
+    expect(hasClass(view, 'cm-image-widget')).toBe(false);
+    expect(hasClass(view, 'cm-wikilink-widget')).toBe(true);
+  });
+
+  it('renders ![[note.md]] as wikilink, not image', () => {
+    const content = '![[note.md]] end';
+    const { view, cleanup: c } = createTestEditor(content, content.length, createRealContext());
+    cleanup = c;
+    expect(hasClass(view, 'cm-image-widget')).toBe(false);
+    expect(hasClass(view, 'cm-wikilink-widget')).toBe(true);
+  });
+
+  it('matches image extensions case-insensitively', () => {
+    const content = '![[shot.WEBP]] end';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+    expect(hasClass(view, 'cm-image-widget')).toBe(true);
+  });
+
+  it('treats ![[image.png|alt]] as image despite alias', () => {
+    const content = '![[photo.png|caption]] end';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+    expect(hasClass(view, 'cm-image-widget')).toBe(true);
   });
 
   it('calls onOpenNewTab on ctrl+click', () => {
@@ -787,8 +817,8 @@ describe('livePreview - inline images', () => {
     expect(hasClass(view, 'cm-link-widget')).toBe(true);
   });
 
-  it('renders ![[Page]] wikilink embeds as image widgets', () => {
-    const content = '![[My Page]] end';
+  it('renders ![[file.png]] wikilink embeds as image widgets', () => {
+    const content = '![[my-image.png]] end';
     const { view, cleanup: c } = createTestEditor(content, content.length);
     cleanup = c;
 

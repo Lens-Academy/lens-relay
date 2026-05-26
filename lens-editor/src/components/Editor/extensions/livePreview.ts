@@ -31,6 +31,7 @@ import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateEffect } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
+import { isImageEmbedTarget } from '../../../lib/isImageEmbedTarget';
 
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
@@ -606,8 +607,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 const pipeIndex = raw.indexOf('|');
                 const content = pipeIndex !== -1 ? raw.substring(0, pipeIndex) : raw;
 
-                // Detect ![[...]] image embed by checking for leading '!'
-                const isImageEmbed = view.state.doc.sliceString(node.from, node.from + 1) === '!';
+                // Detect ![[...]] image embed: leading '!' plus an image file extension.
+                // Without an image extension, fall through to render as a regular wikilink
+                // (the editor doesn't support note transclusion).
+                const hasImagePrefix = view.state.doc.sliceString(node.from, node.from + 1) === '!';
+                const isImageEmbed = hasImagePrefix && isImageEmbedTarget(content);
                 if (isImageEmbed) {
                   const normalizedPath = content.startsWith('/') ? content : `/${content}`;
                   // metadata uses folder-prefixed paths (e.g. "/Relay Folder 1/attachments/img.png").
