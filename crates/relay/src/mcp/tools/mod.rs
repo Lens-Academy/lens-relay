@@ -203,7 +203,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "create",
-            "description": "Create a new document or file at the specified path. Supports .md (markdown) and .json files.",
+            "description": "Create a new document or file at the specified path. Supports .md (markdown — wrapped in CriticMarkup), .html (raw HTML stored as-is, rendered by the HtmlEditor), and .json (raw content stored as-is).",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -211,11 +211,11 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path for the new file (e.g. 'Lens/NewDoc.md', 'Lens Edu/data.json')"
+                        "description": "Path for the new file (e.g. 'Lens/NewDoc.md', 'Lens/Page.html', 'Lens Edu/data.json')"
                     },
                     "content": {
                         "type": "string",
-                        "description": "Initial content. For markdown: wrapped in CriticMarkup. For JSON: raw content stored as-is."
+                        "description": "Initial content. For markdown: wrapped in CriticMarkup. For HTML and JSON: raw content stored as-is."
                     },
                     "session_id": {
                         "type": "string",
