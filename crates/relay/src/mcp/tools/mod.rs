@@ -23,7 +23,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "create_session",
-            "description": "Create a session for this conversation. Call this once before using other tools. Returns a session_id that must be passed to all subsequent tool calls. Pass the human operator's first name (e.g. 'Chris' or 'Luc') so that suggestions appear as 'Chris\\'s AI' rather than a generic 'AI' in the review UI.",
+            "description": "Create a session for this conversation. Call this once before using other tools. Returns a session_id that must be passed to all subsequent tool calls. Pass the human operator's first name (e.g. \"Chris\" or \"Luc\") so that suggestions appear as \"Chris's AI\" rather than a generic \"AI\" in the review UI.",
             "inputSchema": {
                 "type": "object",
                 "required": [],
@@ -31,7 +31,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "First name of the human operator running this AI session (e.g. 'Chris', 'Luc'). Suggestions will be attributed to '{name}\\'s AI' in the review UI. Omit to use the generic 'AI' label."
+                        "description": "First name of the human operator running this AI session (e.g. \"Chris\", \"Luc\"). Suggestions will be attributed to \"{name}'s AI\" in the review UI. Omit to use the generic \"AI\" label."
                     }
                 }
             }
