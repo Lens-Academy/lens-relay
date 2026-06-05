@@ -83,8 +83,21 @@ impl SessionManager {
             self.cleanup_stale(SESSION_TTL);
         }
         let author_name = match human_name {
-            Some(name) if !name.trim().is_empty() => format!("{}'s AI", name.trim()),
-            _ => "AI".to_string(),
+            Some(name) => {
+                // Strip chars that would break the JSON author field in CriticMarkup
+                // (format: {"author":"NAME","timestamp":...}@@)
+                let sanitized: String = name
+                    .chars()
+                    .filter(|c| *c != '"' && *c != '\\' && !c.is_control())
+                    .collect();
+                let trimmed = sanitized.trim();
+                if trimmed.is_empty() {
+                    "AI".to_string()
+                } else {
+                    format!("{}'s AI", trimmed)
+                }
+            }
+            None => "AI".to_string(),
         };
         let session_id = nanoid::nanoid!(8);
         let now = Instant::now();
@@ -195,6 +208,15 @@ mod tests {
         let id = mgr.create_session(default_access(), Some("   "));
         let session = mgr.get_session(&id).unwrap();
         assert_eq!(session.author_name, "AI");
+    }
+
+    #[test]
+    fn create_session_name_strips_json_breaking_chars() {
+        let mgr = SessionManager::new();
+        // A name with quotes and backslash would break the CriticMarkup JSON author field
+        let id = mgr.create_session(default_access(), Some("Ch\"ris\\"));
+        let session = mgr.get_session(&id).unwrap();
+        assert_eq!(session.author_name, "Chris's AI");
     }
 
     #[test]
