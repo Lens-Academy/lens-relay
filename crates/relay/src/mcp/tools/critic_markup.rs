@@ -67,6 +67,7 @@ pub fn extract_comments(text: &str) -> Vec<CommentInfo> {
 }
 
 /// Returns true for AI-authored labels: the generic "AI" or any "{name}'s AI" form.
+/// Assumes only AI sessions produce the "'s AI" suffix (enforced in `session.rs`).
 fn is_ai_author(author: &str) -> bool {
     author == "AI" || author.ends_with("'s AI")
 }
