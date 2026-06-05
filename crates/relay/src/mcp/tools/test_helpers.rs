@@ -80,7 +80,7 @@ pub(crate) async fn build_test_server(entries: &[(&str, &str, &str)]) -> Arc<Ser
 
 /// Create a session with a doc marked as already read.
 pub(crate) fn setup_session_with_read(server: &Arc<Server>, doc_id: &str) -> String {
-    let sid = server.mcp_sessions.create_session(default_access());
+    let sid = server.mcp_sessions.create_session(default_access(), None);
     if let Some(mut session) = server.mcp_sessions.get_session_mut(&sid) {
         session.read_docs.insert(doc_id.to_string());
     }
@@ -89,7 +89,7 @@ pub(crate) fn setup_session_with_read(server: &Arc<Server>, doc_id: &str) -> Str
 
 /// Create a session WITHOUT any docs marked as read.
 pub(crate) fn setup_session_no_reads(server: &Arc<Server>) -> String {
-    server.mcp_sessions.create_session(default_access())
+    server.mcp_sessions.create_session(default_access(), None)
 }
 
 /// Build a test server with a blob file in the store and filemeta entry with hash.

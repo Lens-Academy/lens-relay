@@ -356,7 +356,7 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
   const navigate = useNavigate();
 
   // Filter state
-  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set(['AI']));
+  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
   const [timeRange, setTimeRange] = useState<TimeRange>({ mode: 'range', fromAgo: 3600_000, toAgo: 0, customFrom: '', customTo: '' });
   const [locationFilter, setLocationFilter] = useState<Set<string>>(new Set());
   const [confirmAction, setConfirmAction] = useState<'accept' | 'reject' | null>(null);

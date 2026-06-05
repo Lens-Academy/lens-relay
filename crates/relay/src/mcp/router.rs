@@ -286,7 +286,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_unknown_tool_returns_tool_error() {
         let server = test_server();
-        let sid = server.mcp_sessions.create_session(default_access());
+        let sid = server.mcp_sessions.create_session(default_access(), None);
 
         let req = make_request(
             json!(5),
@@ -372,7 +372,7 @@ mod tests {
         server.docs().insert(content_doc_id.clone(), dwskv);
 
         // Allocate an app session via SessionManager directly.
-        let sid = server.mcp_sessions.create_session(default_access());
+        let sid = server.mcp_sessions.create_session(default_access(), None);
 
         // Verify read_docs is empty before read
         {
@@ -581,7 +581,7 @@ mod tests {
             folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
             folder_name: Some("Lens Edu".to_string()),
         };
-        let sid = server.mcp_sessions.create_session(scoped_access.clone());
+        let sid = server.mcp_sessions.create_session(scoped_access.clone(), None);
 
         let req = make_request(
             json!(51),
@@ -631,7 +631,7 @@ mod tests {
         let server = test_server();
 
         // Allocate one, then evict everything via cleanup.
-        let stale_sid = server.mcp_sessions.create_session(default_access());
+        let stale_sid = server.mcp_sessions.create_session(default_access(), None);
         server
             .mcp_sessions
             .cleanup_stale(std::time::Duration::from_secs(0));

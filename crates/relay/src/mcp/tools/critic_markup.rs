@@ -66,8 +66,13 @@ pub fn extract_comments(text: &str) -> Vec<CommentInfo> {
     comments
 }
 
+/// Returns true for AI-authored labels: the generic "AI" or any "{name}'s AI" form.
+fn is_ai_author(author: &str) -> bool {
+    author == "AI" || author.ends_with("'s AI")
+}
+
 /// Validate that non-AI comments from `old_str` are preserved in `new_str`.
-/// AI-authored comments (author == "AI") can be modified or removed.
+/// AI-authored comments ("AI" or "{name}'s AI") can be modified or removed.
 /// New comments in `new_str` are allowed.
 /// Compares `full_match` (not just content) to prevent metadata reattribution.
 pub fn validate_comment_preservation(old_str: &str, new_str: &str) -> Result<(), String> {
@@ -75,7 +80,7 @@ pub fn validate_comment_preservation(old_str: &str, new_str: &str) -> Result<(),
     let new_comments = extract_comments(new_str);
 
     for old_comment in &old_comments {
-        if old_comment.author == "AI" {
+        if is_ai_author(&old_comment.author) {
             continue; // AI comments can be modified/removed
         }
 
@@ -2144,6 +2149,26 @@ mod tests {
         let result = validate_comment_preservation(
             r#"Hello {>>{"author":"AI"}@@note<<} world"#,
             "Hello world",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_comments_named_ai_removed_ok() {
+        // Named AI comment (e.g. "Chris's AI") removed → OK
+        let result = validate_comment_preservation(
+            r#"Hello {>>{"author":"Chris's AI"}@@note<<} world"#,
+            "Hello world",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_comments_named_ai_modified_ok() {
+        // Named AI comment modified → OK
+        let result = validate_comment_preservation(
+            r#"Hello {>>{"author":"Luc's AI"}@@note<<} world"#,
+            r#"Hello {>>{"author":"Luc's AI"}@@updated<<} world"#,
         );
         assert!(result.is_ok());
     }

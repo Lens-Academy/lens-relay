@@ -149,7 +149,7 @@ pub async fn execute(
     }
 
     // 3. Check read-before-edit: session must have read this document first
-    {
+    let author = {
         let session = server
             .mcp_sessions
             .get_session(session_id)
@@ -160,8 +160,9 @@ pub async fn execute(
                 file_path
             ));
         }
+        session.author_name.clone()
         // Drop session guard before accessing Y.Doc
-    }
+    };
 
     // Blob edit path (e.g. .json) — direct text replacement, no CriticMarkup
     if blob::is_blob_file(file_path) {
@@ -210,7 +211,7 @@ pub async fn execute(
         .as_millis() as u64;
 
     let merge_result =
-        critic_markup::merge_edit(&raw_content, &effective_old, new_string, "AI", timestamp)
+        critic_markup::merge_edit(&raw_content, &effective_old, new_string, &author, timestamp)
             .map_err(|e| format!("Error: {}", e))?;
 
     // No-op check
@@ -242,7 +243,7 @@ pub async fn execute(
 
         // Recompute merge against current raw (in case of concurrent changes)
         let final_merge =
-            critic_markup::merge_edit(&current_raw, &effective_old, new_string, "AI", timestamp)
+            critic_markup::merge_edit(&current_raw, &effective_old, new_string, &author, timestamp)
                 .map_err(|e| format!("Error: {}", e))?;
 
         // Targeted replacement in Y.Doc
