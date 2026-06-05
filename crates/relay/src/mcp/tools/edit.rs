@@ -210,8 +210,13 @@ pub async fn execute(
         .unwrap()
         .as_millis() as u64;
 
+    // Attribute any comment the AI adds or edits to the session's author label.
+    // Comments preserved unchanged from old_string are left byte-identical.
+    let new_string =
+        critic_markup::stamp_new_comments(old_string, new_string, &author, timestamp);
+
     let merge_result =
-        critic_markup::merge_edit(&raw_content, &effective_old, new_string, &author, timestamp)
+        critic_markup::merge_edit(&raw_content, &effective_old, &new_string, &author, timestamp)
             .map_err(|e| format!("Error: {}", e))?;
 
     // No-op check
@@ -243,7 +248,7 @@ pub async fn execute(
 
         // Recompute merge against current raw (in case of concurrent changes)
         let final_merge =
-            critic_markup::merge_edit(&current_raw, &effective_old, new_string, &author, timestamp)
+            critic_markup::merge_edit(&current_raw, &effective_old, &new_string, &author, timestamp)
                 .map_err(|e| format!("Error: {}", e))?;
 
         // Targeted replacement in Y.Doc
@@ -1131,6 +1136,77 @@ mod tests {
         assert!(
             raw.contains("observation"),
             "Comment should be in doc: {}",
+            raw
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_attributes_plain_comment_to_named_session() {
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "Hello world")]).await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+
+        // Named session: comments should be attributed to "Chris's AI".
+        let sid = server
+            .mcp_sessions
+            .create_session(default_access(), Some("Chris"));
+        server
+            .mcp_sessions
+            .get_session_mut(&sid)
+            .unwrap()
+            .read_docs
+            .insert(doc_id.clone());
+
+        // Model writes a bare comment with no author metadata.
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "Hello world",
+                "new_string": "Hello {>>nice point<<} world"
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "adding comment should succeed: {:?}", result);
+        let raw = read_doc_content(&server, &doc_id);
+        assert!(
+            raw.contains(r#"{>>{"author":"Chris's AI""#),
+            "Comment should be attributed to the named session: {}",
+            raw
+        );
+        assert!(raw.contains("nice point"), "Comment text preserved: {}", raw);
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_model_spoofing_human_comment_author() {
+        // A new comment the model attributes to a human is re-stamped as the
+        // session author, so it cannot masquerade as a human reviewer.
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "Hello world")]).await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "Hello world",
+                "new_string": r#"Hello {>>{"author":"Luc"}@@note<<} world"#
+            }),
+        )
+        .await;
+
+        assert!(result.is_ok(), "adding comment should succeed: {:?}", result);
+        let raw = read_doc_content(&server, &doc_id);
+        assert!(
+            raw.contains(r#"{>>{"author":"AI""#),
+            "Spoofed author should be replaced with the session label: {}",
+            raw
+        );
+        assert!(
+            !raw.contains(r#""author":"Luc""#),
+            "Model-supplied human author must not survive: {}",
             raw
         );
     }

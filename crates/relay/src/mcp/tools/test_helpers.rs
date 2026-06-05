@@ -5,7 +5,7 @@ use y_sweet_core::doc_sync::DocWithSyncKv;
 use y_sweet_core::share_token::McpAccess;
 use yrs::{Any, Doc, GetString, Map, ReadTxn, Text, Transact, WriteTxn};
 
-fn default_access() -> McpAccess {
+pub(crate) fn default_access() -> McpAccess {
     McpAccess {
         writable: true,
         folder_uuid: None,

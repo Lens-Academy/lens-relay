@@ -5,7 +5,11 @@ use std::sync::Arc;
 use super::blob;
 
 /// Execute the `create` tool: create a new document or file at the specified path.
-pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
+pub async fn execute(
+    server: &Arc<Server>,
+    session_id: &str,
+    arguments: &Value,
+) -> Result<String, String> {
     let file_path = arguments
         .get("file_path")
         .and_then(|v| v.as_str())
@@ -31,6 +35,20 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
     if !file_path.ends_with(".md") {
         return Err("file_path must end with one of: .md, .html, .json".to_string());
     }
+
+    // Attribute any comment in the initial content to the session's author label.
+    let author = server
+        .mcp_sessions
+        .get_session(session_id)
+        .ok_or_else(|| "Error: Session not found".to_string())?
+        .author_name
+        .clone();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let content = super::critic_markup::stamp_new_comments("", content, &author, timestamp);
+    let content = content.as_str();
 
     let md_content = if content.is_empty() { "_" } else { content };
 
@@ -98,8 +116,10 @@ mod tests {
     #[tokio::test]
     async fn create_json_stores_blob() {
         let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
         let result = execute(
             &server,
+            &sid,
             &json!({
                 "file_path": "Lens/data.json",
                 "content": r#"{"hello": "world"}"#,
@@ -116,8 +136,10 @@ mod tests {
     #[tokio::test]
     async fn create_json_no_criticmarkup() {
         let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
         execute(
             &server,
+            &sid,
             &json!({
                 "file_path": "Lens/test.json",
                 "content": r#"{"key": "value"}"#,
@@ -144,8 +166,10 @@ mod tests {
     #[tokio::test]
     async fn create_md_still_works() {
         let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
         let result = execute(
             &server,
+            &sid,
             &json!({
                 "file_path": "Lens/Doc.md",
                 "content": "Hello world",
@@ -165,8 +189,10 @@ mod tests {
         use yrs::{GetString, Map, ReadTxn, Transact};
 
         let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
         let result = execute(
             &server,
+            &sid,
             &json!({
                 "file_path": "Lens/page.html",
                 "content": "<h1>Hello</h1>",
@@ -219,8 +245,10 @@ mod tests {
     #[tokio::test]
     async fn create_unsupported_extension_rejected() {
         let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
         let result = execute(
             &server,
+            &sid,
             &json!({
                 "file_path": "Lens/page.xyz",
                 "content": "Hello world",
