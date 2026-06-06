@@ -61,6 +61,11 @@ function displayAuthor(author: string): string {
   if (author === 'AI') return 'AI (MCP)';
   return author;
 }
+
+/** Mirrors the Rust `is_ai_author` check in critic_markup.rs. */
+function isAiAuthor(author: string): boolean {
+  return author === 'AI' || author.endsWith("'s AI");
+}
 interface FolderInfo {
   id: string;
   name: string;
@@ -356,9 +361,10 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
   const navigate = useNavigate();
 
   // Filter state
-  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set(['AI']));
+  const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
   const [timeRange, setTimeRange] = useState<TimeRange>({ mode: 'range', fromAgo: 3600_000, toAgo: 0, customFrom: '', customTo: '' });
   const [locationFilter, setLocationFilter] = useState<Set<string>>(new Set());
+  const filterSeededRef = useRef(false);
   const [confirmAction, setConfirmAction] = useState<'accept' | 'reject' | null>(null);
 
   const toggleSet = (prev: Set<string>, value: string) => {
@@ -387,6 +393,14 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
     }
     return Array.from(authors).sort();
   }, [data]);
+
+  // Seed the author filter to AI-only once the first batch of data arrives
+  useEffect(() => {
+    if (filterSeededRef.current || uniqueAuthors.length === 0) return;
+    filterSeededRef.current = true;
+    const aiAuthors = uniqueAuthors.filter(isAiAuthor);
+    if (aiAuthors.length > 0) setAuthorFilter(new Set(aiAuthors));
+  }, [uniqueAuthors]);
 
   // Derive location entries from data + folders
   const locations = useMemo<LocationEntry[]>(() => {

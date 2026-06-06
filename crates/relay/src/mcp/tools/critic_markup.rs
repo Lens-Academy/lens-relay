@@ -66,8 +66,57 @@ pub fn extract_comments(text: &str) -> Vec<CommentInfo> {
     comments
 }
 
+/// Returns true for AI-authored labels: the generic "AI" or any "{name}'s AI" form.
+/// Assumes only AI sessions produce the "'s AI" suffix (enforced in `session.rs`).
+fn is_ai_author(author: &str) -> bool {
+    author == "AI" || author.ends_with("'s AI")
+}
+
+/// Stamp AI author/timestamp metadata onto comments the model is adding or
+/// editing. Each `{>>...<<}` block in `new_str` is rewritten to
+/// `{>>{"author":"<author>","timestamp":<ts>}@@<content><<}`, EXCEPT blocks
+/// whose exact markup also appears in `old_str` — those are being preserved
+/// unchanged and must stay byte-identical (see `validate_comment_preservation`).
+///
+/// This mirrors how `merge_edit` stamps insertions/deletions: comments the AI
+/// writes are attributed to the session's author label rather than left as
+/// "Unknown" or a model-chosen string. Because the author is forced to the
+/// session label, the model cannot spoof a human author on a new comment.
+///
+/// `author` must already be sanitized (no `"`, `\`, or control chars) so it is
+/// safe to interpolate into the JSON metadata; session author labels are
+/// sanitized at creation in `session.rs`.
+pub fn stamp_new_comments(old_str: &str, new_str: &str, author: &str, timestamp: u64) -> String {
+    let comments = extract_comments(new_str);
+    if comments.is_empty() {
+        return new_str.to_string();
+    }
+    let preserved: std::collections::HashSet<String> = extract_comments(old_str)
+        .into_iter()
+        .map(|c| c.full_match)
+        .collect();
+
+    let mut result = String::with_capacity(new_str.len());
+    let mut cursor = 0;
+    for comment in &comments {
+        result.push_str(&new_str[cursor..comment.from]);
+        if preserved.contains(&comment.full_match) {
+            // Unchanged comment carried over from old_str — keep byte-identical.
+            result.push_str(&comment.full_match);
+        } else {
+            result.push_str(&format!(
+                r#"{{>>{{"author":"{}","timestamp":{}}}@@{}<<}}"#,
+                author, timestamp, comment.content
+            ));
+        }
+        cursor = comment.to;
+    }
+    result.push_str(&new_str[cursor..]);
+    result
+}
+
 /// Validate that non-AI comments from `old_str` are preserved in `new_str`.
-/// AI-authored comments (author == "AI") can be modified or removed.
+/// AI-authored comments ("AI" or "{name}'s AI") can be modified or removed.
 /// New comments in `new_str` are allowed.
 /// Compares `full_match` (not just content) to prevent metadata reattribution.
 pub fn validate_comment_preservation(old_str: &str, new_str: &str) -> Result<(), String> {
@@ -75,7 +124,7 @@ pub fn validate_comment_preservation(old_str: &str, new_str: &str) -> Result<(),
     let new_comments = extract_comments(new_str);
 
     for old_comment in &old_comments {
-        if old_comment.author == "AI" {
+        if is_ai_author(&old_comment.author) {
             continue; // AI comments can be modified/removed
         }
 
@@ -1901,7 +1950,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn b39_content_with_criticmarkup_delimiters_in_created_doc() {
         // KNOWN LIMITATION: When AI creates a doc containing literal CriticMarkup
         // delimiters, and the content is wrapped in {++...++}, the parser's
@@ -2144,6 +2192,89 @@ mod tests {
         let result = validate_comment_preservation(
             r#"Hello {>>{"author":"AI"}@@note<<} world"#,
             "Hello world",
+        );
+        assert!(result.is_ok());
+    }
+
+    // --- stamp_new_comments ---
+
+    #[test]
+    fn stamp_plain_new_comment_gets_author() {
+        let out = stamp_new_comments("Hello world", "Hello {>>nice point<<} world", "Chris's AI", 42);
+        assert_eq!(
+            out,
+            r#"Hello {>>{"author":"Chris's AI","timestamp":42}@@nice point<<} world"#
+        );
+    }
+
+    #[test]
+    fn stamp_overrides_model_supplied_author() {
+        // The model cannot spoof a human author on a new comment.
+        let out = stamp_new_comments(
+            "Hello world",
+            r#"Hello {>>{"author":"Luc"}@@note<<} world"#,
+            "Chris's AI",
+            42,
+        );
+        assert_eq!(
+            out,
+            r#"Hello {>>{"author":"Chris's AI","timestamp":42}@@note<<} world"#
+        );
+    }
+
+    #[test]
+    fn stamp_leaves_preserved_comment_untouched() {
+        // A comment carried over unchanged from old_str keeps its exact markup.
+        let old = r#"Hello {>>{"author":"Human","timestamp":1}@@keep<<} world"#;
+        let out = stamp_new_comments(old, old, "Chris's AI", 42);
+        assert_eq!(out, old);
+    }
+
+    #[test]
+    fn stamp_attributes_new_comment_alongside_preserved_one() {
+        let old = r#"A {>>{"author":"Human","timestamp":1}@@keep<<} B"#;
+        let new = r#"A {>>{"author":"Human","timestamp":1}@@keep<<} B {>>added<<}"#;
+        let out = stamp_new_comments(old, new, "Chris's AI", 42);
+        assert_eq!(
+            out,
+            r#"A {>>{"author":"Human","timestamp":1}@@keep<<} B {>>{"author":"Chris's AI","timestamp":42}@@added<<}"#
+        );
+    }
+
+    #[test]
+    fn stamp_no_comments_is_passthrough() {
+        let out = stamp_new_comments("old", "just plain text", "Chris's AI", 42);
+        assert_eq!(out, "just plain text");
+    }
+
+    #[test]
+    fn stamp_modified_ai_comment_refreshes_attribution() {
+        // Editing an AI comment's text yields a fresh stamp (new full_match ≠ old).
+        let old = r#"X {>>{"author":"AI","timestamp":1}@@old<<} Y"#;
+        let new = r#"X {>>{"author":"AI","timestamp":1}@@new<<} Y"#;
+        let out = stamp_new_comments(old, new, "Luc's AI", 99);
+        assert_eq!(
+            out,
+            r#"X {>>{"author":"Luc's AI","timestamp":99}@@new<<} Y"#
+        );
+    }
+
+    #[test]
+    fn validate_comments_named_ai_removed_ok() {
+        // Named AI comment (e.g. "Chris's AI") removed → OK
+        let result = validate_comment_preservation(
+            r#"Hello {>>{"author":"Chris's AI"}@@note<<} world"#,
+            "Hello world",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_comments_named_ai_modified_ok() {
+        // Named AI comment modified → OK
+        let result = validate_comment_preservation(
+            r#"Hello {>>{"author":"Luc's AI"}@@note<<} world"#,
+            r#"Hello {>>{"author":"Luc's AI"}@@updated<<} world"#,
         );
         assert!(result.is_ok());
     }

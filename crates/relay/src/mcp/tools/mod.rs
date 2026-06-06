@@ -23,12 +23,17 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "create_session",
-            "description": "Create a session for this conversation. Call this once before using other tools. Returns a session_id that must be passed to all subsequent tool calls.",
+            "description": "Create a session for this conversation. Call this once before using other tools. Returns a session_id that must be passed to all subsequent tool calls. Pass `name` to attribute suggestions to the user (shown as \"{name}'s AI\" in the review UI).",
             "inputSchema": {
                 "type": "object",
                 "required": [],
                 "additionalProperties": false,
-                "properties": {}
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "User's first name; suggestions show as \"{name}'s AI\". Ask the user if you don't reliably know it. Omit if truly unavailable."
+                    }
+                }
             }
         }),
         json!({
@@ -192,7 +197,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "The replacement text. Empty string for deletion."
+                        "description": "The replacement text. Empty string for deletion. To leave a comment for human reviewers, wrap a note in comment delimiters, e.g. '{>>your note<<}'; it is automatically attributed to your session (do not add author metadata yourself)."
                     },
                     "session_id": {
                         "type": "string",
@@ -275,7 +280,8 @@ pub async fn dispatch_tool(
     // in `mcp/session.rs` for why session identity lives in the JSON-RPC
     // payload rather than the HTTP transport.
     if name == "create_session" {
-        let sid = server.mcp_sessions.create_session(access.clone());
+        let human_name = arguments.get("name").and_then(|v| v.as_str());
+        let sid = server.mcp_sessions.create_session(access.clone(), human_name);
         return tool_success(&sid);
     }
 
@@ -359,7 +365,7 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "create" => match create_doc::execute(server, arguments).await {
+        "create" => match create_doc::execute(server, session_id, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
@@ -431,6 +437,7 @@ mod integration_tests {
         // 1. Create JSON file
         let create_result = create_doc::execute(
             &server,
+            &sid,
             &json!({
                 "file_path": "Lens/config.json",
                 "content": r#"{"version": 1, "name": "test"}"#,

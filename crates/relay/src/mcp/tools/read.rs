@@ -450,7 +450,7 @@ mod tests {
                 writable: true,
                 folder_uuid: None,
                 folder_name: None,
-            });
+            }, None);
 
         // THIS IS THE BUG: read should reload from store, not fail
         let result = execute(
