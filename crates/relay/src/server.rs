@@ -2241,7 +2241,91 @@ impl Server {
             }
         }
 
+        // Diagnostic: the resolver did not know this path. A freshly-created (or
+        // recently-renamed) file can exist in filemeta_v0 — the source of truth —
+        // while the eventually-consistent doc_resolver is stale, in which case the
+        // rename falls through to the folder branch and is rejected with a 400
+        // ("Folder destination must not end with '.md'"): the observed
+        // "Move failed: 400". Log enough to tell missing vs stale-path apart.
+        self.log_resolver_miss_for_move(path, new_path);
+
         self.move_folder_path(path, new_path, target_folder).await
+    }
+
+    /// Read-only diagnostic: resolve a user-facing path to a [`DocInfo`] by
+    /// scanning loaded folder docs' `filemeta_v0` directly (the source of truth),
+    /// bypassing the eventually-consistent `doc_resolver`. Used only for
+    /// observability here; see [`Server::log_resolver_miss_for_move`] and
+    /// `handle_debug_resolve`.
+    fn resolve_path_via_filemeta(&self, path: &str) -> Option<DocInfo> {
+        for folder_doc_id in link_indexer::find_all_folder_docs(&self.docs) {
+            let Some(doc_ref) = self.docs.get(&folder_doc_id) else {
+                continue;
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let folder_name =
+                y_sweet_core::doc_resolver::read_folder_name(&guard.doc, &folder_doc_id);
+            let relay_id = link_indexer::parse_doc_id(&folder_doc_id)
+                .map(|(r, _)| r.to_string())
+                .unwrap_or_default();
+            let txn = guard.doc.transact();
+            let Some(filemeta) = txn.get_map("filemeta_v0") else {
+                continue;
+            };
+            for (entry_path, value) in filemeta.iter(&txn) {
+                let Some(uuid) = link_indexer::extract_id_from_filemeta_entry(&value, &txn) else {
+                    continue;
+                };
+                let path_str: &str = &entry_path;
+                let stripped = path_str.strip_prefix('/').unwrap_or(path_str);
+                let full_path = format!("{}/{}", folder_name, stripped);
+                if full_path == path {
+                    let hash = link_indexer::extract_hash_from_filemeta_entry(&value, &txn);
+                    let doc_id = format!("{}-{}", relay_id, uuid);
+                    return Some(DocInfo {
+                        uuid,
+                        relay_id,
+                        folder_doc_id: folder_doc_id.clone(),
+                        folder_name,
+                        doc_id,
+                        hash,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// Log a `move_path` resolver miss with enough context to diagnose the
+    /// "Move failed: 400" class: whether the file actually exists (filemeta), and
+    /// — if so — what path the resolver currently holds for it (None = missing,
+    /// Some(other) = stale path). Read-only; does not change move behavior.
+    fn log_resolver_miss_for_move(&self, path: &str, new_path: &str) {
+        match self.resolve_path_via_filemeta(path) {
+            Some(info) => {
+                let resolver_path = self.doc_resolver().path_for_uuid(&info.uuid);
+                tracing::warn!(
+                    requested_path = %path,
+                    new_path = %new_path,
+                    uuid = %info.uuid,
+                    folder = %info.folder_name,
+                    in_filemeta = true,
+                    resolver_path_for_uuid = ?resolver_path,
+                    "move: doc_resolver stale — path missing from resolver but present in filemeta_v0; rename will 400"
+                );
+            }
+            None => {
+                // Not in filemeta either: a genuinely unknown path or a folder
+                // move. Expected for legitimate folder renames, so keep it quiet.
+                tracing::debug!(
+                    requested_path = %path,
+                    new_path = %new_path,
+                    in_filemeta = false,
+                    "move: resolver miss and path not in any loaded folder's filemeta_v0; treating as a folder move"
+                );
+            }
+        }
     }
 
     fn filemeta_type_for_uuid(&self, uuid: &str) -> Option<String> {
@@ -3543,6 +3627,7 @@ impl Server {
             .route("/doc/check", post(handle_check_documents))
             .route("/doc/check-video-ids", post(handle_check_video_ids))
             .route("/open/*path", get(handle_open_by_path))
+            .route("/debug/resolve", get(handle_debug_resolve))
             .route("/suggestions", get(handle_suggestions));
 
         // Register /mcp if MCP_API_KEY or SHARE_TOKEN_SECRET is set
@@ -4418,7 +4503,18 @@ async fn handle_move_path(
     let result = server_state
         .move_path(&body.path, &body.new_path, body.target_folder.as_deref())
         .await
-        .map_err(AppError::from)?;
+        .map_err(|e| {
+            // Move failures are returned to the client with an empty body, so
+            // without this they are invisible in the logs.
+            tracing::warn!(
+                path = %body.path,
+                new_path = %body.new_path,
+                target_folder = ?body.target_folder,
+                error = ?e,
+                "move_path request failed"
+            );
+            AppError::from(e)
+        })?;
 
     Ok(Json(MoveDocResponse {
         old_path: result.old_path,
@@ -4946,6 +5042,45 @@ async fn get_doc_folder(
             anyhow!("Document not found in any folder"),
         )),
     }
+}
+
+#[derive(Deserialize)]
+struct DebugResolveQuery {
+    path: String,
+}
+
+/// GET /debug/resolve?path=<folder>/<subpath>/<name>.md
+///
+/// Read-only diagnostic comparing the eventually-consistent `doc_resolver`
+/// against `filemeta_v0` (the source of truth) for a single path. `stale: true`
+/// means the file exists in filemeta but the resolver cannot resolve it at this
+/// path — the condition that makes a rename fail with "Move failed: 400".
+/// `resolver_path_for_uuid` shows where the resolver currently thinks the doc
+/// lives (None = missing entirely; a different path = stale entry).
+async fn handle_debug_resolve(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Query(params): Query<DebugResolveQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    let path = params.path;
+    let resolver_hit = server_state.doc_resolver().resolve_path(&path);
+    let filemeta_hit = server_state.resolve_path_via_filemeta(&path);
+    let resolver_path_for_uuid = filemeta_hit
+        .as_ref()
+        .and_then(|i| server_state.doc_resolver().path_for_uuid(&i.uuid));
+
+    Ok(Json(serde_json::json!({
+        "path": path,
+        "resolver_hit": resolver_hit.is_some(),
+        "resolver_uuid": resolver_hit.as_ref().map(|i| i.uuid.clone()),
+        "in_filemeta": filemeta_hit.is_some(),
+        "filemeta_uuid": filemeta_hit.as_ref().map(|i| i.uuid.clone()),
+        "filemeta_folder": filemeta_hit.as_ref().map(|i| i.folder_name.clone()),
+        "resolver_path_for_uuid": resolver_path_for_uuid,
+        "stale": filemeta_hit.is_some() && resolver_hit.is_none(),
+    })))
 }
 
 fn get_token_from_header(
