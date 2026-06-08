@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
-import { syntaxTree } from '@codemirror/language';
+import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
 import { StateEffect, Compartment } from '@codemirror/state';
 import { flashHeadingLine } from '../Editor/extensions/headingFlash';
 import type { EditorState } from '@codemirror/state';
@@ -73,13 +73,96 @@ export function extractHeadings(state: EditorState): Heading[] {
 }
 
 /**
+ * Cheap, independent ground-truth count of heading-like lines, read directly from
+ * the document text rather than the syntax tree. Used only as a diagnostic
+ * cross-check when an incomplete-parse anomaly is already suspected, so it never
+ * runs on the hot path.
+ *
+ * Caveat: this can overcount `#` lines that live inside fenced code blocks (those
+ * are not real headings), so it is a signal, not an exact count. A large gap
+ * between this and the tree-extracted count is still strong evidence that the
+ * syntax tree was incomplete at extraction time.
+ */
+function countHeadingLikeLines(state: EditorState): number {
+  let count = 0;
+  const doc = state.doc;
+  for (let i = 1; i <= doc.lines; i++) {
+    if (/^#{1,6}\s/.test(doc.line(i).text)) count++;
+  }
+  return count;
+}
+
+/**
  * Hook to get headings from an EditorView.
  * Computes headings from current state on each call.
  * Parent should trigger re-render when document changes (via stateVersion prop).
+ *
+ * Observability: the ToC reads CodeMirror's lazily/incrementally parsed syntax
+ * tree. If the tree isn't parsed all the way to the end of the document at extract
+ * time, headings below the parsed boundary are silently missing — and because a
+ * background parse completing does NOT trigger a React re-render, the ToC can stay
+ * stale until some unrelated re-render (e.g. clicking a heading) re-runs extraction.
+ * The warns below fire ONLY when that incomplete-parse condition is detected, so
+ * they're silent in normal use but capture the rare failure in the wild.
  */
 export function useHeadings(view: EditorView | null): Heading[] {
+  // Called unconditionally (before the early return) to keep hook order stable.
+  const diagRef = useRef<{ lastFullyParsed: boolean }>({ lastFullyParsed: true });
   if (!view) return [];
-  return extractHeadings(view.state);
+
+  const state = view.state;
+  const headings = extractHeadings(state);
+
+  const docLen = state.doc.length;
+  const fullyParsed = syntaxTreeAvailable(state, docLen);
+
+  if (!fullyParsed) {
+    // ALWAYS-ON anomaly warn: the tree didn't cover the whole doc at extract time,
+    // so the ToC is probably missing headings below the parsed boundary.
+    const treeLen = syntaxTree(state).length;
+    const groundTruth = countHeadingLikeLines(state);
+    console.warn('[ToC] syntax tree incomplete at heading extraction', {
+      docLength: docLen,
+      treeParsedTo: treeLen,
+      parsedFraction: docLen ? +(treeLen / docLen).toFixed(3) : 1,
+      headingsExtracted: headings.length,
+      headingLikeLinesInDoc: groundTruth,
+      likelyMissing: Math.max(0, groundTruth - headings.length),
+    });
+
+    // SMOKING-GUN deferred re-check (observability only — logs, no state change,
+    // no doc mutation, no forced parse): did parsing finish later while the ToC
+    // stayed stale? extractHeadings here only reads view.state.
+    setTimeout(() => {
+      if (!view.dom.isConnected) return;
+      const s2 = view.state;
+      const nowFull = syntaxTreeAvailable(s2, s2.doc.length);
+      const nowHeadings = extractHeadings(s2).length;
+      console.warn('[ToC] deferred re-check after incomplete parse', {
+        nowFullyParsed: nowFull,
+        headingsNow: nowHeadings,
+        headingsAtRenderTime: headings.length,
+        gainedHeadings: nowHeadings - headings.length,
+        note: 'if gainedHeadings > 0, the rendered ToC is stale (no re-render fired)',
+      });
+    }, 300);
+  } else if (!diagRef.current.lastFullyParsed && import.meta.env.DEV) {
+    console.info('[ToC] syntax tree now fully parsed on re-render', {
+      headings: headings.length,
+    });
+  }
+
+  diagRef.current.lastFullyParsed = fullyParsed;
+
+  if (import.meta.env.DEV) {
+    console.debug('[ToC] extract', {
+      fullyParsed,
+      headings: headings.length,
+      docLength: docLen,
+    });
+  }
+
+  return headings;
 }
 
 /**
