@@ -45,6 +45,15 @@ case "$RELAY_STORAGE" in
         ;;
 esac
 
+# Auto-create the gitignored local filesystem config from the committed
+# template on first run, so `npm run relay:start` works out of the box.
+if [ ! -f "$RELAY_CRATES_DIR/$CONFIG_FILE" ] \
+    && [ "$RELAY_STORAGE" != "r2" ] \
+    && [ -f "$RELAY_CRATES_DIR/$CONFIG_FILE.example" ]; then
+    echo "Creating $CONFIG_FILE from $CONFIG_FILE.example (first run)"
+    cp "$RELAY_CRATES_DIR/$CONFIG_FILE.example" "$RELAY_CRATES_DIR/$CONFIG_FILE"
+fi
+
 if [ ! -f "$RELAY_CRATES_DIR/$CONFIG_FILE" ]; then
     echo "Error: Config file not found: $RELAY_CRATES_DIR/$CONFIG_FILE"
     exit 1

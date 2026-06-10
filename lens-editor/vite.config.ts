@@ -32,6 +32,15 @@ export default defineConfig(() => {
   // Server token for minting relay doc tokens (optional for local relay)
   const relayServerToken = process.env.RELAY_SERVER_TOKEN;
 
+  // The add-video / add-article pipelines run in-process in the dev plugins and
+  // read RELAY_URL / EDITOR_BASE_URL from the environment. Their defaults point
+  // at the production docker network, so in local mode we redirect them at the
+  // local relay and dev server — otherwise imports would never reach the relay.
+  if (useLocalRelay) {
+    process.env.RELAY_URL ??= `http://localhost:${relayPort}`;
+    process.env.EDITOR_BASE_URL ??= `http://localhost:${defaultVitePort}`;
+  }
+
   console.log(`[vite] Workspace ${wsNum}: Vite port ${defaultVitePort}, Relay port ${relayPort}`);
   console.log(`[vite] Relay target: ${relayTarget}`);
   console.log(`[vite] Discord bridge port ${bridgePort}`);

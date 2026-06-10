@@ -307,6 +307,45 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
       },
     ],
   },
+  {
+    // Real "Lens Edu" folder UUID — matches relay.toml / relay.local.toml.example
+    // and the EDU_FOLDER the editor gates /add-article and /add-video on. Seeding
+    // it locally means imported articles have a real folder to land in, so the
+    // import features can be tested end-to-end without dev R2 access.
+    id: 'ea4015da-24af-4d9d-ac49-8c902cb17121',
+    name: 'Lens Edu',
+    docs: [
+      {
+        path: '/articles',
+        id: 'ed000001-0000-4000-8000-0000000000a1',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/articles/sample-existing-article.md',
+        id: 'ed000002-0000-4000-8000-0000000000a2',
+        type: 'markdown',
+        version: 0,
+        content: `---
+title: "Sample Existing Article"
+author:
+  - "Lens Academy"
+source_url: "https://example.com/sample"
+published: 2024-01-01
+created: 2024-01-01
+description: "A placeholder article so the Lens Edu/articles folder is non-empty. Import a real one from /add-article."
+tags:
+  - "article-importer"
+---
+
+This is a sample article in the **Lens Edu/articles** folder.
+
+Go to [/add-article](/add-article) (with an edit-scoped share token for the Lens Edu or all-folders scope) to import a real web article into this folder.
+`,
+      },
+    ],
+  },
 ];
 
 // Lens Edu test documents — real content from lens-edu-relay repo.

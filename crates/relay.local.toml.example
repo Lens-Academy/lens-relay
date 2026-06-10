@@ -1,0 +1,23 @@
+# Local filesystem relay config for development.
+#
+# `npm run relay:start` copies this to `relay.local.toml` (gitignored) on
+# first run. Edit the copy, not this template. No [[auth]] block → the server
+# runs without authentication, which is what local dev expects (the editor
+# verifies share tokens itself).
+
+[server]
+host = "0.0.0.0"
+
+[store]
+type = "filesystem"
+path = "./data-local"
+
+# Folder display names — must match the folders seeded by setup-local-relay.mjs
+# and the UUIDs the editor gates on (e.g. EDU_FOLDER in add-article/add-video).
+[[folders]]
+uuid = "fbd5eb54-73cc-41b0-ac28-2b93d3b4244e"
+name = "Lens"
+
+[[folders]]
+uuid = "ea4015da-24af-4d9d-ac49-8c902cb17121"
+name = "Lens Edu"
