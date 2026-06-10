@@ -1,28 +1,51 @@
+import { assertPublicUrl } from "./ssrf";
+
 const FETCH_TIMEOUT_MS = 30_000;
 const MAX_HTML_BYTES = 10 * 1024 * 1024; // 10MB
+const MAX_REDIRECTS = 5;
 
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-/** Fetch the raw HTML of an article page. Throws on non-OK or oversized responses. */
+/**
+ * Fetch the raw HTML of an article page. Throws on non-OK or oversized
+ * responses. Redirects are followed manually so the SSRF guard re-runs on
+ * every hop — `redirect: 'follow'` would let an allowed page bounce to an
+ * internal host without re-validation.
+ */
 export async function fetchRawHtml(url: string): Promise<string> {
-  const resp = await fetch(url, {
-    headers: {
-      "User-Agent": BROWSER_UA,
-      Accept: "text/html,application/xhtml+xml",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    redirect: "follow",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!resp.ok) {
-    throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await assertPublicUrl(current);
+    const resp = await fetch(current, {
+      headers: {
+        "User-Agent": BROWSER_UA,
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+
+    if (resp.status >= 300 && resp.status < 400) {
+      const location = resp.headers.get("location");
+      if (!location) {
+        throw new Error(`Redirect ${resp.status} with no Location header`);
+      }
+      current = new URL(location, current).href; // resolve relative redirects
+      continue;
+    }
+
+    if (!resp.ok) {
+      throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
+    }
+    const buf = await resp.arrayBuffer();
+    if (buf.byteLength > MAX_HTML_BYTES) {
+      throw new Error(`Page too large: ${buf.byteLength} bytes`);
+    }
+    return new TextDecoder("utf-8").decode(buf);
   }
-  const buf = await resp.arrayBuffer();
-  if (buf.byteLength > MAX_HTML_BYTES) {
-    throw new Error(`Page too large: ${buf.byteLength} bytes`);
-  }
-  return new TextDecoder("utf-8").decode(buf);
+  throw new Error(`Too many redirects (>${MAX_REDIRECTS}) for ${url}`);
 }
 
 export interface JinaResult {
