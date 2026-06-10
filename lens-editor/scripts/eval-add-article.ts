@@ -6,9 +6,10 @@
  * from the hand-curated gold copies in `Lens Edu/articles/`.
  *
  * Usage:
- *   npx tsx scripts/eval-add-article.ts             # full test set
- *   npx tsx scripts/eval-add-article.ts --only 3    # single entry by index
- *   npx tsx scripts/eval-add-article.ts --fetch-only # skip Claude (fast, free)
+ *   npx tsx scripts/eval-add-article.ts                    # full test set
+ *   npx tsx scripts/eval-add-article.ts --only 3           # single entry by index
+ *   npx tsx scripts/eval-add-article.ts --fetch-only       # skip Claude (fast, free)
+ *   npx tsx scripts/eval-add-article.ts --url <article-url> # try ANY url (no gold checks)
  *
  * Requirements: network access; `claude` CLI on PATH (unless --fetch-only).
  * Outputs land in /tmp/article-eval/<index>-<slug>/ for manual inspection
@@ -204,18 +205,32 @@ async function main() {
   const onlyIdx = args.includes("--only")
     ? parseInt(args[args.indexOf("--only") + 1], 10)
     : null;
+  const adhocUrl = args.includes("--url")
+    ? args[args.indexOf("--url") + 1]
+    : null;
 
-  const testsetPath = path.join(
-    import.meta.dirname,
-    "../server/add-article/eval/testset.json",
-  );
-  const testset = JSON.parse(await fs.readFile(testsetPath, "utf-8")) as {
-    articles: TestEntry[];
-  };
-
-  const entries = testset.articles
-    .map((entry, index) => ({ entry, index }))
-    .filter(({ index }) => onlyIdx === null || index === onlyIdx);
+  let entries: Array<{ entry: TestEntry; index: number }>;
+  if (adhocUrl) {
+    // Ad-hoc URL: no gold copy, so only the structural checks (fetched,
+    // length, artifacts) apply. Inspect the printed out dir's final.md.
+    entries = [
+      {
+        entry: { url: adhocUrl, gold_relay_path: "(ad-hoc)", expect: {} },
+        index: 0,
+      },
+    ];
+  } else {
+    const testsetPath = path.join(
+      import.meta.dirname,
+      "../server/add-article/eval/testset.json",
+    );
+    const testset = JSON.parse(await fs.readFile(testsetPath, "utf-8")) as {
+      articles: TestEntry[];
+    };
+    entries = testset.articles
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ index }) => onlyIdx === null || index === onlyIdx);
+  }
 
   console.log(
     `Running ${entries.length} eval entr${entries.length === 1 ? "y" : "ies"}${fetchOnly ? " (fetch only)" : ""}\n`,
