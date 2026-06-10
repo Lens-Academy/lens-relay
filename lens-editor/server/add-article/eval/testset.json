@@ -1,0 +1,144 @@
+{
+  "_comment": "Article-import eval set. Each entry's expectations come from the hand-curated gold copy in the relay (gold_relay_path, frontmatter + body). must_contain strings are verbatim snippets from the gold body. Run with: npx tsx scripts/eval-add-article.ts",
+  "articles": [
+    {
+      "url": "https://sideways-view.com/2018/02/24/takeoff-speeds/",
+      "gold_relay_path": "Lens Edu/articles/paul-christiano-takeoff-speeds.md",
+      "expect": {
+        "title": "Takeoff speeds",
+        "author_surname": "Christiano",
+        "published": "2018-02-24",
+        "must_contain": ["slow takeoff is significantly more likely"]
+      }
+    },
+    {
+      "url": "https://80000hours.org/problem-profiles/risks-from-power-seeking-ai/",
+      "gold_relay_path": "Lens Edu/articles/80k-risks-from-powerseeking-ai.md",
+      "expect": {
+        "title": "Risks from power-seeking AI systems",
+        "author_surname": "Fenwick",
+        "published": "2025-07-17",
+        "must_contain": ["power-seeking"]
+      }
+    },
+    {
+      "url": "https://www.cold-takes.com/most-important-century/",
+      "gold_relay_path": "Lens Edu/articles/karnofsky-most-important-century.md",
+      "expect": {
+        "title": "most important century",
+        "author_surname": "Karnofsky",
+        "published": "2021-09-24",
+        "must_contain": ["most important century"]
+      }
+    },
+    {
+      "url": "https://intelligence.org/2018/10/03/rocket-alignment/",
+      "gold_relay_path": "Lens Edu/articles/yudkowsky-the-rocket-alignment-problem.md",
+      "expect": {
+        "title": "Rocket Alignment",
+        "author_surname": "Yudkowsky",
+        "published": "2018-10-03",
+        "must_contain": ["fictional dialogue"]
+      }
+    },
+    {
+      "url": "https://en.wikipedia.org/wiki/Existential_risk_from_artificial_intelligence",
+      "gold_relay_path": "Lens Edu/articles/wikipedia-existential-risk-from-ai.md",
+      "expect": {
+        "title": "Existential risk from artificial intelligence",
+        "must_contain": ["human extinction"]
+      }
+    },
+    {
+      "url": "https://waitbutwhy.com/2015/01/artificial-intelligence-revolution-1.html",
+      "gold_relay_path": "Lens Edu/articles/urban-artificial-intelligence-revolution.md",
+      "expect": {
+        "title": "The AI Revolution",
+        "author_surname": "Urban",
+        "published": "2015-01-22",
+        "must_contain": ["Vernor Vinge"]
+      }
+    },
+    {
+      "url": "https://www.cold-takes.com/why-ai-alignment-could-be-hard-with-modern-deep-learning/",
+      "gold_relay_path": "Lens Edu/articles/cotra-why-ai-alignment-could-be-hard-with-modern-deep-learning.md",
+      "expect": {
+        "title": "Why AI alignment could be hard with modern deep learning",
+        "author_surname": "Cotra",
+        "published": "2021-09-21",
+        "must_contain": ["alignment"]
+      }
+    },
+    {
+      "url": "https://mindingourway.com/on-caring/",
+      "gold_relay_path": "Lens Edu/articles/soares-on-caring.md",
+      "expect": {
+        "title": "On Caring",
+        "author_surname": "Soares",
+        "published": "2014-10-07",
+        "must_contain": ["caring"]
+      }
+    },
+    {
+      "url": "https://www.effectivealtruism.org/articles/introduction-to-effective-altruism",
+      "gold_relay_path": "Lens Edu/articles/ea-handbook-introduction-to-effective-altruism.md",
+      "expect": {
+        "title": "Introduction to Effective Altruism",
+        "must_contain": ["effective altruism"]
+      }
+    },
+    {
+      "url": "https://writings.stephenwolfram.com/2023/02/what-is-chatgpt-doing-and-why-does-it-work/",
+      "gold_relay_path": "Lens Edu/articles/wolfram-what-is-chatgpt-doing-and-why-does-it-work.md",
+      "expect": {
+        "title": "What Is ChatGPT Doing",
+        "author_surname": "Wolfram",
+        "published": "2023-02-14",
+        "must_contain": ["ChatGPT"]
+      }
+    },
+    {
+      "url": "https://www.alignmentforum.org/posts/PwnadG4BFjaER3MGf/interpretability-will-not-reliably-find-deceptive-ai",
+      "gold_relay_path": "Lens Edu/articles/nanda-interpretability-will-not-reliably-find-deceptive-ai.md",
+      "expect": {
+        "title": "Interpretability Will Not Reliably Find Deceptive AI",
+        "author_surname": "Nanda",
+        "published": "2025-05-04",
+        "must_contain": ["interpretability"]
+      }
+    },
+    {
+      "url": "https://ourworldindata.org/health-meta",
+      "gold_relay_path": "Lens Edu/articles/owid-global-health.md",
+      "expect": {
+        "title": "Global Health",
+        "must_contain": ["health"]
+      }
+    },
+    {
+      "url": "https://aisafety.info/questions/8IHO/What-are-the-differences-between-a-singularity,-an-intelligence-explosion,-and-a-hard-takeoff",
+      "gold_relay_path": "Lens Edu/articles/aisafety-info-singularity-intelligence-explosion-hard-takeoff.md",
+      "expect": {
+        "must_contain": ["intelligence explosion", "hard takeoff"]
+      }
+    },
+    {
+      "url": "https://www.astralcodexten.com/p/janus-simulators",
+      "gold_relay_path": "Lens Edu/articles/alexander-janus-simulators.md",
+      "expect": {
+        "title": "Janus' Simulators",
+        "author_surname": "Alexander",
+        "published": "2023-01-26",
+        "must_contain": ["simulator"]
+      }
+    },
+    {
+      "url": "https://www.slatestarcodexabridged.com/Meditations-On-Moloch",
+      "gold_relay_path": "Lens Edu/articles/alexander-meditations-on-moloch.md",
+      "expect": {
+        "title": "Meditations On Moloch",
+        "must_contain": ["Moloch"]
+      }
+    }
+  ]
+}

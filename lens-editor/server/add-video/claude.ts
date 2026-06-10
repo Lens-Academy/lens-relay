@@ -51,11 +51,12 @@ export function buildClaudeArgs(workDir: string): string[] {
 /** Spawn Claude Code and wait for completion. Acquires a session from the global pool. */
 export async function spawnClaude(
   workDir: string,
-  timeoutMs: number
+  timeoutMs: number,
+  argsOverride?: string[]
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   await claudeSessionPool.acquire();
   return new Promise((resolve, reject) => {
-    const args = buildClaudeArgs(workDir);
+    const args = argsOverride ?? buildClaudeArgs(workDir);
     const proc = spawn('claude', args, {
       cwd: workDir,
       stdio: ['ignore', 'pipe', 'pipe'],

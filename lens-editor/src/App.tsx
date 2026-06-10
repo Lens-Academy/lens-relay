@@ -20,6 +20,7 @@ import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
+import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { MultiDocSectionEditor } from './components/SectionEditor';
 import { useDocConnection } from './hooks/useDocConnection';
 import { applySuggestionAction } from './lib/suggestion-actions';
@@ -546,6 +547,11 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   <Route path="/add-video" element={
                     role === 'edit' && (isAllFolders || folderUuid === 'ea4015da-24af-4d9d-ac49-8c902cb17121')
                       ? <AddVideoPage shareToken={shareToken} />
+                      : <DefaultLanding />
+                  } />
+                  <Route path="/add-article" element={
+                    role === 'edit' && (isAllFolders || folderUuid === 'ea4015da-24af-4d9d-ac49-8c902cb17121')
+                      ? <AddArticlePage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />
