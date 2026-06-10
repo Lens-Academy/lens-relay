@@ -581,7 +581,9 @@ mod tests {
             folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
             folder_name: Some("Lens Edu".to_string()),
         };
-        let sid = server.mcp_sessions.create_session(scoped_access.clone(), None);
+        let sid = server
+            .mcp_sessions
+            .create_session(scoped_access.clone(), None);
 
         let req = make_request(
             json!(51),

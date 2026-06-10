@@ -444,13 +444,14 @@ mod tests {
         );
 
         // Create MCP session
-        let sid = server
-            .mcp_sessions
-            .create_session(y_sweet_core::share_token::McpAccess {
+        let sid = server.mcp_sessions.create_session(
+            y_sweet_core::share_token::McpAccess {
                 writable: true,
                 folder_uuid: None,
                 folder_name: None,
-            }, None);
+            },
+            None,
+        );
 
         // THIS IS THE BUG: read should reload from store, not fail
         let result = execute(

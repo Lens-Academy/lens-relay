@@ -281,7 +281,9 @@ pub async fn dispatch_tool(
     // payload rather than the HTTP transport.
     if name == "create_session" {
         let human_name = arguments.get("name").and_then(|v| v.as_str());
-        let sid = server.mcp_sessions.create_session(access.clone(), human_name);
+        let sid = server
+            .mcp_sessions
+            .create_session(access.clone(), human_name);
         return tool_success(&sid);
     }
 

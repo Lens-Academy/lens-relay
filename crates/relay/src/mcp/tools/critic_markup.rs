@@ -2200,7 +2200,12 @@ mod tests {
 
     #[test]
     fn stamp_plain_new_comment_gets_author() {
-        let out = stamp_new_comments("Hello world", "Hello {>>nice point<<} world", "Chris's AI", 42);
+        let out = stamp_new_comments(
+            "Hello world",
+            "Hello {>>nice point<<} world",
+            "Chris's AI",
+            42,
+        );
         assert_eq!(
             out,
             r#"Hello {>>{"author":"Chris's AI","timestamp":42}@@nice point<<} world"#
