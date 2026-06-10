@@ -212,12 +212,16 @@ pub async fn execute(
 
     // Attribute any comment the AI adds or edits to the session's author label.
     // Comments preserved unchanged from old_string are left byte-identical.
-    let new_string =
-        critic_markup::stamp_new_comments(old_string, new_string, &author, timestamp);
+    let new_string = critic_markup::stamp_new_comments(old_string, new_string, &author, timestamp);
 
-    let merge_result =
-        critic_markup::merge_edit(&raw_content, &effective_old, &new_string, &author, timestamp)
-            .map_err(|e| format!("Error: {}", e))?;
+    let merge_result = critic_markup::merge_edit(
+        &raw_content,
+        &effective_old,
+        &new_string,
+        &author,
+        timestamp,
+    )
+    .map_err(|e| format!("Error: {}", e))?;
 
     // No-op check
     if merge_result.raw_len == 0 && merge_result.replacement.is_empty() {
@@ -247,9 +251,14 @@ pub async fn execute(
         }
 
         // Recompute merge against current raw (in case of concurrent changes)
-        let final_merge =
-            critic_markup::merge_edit(&current_raw, &effective_old, &new_string, &author, timestamp)
-                .map_err(|e| format!("Error: {}", e))?;
+        let final_merge = critic_markup::merge_edit(
+            &current_raw,
+            &effective_old,
+            &new_string,
+            &author,
+            timestamp,
+        )
+        .map_err(|e| format!("Error: {}", e))?;
 
         // Targeted replacement in Y.Doc
         text.remove_range(
@@ -1168,14 +1177,22 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "adding comment should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "adding comment should succeed: {:?}",
+            result
+        );
         let raw = read_doc_content(&server, &doc_id);
         assert!(
             raw.contains(r#"{>>{"author":"Chris's AI""#),
             "Comment should be attributed to the named session: {}",
             raw
         );
-        assert!(raw.contains("nice point"), "Comment text preserved: {}", raw);
+        assert!(
+            raw.contains("nice point"),
+            "Comment text preserved: {}",
+            raw
+        );
     }
 
     #[tokio::test]
@@ -1197,7 +1214,11 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "adding comment should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "adding comment should succeed: {:?}",
+            result
+        );
         let raw = read_doc_content(&server, &doc_id);
         assert!(
             raw.contains(r#"{>>{"author":"AI""#),

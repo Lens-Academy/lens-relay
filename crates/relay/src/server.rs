@@ -2220,7 +2220,19 @@ impl Server {
             ));
         }
 
-        if let Some(info) = self.doc_resolver().resolve_path(path) {
+        // The in-memory doc_resolver is eventually consistent — kept current by
+        // the link-indexer worker — so a freshly-created file can be present in
+        // filemeta_v0 (the source of truth) before the resolver knows it. A
+        // resolver miss must not turn a file rename into a folder move (which
+        // rejects ".md" destinations with the observed "Move failed: 400"), so
+        // on a miss we resolve directly from filemeta_v0.
+        // See move_path_renames_file_missing_from_stale_resolver.
+        let resolved = self
+            .doc_resolver()
+            .resolve_path(path)
+            .or_else(|| self.resolve_move_path_fallback(path, new_path));
+
+        if let Some(info) = resolved {
             let source_type = self
                 .filemeta_type_for_uuid(&info.uuid)
                 .unwrap_or_else(|| "markdown".to_string());
@@ -2241,31 +2253,33 @@ impl Server {
             }
         }
 
-        // Diagnostic: the resolver did not know this path. A freshly-created (or
-        // recently-renamed) file can exist in filemeta_v0 — the source of truth —
-        // while the eventually-consistent doc_resolver is stale, in which case the
-        // rename falls through to the folder branch and is rejected with a 400
-        // ("Folder destination must not end with '.md'"): the observed
-        // "Move failed: 400". Log enough to tell missing vs stale-path apart.
-        self.log_resolver_miss_for_move(path, new_path);
-
         self.move_folder_path(path, new_path, target_folder).await
     }
 
-    /// Read-only diagnostic: resolve a user-facing path to a [`DocInfo`] by
-    /// scanning loaded folder docs' `filemeta_v0` directly (the source of truth),
-    /// bypassing the eventually-consistent `doc_resolver`. Used only for
-    /// observability here; see [`Server::log_resolver_miss_for_move`] and
-    /// `handle_debug_resolve`.
+    /// Resolve a user-facing path to a [`DocInfo`] by scanning loaded folder
+    /// docs' `filemeta_v0` directly (the source of truth), bypassing the
+    /// eventually-consistent `doc_resolver`. Used as the resolver-miss fallback
+    /// for moves and path opens, and by `handle_debug_resolve`.
     fn resolve_path_via_filemeta(&self, path: &str) -> Option<DocInfo> {
         for folder_doc_id in link_indexer::find_all_folder_docs(&self.docs) {
-            let Some(doc_ref) = self.docs.get(&folder_doc_id) else {
-                continue;
+            // ⚠️ LOCK ORDERING: clone the awareness Arc out and drop the DashMap
+            // shard ref BEFORE locking awareness (see run_worker / search_worker).
+            let awareness = match self.docs.get(&folder_doc_id) {
+                Some(doc_ref) => doc_ref.awareness(),
+                None => continue,
             };
-            let awareness = doc_ref.awareness();
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let folder_name =
                 y_sweet_core::doc_resolver::read_folder_name(&guard.doc, &folder_doc_id);
+            // Every match below has the form "{folder_name}/{entry}", so skip
+            // folders that can't contain the path. Keeps a miss (e.g. a bot
+            // probing /open/*) from iterating every filemeta entry on the server.
+            let Some(entry_suffix) = path
+                .strip_prefix(&folder_name)
+                .and_then(|rest| rest.strip_prefix('/'))
+            else {
+                continue;
+            };
             let relay_id = link_indexer::parse_doc_id(&folder_doc_id)
                 .map(|(r, _)| r.to_string())
                 .unwrap_or_default();
@@ -2279,8 +2293,7 @@ impl Server {
                 };
                 let path_str: &str = &entry_path;
                 let stripped = path_str.strip_prefix('/').unwrap_or(path_str);
-                let full_path = format!("{}/{}", folder_name, stripped);
-                if full_path == path {
+                if stripped == entry_suffix {
                     let hash = link_indexer::extract_hash_from_filemeta_entry(&value, &txn);
                     let doc_id = format!("{}-{}", relay_id, uuid);
                     return Some(DocInfo {
@@ -2297,11 +2310,12 @@ impl Server {
         None
     }
 
-    /// Log a `move_path` resolver miss with enough context to diagnose the
-    /// "Move failed: 400" class: whether the file actually exists (filemeta), and
-    /// — if so — what path the resolver currently holds for it (None = missing,
-    /// Some(other) = stale path). Read-only; does not change move behavior.
-    fn log_resolver_miss_for_move(&self, path: &str, new_path: &str) {
+    /// Resolver-miss fallback for [`Server::move_path`]: resolve the path from
+    /// `filemeta_v0` and log the resolver staleness (with the path the resolver
+    /// currently holds for the uuid: None = missing, Some(other) = stale path).
+    /// Returns None when the path is unknown to filemeta too — a genuinely
+    /// unknown path or a legitimate folder move, so that case stays quiet.
+    fn resolve_move_path_fallback(&self, path: &str, new_path: &str) -> Option<DocInfo> {
         match self.resolve_path_via_filemeta(path) {
             Some(info) => {
                 let resolver_path = self.doc_resolver().path_for_uuid(&info.uuid);
@@ -2312,28 +2326,29 @@ impl Server {
                     folder = %info.folder_name,
                     in_filemeta = true,
                     resolver_path_for_uuid = ?resolver_path,
-                    "move: doc_resolver stale — path missing from resolver but present in filemeta_v0; rename will 400"
+                    "move: doc_resolver stale — path missing from resolver but present in filemeta_v0; using filemeta fallback"
                 );
+                Some(info)
             }
             None => {
-                // Not in filemeta either: a genuinely unknown path or a folder
-                // move. Expected for legitimate folder renames, so keep it quiet.
                 tracing::debug!(
                     requested_path = %path,
                     new_path = %new_path,
                     in_filemeta = false,
                     "move: resolver miss and path not in any loaded folder's filemeta_v0; treating as a folder move"
                 );
+                None
             }
         }
     }
 
     fn filemeta_type_for_uuid(&self, uuid: &str) -> Option<String> {
         for folder_doc_id in link_indexer::find_all_folder_docs(&self.docs) {
-            let Some(doc_ref) = self.docs.get(&folder_doc_id) else {
-                continue;
+            // ⚠️ LOCK ORDERING: drop the shard ref before locking awareness.
+            let awareness = match self.docs.get(&folder_doc_id) {
+                Some(doc_ref) => doc_ref.awareness(),
+                None => continue,
             };
-            let awareness = doc_ref.awareness();
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
             let Some(filemeta) = txn.get_map("filemeta_v0") else {
@@ -4288,7 +4303,19 @@ async fn handle_open_by_path(
     Path(path): Path<String>,
     request: Request,
 ) -> Result<Response, AppError> {
-    match server_state.doc_resolver().resolve_path(&path) {
+    // Fall back to filemeta_v0 (the source of truth) when the eventually-
+    // consistent resolver doesn't know the path yet — e.g. a just-created file.
+    let resolved = server_state.doc_resolver().resolve_path(&path).or_else(|| {
+        let info = server_state.resolve_path_via_filemeta(&path)?;
+        tracing::warn!(
+            requested_path = %path,
+            uuid = %info.uuid,
+            folder = %info.folder_name,
+            "open: doc_resolver stale — path missing from resolver but present in filemeta_v0; using filemeta fallback"
+        );
+        Some(info)
+    });
+    match resolved {
         Some(info) => {
             let short_uuid = &info.uuid[..8.min(info.uuid.len())];
             let encoded_path = path.replace(' ', "-");
@@ -6292,6 +6319,81 @@ mod test {
         assert_eq!(result.new_path, "/New.md");
         assert!(!filemeta_has(&server, &folder_doc_id, "/Old.md"));
         assert!(filemeta_has(&server, &folder_doc_id, "/New.md"));
+    }
+
+    /// Add a filemeta + legacy-docs entry to an already-loaded folder doc WITHOUT
+    /// refreshing the resolver. Simulates a freshly-created file that the client
+    /// wrote to the folder Y.Doc but the link-indexer worker has not yet (or never,
+    /// if stalled) registered in the in-memory resolver.
+    fn add_filemeta_entry_without_resolver(
+        server: &Arc<Server>,
+        folder_doc_id: &str,
+        path: &str,
+        uuid: &str,
+        entry_type: &str,
+    ) {
+        let doc_ref = server.docs().get(folder_doc_id).unwrap();
+        let awareness = doc_ref.awareness();
+        let guard = awareness.write().unwrap();
+        let mut txn = guard.doc.transact_mut();
+        let filemeta = txn.get_or_insert_map("filemeta_v0");
+        let docs_map = txn.get_or_insert_map("docs");
+        let mut map = std::collections::HashMap::new();
+        map.insert("id".to_string(), Any::String(uuid.into()));
+        map.insert("type".to_string(), Any::String(entry_type.into()));
+        map.insert("version".to_string(), Any::Number(0.0));
+        filemeta.insert(&mut txn, path, Any::Map(map.into()));
+        if entry_type == "markdown" {
+            docs_map.insert(&mut txn, path, Any::String(uuid.into()));
+        }
+    }
+
+    // Prevents: "Move failed: 400" when renaming a freshly created markdown file
+    // while the resolver is stale (link-indexer worker lagging or dead). The file
+    // IS in filemeta_v0 (source of truth) but NOT in the resolver, so without the
+    // filemeta fallback resolve_path() misses, move_path() falls through to the
+    // folder-move branch, and the ".md" destination is rejected with BadRequest.
+    #[tokio::test]
+    async fn move_path_renames_file_missing_from_stale_resolver() {
+        let server = Server::new_for_test();
+        // Folder doc loaded; resolver rebuilt while the folder had only old files.
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[(
+                "/Old.md",
+                "00000000-0000-4000-8000-000000000001",
+                "markdown",
+            )],
+        )
+        .await;
+
+        // Freshly-created file: written to filemeta, but resolver never learned it.
+        let uuid = "11111111-1111-4111-8111-111111111111";
+        add_filemeta_entry_without_resolver(&server, &folder_doc_id, "/New.md", uuid, "markdown");
+        insert_test_content_doc(&server, uuid, "New").await;
+
+        // Precondition: the resolver really is stale for this path.
+        assert!(
+            server
+                .doc_resolver()
+                .resolve_path("Relay Folder 1/New.md")
+                .is_none(),
+            "test setup: resolver should not know the new file"
+        );
+
+        // The user's exact action.
+        let result = server
+            .move_path("Relay Folder 1/New.md", "/Renamed.md", None)
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "renaming a file that is in filemeta but missing from a stale resolver should succeed, got: {:?}",
+            result.err()
+        );
+        assert!(!filemeta_has(&server, &folder_doc_id, "/New.md"));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Renamed.md"));
     }
 
     #[tokio::test]
