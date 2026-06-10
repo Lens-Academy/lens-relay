@@ -1161,6 +1161,10 @@ pub struct LinkIndexer {
 
 impl LinkIndexer {
     pub fn new() -> (Self, mpsc::Receiver<String>) {
+        // The channel is only a wake-up signal for the worker; the unbounded
+        // `pending` map is the actual work list. Sends are try_send and may be
+        // dropped when full (the worker's POLL_INTERVAL poll covers the gap),
+        // so the capacity is not load-bearing.
         let (index_tx, index_rx) = mpsc::channel(1000);
         (
             Self {
@@ -1189,12 +1193,30 @@ impl LinkIndexer {
         };
         // Only send to channel on the first update — subsequent updates just
         // reset the timestamp for debouncing without flooding the channel.
+        //
+        // The channel is purely a wake-up signal: the worker scans the full
+        // `pending` map every POLL_INTERVAL regardless, so dropping a send when
+        // the channel is full only delays pickup by ≤250ms. It must NOT be a
+        // blocking send: the worker re-queues a folder's content docs into this
+        // same queue while processing (run_worker step 4) and is the queue's
+        // only consumer, so a blocking send there self-deadlocks the worker as
+        // soon as one batch exceeds the channel capacity — and then every other
+        // caller blocks forever too, since nothing drains the queue anymore.
         if is_new {
-            if let Err(e) = self.index_tx.send(doc_id.to_string()).await {
-                tracing::error!(
-                    "Link indexer channel send failed (receiver dropped — worker dead?): {}",
-                    e
-                );
+            match self.index_tx.try_send(doc_id.to_string()) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::debug!(
+                        doc_id,
+                        "Link indexer channel full; doc will be picked up by the worker's poll"
+                    );
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    tracing::error!(
+                        doc_id,
+                        "Link indexer channel closed (receiver dropped — worker dead?)"
+                    );
+                }
             }
         }
     }
@@ -1744,6 +1766,41 @@ mod tests {
         // Should have exactly one message in channel (not three)
         assert!(rx.try_recv().is_ok(), "should have one message");
         assert!(rx.try_recv().is_err(), "should not have more messages");
+    }
+
+    // Prevents: link-indexer worker self-deadlock — run_worker re-queues a
+    // folder's content docs into its own bounded queue and is the only
+    // consumer, so a blocking send froze the worker (and every later caller)
+    // once one folder batch exceeded the channel capacity. Observed in prod
+    // 2026-06-09: worker died mid-batch on a 1045-doc folder; every file
+    // created afterwards was unrenamable ("Move failed: 400") until restart.
+    #[tokio::test]
+    async fn on_document_update_does_not_block_when_channel_is_full() {
+        let (indexer, _rx) = LinkIndexer::new();
+
+        // Fill the channel to capacity (receiver never drains).
+        for i in 0..1000 {
+            indexer.on_document_update(&format!("doc-{i}")).await;
+        }
+        assert_eq!(
+            indexer.index_tx.capacity(),
+            0,
+            "test setup: channel must be full to exercise the Full branch"
+        );
+
+        // The next update must return promptly, not block on the full channel.
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            indexer.on_document_update("doc-overflow"),
+        )
+        .await
+        .expect("on_document_update must not block when the channel is full");
+
+        // The doc is still tracked in pending, so the worker's poll picks it up.
+        assert!(
+            indexer.pending.contains_key("doc-overflow"),
+            "doc must remain in the pending map despite the dropped wake-up"
+        );
     }
 
     #[tokio::test]
