@@ -37,8 +37,12 @@ export default defineConfig(() => {
   // at the production docker network, so in local mode we redirect them at the
   // local relay and dev server — otherwise imports would never reach the relay.
   if (useLocalRelay) {
+    // The dev server runs over HTTPS (basicSsl), so EDITOR_BASE_URL must be
+    // https too — otherwise the relay_url links in the import UI point at a
+    // dead http origin. Honour VITE_PORT if the dev server is on a custom port.
+    const vitePort = parseInt(process.env.VITE_PORT || String(defaultVitePort), 10);
     process.env.RELAY_URL ??= `http://localhost:${relayPort}`;
-    process.env.EDITOR_BASE_URL ??= `http://localhost:${defaultVitePort}`;
+    process.env.EDITOR_BASE_URL ??= `https://localhost:${vitePort}`;
   }
 
   console.log(`[vite] Workspace ${wsNum}: Vite port ${defaultVitePort}, Relay port ${relayPort}`);

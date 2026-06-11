@@ -16,6 +16,9 @@ export const FOLDERS: FolderConfig[] = (USE_LOCAL_RELAY && !USE_LOCAL_R2)
   ? [
       { id: 'b0000001-0000-4000-8000-000000000001', name: 'Relay Folder 1' },
       { id: 'b0000002-0000-4000-8000-000000000002', name: 'Relay Folder 2' },
+      // Real Lens Edu folder, seeded by setup-local-relay.mjs. Present so
+      // imported articles (written to Lens Edu/articles) show in the sidebar.
+      { id: 'ea4015da-24af-4d9d-ac49-8c902cb17121', name: 'Lens Edu' },
     ]
   : [
       { id: 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e', name: 'Lens' },
