@@ -63,6 +63,17 @@ function isPrivateIPv6(ip: string): boolean {
   // IPv4-mapped (::ffff:a.b.c.d) — validate the embedded IPv4
   const mapped = addr.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return isPrivateIPv4(mapped[1]);
+  // 6to4 (2002:HHHH:HHHH::/16) wraps an IPv4 address in the next 32 bits —
+  // reject if that embedded v4 is private (e.g. 2002:c0a8:0101:: → 192.168.1.1)
+  if (addr.startsWith('2002:')) {
+    const groups = addr.split(':');
+    if (groups.length >= 3 && /^[0-9a-f]{1,4}$/.test(groups[1]) && /^[0-9a-f]{1,4}$/.test(groups[2])) {
+      const hi = parseInt(groups[1].padStart(4, '0'), 16);
+      const lo = parseInt(groups[2].padStart(4, '0'), 16);
+      const v4 = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+      if (isPrivateIPv4(v4)) return true;
+    }
+  }
   return false;
 }
 

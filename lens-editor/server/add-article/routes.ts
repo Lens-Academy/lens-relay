@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { ArticleJobQueue } from "./queue";
 import { verifyShareToken } from "../share-token";
 
-const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
+export const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
 const ALL_FOLDERS = "00000000-0000-0000-0000-000000000000";
 const MAX_URLS_PER_REQUEST = 20;
 

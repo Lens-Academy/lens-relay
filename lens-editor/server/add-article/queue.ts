@@ -14,7 +14,6 @@ interface QueueOptions {
 export class ArticleJobQueue {
   private jobs: Map<string, ArticleJob> = new Map();
   private pending: string[] = [];
-  private activeCount = 0;
   private processJob: QueueOptions["processJob"];
 
   constructor(options: QueueOptions) {
@@ -69,11 +68,10 @@ export class ArticleJobQueue {
 
       job.status = "processing";
       job.updated_at = new Date().toISOString();
-      this.activeCount++;
 
-      void this.runJob(job).then(() => {
-        this.activeCount--;
-      });
+      // Fire and forget — runJob awaits a Claude slot from the shared session
+      // pool, which is what actually bounds concurrency.
+      void this.runJob(job);
     }
   }
 

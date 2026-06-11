@@ -12,7 +12,9 @@ import {
 
 const WORK_BASE = "/tmp/articles";
 const TIMEOUT_MS = 1_200_000; // 20 minutes
-const MIN_CLEANED_CHARS = 200;
+// Below this, Claude almost certainly failed silently (returned only a heading
+// or the wrong section) rather than producing a real article body.
+const MIN_CLEANED_CHARS = 500;
 
 function relayArticleFolder(): string {
   return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";

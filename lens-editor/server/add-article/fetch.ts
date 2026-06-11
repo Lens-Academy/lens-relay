@@ -68,7 +68,7 @@ export async function fetchJina(url: string): Promise<JinaResult> {
   if (process.env.JINA_API_KEY) {
     headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
   }
-  const resp = await fetch(`https://r.jina.ai/${url}`, {
+  const resp = await fetch(`https://r.jina.ai/${encodeURIComponent(url)}`, {
     headers,
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });

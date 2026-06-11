@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
-import { createAddArticleRoutes } from "./routes";
+import { createAddArticleRoutes, EDU_FOLDER } from "./routes";
 import { signShareToken } from "../share-token";
 import type { ShareTokenPayload } from "../share-token";
 
-const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
 const OTHER_FOLDER = "fbd5eb54-73cc-41b0-ac28-2b93d3b4244e";
 
 function makeToken(overrides: Partial<ShareTokenPayload> = {}): string {

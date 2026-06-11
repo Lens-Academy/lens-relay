@@ -29,6 +29,13 @@ describe('isPrivateAddress', () => {
     }
   });
 
+  // Prevents: SSRF via 6to4 address wrapping a private IPv4 (2002:c0a8:0101:: → 192.168.1.1)
+  it('flags 6to4 addresses embedding a private IPv4', () => {
+    expect(isPrivateAddress('2002:c0a8:0101::1')).toBe(true); // 192.168.1.1
+    expect(isPrivateAddress('2002:7f00:0001::')).toBe(true); // 127.0.0.1
+    expect(isPrivateAddress('2002:0808:0808::')).toBe(false); // 8.8.8.8 — public
+  });
+
   it('allows public IPv6', () => {
     expect(isPrivateAddress('2606:4700:4700::1111')).toBe(false);
   });
