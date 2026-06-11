@@ -25,7 +25,9 @@ Your tasks:
    - Keep hyperlinks as inline markdown links. Resolve relative URLs to absolute using the source_url. If the extractor dropped links that exist in raw.html, restore them.
    - Keep content images as ![alt](absolute-url) at their original positions. Drop decorative images, icons, avatars, and tracking pixels.
 
-2. Update ${workDir}/meta.json — fill or correct title, author (array of person names), published (YYYY-MM-DD), and description (one factual sentence describing the article). Check raw.html meta tags, JSON-LD, and the article byline. Leave a field empty if it is genuinely not stated anywhere — NEVER guess or invent authors or dates.
+2. Update ${workDir}/meta.json — fill or correct title, author (array), published (YYYY-MM-DD), and description (one factual sentence describing the article). Check raw.html meta tags, JSON-LD, and the article byline.
+   - author: prefer the individual author(s). If the page has no personal byline (e.g. an organization or company post), use the publication or site name instead (e.g. "Wikipedia", "Anthropic"). Never invent a person's name, but do not leave author empty — fall back to the publication.
+   - published: use any date stated on the page (meta tags, JSON-LD, or a visible byline date). NEVER invent a date; if none exists anywhere, leave it empty and the importer falls back to the import date.
 
 Write only cleaned.md and meta.json. Do not create any other files.`;
 }

@@ -20,6 +20,37 @@ function relayArticleFolder(): string {
   return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
 }
 
+/** Readable publisher from a URL host, e.g. "https://bluedot.org/x" → "Bluedot". */
+export function publisherFromUrl(url: string): string {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    const base = host.split(".")[0];
+    return base ? base.charAt(0).toUpperCase() + base.slice(1) : host;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The Lens Edu content schema requires non-empty title, author, source_url, and
+ * published. Pages without a person byline or a publish date would otherwise
+ * write empty fields that fail content validation. Fill them with real
+ * fallbacks (never fabricated): the publication/site name for author, and the
+ * import date as a last resort for published (a real timestamp the curator can
+ * correct).
+ */
+export function ensureRequiredMeta(
+  meta: ArticleMeta,
+  siteName: string,
+  createdDate: string,
+): ArticleMeta {
+  const author =
+    meta.author.length > 0
+      ? meta.author
+      : [siteName.trim() || publisherFromUrl(meta.source_url)].filter(Boolean);
+  return { ...meta, author, published: meta.published || createdDate };
+}
+
 export async function processArticle(job: ArticleJob): Promise<void> {
   const workDir = path.join(WORK_BASE, job.id);
   let mdPath: string | undefined;
@@ -58,18 +89,24 @@ export async function processArticle(job: ArticleJob): Promise<void> {
 
     // 2. Seed metadata: HTML meta tags win over Jina (more structured),
     //    Claude refines both later.
+    const createdDate = new Date().toISOString().slice(0, 10);
     const htmlMeta = html ? extractHtmlMeta(html) : null;
-    const meta: ArticleMeta = {
-      title: htmlMeta?.title || jina?.title || "",
-      author: htmlMeta?.author ?? [],
-      source_url: job.url,
-      published: htmlMeta?.published || jina?.published || "",
-      description: htmlMeta?.description ?? "",
-    };
-    seededMeta = meta;
-    if (!meta.title) {
+    const siteName = htmlMeta?.siteName ?? "";
+    if (!(htmlMeta?.title || jina?.title)) {
       throw new Error("Could not determine article title from page metadata");
     }
+    const meta: ArticleMeta = ensureRequiredMeta(
+      {
+        title: htmlMeta?.title || jina?.title || "",
+        author: htmlMeta?.author ?? [],
+        source_url: job.url,
+        published: htmlMeta?.published || jina?.published || "",
+        description: htmlMeta?.description ?? "",
+      },
+      siteName,
+      createdDate,
+    );
+    seededMeta = meta;
     job.title = meta.title;
 
     // 3. Resolve relay path; refuse to overwrite an existing article.
@@ -112,7 +149,7 @@ export async function processArticle(job: ArticleJob): Promise<void> {
     placeholderContent = generateArticleMarkdown(
       meta,
       placeholderBody,
-      new Date().toISOString().slice(0, 10),
+      createdDate,
     );
     await createRelayDoc(mdPath, placeholderContent);
 
@@ -147,9 +184,11 @@ export async function processArticle(job: ArticleJob): Promise<void> {
           typeof refined.title === "string" && refined.title
             ? refined.title
             : meta.title,
-        author: Array.isArray(refined.author)
-          ? refined.author.filter((a: unknown) => typeof a === "string" && a)
-          : meta.author,
+        author:
+          Array.isArray(refined.author) &&
+          refined.author.some((a: unknown) => typeof a === "string" && a)
+            ? refined.author.filter((a: unknown) => typeof a === "string" && a)
+            : meta.author,
         source_url: job.url,
         published: /^\d{4}-\d{2}-\d{2}$/.test(refined.published)
           ? refined.published
@@ -164,14 +203,12 @@ export async function processArticle(job: ArticleJob): Promise<void> {
         `[add-article] Could not parse refined meta.json, using seed metadata: ${err}`,
       );
     }
+    // Guarantee required fields are non-empty even if Claude blanked them.
+    finalMeta = ensureRequiredMeta(finalMeta, siteName, createdDate);
     job.title = finalMeta.title;
 
     // 8. Replace placeholder with the final article
-    const finalMd = generateArticleMarkdown(
-      finalMeta,
-      cleaned,
-      new Date().toISOString().slice(0, 10),
-    );
+    const finalMd = generateArticleMarkdown(finalMeta, cleaned, createdDate);
     await updateRelayDoc(mdPath, placeholderContent, finalMd);
   } catch (err) {
     // If we got far enough to create a placeholder, mark it failed so the

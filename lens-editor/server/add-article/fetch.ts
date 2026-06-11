@@ -108,6 +108,8 @@ export interface HtmlMeta {
   author: string[];
   published: string;
   description: string;
+  /** Publication / site name (og:site_name, JSON-LD publisher) — author fallback */
+  siteName: string;
 }
 
 function decodeEntities(s: string): string {
@@ -152,6 +154,7 @@ export function extractHtmlMeta(html: string): HtmlMeta {
     author: [],
     published: "",
     description: "",
+    siteName: "",
   };
 
   meta.title =
@@ -173,12 +176,18 @@ export function extractHtmlMeta(html: string): HtmlMeta {
   const published =
     metaContent(html, "article:published_time") ||
     metaContent(html, "datePublished") ||
-    metaContent(html, "date");
+    metaContent(html, "date") ||
+    metaContent(html, "article:modified_time") ||
+    metaContent(html, "og:updated_time");
   const dateMatch = published.match(/^(\d{4}-\d{2}-\d{2})/);
   if (dateMatch) meta.published = dateMatch[1];
 
   meta.description =
     metaContent(html, "og:description") || metaContent(html, "description");
+
+  meta.siteName =
+    metaContent(html, "og:site_name") ||
+    metaContent(html, "application-name");
 
   // JSON-LD often has the most reliable author/date info
   const jsonLdBlocks = html.matchAll(
@@ -204,9 +213,20 @@ export function extractHtmlMeta(html: string): HtmlMeta {
             )
             .filter(Boolean);
         }
-        if (!meta.published && typeof node.datePublished === "string") {
-          const m = node.datePublished.match(/^(\d{4}-\d{2}-\d{2})/);
+        const ldDate =
+          (typeof node.datePublished === "string" && node.datePublished) ||
+          (typeof node.dateModified === "string" && node.dateModified) ||
+          "";
+        if (!meta.published && ldDate) {
+          const m = ldDate.match(/^(\d{4}-\d{2}-\d{2})/);
           if (m) meta.published = m[1];
+        }
+        if (!meta.siteName && node.publisher) {
+          const pub =
+            typeof node.publisher === "string"
+              ? node.publisher
+              : ((node.publisher as { name?: string })?.name ?? "");
+          if (pub) meta.siteName = pub;
         }
         if (!meta.title && typeof node.headline === "string") {
           meta.title = node.headline;
