@@ -22,6 +22,9 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   const workDir = path.join(WORK_BASE, job.id);
   let mdPath: string | undefined;
   let placeholderContent = "";
+  // Captured once metadata is known, so the catch block can regenerate the
+  // failed-state doc from structured data rather than string-matching prose.
+  let seededMeta: ArticleMeta | null = null;
 
   try {
     console.log(`[add-article] Processing ${job.url}`);
@@ -61,6 +64,7 @@ export async function processArticle(job: ArticleJob): Promise<void> {
       published: htmlMeta?.published || jina?.published || "",
       description: htmlMeta?.description ?? "",
     };
+    seededMeta = meta;
     if (!meta.title) {
       throw new Error("Could not determine article title from page metadata");
     }
@@ -169,13 +173,16 @@ export async function processArticle(job: ArticleJob): Promise<void> {
     await updateRelayDoc(mdPath, placeholderContent, finalMd);
   } catch (err) {
     // If we got far enough to create a placeholder, mark it failed so the
-    // doc doesn't sit there saying "being imported" forever.
-    if (mdPath && placeholderContent) {
-      const failedNote = placeholderContent.replace(
-        /\*This article is being imported[\s\S]*$/,
-        `*Article import failed.* You can resubmit it from the Add Article page.\n\nFailed at: ${new Date().toISOString()}\n`,
+    // doc doesn't sit there saying "being imported" forever. Regenerate from
+    // the seeded metadata instead of editing the placeholder prose.
+    if (mdPath && placeholderContent && seededMeta) {
+      const failedBody = `*Article import failed.* You can resubmit it from the Add Article page.\n\nFailed at: ${new Date().toISOString()}`;
+      const failedContent = generateArticleMarkdown(
+        seededMeta,
+        failedBody,
+        new Date().toISOString().slice(0, 10),
       );
-      await updateRelayDoc(mdPath, placeholderContent, failedNote).catch(
+      await updateRelayDoc(mdPath, placeholderContent, failedContent).catch(
         () => {},
       );
     }
