@@ -20,6 +20,7 @@ import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
+import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { MultiDocSectionEditor } from './components/SectionEditor';
 import { useDocConnection } from './hooks/useDocConnection';
 import { applySuggestionAction } from './lib/suggestion-actions';
@@ -31,7 +32,7 @@ import { HtmlEditor } from './components/HtmlEditor';
 import { findPathByUuid } from './lib/uuid-to-path';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { useRecentFiles } from './hooks/useRecentFiles';
-import { RELAY_ID, FOLDERS, DEFAULT_DOC_UUID } from './lib/constants';
+import { RELAY_ID, FOLDERS, DEFAULT_DOC_UUID, EDU_FOLDER_ID } from './lib/constants';
 import { pickEditor } from './lib/editor-selector';
 import { EduEditor } from './components/EduEditor/EduEditor';
 import { useContainerWidth } from './hooks/useContainerWidth';
@@ -544,8 +545,13 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                       : <DefaultLanding />
                   } />
                   <Route path="/add-video" element={
-                    role === 'edit' && (isAllFolders || folderUuid === 'ea4015da-24af-4d9d-ac49-8c902cb17121')
+                    role === 'edit' && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <AddVideoPage shareToken={shareToken} />
+                      : <DefaultLanding />
+                  } />
+                  <Route path="/add-article" element={
+                    role === 'edit' && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                      ? <AddArticlePage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />

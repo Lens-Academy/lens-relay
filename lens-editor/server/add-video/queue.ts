@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Job, VideoPayload } from "./types";
 import { generateFilenameBase } from "./export";
+import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 
 interface QueueOptions {
   processJob: (job: Job & { payload: VideoPayload }) => Promise<void>;
@@ -17,6 +18,7 @@ export class JobQueue {
   }
 
   add(payload: VideoPayload): Job {
+    evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
     const editorBase =
