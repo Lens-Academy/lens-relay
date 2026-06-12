@@ -36,10 +36,9 @@ void function() {
     if (vd) visitorData = vd[1];
   }
 
-  if (!apiKey || !clientVersion) {
-    alert('Could not find YouTube API config on this page. Try reloading the page first.');
-    return;
-  }
+  // Page config is only needed for the WEB player request; without it we
+  // still proceed and rely on the ANDROID fallback in fetchTranscript.
+  var hasWebConfig = !!(apiKey && clientVersion);
 
   // Remove existing overlay if present
   var existing = document.getElementById('lens-add-video-overlay');
@@ -193,66 +192,142 @@ void function() {
     return inputs;
   }
 
-  // Fetch transcript for a single video
-  function fetchTranscript(videoInput) {
-    var videoId = videoInput.video_id;
-    return fetch('https://www.youtube.com/youtubei/v1/player?key=' + apiKey + '&prettyPrint=false', {
+  // Innertube /player request. WEB uses the page config and the user's
+  // cookies; ANDROID is a cookie-less fallback for when YouTube's attestation
+  // enforcement strips captions from WEB responses (reports UNPLAYABLE or
+  // omits captionTracks even though the watch page shows captions).
+  function requestPlayer(videoId, client) {
+    var url, init;
+    if (client === 'WEB') {
+      url = 'https://www.youtube.com/youtubei/v1/player?key=' + apiKey + '&prettyPrint=false';
+      init = {
+        credentials: 'include',
+        body: { videoId: videoId, context: { client: {
+          clientName: 'WEB', clientVersion: clientVersion, visitorData: visitorData
+        } } }
+      };
+    } else {
+      url = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
+      init = {
+        credentials: 'omit',
+        body: { videoId: videoId, context: { client: {
+          clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 30, hl: 'en'
+        } } }
+      };
+    }
+    return fetch(url, {
       method: 'POST',
-      credentials: 'include',
+      credentials: init.credentials,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        videoId: videoId,
-        context: {
-          client: {
-            clientName: 'WEB',
-            clientVersion: clientVersion,
-            visitorData: visitorData
-          }
-        }
-      })
-    })
-    .then(function(resp) {
-      if (!resp.ok) throw new Error('Player API returned ' + resp.status);
+      body: JSON.stringify(init.body)
+    }).then(function(resp) {
+      if (!resp.ok) throw new Error(client + ' player API returned ' + resp.status);
       return resp.json();
-    })
-    .then(function(playerData) {
-      var title = (playerData.videoDetails && playerData.videoDetails.title) || 'Unknown';
-      var channel = (playerData.videoDetails && playerData.videoDetails.author) || 'Unknown';
+    });
+  }
+
+  function describePlayability(playerData) {
+    var ps = playerData.playabilityStatus || {};
+    return (ps.status || 'unknown') + (ps.reason ? ' (' + ps.reason + ')' : '');
+  }
+
+  // Convert srv3 timedtext XML (the only format the ANDROID caption URLs
+  // serve) into the json3 {events} shape the Lens server expects.
+  function srv3ToEvents(xmlText) {
+    // safeHTML: YouTube's Trusted Types CSP requires TrustedHTML even for XML
+    var doc = new DOMParser().parseFromString(safeHTML(xmlText), 'text/xml');
+    if (doc.getElementsByTagName('parsererror').length > 0) {
+      throw new Error('Could not parse caption XML');
+    }
+    var events = [];
+    var ps = doc.getElementsByTagName('p');
+    for (var i = 0; i < ps.length; i++) {
+      var p = ps[i];
+      var segs = [];
+      var sEls = p.getElementsByTagName('s');
+      if (sEls.length > 0) {
+        for (var j = 0; j < sEls.length; j++) {
+          var seg = { utf8: sEls[j].textContent };
+          var off = sEls[j].getAttribute('t');
+          if (off) seg.tOffsetMs = parseInt(off, 10);
+          segs.push(seg);
+        }
+      } else if (p.textContent && p.textContent.trim()) {
+        segs.push({ utf8: p.textContent });
+      } else {
+        continue; // rolling-caption append markers: <p a="1"> with no text
+      }
+      events.push({
+        tStartMs: parseInt(p.getAttribute('t') || '0', 10),
+        dDurationMs: parseInt(p.getAttribute('d') || '0', 10),
+        segs: segs
+      });
+    }
+    return { events: events };
+  }
+
+  // Fetch a caption track and normalize to json3. WEB tracks honor fmt=json3;
+  // ANDROID tracks ignore it and return srv3 XML.
+  function fetchTrackEvents(track, credentials) {
+    return fetch(track.baseUrl + '&fmt=json3', { credentials: credentials })
+      .then(function(resp) {
+        if (!resp.ok) throw new Error('Transcript fetch returned ' + resp.status);
+        return resp.text();
+      })
+      .then(function(text) {
+        if (!text) throw new Error('Transcript response was empty');
+        var data = text.charAt(0) === '<' ? srv3ToEvents(text) : JSON.parse(text);
+        var events = (data.events || []).filter(function(e) { return e.segs; });
+        if (events.length === 0) throw new Error('Transcript returned no word data');
+        return { transcript_raw: data, word_event_count: events.length };
+      });
+  }
+
+  function attemptTranscript(videoInput, client) {
+    return requestPlayer(videoInput.video_id, client).then(function(playerData) {
+      var status = (playerData.playabilityStatus || {}).status;
+      if (status && status !== 'OK') {
+        throw new Error('Video is ' + describePlayability(playerData));
+      }
       var tracks = playerData.captions &&
         playerData.captions.playerCaptionsTracklistRenderer &&
         playerData.captions.playerCaptionsTracklistRenderer.captionTracks;
-
       if (!tracks || tracks.length === 0) {
         throw new Error('No captions available for this video');
       }
 
       // Prefer English track
-      var enTrack = null;
+      var track = tracks[0];
       for (var i = 0; i < tracks.length; i++) {
-        if (tracks[i].languageCode === 'en') { enTrack = tracks[i]; break; }
+        if (tracks[i].languageCode === 'en') { track = tracks[i]; break; }
       }
-      if (!enTrack) enTrack = tracks[0];
 
-      return fetch(enTrack.baseUrl + '&fmt=json3', { credentials: 'include' })
-        .then(function(resp) {
-          if (!resp.ok) throw new Error('Transcript fetch returned ' + resp.status);
-          return resp.json();
-        })
-        .then(function(transcriptData) {
-          var events = (transcriptData.events || []).filter(function(e) { return e.segs; });
-          if (events.length === 0) throw new Error('Transcript returned no word data');
-
+      return fetchTrackEvents(track, client === 'WEB' ? 'include' : 'omit')
+        .then(function(t) {
           return {
-            video_id: videoId,
-            title: title,
-            channel: channel,
+            video_id: videoInput.video_id,
+            title: (playerData.videoDetails && playerData.videoDetails.title) || 'Unknown',
+            channel: (playerData.videoDetails && playerData.videoDetails.author) || 'Unknown',
             url: videoInput.url,
-            transcript_type: enTrack.kind === 'asr' ? 'word_level' : 'sentence_level',
-            track_lang: enTrack.languageCode,
-            transcript_raw: transcriptData,
-            word_event_count: events.length
+            transcript_type: track.kind === 'asr' ? 'word_level' : 'sentence_level',
+            track_lang: track.languageCode,
+            transcript_raw: t.transcript_raw,
+            word_event_count: t.word_event_count
           };
         });
+    });
+  }
+
+  // Fetch transcript for a single video: try the WEB client first (carries
+  // the user's cookies, so age-gated/member videos work), fall back to
+  // ANDROID if WEB fails for any reason.
+  function fetchTranscript(videoInput) {
+    if (!hasWebConfig) return attemptTranscript(videoInput, 'ANDROID');
+    return attemptTranscript(videoInput, 'WEB').catch(function(webErr) {
+      return attemptTranscript(videoInput, 'ANDROID').catch(function(androidErr) {
+        if (androidErr.message === webErr.message) throw androidErr;
+        throw new Error(androidErr.message + ' [web client: ' + webErr.message + ']');
+      });
     });
   }
 
