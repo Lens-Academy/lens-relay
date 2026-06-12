@@ -45,4 +45,31 @@ describe("ArticleJobQueue", () => {
     // job is done now — resubmitting should be allowed
     expect(queue.findActive("https://example.com/a")).toBeUndefined();
   });
+
+  // Prevents: in-memory job map growing unbounded over the server's lifetime
+  it("evicts finished jobs older than the TTL on add", async () => {
+    const queue = new ArticleJobQueue({ processJob: vi.fn(async () => {}) });
+    const old = queue.add("https://example.com/old");
+    await flushMicrotasks();
+    expect(queue.get(old.id)?.status).toBe("done");
+    // Age the finished job past the 7-day TTL
+    queue.get(old.id)!.updated_at = new Date(
+      Date.now() - 8 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    queue.add("https://example.com/new");
+    expect(queue.get(old.id)).toBeUndefined();
+  });
+
+  it("never evicts active jobs, even old ones", () => {
+    const neverResolves = vi.fn(() => new Promise<void>(() => {}));
+    const queue = new ArticleJobQueue({ processJob: neverResolves });
+    const stuck = queue.add("https://example.com/stuck");
+    stuck.updated_at = new Date(
+      Date.now() - 30 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    queue.add("https://example.com/new");
+    expect(queue.get(stuck.id)).toBeDefined();
+  });
 });

@@ -1,18 +1,10 @@
 import http from 'node:http';
 import { Readable } from 'node:stream';
 import httpProxy from 'http-proxy';
-import { Hono } from 'hono';
 import { getRequestListener } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
-import { createAuthHandler, AuthError } from './auth-middleware.ts';
 import { validateProxyToken, checkProxyAccessWithBody } from './relay-proxy-auth.ts';
-import { discordRoutes, initDiscordGateway } from './discord/routes.ts';
-import { createAddVideoRoutes } from './add-video/routes.ts';
-import { JobQueue } from './add-video/queue.ts';
-import { processVideo } from './add-video/pipeline.ts';
-import { createAddArticleRoutes } from './add-article/routes.ts';
-import { ArticleJobQueue } from './add-article/queue.ts';
-import { processArticle } from './add-article/pipeline.ts';
+import { initDiscordGateway } from './discord/routes.ts';
+import { createApp } from './app.ts';
 
 const relayUrl = process.env.RELAY_URL || 'http://relay-server:8080';
 const relayServerToken = process.env.RELAY_SERVER_TOKEN;
@@ -31,12 +23,6 @@ proxy.on('error', (err, _req, res) => {
   }
 });
 
-// Auth handler
-const authHandler = createAuthHandler({
-  relayServerUrl: relayUrl,
-  relayServerToken,
-});
-
 async function resolveFolderName(folderUuid: string): Promise<string | undefined> {
   const headers: Record<string, string> = {};
   if (relayServerToken) {
@@ -48,75 +34,8 @@ async function resolveFolderName(folderUuid: string): Promise<string | undefined
   return data.name;
 }
 
-// Hono app for auth, discord, and static files
-const app = new Hono();
-
-app.post('/api/auth/token', async (c) => {
-  try {
-    const body = await c.req.json();
-    const result = await authHandler(body);
-    return c.json(result);
-  } catch (error) {
-    if (error instanceof AuthError) {
-      return c.json({ error: error.message }, error.status as 400);
-    }
-    return c.json({ error: 'Internal server error' }, 500);
-  }
-});
-
-// Mount discord routes under /api/discord
-app.route('/api/discord', discordRoutes);
-
-// Add video transcript pipeline
-const addVideoQueue = new JobQueue({ processJob: processVideo });
-app.route('/api/add-video', createAddVideoRoutes(addVideoQueue));
-
-// Add article import pipeline
-const addArticleQueue = new ArticleJobQueue({ processJob: processArticle });
-app.route('/api/add-article', createAddArticleRoutes(addArticleQueue));
-
-// Blob content proxy — fetches presigned R2 URLs server-side to avoid CORS
-app.get('/api/blob-fetch', async (c) => {
-  const url = c.req.query('url');
-  if (!url) return c.json({ error: 'url parameter required' }, 400);
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) return c.text(`Upstream error: ${resp.status}`, 502);
-    const contentType = resp.headers.get('content-type') ?? 'application/octet-stream';
-    const body = await resp.arrayBuffer();
-    return c.body(body, 200, { 'Content-Type': contentType });
-  } catch (err) {
-    return c.text(`Fetch failed: ${err}`, 502);
-  }
-});
-
-// Blob upload proxy — PUTs to presigned R2 URLs server-side to avoid CORS
-app.post('/api/blob-upload', async (c) => {
-  const url = c.req.query('url');
-  if (!url) return c.json({ error: 'url parameter required' }, 400);
-  let parsed: URL;
-  try { parsed = new URL(url); } catch { return c.json({ error: 'invalid url' }, 400); }
-  if (!parsed.hostname.endsWith('.r2.cloudflarestorage.com'))
-    return c.json({ error: 'url not allowed' }, 400);
-  const body = await c.req.arrayBuffer();
-  const contentType = c.req.header('content-type') ?? 'application/octet-stream';
-  try {
-    const resp = await fetch(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': contentType, 'Content-Length': String(body.byteLength) },
-      body,
-    });
-    if (!resp.ok) return c.text(`Upstream error: ${resp.status}`, 502);
-    return c.text('', 200);
-  } catch (err) {
-    return c.text(`Upload failed: ${err}`, 502);
-  }
-});
-
-// Static files from Vite build output
-app.use('/*', serveStatic({ root: './dist' }));
-// SPA fallback
-app.get('/*', serveStatic({ root: './dist', path: 'index.html' }));
+// Hono app for auth, discord, import pipelines, and static files
+const app = createApp({ relayUrl, relayServerToken });
 
 const honoListener = getRequestListener(app.fetch);
 

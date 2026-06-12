@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ArticleJob } from "./types";
+import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 
 interface QueueOptions {
   processJob: (job: ArticleJob) => Promise<void>;
@@ -21,6 +22,7 @@ export class ArticleJobQueue {
   }
 
   add(url: string): ArticleJob {
+    evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
     const job: ArticleJob = {
