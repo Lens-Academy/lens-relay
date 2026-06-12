@@ -32,6 +32,19 @@ export default defineConfig(() => {
   // Server token for minting relay doc tokens (optional for local relay)
   const relayServerToken = process.env.RELAY_SERVER_TOKEN;
 
+  // The add-video / add-article pipelines run in-process in the dev plugins and
+  // read RELAY_URL / EDITOR_BASE_URL from the environment. Their defaults point
+  // at the production docker network, so in local mode we redirect them at the
+  // local relay and dev server — otherwise imports would never reach the relay.
+  if (useLocalRelay) {
+    // The dev server runs over HTTPS (basicSsl), so EDITOR_BASE_URL must be
+    // https too — otherwise the relay_url links in the import UI point at a
+    // dead http origin. Honour VITE_PORT if the dev server is on a custom port.
+    const vitePort = parseInt(process.env.VITE_PORT || String(defaultVitePort), 10);
+    process.env.RELAY_URL ??= `http://localhost:${relayPort}`;
+    process.env.EDITOR_BASE_URL ??= `https://localhost:${vitePort}`;
+  }
+
   console.log(`[vite] Workspace ${wsNum}: Vite port ${defaultVitePort}, Relay port ${relayPort}`);
   console.log(`[vite] Relay target: ${relayTarget}`);
   console.log(`[vite] Discord bridge port ${bridgePort}`);
@@ -290,6 +303,39 @@ export default defineConfig(() => {
   }
 
   /**
+   * Vite plugin that adds /api/add-article endpoints for article importing.
+   * Dev-only — mounts the same Hono router the prod server uses.
+   */
+  function addArticlePlugin(): Plugin {
+    let listener: ReturnType<typeof import('@hono/node-server').getRequestListener> | null = null;
+
+    return {
+      name: 'add-article-api',
+      configureServer(server) {
+        server.middlewares.use('/api/add-article', async (req, res) => {
+          try {
+            if (!listener) {
+              const { Hono } = await import('hono');
+              const { getRequestListener } = await import('@hono/node-server');
+              const { createAddArticleRoutes } = await import('./server/add-article/routes.ts');
+              const { ArticleJobQueue } = await import('./server/add-article/queue.ts');
+              const { processArticle } = await import('./server/add-article/pipeline.ts');
+              const app = new Hono();
+              app.route('/', createAddArticleRoutes(new ArticleJobQueue({ processJob: processArticle })));
+              listener = getRequestListener(app.fetch);
+            }
+            console.log(`[add-article] ${req.method} /api/add-article${req.url || '/'}`);
+            listener(req, res);
+          } catch (error) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+          }
+        });
+      },
+    };
+  }
+
+  /**
    * Dev-only plugin to proxy blob downloads from presigned R2 URLs server-side,
    * mirroring the prod-server /api/blob-fetch endpoint. Needed for dev:local:r2.
    */
@@ -402,7 +448,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), addArticlePlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

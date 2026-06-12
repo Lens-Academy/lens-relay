@@ -10,6 +10,9 @@ import { discordRoutes, initDiscordGateway } from './discord/routes.ts';
 import { createAddVideoRoutes } from './add-video/routes.ts';
 import { JobQueue } from './add-video/queue.ts';
 import { processVideo } from './add-video/pipeline.ts';
+import { createAddArticleRoutes } from './add-article/routes.ts';
+import { ArticleJobQueue } from './add-article/queue.ts';
+import { processArticle } from './add-article/pipeline.ts';
 
 const relayUrl = process.env.RELAY_URL || 'http://relay-server:8080';
 const relayServerToken = process.env.RELAY_SERVER_TOKEN;
@@ -67,6 +70,10 @@ app.route('/api/discord', discordRoutes);
 // Add video transcript pipeline
 const addVideoQueue = new JobQueue({ processJob: processVideo });
 app.route('/api/add-video', createAddVideoRoutes(addVideoQueue));
+
+// Add article import pipeline
+const addArticleQueue = new ArticleJobQueue({ processJob: processArticle });
+app.route('/api/add-article', createAddArticleRoutes(addArticleQueue));
 
 // Blob content proxy — fetches presigned R2 URLs server-side to avoid CORS
 app.get('/api/blob-fetch', async (c) => {
