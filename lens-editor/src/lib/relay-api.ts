@@ -430,6 +430,27 @@ export interface MoveDocumentResponse {
   links_rewritten: number;
 }
 
+/** Error from a relay API call, carrying the HTTP status. The relay redacts
+ * error bodies in production (`redact_errors`), so the status code is often
+ * the only signal the client gets — keep it so the UI can map it to a
+ * meaningful message (e.g. 409 → "already exists"). */
+export class RelayApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = 'RelayApiError';
+  }
+}
+
+/** User-facing message for a failed move/rename. */
+export function moveErrorMessage(err: unknown, newName?: string): string {
+  if (err instanceof RelayApiError && err.status === 409) {
+    return newName
+      ? `"${newName}" already exists`
+      : 'The destination already exists';
+  }
+  return err instanceof Error && err.message ? err.message : 'Move failed';
+}
+
 /**
  * Move a document to a new path, optionally to a different folder.
  * Calls the server's POST /doc/move endpoint which handles:
@@ -455,7 +476,7 @@ export async function moveDocument(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Move failed: ${response.status}`);
+    throw new RelayApiError(text || `Move failed: ${response.status}`, response.status);
   }
 
   return response.json();
@@ -482,7 +503,7 @@ export async function movePath(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Move failed: ${response.status}`);
+    throw new RelayApiError(text || `Move failed: ${response.status}`, response.status);
   }
 
   return response.json();

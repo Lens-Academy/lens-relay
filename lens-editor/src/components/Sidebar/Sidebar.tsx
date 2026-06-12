@@ -13,7 +13,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } from '../../lib/tree-utils';
-import { createDocument, createFolder, deleteDocument, movePath } from '../../lib/relay-api';
+import { createDocument, createFolder, deleteDocument, movePath, moveErrorMessage } from '../../lib/relay-api';
 import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { nextUntitledHtmlName } from '../../lib/untitled-name';
 import { RELAY_ID } from '../../App';
@@ -134,7 +134,7 @@ export function Sidebar() {
       await movePath(prefixedOldPath.slice(1), newPath);
     } catch (err: any) {
       console.error('Rename failed:', err);
-      setMoveError(err.message || 'Rename failed');
+      setMoveError(moveErrorMessage(err, parts[parts.length - 1]));
     }
   }, [folderNames]);
 
@@ -238,7 +238,7 @@ export function Sidebar() {
       setMoveTarget(null);
       setMoveNewPath('');
     } catch (err: any) {
-      setMoveError(err.message || 'Move failed');
+      setMoveError(moveErrorMessage(err, moveNewPath.split('/').pop()));
     } finally {
       setIsMoving(false);
     }
@@ -279,7 +279,7 @@ export function Sidebar() {
       await movePath(oldPrefixedPath.slice(1), newOriginalPath, crossFolder);
     } catch (err: any) {
       console.error('Drag move failed:', err);
-      setMoveError(err.message || 'Move failed');
+      setMoveError(moveErrorMessage(err, fileName));
     }
   }, [folderNames]);
 
