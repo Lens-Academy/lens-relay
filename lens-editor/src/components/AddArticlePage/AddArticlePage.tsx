@@ -18,7 +18,7 @@ interface SubmitResult {
   error?: string;
 }
 
-const POLL_INTERVAL_MS = 3000;
+export const POLL_INTERVAL_MS = 3000;
 
 const STATUS_COLORS: Record<ArticleJob["status"], string> = {
   queued: "#f0ad4e",
@@ -33,9 +33,11 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [invalidResults, setInvalidResults] = useState<SubmitResult[]>([]);
   const [jobs, setJobs] = useState<ArticleJob[]>([]);
-  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchInFlight = useRef(false);
 
   const fetchStatus = useCallback(async () => {
+    if (fetchInFlight.current) return;
+    fetchInFlight.current = true;
     try {
       const resp = await fetch("/api/add-article/status", {
         headers: { Authorization: `Bearer ${shareToken}` },
@@ -44,22 +46,26 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
       const data = (await resp.json()) as { jobs: ArticleJob[] };
       setJobs(data.jobs);
       return data.jobs;
-    } catch {
+    } catch (err) {
+      console.warn("[add-article] status poll failed:", err);
       return;
+    } finally {
+      fetchInFlight.current = false;
     }
   }, [shareToken]);
 
-  // Poll while any job is still in flight
+  // Poll while any job is still in flight. setInterval keyed on the
+  // active/idle boolean (not the jobs array) so the cadence is independent of
+  // individual fetch outcomes: a failed poll doesn't kill the loop (the bug a
+  // state-driven timeout chain had), and a successful one doesn't reset it.
+  const anyActive = jobs.some(
+    (j) => j.status === "queued" || j.status === "processing",
+  );
   useEffect(() => {
-    const anyActive = jobs.some(
-      (j) => j.status === "queued" || j.status === "processing",
-    );
     if (!anyActive) return;
-    pollTimer.current = setTimeout(fetchStatus, POLL_INTERVAL_MS);
-    return () => {
-      if (pollTimer.current) clearTimeout(pollTimer.current);
-    };
-  }, [jobs, fetchStatus]);
+    const interval = setInterval(fetchStatus, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [anyActive, fetchStatus]);
 
   useEffect(() => {
     fetchStatus();
