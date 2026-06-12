@@ -23,6 +23,7 @@ author:
 source_url: "https://slatestarcodex.com/2014/07/30/meditations-on-moloch/"
 published: 2014-07-30
 created: 2026-06-10
+accessed: 2026-06-10
 description: "An essay on coordination failures."
 tags:
   - "article-importer"

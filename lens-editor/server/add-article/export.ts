@@ -7,7 +7,9 @@ function yamlQuote(s: string): string {
 /**
  * Generate article markdown with YAML frontmatter matching the existing
  * Lens Edu/articles convention (title, author list, source_url, published,
- * created, description, tags).
+ * created, description, tags), plus `accessed` — the date we fetched the
+ * original. Lens never edits imported articles, but sources change after
+ * import (e.g. Wikipedia), so the access date records which version we hold.
  */
 export function generateArticleMarkdown(
   meta: ArticleMeta,
@@ -28,6 +30,7 @@ export function generateArticleMarkdown(
   lines.push(`source_url: ${yamlQuote(meta.source_url)}`);
   lines.push(meta.published ? `published: ${meta.published}` : "published:");
   lines.push(`created: ${createdDate}`);
+  lines.push(`accessed: ${createdDate}`);
   lines.push(
     meta.description
       ? `description: ${yamlQuote(meta.description)}`
