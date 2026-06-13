@@ -42,7 +42,13 @@ Internet → Cloudflare (HTTPS/443) ← cloudflared (outbound tunnel) → relay-
    - Port: 8000 (internal only, receives webhooks from relay-server)
    - Config: `/root/relay-git-sync-data/git_connectors.toml`
    - Data: `/root/relay-git-sync-data/`
-   - Network: default compose network
+   - Network: `lens-relay_default` (joins the compose network)
+   - **Started by `scripts/start-git-sync.sh`, NOT by compose.** Its SSH deploy
+     key is multi-line and does not interpolate reliably through compose, so a
+     compose-created container would start without the key and crash-loop
+     (breaking GitHub sync). The script injects the key from file at runtime.
+     Restart it — e.g. after a deploy that recreated containers — with
+     `bash scripts/start-git-sync.sh`.
 
 4. **lens-editor** — Web editor frontend + Discord bridge
    - Image: `lens-editor:custom` (built from lens-editor/)
@@ -316,17 +322,27 @@ tail -f /var/log/relay-fd-monitor.log
 
 ## Deploying / Updating
 
-All services are managed via `docker-compose.prod.yaml` at the repo root:
+cloudflared, relay-server, and lens-editor are managed via
+`docker-compose.prod.yaml` at the repo root. `relay-git-sync` is started
+separately (see below):
 
 ```bash
-# Deploy/update all services
+# Deploy/update the compose-managed services
 docker compose -f docker-compose.prod.yaml build
 docker compose -f docker-compose.prod.yaml up -d
 
 # Rebuild a single service
 docker compose -f docker-compose.prod.yaml build relay-server
 docker compose -f docker-compose.prod.yaml up -d relay-server
+
+# relay-git-sync is NOT in compose — (re)start it with its own script.
+# Safe to run any time; required after anything that recreated containers.
+bash scripts/start-git-sync.sh
 ```
+
+Because `relay-git-sync` is not in compose, `docker compose down` stops only
+cloudflared, relay-server, and lens-editor — it leaves git-sync running. Stop it
+explicitly with `docker stop relay-git-sync` when tearing the stack down.
 
 See `.env.example` for required environment variables.
 

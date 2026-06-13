@@ -70,7 +70,8 @@ docker compose -f docker-compose.prod.yaml build
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
-Production uses `docker-compose.prod.yaml` to manage relay-server, lens-editor, cloudflared, and relay-git-sync.
+Production uses `docker-compose.prod.yaml` to manage relay-server, lens-editor, and cloudflared.
+`relay-git-sync` is **not** in compose (its multi-line SSH key won't interpolate reliably); it is started by `scripts/start-git-sync.sh`. A bare `docker compose up -d` therefore won't disturb git-sync.
 See `.env.example` for required environment variables and `docs/server-ops.md` for full operational details.
 
 For production share links, the token must be signed with the production secret. Without it, tokens are signed with a dev-only key and will be rejected with 401 "Invalid or expired share token":

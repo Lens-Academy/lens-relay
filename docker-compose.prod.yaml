@@ -5,10 +5,16 @@
 #   docker compose -f docker-compose.prod.yaml logs -f
 #   docker compose -f docker-compose.prod.yaml down
 #
+# NOTE: relay-git-sync is intentionally NOT defined here. Its SSH deploy key is
+# a multi-line value that does not interpolate reliably through compose, so a
+# compose-created container starts without the key and crash-loops (breaking
+# GitHub sync). It is started separately by scripts/start-git-sync.sh, which
+# reads the key from file at runtime. Because it is not in this file, a bare
+# `docker compose -f docker-compose.prod.yaml up -d` will not disturb it.
+#
 # Prerequisites:
 #   - /root/relay.toml — relay server configuration
 #   - /root/auth.env — Cloudflare R2 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
-#   - /root/relay-git-sync-data/ — git sync data, SSH keys, patched files
 #   - TUNNEL_TOKEN environment variable or in .env file
 
 # Cap container log growth. Docker's default json-file driver never rotates, so
@@ -63,20 +69,5 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PORT=3000
 
-  relay-git-sync:
-    # Private registry — no versioned tags available. Pin when possible.
-    image: docker.system3.md/relay-git-sync:latest
-    container_name: relay-git-sync
-    restart: unless-stopped
-    logging: *default-logging
-    ports:
-      - "127.0.0.1:8001:8000"
-    volumes:
-      - /root/relay-git-sync-data:/data
-      - /root/relay-git-sync-data/webhook_handler.py:/app/webhook_handler.py
-      - /root/relay-git-sync-data/persistence.py:/app/persistence.py
-    environment:
-      - RELAY_GIT_DATA_DIR=/data
-      - RELAY_SERVER_URL=http://relay-server:8080
-      - RELAY_SERVER_API_KEY=${RELAY_SERVER_API_KEY}
-      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+  # relay-git-sync is started by scripts/start-git-sync.sh, not compose — see
+  # the note at the top of this file.
