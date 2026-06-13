@@ -11,11 +11,23 @@
 #   - /root/relay-git-sync-data/ — git sync data, SSH keys, patched files
 #   - TUNNEL_TOKEN environment variable or in .env file
 
+# Cap container log growth. Docker's default json-file driver never rotates, so
+# logs grow until they fill the disk (relay-server alone writes ~20 MB/hr of
+# awareness-update output). 50 MB × 5 files bounds each container to 250 MB.
+# NOTE: logging options only apply to newly created containers — run
+# `docker compose -f docker-compose.prod.yaml up -d` to recreate and apply.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   cloudflared:
     image: cloudflare/cloudflared@sha256:e9bcb2ef08d25632ff74344e73a025f4f4bf12718335b196fa0e670cacace8c5
     container_name: cloudflared
     restart: unless-stopped
+    logging: *default-logging
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
 
   relay-server:
@@ -25,6 +37,7 @@ services:
     image: relay-server:custom
     container_name: relay-server
     restart: unless-stopped
+    logging: *default-logging
     ulimits:
       nofile:
         soft: 65536
@@ -41,6 +54,7 @@ services:
     image: lens-editor:custom
     container_name: lens-editor
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - RELAY_URL=http://relay-server:8080
       - RELAY_SERVER_TOKEN=${RELAY_SERVER_TOKEN}
@@ -54,6 +68,7 @@ services:
     image: docker.system3.md/relay-git-sync:latest
     container_name: relay-git-sync
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:8001:8000"
     volumes:
