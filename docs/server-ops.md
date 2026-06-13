@@ -203,7 +203,7 @@ Host github.com-edu-private
 2. Add the public key as a deploy key to the new GitHub repo (with write access)
 3. Add a new Host block to `/root/relay-git-sync-data/ssh/config`
 4. Add a new `[[git_connector]]` entry using the host alias (e.g., `git@github.com-newrepo:user/repo.git`)
-5. Restart the container: `docker restart relay-git-sync`
+5. Reload the container: `docker restart relay-git-sync` (or, if it isn't running, `bash scripts/start-git-sync.sh`)
 
 **Patched persistence.py:** The stock relay-git-sync image hardcodes a single SSH key. We mount a patched `persistence.py` that uses `-F /data/ssh/config` instead, allowing SSH config-based key selection.
 
@@ -215,10 +215,10 @@ docker logs -f relay-server
 docker logs -f cloudflared
 docker logs -f relay-git-sync
 
-# Restart services
+# Restart services (restart reuses the existing container)
 docker restart relay-server
 docker restart cloudflared
-docker restart relay-git-sync
+docker restart relay-git-sync   # if the container was removed, recreate it: bash scripts/start-git-sync.sh
 
 # Check running containers
 docker ps -a

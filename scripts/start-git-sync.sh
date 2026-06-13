@@ -47,8 +47,8 @@ WEBHOOK_SECRET=$(read_env WEBHOOK_SECRET)
 [[ -n "$RELAY_SERVER_API_KEY" ]] || { echo "ERROR: RELAY_SERVER_API_KEY missing from $ENV_FILE" >&2; exit 1; }
 [[ -n "$WEBHOOK_SECRET" ]] || { echo "ERROR: WEBHOOK_SECRET missing from $ENV_FILE" >&2; exit 1; }
 
-docker stop relay-git-sync 2>/dev/null || true
-docker rm relay-git-sync 2>/dev/null || true
+# Remove any existing container (running or stopped) before recreating.
+docker rm -f relay-git-sync 2>/dev/null || true
 
 docker run -d \
   --name relay-git-sync \
