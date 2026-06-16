@@ -102,38 +102,63 @@ function countHeadingLikeLines(state: EditorState): number {
  * time, headings below the parsed boundary are silently missing — and because a
  * background parse completing does NOT trigger a React re-render, the ToC can stay
  * stale until some unrelated re-render (e.g. clicking a heading) re-runs extraction.
- * The warns below fire ONLY when that incomplete-parse condition is detected, so
- * they're silent in normal use but capture the rare failure in the wild.
+ * The diagnostic logging below lives in a commit-phase effect (never in render) and
+ * fires ONLY when that incomplete-parse condition is detected, so it's silent in
+ * normal use but captures the rare failure in the wild.
  */
 export function useHeadings(view: EditorView | null): Heading[] {
-  // Called unconditionally (before the early return) to keep hook order stable.
+  // All hooks run unconditionally (no early return) to keep hook order stable.
   const diagRef = useRef<{ lastFullyParsed: boolean }>({ lastFullyParsed: true });
-  if (!view) return [];
 
-  const state = view.state;
-  const headings = extractHeadings(state);
+  // Pure render-phase reads only — extraction has no side effects.
+  const headings = view ? extractHeadings(view.state) : [];
+  const docLen = view ? view.state.doc.length : 0;
+  const fullyParsed = view ? syntaxTreeAvailable(view.state, docLen) : true;
+  const headingCount = headings.length;
 
-  const docLen = state.doc.length;
-  const fullyParsed = syntaxTreeAvailable(state, docLen);
+  // Side-effecting observability runs in the commit phase, so it doesn't fire
+  // twice under Strict Mode's double-render and any deferred timer is cleaned up.
+  useEffect(() => {
+    if (!view) return;
 
-  if (!fullyParsed) {
-    // ALWAYS-ON anomaly warn: the tree didn't cover the whole doc at extract time,
-    // so the ToC is probably missing headings below the parsed boundary.
-    const treeLen = syntaxTree(state).length;
-    const groundTruth = countHeadingLikeLines(state);
-    console.warn('[ToC] syntax tree incomplete at heading extraction', {
-      docLength: docLen,
-      treeParsedTo: treeLen,
-      parsedFraction: docLen ? +(treeLen / docLen).toFixed(3) : 1,
-      headingsExtracted: headings.length,
-      headingLikeLinesInDoc: groundTruth,
-      likelyMissing: Math.max(0, groundTruth - headings.length),
-    });
+    const wasFullyParsed = diagRef.current.lastFullyParsed;
+    diagRef.current.lastFullyParsed = fullyParsed;
+
+    if (fullyParsed) {
+      if (!wasFullyParsed && import.meta.env.DEV) {
+        console.info('[ToC] syntax tree now fully parsed on re-render', {
+          headings: headingCount,
+        });
+      }
+      if (import.meta.env.DEV) {
+        console.debug('[ToC] extract', { fullyParsed, headings: headingCount, docLength: docLen });
+      }
+      return;
+    }
+
+    // Anomaly: the tree didn't cover the whole doc at extract time, so the ToC is
+    // probably missing headings below the parsed boundary. Warn once per episode
+    // (on the fully-parsed -> incomplete transition) rather than on every render,
+    // to keep production logs readable.
+    if (wasFullyParsed) {
+      const state = view.state;
+      const treeLen = syntaxTree(state).length;
+      const groundTruth = countHeadingLikeLines(state);
+      console.warn('[ToC] syntax tree incomplete at heading extraction', {
+        docLength: docLen,
+        treeParsedTo: treeLen,
+        parsedFraction: docLen ? +(treeLen / docLen).toFixed(3) : 1,
+        headingsExtracted: headingCount,
+        headingLikeLinesInDoc: groundTruth,
+        likelyMissing: Math.max(0, groundTruth - headingCount),
+      });
+    }
 
     // SMOKING-GUN deferred re-check (observability only — logs, no state change,
     // no doc mutation, no forced parse): did parsing finish later while the ToC
-    // stayed stale? extractHeadings here only reads view.state.
-    setTimeout(() => {
+    // stayed stale? extractHeadings here only reads view.state. Cleared on the next
+    // effect run or unmount so timers never stack across renders.
+    const timer = setTimeout(() => {
       if (!view.dom.isConnected) return;
       const s2 = view.state;
       const nowFull = syntaxTreeAvailable(s2, s2.doc.length);
@@ -141,26 +166,13 @@ export function useHeadings(view: EditorView | null): Heading[] {
       console.warn('[ToC] deferred re-check after incomplete parse', {
         nowFullyParsed: nowFull,
         headingsNow: nowHeadings,
-        headingsAtRenderTime: headings.length,
-        gainedHeadings: nowHeadings - headings.length,
+        headingsAtRenderTime: headingCount,
+        gainedHeadings: nowHeadings - headingCount,
         note: 'if gainedHeadings > 0, the rendered ToC is stale (no re-render fired)',
       });
     }, 300);
-  } else if (!diagRef.current.lastFullyParsed && import.meta.env.DEV) {
-    console.info('[ToC] syntax tree now fully parsed on re-render', {
-      headings: headings.length,
-    });
-  }
-
-  diagRef.current.lastFullyParsed = fullyParsed;
-
-  if (import.meta.env.DEV) {
-    console.debug('[ToC] extract', {
-      fullyParsed,
-      headings: headings.length,
-      docLength: docLen,
-    });
-  }
+    return () => clearTimeout(timer);
+  }, [view, fullyParsed, headingCount, docLen]);
 
   return headings;
 }
