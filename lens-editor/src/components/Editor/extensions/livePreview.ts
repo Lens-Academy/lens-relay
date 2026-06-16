@@ -380,11 +380,15 @@ class BulletWidget extends WidgetType {
  */
 class CheckboxWidget extends WidgetType {
   private checked: boolean;
+  private from: number;
+  private to: number;
   private onToggle: () => void;
 
-  constructor(checked: boolean, onToggle: () => void) {
+  constructor(checked: boolean, from: number, to: number, onToggle: () => void) {
     super();
     this.checked = checked;
+    this.from = from;
+    this.to = to;
     this.onToggle = onToggle;
   }
 
@@ -401,7 +405,7 @@ class CheckboxWidget extends WidgetType {
   }
 
   eq(other: CheckboxWidget): boolean {
-    return this.checked === other.checked;
+    return this.checked === other.checked && this.from === other.from && this.to === other.to;
   }
 }
 
@@ -813,7 +817,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   from: replaceFrom,
                   to: replaceTo,
                   deco: Decoration.replace({
-                    widget: new CheckboxWidget(isChecked, () => {
+                    widget: new CheckboxWidget(isChecked, capturedFrom, capturedTo, () => {
                       const newText = isChecked ? '[ ]' : '[x]';
                       view.dispatch({
                         changes: { from: capturedFrom, to: capturedTo, insert: newText },
