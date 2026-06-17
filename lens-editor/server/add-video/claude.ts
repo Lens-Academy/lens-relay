@@ -64,6 +64,16 @@ export async function spawnClaude(
 
     let stdout = '';
     let stderr = '';
+    // Guard against double-settle: a timeout SIGTERM still fires 'close' later,
+    // which would otherwise release the pool slot twice (corrupting the cap).
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      claudeSessionPool.release();
+      fn();
+    };
 
     proc.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -74,20 +84,15 @@ export async function spawnClaude(
 
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
-      claudeSessionPool.release();
-      reject(new Error(`Claude timed out after ${timeoutMs}ms`));
+      finish(() => reject(new Error(`Claude timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
 
     proc.on('close', (code) => {
-      clearTimeout(timer);
-      claudeSessionPool.release();
-      resolve({ exitCode: code ?? 1, stdout, stderr });
+      finish(() => resolve({ exitCode: code ?? 1, stdout, stderr }));
     });
 
     proc.on('error', (err) => {
-      clearTimeout(timer);
-      claudeSessionPool.release();
-      reject(err);
+      finish(() => reject(err));
     });
   });
 }

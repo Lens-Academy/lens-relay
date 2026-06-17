@@ -81,11 +81,13 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
   });
 
   router.post('/', async (c) => {
-    const body = await c.req.json<{ videos?: VideoPayload[] }>();
+    const body = await c.req.json<{ videos?: VideoPayload[]; createLens?: boolean }>();
 
     if (!body.videos || !Array.isArray(body.videos) || body.videos.length === 0) {
       return c.json({ error: 'videos array is required and must not be empty' }, 400);
     }
+    // Auto-create a lens per import unless the client opts out.
+    const createLens = body.createLens !== false;
 
     // Validate each video payload
     for (const video of body.videos) {
@@ -132,7 +134,7 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
           relay_url: `${editorBase}/open/${encodeURI(relayFolder.split('/')[0] + existingPath)}`,
         });
       } else {
-        const job = queue.add(video);
+        const job = queue.add(video, createLens);
         results.push({
           video_id: job.video_id,
           title: job.title,

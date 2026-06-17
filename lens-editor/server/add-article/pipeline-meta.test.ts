@@ -18,6 +18,13 @@ describe("publisherFromUrl", () => {
     );
   });
 
+  it("uses the registrable label, not a subdomain (no 'Plato' from plato.stanford.edu)", () => {
+    expect(publisherFromUrl("https://plato.stanford.edu/entries/x")).toBe(
+      "Stanford",
+    );
+    expect(publisherFromUrl("https://www.bbc.co.uk/news/x")).toBe("Bbc");
+  });
+
   it("returns empty string for an unparseable url", () => {
     expect(publisherFromUrl("not a url")).toBe("");
   });

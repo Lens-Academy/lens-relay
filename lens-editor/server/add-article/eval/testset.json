@@ -73,9 +73,9 @@
       "url": "https://mindingourway.com/on-caring/",
       "gold_relay_path": "Lens Edu/articles/soares-on-caring.md",
       "expect": {
-        "title": "On Caring",
+        "title": "On caring",
         "author_surname": "Soares",
-        "published": "2014-10-07",
+        "published": "2014-10-04",
         "must_contain": ["caring"]
       }
     },
@@ -83,7 +83,7 @@
       "url": "https://www.effectivealtruism.org/articles/introduction-to-effective-altruism",
       "gold_relay_path": "Lens Edu/articles/ea-handbook-introduction-to-effective-altruism.md",
       "expect": {
-        "title": "Introduction to Effective Altruism",
+        "title": "What is effective altruism",
         "must_contain": ["effective altruism"]
       }
     },
@@ -138,6 +138,36 @@
       "expect": {
         "title": "Meditations On Moloch",
         "must_contain": ["Moloch"]
+      }
+    },
+    {
+      "url": "https://www.lesswrong.com/posts/uMQ3cqWDPHhjtiesc/agi-ruin-a-list-of-lethalities",
+      "gold_relay_path": "(forum-baseline: LessWrong, ForumMagnum adapter)",
+      "expect": {
+        "title": "AGI Ruin: A List of Lethalities",
+        "author_surname": "Yudkowsky",
+        "published": "2022-06-05",
+        "must_contain": ["There are no pivotal weak acts", "first critical try"]
+      }
+    },
+    {
+      "url": "https://www.alignmentforum.org/posts/FkgsxrGf3QxhfLWHG/risks-from-learned-optimization-introduction",
+      "gold_relay_path": "(forum-baseline: Alignment Forum, math + footnotes)",
+      "expect": {
+        "title": "Risks from Learned Optimization: Introduction",
+        "author_surname": "Garrabrant",
+        "published": "2019-05-31",
+        "must_contain": ["mesa-optimizer", "base objective"]
+      }
+    },
+    {
+      "url": "https://forum.effectivealtruism.org/posts/78NoGoRitPzeT8nga/draft-report-on-existential-risk-from-power-seeking-ai",
+      "gold_relay_path": "(forum-baseline: EA Forum, link-out stub)",
+      "expect": {
+        "title": "power-seeking AI",
+        "author_surname": "Carlsmith",
+        "published": "2021-04-28",
+        "must_contain": ["Open Philanthropy"]
       }
     }
   ]

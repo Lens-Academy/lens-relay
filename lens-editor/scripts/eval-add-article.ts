@@ -1,36 +1,30 @@
 /**
- * Eval harness for the add-article import pipeline.
+ * End-to-end eval for the DETERMINISTIC add-article pipeline (post-redesign).
  *
- * Runs fetch + extraction + Claude cleanup for each test-set article WITHOUT
- * touching the relay, then scores the result against expectations derived
- * from the hand-curated gold copies in `Lens Edu/articles/`.
+ * Mirrors processArticle — fetch raw HTML → extractArticle (isolate + HTML→MD,
+ * no LLM) → generateArticleMarkdown — WITHOUT writing to the relay, then scores
+ * the result against the hand-curated gold copies referenced in testset.json.
  *
  * Usage:
- *   npx tsx scripts/eval-add-article.ts                    # full test set
- *   npx tsx scripts/eval-add-article.ts --only 3           # single entry by index
- *   npx tsx scripts/eval-add-article.ts --fetch-only       # skip Claude (fast, free)
- *   npx tsx scripts/eval-add-article.ts --url <article-url> # try ANY url (no gold checks)
+ *   npx tsx scripts/eval-add-article.ts                     # full test set
+ *   npx tsx scripts/eval-add-article.ts --only 3            # single entry by index
+ *   npx tsx scripts/eval-add-article.ts --url <article-url> # ad-hoc url (no gold checks)
  *
- * Requirements: network access; `claude` CLI on PATH (unless --fetch-only).
+ * Requirements: network access. No `claude` CLI, no API cost.
  * Outputs land in /tmp/article-eval/<index>-<slug>/ for manual inspection
  * (final.md is the document that would have been written to the relay).
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import {
-  fetchRawHtml,
-  fetchJina,
-  extractHtmlMeta,
-} from "../server/add-article/fetch";
-import { runArticleClaude } from "../server/add-article/claude";
+import { fetchRawHtml } from "../server/add-article/fetch";
+import { extractArticle } from "../server/add-article/extract";
+import { ensureRequiredMeta } from "../server/add-article/pipeline";
 import {
   generateArticleMarkdown,
   generateArticleFilenameBase,
 } from "../server/add-article/export";
-import type { ArticleMeta } from "../server/add-article/types";
 
 const OUT_BASE = "/tmp/article-eval";
-const CLAUDE_TIMEOUT_MS = 1_200_000;
 
 interface TestExpectation {
   title?: string;
@@ -38,34 +32,39 @@ interface TestExpectation {
   published?: string;
   must_contain?: string[];
 }
-
 interface TestEntry {
   url: string;
   gold_relay_path: string;
   expect: TestExpectation;
 }
-
 interface CheckResult {
   name: string;
   ok: boolean;
   detail?: string;
 }
 
-// Artifact patterns that should never survive cleanup. Checked as warnings —
-// some can legitimately appear inside article prose.
+// Artifact patterns that should never survive extraction (forum chrome etc.).
 const ARTIFACT_PATTERNS: Array<[string, RegExp]> = [
   ["soft hyphen (U+00AD)", /­/],
   ["empty link []()", /\[\]\(\)/],
   ['"Skip to content"', /skip to (main )?content/i],
-  ['"Subscribe" prompt', /subscribe (now|to (our|the|my))/i],
-  ["cookie banner text", /we use cookies|cookie policy/i],
+  ["comment-deleted chrome", /\bcomment deleted\b/i],
+  ["karma/byline chrome", /·\s*\d+\s*(mo|y|d|h)\s*ago/i],
   ['"Related posts" block', /related (posts|articles)/i],
 ];
+
+function fidelityLine(md: string): string {
+  const mathInline = (md.match(/(?<!\$)\$(?!\$)[^$\n]+\$/g) || []).length;
+  const mathDisplay = (md.match(/\$\$[^$]+\$\$/g) || []).length;
+  const fnRefs = (md.match(/\[\^\d+\]/g) || []).length;
+  const fnDefs = (md.match(/^\[\^\d+\]:/gm) || []).length;
+  const ol = (md.match(/^\s*\d+\.\s/gm) || []).length;
+  return `math:${mathInline}i/${mathDisplay}d  fn:${fnRefs}ref/${fnDefs}def  ol:${ol}`;
+}
 
 async function runEntry(
   entry: TestEntry,
   index: number,
-  fetchOnly: boolean,
 ): Promise<{ checks: CheckResult[]; warnings: string[]; outDir: string }> {
   const slug = new URL(entry.url).hostname
     .replace(/^www\./, "")
@@ -77,121 +76,78 @@ async function runEntry(
   const checks: CheckResult[] = [];
   const warnings: string[] = [];
 
-  // 1. Fetch (mirrors pipeline.ts)
-  const [htmlResult, jinaResult] = await Promise.allSettled([
-    fetchRawHtml(entry.url),
-    fetchJina(entry.url),
-  ]);
-  const html = htmlResult.status === "fulfilled" ? htmlResult.value : null;
-  const jina = jinaResult.status === "fulfilled" ? jinaResult.value : null;
-
-  checks.push({
-    name: "fetched",
-    ok: Boolean(html || jina),
-    detail: [
-      html
-        ? "html ok"
-        : `html FAILED (${(htmlResult as PromiseRejectedResult).reason})`,
-      jina
-        ? "jina ok"
-        : `jina FAILED (${(jinaResult as PromiseRejectedResult).reason})`,
-    ].join(", "),
-  });
-  if (!html && !jina) return { checks, warnings, outDir };
-
-  const htmlMeta = html ? extractHtmlMeta(html) : null;
-  const meta: ArticleMeta = {
-    title: htmlMeta?.title || jina?.title || "",
-    author: htmlMeta?.author ?? [],
-    source_url: entry.url,
-    published: htmlMeta?.published || jina?.published || "",
-    description: htmlMeta?.description ?? "",
-  };
-
-  await fs.writeFile(path.join(outDir, "extracted.md"), jina?.markdown ?? "");
-  if (html) await fs.writeFile(path.join(outDir, "raw.html"), html);
-  await fs.writeFile(
-    path.join(outDir, "meta.json"),
-    JSON.stringify(meta, null, 2),
-  );
-
-  if (fetchOnly) {
+  // 1. Fetch raw HTML (mirrors pipeline.ts)
+  let html: string;
+  const t0 = performance.now();
+  try {
+    html = await fetchRawHtml(entry.url);
+    checks.push({ name: "fetched", ok: true });
+  } catch (err) {
     checks.push({
-      name: "seed title found",
-      ok: Boolean(meta.title),
-      detail: meta.title,
+      name: "fetched",
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
     });
     return { checks, warnings, outDir };
   }
 
-  // 2. Claude cleanup
-  const result = await runArticleClaude(outDir, CLAUDE_TIMEOUT_MS);
-  checks.push({
-    name: "claude exit 0",
-    ok: result.exitCode === 0,
-    detail: result.exitCode === 0 ? undefined : result.stderr.slice(0, 200),
-  });
-  if (result.exitCode !== 0) return { checks, warnings, outDir };
-
-  const cleaned = (
-    await fs.readFile(path.join(outDir, "cleaned.md"), "utf-8").catch(() => "")
-  ).trim();
-  const finalMeta: ArticleMeta = JSON.parse(
-    await fs.readFile(path.join(outDir, "meta.json"), "utf-8"),
-  );
-
-  const finalMd = generateArticleMarkdown(
-    finalMeta,
-    cleaned,
-    new Date().toISOString().slice(0, 10),
-  );
+  // 2. Deterministic extract + convert
+  const ex = await extractArticle(html, entry.url);
+  const ms = Math.round(performance.now() - t0);
+  const createdDate = new Date().toISOString().slice(0, 10);
+  const meta = ensureRequiredMeta(ex.meta, ex.siteName, createdDate);
+  const finalMd = generateArticleMarkdown(meta, ex.body, createdDate);
+  await fs.writeFile(path.join(outDir, "body.md"), ex.body);
   await fs.writeFile(path.join(outDir, "final.md"), finalMd);
 
-  // 3. Score
   checks.push({
-    name: "body length > 1000 chars",
-    ok: cleaned.length > 1000,
-    detail: `${cleaned.length} chars`,
+    name: "extracted",
+    ok: ex.body.length > 200,
+    detail: `via ${ex.via}, ${ex.body.length} chars, ${ms}ms`,
   });
+  if (ex.linkedOut) {
+    warnings.push(
+      "LINK-OUT detected → pipeline would reject (no stub written to relay)",
+    );
+  }
 
+  // 3. Score against gold
   const e = entry.expect;
   if (e.title) {
     checks.push({
       name: "title matches gold",
-      ok: finalMeta.title.toLowerCase().includes(e.title.toLowerCase()),
-      detail: finalMeta.title,
+      ok: meta.title.toLowerCase().includes(e.title.toLowerCase()),
+      detail: meta.title,
     });
   }
   if (e.author_surname) {
     checks.push({
       name: "author matches gold",
-      ok: finalMeta.author.some((a) =>
+      ok: meta.author.some((a) =>
         a.toLowerCase().includes(e.author_surname!.toLowerCase()),
       ),
-      detail: finalMeta.author.join(", ") || "(none)",
+      detail: meta.author.join(", ") || "(none)",
     });
   }
   if (e.published) {
     checks.push({
       name: "published matches gold",
-      ok: finalMeta.published === e.published,
-      detail: finalMeta.published || "(none)",
+      ok: meta.published === e.published,
+      detail: meta.published || "(none)",
     });
   }
   for (const snippet of e.must_contain ?? []) {
     checks.push({
       name: `contains "${snippet}"`,
-      ok: cleaned.toLowerCase().includes(snippet.toLowerCase()),
+      ok: ex.body.toLowerCase().includes(snippet.toLowerCase()),
     });
   }
 
   for (const [name, pattern] of ARTIFACT_PATTERNS) {
-    if (pattern.test(cleaned)) warnings.push(`artifact: ${name}`);
+    if (pattern.test(ex.body)) warnings.push(`artifact: ${name}`);
   }
-  const filenameBase = generateArticleFilenameBase(
-    finalMeta.author,
-    finalMeta.title,
-  );
+  warnings.push(`fidelity: ${fidelityLine(ex.body)}`);
+  const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
   warnings.push(
     `would write: Lens Edu/articles/${filenameBase}.md (gold: ${entry.gold_relay_path})`,
   );
@@ -201,7 +157,6 @@ async function runEntry(
 
 async function main() {
   const args = process.argv.slice(2);
-  const fetchOnly = args.includes("--fetch-only");
   const onlyIdx = args.includes("--only")
     ? parseInt(args[args.indexOf("--only") + 1], 10)
     : null;
@@ -211,8 +166,6 @@ async function main() {
 
   let entries: Array<{ entry: TestEntry; index: number }>;
   if (adhocUrl) {
-    // Ad-hoc URL: no gold copy, so only the structural checks (fetched,
-    // length, artifacts) apply. Inspect the printed out dir's final.md.
     entries = [
       {
         entry: { url: adhocUrl, gold_relay_path: "(ad-hoc)", expect: {} },
@@ -232,23 +185,14 @@ async function main() {
       .filter(({ index }) => onlyIdx === null || index === onlyIdx);
   }
 
-  console.log(
-    `Running ${entries.length} eval entr${entries.length === 1 ? "y" : "ies"}${fetchOnly ? " (fetch only)" : ""}\n`,
-  );
+  console.log(`Running ${entries.length} eval entr${entries.length === 1 ? "y" : "ies"} (deterministic)\n`);
 
   let totalPass = 0;
   let totalFail = 0;
-
-  // Sequential by entry — Claude concurrency is already pooled per article,
-  // and sequential output is much easier to read.
   for (const { entry, index } of entries) {
     console.log(`[${index}] ${entry.url}`);
     try {
-      const { checks, warnings, outDir } = await runEntry(
-        entry,
-        index,
-        fetchOnly,
-      );
+      const { checks, warnings, outDir } = await runEntry(entry, index);
       for (const c of checks) {
         console.log(
           `  ${c.ok ? "PASS" : "FAIL"}  ${c.name}${c.detail ? ` — ${c.detail}` : ""}`,
@@ -256,10 +200,10 @@ async function main() {
         if (c.ok) totalPass++;
         else totalFail++;
       }
-      for (const w of warnings) console.log(`  warn  ${w}`);
+      for (const w of warnings) console.log(`  ·     ${w}`);
       console.log(`  out   ${outDir}\n`);
     } catch (err) {
-      console.log(`  ERROR ${err instanceof Error ? err.message : err}\n`);
+      console.log(`  ERROR ${err instanceof Error ? err.stack : err}\n`);
       totalFail++;
     }
   }

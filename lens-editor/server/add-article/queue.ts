@@ -21,7 +21,7 @@ export class ArticleJobQueue {
     this.processJob = options.processJob;
   }
 
-  add(url: string): ArticleJob {
+  add(url: string, createLens = true): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
@@ -29,6 +29,7 @@ export class ArticleJobQueue {
       id,
       url,
       status: "queued",
+      createLens,
       created_at: now,
       updated_at: now,
     };
