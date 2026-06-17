@@ -37,8 +37,9 @@ function char4grams(s: string): Set<string> {
   return set;
 }
 
-/** Char-4gram Jaccard similarity — language-agnostic text overlap. */
-function jaccard(a: string, b: string): number {
+/** Char-4gram Jaccard similarity of two strings (0-1), language-agnostic. Used
+ *  for cross-extractor consensus and to gate the QC body-rewrite. */
+export function jaccard(a: string, b: string): number {
   const A = char4grams(a);
   const B = char4grams(b);
   if (A.size === 0 || B.size === 0) return 0;

@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { spawnClaude } from "../add-video/claude";
+import { jaccard } from "./confidence";
 import type { ArticleMeta } from "./types";
 
 /**
@@ -109,6 +110,18 @@ export function applyVerdictMeta(meta: ArticleMeta, v: ArticleVerdict): ArticleM
   return { ...meta, title, author, published };
 }
 
+/**
+ * Accept Claude's reformatted body only when it PRESERVES the original text. A
+ * genuine formatting fix keeps almost all of the deterministic body's
+ * char-4grams; a wholesale rewrite (e.g. induced by a prompt-injected source
+ * page Claude WebFetched) does not. Guards the body-rewrite path against
+ * injection — Claude is a formatter here, never a ghost-writer.
+ */
+export function acceptsCorrectedBody(original: string, corrected: string): boolean {
+  const c = corrected.trim();
+  return c.length >= 200 && jaccard(c, original) >= 0.5;
+}
+
 export interface VerifyOutcome {
   /** Null when the verify step was unavailable/failed — caller keeps deterministic output. */
   verdict: ArticleVerdict | null;
@@ -143,7 +156,7 @@ export async function verifyAndRefine(
       const corrected = await fs
         .readFile(path.join(workDir, "corrected.md"), "utf-8")
         .catch(() => "");
-      if (corrected.trim().length >= 200) newBody = corrected.trim();
+      if (acceptsCorrectedBody(body, corrected)) newBody = corrected.trim();
     }
     return { verdict, meta: newMeta, body: newBody };
   } catch {

@@ -87,4 +87,23 @@ describe("maybeCreateLens", () => {
     expect(p).toBeNull();
     expect(createRelayDoc).not.toHaveBeenCalled();
   });
+
+  it("keeps the source a valid RELATIVE wikilink when lens and doc folders are co-located", async () => {
+    // If an operator points RELAY_LENS_FOLDER at the doc folder, relative()
+    // yields a bare "foo.md" — which is NOT a relative wikilink. Must be "./foo.md".
+    process.env.RELAY_LENS_FOLDER = "Lens Edu/articles";
+    checkRelayDocsExist.mockResolvedValue({});
+    createRelayDoc.mockResolvedValue(undefined);
+    try {
+      await maybeCreateLens({
+        docPath: "Lens Edu/articles/foo.md",
+        title: "Foo",
+        segment: "Article",
+      });
+    } finally {
+      delete process.env.RELAY_LENS_FOLDER;
+    }
+    const [, md] = createRelayDoc.mock.calls[0];
+    expect(md).toContain("source:: [[./foo.md|Foo]]");
+  });
 });

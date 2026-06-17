@@ -86,7 +86,11 @@ export async function maybeCreateLens(opts: {
   const exists = await checkRelayDocsExist([lensPath]);
   if (exists[lensPath]) return null;
 
-  const source = path.posix.relative(lensFolder, opts.docPath);
+  // The content-processor requires a RELATIVE wikilink (must contain "/"). If
+  // the lens and doc folders are co-located (e.g. via RELAY_LENS_FOLDER),
+  // relative() yields a bare filename — prefix "./" so the invariant holds.
+  const rel = path.posix.relative(lensFolder, opts.docPath);
+  const source = rel.includes("/") ? rel : `./${rel}`;
   await createRelayDoc(
     lensPath,
     generateLensMarkdown({ title: opts.title, segment: opts.segment, source }),
