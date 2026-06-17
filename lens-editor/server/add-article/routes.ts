@@ -47,7 +47,9 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
   });
 
   router.post("/", async (c) => {
-    const body = await c.req.json<{ urls?: string[] }>().catch(() => null);
+    const body = await c.req
+      .json<{ urls?: string[]; createLens?: boolean }>()
+      .catch(() => null);
     if (!body?.urls || !Array.isArray(body.urls) || body.urls.length === 0) {
       return c.json(
         { error: "urls array is required and must not be empty" },
@@ -60,6 +62,8 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         400,
       );
     }
+    // Auto-create a lens per import unless the client opts out.
+    const createLens = body.createLens !== false;
 
     const results: Array<{
       url: string;
@@ -87,7 +91,7 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         results.push({ url, status: "already_queued", id: active.id });
         continue;
       }
-      const job = queue.add(url);
+      const job = queue.add(url, createLens);
       results.push({ url, status: "queued", id: job.id });
     }
 

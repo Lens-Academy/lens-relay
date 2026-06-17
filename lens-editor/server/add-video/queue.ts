@@ -17,7 +17,7 @@ export class JobQueue {
     this.processJob = options.processJob;
   }
 
-  add(payload: VideoPayload): Job {
+  add(payload: VideoPayload, createLens = true): Job {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
@@ -36,6 +36,7 @@ export class JobQueue {
       url: payload.url,
       transcript_type: payload.transcript_type,
       status: "queued",
+      createLens,
       relay_url: `${editorBase}/open/${encodeURI(mdPath)}`,
       created_at: now,
       updated_at: now,

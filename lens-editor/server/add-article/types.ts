@@ -16,6 +16,8 @@ export interface ArticleJob {
   status: ArticleJobStatus;
   error?: string;
   relay_url?: string;
+  /** Also auto-create a lens wrapping the imported article (default true). */
+  createLens?: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -33,6 +33,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [invalidResults, setInvalidResults] = useState<SubmitResult[]>([]);
   const [jobs, setJobs] = useState<ArticleJob[]>([]);
+  const [createLens, setCreateLens] = useState(true);
   const fetchInFlight = useRef(false);
 
   const fetchStatus = useCallback(async () => {
@@ -95,7 +96,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${shareToken}`,
         },
-        body: JSON.stringify({ urls }),
+        body: JSON.stringify({ urls, createLens }),
       });
       const data = (await resp.json().catch(() => ({}))) as {
         results?: SubmitResult[];
@@ -175,6 +176,24 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
             margin: "12px 0",
           }}
         />
+
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            margin: "0 0 12px",
+            fontSize: 14,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={createLens}
+            onChange={(e) => setCreateLens(e.target.checked)}
+          />
+          Also create a lens for each article
+        </label>
 
         <button
           onClick={submit}

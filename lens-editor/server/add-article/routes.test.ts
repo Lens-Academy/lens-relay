@@ -57,7 +57,13 @@ describe("POST /api/add-article", () => {
     expect(data.results).toEqual([
       { url: "https://example.com/article", status: "queued", id: "job1" },
     ]);
-    expect(mockQueue.add).toHaveBeenCalledWith("https://example.com/article");
+    // createLens defaults to true.
+    expect(mockQueue.add).toHaveBeenCalledWith("https://example.com/article", true);
+  });
+
+  it("passes createLens:false through to the queue when the client opts out", async () => {
+    await post({ urls: ["https://example.com/article"], createLens: false });
+    expect(mockQueue.add).toHaveBeenCalledWith("https://example.com/article", false);
   });
 
   it("rejects request with no auth header", async () => {

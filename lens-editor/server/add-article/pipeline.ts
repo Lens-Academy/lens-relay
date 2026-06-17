@@ -9,6 +9,7 @@ import {
   generateArticleFilenameBase,
 } from "./export";
 import { createRelayDoc, checkRelayDocsExist } from "../add-video/relay-docs";
+import { maybeCreateLens } from "../lens-doc";
 
 const WORK_BASE = "/tmp/articles";
 // Below this the extraction almost certainly failed (empty/wrong container)
@@ -213,4 +214,24 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   console.log(
     `[add-article] Wrote ${mdPath} (via ${ex.via}, ${body.length} chars)`,
   );
+
+  // 6. Auto-create a lens wrapping the article so it can be dropped straight
+  //    into a module (Asana 1215689584721257). Opt out with createLens=false.
+  //    A lens failure must not fail the import — the article is already saved.
+  if (job.createLens !== false) {
+    try {
+      const lensPath = await maybeCreateLens({
+        docPath: mdPath,
+        title: meta.title,
+        segment: "Article",
+      });
+      console.log(
+        lensPath
+          ? `[add-article] Created lens ${lensPath}`
+          : `[add-article] Lens already exists for ${mdPath}, skipped`,
+      );
+    } catch (err) {
+      console.warn(`[add-article] Lens creation failed (article saved): ${err}`);
+    }
+  }
 }

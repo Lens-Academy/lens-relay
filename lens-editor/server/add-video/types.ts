@@ -53,6 +53,8 @@ export interface Job {
   status: JobStatus;
   error?: string;
   relay_url?: string;
+  /** Also auto-create a lens wrapping the imported transcript (default true). */
+  createLens?: boolean;
   created_at: string;
   updated_at: string;
 }

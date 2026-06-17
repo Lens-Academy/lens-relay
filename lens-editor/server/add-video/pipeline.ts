@@ -10,6 +10,7 @@ import {
 } from "./export";
 import { runClaude } from "./claude";
 import { createRelayDoc, updateRelayDoc } from "./relay-docs";
+import { maybeCreateLens } from "../lens-doc";
 
 const WORK_BASE = "/tmp/transcripts";
 const RELAY_FOLDER =
@@ -117,6 +118,27 @@ export async function processVideo(
 
     // 8. Create timestamps JSON in Relay
     await createRelayDoc(jsonPath, JSON.stringify(timestamps, null, 2));
+
+    // 9. Auto-create a lens wrapping the transcript (Asana 1215689584721257).
+    //    Opt out with createLens=false; a lens failure must not fail the import.
+    if (job.createLens !== false) {
+      try {
+        const lensPath = await maybeCreateLens({
+          docPath: mdPath,
+          title: job.title,
+          segment: "Video",
+        });
+        console.log(
+          lensPath
+            ? `[add-video] Created lens ${lensPath}`
+            : `[add-video] Lens already exists for ${mdPath}, skipped`,
+        );
+      } catch (lensErr) {
+        console.warn(
+          `[add-video] Lens creation failed (transcript saved): ${lensErr}`,
+        );
+      }
+    }
   } catch (err) {
     // Update placeholder to show failure
     const failedContent = generateMarkdown({
