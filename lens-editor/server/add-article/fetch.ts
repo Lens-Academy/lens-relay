@@ -1,7 +1,9 @@
 import { assertPublicUrl } from "./ssrf";
 
 const FETCH_TIMEOUT_MS = 30_000;
-const MAX_HTML_BYTES = 10 * 1024 * 1024; // 10MB
+const RENDER_TIMEOUT_MS = 60_000;
+// Heavy interactive pages (e.g. distill.pub with inline assets) can be large.
+const MAX_HTML_BYTES = 32 * 1024 * 1024; // 32MB
 const MAX_REDIRECTS = 5;
 
 const BROWSER_UA =
@@ -46,6 +48,57 @@ export async function fetchRawHtml(url: string): Promise<string> {
     return new TextDecoder("utf-8").decode(buf);
   }
   throw new Error(`Too many redirects (>${MAX_REDIRECTS}) for ${url}`);
+}
+
+/**
+ * Fetch the first candidate URL that returns usable HTML. Used with an
+ * adapter's `resolveFetchUrls` (e.g. try arxiv.org/html, then ar5iv). Throws
+ * the last error if every candidate fails.
+ */
+export async function fetchFirstHtml(
+  urls: string[],
+): Promise<{ html: string; url: string }> {
+  let lastErr: unknown = new Error("No candidate URLs to fetch");
+  for (const u of urls) {
+    try {
+      return { html: await fetchRawHtml(u), url: u };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+/**
+ * Fetch the *rendered* HTML of a page via the Jina Reader browser engine
+ * (X-Return-Format: html). Used as a fallback when the raw fetch is a JS-only
+ * SPA skeleton or is bot-blocked: Jina renders the page (from its own network)
+ * and returns the post-JS DOM, which we then run our deterministic extractor
+ * over — "buy the rendering, own the extraction". SSRF: we still validate the
+ * target is a public http(s) URL before handing it off.
+ */
+export async function fetchRenderedHtml(url: string): Promise<string> {
+  await assertPublicUrl(url);
+  const headers: Record<string, string> = {
+    Accept: "text/html",
+    "X-Return-Format": "html",
+    "X-Timeout": "45",
+  };
+  if (process.env.JINA_API_KEY) {
+    headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
+  }
+  const resp = await fetch(`https://r.jina.ai/${encodeURIComponent(url)}`, {
+    headers,
+    signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
+  });
+  if (!resp.ok) {
+    throw new Error(`Render fetch failed: ${resp.status} ${resp.statusText}`);
+  }
+  const buf = await resp.arrayBuffer();
+  if (buf.byteLength > MAX_HTML_BYTES) {
+    throw new Error(`Rendered page too large: ${buf.byteLength} bytes`);
+  }
+  return new TextDecoder("utf-8").decode(buf);
 }
 
 export interface JinaResult {
@@ -144,6 +197,54 @@ function metaContent(html: string, key: string): string {
   return "";
 }
 
+/** All values for a repeated meta tag (e.g. multiple citation_author tags). */
+function metaContentAll(html: string, key: string): string[] {
+  const re = new RegExp(
+    `<meta[^>]+(?:property|name)=["']${key}["'][^>]+content=["']([^"']*)["']`,
+    "gi",
+  );
+  const out: string[] = [];
+  for (const m of html.matchAll(re)) {
+    const v = decodeEntities((m[1] || "").trim());
+    if (v) out.push(v);
+  }
+  return out;
+}
+
+/** "Last, First" → "First Last" (citation_author convention); else unchanged. */
+function flipCommaName(s: string): string {
+  const m = s.match(/^([^,]+),\s*([^,]+)$/);
+  return m ? `${m[2].trim()} ${m[1].trim()}` : s;
+}
+
+/** Normalize a date string to YYYY-MM-DD (ISO, slashed, or parseable text). */
+function normalizeDate(s: string): string {
+  if (!s) return "";
+  const m = s.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  const t = Date.parse(s);
+  if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
+  return "";
+}
+
+/** Date embedded in a URL path, e.g. /2017/02/14/ or /2016/09/. */
+export function dateFromUrl(url: string): string {
+  try {
+    const m = new URL(url).pathname.match(
+      /\/(\d{4})\/(\d{1,2})(?:\/(\d{1,2}))?(?=\/|$|[-_])/,
+    );
+    if (m) {
+      const year = Number(m[1]);
+      if (year >= 1990 && year <= 2100) {
+        return `${m[1]}-${m[2].padStart(2, "0")}-${(m[3] || "01").padStart(2, "0")}`;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
 /**
  * Best-effort metadata extraction from HTML meta tags and JSON-LD.
  * Claude refines this later with full page context — this only seeds meta.json.
@@ -164,23 +265,40 @@ export function extractHtmlMeta(html: string): HtmlMeta {
     if (m) meta.title = decodeEntities(m[1].trim());
   }
 
-  const author =
-    metaContent(html, "author") || metaContent(html, "article:author");
-  if (author && !author.startsWith("http")) {
-    meta.author = author
-      .split(/,| and /)
-      .map((a) => a.trim())
-      .filter(Boolean);
+  // Academic pages emit one <meta name="citation_author"> per author.
+  const citationAuthors = metaContentAll(html, "citation_author").map(flipCommaName);
+  if (citationAuthors.length > 0) {
+    meta.author = citationAuthors;
+  } else {
+    const author =
+      metaContent(html, "author") ||
+      metaContent(html, "article:author") ||
+      metaContent(html, "parsely-author");
+    if (author && !author.startsWith("http")) {
+      meta.author = author
+        .split(/,| and |;/)
+        .map((a) => a.trim())
+        .filter(Boolean);
+    }
   }
 
   const published =
     metaContent(html, "article:published_time") ||
     metaContent(html, "datePublished") ||
+    metaContent(html, "citation_publication_date") ||
+    metaContent(html, "citation_date") ||
+    metaContent(html, "parsely-pub-date") ||
+    metaContent(html, "sailthru.date") ||
+    metaContent(html, "dc.date.issued") ||
+    metaContent(html, "dc.date") ||
     metaContent(html, "date") ||
     metaContent(html, "article:modified_time") ||
     metaContent(html, "og:updated_time");
-  const dateMatch = published.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (dateMatch) meta.published = dateMatch[1];
+  meta.published = normalizeDate(published);
+  if (!meta.published) {
+    const t = html.match(/<time[^>]+datetime=["']([^"']+)["']/i);
+    if (t) meta.published = normalizeDate(t[1]);
+  }
 
   meta.description =
     metaContent(html, "og:description") || metaContent(html, "description");
@@ -218,8 +336,7 @@ export function extractHtmlMeta(html: string): HtmlMeta {
           (typeof node.dateModified === "string" && node.dateModified) ||
           "";
         if (!meta.published && ldDate) {
-          const m = ldDate.match(/^(\d{4}-\d{2}-\d{2})/);
-          if (m) meta.published = m[1];
+          meta.published = normalizeDate(ldDate);
         }
         if (!meta.siteName && node.publisher) {
           const pub =

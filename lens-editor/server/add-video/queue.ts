@@ -54,7 +54,11 @@ export class JobQueue {
   }
 
   status(): Job[] {
-    return Array.from(this.jobs.values()).map(({ payload: _, ...job }) => job);
+    return Array.from(this.jobs.values()).map((entry) => {
+      const { payload, ...job } = entry;
+      void payload; // omit the (large) payload from status output
+      return job;
+    });
   }
 
   /** Number of jobs currently processing */
@@ -139,7 +143,7 @@ class ClaudeSessionPool {
   }
 
   release(): void {
-    this.active--;
+    this.active = Math.max(0, this.active - 1);
     if (this.waiters.length > 0) {
       const next = this.waiters.shift()!;
       next();
