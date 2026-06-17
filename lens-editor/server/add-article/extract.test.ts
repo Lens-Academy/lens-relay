@@ -74,6 +74,16 @@ describe("extractArticle — link-out detection", () => {
     const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
     expect(ex.linkedOut).toBe(false);
   });
+
+  it("does not flag an arXiv page as a link-out when it links to its own PDF", async () => {
+    const body =
+      "<article><p>" +
+      "This paper studies debate and amplification as scalable oversight methods. ".repeat(11) +
+      'The full version is available as a PDF at <a href="https://arxiv.org/pdf/2210.01241">the PDF</a>.</p></article>';
+    const html = `<!doctype html><html><head><title>A Paper - arXiv</title></head><body>${body}</body></html>`;
+    const ex = await extractArticle(html, "https://arxiv.org/abs/2210.01241");
+    expect(ex.linkedOut).toBe(false); // arxiv→pdf is the same doc, not a link-out
+  });
 });
 
 describe("extractArticle — Wikipedia adapter", () => {
@@ -288,6 +298,29 @@ ${"Export controls and on-chip mechanisms are the main levers available to gover
     expect(ex.body).toMatch(
       /!\[Figure 4\.6\]\(https:\/\/ai-safety-atlas\.com\/_astro\/x\.webp\)\n\n\*Figure 4\.6:/,
     );
+  });
+
+  it("injects each figure once, and never above a prose mention of it", async () => {
+    const md = `# Compute Governance
+
+${"Compute governance steers AI development through hardware controls. ".repeat(8)}
+
+Figure 4.6 illustrates a modern accelerator, which we discuss below.
+
+[Read online](https://aisafetytextbook.com/x)
+
+---
+
+*Figure 4.6: An NVIDIA accelerator ([NVIDIA, 2025](https://x))*`;
+    const ex = await extractArticle(
+      ATLAS(false),
+      "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+      { fetchText: async () => md },
+    );
+    // Exactly one image embed — on the caption, not the prose mention.
+    expect((ex.body.match(/!\[Figure 4\.6\]/g) || []).length).toBe(1);
+    expect(ex.body).toContain("Figure 4.6 illustrates a modern accelerator");
+    expect(ex.body).not.toMatch(/!\[Figure 4\.6\][^\n]*\n\nFigure 4\.6 illustrates/);
   });
 });
 

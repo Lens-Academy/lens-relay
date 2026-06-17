@@ -21,6 +21,8 @@ const RENDER_ESCALATE_CHARS = 1000;
 // low-consensus predict broken bodies; no-author/publisher-author flag metadata
 // to repair). `no-date` is intentionally excluded — it's rarely fixable (the
 // date usually isn't on the page) and would route many articles for no gain.
+// `truncation` is also excluded: paywall teasers are short and already caught by
+// `thin`, while a non-terminal ending alone is too noisy to route on.
 const ROUTE_FLAGS = new Set([
   "thin",
   "low-consensus",

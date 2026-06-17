@@ -417,12 +417,18 @@ export async function extractArticle(
     siteName,
   });
 
+  // An arXiv / ar5iv page links to its own PDF — that's the same document, not a
+  // "link-out" to an external one — so don't let the heuristic reject the arXiv
+  // URL the user submitted (e.g. when full-text is unavailable and we fall back
+  // to the abstract).
+  const onArxiv = /(^|\.)arxiv\.org$/.test(ctx.host) || ctx.host === "ar5iv.org";
+
   return {
     body,
     meta,
     siteName,
     via: chosen.via,
-    linkedOut: looksLikeLinkOut(body),
+    linkedOut: onArxiv ? false : looksLikeLinkOut(body),
     assessment,
   };
 }

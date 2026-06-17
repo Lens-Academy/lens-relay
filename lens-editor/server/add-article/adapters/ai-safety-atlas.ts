@@ -93,19 +93,29 @@ function cleanAtlasMarkdown(raw: string): string {
  * the page's actual figure image (`![label](src)`) above each caption whose
  * label matches a figure that had an <img> in the HTML.
  */
+// A real caption line in the .md export is "*Figure 5.2: …*" — the label is
+// followed by a delimiter (colon or dash). Requiring it avoids injecting an
+// image above an in-prose mention like "Figure 5.2 shows …".
+const FIGURE_CAPTION_RE =
+  /^((?:interactive\s+)?(?:figure|video|table)\s+\d+(?:\.\d+)?)\s*[:.\-–—]/i;
+
 function injectFigures(
   md: string,
   figures: Map<string, { src: string; alt: string }>,
 ): string {
   if (figures.size === 0) return md;
+  const used = new Set<string>();
   return md
     .split("\n")
     .map((line) => {
       const text = line.replace(/^[*_\s]+/, ""); // strip leading italic/bold markers
-      const m = text.match(FIGURE_LABEL_RE);
+      const m = text.match(FIGURE_CAPTION_RE);
       if (!m) return line;
-      const fig = figures.get(norm(m[1]));
+      const key = norm(m[1]);
+      if (used.has(key)) return line; // inject each figure at most once
+      const fig = figures.get(key);
       if (!fig) return line;
+      used.add(key);
       return `![${fig.alt}](${fig.src})\n\n${line}`;
     })
     .join("\n");

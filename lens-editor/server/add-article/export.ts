@@ -1,7 +1,16 @@
 import type { ArticleMeta } from "./types";
 
 function yamlQuote(s: string): string {
-  return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  // Collapse control whitespace too — a raw newline inside a double-quoted YAML
+  // scalar (e.g. a title with an embedded line break) breaks frontmatter parsing.
+  return (
+    '"' +
+    s
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/[\r\n\t]+/g, " ") +
+    '"'
+  );
 }
 
 /**

@@ -2,6 +2,22 @@ import { describe, it, expect } from "vitest";
 import { generateArticleMarkdown, generateArticleFilenameBase } from "./export";
 
 describe("generateArticleMarkdown", () => {
+  it("collapses control whitespace so a multi-line title can't break the YAML", () => {
+    const md = generateArticleMarkdown(
+      {
+        title: "Line one\nLine two",
+        author: ["A"],
+        source_url: "https://x.com",
+        published: "",
+        description: "",
+      },
+      "Body.",
+      "2026-06-10",
+    );
+    const titleLine = md.split("\n").find((l) => l.startsWith("title:"));
+    expect(titleLine).toBe('title: "Line one Line two"'); // single line, no raw newline
+  });
+
   it("generates frontmatter matching the Lens Edu articles convention", () => {
     const md = generateArticleMarkdown(
       {

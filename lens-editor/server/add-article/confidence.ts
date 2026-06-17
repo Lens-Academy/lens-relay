@@ -21,7 +21,7 @@ export interface ExtractionSignals {
 }
 
 export interface Assessment {
-  confidence: number; // 0-1 (body quality)
+  /** Diagnostic signals behind the flags (retained for calibration/logging). */
   signals: ExtractionSignals;
   flags: string[]; // body flags: truncation, link-heavy, low-consensus, thin; meta flags: no-author, publisher-author, no-date
 }
@@ -29,7 +29,6 @@ export interface Assessment {
 const TEASER_RE =
   /(subscribe to (keep|continue) reading|keep reading with a|read the (full|rest)|this post is for paid|become a (paid )?subscriber|sign up to (keep )?read|to keep reading this post)/i;
 const TERMINAL = /[.!?…"'”’)\]》」。！？]$/;
-const clamp = (x: number) => Math.max(0, Math.min(1, x));
 
 function char4grams(s: string): Set<string> {
   const t = s.toLowerCase().replace(/\s+/g, " ").trim();
@@ -110,24 +109,6 @@ export function assessExtraction(args: {
   const endsClean = TERMINAL.test(trimmed);
   const teaser = TEASER_RE.test(chosenBody);
 
-  // per-signal goodness (0-1)
-  const gLink = clamp(1 - ld / 0.4);
-  const gCov = coverage < 0.05 ? coverage / 0.05 : coverage > 0.95 ? 0.7 : 1;
-  const gTrunc = teaser ? 0 : endsClean ? 1 : 0.4;
-  const gProse = clamp(paragraphs / 4);
-  const gThin = clamp(chars / 800);
-
-  const W = { consensus: 0.4, link: 0.18, cov: 0.12, trunc: 0.15, prose: 0.08, thin: 0.07 };
-  const bodyTerms = W.link * gLink + W.cov * gCov + W.trunc * gTrunc + W.prose * gProse + W.thin * gThin;
-  let confidence: number;
-  if (consensus != null) {
-    confidence = W.consensus * consensus + bodyTerms;
-  } else {
-    const restWeight = W.link + W.cov + W.trunc + W.prose + W.thin;
-    confidence = bodyTerms / restWeight; // redistribute consensus weight
-  }
-  confidence = clamp(confidence);
-
   const flags: string[] = [];
   if (teaser || !endsClean) flags.push("truncation");
   if (ld > 0.45) flags.push("link-heavy");
@@ -142,7 +123,6 @@ export function assessExtraction(args: {
   if (!meta.published) flags.push("no-date");
 
   return {
-    confidence,
     signals: { consensus, lengthRatio, overlap, linkDensity: ld, coverage, paragraphs, endsClean, teaser, chars },
     flags,
   };

@@ -1,35 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { parseJinaResponse, extractHtmlMeta } from "./fetch";
+import { extractHtmlMeta, dateFromUrl } from "./fetch";
 
-describe("parseJinaResponse", () => {
-  it("parses title, published date, and markdown content", () => {
-    const resp = [
-      "Title: Takeoff Speeds",
-      "URL Source: https://sideways-view.com/2018/02/24/takeoff-speeds/",
-      "Published Time: 2018-02-24T12:00:00.000Z",
-      "Markdown Content:",
-      "# Heading",
-      "",
-      "Some text.",
-    ].join("\n");
-
-    const result = parseJinaResponse(resp);
-    expect(result.title).toBe("Takeoff Speeds");
-    expect(result.published).toBe("2018-02-24");
-    expect(result.markdown).toBe("# Heading\n\nSome text.");
+describe("dateFromUrl", () => {
+  it("extracts a real date embedded in the URL path", () => {
+    expect(dateFromUrl("https://site.com/2017/02/14/post")).toBe("2017-02-14");
+    expect(dateFromUrl("https://site.com/2016/09/post")).toBe("2016-09-01");
   });
 
-  it("handles missing published time", () => {
-    const result = parseJinaResponse("Title: X\nMarkdown Content:\nbody");
-    expect(result.published).toBe("");
-    expect(result.markdown).toBe("body");
-  });
-
-  // Prevents: treating an error page / empty response as a successful extraction
-  it("returns empty markdown when no content marker present", () => {
-    const result = parseJinaResponse("Some random error text");
-    expect(result.markdown).toBe("");
-    expect(result.title).toBe("");
+  it("rejects path segments that aren't valid months/days (issue/volume numbers)", () => {
+    expect(dateFromUrl("https://site.com/2020/45/thing")).toBe("");
+    expect(dateFromUrl("https://site.com/2020/13/article")).toBe("");
+    expect(dateFromUrl("https://site.com/no/date/here")).toBe("");
   });
 });
 
@@ -58,6 +39,15 @@ describe("extractHtmlMeta", () => {
     const meta = extractHtmlMeta(html);
     expect(meta.title).toBe("Only Title");
     expect(meta.published).toBe("2021-03-01");
+  });
+
+  it("reads repeated citation_author tags in either attribute order", () => {
+    const html = `<head>
+      <meta name="citation_author" content="Doe, Jane">
+      <meta content="Smith, John" name="citation_author">
+    </head>`;
+    // "Last, First" is flipped; content-first attribute order must not be dropped.
+    expect(extractHtmlMeta(html).author).toEqual(["Jane Doe", "John Smith"]);
   });
 
   it("reads author and date from JSON-LD", () => {

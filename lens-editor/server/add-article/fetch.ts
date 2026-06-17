@@ -101,61 +101,6 @@ export async function fetchRenderedHtml(url: string): Promise<string> {
   return new TextDecoder("utf-8").decode(buf);
 }
 
-export interface JinaResult {
-  markdown: string;
-  title: string;
-  published: string; // YYYY-MM-DD or ''
-}
-
-/**
- * Extract article markdown via the Jina Reader API (r.jina.ai).
- * Response format (text/plain):
- *   Title: ...
- *   URL Source: ...
- *   Published Time: ... (optional)
- *   Markdown Content:
- *   ...
- */
-export async function fetchJina(url: string): Promise<JinaResult> {
-  const headers: Record<string, string> = { Accept: "text/plain" };
-  if (process.env.JINA_API_KEY) {
-    headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
-  }
-  const resp = await fetch(`https://r.jina.ai/${encodeURIComponent(url)}`, {
-    headers,
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!resp.ok) {
-    throw new Error(`Jina fetch failed: ${resp.status} ${resp.statusText}`);
-  }
-  return parseJinaResponse(await resp.text());
-}
-
-export function parseJinaResponse(text: string): JinaResult {
-  const result: JinaResult = { markdown: "", title: "", published: "" };
-  const lines = text.split("\n");
-  const contentLines: string[] = [];
-  let inContent = false;
-
-  for (const line of lines) {
-    if (inContent) {
-      contentLines.push(line);
-    } else if (line.startsWith("Title:")) {
-      result.title = line.slice(6).trim();
-    } else if (line.startsWith("Published Time:")) {
-      const dateStr = line.slice(15).trim();
-      // ISO timestamp → date part only
-      const match = dateStr.match(/^(\d{4}-\d{2}-\d{2})/);
-      if (match) result.published = match[1];
-    } else if (line.startsWith("Markdown Content:")) {
-      inContent = true;
-    }
-  }
-
-  result.markdown = contentLines.join("\n").trim();
-  return result;
-}
-
 export interface HtmlMeta {
   title: string;
   author: string[];
@@ -197,16 +142,25 @@ function metaContent(html: string, key: string): string {
   return "";
 }
 
-/** All values for a repeated meta tag (e.g. multiple citation_author tags). */
+/** All values for a repeated meta tag (e.g. multiple citation_author tags),
+ *  regardless of attribute order. */
 function metaContentAll(html: string, key: string): string[] {
-  const re = new RegExp(
-    `<meta[^>]+(?:property|name)=["']${key}["'][^>]+content=["']([^"']*)["']`,
-    "gi",
-  );
+  const res = [
+    new RegExp(
+      `<meta[^>]+(?:property|name)=["']${key}["'][^>]+content=["']([^"']*)["']`,
+      "gi",
+    ),
+    new RegExp(
+      `<meta[^>]+content=["']([^"']*)["'][^>]+(?:property|name)=["']${key}["']`,
+      "gi",
+    ),
+  ];
   const out: string[] = [];
-  for (const m of html.matchAll(re)) {
-    const v = decodeEntities((m[1] || "").trim());
-    if (v) out.push(v);
+  for (const re of res) {
+    for (const m of html.matchAll(re)) {
+      const v = decodeEntities((m[1] || "").trim());
+      if (v) out.push(v);
+    }
   }
   return out;
 }
@@ -217,11 +171,30 @@ function flipCommaName(s: string): string {
   return m ? `${m[2].trim()} ${m[1].trim()}` : s;
 }
 
+/** True if (year, month, day) strings form a plausible calendar date. Guards
+ *  against URL/issue numbers producing structurally-invalid dates like
+ *  2020-45-01 (which would land, unquoted, in the YAML frontmatter). */
+function isValidYmd(y: string, mo: string, d: string): boolean {
+  const year = Number(y);
+  const month = Number(mo);
+  const day = Number(d);
+  return (
+    year >= 1990 &&
+    year <= 2100 &&
+    month >= 1 &&
+    month <= 12 &&
+    day >= 1 &&
+    day <= 31
+  );
+}
+
 /** Normalize a date string to YYYY-MM-DD (ISO, slashed, or parseable text). */
 function normalizeDate(s: string): string {
   if (!s) return "";
   const m = s.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  if (m && isValidYmd(m[1], m[2], m[3])) {
+    return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  }
   const t = Date.parse(s);
   if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
   return "";
@@ -233,11 +206,8 @@ export function dateFromUrl(url: string): string {
     const m = new URL(url).pathname.match(
       /\/(\d{4})\/(\d{1,2})(?:\/(\d{1,2}))?(?=\/|$|[-_])/,
     );
-    if (m) {
-      const year = Number(m[1]);
-      if (year >= 1990 && year <= 2100) {
-        return `${m[1]}-${m[2].padStart(2, "0")}-${(m[3] || "01").padStart(2, "0")}`;
-      }
+    if (m && isValidYmd(m[1], m[2], m[3] || "01")) {
+      return `${m[1]}-${m[2].padStart(2, "0")}-${(m[3] || "01").padStart(2, "0")}`;
     }
   } catch {
     /* ignore */
