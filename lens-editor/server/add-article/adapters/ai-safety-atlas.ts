@@ -1,4 +1,5 @@
 import type { AdapterContext, AdapterExtract, SiteAdapter } from "./types";
+import { isVideoEmbedUrl, videoEmbedIframe } from "./util";
 
 const SITE_NAME = "AI Safety Atlas";
 const ORIGIN = "https://ai-safety-atlas.com";
@@ -47,29 +48,50 @@ const FIGURE_LABEL_RE =
   /^\s*((?:interactive\s+)?(?:figure|video|table)\s+\d+(?:\.\d+)?)/i;
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
+interface MediaEmbed {
+  kind: "img" | "video";
+  src: string;
+  alt: string;
+}
+
 /**
- * Map each labelled figure that has an <img> to its absolute image URL. Keyed
- * by the normalized full label ("figure 5.2", "interactive figure 5.1") so a
- * static "Figure 5.2" is never confused with an "Interactive figure 5.2".
- * Figures without an <img> (interactive widgets, video iframes) are skipped.
+ * Map each labelled <figure> to its media (an <img> or a YouTube/Vimeo
+ * <iframe>), keyed by the normalized full label ("figure 5.2",
+ * "interactive figure 5.1", "video 1.2") so a static "Figure 5.2" is never
+ * confused with an "Interactive figure 5.2". The native `.md` export keeps only
+ * the caption, so we re-inject the media from the HTML page. Figures with
+ * neither (interactive widgets) are skipped.
  */
-function figureImages(doc: Document): Map<string, { src: string; alt: string }> {
-  const map = new Map<string, { src: string; alt: string }>();
+function mediaEmbeds(doc: Document): Map<string, MediaEmbed> {
+  const map = new Map<string, MediaEmbed>();
   for (const fig of Array.from(doc.querySelectorAll("figure"))) {
-    const img = fig.querySelector("img");
-    let src = img?.getAttribute("src") || img?.getAttribute("data-src") || "";
-    if (!src || src.startsWith("data:")) continue;
-    try {
-      src = new URL(src, ORIGIN).href;
-    } catch {
-      /* keep as-is */
-    }
     const cap = fig.querySelector("figcaption");
     const label = (cap?.querySelector("strong") || cap)?.textContent || "";
     const m = label.match(FIGURE_LABEL_RE);
     if (!m) continue;
     const key = norm(m[1]);
-    if (!map.has(key)) map.set(key, { src, alt: m[1].trim() });
+    if (map.has(key)) continue;
+
+    const img = fig.querySelector("img");
+    const imgSrc =
+      img?.getAttribute("src") || img?.getAttribute("data-src") || "";
+    if (imgSrc && !imgSrc.startsWith("data:")) {
+      let src = imgSrc;
+      try {
+        src = new URL(imgSrc, ORIGIN).href;
+      } catch {
+        /* keep as-is */
+      }
+      map.set(key, { kind: "img", src, alt: m[1].trim() });
+      continue;
+    }
+
+    const iframe = fig.querySelector("iframe");
+    const ifSrc =
+      iframe?.getAttribute("src") || iframe?.getAttribute("data-src") || "";
+    if (isVideoEmbedUrl(ifSrc)) {
+      map.set(key, { kind: "video", src: ifSrc, alt: m[1].trim() });
+    }
   }
   return map;
 }
@@ -99,11 +121,8 @@ function cleanAtlasMarkdown(raw: string): string {
 const FIGURE_CAPTION_RE =
   /^((?:interactive\s+)?(?:figure|video|table)\s+\d+(?:\.\d+)?)\s*[:.\-–—]/i;
 
-function injectFigures(
-  md: string,
-  figures: Map<string, { src: string; alt: string }>,
-): string {
-  if (figures.size === 0) return md;
+function injectMedia(md: string, media: Map<string, MediaEmbed>): string {
+  if (media.size === 0) return md;
   const used = new Set<string>();
   return md
     .split("\n")
@@ -112,11 +131,15 @@ function injectFigures(
       const m = text.match(FIGURE_CAPTION_RE);
       if (!m) return line;
       const key = norm(m[1]);
-      if (used.has(key)) return line; // inject each figure at most once
-      const fig = figures.get(key);
-      if (!fig) return line;
+      if (used.has(key)) return line; // inject each item at most once
+      const item = media.get(key);
+      if (!item) return line;
       used.add(key);
-      return `![${fig.alt}](${fig.src})\n\n${line}`;
+      const embed =
+        item.kind === "video"
+          ? videoEmbedIframe(item.src)
+          : `![${item.alt}](${item.src})`;
+      return `${embed}\n\n${line}`;
     })
     .join("\n");
 }
@@ -160,13 +183,13 @@ export const aiSafetyAtlasAdapter: SiteAdapter = {
       .querySelectorAll("nav, [id^='feedback'], [data-storage-key^='feedback']")
       .forEach((e) => e.remove());
 
-    const figures = figureImages(doc);
+    const media = mediaEmbeds(doc);
     const authors = atlasAuthors(ctx.html);
     const mdUrl = ctx.url.replace(/[#?].*$/, "").replace(/\/$/, "") + ".md";
 
     return {
       bodyMarkdownUrl: mdUrl,
-      transformMarkdown: (raw) => injectFigures(cleanAtlasMarkdown(raw), figures),
+      transformMarkdown: (raw) => injectMedia(cleanAtlasMarkdown(raw), media),
       bodyHtml: article.innerHTML,
       title: chapterTitle(doc),
       author: authors.length > 0 ? authors : [SITE_NAME],

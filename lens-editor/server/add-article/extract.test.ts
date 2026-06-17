@@ -154,6 +154,8 @@ describe("extractArticle — AI Safety Atlas adapter", () => {
         <p><a href="false"></a>${"It rests on the physical chokepoints of the compute supply chain. ".repeat(8)}</p>
         <figure><img src="/_astro/x.webp" alt="chip" />
           <figcaption><strong>Figure 4.6</strong> - An NVIDIA accelerator</figcaption></figure>
+        <figure><iframe src="https://www.youtube-nocookie.com/embed/kK3NmQT241w" allowfullscreen></iframe>
+          <figcaption><strong>Video 1.2</strong> - A short talk</figcaption></figure>
         ${
           footnotes
             ? `<section id="footnotes" class="mt-12"><h2 class="sr-only">Footnotes</h2>
@@ -321,6 +323,49 @@ Figure 4.6 illustrates a modern accelerator, which we discuss below.
     expect((ex.body.match(/!\[Figure 4\.6\]/g) || []).length).toBe(1);
     expect(ex.body).toContain("Figure 4.6 illustrates a modern accelerator");
     expect(ex.body).not.toMatch(/!\[Figure 4\.6\][^\n]*\n\nFigure 4\.6 illustrates/);
+  });
+
+  it("injects the page's YouTube embed above the matching .md video caption", async () => {
+    const md = `# Compute Governance
+
+${"Compute governance steers AI development through hardware controls. ".repeat(8)}
+
+*Video 1.2: A short talk*`;
+    const ex = await extractArticle(
+      ATLAS(false),
+      "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+      { fetchText: async () => md },
+    );
+    expect(ex.body).toMatch(
+      /<iframe src="https:\/\/www\.youtube-nocookie\.com\/embed\/kK3NmQT241w"[^>]*><\/iframe>\n\n\*Video 1\.2:/,
+    );
+  });
+
+  it("preserves the YouTube iframe when falling back to HTML conversion", async () => {
+    const ex = await extractArticle(
+      ATLAS(false),
+      "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+      offline, // .md fetch fails → HTML conversion path
+    );
+    expect(ex.body).toContain(
+      '<iframe src="https://www.youtube-nocookie.com/embed/kK3NmQT241w"',
+    );
+    expect(ex.body).toContain("allowfullscreen");
+  });
+});
+
+describe("extractArticle — video embeds (generic path)", () => {
+  it("keeps a YouTube iframe and drops a non-video iframe", async () => {
+    const html = `<!doctype html><html><head><title>Post</title></head><body><article>
+      <h1>Post</h1>
+      <p>${"Genuine article prose so the generic extractor keeps the content cleanly. ".repeat(25)}</p>
+      <p><iframe src="https://www.youtube.com/embed/abc123XYZ" allowfullscreen></iframe></p>
+      <p><iframe src="https://ads.example.net/banner"></iframe></p>
+      <p>${"More prose after the embedded talk to keep the body substantial. ".repeat(15)}</p>
+    </article></body></html>`;
+    const ex = await extractArticle(html, "https://example.com/post");
+    expect(ex.body).toContain('<iframe src="https://www.youtube.com/embed/abc123XYZ"');
+    expect(ex.body).not.toContain("ads.example.net");
   });
 });
 

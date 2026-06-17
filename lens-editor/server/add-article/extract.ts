@@ -6,7 +6,13 @@ import { Defuddle } from "defuddle/node";
 import { extractHtmlMeta, dateFromUrl, fetchRawHtml } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
-import { stripSiteSuffix, splitAuthors, toIsoDate } from "./adapters/util";
+import {
+  stripSiteSuffix,
+  splitAuthors,
+  toIsoDate,
+  isVideoEmbedUrl,
+  videoEmbedIframe,
+} from "./adapters/util";
 import type { ArticleMeta } from "./types";
 
 /**
@@ -198,6 +204,23 @@ function makeTurndown(baseUrl: string): TurndownService {
       return text === "" || /^[#¶§※🔗]+$/u.test(text);
     },
     replacement: () => "",
+  });
+
+  // Preserve video embeds (YouTube / Vimeo) as raw <iframe> so the player
+  // renders inline where it was in the article (the platform runs rehype-raw).
+  // Turndown otherwise drops iframes entirely. Non-video iframes are still
+  // dropped — we never pass through arbitrary cross-site frames.
+  td.addRule("videoEmbed", {
+    filter: (node: HTMLElement) =>
+      node.nodeName === "IFRAME" &&
+      isVideoEmbedUrl(
+        node.getAttribute("src") || node.getAttribute("data-src"),
+      ),
+    replacement: (_content: string, node: TurndownService.Node) => {
+      const el = node as HTMLElement;
+      const src = el.getAttribute("src") || el.getAttribute("data-src") || "";
+      return `\n\n${videoEmbedIframe(src)}\n\n`;
+    },
   });
 
   // Lazy images: prefer data-src, resolve relative URLs.

@@ -31,3 +31,28 @@ export function toIsoDate(s: string): string {
   const m = String(s || "").match(/(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : "";
 }
+
+// Iframe hosts we treat as embeddable video players. We only ever pass these
+// through as raw HTML — never arbitrary iframes (ads/trackers/cross-site).
+const VIDEO_EMBED_HOST_RE =
+  /(?:youtube\.com|youtube-nocookie\.com|youtu\.be|player\.vimeo\.com|vimeo\.com)/i;
+
+/** Is this iframe src a recognized video embed (YouTube / Vimeo)? */
+export function isVideoEmbedUrl(src: string | null | undefined): boolean {
+  return !!src && VIDEO_EMBED_HOST_RE.test(src);
+}
+
+/**
+ * Render a clean, render-safe <iframe> for a video embed so it survives into
+ * the imported Markdown. The platform's article renderer runs rehype-raw, so
+ * the iframe renders inline exactly where the video was in the source.
+ */
+export function videoEmbedIframe(src: string): string {
+  let s = (src || "").trim().replace(/"/g, "");
+  if (s.startsWith("//")) s = `https:${s}`;
+  return (
+    `<iframe src="${s}" width="560" height="315" frameborder="0" ` +
+    `allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" ` +
+    `referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`
+  );
+}
