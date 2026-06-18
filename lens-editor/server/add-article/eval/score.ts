@@ -1,12 +1,16 @@
 import { jaccard } from "../confidence";
 
-/** Canonicalize render-equivalent markdown DIALECT (not content) before scoring.
- *  Currently: treat a line-leading list bullet `* ` and `- ` (with any run of
- *  spaces after the marker) as equivalent. Scoped to the LEADING marker only —
- *  inline `*` (emphasis/bold) and `-` (hyphens, `--` dashes) are left untouched,
- *  so `*` and `-` are NOT generally equated. */
+/** Canonicalize render-equivalent markdown DIALECT (not content) before scoring:
+ *  - curly quotes/apostrophes `“ ” ‘ ’` folded to straight `" '` (typographic,
+ *    render-equivalent; dashes/ellipsis are intentionally left raw for now).
+ *  - line-leading list bullet `* ` and `- ` (with any run of spaces after the
+ *    marker) treated as equivalent. Scoped to the LEADING marker only — inline
+ *    `*` (emphasis/bold) and `-` (hyphens, `--` dashes) are left untouched, so
+ *    `*` and `-` are NOT generally equated. */
 function canonicalize(md: string): string {
   return md
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
     .split("\n")
     .map((l) => l.replace(/^(\s*)[-*][ \t]+/, "$1- "))
     .join("\n");

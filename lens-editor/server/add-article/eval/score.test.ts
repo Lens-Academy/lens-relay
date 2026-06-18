@@ -34,6 +34,15 @@ describe("scoreBody", () => {
     const s = scoreBody(output, gold);
     expect(s.recall).toBeLessThan(1);
   });
+  it("treats curly and straight quotes/apostrophes as equivalent", () => {
+    const gold =
+      'She said "hello there everyone" to the room.\nThat is everyone\'s favorite kind of day.';
+    const output =
+      'She said “hello there everyone” to the room.\nThat is everyone’s favorite kind of day.';
+    const s = scoreBody(output, gold);
+    expect(s.recall).toBe(1);
+    expect(s.precision).toBe(1);
+  });
 });
 
 describe("structureCounts", () => {
