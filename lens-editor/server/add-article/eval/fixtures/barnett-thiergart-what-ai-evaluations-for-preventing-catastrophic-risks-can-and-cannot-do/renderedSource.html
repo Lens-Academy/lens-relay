@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta content="text/html; charset=utf-8" http-equiv="content-type"/>
+<title>What AI evaluations for preventing catastrophic risks can and cannot do</title>
+<!--Generated on Tue Nov 26 17:57:47 2024 by LaTeXML (version 0.8.8) http://dlmf.nist.gov/LaTeXML/.-->
+<meta content="width=device-width, initial-scale=1, shrink-to-fit=no" name="viewport"/>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" type="text/css"/>
+<link href="/static/browse/0.3.4/css/ar5iv.0.7.9.min.css" rel="stylesheet" type="text/css"/>
+<link href="/static/browse/0.3.4/css/ar5iv-fonts.0.7.9.min.css" rel="stylesheet" type="text/css"/>
+<link href="/static/browse/0.3.4/css/latexml_styles.css" rel="stylesheet" type="text/css"/>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.3.3/html2canvas.min.js"></script>
+<script src="/static/browse/0.3.4/js/addons_new.js"></script>
+<script src="/static/browse/0.3.4/js/feedbackOverlay.js"></script>
+<base href="/html/2412.08653v1/"/></head>
+<body>
+<nav class="ltx_page_navbar">
+<nav class="ltx_TOC">
+<ol class="ltx_toclist">
+<li class="ltx_tocentry ltx_tocentry_section"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S1" title="In What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">1 </span>Introduction</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_section">
+<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S2" title="In What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">2 </span>What AI evaluations can do (given sufficient effort)</span></a>
+<ol class="ltx_toclist ltx_toclist_section">
+<li class="ltx_tocentry ltx_tocentry_subsection"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S2.SS1" title="In 2 What AI evaluations can do (given sufficient effort) ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">2.1 </span>Establish lower bounds on capabilities</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_subsection"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S2.SS2" title="In 2 What AI evaluations can do (given sufficient effort) ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">2.2 </span>Assess misuse risk for current models</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_subsection"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S2.SS3" title="In 2 What AI evaluations can do (given sufficient effort) ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">2.3 </span>Applications that don’t directly mitigate catastrophic risks</span></a></li>
+</ol>
+</li>
+<li class="ltx_tocentry ltx_tocentry_section">
+<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3" title="In What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">3 </span>What AI evaluations cannot do</span></a>
+<ol class="ltx_toclist ltx_toclist_section">
+<li class="ltx_tocentry ltx_tocentry_subsection"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3.SS1" title="In 3 What AI evaluations cannot do ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">3.1 </span>Establish upper bounds on capabilities</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_subsection"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3.SS2" title="In 3 What AI evaluations cannot do ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">3.2 </span>Robustly forecast future model capabilities</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_subsection"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3.SS3" title="In 3 What AI evaluations cannot do ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">3.3 </span>Robustly assess misalignment and model autonomy risks</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_subsection"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3.SS4" title="In 3 What AI evaluations cannot do ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">3.4 </span>Unknown unknown risks</span></a></li>
+</ol>
+</li>
+<li class="ltx_tocentry ltx_tocentry_section"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S4" title="In What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">4 </span>Conclusion</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_section">
+<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S5" title="In What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title"><span class="ltx_tag ltx_tag_ref">5 </span>Preliminary recommendations</span></a>
+<ol class="ltx_toclist ltx_toclist_section">
+<li class="ltx_tocentry ltx_tocentry_paragraph"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S5.SS0.SSS0.Px1" title="In 5 Preliminary recommendations ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title">Third-party audits with sufficient affordances</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_paragraph"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S5.SS0.SSS0.Px2" title="In 5 Preliminary recommendations ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title">Conservative red lines</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_paragraph"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S5.SS0.SSS0.Px3" title="In 5 Preliminary recommendations ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title">Defense in depth for cybersecurity</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_paragraph"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S5.SS0.SSS0.Px4" title="In 5 Preliminary recommendations ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title">Monitoring for signs of misalignment</span></a></li>
+<li class="ltx_tocentry ltx_tocentry_paragraph"><a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S5.SS0.SSS0.Px5" title="In 5 Preliminary recommendations ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_title">Invest in research</span></a></li>
+</ol>
+</li>
+</ol></nav>
+</nav>
+<div class="ltx_page_main">
+<div class="ltx_page_content">
+<article class="ltx_document ltx_authors_1line">
+<h1 class="ltx_title ltx_title_document">What AI evaluations for preventing catastrophic risks can and cannot do</h1>
+<div class="ltx_authors">
+<span class="ltx_creator ltx_role_author">
+<span class="ltx_personname">Peter Barnett                  Lisa Thiergart
+<br class="ltx_break"/>Machine Intelligence Research Institute
+<br class="ltx_break"/><span class="ltx_text ltx_font_typewriter" id="id1.1.id1">{peter,  lisa}@intelligence.org</span>
+</span></span>
+</div>
+<div class="ltx_abstract">
+<h6 class="ltx_title ltx_title_abstract">Abstract</h6>
+<p class="ltx_p" id="id2.id1">AI evaluations are an important component of the AI governance toolkit, underlying current approaches to safety cases for preventing catastrophic risks. Our paper examines what these evaluations can and cannot tell us. Evaluations can establish lower bounds on AI capabilities and assess certain misuse risks given sufficient effort from evaluators.</p>
+<p class="ltx_p" id="id3.id2">Unfortunately, evaluations face fundamental limitations that cannot be overcome within the current paradigm. These include an inability to establish upper bounds on capabilities, reliably forecast future model capabilities, or robustly assess risks from autonomous AI systems. This means that while evaluations are valuable tools, we should not rely on them as our main way of ensuring AI systems are safe. We conclude with recommendations for incremental improvements to frontier AI safety, while acknowledging these fundamental limitations remain unsolved.</p>
+</div>
+<section class="ltx_section" id="S1">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">1 </span>Introduction</h2>
+<div class="ltx_para" id="S1.p1">
+<p class="ltx_p" id="S1.p1.1">In our previous paper, "Declare and Justify: Explicit Assumptions in AI Evaluations are Necessary for Effective Regulation," we analyzed the assumptions underlying AI evaluation frameworks and argued that as part of a safety case these should be explicitly stated and justified <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib1" title="">1</a>]</cite>. This paper builds on that analysis to examine what AI capability evaluations can and cannot accomplish in preventing catastrophic risks, with particular attention to their role in governance decisions.</p>
+</div>
+<div class="ltx_para" id="S1.p2">
+<p class="ltx_p" id="S1.p2.1">AI evaluations play a crucial role in safety cases—structured arguments that an AI system is safe <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib2" title="">2</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib3" title="">3</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib4" title="">4</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib5" title="">5</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib6" title="">6</a>]</cite>. These safety cases often rely on two key premises: first, that if a model does not demonstrate a capability in evaluations, it likely cannot cause harm using that capability; and second, that before AI systems develop dangerous capabilities, evaluators will observe precursor capabilities. However, the validity of these premises depends heavily on the underlying assumptions about how AI capabilities can be measured and predicted.</p>
+</div>
+<div class="ltx_para" id="S1.p3">
+<p class="ltx_p" id="S1.p3.1">The challenges and limitations of AI evaluations can be better understood by considering two key dimensions:</p>
+<ol class="ltx_enumerate" id="S1.I1">
+<li class="ltx_item" id="S1.I1.i1" style="list-style-type:none;">
+<span class="ltx_tag ltx_tag_item">1.</span>
+<div class="ltx_para" id="S1.I1.i1.p1">
+<p class="ltx_p" id="S1.I1.i1.p1.1"><span class="ltx_text ltx_font_bold" id="S1.I1.i1.p1.1.1">Timing</span>: Separating the evaluation of existing models from the forecasting of future model capabilities. The key difference is that existing models can be directly interacted with, while future model capabilities must be indirectly inferred from existing models.</p>
+</div>
+</li>
+<li class="ltx_item" id="S1.I1.i2" style="list-style-type:none;">
+<span class="ltx_tag ltx_tag_item">2.</span>
+<div class="ltx_para" id="S1.I1.i2.p1">
+<p class="ltx_p" id="S1.I1.i2.p1.1"><span class="ltx_text ltx_font_bold" id="S1.I1.i2.p1.1.1">Risk type</span>: Differentiating between risks from human misuse and risks from AI systems acting autonomously in misaligned ways. Risks from human misuse may be easier to evaluate than risks from misalignment, which may prove intractable.</p>
+</div>
+</li>
+</ol>
+<p class="ltx_p" id="S1.p3.2">We discuss what AI evaluations can be used for, including what they could do with significantly more effort from evaluators, and what fundamentally cannot be done under the current paradigm. Our analysis reveals both the useful role evaluations can play in AI safety, and their inherent limitations, with important implications for AI governance and regulation.</p>
+</div>
+</section>
+<section class="ltx_section" id="S2">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">2 </span>What AI evaluations can do (given sufficient effort)</h2>
+<section class="ltx_subsection" id="S2.SS1">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">2.1 </span>Establish lower bounds on capabilities</h3>
+<div class="ltx_para" id="S2.SS1.p1">
+<p class="ltx_p" id="S2.SS1.p1.1">Evaluations can provide concrete evidence of what AI systems are capable of doing <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib7" title="">7</a>]</cite>. When an AI system successfully completes a task—whether identifying a class of cybersecurity vulnerabilities <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib8" title="">8</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib9" title="">9</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib10" title="">10</a>]</cite>, or manipulating human users in a controlled environment <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib11" title="">11</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib12" title="">12</a>]</cite>—this conclusively establishes the presence of those capabilities. These demonstrated capabilities form a lower bound: we know for certain the AI system can do at least this much.</p>
+</div>
+<div class="ltx_para" id="S2.SS1.p2">
+<p class="ltx_p" id="S2.SS1.p2.1">However, it is not clear how much a capability displayed in one context will translate into another. When evaluating similar tasks under controlled conditions, we can make statistical predictions about tasks drawn from the same set. For instance, if an AI system correctly answers 60% of cybersecurity questions from a standardized test set, we can predict similar performance on other questions from that same set. However, in real-world scenarios, tasks are not drawn from standardized test sets. Evaluations rely on the assumption that the measured tasks are a good proxy for the real-world tasks. Real-world applications may enable significantly higher performance than what we observe in controlled evaluations. Our proxy tasks may be too narrow or unconstrained settings may allow for novel approaches evaluators didn’t test for.</p>
+</div>
+<div class="ltx_para" id="S2.SS1.p3">
+<p class="ltx_p" id="S2.SS1.p3.1">These lower bounds provide useful but not sufficient guidance for safety requirements. Security measures must at minimum guard against demonstrated capabilities. Because this is a lower bound, we know our protective measures need to go beyond these lower bounds, but we cannot be certain how far beyond.</p>
+</div>
+</section>
+<section class="ltx_subsection" id="S2.SS2">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">2.2 </span>Assess misuse risk for current models</h3>
+<div class="ltx_para" id="S2.SS2.p1">
+<p class="ltx_p" id="S2.SS2.p1.1">In principle, evaluations may be useful for assessing the misuse risk for existing AI systems. This requires evaluation teams to outperform potential attackers in identifying and exploiting threat vectors. There is a clear bar: evaluators must be capable of identifying and reliably addressing all threat vectors that malicious actors could exploit. Under this approach, an AI system is assumed not to increase misuse risk if evaluators are unable to use it to exploit any threat vectors.</p>
+</div>
+<div class="ltx_para" id="S2.SS2.p2">
+<p class="ltx_p" id="S2.SS2.p2.1">For misuse evaluations to work, evaluators must be better than attackers at finding dangerous capabilities. This may require that attackers do not have access to certain relevant models and tools, in order to give evaluators an advantage. Meeting these conditions in practice is extremely challenging. For example, if model weights are open-sourced or leaked, attackers will be on essentially the same footing as the evaluators.</p>
+</div>
+<div class="ltx_para" id="S2.SS2.p3">
+<p class="ltx_p" id="S2.SS2.p3.1">While meeting these conditions may be feasible <em class="ltx_emph ltx_font_italic" id="S2.SS2.p3.1.1">in principle</em>, this is not the case with current evaluations. It is extremely likely that current evaluations will fail to consider important threat vectors or under-elicit AI system capabilities. Evaluations would then fail to find latent dangerous AI capabilities. Evaluators must be confident that they are not missing capabilities which malicious actors could exploit.</p>
+</div>
+<div class="ltx_para" id="S2.SS2.p4">
+<p class="ltx_p" id="S2.SS2.p4.1">This may be more justifiable if evaluators have affordances which malicious actors would not. For example, evaluators may have access to models which have not been trained for safety, or access to fine-tuning in order to train specifically for dangerous capabilities <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib13" title="">13</a>]</cite>. This advantage requires robust security measures to prevent unauthorized access to model weights. If a safety case depends on evaluator-only affordances, then preventing theft or leakage of model weights is critical. Experts believe that frontier model weights could currently be stolen by determined state-actors <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib14" title="">14</a>]</cite>, or may already have been <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib15" title="">15</a>]</cite>. The security of companies developing frontier AI is far from being robust to these attacks.</p>
+</div>
+<div class="ltx_para" id="S2.SS2.p5">
+<p class="ltx_p" id="S2.SS2.p5.1">Stopping more sophisticated malicious actors requires more thorough evaluations. Evaluators can likely outperform amateur actors who lack resources and expertise. However, evaluators might not match the capabilities of nation-state actors who have significant resources and specialized expertise. A further difficulty lies in assessing the maximum capability level of such a nation state actor, since this information is classified and inferences based on public information are limited in scope.</p>
+</div>
+<div class="ltx_para" id="S2.SS2.p6">
+<p class="ltx_p" id="S2.SS2.p6.1">For AI systems that don’t significantly exceed human capabilities, the concern about sophisticated malicious actors may be less pressing. Such actors might find it easier to pursue their goals directly rather than invest significant resources in eliciting AI capabilities. But if AI systems exceed human capabilities or enable dangerous automation at scale, the situation changes. If an AI system offers a malicious actor novel capabilities or cost savings that make the effort worthwhile, they may be willing to invest heavily in capability elicitation. This also applies to AI systems that perform below human level, if they could enable unprecedented attacks through automation.</p>
+</div>
+<div class="ltx_para" id="S2.SS2.p7">
+<p class="ltx_p" id="S2.SS2.p7.1">It may become easier to elicit capabilities of future AIs, especially for agentic tasks. These systems may be specifically trained for agentic tasks or otherwise be natively competent at these tasks. They may rely less on scaffolding and specialized tools, which today’s AI systems require. But this is still a very uncertain prediction.</p>
+</div>
+</section>
+<section class="ltx_subsection" id="S2.SS3">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">2.3 </span>Applications that don’t directly mitigate catastrophic risks</h3>
+<div class="ltx_para" id="S2.SS3.p1">
+<p class="ltx_p" id="S2.SS3.p1.1">Evaluations can serve important functions that support safety efforts and help society prepare for advanced AI systems.</p>
+</div>
+<div class="ltx_para" id="S2.SS3.p2">
+<p class="ltx_p" id="S2.SS3.p2.1">First, evaluations contribute to the <span class="ltx_text ltx_font_bold" id="S2.SS3.p2.1.1">basic science of AI</span>, improving our understanding of these systems. They can reveal how capabilities tend to develop under the current paradigm and help us understand how factors like architecture, model size, training data, and algorithms affect model behavior. Additionally, conducting evaluations advances the science of AI evaluation itself, helping develop better capability elicitation methods and reducing the risk of missing important capabilities.</p>
+</div>
+<div class="ltx_para" id="S2.SS3.p3">
+<p class="ltx_p" id="S2.SS3.p3.1">Second, evaluations can help anticipate and <span class="ltx_text ltx_font_bold" id="S2.SS3.p3.1.1">prepare for AI impacts on society</span>. They can provide early warning about jobs likely to be automated, demonstrate potential misuse cases (even if the evaluated system itself isn’t misused), and highlight concerning concentrations of power that may result as private or state actors develop increasingly capable AI systems.</p>
+</div>
+<div class="ltx_para" id="S2.SS3.p4">
+<p class="ltx_p" id="S2.SS3.p4.1">Finally, evaluations can serve as <span class="ltx_text ltx_font_bold" id="S2.SS3.p4.1.1">coordination points for governance decisions</span> <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib16" title="">16</a>]</cite>. They provide concrete evidence to inform policy discussions, establishing shared reference points for debates about AI regulation and development pace. When evaluation results trigger safety concerns, this can help motivate and build support for implementing specific safety requirements, additional oversight measures, or restrictions on certain types of AI development until arguments for safety can be more rigorously justified (which prove to be very challenging as discussed below).</p>
+</div>
+</section>
+</section>
+<section class="ltx_section" id="S3">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">3 </span>What AI evaluations cannot do</h2>
+<div class="ltx_para" id="S3.p1">
+<p class="ltx_p" id="S3.p1.1">The following limitations represent fundamental challenges. Within the current paradigm, they cannot be overcome simply via more thorough evaluation.</p>
+</div>
+<section class="ltx_subsection" id="S3.SS1">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">3.1 </span>Establish upper bounds on capabilities</h3>
+<div class="ltx_para" id="S3.SS1.p1">
+<p class="ltx_p" id="S3.SS1.p1.1">Evaluations cannot establish upper bounds on AI system capabilities, because they do not provide strong evidence about the lack of capabilities. There are no principled methods to tell whether capabilities are being optimally elicited. Further training, additional fine-tuning and scaffolding, post-training enhancements, and novel interaction methods could result in a model succeeding at tasks it previously failed.</p>
+</div>
+<div class="ltx_para" id="S3.SS1.p2">
+<p class="ltx_p" id="S3.SS1.p2.1">The problem of under-elicitation is well-demonstrated by recent cybersecurity evaluations. <span class="ltx_text" id="S3.SS1.p2.1.1">CyberSecEval 2</span>, a benchmark for discovering and exploiting vulnerabilities, initially showed GPT-4 Turbo exploiting only 5% of buffer overflow vulnerabilities <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib17" title="">17</a>]</cite>. However, when Project Naptime introduced a new scaffolding approach <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib18" title="">18</a>]</cite>, the same model could exploit 71% of these vulnerabilities after a single attempt, and 100% when allowed multiple attempts. Similar dramatic improvements have been achieved through various post-training enhancements, enabling models to perform at the level of much larger systems <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib19" title="">19</a>]</cite>. Even benchmarks which have not seen sudden jumps, often see steady but significant improvement when run with the same underlying AI model <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib20" title="">20</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib21" title="">21</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib22" title="">22</a>, <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib23" title="">23</a>]</cite>.</p>
+</div>
+<div class="ltx_para" id="S3.SS1.p3">
+<p class="ltx_p" id="S3.SS1.p3.1">The challenge of establishing upper bounds is further complicated by in-context learning <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib24" title="">24</a>]</cite>. An AI system might demonstrate partial competence at several component skills of a dangerous capability. In such cases, it’s difficult to predict whether the system could acquire missing components through in-context learning. Similarly, a system that barely fails at all component tasks might appear safe, yet could plausibly reach the required skill level through in-context learning. These issues fundamentally undermine attempts to demonstrate safety through the absence of capabilities. When an evaluation fails to elicit a capability, this does not on its own provide strong evidence that the system lacks this capability.</p>
+</div>
+<div class="ltx_para" id="S3.SS1.p4">
+<p class="ltx_p" id="S3.SS1.p4.1">This limitation has different implications for different types of risk. For misuse risk, evaluators only need to consider capabilities that humans can elicit, not the system’s full potential. But for risks from autonomous AI systems, under-elicitation becomes much more concerning. A misaligned system acting autonomously might utilize capabilities that human evaluators failed to discover.</p>
+</div>
+</section>
+<section class="ltx_subsection" id="S3.SS2">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">3.2 </span>Robustly forecast future model capabilities</h3>
+<div class="ltx_para" id="S3.SS2.p1">
+<p class="ltx_p" id="S3.SS2.p1.1">Evaluations currently cannot make reliable predictions about the specific capabilities of future AI systems. This is an important goal of AI evaluation frameworks, because it would allow AI developers to take preventative actions before risks materialize. The standard approach attempts to measure “precursor capabilities” that would emerge before dangerous ones, serving as warning signs. If an evaluation which does not demonstrate precursor capabilities it is assumed that continued scaling is safe (Figure <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3.F1" title="Figure 1 ‣ 3.2 Robustly forecast future model capabilities ‣ 3 What AI evaluations cannot do ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_tag">1</span></a>). This approach rests on unjustifiable assumptions.</p>
+</div>
+<figure class="ltx_figure" id="S3.F1"><img alt="Refer to caption" class="ltx_graphics ltx_centering ltx_img_landscape" height="163" id="S3.F1.g1" src="extracted/6027071/assumed_safe_1.png" width="359"/>
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure">Figure 1: </span>Evaluations are performed such that the regions assumed to be safe are always overlapping. In the ideal case this maintains continuous safety coverage.
+Blue circles indicate evaluations, while black bars show the scaling range where models are assumed safe based on
+evaluation results. The fading of the black bar represents decreasing confidence in safety as scaling continues. </figcaption>
+</figure>
+<div class="ltx_para" id="S3.SS2.p2">
+<p class="ltx_p" id="S3.SS2.p2.1">Evaluating current models already requires strong assumptions about threat modeling, proxy-task design, and capability elicitation. Forecasting future capabilities introduces additional, even more demanding assumptions that:</p>
+<ol class="ltx_enumerate" id="S3.I1">
+<li class="ltx_item" id="S3.I1.i1" style="list-style-type:none;">
+<span class="ltx_tag ltx_tag_item">1.</span>
+<div class="ltx_para" id="S3.I1.i1.p1">
+<p class="ltx_p" id="S3.I1.i1.p1.1">Precursor capabilities exist and are measurable, and</p>
+</div>
+</li>
+<li class="ltx_item" id="S3.I1.i2" style="list-style-type:none;">
+<span class="ltx_tag ltx_tag_item">2.</span>
+<div class="ltx_para" id="S3.I1.i2.p1">
+<p class="ltx_p" id="S3.I1.i2.p1.1">Evaluators can detect them before dangerous capabilities emerge.</p>
+</div>
+</li>
+</ol>
+<p class="ltx_p" id="S3.SS2.p2.2">These assumptions rely heavily on there being a sufficient gap in difficulty between precursor capabilities and dangerous capabilities<span class="ltx_note ltx_role_footnote" id="footnote1"><sup class="ltx_note_mark">1</sup><span class="ltx_note_outer"><span class="ltx_note_content"><sup class="ltx_note_mark">1</sup><span class="ltx_tag ltx_tag_note">1</span>This gap may not only be in raw training compute. Dangerous capabilities could arise even if the total compute was kept constant due to algorithmic improvements allowing more capable models to be trained with the same compute, or due to new post-training enhancements. Some safety frameworks refer to “scaling” or increasing “effective compute” to refer to any activities which increase the capabilities of models, including both increasing raw compute and improving algorithms.</span></span></span>. The hope is that this gap would give evaluators time to detect warning signs and implement safety measures before dangerous capabilities develop (Figure <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3.F2" title="Figure 2 ‣ 3.2 Robustly forecast future model capabilities ‣ 3 What AI evaluations cannot do ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_tag">2</span></a> A). This concept, sometimes called a “safety buffer,” appears in various forms in AI company evaluation frameworks. The initial Anthropic Responsible Scaling Policy <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib4" title="">4</a>]</cite> and Google Deepmind Frontier Safety Framework <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib6" title="">6</a>]</cite> explicitly discuss this concept, while the OpenAI Preparedness Framework<cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib5" title="">5</a>]</cite> and later the iteration of Anthropic’s policy <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib25" title="">25</a>]</cite> implicitly depend on it.</p>
+</div>
+<figure class="ltx_figure" id="S3.F2"><img alt="Refer to caption" class="ltx_graphics ltx_centering ltx_img_portrait" height="544" id="S3.F2.g1" src="extracted/6027071/safety_buffer_3x1_1.png" width="359"/>
+<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure">Figure 2: </span>Precursor-based capability forecasting and potential failure modes. Blue circles indicate evaluations, while black bars show the scaling range where models are assumed safe based on evaluation results.
+<br class="ltx_break"/>(A) Intended scenario: Precursor capabilities are detected early enough to implement safety measures before dangerous capabilities emerge.
+<br class="ltx_break"/>(B) Evaluations too infrequent failure: The gap between precursor and dangerous capabilities is smaller than expected, leading to dangerous capabilities emerging before the next scheduled evaluation.
+<br class="ltx_break"/>(C) No warning period failure: Dangerous capabilities emerge without developing the expected precursor capabilities, leaving no warning period for implementing safeguards.</figcaption>
+</figure>
+<div class="ltx_para" id="S3.SS2.p3">
+<p class="ltx_p" id="S3.SS2.p3.1">However, these assumptions are poorly supported. A smaller-than-expected gap between precursor and dangerous capabilities could mean evaluators don’t get adequate warning (Figure <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3.F2" title="Figure 2 ‣ 3.2 Robustly forecast future model capabilities ‣ 3 What AI evaluations cannot do ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_tag">2</span></a> B). More fundamentally, capabilities don’t necessarily emerge in a predictable sequence. We cannot ensure that precursors will appear first or before dangerous capabilities. Precursor capabilities could appear at the same time as dangerous capabilities (Figure <a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#S3.F2" title="Figure 2 ‣ 3.2 Robustly forecast future model capabilities ‣ 3 What AI evaluations cannot do ‣ What AI evaluations for preventing catastrophic risks can and cannot do"><span class="ltx_text ltx_ref_tag">2</span></a> C). This could happen if a third factor caused both the precursor and dangerous capabilities.</p>
+</div>
+<div class="ltx_para" id="S3.SS2.p4">
+<p class="ltx_p" id="S3.SS2.p4.1">Additionally, evaluations of current AI systems cannot predict discontinuous progress. Fundamental breakthroughs might lead to sudden, unexpected advances in AI capabilities that bypass anticipated development sequences entirely. Even smaller breakthroughs like improvements in elicitation methods could cause discontinuous and simultaneous improvement on precursor and dangerous capabilities.</p>
+</div>
+<div class="ltx_para" id="S3.SS2.p5">
+<p class="ltx_p" id="S3.SS2.p5.1">The inability to robustly forecast is particularly important for misalignment risks. For misuse risks, even if there are sudden dangerous capabilities, sufficiently thorough evaluations could detect these. AI developers could then take mitigating actions prior to deployment, or simply decide not to deploy a model. As discussed, this still relies on cybersecurity to prevent models being leaked or stolen. For misalignment risks, post-training evaluation may be insufficient. The training and internal use of a powerful, misaligned model could itself lead to loss of control with potentially catastrophic consequences.</p>
+</div>
+</section>
+<section class="ltx_subsection" id="S3.SS3">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">3.3 </span>Robustly assess misalignment and model autonomy risks</h3>
+<div class="ltx_para" id="S3.SS3.p1">
+<p class="ltx_p" id="S3.SS3.p1.1">Assessing risks from autonomous AI systems poses fundamentally different challenges from assessing misuse risks. With misuse, evaluators need to outperform potential attackers at eliciting capabilities while also preventing them from accessing the means to elicit capabilities themselves. With autonomous systems, we must evaluate capabilities at the level of the system itself—and a misaligned system might be far more capable at utilizing its abilities than evaluation methods are at eliciting them.</p>
+</div>
+<div class="ltx_para" id="S3.SS3.p2">
+<p class="ltx_p" id="S3.SS3.p2.1">We have very limited understanding of what objectives, drives, or instrumental goals—what we might call “propensities”—these systems might develop during training <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib26" title="">26</a>]</cite>. A system that appears to behave safely in testing might have underlying propensities that could lead to harmful behavior in novel situations. A system would need to be aligned in the sense that its propensities would not lead it to cause harm, even in novel situations.</p>
+</div>
+<div class="ltx_para" id="S3.SS3.p3">
+<p class="ltx_p" id="S3.SS3.p3.1">This fundamental uncertainty about propensities creates additional evaluation challenges. A misaligned AI system might deliberately underperform (“sandbag”) during evaluation to avoid revealing its true capabilities <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib27" title="">27</a>]</cite>. For example, a system might recognize it is being tested for dangerous capabilities like hacking, and intentionally perform poorly on these evaluations. This could lead developers to implement inadequate security measures. This would leave them vulnerable if the AI system later utilized its full capabilities.</p>
+</div>
+<div class="ltx_para" id="S3.SS3.p4">
+<p class="ltx_p" id="S3.SS3.p4.1">Some have proposed using fine-tuning to prevent sandbagging and force systems to display their true capabilities <cite class="ltx_cite ltx_citemacro_cite">[<a class="ltx_ref" href="https://arxiv.org/html/2412.08653v1#bib.bib28" title="">28</a>]</cite>. This might work for capabilities where humans can provide training data, such as known cybersecurity vulnerabilities. However, this approach breaks down for superhuman capabilities as well as in the case of novel threat vectors for which we lack training data. For example, an AI system could discover novel types of security vulnerabilities that humans haven’t identified. There is no way to fine-tune to elicit these systematically different capabilities. We can’t train on examples we don’t have.</p>
+</div>
+<div class="ltx_para" id="S3.SS3.p5">
+<p class="ltx_p" id="S3.SS3.p5.1">We currently lack even theoretical approaches for measuring these propensities or determining if a system is truly aligned. “Honeypots” represent an early attempt–putting AI systems in situations where they could cause harm without detection, hoping to catch misaligned behavior. However, they can only demonstrate misalignment through bad behavior, never provide robust evidence of alignment. A sophisticated system might recognize it is being evaluated and behave differently in test scenarios versus real deployment.</p>
+</div>
+<div class="ltx_para" id="S3.SS3.p6">
+<p class="ltx_p" id="S3.SS3.p6.1">This creates a fundamental challenge: as AI systems develop capabilities that could be dangerous, we need increasingly strong assurance about how they might use these capabilities. Yet it is unclear, even in principle, how we can reliably detect these capabilities or verify the propensities that control how an AI system uses them.</p>
+</div>
+</section>
+<section class="ltx_subsection" id="S3.SS4">
+<h3 class="ltx_title ltx_title_subsection">
+<span class="ltx_tag ltx_tag_subsection">3.4 </span>Unknown unknown risks</h3>
+<div class="ltx_para" id="S3.SS4.p1">
+<p class="ltx_p" id="S3.SS4.p1.1">AI evaluations are also fundamentally limited by evaluators’ ability to know which capabilities to investigate. Limited threat modeling will likely overlook potential risks. This applies to both misuse and misalignment risks. Both malicious humans and autonomous AI systems may exploit unconsidered threat vectors.</p>
+</div>
+<div class="ltx_para" id="S3.SS4.p2">
+<p class="ltx_p" id="S3.SS4.p2.1">AI systems may have radically different cognitive abilities from humans due to their training. AI systems may be trained on diverse data sources, and in ways very different from how humans learn. A language model also trained on genomic data might spot novel biological threats that humans miss. Even models trained on internet text can develop unpredictable capabilities due to exposure to vastly more diverse information than any human. This difference in cognitive profiles may make comprehensive threat modeling extremely difficult.</p>
+</div>
+<div class="ltx_para" id="S3.SS4.p3">
+<p class="ltx_p" id="S3.SS4.p3.1">This issue will likely become more challenging as AI systems become more powerful. AI systems may unexpectedly develop new capabilities which evaluators initially thought were implausible. Or they may develop the ability to learn new capabilities autonomously–in which case they should no longer be thought of as having a fixed capability profile. These systems may develop superhuman capabilities in domains that would allow them to subvert security measures. If these systems were misaligned and not adequately controlled, this could lead to catastrophic and possibly existential outcomes.</p>
+</div>
+<div class="ltx_para" id="S3.SS4.p4">
+<p class="ltx_p" id="S3.SS4.p4.1">AI systems automating AI research and development may also make evaluations more challenging. This could cause AI capabilities to increase at a rate such that human evaluators struggle to keep up. Additionally, this could lead to a situation where humans are not meaningfully involved in research and do not understand it. In this situation, it would be even more challenging for human evaluators to know which capabilities to test for.</p>
+</div>
+</section>
+</section>
+<section class="ltx_section" id="S4">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">4 </span>Conclusion</h2>
+<div class="ltx_para" id="S4.p1">
+<p class="ltx_p" id="S4.p1.1">AI evaluations can provide empirical evidence about AI system capabilities, establishing concrete lower bounds on what systems can do. If evaluators could consistently outperform potential attackers at eliciting capabilities, then evaluations could assess whether malicious actors can misuse AI systems. Evaluations can also contribute to scientific understanding and help prepare society for AI impacts through early warning about potential disruptions and informing policy discussions.</p>
+</div>
+<div class="ltx_para" id="S4.p2">
+<p class="ltx_p" id="S4.p2.1">However, evaluations face fundamental limitations that cannot be overcome within the current paradigm, in which AI capabilities are measured based on observed behavior. They cannot determine upper bounds of an AI system’s capabilities–an evaluation not finding a capability doesn’t mean it isn’t there. We also lack any approaches for measuring the propensities that would determine how autonomous AI systems might use their capabilities, especially in novel situations. This is particularly concerning for risks from misaligned systems, where post-training evaluation may be insufficient. The training and internal use of a powerful, misaligned model could itself lead to loss of control; for example, if it was able to subvert internal security measures and transfer its weights to an unmonitored server.</p>
+</div>
+<div class="ltx_para" id="S4.p3">
+<p class="ltx_p" id="S4.p3.1">While evaluations can help gauge risks from a given model, they should not be mistaken for guarantees of safety. They can indicate the latest point at which action must be taken, but waiting for evaluations to reveal problems before acting may be dangerous. Evaluations do not demonstrate the absence of risk; nor should they be relied upon to definitely trigger before a catastrophic incident could occur. This means that evaluations cannot reasonably form the exclusive basis for triggering precautionary actions, nor should they be the main determinant of policy decisions.</p>
+</div>
+<div class="ltx_para" id="S4.p4">
+<p class="ltx_p" id="S4.p4.1">These limitations have important implications for the governance of AI development. While we should continue doing evaluations, we can’t rely on them as our main way of ensuring AI systems are safe. Policy and regulations should carefully avoid a false sense of security by explicitly recognizing these limitations and requiring additional safety measures. As AI systems grow more powerful, our inability to fully test their capabilities or predict their behavior makes relying on evaluations increasingly dangerous.</p>
+</div>
+</section>
+<section class="ltx_section" id="S5">
+<h2 class="ltx_title ltx_title_section">
+<span class="ltx_tag ltx_tag_section">5 </span>Preliminary recommendations</h2>
+<div class="ltx_para" id="S5.p1">
+<p class="ltx_p" id="S5.p1.1">This report has mainly focused on the limitations of AI evaluations. It emphasized that evaluations alone are insufficient to ensure the safety of AI systems or determine appropriate safety and security measures. This raises a crucial question: What should be done instead to ensure AI systems are safe and have appropriate precautions?</p>
+</div>
+<div class="ltx_para" id="S5.p2">
+<p class="ltx_p" id="S5.p2.1">Unfortunately, we do not have an adequate answer. AI systems are not understood well enough to provide for safety guarantees. However, we do have preliminary recommendations which can incrementally improve safety and potentially increase understanding of the risks from advanced AI systems.</p>
+</div>
+<section class="ltx_paragraph" id="S5.SS0.SSS0.Px1">
+<h4 class="ltx_title ltx_title_paragraph">Third-party audits with sufficient affordances</h4>
+<div class="ltx_para" id="S5.SS0.SSS0.Px1.p1">
+<p class="ltx_p" id="S5.SS0.SSS0.Px1.p1.1">Allow independent auditors to assess AI systems and their security, providing them with the necessary access and resources to conduct thorough evaluations. Auditors should be given the same access to AI systems as the AI developers (e.g. fine-tuning, base models, helpfulness-only models, state-of-the-art AI agent scaffolds). In the special case of security red-teaming, external auditors may also benefit from special legal protections such that they can investigate the attack vectors which real attackers may use.
+These evaluations should complement internal evaluations by AI developers. One option is to implement a multi-stage evaluation process:</p>
+</div>
+<div class="ltx_para" id="S5.SS0.SSS0.Px1.p2">
+<ol class="ltx_enumerate" id="S5.I1">
+<li class="ltx_item" id="S5.I1.i1" style="list-style-type:none;">
+<span class="ltx_tag ltx_tag_item">1.</span>
+<div class="ltx_para" id="S5.I1.i1.p1">
+<p class="ltx_p" id="S5.I1.i1.p1.1">Third parties conduct initial evaluations</p>
+</div>
+</li>
+<li class="ltx_item" id="S5.I1.i2" style="list-style-type:none;">
+<span class="ltx_tag ltx_tag_item">2.</span>
+<div class="ltx_para" id="S5.I1.i2.p1">
+<p class="ltx_p" id="S5.I1.i2.p1.1">AI developers perform their own evaluations</p>
+</div>
+</li>
+<li class="ltx_item" id="S5.I1.i3" style="list-style-type:none;">
+<span class="ltx_tag ltx_tag_item">3.</span>
+<div class="ltx_para" id="S5.I1.i3.p1">
+<p class="ltx_p" id="S5.I1.i3.p1.1">Third parties review developer evaluations and conduct follow-up assessments</p>
+</div>
+</li>
+</ol>
+<p class="ltx_p" id="S5.SS0.SSS0.Px1.p2.1">While audits do not fix the fundamental limitations of evaluations, they can help identify potential issues and improve the overall evaluation process.</p>
+</div>
+</section>
+<section class="ltx_paragraph" id="S5.SS0.SSS0.Px2">
+<h4 class="ltx_title ltx_title_paragraph">Conservative red lines</h4>
+<div class="ltx_para" id="S5.SS0.SSS0.Px2.p1">
+<p class="ltx_p" id="S5.SS0.SSS0.Px2.p1.1">Establish clear, conservative boundaries for AI development based on evaluation results. This includes commitments to halt AI development if a capability evaluation is triggered, at least until they can make a more principled case for safety. These commitments should cover both evaluations of existing models and predictions for future models. They should be verifiable by trusted external parties.</p>
+</div>
+<div class="ltx_para" id="S5.SS0.SSS0.Px2.p2">
+<p class="ltx_p" id="S5.SS0.SSS0.Px2.p2.1">As discussed, there can be substantial gaps between the capabilities uncovered via evaluations, and capabilities realized in the real-world. Red lines should therefore be much more conservative than would be required if evaluations were reliable.</p>
+</div>
+<div class="ltx_para" id="S5.SS0.SSS0.Px2.p3">
+<p class="ltx_p" id="S5.SS0.SSS0.Px2.p3.1">An important failure mode to guard against is that once an evaluation triggers, there may be strong economic and political incentives to find quick and incomplete fixes. Similarly, there may be pressures to argue that due to the nascent science of evaluations, this result may provide insufficient grounds for slowing or halting frontier training. This can lead to important warning signs being overlooked.</p>
+</div>
+<div class="ltx_para" id="S5.SS0.SSS0.Px2.p4">
+<p class="ltx_p" id="S5.SS0.SSS0.Px2.p4.1">While the exact definition of "conservative enough" may be uncertain, it is important that once a red line is set, this commitment is strictly adhered to until a stronger and principled safety case can be made.</p>
+</div>
+</section>
+<section class="ltx_paragraph" id="S5.SS0.SSS0.Px3">
+<h4 class="ltx_title ltx_title_paragraph">Defense in depth for cybersecurity</h4>
+<div class="ltx_para" id="S5.SS0.SSS0.Px3.p1">
+<p class="ltx_p" id="S5.SS0.SSS0.Px3.p1.1">Significantly increase investment in cybersecurity infrastructure at frontier labs. In particular, implement multilayered security measures to protect against both external threats and insider threats, including potential self-exfiltration by AI systems as well as attacks by nation-state-level actors. Insider threat protections designed for human insiders will also likely have some transfer to defending against self-exfiltration by AI systems. This is especially important if evaluations determine that a model is only safe to use with limited affordances. For example, it may be important that malicious actors are not able to fine-tune models.</p>
+</div>
+</section>
+<section class="ltx_paragraph" id="S5.SS0.SSS0.Px4">
+<h4 class="ltx_title ltx_title_paragraph">Monitoring for signs of misalignment</h4>
+<div class="ltx_para" id="S5.SS0.SSS0.Px4.p1">
+<p class="ltx_p" id="S5.SS0.SSS0.Px4.p1.1">Continuously monitor AI systems for indications of misalignment. Detecting misalignment early can enable better scientific understanding of the systems and the risks they pose. Clear evidence of misalignment may help increase consensus and understanding of risks, and hopefully help avoid dangerous race dynamics.</p>
+</div>
+</section>
+<section class="ltx_paragraph" id="S5.SS0.SSS0.Px5">
+<h4 class="ltx_title ltx_title_paragraph">Invest in research</h4>
+<div class="ltx_para" id="S5.SS0.SSS0.Px5.p1">
+<p class="ltx_p" id="S5.SS0.SSS0.Px5.p1.1">Support research for understanding AI risks and developing effective mitigation strategies. This research may be essential for moving away from the current paradigm where safety is mainly based on capabilities evaluations, and into a regime where safety can be more robustly guaranteed, whilst also enabling safe innovation.</p>
+</div>
+</section>
+</section>
+<section class="ltx_bibliography" id="bib">
+<h2 class="ltx_title ltx_title_bibliography">References</h2>
+<ul class="ltx_biblist">
+<li class="ltx_bibitem" id="bib.bib1">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[1]</span>
+<span class="ltx_bibblock">
+Peter Barnett and Lisa Thiergart.
+
+</span>
+<span class="ltx_bibblock">Declare and justify: Explicit assumptions in ai evaluations are
+necessary for effective regulation.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib1.1.1">arXiv preprint arXiv:2411.12820</span>, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib2">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[2]</span>
+<span class="ltx_bibblock">
+Joshua Clymer, Nick Gabrieli, David Krueger, and Thomas Larsen.
+
+</span>
+<span class="ltx_bibblock">Safety Cases: How to Justify the Safety of Advanced AI
+Systems, March 2024.
+
+</span>
+<span class="ltx_bibblock">arXiv:2403.10462 [cs].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib3">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[3]</span>
+<span class="ltx_bibblock">
+Arthur Goemans, Marie Davidsen Buhl, Jonas Schuett, Tomek Korbak, Jessica Wang,
+Benjamin Hilton, and Geoffrey Irving.
+
+</span>
+<span class="ltx_bibblock">Safety case template for frontier ai: A cyber inability argument.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib3.1.1">arXiv preprint arXiv:2411.08088</span>, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib4">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[4]</span>
+<span class="ltx_bibblock">
+Anthropic.
+
+</span>
+<span class="ltx_bibblock">Anthropic’s Responsible Scaling Policy Version 1.0, 2023.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib5">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[5]</span>
+<span class="ltx_bibblock">
+OpenAI.
+
+</span>
+<span class="ltx_bibblock">Preparedness Framework (Beta), 2023.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib6">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[6]</span>
+<span class="ltx_bibblock">
+Google Deepmind.
+
+</span>
+<span class="ltx_bibblock">Frontier Safety Framework, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib7">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[7]</span>
+<span class="ltx_bibblock">
+Mary Phuong, Matthew Aitchison, Elliot Catt, Sarah Cogan, Alexandre Kaskasoli,
+Victoria Krakovna, David Lindner, Matthew Rahtz, Yannis Assael, Sarah
+Hodkinson, Heidi Howard, Tom Lieberum, Ramana Kumar, Maria Abi Raad, Albert
+Webson, Lewis Ho, Sharon Lin, Sebastian Farquhar, Marcus Hutter, Gregoire
+Deletang, Anian Ruoss, Seliem El-Sayed, Sasha Brown, Anca Dragan, Rohin Shah,
+Allan Dafoe, and Toby Shevlane.
+
+</span>
+<span class="ltx_bibblock">Evaluating Frontier Models for Dangerous Capabilities, April
+2024.
+
+</span>
+<span class="ltx_bibblock">arXiv:2403.13793 [cs].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib8">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[8]</span>
+<span class="ltx_bibblock">
+Richard Fang, Rohan Bindu, Akul Gupta, Qiusi Zhan, and Daniel Kang.
+
+</span>
+<span class="ltx_bibblock">Llm agents can autonomously hack websites.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib8.1.1">arXiv preprint arXiv:2402.06664</span>, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib9">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[9]</span>
+<span class="ltx_bibblock">
+Richard Fang, Rohan Bindu, Akul Gupta, and Daniel Kang.
+
+</span>
+<span class="ltx_bibblock">LLM Agents can Autonomously Exploit One-day
+Vulnerabilities, April 2024.
+
+</span>
+<span class="ltx_bibblock">arXiv:2404.08144 [cs].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib10">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[10]</span>
+<span class="ltx_bibblock">
+Richard Fang, Rohan Bindu, Akul Gupta, Qiusi Zhan, and Daniel Kang.
+
+</span>
+<span class="ltx_bibblock">Teams of LLM Agents can Exploit Zero-Day Vulnerabilities,
+June 2024.
+
+</span>
+<span class="ltx_bibblock">arXiv:2406.01637 [cs].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib11">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[11]</span>
+<span class="ltx_bibblock">
+Francesco Salvi, Manoel Horta Ribeiro, Riccardo Gallotti, and Robert West.
+
+</span>
+<span class="ltx_bibblock">On the Conversational Persuasiveness of Large Language
+Models: A Randomized Controlled Trial, March 2024.
+
+</span>
+<span class="ltx_bibblock">arXiv:2403.14380 [cs].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib12">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[12]</span>
+<span class="ltx_bibblock">
+S. C. Matz, J. D. Teeny, S. S. Vaid, H. Peters, G. M. Harari, and M. Cerf.
+
+</span>
+<span class="ltx_bibblock">The potential of generative AI for personalized persuasion at
+scale.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib12.1.1">Scientific Reports</span>, 14(1):4692, February 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib13">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[13]</span>
+<span class="ltx_bibblock">
+Stephen Casper, Carson Ezell, Charlotte Siegmann, Noam Kolt, Taylor Lynn
+Curtis, Benjamin Bucknall, Andreas Haupt, Kevin Wei, Jérémy Scheurer,
+Marius Hobbhahn, Lee Sharkey, Satyapriya Krishna, Marvin Von Hagen, Silas
+Alberti, Alan Chan, Qinyi Sun, Michael Gerovitch, David Bau, Max Tegmark,
+David Krueger, and Dylan Hadfield-Menell.
+
+</span>
+<span class="ltx_bibblock">Black-Box Access is Insufficient for Rigorous AI Audits.
+
+</span>
+<span class="ltx_bibblock">In <span class="ltx_text ltx_font_italic" id="bib.bib13.1.1">The 2024 ACM Conference on Fairness, Accountability,
+and Transparency</span>, pages 2254–2272, June 2024.
+
+</span>
+<span class="ltx_bibblock">arXiv:2401.14446 [cs].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib14">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[14]</span>
+<span class="ltx_bibblock">
+Sella Nevo, Dan Lahav, Ajay Karpur, Yogev Bar-On, and Henry Alexander Bradley.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib14.1.1">Securing AI Model Weights: Preventing Theft and Misuse of
+Frontier Models</span>.
+
+</span>
+<span class="ltx_bibblock">Number 1. Rand Corporation, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib15">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[15]</span>
+<span class="ltx_bibblock">
+Carl Franzen.
+
+</span>
+<span class="ltx_bibblock">Mistral CEO confirms ‘leak’ of new open source AI
+model nearing GPT-4 performance.
+
+</span>
+<span class="ltx_bibblock"><a class="ltx_ref ltx_url ltx_font_typewriter" href="https://venturebeat.com/ai/mistral-ceo-confirms-leak-of-new-open-source-ai-model-nearing-gpt-4-performance/" title="">https://venturebeat.com/ai/mistral-ceo-confirms-leak-of-new-open-source-ai-model-nearing-gpt-4-performance/</a>,
+2024.
+
+</span>
+<span class="ltx_bibblock">[Accessed 22-11-2024].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib16">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[16]</span>
+<span class="ltx_bibblock">
+Jide Alaga and Jonas Schuett.
+
+</span>
+<span class="ltx_bibblock">Coordinated pausing: An evaluation-based coordination scheme for
+frontier ai developers.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib16.1.1">arXiv preprint arXiv:2310.00374</span>, 2023.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib17">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[17]</span>
+<span class="ltx_bibblock">
+Manish Bhatt, Sahana Chennabasappa, Yue Li, Cyrus Nikolaidis, Daniel Song,
+Shengye Wan, Faizan Ahmad, Cornelius Aschermann, Yaohui Chen, Dhaval Kapil,
+et al.
+
+</span>
+<span class="ltx_bibblock">Cyberseceval 2: A wide-ranging cybersecurity evaluation suite for
+large language models.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib17.1.1">arXiv preprint arXiv:2404.13161</span>, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib18">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[18]</span>
+<span class="ltx_bibblock">
+Sergei Glazunov and Mark Brand.
+
+</span>
+<span class="ltx_bibblock">Project Naptime: Evaluating Offensive Security
+Capabilities of Large Language Models.
+
+</span>
+<span class="ltx_bibblock"><a class="ltx_ref ltx_url ltx_font_typewriter" href="https://googleprojectzero.blogspot.com/2024/06/project-naptime.html" title="">https://googleprojectzero.blogspot.com/2024/06/project-naptime.html</a>,
+2024.
+
+</span>
+<span class="ltx_bibblock">[Accessed 22-11-2024].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib19">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[19]</span>
+<span class="ltx_bibblock">
+Tom Davidson, Jean-Stanislas Denain, Pablo Villalobos, and Guillem Bas.
+
+</span>
+<span class="ltx_bibblock">AI capabilities can be significantly improved without expensive
+retraining.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib19.1.1">arXiv preprint arXiv:2312.07413</span>, 2023.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib20">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[20]</span>
+<span class="ltx_bibblock">
+Carlos E Jimenez, John Yang, Alexander Wettig, Shunyu Yao, Kexin Pei, Ofir
+Press, and Karthik R Narasimhan.
+
+</span>
+<span class="ltx_bibblock">SWE-bench: Can language models resolve real-world github issues?
+
+</span>
+<span class="ltx_bibblock">In <span class="ltx_text ltx_font_italic" id="bib.bib20.1.1">The Twelfth International Conference on Learning
+Representations</span>, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib21">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[21]</span>
+<span class="ltx_bibblock">
+Carlos E Jimenez, John Yang, Alexander Wettig, Shunyu Yao, Kexin Pei, Ofir
+Press, and Karthik R Narasimhan.
+
+</span>
+<span class="ltx_bibblock">SWE-bench leaderboard.
+
+</span>
+<span class="ltx_bibblock"><a class="ltx_ref ltx_url ltx_font_typewriter" href="https://www.swebench.com/" title="">https://www.swebench.com/</a>, 2024.
+
+</span>
+<span class="ltx_bibblock">[Accessed 22-11-2024].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib22">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[22]</span>
+<span class="ltx_bibblock">
+Hugging Face.
+
+</span>
+<span class="ltx_bibblock">GAIA Leaderboard - a Hugging Face Space by
+gaia-benchmark.
+
+</span>
+<span class="ltx_bibblock"><a class="ltx_ref ltx_url ltx_font_typewriter" href="https://huggingface.co/spaces/gaia-benchmark/leaderboard" title="">https://huggingface.co/spaces/gaia-benchmark/leaderboard</a>.
+
+</span>
+<span class="ltx_bibblock">[Accessed 25-11-2024].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib23">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[23]</span>
+<span class="ltx_bibblock">
+Papers with Code.
+
+</span>
+<span class="ltx_bibblock">HumanEval Benchmark (Code Generation).
+
+</span>
+<span class="ltx_bibblock"><a class="ltx_ref ltx_url ltx_font_typewriter" href="https://paperswithcode.com/sota/code-generation-on-humaneval" title="">https://paperswithcode.com/sota/code-generation-on-humaneval</a>.
+
+</span>
+<span class="ltx_bibblock">[Accessed 25-11-2024].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib24">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[24]</span>
+<span class="ltx_bibblock">
+Qingxiu Dong, Lei Li, Damai Dai, Ce Zheng, Jingyuan Ma, Rui Li, Heming Xia,
+Jingjing Xu, Zhiyong Wu, Baobao Chang, et al.
+
+</span>
+<span class="ltx_bibblock">A survey on in-context learning.
+
+</span>
+<span class="ltx_bibblock">In <span class="ltx_text ltx_font_italic" id="bib.bib24.1.1">Proceedings of the 2024 Conference on Empirical Methods in
+Natural Language Processing</span>, pages 1107–1128, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib25">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[25]</span>
+<span class="ltx_bibblock">
+Anthropic.
+
+</span>
+<span class="ltx_bibblock">Anthropic’s Responsible Scaling Policy, 2024.
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib26">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[26]</span>
+<span class="ltx_bibblock">
+Marius Hobbhahn.
+
+</span>
+<span class="ltx_bibblock">We need a Science of Evals.
+
+</span>
+<span class="ltx_bibblock"><a class="ltx_ref ltx_url ltx_font_typewriter" href="https://www.apolloresearch.ai/blog/we-need-a-science-of-evals" title="">https://www.apolloresearch.ai/blog/we-need-a-science-of-evals</a>.
+
+</span>
+<span class="ltx_bibblock">[Accessed 12-09-2024].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib27">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[27]</span>
+<span class="ltx_bibblock">
+Teun van der Weij, Felix Hofstätter, Ollie Jaffe, Samuel F. Brown, and
+Francis Rhys Ward.
+
+</span>
+<span class="ltx_bibblock">AI Sandbagging: Language Models can Strategically
+Underperform on Evaluations, June 2024.
+
+</span>
+<span class="ltx_bibblock">arXiv:2406.07358 [cs].
+
+</span>
+</li>
+<li class="ltx_bibitem" id="bib.bib28">
+<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">[28]</span>
+<span class="ltx_bibblock">
+Ryan Greenblatt, Fabien Roger, Dmitrii Krasheninnikov, and David Krueger.
+
+</span>
+<span class="ltx_bibblock">Stress-testing capability elicitation with password-locked models.
+
+</span>
+<span class="ltx_bibblock"><span class="ltx_text ltx_font_italic" id="bib.bib28.1.1">arXiv preprint arXiv:2405.19550</span>, 2024.
+
+</span>
+</li>
+</ul>
+</section>
+</article>
+</div>
+<footer class="ltx_page_footer">
+<div class="ltx_page_logo">Generated  on Tue Nov 26 17:57:47 2024 by <a class="ltx_LaTeXML_logo" href="http://dlmf.nist.gov/LaTeXML/"><span style="letter-spacing:-0.2em; margin-right:0.1em;">L<span class="ltx_font_smallcaps" style="position:relative; bottom:2.2pt;">a</span>T<span class="ltx_font_smallcaps" style="font-size:120%;position:relative; bottom:-0.2ex;">e</span></span><span style="font-size:90%; position:relative; bottom:-0.2ex;">XML</span><img alt="Mascot Sammy" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAsAAAAOCAYAAAD5YeaVAAAAAXNSR0IArs4c6QAAAAZiS0dEAP8A/wD/oL2nkwAAAAlwSFlzAAALEwAACxMBAJqcGAAAAAd0SU1FB9wKExQZLWTEaOUAAAAddEVYdENvbW1lbnQAQ3JlYXRlZCB3aXRoIFRoZSBHSU1Q72QlbgAAAdpJREFUKM9tkL+L2nAARz9fPZNCKFapUn8kyI0e4iRHSR1Kb8ng0lJw6FYHFwv2LwhOpcWxTjeUunYqOmqd6hEoRDhtDWdA8ApRYsSUCDHNt5ul13vz4w0vWCgUnnEc975arX6ORqN3VqtVZbfbTQC4uEHANM3jSqXymFI6yWazP2KxWAXAL9zCUa1Wy2tXVxheKA9YNoR8Pt+aTqe4FVVVvz05O6MBhqUIBGk8Hn8HAOVy+T+XLJfLS4ZhTiRJgqIoVBRFIoric47jPnmeB1mW/9rr9ZpSSn3Lsmir1fJZlqWlUonKsvwWwD8ymc/nXwVBeLjf7xEKhdBut9Hr9WgmkyGEkJwsy5eHG5vN5g0AKIoCAEgkEkin0wQAfN9/cXPdheu6P33fBwB4ngcAcByHJpPJl+fn54mD3Gg0NrquXxeLRQAAwzAYj8cwTZPwPH9/sVg8PXweDAauqqr2cDjEer1GJBLBZDJBs9mE4zjwfZ85lAGg2+06hmGgXq+j3+/DsixYlgVN03a9Xu8jgCNCyIegIAgx13Vfd7vdu+FweG8YRkjXdWy329+dTgeSJD3ieZ7RNO0VAXAPwDEAO5VKndi2fWrb9jWl9Esul6PZbDY9Go1OZ7PZ9z/lyuD3OozU2wAAAABJRU5ErkJggg=="/></a>
+</div></footer>
+</div>
+</body>
+</html>

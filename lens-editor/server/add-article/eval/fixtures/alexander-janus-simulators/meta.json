@@ -1,0 +1,16 @@
+{
+  "slug": "alexander-janus-simulators",
+  "relay_path": "articles/alexander-janus-simulators.md",
+  "source_url": "https://www.astralcodexten.com/p/janus-simulators",
+  "resolved_fetch_url": "https://www.astralcodexten.com/p/janus-simulators",
+  "host": "www.astralcodexten.com",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Janus' Simulators",
+  "author": [
+    "Scott Alexander"
+  ],
+  "published": "2023-01-26",
+  "reviewed": false
+}

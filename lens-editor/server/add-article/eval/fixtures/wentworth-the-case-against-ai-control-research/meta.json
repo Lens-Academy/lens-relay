@@ -1,0 +1,16 @@
+{
+  "slug": "wentworth-the-case-against-ai-control-research",
+  "relay_path": "articles/wentworth--the-case-against-ai-control-research.md",
+  "source_url": "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "The Case Against AI Control Research",
+  "author": [
+    "johnswentworth"
+  ],
+  "published": "2025-01-21",
+  "reviewed": false
+}

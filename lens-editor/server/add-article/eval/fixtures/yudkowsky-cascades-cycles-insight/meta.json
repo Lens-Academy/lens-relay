@@ -1,0 +1,16 @@
+{
+  "slug": "yudkowsky-cascades-cycles-insight",
+  "relay_path": "articles/yudkowsky-cascades-cycles-insight.md",
+  "source_url": "https://www.lesswrong.com/posts/dq3KsCsqNotWc8nAK/cascades-cycles-insight",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/dq3KsCsqNotWc8nAK/cascades-cycles-insight",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Cascades, Cycles, Insight...",
+  "author": [
+    "Eliezer Yudkowsky"
+  ],
+  "published": "2008-11-24",
+  "reviewed": false
+}

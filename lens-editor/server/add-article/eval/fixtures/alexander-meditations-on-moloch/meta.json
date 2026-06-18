@@ -1,0 +1,16 @@
+{
+  "slug": "alexander-meditations-on-moloch",
+  "relay_path": "articles/alexander-meditations-on-moloch.md",
+  "source_url": "https://www.slatestarcodexabridged.com/Meditations-On-Moloch",
+  "resolved_fetch_url": "https://www.slatestarcodexabridged.com/Meditations-On-Moloch",
+  "host": "www.slatestarcodexabridged.com",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Meditations On Moloch",
+  "author": [
+    "Scott Alexander"
+  ],
+  "published": "2014-07-30",
+  "reviewed": false
+}

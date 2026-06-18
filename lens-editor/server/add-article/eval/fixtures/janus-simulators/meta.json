@@ -1,0 +1,16 @@
+{
+  "slug": "janus-simulators",
+  "relay_path": "articles/janus-simulators.md",
+  "source_url": "https://www.lesswrong.com/s/N7nDePaNabJdnbXeE/p/vJFdjigzmcXMhNTsx",
+  "resolved_fetch_url": "https://www.lesswrong.com/s/N7nDePaNabJdnbXeE/p/vJFdjigzmcXMhNTsx",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Simulators",
+  "author": [
+    "janus"
+  ],
+  "published": "2022-09-02",
+  "reviewed": false
+}

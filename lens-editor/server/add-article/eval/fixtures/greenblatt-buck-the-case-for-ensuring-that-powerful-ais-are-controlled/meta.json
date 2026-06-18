@@ -1,0 +1,17 @@
+{
+  "slug": "greenblatt-buck-the-case-for-ensuring-that-powerful-ais-are-controlled",
+  "relay_path": "articles/greenblatt+buck-the-case-for-ensuring-that-powerful-ais-are-controlled.md",
+  "source_url": "https://www.alignmentforum.org/posts/kcKrE9mzEHrdqtDpE/the-case-for-ensuring-that-powerful-ais-are-controlled",
+  "resolved_fetch_url": "https://www.alignmentforum.org/posts/kcKrE9mzEHrdqtDpE/the-case-for-ensuring-that-powerful-ais-are-controlled",
+  "host": "www.alignmentforum.org",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "The case for ensuring that powerful AIs are controlled",
+  "author": [
+    "ryan_greenblatt",
+    "Buck"
+  ],
+  "published": "2024-01-24",
+  "reviewed": false
+}

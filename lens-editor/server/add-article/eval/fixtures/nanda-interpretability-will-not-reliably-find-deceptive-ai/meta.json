@@ -1,0 +1,16 @@
+{
+  "slug": "nanda-interpretability-will-not-reliably-find-deceptive-ai",
+  "relay_path": "articles/nanda-interpretability-will-not-reliably-find-deceptive-ai.md",
+  "source_url": "https://www.alignmentforum.org/posts/PwnadG4BFjaER3MGf/interpretability-will-not-reliably-find-deceptive-ai",
+  "resolved_fetch_url": "https://www.alignmentforum.org/posts/PwnadG4BFjaER3MGf/interpretability-will-not-reliably-find-deceptive-ai",
+  "host": "www.alignmentforum.org",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Interpretability Will Not Reliably Find Deceptive AI",
+  "author": [
+    "Neel Nanda"
+  ],
+  "published": "2025-05-04",
+  "reviewed": false
+}

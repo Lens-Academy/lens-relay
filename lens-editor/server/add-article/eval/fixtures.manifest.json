@@ -47,7 +47,7 @@
     "host": "archive.is",
     "expected_via": "generic",
     "needs_body_markdown": false,
-    "status": "ok"
+    "status": "skipped:blocked"
   },
   {
     "slug": "yudkowsky-security-mindset-and-ordinary-paranoia",
@@ -107,7 +107,7 @@
     "host": "flyingpenguin.com",
     "expected_via": "generic",
     "needs_body_markdown": false,
-    "status": "ok"
+    "status": "skipped:blocked"
   },
   {
     "slug": "recursion-magic",
@@ -147,7 +147,7 @@
     "host": "link.springer.com",
     "expected_via": "generic",
     "needs_body_markdown": false,
-    "status": "ok"
+    "status": "skipped:blocked"
   },
   {
     "slug": "blaked-how-it-feels-to-have-your-mind-hacked-by-an-ai",

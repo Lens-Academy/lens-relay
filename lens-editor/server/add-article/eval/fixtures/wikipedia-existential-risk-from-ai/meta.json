@@ -1,0 +1,16 @@
+{
+  "slug": "wikipedia-existential-risk-from-ai",
+  "relay_path": "articles/wikipedia-existential-risk-from-ai.md",
+  "source_url": "https://en.wikipedia.org/wiki/Existential_risk_from_artificial_intelligence",
+  "resolved_fetch_url": "https://en.wikipedia.org/wiki/Existential_risk_from_artificial_intelligence",
+  "host": "en.wikipedia.org",
+  "expected_via": "wikipedia",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Existential risk from artificial intelligence",
+  "author": [
+    "Wikipedia"
+  ],
+  "published": "2015-05-01",
+  "reviewed": false
+}

@@ -1,0 +1,16 @@
+{
+  "slug": "chris-apollo-research-we-need-a-science-of-evals",
+  "relay_path": "articles/chris+apollo-research-we-need-a-science-of-evals.md",
+  "source_url": "https://www.apolloresearch.ai/blog/we-need-a-science-of-evals/",
+  "resolved_fetch_url": "https://www.apolloresearch.ai/blog/we-need-a-science-of-evals/",
+  "host": "www.apolloresearch.ai",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "We Need A ‘Science of Evals’",
+  "author": [
+    "Chris"
+  ],
+  "published": "2024-01-22",
+  "reviewed": false
+}
