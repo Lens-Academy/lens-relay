@@ -144,17 +144,26 @@ function injectMedia(md: string, media: Map<string, MediaEmbed>): string {
     .join("\n");
 }
 
+// "Acknowledgements" (British) / "Acknowledgments" (US), singular or plural.
+const ACK_HEADING_RE = /^acknowledge?ments?$/;
+
 /**
  * The native `.md` export drops the per-chapter "Acknowledgements" section, but
  * the HTML page carries it (an `<h3 id="acknowledgements">` inside the prose,
  * followed by the credit paragraph). Pull it out as Markdown so contributors keep
  * their attribution when we use the `.md` body. Returns "" when absent.
+ *
+ * Assumes the Atlas shape — a heading followed by plain-text `<p>` credit
+ * paragraph(s); contributor *lists* or *links* would need turndown and are not
+ * handled (no chapter uses them today). Emitted as `### Acknowledgements` to match
+ * the source heading level and the HTML-fallback path, so both import paths
+ * produce identical output.
  */
 function acknowledgementsMarkdown(doc: Document): string {
   const heading = Array.from(doc.querySelectorAll("h2, h3, h4")).find(
     (el) =>
-      el.id === "acknowledgements" ||
-      norm(el.textContent || "") === "acknowledgements",
+      (el.id || "").toLowerCase().startsWith("acknowledg") ||
+      ACK_HEADING_RE.test(norm(el.textContent || "")),
   );
   if (!heading) return "";
   const paras: string[] = [];
@@ -163,13 +172,19 @@ function acknowledgementsMarkdown(doc: Document): string {
     el && !/^H[1-6]$/.test(el.tagName);
     el = el.nextElementSibling
   ) {
-    if (el.hasAttribute("data-feedback-section")) break; // stop at the feedback widget
+    // Stop at the feedback widget — the `data-feedback-section` wrapper on live
+    // pages, plus the same feedback selectors the adapter strips elsewhere.
+    if (
+      el.hasAttribute("data-feedback-section") ||
+      el.matches("[id^='feedback'], [data-storage-key^='feedback']")
+    )
+      break;
     if (el.tagName === "P") {
       const text = (el.textContent || "").replace(/\s+/g, " ").trim();
       if (text) paras.push(text);
     }
   }
-  return paras.length ? `## Acknowledgements\n\n${paras.join("\n\n")}` : "";
+  return paras.length ? `### Acknowledgements\n\n${paras.join("\n\n")}` : "";
 }
 
 /**
@@ -188,7 +203,10 @@ export const aiSafetyAtlasAdapter: SiteAdapter = {
   },
 
   extract(doc: Document, ctx: AdapterContext): AdapterExtract | null {
-    // Direct `.md` URL (no companion HTML available): use it as-is.
+    // Direct `.md` URL (no companion HTML available): use it as-is. NOTE: the
+    // HTML-only Acknowledgements can't be recovered on this path (extract() is
+    // synchronous and has no page to read); the normal entry is the HTML page
+    // URL, which does preserve them. This bare-`.md` entry is rare.
     if (ctx.pathname.endsWith(".md")) {
       const body = cleanAtlasMarkdown(ctx.html);
       if (!body) return null;

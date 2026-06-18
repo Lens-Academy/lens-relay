@@ -353,7 +353,8 @@ ${"Compute governance steers AI development through hardware controls. ".repeat(
       { fetchText: async () => md }, // native .md export, which has no acknowledgements
     );
     // Pulled from the HTML page so contributors keep their attribution.
-    expect(ex.body).toContain("## Acknowledgements");
+    // `###` to match the source h3 + the HTML-fallback path (level consistency).
+    expect(ex.body).toContain("### Acknowledgements");
     expect(ex.body).toContain("We thank Jane Doe and John Roe");
   });
 
@@ -367,6 +368,8 @@ ${"Compute governance steers AI development through hardware controls. ".repeat(
       '<iframe src="https://www.youtube-nocookie.com/embed/kK3NmQT241w"',
     );
     expect(ex.body).toContain("allowfullscreen");
+    // Same Acknowledgements heading level as the .md-primary path (### , not ##).
+    expect(ex.body).toContain("### Acknowledgements");
   });
 });
 
