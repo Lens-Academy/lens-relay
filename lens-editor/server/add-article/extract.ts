@@ -6,6 +6,7 @@ import { Defuddle } from "defuddle/node";
 import { extractHtmlMeta, dateFromUrl, fetchRawHtml } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
+import { normalizeArticleDom } from "./normalize-dom";
 import {
   stripSiteSuffix,
   splitAuthors,
@@ -247,6 +248,19 @@ function makeTurndown(baseUrl: string): TurndownService {
   return td;
 }
 
+/**
+ * HTML body → Markdown. Parses the body with the base URL, runs the deterministic
+ * DOM normalization pass (footnote canonicalization + link absolutization), then
+ * converts with the shared turndown rules. Single choke point so BOTH the adapter
+ * and generic (Defuddle/Readability) paths get identical normalization.
+ */
+function htmlToMarkdown(bodyHtml: string, baseUrl: string): string {
+  const dom = new JSDOM(`<body>${bodyHtml}</body>`, { url: baseUrl });
+  const body = dom.window.document.body;
+  normalizeArticleDom(body as unknown as Element, baseUrl);
+  return makeTurndown(baseUrl).turndown(body.innerHTML).trim();
+}
+
 /** Internal: the winning extraction's metadata + provenance. */
 interface Chosen {
   title: string;
@@ -304,10 +318,10 @@ export async function extractArticle(
           const raw = await fetchText(ex.bodyMarkdownUrl);
           md = (ex.transformMarkdown ? ex.transformMarkdown(raw) : raw).trim();
         } catch {
-          md = ex.bodyHtml ? makeTurndown(url).turndown(ex.bodyHtml).trim() : "";
+          md = ex.bodyHtml ? htmlToMarkdown(ex.bodyHtml, url) : "";
         }
       } else if (ex.bodyHtml) {
-        md = makeTurndown(url).turndown(ex.bodyHtml).trim();
+        md = htmlToMarkdown(ex.bodyHtml, url);
       }
       if (md.length >= MIN_ADAPTER_CHARS) {
         body = md;
@@ -370,7 +384,7 @@ export async function extractArticle(
     if (candidates.length > 0) {
       const converted = candidates.map((c) => ({
         c,
-        md: makeTurndown(url).turndown(c.bodyHtml).trim(),
+        md: htmlToMarkdown(c.bodyHtml, url),
       }));
       const def = converted.find((x) => x.c.via === "defuddle");
       const rea = converted.find((x) => x.c.via === "readability");
