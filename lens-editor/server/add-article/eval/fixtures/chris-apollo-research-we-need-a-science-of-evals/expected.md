@@ -45,7 +45,7 @@ The mature field should be able to answer questions such as:
 
 ## Current work in the direction of Science of Evals
 
-To convey a better intuitive understanding of what Science of Evals could look like, we list a few papers that we think broadly go in the direction we have in mind. This is not the result of an exhaustive search, so there might be papers that fit our description better–we’re mostly trying to provide a flavor <sup><a href="https://www.apolloresearch.ai/blog/we-need-a-science-of-evals/#e9221e4c-ba74-493e-a2a9-ca38c45ac6ff">1</a></sup>.
+To convey a better intuitive understanding of what Science of Evals could look like, we list a few papers that we think broadly go in the direction we have in mind. This is not the result of an exhaustive search, so there might be papers that fit our description better–we’re mostly trying to provide a flavor [^1].
 
 1. Many different papers such as [Liang et al., 2022](https://arxiv.org/abs/2211.09110); [Mizrahi et al., 2023](https://arxiv.org/abs/2401.00595); [Scalar et al., 2023](https://arxiv.org/abs/2310.11324) find that different phrasings of the same question can lead to very different results thus suggesting to always evaluate LMs on a set of diverse prompts.
 2. Multiple papers investigate how different ways of structuring an evaluation, e.g. as multiple choice or generative evaluation, can lead to substantially different results, e.g. [Robinson et al., 2022](https://arxiv.org/abs/2210.12353); [Wang et al., 2023](https://arxiv.org/abs/2311.05915); [Savelka et al., 2023](https://arxiv.org/abs/2303.08033), [Khatun et al, 2024](https://arxiv.org/abs/2401.07955#:~:text=We%20analyze%2026%20small%20open,MCQ%20tests%20with%20these%20models). Since model evaluations often try to make statements about the maximal capability of a model, it’s important to be aware of how a question is structured (e.g. discriminative vs. generative evaluation) and worded.
@@ -86,12 +86,12 @@ For both, we propose a few preliminary open research questions.
 	- Can we define hypothesis testing procedures that provide us with an estimate of statistical significance? For example, can we make statements like “Under these assumptions, the model is above the allowed threshold with a p-value lower than 1e-5”?
 	- How large is the difference between different elicitation techniques, e.g. prompt engineering vs. fine-tuning? Can we make systematic statements about these differences, e.g. akin to scaling laws?
 
-Note: One way of quantifying aspects of Science of Evals adequately might be asking *“How much optimization power is needed to elicit that behavior”*. For example, we might make empirical statements like it required 1e10 FLOP to elicit the first occurrence of the concept using state-of-the-art elicitation methods. Being able to make statements like these would allow us to quantify the “safety” of AI systems for specific concepts more quantitatively <sup><a href="https://www.apolloresearch.ai/blog/we-need-a-science-of-evals/#0b3b6cad-084b-4988-acb1-95fe5d1983f4">2</a></sup>.
+Note: One way of quantifying aspects of Science of Evals adequately might be asking *“How much optimization power is needed to elicit that behavior”*. For example, we might make empirical statements like it required 1e10 FLOP to elicit the first occurrence of the concept using state-of-the-art elicitation methods. Being able to make statements like these would allow us to quantify the “safety” of AI systems for specific concepts more quantitatively [^2].
 
 ## Conclusion
 
 Evals are going to be an important piece of ensuring the safety of AI systems. They enable us to improve our decision-making because they provide important information and are already tied to safety-related decisions, e.g. in RSPs. For evals to be useful for high-stakes decisions, we need to have high trust in the evals process. Evals is a nascent field and we think a “Science of Evals” would greatly accelerate the maturation process of the field and allow us to make higher-confidence statements about the results of evals.  
   
 
-1. If you think further papers should be added to this list, feel free to contact us. [↩︎](https://www.apolloresearch.ai/blog/we-need-a-science-of-evals/#e9221e4c-ba74-493e-a2a9-ca38c45ac6ff-link)
-2. We intend to share a more detailed explanation of this idea soon. [↩︎](https://www.apolloresearch.ai/blog/we-need-a-science-of-evals/#0b3b6cad-084b-4988-acb1-95fe5d1983f4-link)
+[^1]: If you think further papers should be added to this list, feel free to contact us.
+[^2]: We intend to share a more detailed explanation of this idea soon.
