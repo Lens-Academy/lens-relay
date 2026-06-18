@@ -145,6 +145,34 @@ function injectMedia(md: string, media: Map<string, MediaEmbed>): string {
 }
 
 /**
+ * The native `.md` export drops the per-chapter "Acknowledgements" section, but
+ * the HTML page carries it (an `<h3 id="acknowledgements">` inside the prose,
+ * followed by the credit paragraph). Pull it out as Markdown so contributors keep
+ * their attribution when we use the `.md` body. Returns "" when absent.
+ */
+function acknowledgementsMarkdown(doc: Document): string {
+  const heading = Array.from(doc.querySelectorAll("h2, h3, h4")).find(
+    (el) =>
+      el.id === "acknowledgements" ||
+      norm(el.textContent || "") === "acknowledgements",
+  );
+  if (!heading) return "";
+  const paras: string[] = [];
+  for (
+    let el = heading.nextElementSibling;
+    el && !/^H[1-6]$/.test(el.tagName);
+    el = el.nextElementSibling
+  ) {
+    if (el.hasAttribute("data-feedback-section")) break; // stop at the feedback widget
+    if (el.tagName === "P") {
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (text) paras.push(text);
+    }
+  }
+  return paras.length ? `## Acknowledgements\n\n${paras.join("\n\n")}` : "";
+}
+
+/**
  * AI Safety Atlas (ai-safety-atlas.com) — an Astro-rendered online textbook.
  * We use the page's native Markdown export for the body (cleaner than converting
  * HTML), but read the per-chapter authors and the figure images from the HTML
@@ -185,11 +213,17 @@ export const aiSafetyAtlasAdapter: SiteAdapter = {
 
     const media = mediaEmbeds(doc);
     const authors = atlasAuthors(ctx.html);
+    // The `.md` export omits the Acknowledgements; re-append it from the HTML.
+    // (The HTML-fallback body below already contains it inline.)
+    const acknowledgements = acknowledgementsMarkdown(doc);
     const mdUrl = ctx.url.replace(/[#?].*$/, "").replace(/\/$/, "") + ".md";
 
     return {
       bodyMarkdownUrl: mdUrl,
-      transformMarkdown: (raw) => injectMedia(cleanAtlasMarkdown(raw), media),
+      transformMarkdown: (raw) => {
+        const body = injectMedia(cleanAtlasMarkdown(raw), media);
+        return acknowledgements ? `${body}\n\n${acknowledgements}` : body;
+      },
       bodyHtml: article.innerHTML,
       title: chapterTitle(doc),
       author: authors.length > 0 ? authors : [SITE_NAME],
