@@ -1,0 +1,15 @@
+**tl;dr:** *When making the case for AI as a risk to humanity, trying showing people an evocative illustration of what differences in processing speeds can look like, such as [this video](https://vimeo.com/83664407).*
+
+Over the past ~12 years of making the case for AI x-risk to various people inside and outside academia, I've found folks often ask for a single story of how AI "goes off the rails". When given a plausible story, the mind just thinks of a way humanity could avoid that-particular-story, and goes back to thinking there's no risk, unless provided with another story, or another, etc.. Eventually this can lead to a realization that there's a lot of ways for humanity to die, and a correspondingly high level of risk, but it takes a while.
+
+Nowadays, before getting into a bunch of specific stories, I try to say something more general, like this:
+
+- There's a ton of ways humanity can die out from the introduction of AI. I'm happy to share specific stories if necessary, but plenty of risks arise just from the fact that *humans are extremely slow.* Transistors can fire about 10 million times faster than human brain cells, so it's possible we'll eventually have digital minds operating 10 million times faster than us, meaning from a decision-making perspective we'd look to them like stationary objects, like plants or rocks. This speed differential exists whether or not you believe in a centralized AI system calling the shots, or an economy of many, so it applies to a wide variety of "stories" for how the future could go. To give you a sense, here's what humans look like when slowed down by only around 100x:  
+  
+	[https://vimeo.com/83664407](https://vimeo.com/83664407) <-- (cred to an anonymous friend for suggesting this one)  
+	  
+	\[At this point, I wait for the person I'm chatting with to watch the video.\]  
+	  
+	Now, when you try imagining things turning out fine for humanity over the course of a year, try imagining advanced AI technology running all over the world and making all kinds of decisions and actions *10 million times faster than us, for 10 million subjective years.* Meanwhile, there are these nearly-stationary plant-like or rock-like "human" objects around that could easily be taken apart for, say, biofuel or carbon atoms, if you could just get started building a human-disassembler. Visualizing things this way, you can start to see all the ways that a digital civilization can develop very quickly into a situation where there are no humans left alive, just as human civilization doesn't show much regard for plants or wildlife or insects.
+
+I've found this kind of argument — including an actual 30 second pause to watch a video in the middle of the conversation — to be more persuasive than trying to tell a single, specific story, so I thought I'd share it.

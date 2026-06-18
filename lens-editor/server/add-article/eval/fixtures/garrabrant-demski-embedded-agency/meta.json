@@ -1,0 +1,17 @@
+{
+  "slug": "garrabrant-demski-embedded-agency",
+  "relay_path": "articles/garrabrant+demski--embedded-agency.md",
+  "source_url": "https://www.lesswrong.com/posts/i3BTagvt3HbPMx6PN/embedded-agency-full-text-version",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/i3BTagvt3HbPMx6PN/embedded-agency-full-text-version",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Embedded Agency (full-text version)",
+  "author": [
+    "Scott Garrabrant",
+    "abramdemski"
+  ],
+  "published": "2018-11-15",
+  "reviewed": false
+}

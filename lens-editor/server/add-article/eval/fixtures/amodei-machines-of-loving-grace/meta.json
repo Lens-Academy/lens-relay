@@ -1,0 +1,16 @@
+{
+  "slug": "amodei-machines-of-loving-grace",
+  "relay_path": "articles/Amodei-machines-of-loving-grace.md",
+  "source_url": "https://darioamodei.com/essay/machines-of-loving-grace",
+  "resolved_fetch_url": "https://darioamodei.com/essay/machines-of-loving-grace",
+  "host": "darioamodei.com",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Machines of Loving Grace",
+  "author": [
+    "Dario Amodei"
+  ],
+  "published": "2024-10",
+  "reviewed": false
+}

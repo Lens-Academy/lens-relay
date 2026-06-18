@@ -1,0 +1,16 @@
+{
+  "slug": "duncan-deadly-by-default",
+  "relay_path": "articles/Duncan, Deadly By Default.md",
+  "source_url": "https://homosabiens.substack.com/p/deadly-by-default",
+  "resolved_fetch_url": "https://homosabiens.substack.com/p/deadly-by-default",
+  "host": "homosabiens.substack.com",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Deadly by Default",
+  "author": [
+    "Duncan Sabien"
+  ],
+  "published": "2024-07-26",
+  "reviewed": false
+}

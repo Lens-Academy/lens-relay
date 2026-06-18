@@ -1,0 +1,16 @@
+{
+  "slug": "yudkowsky-security-mindset-and-ordinary-paranoia",
+  "relay_path": "articles/yudkowsky-security-mindset-and-ordinary-paranoia.md",
+  "source_url": "https://www.lesswrong.com/posts/8gqrbnW758qjHFTrH/security-mindset-and-ordinary-paranoia",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/8gqrbnW758qjHFTrH/security-mindset-and-ordinary-paranoia",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Security Mindset and Ordinary Paranoia",
+  "author": [
+    "Eliezer Yudkowsky"
+  ],
+  "published": "2017-11-25",
+  "reviewed": false
+}

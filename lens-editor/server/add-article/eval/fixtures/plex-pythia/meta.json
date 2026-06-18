@@ -1,0 +1,16 @@
+{
+  "slug": "plex-pythia",
+  "relay_path": "articles/plex-pythia.md",
+  "source_url": "https://www.lesswrong.com/posts/qqEndN5Cuzbat9fyx/pythia",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/qqEndN5Cuzbat9fyx/pythia",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Pythia — LessWrong",
+  "author": [
+    "plex"
+  ],
+  "published": "2025-11-07",
+  "reviewed": false
+}

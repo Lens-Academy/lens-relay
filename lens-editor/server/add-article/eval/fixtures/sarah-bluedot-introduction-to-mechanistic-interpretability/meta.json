@@ -1,0 +1,16 @@
+{
+  "slug": "sarah-bluedot-introduction-to-mechanistic-interpretability",
+  "relay_path": "articles/sarah+bluedot-introduction-to-mechanistic-interpretability.md",
+  "source_url": "https://blog.bluedot.org/p/introduction-to-mechanistic-interpretability",
+  "resolved_fetch_url": "https://blog.bluedot.org/p/introduction-to-mechanistic-interpretability",
+  "host": "blog.bluedot.org",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Introduction to Mechanistic Interpretability",
+  "author": [
+    "Sarah"
+  ],
+  "published": "2024-08-19",
+  "reviewed": false
+}

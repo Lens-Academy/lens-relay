@@ -1,0 +1,16 @@
+{
+  "slug": "bostrom-sources-of-advantage-for-digital-agents-over-biological-agents",
+  "relay_path": "articles/bostrom-sources-of-advantage-for-digital-agents-over-biological-agents.md",
+  "source_url": "https://aiimpacts.org/sources-of-advantage-for-artificial-intelligence/",
+  "resolved_fetch_url": "https://aiimpacts.org/sources-of-advantage-for-artificial-intelligence/",
+  "host": "aiimpacts.org",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Sources of advantage for digital agents over biological agents",
+  "author": [
+    "AI Impacts"
+  ],
+  "published": "2016-09-04",
+  "reviewed": false
+}

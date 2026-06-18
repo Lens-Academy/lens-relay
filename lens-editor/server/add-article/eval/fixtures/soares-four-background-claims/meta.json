@@ -1,0 +1,16 @@
+{
+  "slug": "soares-four-background-claims",
+  "relay_path": "articles/soares-four-background-claims.md",
+  "source_url": "https://intelligence.org/2015/07/24/four-background-claims/",
+  "resolved_fetch_url": "https://intelligence.org/2015/07/24/four-background-claims/",
+  "host": "intelligence.org",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Four Background Claims - Machine Intelligence Research Institute",
+  "author": [
+    "Nate Soares"
+  ],
+  "published": "2015-07-24",
+  "reviewed": false
+}

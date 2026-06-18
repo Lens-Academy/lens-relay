@@ -1,0 +1,16 @@
+{
+  "slug": "altair-agent-foundations-not-really-math-not-really-science",
+  "relay_path": "articles/altair-agent-foundations-not-really-math-not-really-science.md",
+  "source_url": "https://www.lesswrong.com/posts/Dt4DuCCok3Xv5HEnG/agent-foundations-not-really-math-not-really-science",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/Dt4DuCCok3Xv5HEnG/agent-foundations-not-really-math-not-really-science",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Agent foundations: not really math, not really science",
+  "author": [
+    "Alex_Altair"
+  ],
+  "published": "2025-08-17",
+  "reviewed": false
+}

@@ -1,0 +1,21 @@
+{
+  "slug": "kenton-etal-discovering-when-an-agent-is-present-in-a-system",
+  "relay_path": "articles/kenton+etal-discovering-when-an-agent-is-present-in-a-system.md",
+  "source_url": "https://deepmind.google/blog/discovering-when-an-agent-is-present-in-a-system/",
+  "resolved_fetch_url": "https://deepmind.google/blog/discovering-when-an-agent-is-present-in-a-system/",
+  "host": "deepmind.google",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Discovering when an agent is present in a system",
+  "author": [
+    "Zachary Kenton",
+    "Ramana Kumar",
+    "Sebastian Farquhar",
+    "Jonathan Richens",
+    "Matt MacDermott",
+    "Tom Everitt"
+  ],
+  "published": "2022-08-17",
+  "reviewed": false
+}

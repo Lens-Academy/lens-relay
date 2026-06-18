@@ -1,0 +1,16 @@
+{
+  "slug": "buck-worst-case-thinking-in-ai-alignment",
+  "relay_path": "articles/buck-worst-case-thinking-in-ai-alignment.md",
+  "source_url": "https://www.lesswrong.com/posts/yTvBSFrXhZfL8vr5a/worst-case-thinking-in-ai-alignment",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/yTvBSFrXhZfL8vr5a/worst-case-thinking-in-ai-alignment",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "Worst-case thinking in AI alignment",
+  "author": [
+    "Buck Shlegeris"
+  ],
+  "published": "2021-12-23",
+  "reviewed": false
+}

@@ -1,0 +1,16 @@
+{
+  "slug": "carlsmith-when-should-we-worry-about-ai-power-seeking",
+  "relay_path": "articles/carlsmith-when-should-we-worry-about-ai-power-seeking.md",
+  "source_url": "https://joecarlsmith.substack.com/p/when-should-we-worry-about-ai-power",
+  "resolved_fetch_url": "https://joecarlsmith.substack.com/p/when-should-we-worry-about-ai-power",
+  "host": "joecarlsmith.substack.com",
+  "expected_via": "generic",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "When should we worry about AI power-seeking?",
+  "author": [
+    "Joe Carlsmith"
+  ],
+  "published": "2025-02-19",
+  "reviewed": false
+}

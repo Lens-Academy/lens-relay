@@ -1,0 +1,16 @@
+{
+  "slug": "bogoed-the-world-keeps-getting-saved",
+  "relay_path": "articles/Bogoed-the-world-keeps-getting-saved.md",
+  "source_url": "https://www.lesswrong.com/posts/qnvmZCjzspceWdgjC/the-world-keeps-getting-saved-and-you-don-t-notice",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/qnvmZCjzspceWdgjC/the-world-keeps-getting-saved-and-you-don-t-notice",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "The World Keeps Getting Saved and You Don’t Notice",
+  "author": [
+    "Bogoed"
+  ],
+  "published": "2026-02-16",
+  "reviewed": false
+}

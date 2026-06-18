@@ -1,0 +1,20 @@
+{
+  "slug": "hobbhahn-etal-a-starter-guide-for-evals",
+  "relay_path": "articles/hobbhahn+etal-a-starter-guide-for-evals.md",
+  "source_url": "https://www.lesswrong.com/posts/2PiawPFJeyCQGcwXG/a-starter-guide-for-evals",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/2PiawPFJeyCQGcwXG/a-starter-guide-for-evals",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "A starter guide for evals",
+  "author": [
+    "Marius Hobbhahn",
+    "Jérémy Scheurer",
+    "Mikita Balesni",
+    "rusheb",
+    "AlexMeinke"
+  ],
+  "published": "2024-01-08",
+  "reviewed": false
+}

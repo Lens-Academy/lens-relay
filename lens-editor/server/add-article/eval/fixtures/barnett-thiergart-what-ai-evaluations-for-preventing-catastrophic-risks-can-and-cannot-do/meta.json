@@ -1,0 +1,17 @@
+{
+  "slug": "barnett-thiergart-what-ai-evaluations-for-preventing-catastrophic-risks-can-and-cannot-do",
+  "relay_path": "articles/barnett+thiergart-what-ai-evaluations-for-preventing-catastrophic-risks-can-and-cannot-do.md",
+  "source_url": "https://arxiv.org/html/2412.08653v1",
+  "resolved_fetch_url": "https://arxiv.org/html/2412.08653",
+  "host": "arxiv.org",
+  "expected_via": "arxiv",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "What AI evaluations for preventing catastrophic risks can and cannot do",
+  "author": [
+    "Peter Barnett",
+    "Lisa Thiergart"
+  ],
+  "published": "2024-11-26",
+  "reviewed": false
+}

@@ -1,0 +1,16 @@
+{
+  "slug": "recursion-magic",
+  "relay_path": "articles/recursion-magic.md",
+  "source_url": "https://www.lesswrong.com/posts/rJLviHqJMTy8WQkow/recursion-magic",
+  "resolved_fetch_url": "https://www.lesswrong.com/posts/rJLviHqJMTy8WQkow/recursion-magic",
+  "host": "www.lesswrong.com",
+  "expected_via": "forum-adapter",
+  "needs_body_markdown": false,
+  "status": "ok",
+  "title": "...Recursion, Magic",
+  "author": [
+    "Eliezer Yudkowsky"
+  ],
+  "published": "2008-11-25",
+  "reviewed": false
+}
