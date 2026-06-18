@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSourceTargets, parseModuleLinks } from "./wikilink";
+import { parseSourceTargets, parseModuleLinks, resolveRelayPath } from "./wikilink";
 
 describe("parseSourceTargets", () => {
   it("extracts targets across heading levels, embeds, aliases, and spacing", () => {
@@ -38,5 +38,21 @@ describe("parseModuleLinks", () => {
   it("reads # Module lines with variable spacing, ignores # Meeting", () => {
     const md = `# Module: [[../modules/a]]\n# Meeting: Intro\n# Module:  [[../modules/b]]`;
     expect(parseModuleLinks(md)).toEqual(["../modules/a", "../modules/b"]);
+  });
+});
+
+describe("resolveRelayPath", () => {
+  it("resolves ../ targets against the referring doc's folder and adds .md", () => {
+    expect(
+      resolveRelayPath("modules/what-even-is-ai.md", "../articles/foo-bar"),
+    ).toBe("articles/foo-bar.md");
+    expect(
+      resolveRelayPath("Learning Outcomes/An Outcome.md", "../Lenses/A Lens"),
+    ).toBe("Lenses/A Lens.md");
+  });
+  it("does not double-append .md", () => {
+    expect(resolveRelayPath("modules/x.md", "../articles/y.md")).toBe(
+      "articles/y.md",
+    );
   });
 });

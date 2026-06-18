@@ -1,3 +1,5 @@
+import * as path from "node:path";
+
 /** Extract every `source::` wikilink target from a relay doc, normalized.
  *  Strips the embed `!` prefix and a `|alias` suffix; returns inner paths,
  *  order-preserving and de-duplicated. */
@@ -25,4 +27,16 @@ export function parseModuleLinks(md: string): string[] {
   const re = /^#\s*Module:\s*!?\[\[([^\]]+)\]\]/gm;
   for (const m of md.matchAll(re)) out.push(m[1].split("|")[0].trim());
   return out;
+}
+
+/** Resolves a `../`-relative wikilink target against the folder of the referring doc,
+ *  returning a repo-relative path with `.md` appended (unless already present).
+ *  @param fromRelayPath - Path to the referring doc (e.g., "modules/x.md")
+ *  @param target - Relative wikilink target without extension (e.g., "../articles/foo")
+ *  @returns Normalized path with `.md` (e.g., "articles/foo.md")
+ */
+export function resolveRelayPath(fromRelayPath: string, target: string): string {
+  const dir = path.posix.dirname(fromRelayPath);
+  const joined = path.posix.normalize(path.posix.join(dir, target));
+  return joined.endsWith(".md") ? joined : `${joined}.md`;
 }
