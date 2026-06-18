@@ -38,4 +38,29 @@ describe("resolveCourseArticles", () => {
     expect(report.skippedNonArticle).toContain("../video_transcripts/clip");
     expect(report.perModule.find((m) => m.module.endsWith("m1.md"))?.articleCount).toBe(2);
   });
+
+  it("deduplicates shared lenses reached from multiple modules", async () => {
+    const sharedDocs: Record<string, string> = {
+      "courses/SharedLens.md": `# Module: [[../modules/m1]]\n# Module: [[../modules/m2]]`,
+      // m1 references the shared lens directly
+      "modules/m1.md": `# Lens:\nsource:: [[../Lenses/SharedLens]]`,
+      // m2 references the shared lens via a Learning Outcome
+      "modules/m2.md": `# Learning Outcome:\nsource:: [[../Learning Outcomes/LO3]]`,
+      "Learning Outcomes/LO3.md": `## Lens:\nsource:: [[../Lenses/SharedLens]]`,
+      // SharedLens has one article segment
+      "Lenses/SharedLens.md": `#### Article\nsource:: [[../articles/shared]]`,
+    };
+    const sharedRead = (p: string) =>
+      p in sharedDocs ? Promise.resolve(sharedDocs[p]) : Promise.reject(new Error(`missing ${p}`));
+
+    const { articles, report } = await resolveCourseArticles(
+      "courses/SharedLens.md",
+      sharedRead,
+    );
+
+    // The shared article should appear exactly once
+    expect(articles).toEqual(["articles/shared.md"]);
+    // visitedLenses should count the SharedLens doc only once, not twice
+    expect(report.visitedLenses).toBe(1);
+  });
 });
