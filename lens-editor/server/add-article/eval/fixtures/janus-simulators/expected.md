@@ -82,6 +82,9 @@ The earliest engagement with the hypothetical of “ *what if self-supervised se
 
 It is conceivable that predictive loss does not descend to the AGI-complete limit, maybe because:
 
+- Some AGI-necessary predictions are [too difficult to be learned by even a scaled version of the current paradigm](https://www.lesswrong.com/posts/pv7Qpu8WSge8NRbpB).
+- The irreducible entropy is above the “AGI threshold”: datasets + context windows [contain insufficient information](https://twitter.com/ylecun/status/1562162165540331520) to improve on some necessary predictions.
+
 But I have not seen enough evidence for either not to be concerned that we have in our hands a well-defined protocol that could end in AGI, or a foundation which could spin up an AGI without too much additional finagling. As Gurkenglas observed, this would be a very different source of AGI than previously foretold.
 
 ## The old framework of alignment

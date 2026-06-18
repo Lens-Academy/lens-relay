@@ -61,7 +61,7 @@ So, where does interpretability fit into this pragmatic portfolio? I see several
 
 Firstly, safeguards can be categorised as follows:
 
-1. **Evaluation**: We take a system and perform extensive tests on it for desired properties, like a tendency towards misalignment or sandbagging
+1. **Evaluation**: We take a system and perform extensive tests on it for undesired properties, like a tendency towards misalignment or sandbagging
 2. **Monitoring**: When we deploy a system we are always running some checks at inference, which try to catch and mitigate bad behaviour
 	1. Importantly, this needs to be cheap to be run in production, while evaluations can be more expensive and slow
 
@@ -74,7 +74,7 @@ How can interp help?
 2. **Enhancing Black-Box Evaluations:** Interpretability might make our external checks more effective. For example:
 	- Could we use steering vectors identified via interpretability to **manipulate whether the model thinks it’s in an eval?** Maybe we can test it more effectively if we can trick it into thinking it's *not* in a honeypot or evaluation setting.
 	- Can we use interpretability to better elicit information from token forcing? We can make the model say “my secret plan is”, and even if it tries to internally suppress awareness or obfuscate the output perhaps interpretability can prevent that?
-	- Interpretability may provide a sanity check that our black box methods are not missing something, e.g. whether a model is using an eval only because it knows it’s in one and is deliberately underperforming.
+	- Interpretability may provide a sanity check that our black box methods are not missing something, e.g. whether a model is passing an eval only because it knows it’s in one and is deliberately underperforming.
 3. **Debugging mysterious behaviour**: One particularly interesting form of evaluation (or offline monitoring) is taking particularly weird or unexpected examples of model behaviour, e.g. it seeming to put vulnerabilities in critical code, and trying to debug what’s going on and see if it’s real alignment or not. I think interpretability methods may prove very good at raising unexpected hypotheses, and piecing together what’s happening (e.g. [this proof of concept](https://transformer-circuits.pub/2025/attribution-graphs/biology.html))
 	- I expect these kinds of potential warning shots to happen, and anything that can add more signal here would be great.
 	- Even if we don’t trust the interpretability method fully, the hypotheses generated can be verified by other means.
