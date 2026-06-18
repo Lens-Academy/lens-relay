@@ -100,6 +100,63 @@ describe("normalizeArticleDom — footnotes", () => {
     expect(body.querySelector("ol")?.textContent).toMatch(/One[\s\S]*Two/);
   });
 
+  it("relocates arXiv/LaTeXML inline footnotes to a bottom list", () => {
+    const body = normalize(`
+      <p>Some claim<span class="ltx_note ltx_role_footnote" id="footnote1"><sup class="ltx_note_mark">1</sup><span class="ltx_note_outer"><span class="ltx_note_content"><sup class="ltx_note_mark">1</sup><span class="ltx_tag ltx_tag_note">1</span>The first note text.</span></span></span> and more<span class="ltx_note ltx_role_footnote" id="footnote2"><sup class="ltx_note_mark">2</sup><span class="ltx_note_outer"><span class="ltx_note_content"><sup class="ltx_note_mark">2</sup><span class="ltx_tag ltx_tag_note">2</span>The second note text.</span></span></span>.</p>`);
+    // Inline note containers are gone; numeric markers remain in the prose.
+    expect(body.querySelector(".ltx_role_footnote")).toBeNull();
+    expect([...body.querySelectorAll("a[data-footnote-ref]")].map((a) =>
+      a.getAttribute("data-footnote-ref"),
+    )).toEqual(["1", "2"]);
+    // Definitions were collected into a bottom list with numeric ids + text,
+    // and the duplicated LaTeXML mark/tag glyphs were stripped.
+    const defs = [...body.querySelectorAll("li")];
+    expect(defs.map((li) => li.id)).toEqual(["fn-1", "fn-2"]);
+    expect(defs[0].textContent).toContain("The first note text.");
+    expect(defs[0].textContent).not.toMatch(/^\s*1\s*1/);
+    // The footnotes list is at the end of the body.
+    expect(body.lastElementChild?.tagName).toBe("OL");
+  });
+
+  it("never assigns the same number twice when display + positional refs mix", () => {
+    // First ref has no number (positional), second prints [1]: must not collide.
+    const body = normalize(`
+      <p>a<sup><a href="#fnAAA">note</a></sup>
+      b<span class="footnote-reference"><sup><a href="#fnBBB">[1]</a></sup></span></p>
+      <ol class="footnotes">
+        <li class="footnote-item" id="fnAAA"><div class="footnote-content"><p>A note</p></div></li>
+        <li class="footnote-item" id="fnBBB"><div class="footnote-content"><p>B note</p></div></li>
+      </ol>`);
+    const markers = [...body.querySelectorAll("a[data-footnote-ref]")].map((a) =>
+      a.getAttribute("data-footnote-ref"),
+    );
+    expect(new Set(markers).size).toBe(markers.length); // all unique
+    expect([...body.querySelectorAll("li")].map((li) => li.id)).toEqual([
+      "fn-1",
+      "fn-2",
+    ]);
+  });
+
+  it("gives unique numbers across two separate footnote sections", () => {
+    const body = normalize(`
+      <p>a<span class="footnote-reference"><sup><a href="#fnA">[1]</a></sup></span></p>
+      <ol class="footnotes"><li class="footnote-item" id="fnA"><div class="footnote-content"><p>First section note</p></div></li></ol>
+      <p>b<span class="footnote-reference"><sup><a href="#fnB">[1]</a></sup></span></p>
+      <ol class="footnotes"><li class="footnote-item" id="fnB"><div class="footnote-content"><p>Second section note</p></div></li></ol>`);
+    const ids = [...body.querySelectorAll("li")].map((li) => li.id);
+    expect(ids).toEqual(["fn-1", "fn-2"]); // second [1] bumped to 2, no duplicate
+  });
+
+  it("does not turn an ordinary superscript in-page link into a footnote marker", () => {
+    const body = normalize(
+      `<p>See<sup><a href="#fn-section">notes section</a></sup> below.</p>`,
+    );
+    // No definition exists and the text isn't numeric → not a footnote, and the
+    // in-page fragment link is left untouched.
+    expect(body.querySelector("a[data-footnote-ref]")).toBeNull();
+    expect(body.querySelector("a")?.getAttribute("href")).toBe("#fn-section");
+  });
+
   it("is idempotent on already-canonical input", () => {
     const canonical = `<p>x<sup class="footnote-ref"><a data-footnote-ref="1" href="#fn-1">1</a></sup></p>
       <ol class="footnotes"><li id="fn-1"><div class="footnote-content"><p>Note.</p></div></li></ol>`;

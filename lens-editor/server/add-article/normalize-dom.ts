@@ -56,10 +56,12 @@ function targetId(ref: Element): string {
     if (id && !id.startsWith("fnref")) return id;
     if (id.startsWith("fnref")) return "fn" + id.slice(5);
   }
-  // Fall back to the reference's own id with the `ref` marker removed.
+  // Fall back to the reference's own id with the `ref` marker removed
+  // (`fnref<HASH>` → `fn<HASH>`); anchored to the prefix so we don't mangle an
+  // id that merely contains the letters "ref" (e.g. `fn-preface-3`).
   const ownId =
     ref.getAttribute("id") || refAnchor(ref)?.getAttribute("id") || "";
-  return ownId.replace(/ref/i, "");
+  return ownId.replace(/^fnref/i, "fn");
 }
 
 /** The reference's display number, preferring a real number over position so we
@@ -76,10 +78,23 @@ function displayNumber(ref: Element): string | null {
   return null;
 }
 
+/** Ids of the footnote definition elements present in the body. */
+function footnoteDefIds(root: Element): Set<string> {
+  const ids = new Set<string>();
+  root
+    .querySelectorAll("li.footnote-item, li[id^='fn'], li[id^='user-content-fn']")
+    .forEach((li) => {
+      const id = li.getAttribute("id");
+      if (id) ids.add(id);
+    });
+  return ids;
+}
+
 /** Inline footnote reference wrappers, outermost-only, in document order,
  * excluding back-links. */
 function collectReferences(root: Element): Element[] {
   const set = new Set<Element>();
+  // Class/attribute-labelled references are unambiguous footnote markers.
   root
     .querySelectorAll(".footnote-reference, .footnote-ref")
     .forEach((e) => set.add(e));
@@ -87,8 +102,17 @@ function collectReferences(root: Element): Element[] {
     const sup = a.closest("sup");
     set.add(sup && root.contains(sup) ? sup : a);
   });
+  // An UNlabelled `<sup>` linking to `#fn…` is only a footnote marker when its
+  // text is a number (e.g. "1" / "[1]") OR it targets a real footnote
+  // definition — otherwise an ordinary superscript in-page link (e.g.
+  // `#fn-section`) would be turned into a phantom `[^N]` marker.
+  const defIds = footnoteDefIds(root);
   root.querySelectorAll("sup").forEach((sup) => {
-    if (sup.querySelector('a[href^="#fn"]')) set.add(sup);
+    const a = sup.querySelector('a[href^="#fn"]');
+    if (!a) return;
+    const text = (a.textContent || "").replace(/[[\]\s]/g, "");
+    const target = (a.getAttribute("href") || "").slice(1);
+    if (/^\d+$/.test(text) || defIds.has(target)) set.add(sup);
   });
 
   let refs = [...set].filter((e) => !isBackLink(e));
@@ -109,18 +133,87 @@ function canonicalMarker(doc: Document, n: string): Element {
   return sup;
 }
 
+/**
+ * Some sources render footnotes *inline* at the citation point rather than as a
+ * list at the bottom — notably LaTeXML / arXiv HTML (`span.ltx_role_footnote`),
+ * where the whole note (marker + text) sits where it was cited. Pull each one
+ * out: leave a reference marker in place and append its content to a footnotes
+ * list at the end of the body, so the rest of the pipeline collects it as `[^N]:`.
+ */
+function relocateInlineFootnotes(root: Element): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+  const notes = [...root.querySelectorAll(".ltx_role_footnote")];
+  if (notes.length === 0) return;
+
+  const list = doc.createElement("ol");
+  list.className = "footnotes";
+
+  let counter = 0;
+  for (const note of notes) {
+    counter += 1;
+    const markText = (note.querySelector(".ltx_note_mark")?.textContent || "").trim();
+    const n = /^\d+$/.test(markText) ? markText : String(counter);
+    const id = note.getAttribute("id") || `ltxfn-${counter}`;
+
+    // Build the definition from the note content, dropping the duplicated
+    // mark/tag glyphs LaTeXML repeats inside the content.
+    const li = doc.createElement("li");
+    li.className = "footnote-item";
+    li.setAttribute("id", id);
+    const content = note.querySelector(".ltx_note_content");
+    if (content) {
+      const clone = content.cloneNode(true) as Element;
+      clone
+        .querySelectorAll(".ltx_note_mark, .ltx_tag, .ltx_tag_note")
+        .forEach((e) => e.remove());
+      while (clone.firstChild) li.appendChild(clone.firstChild);
+    }
+    list.appendChild(li);
+
+    // Replace the inline note with a reference marker pointing at the new def.
+    const sup = doc.createElement("sup");
+    sup.className = "footnote-ref";
+    const a = doc.createElement("a");
+    a.setAttribute("href", `#${id}`);
+    a.textContent = n;
+    sup.appendChild(a);
+    note.replaceWith(sup);
+  }
+
+  root.appendChild(list);
+}
+
 function normalizeFootnotes(root: Element): void {
   const doc = root.ownerDocument;
   if (!doc) return;
 
+  // Inline footnotes (arXiv/LaTeXML) become a bottom list first, then the
+  // unified numbering below treats them like any other list-based footnotes.
+  relocateInlineFootnotes(root);
+
   const refs = collectReferences(root);
 
-  // targetId -> assigned number, built in document order from the references.
+  // Assign each footnote a UNIQUE number. We keep a reference's own display
+  // number when it is free (so footnotes cited out of order keep their printed
+  // numbers), but allocate the smallest unused number otherwise — so a positional
+  // fallback or a second footnote section can never collide into a duplicate
+  // `[^N]`. `numByTarget` links definitions back to their reference's number.
   const numByTarget = new Map<string, string>();
-  let maxAssigned = 0;
-  const assign = (n: string) => {
-    maxAssigned = Math.max(maxAssigned, Number(n) || 0);
-    return n;
+  const used = new Set<number>();
+  const takeFree = (): string => {
+    let i = 1;
+    while (used.has(i)) i += 1;
+    used.add(i);
+    return String(i);
+  };
+  const take = (preferred: string | null): string => {
+    const want = preferred && /^\d+$/.test(preferred) ? Number(preferred) : 0;
+    if (want && !used.has(want)) {
+      used.add(want);
+      return String(want);
+    }
+    return takeFree();
   };
 
   for (const ref of refs) {
@@ -129,7 +222,7 @@ function normalizeFootnotes(root: Element): void {
     if (tid && numByTarget.has(tid)) {
       n = numByTarget.get(tid)!;
     } else {
-      n = assign(displayNumber(ref) ?? String(maxAssigned + 1));
+      n = take(displayNumber(ref));
       if (tid) numByTarget.set(tid, n);
     }
     ref.replaceWith(canonicalMarker(doc, n));
@@ -146,7 +239,7 @@ function normalizeFootnotes(root: Element): void {
   const numByDef = new Map<Element, number>();
   for (const def of defs) {
     const id = def.getAttribute("id") || "";
-    const n = numByTarget.get(id) ?? String(++maxAssigned);
+    const n = numByTarget.get(id) ?? takeFree();
     def.setAttribute("id", `fn-${n}`);
     def
       .querySelectorAll(
