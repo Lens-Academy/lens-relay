@@ -156,6 +156,8 @@ describe("extractArticle — AI Safety Atlas adapter", () => {
           <figcaption><strong>Figure 4.6</strong> - An NVIDIA accelerator</figcaption></figure>
         <figure><iframe src="https://www.youtube-nocookie.com/embed/kK3NmQT241w" allowfullscreen></iframe>
           <figcaption><strong>Video 1.2</strong> - A short talk</figcaption></figure>
+        <h3 id="acknowledgements">Acknowledgements</h3>
+        <p>We thank Jane Doe and John Roe for their valuable feedback and contributions.</p>
         ${
           footnotes
             ? `<section id="footnotes" class="mt-12"><h2 class="sr-only">Footnotes</h2>
@@ -341,6 +343,21 @@ ${"Compute governance steers AI development through hardware controls. ".repeat(
     );
   });
 
+  it("appends the page's Acknowledgements to the .md body (the .md export drops it)", async () => {
+    const md = `# Compute Governance
+
+${"Compute governance steers AI development through hardware controls. ".repeat(8)}`;
+    const ex = await extractArticle(
+      ATLAS(false),
+      "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+      { fetchText: async () => md }, // native .md export, which has no acknowledgements
+    );
+    // Pulled from the HTML page so contributors keep their attribution.
+    // `###` to match the source h3 + the HTML-fallback path (level consistency).
+    expect(ex.body).toContain("### Acknowledgements");
+    expect(ex.body).toContain("We thank Jane Doe and John Roe");
+  });
+
   it("preserves the YouTube iframe when falling back to HTML conversion", async () => {
     const ex = await extractArticle(
       ATLAS(false),
@@ -351,6 +368,8 @@ ${"Compute governance steers AI development through hardware controls. ".repeat(
       '<iframe src="https://www.youtube-nocookie.com/embed/kK3NmQT241w"',
     );
     expect(ex.body).toContain("allowfullscreen");
+    // Same Acknowledgements heading level as the .md-primary path (### , not ##).
+    expect(ex.body).toContain("### Acknowledgements");
   });
 });
 
