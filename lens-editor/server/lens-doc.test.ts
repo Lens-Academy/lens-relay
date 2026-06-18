@@ -20,9 +20,9 @@ describe("generateLensMarkdown", () => {
     expect(md).toContain("id: abc-123");
     expect(md).toContain('title: "Benchmarks"');
     expect(md).toMatch(/^#### Article$/m);
-    expect(md).toContain(
-      "source:: [[../articles/grey-benchmarks.md|Benchmarks]]",
-    );
+    // No `.md` extension and no `|alias` — the canonical lens wikilink form.
+    expect(md).toContain("source:: [[../articles/grey-benchmarks]]");
+    expect(md).not.toContain("grey-benchmarks.md");
   });
 
   it("generates a UUID id and a Video segment when asked", () => {
@@ -35,17 +35,18 @@ describe("generateLensMarkdown", () => {
       /^id: [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/m,
     );
     expect(md).toMatch(/^#### Video$/m);
+    expect(md).toContain("source:: [[../video_transcripts/some-talk]]");
   });
 
-  it("quotes the YAML title and strips wikilink-breaking chars from the label", () => {
+  it("strips the .md, uses no alias, and still YAML-escapes a weird title", () => {
     const md = generateLensMarkdown({
       title: 'A | weird ] title',
       segment: "Article",
       source: "../articles/a.md",
     });
-    // []| removed from the [[path|label]] display so the wikilink stays valid
-    expect(md).toContain("source:: [[../articles/a.md|A weird title]]");
-    // frontmatter title escaped for YAML
+    // Extensionless, alias-free wikilink (no `|` to break, no `.md` to misresolve).
+    expect(md).toContain("source:: [[../articles/a]]");
+    // The title still carries the display text — escaped for YAML in frontmatter.
     expect(md).toContain('title: "A | weird ] title"');
   });
 });
@@ -72,9 +73,7 @@ describe("maybeCreateLens", () => {
     expect(createRelayDoc).toHaveBeenCalledTimes(1);
     const [writtenPath, md] = createRelayDoc.mock.calls[0];
     expect(writtenPath).toBe("Lens Edu/Lenses/grey-benchmarks.md");
-    expect(md).toContain(
-      "source:: [[../articles/grey-benchmarks.md|Benchmarks]]",
-    );
+    expect(md).toContain("source:: [[../articles/grey-benchmarks]]");
   });
 
   it("skips (returns null) when a lens of that name already exists", async () => {
@@ -90,7 +89,7 @@ describe("maybeCreateLens", () => {
 
   it("keeps the source a valid RELATIVE wikilink when lens and doc folders are co-located", async () => {
     // If an operator points RELAY_LENS_FOLDER at the doc folder, relative()
-    // yields a bare "foo.md" — which is NOT a relative wikilink. Must be "./foo.md".
+    // yields a bare "foo" — which is NOT a relative wikilink. Must be "./foo".
     process.env.RELAY_LENS_FOLDER = "Lens Edu/articles";
     checkRelayDocsExist.mockResolvedValue({});
     createRelayDoc.mockResolvedValue(undefined);
@@ -104,6 +103,6 @@ describe("maybeCreateLens", () => {
       delete process.env.RELAY_LENS_FOLDER;
     }
     const [, md] = createRelayDoc.mock.calls[0];
-    expect(md).toContain("source:: [[./foo.md|Foo]]");
+    expect(md).toContain("source:: [[./foo]]");
   });
 });

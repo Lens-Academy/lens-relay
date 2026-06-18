@@ -14,11 +14,13 @@ import { createRelayDoc, checkRelayDocsExist } from "./add-video/relay-docs";
  *   ---
  *
  *   #### Article
- *   source:: [[../articles/<file>.md|<display title>]]
+ *   source:: [[../articles/<file>]]
  *
  * The single source-only segment means "include the whole article/video". The
- * source must be a RELATIVE wikilink (contain "/"), which it is — the lens lives
- * in a sibling folder of the imported doc (Lens Edu/Lenses ↔ Lens Edu/articles).
+ * source is a RELATIVE wikilink (contains "/") with NO `.md` extension and no
+ * `|alias` — the form the content-processor / Obsidian resolve (a trailing `.md`
+ * breaks resolution). The lens lives in a sibling folder of the imported doc
+ * (Lens Edu/Lenses ↔ Lens Edu/articles).
  */
 
 function relayLensFolder(): string {
@@ -37,16 +39,12 @@ function yamlQuote(s: string): string {
   );
 }
 
-/** Sanitize a display label so it can't break the [[path|label]] wikilink. */
-function wikilinkLabel(s: string): string {
-  return s.replace(/[[\]|]/g, "").replace(/\s+/g, " ").trim();
-}
-
 export interface LensDocOptions {
   title: string;
   /** Segment header — "Article" or "Video". */
   segment: "Article" | "Video";
-  /** Relative wikilink target, e.g. "../articles/foo.md". */
+  /** Relative path to the target doc, e.g. "../articles/foo.md". A trailing
+   *  `.md` is stripped for the wikilink. */
   source: string;
   /** Lens id (UUID). Generated when omitted. */
   id?: string;
@@ -55,6 +53,11 @@ export interface LensDocOptions {
 /** Render a minimal whole-document lens. */
 export function generateLensMarkdown(opts: LensDocOptions): string {
   const id = opts.id ?? randomUUID();
+  // Canonical lens wikilink: the relative path WITHOUT the `.md` extension and
+  // WITHOUT a `|alias`. The content-processor / Obsidian resolve the
+  // extensionless form (a trailing `.md` breaks resolution), and a whole-document
+  // lens needs no display label.
+  const target = opts.source.replace(/\.md$/i, "");
   return [
     "---",
     `id: ${id}`,
@@ -62,7 +65,7 @@ export function generateLensMarkdown(opts: LensDocOptions): string {
     "---",
     "",
     `#### ${opts.segment}`,
-    `source:: [[${opts.source}|${wikilinkLabel(opts.title)}]]`,
+    `source:: [[${target}]]`,
     "",
   ].join("\n");
 }
