@@ -18,6 +18,22 @@ describe("scoreBody", () => {
     const s = scoreBody(output, gold);
     expect(s.recall).toBeLessThan(1);
   });
+  it("treats leading '* ' and '- ' list bullets as equivalent (incl. extra spaces)", () => {
+    const gold =
+      "* The first bullet point of the list.\n* The second bullet point of the list.";
+    const output =
+      "-   The first bullet point of the list.\n-   The second bullet point of the list.";
+    const s = scoreBody(output, gold);
+    expect(s.recall).toBe(1);
+    expect(s.precision).toBe(1);
+  });
+  it("does NOT equate inline '*' and '-' (only the leading bullet marker)", () => {
+    // inline emphasis/hyphen must stay distinct — bullets are line-leading only
+    const gold = "This is the sentence with *emphasis* in the middle.";
+    const output = "This is the sentence with -emphasis- in the middle.";
+    const s = scoreBody(output, gold);
+    expect(s.recall).toBeLessThan(1);
+  });
 });
 
 describe("structureCounts", () => {

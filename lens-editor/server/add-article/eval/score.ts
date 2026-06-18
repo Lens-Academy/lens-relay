@@ -1,9 +1,21 @@
 import { jaccard } from "../confidence";
 
+/** Canonicalize render-equivalent markdown DIALECT (not content) before scoring.
+ *  Currently: treat a line-leading list bullet `* ` and `- ` (with any run of
+ *  spaces after the marker) as equivalent. Scoped to the LEADING marker only —
+ *  inline `*` (emphasis/bold) and `-` (hyphens, `--` dashes) are left untouched,
+ *  so `*` and `-` are NOT generally equated. */
+function canonicalize(md: string): string {
+  return md
+    .split("\n")
+    .map((l) => l.replace(/^(\s*)[-*][ \t]+/, "$1- "))
+    .join("\n");
+}
+
 function shingles(md: string): Set<string> {
-  // Trim only for line tokenization; no content is masked (raw compare).
+  // Trim for line tokenization; canonicalize folds render-equivalent dialect.
   return new Set(
-    md.split("\n").map((l) => l.trim()).filter((l) => l.length >= 12),
+    canonicalize(md).split("\n").map((l) => l.trim()).filter((l) => l.length >= 12),
   );
 }
 
@@ -12,7 +24,7 @@ export function scoreBody(output: string, gold: string): { recall: number; preci
   const inBoth = (a: Set<string>, b: Set<string>) => [...a].filter((x) => b.has(x)).length;
   const recall = g.size ? inBoth(g, o) / g.size : 1;
   const precision = o.size ? inBoth(o, g) / o.size : 1;
-  return { recall, precision, jaccard: jaccard(output, gold) };
+  return { recall, precision, jaccard: jaccard(canonicalize(output), canonicalize(gold)) };
 }
 
 export function structureCounts(md: string) {
