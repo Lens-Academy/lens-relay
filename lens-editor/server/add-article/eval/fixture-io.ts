@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
 const GZIP_THRESHOLD = 1024 * 1024;
-const FIXTURES_ROOT = path.join(__dirname, "fixtures");
+const FIXTURES_ROOT = path.join(import.meta.dirname, "fixtures");
 
 export function fixtureDir(slug: string, root: string = FIXTURES_ROOT): string {
   return path.join(root, slug);

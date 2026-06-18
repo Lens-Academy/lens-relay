@@ -12,7 +12,7 @@ import { fetchFirstHtml, fetchRenderedHtml, fetchRawHtml } from "../server/add-a
 import { resolveFetchUrls, adapterContext } from "../server/add-article/adapters";
 import type { ManifestEntry } from "../server/add-article/eval/manifest";
 
-const MANIFEST = path.join(__dirname, "../server/add-article/eval/fixtures.manifest.json");
+const MANIFEST = path.join(import.meta.dirname, "../server/add-article/eval/fixtures.manifest.json");
 
 async function build(entry: ManifestEntry) {
   const { frontmatter, body } = splitFrontmatter(await readEduDoc(entry.relay_path));

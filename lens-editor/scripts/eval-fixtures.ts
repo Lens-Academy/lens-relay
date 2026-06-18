@@ -44,7 +44,7 @@ export async function scoreFixture(slug: string, root?: string, emitDiffDir?: st
 }
 
 async function main() {
-  const root = path.join(__dirname, "../server/add-article/eval/fixtures");
+  const root = path.join(import.meta.dirname, "../server/add-article/eval/fixtures");
   const only = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : null;
   const slugs = (await fs.readdir(root, { withFileTypes: true }))
     .filter((d) => d.isDirectory() && (!only || d.name === only)).map((d) => d.name);

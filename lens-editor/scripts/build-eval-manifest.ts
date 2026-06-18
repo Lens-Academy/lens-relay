@@ -12,7 +12,7 @@ import { classifyVia, stratifiedSelect, type ManifestEntry } from "../server/add
 import { adapterContext, resolveFetchUrls } from "../server/add-article/adapters";
 
 const COURSE = "courses/Navigating Superintelligence.md";
-const OUT = path.join(__dirname, "../server/add-article/eval/fixtures.manifest.json");
+const OUT = path.join(import.meta.dirname, "../server/add-article/eval/fixtures.manifest.json");
 
 function slugFor(relayPath: string): string {
   return path.posix.basename(relayPath).replace(/\.md$/i, "")

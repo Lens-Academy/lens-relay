@@ -1,0 +1,392 @@
+[
+  {
+    "slug": "wikipedia-existential-risk-from-ai",
+    "relay_path": "articles/wikipedia-existential-risk-from-ai.md",
+    "source_url": "https://en.wikipedia.org/wiki/Existential_risk_from_artificial_intelligence",
+    "resolved_fetch_url": "https://en.wikipedia.org/wiki/Existential_risk_from_artificial_intelligence",
+    "host": "en.wikipedia.org",
+    "expected_via": "wikipedia",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "soares-four-background-claims",
+    "relay_path": "articles/soares-four-background-claims.md",
+    "source_url": "https://intelligence.org/2015/07/24/four-background-claims/",
+    "resolved_fetch_url": "https://intelligence.org/2015/07/24/four-background-claims/",
+    "host": "intelligence.org",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "buck-worst-case-thinking-in-ai-alignment",
+    "relay_path": "articles/buck-worst-case-thinking-in-ai-alignment.md",
+    "source_url": "https://www.lesswrong.com/posts/yTvBSFrXhZfL8vr5a/worst-case-thinking-in-ai-alignment",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/yTvBSFrXhZfL8vr5a/worst-case-thinking-in-ai-alignment",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "barnett-thiergart-what-ai-evaluations-for-preventing-catastrophic-risks-can-and-cannot-do",
+    "relay_path": "articles/barnett+thiergart-what-ai-evaluations-for-preventing-catastrophic-risks-can-and-cannot-do.md",
+    "source_url": "https://arxiv.org/html/2412.08653v1",
+    "resolved_fetch_url": "https://arxiv.org/html/2412.08653",
+    "host": "arxiv.org",
+    "expected_via": "arxiv",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "yudkowsky-soares-ai-is-grown-not-built",
+    "relay_path": "articles/yudkowsky-soares-ai-is-grown-not-built.md",
+    "source_url": "https://archive.is/blU6r",
+    "resolved_fetch_url": "https://archive.is/blU6r",
+    "host": "archive.is",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "yudkowsky-security-mindset-and-ordinary-paranoia",
+    "relay_path": "articles/yudkowsky-security-mindset-and-ordinary-paranoia.md",
+    "source_url": "https://www.lesswrong.com/posts/8gqrbnW758qjHFTrH/security-mindset-and-ordinary-paranoia",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/8gqrbnW758qjHFTrH/security-mindset-and-ordinary-paranoia",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "stampyai-how-can-llms-be-understood-as-simulators",
+    "relay_path": "articles/stampyai-how-can-llms-be-understood-as-simulators.md",
+    "source_url": "https://aisafety.info/questions/9FQK/How-can-LLMs-be-understood-as-%E2%80%9Csimulators%E2%80%9D",
+    "resolved_fetch_url": "https://aisafety.info/questions/9FQK/How-can-LLMs-be-understood-as-%E2%80%9Csimulators%E2%80%9D",
+    "host": "aisafety.info",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "janus-simulators",
+    "relay_path": "articles/janus-simulators.md",
+    "source_url": "https://www.lesswrong.com/s/N7nDePaNabJdnbXeE/p/vJFdjigzmcXMhNTsx",
+    "resolved_fetch_url": "https://www.lesswrong.com/s/N7nDePaNabJdnbXeE/p/vJFdjigzmcXMhNTsx",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "alexander-janus-simulators",
+    "relay_path": "articles/alexander-janus-simulators.md",
+    "source_url": "https://www.astralcodexten.com/p/janus-simulators",
+    "resolved_fetch_url": "https://www.astralcodexten.com/p/janus-simulators",
+    "host": "www.astralcodexten.com",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "yudkowsky-cascades-cycles-insight",
+    "relay_path": "articles/yudkowsky-cascades-cycles-insight.md",
+    "source_url": "https://www.lesswrong.com/posts/dq3KsCsqNotWc8nAK/cascades-cycles-insight",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/dq3KsCsqNotWc8nAK/cascades-cycles-insight",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "good-speculations-concerning-first-ultraintelligent-machine",
+    "relay_path": "articles/good-speculations-concerning-first-ultraintelligent-machine.md",
+    "source_url": "https://flyingpenguin.com/wp-content/uploads/2022/04/good-1964-.pdf",
+    "resolved_fetch_url": "https://flyingpenguin.com/wp-content/uploads/2022/04/good-1964-.pdf",
+    "host": "flyingpenguin.com",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "recursion-magic",
+    "relay_path": "articles/recursion-magic.md",
+    "source_url": "https://www.lesswrong.com/posts/rJLviHqJMTy8WQkow/recursion-magic",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/rJLviHqJMTy8WQkow/recursion-magic",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "aisafety-info-singularity-intelligence-explosion-hard-takeoff",
+    "relay_path": "articles/aisafety-info-singularity-intelligence-explosion-hard-takeoff.md",
+    "source_url": "https://aisafety.info/questions/8IHO/What-are-the-differences-between-a-singularity,-an-intelligence-explosion,-and-a-hard-takeoff",
+    "resolved_fetch_url": "https://aisafety.info/questions/8IHO/What-are-the-differences-between-a-singularity,-an-intelligence-explosion,-and-a-hard-takeoff",
+    "host": "aisafety.info",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "slow-motion-videos-as-ai-risk-intuition-pumps",
+    "relay_path": "articles/slow-motion-videos-as-ai-risk-intuition-pumps.md",
+    "source_url": "https://www.lesswrong.com/posts/Ccsx339LE9Jhoii9K/slow-motion-videos-as-ai-risk-intuition-pumps",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/Ccsx339LE9Jhoii9K/slow-motion-videos-as-ai-risk-intuition-pumps",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "houba-bolt-credible-threats-in-negotiations",
+    "relay_path": "articles/houba+bolt-credible-threats-in-negotiations.md",
+    "source_url": "https://link.springer.com/chapter/10.1007/0-306-47539-1_7",
+    "resolved_fetch_url": "https://link.springer.com/chapter/10.1007/0-306-47539-1_7",
+    "host": "link.springer.com",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "blaked-how-it-feels-to-have-your-mind-hacked-by-an-ai",
+    "relay_path": "articles/blaked-how-it-feels-to-have-your-mind-hacked-by-an-ai.md",
+    "source_url": "https://www.lesswrong.com/posts/9kQFure4hdDmRBNdH/how-it-feels-to-have-your-mind-hacked-by-an-ai",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/9kQFure4hdDmRBNdH/how-it-feels-to-have-your-mind-hacked-by-an-ai",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "bostrom-sources-of-advantage-for-digital-agents-over-biological-agents",
+    "relay_path": "articles/bostrom-sources-of-advantage-for-digital-agents-over-biological-agents.md",
+    "source_url": "https://aiimpacts.org/sources-of-advantage-for-artificial-intelligence/",
+    "resolved_fetch_url": "https://aiimpacts.org/sources-of-advantage-for-artificial-intelligence/",
+    "host": "aiimpacts.org",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "byrnes-6-reasons-why-alignment-is-hard-discourse-seems-alien",
+    "relay_path": "articles/byrnes-6-reasons-why-alignment-is-hard-discourse-seems-alien.md",
+    "source_url": "https://www.lesswrong.com/posts/d4HNRdw6z7Xqbnu5E/6-reasons-why-alignment-is-hard-discourse-seems-alien-to",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/d4HNRdw6z7Xqbnu5E/6-reasons-why-alignment-is-hard-discourse-seems-alien-to",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "carlsmith-when-should-we-worry-about-ai-power-seeking",
+    "relay_path": "articles/carlsmith-when-should-we-worry-about-ai-power-seeking.md",
+    "source_url": "https://joecarlsmith.substack.com/p/when-should-we-worry-about-ai-power",
+    "resolved_fetch_url": "https://joecarlsmith.substack.com/p/when-should-we-worry-about-ai-power",
+    "host": "joecarlsmith.substack.com",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "soares-a-central-ai-alignment-problem-capabilities-generalization-and-the-sharp-left-turn",
+    "relay_path": "articles/soares-a-central-ai-alignment-problem-capabilities-generalization-and-the-sharp-left-turn.md",
+    "source_url": "https://www.lesswrong.com/posts/GNhMPAWcfBCASy8e6/a-central-ai-alignment-problem-capabilities-generalization",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/GNhMPAWcfBCASy8e6/a-central-ai-alignment-problem-capabilities-generalization",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "kenton-etal-discovering-when-an-agent-is-present-in-a-system",
+    "relay_path": "articles/kenton+etal-discovering-when-an-agent-is-present-in-a-system.md",
+    "source_url": "https://deepmind.google/blog/discovering-when-an-agent-is-present-in-a-system/",
+    "resolved_fetch_url": "https://deepmind.google/blog/discovering-when-an-agent-is-present-in-a-system/",
+    "host": "deepmind.google",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "plex-pythia",
+    "relay_path": "articles/plex-pythia.md",
+    "source_url": "https://www.lesswrong.com/posts/qqEndN5Cuzbat9fyx/pythia",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/qqEndN5Cuzbat9fyx/pythia",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "alexander-meditations-on-moloch",
+    "relay_path": "articles/alexander-meditations-on-moloch.md",
+    "source_url": "https://www.slatestarcodexabridged.com/Meditations-On-Moloch",
+    "resolved_fetch_url": "https://www.slatestarcodexabridged.com/Meditations-On-Moloch",
+    "host": "www.slatestarcodexabridged.com",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "gillen-barnett-without-fundamental-advances-misalignment-and-catastrophe-are-the-default-outcomes-of-training-powerful-ai",
+    "relay_path": "articles/gillen+barnett-without-fundamental-advances,-misalignment-and-catastrophe-are-the-default-outcomes-of-training-powerful-ai.md",
+    "source_url": "https://www.lesswrong.com/posts/GfZfDHZHCuYwrHGCd/without-fundamental-advances-misalignment-and-catastrophe",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/GfZfDHZHCuYwrHGCd/without-fundamental-advances-misalignment-and-catastrophe",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "sarah-bluedot-introduction-to-mechanistic-interpretability",
+    "relay_path": "articles/sarah+bluedot-introduction-to-mechanistic-interpretability.md",
+    "source_url": "https://blog.bluedot.org/p/introduction-to-mechanistic-interpretability",
+    "resolved_fetch_url": "https://blog.bluedot.org/p/introduction-to-mechanistic-interpretability",
+    "host": "blog.bluedot.org",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "raemon-carefully-bootstrapped-alignment-is-organizationally-hard",
+    "relay_path": "articles/raemon-carefully-bootstrapped-alignment-is-organizationally-hard.md",
+    "source_url": "https://www.lesswrong.com/posts/thkAtqoQwN6DtaiGT/carefully-bootstrapped-alignment-is-organizationally-hard",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/thkAtqoQwN6DtaiGT/carefully-bootstrapped-alignment-is-organizationally-hard",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "chris-apollo-research-we-need-a-science-of-evals",
+    "relay_path": "articles/chris+apollo-research-we-need-a-science-of-evals.md",
+    "source_url": "https://www.apolloresearch.ai/blog/we-need-a-science-of-evals/",
+    "resolved_fetch_url": "https://www.apolloresearch.ai/blog/we-need-a-science-of-evals/",
+    "host": "www.apolloresearch.ai",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "nanda-interpretability-will-not-reliably-find-deceptive-ai",
+    "relay_path": "articles/nanda-interpretability-will-not-reliably-find-deceptive-ai.md",
+    "source_url": "https://www.alignmentforum.org/posts/PwnadG4BFjaER3MGf/interpretability-will-not-reliably-find-deceptive-ai",
+    "resolved_fetch_url": "https://www.alignmentforum.org/posts/PwnadG4BFjaER3MGf/interpretability-will-not-reliably-find-deceptive-ai",
+    "host": "www.alignmentforum.org",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "1960-the-year-the-singularity-was-cancelled",
+    "relay_path": "articles/1960, The Year The Singularity Was Cancelled.md",
+    "source_url": "https://www.slatestarcodexabridged.com/1960-The-Year-The-Singularity-Was-Cancelled",
+    "resolved_fetch_url": "https://www.slatestarcodexabridged.com/1960-The-Year-The-Singularity-Was-Cancelled",
+    "host": "www.slatestarcodexabridged.com",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "hobbhahn-etal-a-starter-guide-for-evals",
+    "relay_path": "articles/hobbhahn+etal-a-starter-guide-for-evals.md",
+    "source_url": "https://www.lesswrong.com/posts/2PiawPFJeyCQGcwXG/a-starter-guide-for-evals",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/2PiawPFJeyCQGcwXG/a-starter-guide-for-evals",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "duncan-deadly-by-default",
+    "relay_path": "articles/Duncan, Deadly By Default.md",
+    "source_url": "https://homosabiens.substack.com/p/deadly-by-default",
+    "resolved_fetch_url": "https://homosabiens.substack.com/p/deadly-by-default",
+    "host": "homosabiens.substack.com",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "greenblatt-buck-the-case-for-ensuring-that-powerful-ais-are-controlled",
+    "relay_path": "articles/greenblatt+buck-the-case-for-ensuring-that-powerful-ais-are-controlled.md",
+    "source_url": "https://www.alignmentforum.org/posts/kcKrE9mzEHrdqtDpE/the-case-for-ensuring-that-powerful-ais-are-controlled",
+    "resolved_fetch_url": "https://www.alignmentforum.org/posts/kcKrE9mzEHrdqtDpE/the-case-for-ensuring-that-powerful-ais-are-controlled",
+    "host": "www.alignmentforum.org",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "amodei-machines-of-loving-grace",
+    "relay_path": "articles/Amodei-machines-of-loving-grace.md",
+    "source_url": "https://darioamodei.com/essay/machines-of-loving-grace",
+    "resolved_fetch_url": "https://darioamodei.com/essay/machines-of-loving-grace",
+    "host": "darioamodei.com",
+    "expected_via": "generic",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "kulveit-ai-control-may-increase-existential-risk",
+    "relay_path": "articles/kulveit--ai-control-may-increase-existential-risk.md",
+    "source_url": "https://www.alignmentforum.org/posts/rZcyemEpBHgb2hqLP/ai-control-may-increase-existential-risk",
+    "resolved_fetch_url": "https://www.alignmentforum.org/posts/rZcyemEpBHgb2hqLP/ai-control-may-increase-existential-risk",
+    "host": "www.alignmentforum.org",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "wentworth-the-case-against-ai-control-research",
+    "relay_path": "articles/wentworth--the-case-against-ai-control-research.md",
+    "source_url": "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "altair-agent-foundations-not-really-math-not-really-science",
+    "relay_path": "articles/altair-agent-foundations-not-really-math-not-really-science.md",
+    "source_url": "https://www.lesswrong.com/posts/Dt4DuCCok3Xv5HEnG/agent-foundations-not-really-math-not-really-science",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/Dt4DuCCok3Xv5HEnG/agent-foundations-not-really-math-not-really-science",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "garrabrant-demski-embedded-agency",
+    "relay_path": "articles/garrabrant+demski--embedded-agency.md",
+    "source_url": "https://www.lesswrong.com/posts/i3BTagvt3HbPMx6PN/embedded-agency-full-text-version",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/i3BTagvt3HbPMx6PN/embedded-agency-full-text-version",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "ngo-realism-about-rationality",
+    "relay_path": "articles/ngo--realism-about-rationality.md",
+    "source_url": "https://www.alignmentforum.org/posts/suxvE2ddnYMPJN9HD/realism-about-rationality",
+    "resolved_fetch_url": "https://www.alignmentforum.org/posts/suxvE2ddnYMPJN9HD/realism-about-rationality",
+    "host": "www.alignmentforum.org",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  },
+  {
+    "slug": "bogoed-the-world-keeps-getting-saved",
+    "relay_path": "articles/Bogoed-the-world-keeps-getting-saved.md",
+    "source_url": "https://www.lesswrong.com/posts/qnvmZCjzspceWdgjC/the-world-keeps-getting-saved-and-you-don-t-notice",
+    "resolved_fetch_url": "https://www.lesswrong.com/posts/qnvmZCjzspceWdgjC/the-world-keeps-getting-saved-and-you-don-t-notice",
+    "host": "www.lesswrong.com",
+    "expected_via": "forum-adapter",
+    "needs_body_markdown": false,
+    "status": "ok"
+  }
+]
