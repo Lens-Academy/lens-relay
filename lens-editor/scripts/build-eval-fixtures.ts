@@ -1,11 +1,14 @@
 /**
  * Freeze each manifest entry into a hermetic fixture. Live network + relay
- * cache. Usage: npx tsx scripts/build-eval-fixtures.ts [--only <slug>]
+ * cache. Usage: npx tsx scripts/build-eval-fixtures.ts [--only <slug>] [--force]
+ *
+ * By default an existing fixture is SKIPPED (so hand-curated gold is never
+ * clobbered by a rebuild). Pass --force to regenerate fixtures that exist.
  */
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { readEduDoc, splitFrontmatter, parseFrontmatterAuthor } from "../server/add-article/eval/edu-repo";
-import { writeFixture, readFixture } from "../server/add-article/eval/fixture-io";
+import { writeFixture, readFixture, fixtureDir } from "../server/add-article/eval/fixture-io";
 import { hasCriticMarkup } from "../server/add-article/eval/criticmarkup";
 import { atlasMarkdownUrl } from "../server/add-article/eval/atlas-md-url";
 import { fetchFirstHtml, fetchRenderedHtml, fetchRawHtml } from "../server/add-article/fetch";
@@ -53,10 +56,19 @@ async function build(entry: ManifestEntry) {
   console.log(`✓ ${entry.slug} (${html.length} bytes${bodyMarkdown ? " + md" : ""})${reviewed ? " [reviewed]" : dirtyGold ? " [dirty-gold]" : ""}`);
 }
 
+async function fixtureExists(slug: string): Promise<boolean> {
+  try { await fs.stat(fixtureDir(slug)); return true; } catch { return false; }
+}
+
 async function main() {
   const only = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : null;
+  const force = process.argv.includes("--force");
   const manifest: ManifestEntry[] = JSON.parse(await fs.readFile(MANIFEST, "utf-8"));
   for (const e of manifest.filter((x) => x.status === "ok" && (!only || x.slug === only))) {
+    if (!force && (await fixtureExists(e.slug))) {
+      console.log(`• skip ${e.slug} (fixture exists — pass --force to overwrite)`);
+      continue;
+    }
     try { await build(e); }
     catch (err) { console.error(`✗ ${e.slug}: ${err}`); }
   }
