@@ -3,14 +3,19 @@ import { scoreBody, structureCounts } from "./score";
 
 describe("scoreBody", () => {
   it("recall=1 when output covers all gold lines; precision<1 when output adds lines", () => {
-    const gold = "Line one.\nLine two.\nLine three.";
-    const output = "Line one.\nLine two.\nLine three.\nExtra added line.";
+    const gold =
+      "This is the first sentence of the document.\nHere is the second sentence of the document.\nAnd this is the third sentence of the document.";
+    const output = gold + "\nThis is an extra sentence not present in the gold.";
     const s = scoreBody(output, gold);
     expect(s.recall).toBeCloseTo(1, 5);
     expect(s.precision).toBeLessThan(1);
   });
   it("recall<1 when output drops a gold line", () => {
-    const s = scoreBody("Line one.\nLine three.", "Line one.\nLine two.\nLine three.");
+    const gold =
+      "This is the first sentence of the document.\nHere is the second sentence of the document.\nAnd this is the third sentence of the document.";
+    const output =
+      "This is the first sentence of the document.\nAnd this is the third sentence of the document.";
+    const s = scoreBody(output, gold);
     expect(s.recall).toBeLessThan(1);
   });
 });

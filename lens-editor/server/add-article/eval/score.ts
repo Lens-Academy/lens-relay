@@ -3,7 +3,7 @@ import { jaccard } from "../confidence";
 function shingles(md: string): Set<string> {
   // Trim only for line tokenization; no content is masked (raw compare).
   return new Set(
-    md.split("\n").map((l) => l.trim()).filter((l) => l.length > 0),
+    md.split("\n").map((l) => l.trim()).filter((l) => l.length >= 12),
   );
 }
 
