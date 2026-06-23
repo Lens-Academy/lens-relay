@@ -358,6 +358,34 @@ ${"Compute governance steers AI development through hardware controls. ".repeat(
     expect(ex.body).toContain("We thank Jane Doe and John Roe");
   });
 
+  it("relocates space-inside-bold lead-ins from the .md export so the bold binds", async () => {
+    const md = `# Compute Governance
+
+${"Compute governance steers AI development through hardware controls. ".repeat(8)}
+
+**Are LLMs robust to distributional shifts? **While it is true that AI has not yet achieved maximal robustness, there has been progress.
+
+- **Reflexion. **The Reflexion technique enhances the model.
+
+These are **selection inference** and **chain of thought** methods.`;
+    const ex = await extractArticle(
+      ATLAS(false),
+      "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+      { fetchText: async () => md },
+    );
+    // Inner edge-space relocated OUTSIDE the `**` so the emphasis binds.
+    expect(ex.body).toContain(
+      "**Are LLMs robust to distributional shifts?** While it is true",
+    );
+    expect(ex.body).toContain("- **Reflexion.** The Reflexion technique");
+    // The specific space-inside-bold artifacts are gone (substring checks avoid
+    // false-matching the legitimate `** and **` gap between adjacent spans).
+    expect(ex.body).not.toContain("shifts? **");
+    expect(ex.body).not.toContain("Reflexion. **");
+    // Over-correction guard: legitimate adjacent bold is untouched.
+    expect(ex.body).toContain("**selection inference** and **chain of thought**");
+  });
+
   it("preserves the YouTube iframe when falling back to HTML conversion", async () => {
     const ex = await extractArticle(
       ATLAS(false),
