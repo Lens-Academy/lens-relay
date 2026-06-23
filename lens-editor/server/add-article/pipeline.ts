@@ -7,6 +7,7 @@ import { verifyAndRefine } from "./claude";
 import {
   generateArticleMarkdown,
   generateArticleFilenameBase,
+  articleFilenameCandidates,
 } from "./export";
 import { createRelayDoc, checkRelayDocsExist } from "../add-video/relay-docs";
 import { maybeCreateLens } from "../lens-doc";
@@ -192,21 +193,30 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   }
   job.title = meta.title;
 
-  // 4. Resolve relay path; refuse to overwrite an existing article.
+  // 4. Resolve relay path. The base name (surname-title) can collide across
+  //    DISTINCT pages — e.g. every AI Safety Atlas chapter's "Introduction" — so
+  //    we disambiguate deterministically from the source URL and write to the
+  //    first candidate that doesn't already exist, rather than rejecting a
+  //    genuinely new article. (Interim: true source_url dedup is a relay
+  //    follow-up; until then a re-import of the SAME url under the base name can
+  //    still create one duplicate.)
   const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
   if (!filenameBase) {
     throw new Error(`Could not derive filename from title: ${meta.title}`);
   }
-  const mdPath = `${relayArticleFolder()}/${filenameBase}.md`;
+  const folder = relayArticleFolder();
+  const candidatePaths = articleFilenameCandidates(filenameBase, job.url).map(
+    (b) => `${folder}/${b}.md`,
+  );
+  const existing = await checkRelayDocsExist(candidatePaths);
+  const mdPath = candidatePaths.find((p) => !existing[p]);
+  if (!mdPath) {
+    throw new Error(`Document already exists: ${candidatePaths[0]}`);
+  }
   const editorBase =
     process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
   job.relay_url = `${editorBase}/open/${encodeURI(mdPath)}`;
   job.updated_at = new Date().toISOString();
-
-  const exists = await checkRelayDocsExist([mdPath]);
-  if (exists[mdPath]) {
-    throw new Error(`Document already exists: ${mdPath}`);
-  }
 
   // 5. Write the final article directly.
   const finalMd = generateArticleMarkdown(meta, body, createdDate);

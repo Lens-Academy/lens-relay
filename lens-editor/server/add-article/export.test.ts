@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { generateArticleMarkdown, generateArticleFilenameBase } from "./export";
+import {
+  generateArticleMarkdown,
+  generateArticleFilenameBase,
+  articleFilenameCandidates,
+} from "./export";
 
 describe("generateArticleMarkdown", () => {
   it("collapses control whitespace so a multi-line title can't break the YAML", () => {
@@ -126,5 +130,42 @@ describe("generateArticleFilenameBase", () => {
         "Cascades, Cycles, Insight...",
       ),
     ).toBe("yudkowsky-cascades-cycles-insight");
+  });
+});
+
+describe("articleFilenameCandidates", () => {
+  const atlas = (section: string) =>
+    `https://ai-safety-atlas.com/chapters/v1/${section}/introduction`;
+
+  it("starts with the bare base, then folds in distinguishing URL path segments", () => {
+    const c = articleFilenameCandidates("grey-introduction", atlas("risks"));
+    expect(c[0]).toBe("grey-introduction");
+    expect(c[1]).toBe("grey-introduction-risks");
+    expect(c[2]).toBe("grey-introduction-v1-risks");
+  });
+
+  it("disambiguates the collision the bug hit: same author+title, different chapters", () => {
+    const caps = articleFilenameCandidates("grey-introduction", atlas("capabilities"));
+    const risks = articleFilenameCandidates("grey-introduction", atlas("risks"));
+    expect(caps[0]).toBe(risks[0]); // identical base (the collision)
+    expect(caps[1]).toBe("grey-introduction-capabilities");
+    expect(risks[1]).toBe("grey-introduction-risks");
+    expect(caps[1]).not.toBe(risks[1]); // ...steered to distinct names
+  });
+
+  it("is deterministic — re-importing the same URL yields the same candidate list", () => {
+    expect(articleFilenameCandidates("grey-introduction", atlas("risks"))).toEqual(
+      articleFilenameCandidates("grey-introduction", atlas("risks")),
+    );
+  });
+
+  it("ignores a trailing slash (no empty segment leaks into the suffix)", () => {
+    const c = articleFilenameCandidates("grey-introduction", `${atlas("risks")}/`);
+    expect(c[1]).toBe("grey-introduction-risks");
+  });
+
+  it("falls back to just the base when the URL has no usable path or is malformed", () => {
+    expect(articleFilenameCandidates("foo", "https://example.com")).toEqual(["foo"]);
+    expect(articleFilenameCandidates("foo", "not a url")).toEqual(["foo"]);
   });
 });
