@@ -1735,6 +1735,7 @@ impl Server {
         folder_name: &str,
         in_folder_path: &str,
         data: &[u8],
+        mimetype: &str,
     ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
         // 1. Find folder doc (same logic as create_document)
         let docs = self.docs();
@@ -1832,15 +1833,19 @@ impl Server {
 
             link_indexer::ensure_ancestor_folders(&filemeta, &docs_map, &mut txn, in_folder_path);
 
+            // Images are registered as "image" so clients render them as inline
+            // embeds; other blobs use the generic "file" type.
+            let file_type = if mimetype.starts_with("image/") {
+                "image"
+            } else {
+                "file"
+            };
             let mut map = std::collections::HashMap::new();
             map.insert("id".to_string(), yrs::Any::String(uuid.clone().into()));
-            map.insert("type".to_string(), yrs::Any::String("file".into()));
+            map.insert("type".to_string(), yrs::Any::String(file_type.into()));
             map.insert("version".to_string(), yrs::Any::Number(0.0));
             map.insert("hash".to_string(), yrs::Any::String(hash.clone().into()));
-            map.insert(
-                "mimetype".to_string(),
-                yrs::Any::String("application/json".into()),
-            );
+            map.insert("mimetype".to_string(), yrs::Any::String(mimetype.into()));
             map.insert(
                 "synctime".to_string(),
                 yrs::Any::Number(
@@ -3642,6 +3647,11 @@ impl Server {
             .route("/doc/check", post(handle_check_documents))
             .route("/doc/check-video-ids", post(handle_check_video_ids))
             .route("/doc/check-source-urls", post(handle_check_source_urls))
+            .route(
+                "/doc/attachment",
+                post(handle_upsert_attachment)
+                    .layer(DefaultBodyLimit::max(30 * 1024 * 1024)),
+            )
             .route("/open/*path", get(handle_open_by_path))
             .route("/debug/resolve", get(handle_debug_resolve))
             .route("/suggestions", get(handle_suggestions));
@@ -4590,7 +4600,7 @@ async fn handle_upsert_document(
     if is_blob {
         // JSON files → blob storage (create-only, no updates)
         match server_state
-            .create_blob_file(&body.folder, &path, body.content.as_bytes())
+            .create_blob_file(&body.folder, &path, body.content.as_bytes(), "application/json")
             .await
         {
             Ok(result) => Ok(Json(UpsertDocResponse {
@@ -4916,6 +4926,57 @@ async fn handle_check_source_urls(
     }
 
     Ok(Json(CheckSourceUrlsResponse { found }))
+}
+
+#[derive(Deserialize)]
+struct AttachmentQuery {
+    folder: String,
+    path: String,
+    mimetype: Option<String>,
+}
+
+/// Create a binary attachment (e.g. an image extracted from an imported PDF) as
+/// a relay blob + `filemeta_v0` entry, so markdown can reference it
+/// (`![[/attachments/x.png]]`). Raw bytes in the body; folder/path/mimetype in
+/// the query. Create-only: an existing path is treated as already-hosted.
+async fn handle_upsert_attachment(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Query(query): Query<AttachmentQuery>,
+    body: axum::body::Bytes,
+) -> Result<Json<UpsertDocResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    let path = if query.path.starts_with('/') {
+        query.path.clone()
+    } else {
+        format!("/{}", query.path)
+    };
+    let mimetype = query.mimetype.as_deref().unwrap_or("application/octet-stream");
+
+    match server_state
+        .create_blob_file(&query.folder, &path, &body, mimetype)
+        .await
+    {
+        Ok(result) => Ok(Json(UpsertDocResponse {
+            doc_id: result.full_doc_id,
+            path: format!("{}{}", query.folder, path),
+            created: true,
+        })),
+        // Already hosted at this path — idempotent success.
+        Err(CreateDocumentError::Conflict(_)) => Ok(Json(UpsertDocResponse {
+            doc_id: String::new(),
+            path: format!("{}{}", query.folder, path),
+            created: false,
+        })),
+        Err(CreateDocumentError::NotFound(msg)) => {
+            Err(AppError::new(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
+        }
+        Err(e) => Err(AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            anyhow!("{:?}", e),
+        )),
+    }
 }
 
 async fn new_doc(
