@@ -138,3 +138,39 @@ export async function checkRelayVideoIds(
   const data = (await resp.json()) as { found: Record<string, string | null> };
   return data.found;
 }
+
+/**
+ * Check which source URLs already have an article document on the relay.
+ * Matches the `source_url` frontmatter field (normalized) — the URL-based
+ * duplicate check the add-article importer uses. Returns a map of source_url →
+ * matched relative path (or null if not found).
+ */
+export async function checkRelayArticleUrls(
+  sourceUrls: string[]
+): Promise<Record<string, string | null>> {
+  if (sourceUrls.length === 0) return {};
+
+  const { url, token } = getRelayConfig();
+
+  const relayFolder = process.env.RELAY_ARTICLE_FOLDER || 'Lens Edu/articles';
+  const slashIdx = relayFolder.indexOf('/');
+  const folder = slashIdx !== -1 ? relayFolder.slice(0, slashIdx) : relayFolder;
+  const subfolder = slashIdx !== -1 ? relayFolder.slice(slashIdx + 1) : undefined;
+
+  const resp = await fetch(`${url}/doc/check-source-urls`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ folder, subfolder, source_urls: sourceUrls }),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Relay check-source-urls failed: ${resp.status} ${text}`);
+  }
+
+  const data = (await resp.json()) as { found: Record<string, string | null> };
+  return data.found;
+}

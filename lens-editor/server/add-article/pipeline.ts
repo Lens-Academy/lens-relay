@@ -15,7 +15,11 @@ import {
   generateArticleFilenameBase,
   articleFilenameCandidates,
 } from "./export";
-import { createRelayDoc, checkRelayDocsExist } from "../add-video/relay-docs";
+import {
+  createRelayDoc,
+  checkRelayDocsExist,
+  checkRelayArticleUrls,
+} from "../add-video/relay-docs";
 import { maybeCreateLens } from "../lens-doc";
 
 const WORK_BASE = "/tmp/articles";
@@ -231,26 +235,36 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   }
   job.title = meta.title;
 
-  // 4. Resolve relay path. The base name (surname-title) can collide across
-  //    DISTINCT pages — e.g. every AI Safety Atlas chapter's "Introduction" — so
-  //    we disambiguate deterministically from the source URL and write to the
-  //    first candidate that doesn't already exist, rather than rejecting a
-  //    genuinely new article. (Interim: true source_url dedup is a relay
-  //    follow-up; until then a re-import of the SAME url under the base name can
-  //    still create one duplicate.)
+  // 4. Duplicate detection by SOURCE URL. The real duplicate signal is the
+  //    source_url, not the filename (which is author+title and collides across
+  //    distinct pages). If this URL is already imported — even under a different
+  //    filename — refuse. Degrades gracefully: if the relay check errors, fall
+  //    through to the filename guard below rather than blocking the import.
   const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
   if (!filenameBase) {
     throw new Error(`Could not derive filename from title: ${meta.title}`);
   }
   const folder = relayArticleFolder();
+  let existingByUrl: string | null = null;
+  try {
+    existingByUrl = (await checkRelayArticleUrls([job.url]))[job.url] ?? null;
+  } catch (err) {
+    console.warn(`[add-article] source_url dedup check failed, proceeding: ${err}`);
+  }
+  if (existingByUrl) {
+    throw new Error(
+      `This URL was already imported: ${folder.split("/")[0]}${existingByUrl}`,
+    );
+  }
+
+  // 5. Resolve a unique filename — disambiguating DISTINCT pages that share a
+  //    base name (e.g. each Atlas chapter's "Introduction") — and write it,
+  //    serialized so two concurrent imports can't pick the same name and
+  //    overwrite each other.
   const candidatePaths = articleFilenameCandidates(filenameBase, job.url).map(
     (b) => `${folder}/${b}.md`,
   );
   const finalMd = generateArticleMarkdown(meta, body, createdDate);
-
-  // 5. Pick the first free candidate and write it — serialized so two concurrent
-  //    imports of distinct same-base pages can't select the same name and
-  //    overwrite each other.
   const mdPath = await withArticleWriteLock(async () => {
     const existing = await checkRelayDocsExist(candidatePaths);
     const chosen = candidatePaths.find((p) => !existing[p]);
