@@ -1,6 +1,6 @@
 import { getDocumentProxy, getMeta } from "unpdf";
 import { assessExtraction } from "./confidence";
-import { dateFromUrl } from "./fetch";
+import { dateFromUrl, isValidYmd } from "./fetch";
 import type { ArticleMeta } from "./types";
 import type { ExtractResult } from "./extract";
 
@@ -20,6 +20,7 @@ import type { ExtractResult } from "./extract";
  */
 
 const MAX_PDF_PAGES = 100; // bound CPU/memory on pathological inputs
+const MAX_PDF_TEXT = 4_000_000; // ~4MB of extracted text — guards a decompression bomb
 
 interface PdfTextRun {
   str: string;
@@ -33,40 +34,48 @@ function isTextRun(item: unknown): item is PdfTextRun {
   return typeof it?.str === "string" && Array.isArray(it.transform);
 }
 
-/** Reconstruct one page's text from its positioned glyph runs. */
+/**
+ * Reconstruct one page's text from its positioned glyph runs. Runs are grouped
+ * into lines by baseline, then ordered left-to-right WITHIN each line (PDF
+ * generators can emit runs out of visual order) and joined with gap-based
+ * spaces; a large vertical gap becomes a paragraph break. Known limitation:
+ * multi-column layouts group by baseline across columns, so the columns
+ * interleave (like the scanned-PDF case, accepted for v1).
+ */
 export function pageText(items: unknown[]): string {
-  const lines: string[] = [];
-  let line = "";
-  let prevEndX: number | null = null;
-  let prevY: number | null = null;
+  const runs = items.filter(isTextRun);
+  const lines: { y: number; runs: PdfTextRun[] }[] = [];
   let lineHeight = 10;
-
-  for (const item of items) {
-    if (!isTextRun(item)) continue;
-    const { str } = item;
-    const x = item.transform[4];
-    const y = item.transform[5];
-    const h = item.height || Math.abs(item.transform[3]) || lineHeight;
+  for (const r of runs) {
+    const y = r.transform[5];
+    const h = r.height || Math.abs(r.transform[3]) || lineHeight;
     if (h) lineHeight = h;
-
-    if (prevY === null) {
-      line = str;
-    } else if (Math.abs(y - prevY) > lineHeight * 0.5) {
-      lines.push(line); // baseline moved → new line
-      if (prevY - y > lineHeight * 1.7) lines.push(""); // big drop → paragraph break
-      line = str;
-    } else {
-      const gap = prevEndX === null ? 0 : x - prevEndX;
-      const needsSpace =
-        gap > lineHeight * 0.25 && !line.endsWith(" ") && !str.startsWith(" ");
-      line += (needsSpace ? " " : "") + str;
-    }
-
-    prevEndX = x + (item.width || 0);
-    prevY = y;
+    const last = lines[lines.length - 1];
+    if (last && Math.abs(y - last.y) <= lineHeight * 0.5) last.runs.push(r);
+    else lines.push({ y, runs: [r] });
   }
-  if (line) lines.push(line);
-  return lines.join("\n");
+
+  const out: string[] = [];
+  let prevY: number | null = null;
+  for (const ln of lines) {
+    ln.runs.sort((a, b) => a.transform[4] - b.transform[4]); // visual left-to-right
+    let text = "";
+    let prevEndX: number | null = null;
+    for (const r of ln.runs) {
+      const x = r.transform[4];
+      const needsSpace =
+        prevEndX !== null &&
+        x - prevEndX > lineHeight * 0.25 &&
+        !text.endsWith(" ") &&
+        !r.str.startsWith(" ");
+      text += (needsSpace ? " " : "") + r.str;
+      prevEndX = x + (r.width || 0);
+    }
+    if (prevY !== null && prevY - ln.y > lineHeight * 1.7) out.push(""); // paragraph gap
+    out.push(text);
+    prevY = ln.y;
+  }
+  return out.join("\n");
 }
 
 /** Tidy reconstructed text: collapse intra-line whitespace, drop standalone
@@ -85,7 +94,9 @@ export function cleanPdfText(raw: string): string {
 export function parsePdfDate(value: unknown): string {
   if (typeof value !== "string") return "";
   const m = value.match(/D:(\d{4})(\d{2})(\d{2})/);
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : "";
+  // Validate before formatting — a corrupt CreationDate (e.g. D:20049999) must
+  // not become an invalid unquoted YAML date like "2004-99-99".
+  return m && isValidYmd(m[1], m[2], m[3]) ? `${m[1]}-${m[2]}-${m[3]}` : "";
 }
 
 /** Last URL path segment, de-extensioned and spaced — a last-resort title. */
@@ -109,6 +120,13 @@ export function firstLineTitle(text: string): string {
     if (l.length < 6 || l.length > 200) continue;
     if (!/[a-z]/.test(l)) continue; // skip ALL-CAPS banners
     if (/^(abstract|introduction|contents|table of contents)$/i.test(l)) continue;
+    if (/^by\s/i.test(l)) continue; // byline
+    if (/^(vol\.?|volume|no\.?|issue|journal\b)/i.test(l)) continue; // journal metadata
+    if (
+      /^[A-Z][a-z]+ \d{1,2},? \d{4}$/.test(l) || // "January 15, 2004"
+      /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(l) // "01/15/2004"
+    )
+      continue; // dates
     return l;
   }
   return "";
@@ -118,18 +136,31 @@ export async function extractPdf(
   bytes: ArrayBuffer,
   sourceUrl: string,
 ): Promise<ExtractResult> {
-  const pdf = await getDocumentProxy(new Uint8Array(bytes));
-  const pageCount = Math.min(pdf.numPages, MAX_PDF_PAGES);
-  const pages: string[] = [];
-  for (let i = 1; i <= pageCount; i += 1) {
-    const page = await pdf.getPage(i);
-    const content = await page.getTextContent();
-    pages.push(pageText(content.items));
+  let body: string;
+  let info: Record<string, unknown>;
+  try {
+    // pdf.js takes ownership of (detaches) the passed buffer — callers must not
+    // reuse `bytes` after this.
+    const pdf = await getDocumentProxy(new Uint8Array(bytes));
+    const pageCount = Math.min(pdf.numPages, MAX_PDF_PAGES);
+    const pages: string[] = [];
+    let total = 0;
+    for (let i = 1; i <= pageCount; i += 1) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const text = pageText(content.items);
+      pages.push(text);
+      total += text.length;
+      if (total > MAX_PDF_TEXT) break; // guard a decompression bomb
+    }
+    body = cleanPdfText(pages.join("\n\n"));
+    const meta = await getMeta(pdf).catch(() => null);
+    info = (meta?.info ?? {}) as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      "Could not read this PDF — it may be corrupt, encrypted, or image-only.",
+    );
   }
-  const body = cleanPdfText(pages.join("\n\n"));
-
-  const meta = await getMeta(pdf).catch(() => null);
-  const info = (meta?.info ?? {}) as Record<string, unknown>;
 
   const infoTitle = typeof info.Title === "string" ? info.Title.trim() : "";
   // The pipeline hard-requires a title; fall back through the document text and

@@ -104,10 +104,13 @@ export function articleFilenameCandidates(
   }
   // The trailing segment usually mirrors the title; preceding segments are the
   // distinguishing context (the Atlas chapter section: "risks", "governance", …).
+  // Cap depth and suffix length so a deep URL can't grow a filename past the
+  // ~255-char filesystem/git component limit.
   const context = segments.slice(0, -1);
-  for (let take = 1; take <= context.length; take += 1) {
+  const maxLevels = Math.min(context.length, 3);
+  for (let take = 1; take <= maxLevels; take += 1) {
     const suffix = context.slice(context.length - take).join("-");
-    if (suffix) candidates.push(`${base}-${suffix}`);
+    if (suffix && suffix.length <= 60) candidates.push(`${base}-${suffix}`);
   }
   return candidates;
 }

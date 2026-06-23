@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  extractPdf,
   pageText,
   cleanPdfText,
   parsePdfDate,
@@ -38,6 +39,12 @@ describe("pageText (position-aware reconstruction)", () => {
       "Para one\n\nPara two",
     );
   });
+
+  it("orders runs left-to-right even when emitted out of visual order", () => {
+    expect(pageText([run("World", 200, 100, 50), run("Hello", 0, 100, 50)])).toBe(
+      "Hello World",
+    );
+  });
 });
 
 describe("cleanPdfText", () => {
@@ -56,6 +63,10 @@ describe("parsePdfDate", () => {
     expect(parsePdfDate("2004")).toBe("");
     expect(parsePdfDate(undefined)).toBe("");
     expect(parsePdfDate(20040115)).toBe("");
+  });
+  it("rejects a structurally-invalid Info date (no poisoned unquoted YAML)", () => {
+    expect(parsePdfDate("D:20049999000000")).toBe("");
+    expect(parsePdfDate("D:20040000")).toBe("");
   });
 });
 
@@ -77,5 +88,21 @@ describe("firstLineTitle", () => {
   });
   it("skips a leading 'Abstract' heading", () => {
     expect(firstLineTitle("Abstract\nThe Real Title Here")).toBe("The Real Title Here");
+  });
+  it("skips bylines, journal metadata, and date lines", () => {
+    expect(firstLineTitle("by Jane Doe\nThe Real Title")).toBe("The Real Title");
+    expect(firstLineTitle("Journal of AI Safety, Vol 3\nThe Real Title")).toBe(
+      "The Real Title",
+    );
+    expect(firstLineTitle("January 15, 2004\nThe Real Title")).toBe("The Real Title");
+  });
+});
+
+describe("extractPdf", () => {
+  it("throws a friendly error on unreadable PDF bytes", async () => {
+    const garbage = new TextEncoder().encode("this is plainly not a pdf").buffer;
+    await expect(extractPdf(garbage, "https://example.org/a.pdf")).rejects.toThrow(
+      /Could not read this PDF/,
+    );
   });
 });

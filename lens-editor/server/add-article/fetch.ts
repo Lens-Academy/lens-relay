@@ -72,14 +72,20 @@ export async function fetchRawHtml(url: string): Promise<string> {
 export async function fetchRawBytes(
   url: string,
 ): Promise<{ bytes: ArrayBuffer; contentType: string; finalUrl: string }> {
-  return fetchFollowingRedirects(url, "application/pdf,*/*");
+  // Prefer HTML (most single-candidate URLs are pages) but accept a PDF or
+  // anything else — the caller sniffs the result and branches.
+  return fetchFollowingRedirects(
+    url,
+    "text/html,application/xhtml+xml,application/pdf,*/*",
+  );
 }
 
-/** Detect a PDF by response content type or the leading `%PDF-` magic bytes. */
+/** Detect a PDF by response content type or a `%PDF-` header. Scans the first
+ *  1KB because some files have whitespace/junk before the header. */
 export function looksLikePdf(contentType: string, bytes: ArrayBuffer): boolean {
   if (/application\/pdf/i.test(contentType)) return true;
-  const head = new TextDecoder("latin1").decode(new Uint8Array(bytes).slice(0, 5));
-  return head === "%PDF-";
+  const head = new TextDecoder("latin1").decode(new Uint8Array(bytes).slice(0, 1024));
+  return head.includes("%PDF-");
 }
 
 /**
@@ -206,7 +212,7 @@ function flipCommaName(s: string): string {
 /** True if (year, month, day) strings form a plausible calendar date. Guards
  *  against URL/issue numbers producing structurally-invalid dates like
  *  2020-45-01 (which would land, unquoted, in the YAML frontmatter). */
-function isValidYmd(y: string, mo: string, d: string): boolean {
+export function isValidYmd(y: string, mo: string, d: string): boolean {
   const year = Number(y);
   const month = Number(mo);
   const day = Number(d);

@@ -386,6 +386,20 @@ These are **selection inference** and **chain of thought** methods.`;
     expect(ex.body).toContain("**selection inference** and **chain of thought**");
   });
 
+  it("does not corrupt a ***bold-italic*** run when tidying bold edges", async () => {
+    const md = `# T
+
+${"Body text long enough to clear the adapter minimum length. ".repeat(8)}
+
+This point is ***very important*** to note.`;
+    const ex = await extractArticle(
+      ATLAS(false),
+      "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+      { fetchText: async () => md },
+    );
+    expect(ex.body).toContain("***very important***");
+  });
+
   it("preserves the YouTube iframe when falling back to HTML conversion", async () => {
     const ex = await extractArticle(
       ATLAS(false),

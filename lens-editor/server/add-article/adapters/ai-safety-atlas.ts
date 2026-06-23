@@ -105,7 +105,9 @@ function mediaEmbeds(doc: Document): Map<string, MediaEmbed> {
  * `** **` is left alone).
  */
 function tidyStrongEdges(md: string): string {
-  return md.replace(/\*\*(?!\*)([^*][\s\S]*?)\*\*/g, (full: string, captured: string) => {
+  // The leading (?<!\*) and trailing (?!\*) keep a `***bold italic***` run from
+  // being sliced into corruption — only standalone `**…**` spans are touched.
+  return md.replace(/(?<!\*)\*\*(?!\*)([^*][\s\S]*?)\*\*(?!\*)/g, (full: string, captured: string) => {
     let inner = captured;
     let lead = "";
     let trail = "";

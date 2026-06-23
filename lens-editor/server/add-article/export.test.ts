@@ -168,4 +168,21 @@ describe("articleFilenameCandidates", () => {
     expect(articleFilenameCandidates("foo", "https://example.com")).toEqual(["foo"]);
     expect(articleFilenameCandidates("foo", "not a url")).toEqual(["foo"]);
   });
+
+  it("falls back to base when a path segment has a malformed %-escape", () => {
+    // decodeURIComponent throws on "%E0%A4%A"; the catch returns [base].
+    expect(articleFilenameCandidates("foo", "https://x.org/a/%E0%A4%A/b")).toEqual([
+      "foo",
+    ]);
+  });
+
+  it("bounds candidate count and length on a deep URL", () => {
+    const deep =
+      "https://x.org/" +
+      Array.from({ length: 12 }, (_, i) => `seg${i}aaaaaaaaaa`).join("/") +
+      "/title";
+    const c = articleFilenameCandidates("author-title", deep);
+    expect(c.length).toBeLessThanOrEqual(4); // base + up to 3 URL-context levels
+    for (const name of c) expect(name.length).toBeLessThanOrEqual(160);
+  });
 });

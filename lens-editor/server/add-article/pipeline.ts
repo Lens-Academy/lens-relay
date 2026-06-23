@@ -43,6 +43,21 @@ function relayArticleFolder(): string {
   return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
 }
 
+// Serializes the resolve-filename → write step across concurrently-running jobs
+// (the queue fires jobs in parallel). Without it, two distinct pages that share
+// a filename base could both see the same candidate free and overwrite each
+// other (the relay upsert replaces on conflict). Process-local; cross-process
+// safety would need a relay create-only upsert (deferred to the relay PR).
+let articleWriteChain: Promise<unknown> = Promise.resolve();
+function withArticleWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = articleWriteChain.then(fn, fn);
+  articleWriteChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 /**
  * Readable publisher from a URL host, e.g. "https://bluedot.org/x" → "Bluedot".
  * Uses the registrable label (the part before the public suffix) rather than the
@@ -231,19 +246,24 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   const candidatePaths = articleFilenameCandidates(filenameBase, job.url).map(
     (b) => `${folder}/${b}.md`,
   );
-  const existing = await checkRelayDocsExist(candidatePaths);
-  const mdPath = candidatePaths.find((p) => !existing[p]);
-  if (!mdPath) {
-    throw new Error(`Document already exists: ${candidatePaths[0]}`);
-  }
+  const finalMd = generateArticleMarkdown(meta, body, createdDate);
+
+  // 5. Pick the first free candidate and write it — serialized so two concurrent
+  //    imports of distinct same-base pages can't select the same name and
+  //    overwrite each other.
+  const mdPath = await withArticleWriteLock(async () => {
+    const existing = await checkRelayDocsExist(candidatePaths);
+    const chosen = candidatePaths.find((p) => !existing[p]);
+    if (!chosen) {
+      throw new Error(`Document already exists: ${candidatePaths[0]}`);
+    }
+    await createRelayDoc(chosen, finalMd);
+    return chosen;
+  });
   const editorBase =
     process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
   job.relay_url = `${editorBase}/open/${encodeURI(mdPath)}`;
   job.updated_at = new Date().toISOString();
-
-  // 5. Write the final article directly.
-  const finalMd = generateArticleMarkdown(meta, body, createdDate);
-  await createRelayDoc(mdPath, finalMd);
   console.log(
     `[add-article] Wrote ${mdPath} (via ${ex.via}, ${body.length} chars)`,
   );
