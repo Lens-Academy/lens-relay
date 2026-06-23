@@ -1,6 +1,7 @@
 import { getDocumentProxy, getMeta } from "unpdf";
 import { assessExtraction } from "./confidence";
 import { dateFromUrl, isValidYmd } from "./fetch";
+import { extractPageImages, type PdfPageImage } from "./pdf-images";
 import type { ArticleMeta } from "./types";
 import type { ExtractResult } from "./extract";
 
@@ -34,15 +35,24 @@ function isTextRun(item: unknown): item is PdfTextRun {
   return typeof it?.str === "string" && Array.isArray(it.transform);
 }
 
+interface PageBlock {
+  /** Distance from the top of the page (smaller = higher up). */
+  yTop: number;
+  text: string;
+  isImage?: boolean;
+}
+
 /**
- * Reconstruct one page's text from its positioned glyph runs. Runs are grouped
- * into lines by baseline, then ordered left-to-right WITHIN each line (PDF
- * generators can emit runs out of visual order) and joined with gap-based
- * spaces; a large vertical gap becomes a paragraph break. Known limitation:
- * multi-column layouts group by baseline across columns, so the columns
- * interleave (like the scanned-PDF case, accepted for v1).
+ * Group a page's glyph runs into visual lines (x-ordered, gap-spaced), each with
+ * its distance from the page top. `vpHeight` maps PDF baselines (measured from
+ * the bottom) to top-down `yTop`; pass 0 when only relative order matters.
+ * Known limitation: multi-column layouts group by baseline across columns, so
+ * columns interleave.
  */
-export function pageText(items: unknown[]): string {
+function renderTextBlocks(
+  items: unknown[],
+  vpHeight: number,
+): { blocks: PageBlock[]; lineHeight: number } {
   const runs = items.filter(isTextRun);
   const lines: { y: number; runs: PdfTextRun[] }[] = [];
   let lineHeight = 10;
@@ -54,10 +64,7 @@ export function pageText(items: unknown[]): string {
     if (last && Math.abs(y - last.y) <= lineHeight * 0.5) last.runs.push(r);
     else lines.push({ y, runs: [r] });
   }
-
-  const out: string[] = [];
-  let prevY: number | null = null;
-  for (const ln of lines) {
+  const blocks: PageBlock[] = lines.map((ln) => {
     ln.runs.sort((a, b) => a.transform[4] - b.transform[4]); // visual left-to-right
     let text = "";
     let prevEndX: number | null = null;
@@ -71,11 +78,36 @@ export function pageText(items: unknown[]): string {
       text += (needsSpace ? " " : "") + r.str;
       prevEndX = x + (r.width || 0);
     }
-    if (prevY !== null && prevY - ln.y > lineHeight * 1.7) out.push(""); // paragraph gap
-    out.push(text);
-    prevY = ln.y;
+    return { yTop: vpHeight - ln.y, text };
+  });
+  return { blocks, lineHeight };
+}
+
+/** Join positioned blocks top-to-bottom, inserting a blank line on a large
+ *  vertical gap (paragraph break) and around image blocks. */
+function joinBlocks(blocks: PageBlock[], lineHeight: number): string {
+  const sorted = [...blocks].sort((a, b) => a.yTop - b.yTop);
+  const out: string[] = [];
+  let prevYTop: number | null = null;
+  let prevImage = false;
+  for (const b of sorted) {
+    if (
+      prevYTop !== null &&
+      (b.isImage || prevImage || b.yTop - prevYTop > lineHeight * 1.7)
+    ) {
+      out.push(""); // paragraph gap, or separation around an image
+    }
+    out.push(b.text);
+    prevYTop = b.yTop;
+    prevImage = !!b.isImage;
   }
   return out.join("\n");
+}
+
+/** Reconstruct one page's text from its positioned glyph runs (text only). */
+export function pageText(items: unknown[]): string {
+  const { blocks, lineHeight } = renderTextBlocks(items, 0);
+  return joinBlocks(blocks, lineHeight);
 }
 
 /** Tidy reconstructed text: collapse intra-line whitespace, drop standalone
@@ -138,6 +170,7 @@ export async function extractPdf(
 ): Promise<ExtractResult> {
   let body: string;
   let info: Record<string, unknown>;
+  const images: PdfPageImage[] = [];
   try {
     // pdf.js takes ownership of (detaches) the passed buffer — callers must not
     // reuse `bytes` after this.
@@ -147,10 +180,22 @@ export async function extractPdf(
     let total = 0;
     for (let i = 1; i <= pageCount; i += 1) {
       const page = await pdf.getPage(i);
+      const vpHeight = page.getViewport({ scale: 1 }).height;
       const content = await page.getTextContent();
-      const text = pageText(content.items);
-      pages.push(text);
-      total += text.length;
+      const { blocks, lineHeight } = renderTextBlocks(content.items, vpHeight);
+      // Pull the page's figures and interleave a placeholder at each one's
+      // position; the pipeline uploads them and swaps in the real embed.
+      for (const img of await extractPageImages(pdf, i).catch(() => [])) {
+        blocks.push({
+          yTop: img.yTop,
+          text: `![[__pdfimg_${images.length}__]]`,
+          isImage: true,
+        });
+        images.push(img);
+      }
+      const pageStr = joinBlocks(blocks, lineHeight);
+      pages.push(pageStr);
+      total += pageStr.length;
       if (total > MAX_PDF_TEXT) break; // guard a decompression bomb
     }
     body = cleanPdfText(pages.join("\n\n"));
@@ -200,5 +245,36 @@ export async function extractPdf(
     via: "pdf",
     linkedOut: false,
     assessment,
+    images,
   };
+}
+
+/**
+ * Replace the `![[__pdfimg_N__]]` placeholders in a PDF-extracted body with real
+ * attachment embeds, uploading each image first. Images that fail to upload are
+ * dropped (the surrounding text stays). Returns the rewritten body.
+ */
+export async function embedPdfImages(
+  body: string,
+  images: PdfPageImage[],
+  slugBase: string,
+  upload: (inFolderPath: string, png: Buffer, mimetype: string) => Promise<void>,
+): Promise<string> {
+  let out = body;
+  for (let i = 0; i < images.length; i += 1) {
+    const placeholder = `![[__pdfimg_${i}__]]`;
+    if (!out.includes(placeholder)) continue;
+    const inFolderPath = `/attachments/${slugBase}-fig${i + 1}.png`;
+    try {
+      await upload(inFolderPath, images[i].png, "image/png");
+      out = out.split(placeholder).join(`![[${inFolderPath}]]`);
+    } catch {
+      out = out.split(placeholder).join(""); // drop the figure, keep the text
+    }
+  }
+  // Strip any unreplaced placeholders and tidy resulting blank-line runs.
+  return out
+    .replace(/!\[\[__pdfimg_\d+__\]\]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }

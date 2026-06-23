@@ -15,6 +15,7 @@ import {
   videoEmbedIframe,
 } from "./adapters/util";
 import type { ArticleMeta } from "./types";
+import type { PdfPageImage } from "./pdf-images";
 
 /**
  * Deterministic article extraction + HTML→Markdown conversion. Replaces the
@@ -43,6 +44,9 @@ export interface ExtractResult {
   linkedOut: boolean;
   /** Deterministic extraction-quality assessment (confidence + signals + flags). */
   assessment: Assessment;
+  /** PDF figure images (PDF path only) — uploaded + embedded by the pipeline,
+   *  replacing `![[__pdfimg_N__]]` placeholders in the body. */
+  images?: PdfPageImage[];
 }
 
 // A post is treated as a "link-out" when the body is short AND points at an

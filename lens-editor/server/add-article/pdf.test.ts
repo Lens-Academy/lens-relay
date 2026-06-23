@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   extractPdf,
+  embedPdfImages,
   pageText,
   cleanPdfText,
   parsePdfDate,
   filenameTitle,
   firstLineTitle,
 } from "./pdf";
+import type { PdfPageImage } from "./pdf-images";
 
 // A positioned glyph run, as pdf.js emits in page.getTextContent().items.
 const run = (str: string, x: number, y: number, width: number, height = 10) => ({
@@ -104,5 +106,40 @@ describe("extractPdf", () => {
     await expect(extractPdf(garbage, "https://example.org/a.pdf")).rejects.toThrow(
       /Could not read this PDF/,
     );
+  });
+});
+
+describe("embedPdfImages", () => {
+  const img = (n: number): PdfPageImage => ({
+    png: Buffer.from(`png-${n}`),
+    yTop: 0,
+    width: 1,
+    height: 1,
+  });
+
+  it("uploads each image and swaps placeholders for attachment embeds", async () => {
+    const body = "Intro.\n\n![[__pdfimg_0__]]\n\nMiddle.\n\n![[__pdfimg_1__]]\n\nEnd.";
+    const uploads: { path: string; bytes: Buffer }[] = [];
+    const out = await embedPdfImages(body, [img(0), img(1)], "grey-x", async (p, png) => {
+      uploads.push({ path: p, bytes: png });
+    });
+    expect(out).toContain("![[/attachments/grey-x-fig1.png]]");
+    expect(out).toContain("![[/attachments/grey-x-fig2.png]]");
+    expect(out).not.toMatch(/__pdfimg_/);
+    expect(uploads.map((u) => u.path)).toEqual([
+      "/attachments/grey-x-fig1.png",
+      "/attachments/grey-x-fig2.png",
+    ]);
+    expect(uploads[0].bytes.toString()).toBe("png-0");
+  });
+
+  it("drops a figure whose upload fails, keeping the surrounding text", async () => {
+    const body = "Before.\n\n![[__pdfimg_0__]]\n\nAfter.";
+    const out = await embedPdfImages(body, [img(0)], "x", async () => {
+      throw new Error("upload failed");
+    });
+    expect(out).not.toMatch(/__pdfimg_|attachments/);
+    expect(out).toContain("Before.");
+    expect(out).toContain("After.");
   });
 });

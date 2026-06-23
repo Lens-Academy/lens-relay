@@ -174,3 +174,34 @@ export async function checkRelayArticleUrls(
   const data = (await resp.json()) as { found: Record<string, string | null> };
   return data.found;
 }
+
+/**
+ * Upload a binary attachment (e.g. a figure image extracted from a PDF) to the
+ * relay and register it as a `filemeta_v0` "image" entry, so markdown can embed
+ * it via `![[/attachments/x.png]]`. `folder` is the relay folder's top segment
+ * (e.g. "Lens Edu"); `inFolderPath` is the path within it (e.g.
+ * "/attachments/x.png"). Create-only: an existing path is a no-op success.
+ */
+export async function createRelayAttachment(
+  folder: string,
+  inFolderPath: string,
+  data: Uint8Array,
+  mimetype: string
+): Promise<void> {
+  const { url, token } = getRelayConfig();
+  const qs = new URLSearchParams({ folder, path: inFolderPath, mimetype });
+
+  const resp = await fetch(`${url}/doc/attachment?${qs.toString()}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': mimetype,
+      Authorization: `Bearer ${token}`,
+    },
+    body: data,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Relay attachment upload failed: ${resp.status} ${text}`);
+  }
+}

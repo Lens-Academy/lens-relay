@@ -7,7 +7,7 @@ import {
   looksLikePdf,
 } from "./fetch";
 import { extractArticle } from "./extract";
-import { extractPdf } from "./pdf";
+import { extractPdf, embedPdfImages } from "./pdf";
 import { adapterContext, resolveFetchUrls } from "./adapters";
 import { verifyAndRefine } from "./claude";
 import {
@@ -19,6 +19,7 @@ import {
   createRelayDoc,
   checkRelayDocsExist,
   checkRelayArticleUrls,
+  createRelayAttachment,
 } from "../add-video/relay-docs";
 import { maybeCreateLens } from "../lens-doc";
 
@@ -254,6 +255,16 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   if (existingByUrl) {
     throw new Error(
       `This URL was already imported: ${folder.split("/")[0]}${existingByUrl}`,
+    );
+  }
+
+  // 4.5. Host + embed any PDF figure images: upload each to the folder's
+  //      /attachments/ and replace its placeholder with the embed. Images that
+  //      fail to upload are dropped (the text stays); never fails the import.
+  if (ex.images?.length) {
+    const topFolder = folder.split("/")[0];
+    body = await embedPdfImages(body, ex.images, filenameBase, (p, png, mime) =>
+      createRelayAttachment(topFolder, p, png, mime),
     );
   }
 
