@@ -10,19 +10,23 @@ const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /**
- * Fetch the raw HTML of an article page. Throws on non-OK or oversized
- * responses. Redirects are followed manually so the SSRF guard re-runs on
- * every hop — `redirect: 'follow'` would let an allowed page bounce to an
- * internal host without re-validation.
+ * Follow redirects manually (re-validating the SSRF guard on every hop —
+ * `redirect: 'follow'` would let an allowed page bounce to an internal host
+ * without re-validation) and return the final response's raw bytes + content
+ * type. Shared by the HTML and PDF fetchers. Throws on non-OK or oversized
+ * responses.
  */
-export async function fetchRawHtml(url: string): Promise<string> {
+async function fetchFollowingRedirects(
+  url: string,
+  accept: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string; finalUrl: string }> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     await assertPublicUrl(current);
     const resp = await fetch(current, {
       headers: {
         "User-Agent": BROWSER_UA,
-        Accept: "text/html,application/xhtml+xml",
+        Accept: accept,
         "Accept-Language": "en-US,en;q=0.9",
       },
       redirect: "manual",
@@ -41,13 +45,41 @@ export async function fetchRawHtml(url: string): Promise<string> {
     if (!resp.ok) {
       throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
     }
-    const buf = await resp.arrayBuffer();
-    if (buf.byteLength > MAX_HTML_BYTES) {
-      throw new Error(`Page too large: ${buf.byteLength} bytes`);
+    const bytes = await resp.arrayBuffer();
+    if (bytes.byteLength > MAX_HTML_BYTES) {
+      throw new Error(`Page too large: ${bytes.byteLength} bytes`);
     }
-    return new TextDecoder("utf-8").decode(buf);
+    return {
+      bytes,
+      contentType: resp.headers.get("content-type") || "",
+      finalUrl: current,
+    };
   }
   throw new Error(`Too many redirects (>${MAX_REDIRECTS}) for ${url}`);
+}
+
+/** Fetch the raw HTML of an article page. */
+export async function fetchRawHtml(url: string): Promise<string> {
+  const { bytes } = await fetchFollowingRedirects(
+    url,
+    "text/html,application/xhtml+xml",
+  );
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+/** Fetch raw bytes + content type for a binary resource (e.g. a PDF), using the
+ *  same SSRF/redirect/size guards as fetchRawHtml. */
+export async function fetchRawBytes(
+  url: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string; finalUrl: string }> {
+  return fetchFollowingRedirects(url, "application/pdf,*/*");
+}
+
+/** Detect a PDF by response content type or the leading `%PDF-` magic bytes. */
+export function looksLikePdf(contentType: string, bytes: ArrayBuffer): boolean {
+  if (/application\/pdf/i.test(contentType)) return true;
+  const head = new TextDecoder("latin1").decode(new Uint8Array(bytes).slice(0, 5));
+  return head === "%PDF-";
 }
 
 /**

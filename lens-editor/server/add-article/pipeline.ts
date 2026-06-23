@@ -1,7 +1,13 @@
 import * as path from "node:path";
 import type { ArticleJob, ArticleMeta } from "./types";
-import { fetchFirstHtml, fetchRenderedHtml } from "./fetch";
+import {
+  fetchFirstHtml,
+  fetchRenderedHtml,
+  fetchRawBytes,
+  looksLikePdf,
+} from "./fetch";
 import { extractArticle } from "./extract";
+import { extractPdf } from "./pdf";
 import { adapterContext, resolveFetchUrls } from "./adapters";
 import { verifyAndRefine } from "./claude";
 import {
@@ -94,10 +100,25 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   //    full text); we still cite the original URL as source_url.
   let ex: Awaited<ReturnType<typeof extractArticle>> | null = null;
   let rawErr: unknown = null;
+  let detectedPdf = false;
   try {
     const candidates = resolveFetchUrls(adapterContext(job.url, ""));
-    const { html, url: fetchedFrom } = await fetchFirstHtml(candidates);
-    ex = await extractArticle(html, fetchedFrom, { sourceUrl: job.url });
+    if (candidates.length === 1) {
+      // Single candidate (no multi-source adapter): fetch bytes once so we can
+      // detect a PDF; non-PDF bytes decode to HTML with no second fetch.
+      const { bytes, contentType, finalUrl } = await fetchRawBytes(candidates[0]);
+      if (looksLikePdf(contentType, bytes)) {
+        detectedPdf = true;
+        ex = await extractPdf(bytes, job.url);
+      } else {
+        const html = new TextDecoder("utf-8").decode(bytes);
+        ex = await extractArticle(html, finalUrl, { sourceUrl: job.url });
+      }
+    } else {
+      // Multiple HTML candidates (e.g. arXiv html → ar5iv) — never PDFs.
+      const { html, url: fetchedFrom } = await fetchFirstHtml(candidates);
+      ex = await extractArticle(html, fetchedFrom, { sourceUrl: job.url });
+    }
   } catch (err) {
     rawErr = err;
     console.warn(`[add-article] Raw fetch/extract failed: ${err}`);
@@ -108,8 +129,10 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   //    network, so it also clears some bot-blocks. Skipped for link-outs (a
   //    short body that points elsewhere won't grow when rendered). Keep whichever
   //    extraction captured more.
+  // Skip the render tier for PDFs — Jina would just re-fetch the binary.
   const needsRender =
-    !ex || (!ex.linkedOut && ex.body.length < RENDER_ESCALATE_CHARS);
+    !detectedPdf &&
+    (!ex || (!ex.linkedOut && ex.body.length < RENDER_ESCALATE_CHARS));
   if (needsRender) {
     try {
       const rendered = await fetchRenderedHtml(job.url);
