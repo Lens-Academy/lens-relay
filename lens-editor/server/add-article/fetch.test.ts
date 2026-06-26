@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { extractHtmlMeta, dateFromUrl } from "./fetch";
+import { extractHtmlMeta, dateFromUrl, looksLikePdf } from "./fetch";
+
+const buf = (s: string): ArrayBuffer => new TextEncoder().encode(s).buffer;
 
 describe("dateFromUrl", () => {
   it("extracts a real date embedded in the URL path", () => {
@@ -96,5 +98,20 @@ describe("extractHtmlMeta", () => {
   it("decodes HTML entities in extracted values", () => {
     const html = `<meta property="og:title" content="Tom &amp; Jerry&#39;s Guide" />`;
     expect(extractHtmlMeta(html).title).toBe("Tom & Jerry's Guide");
+  });
+});
+
+describe("looksLikePdf", () => {
+  it("detects via content-type", () => {
+    expect(looksLikePdf("application/pdf", buf("anything"))).toBe(true);
+    expect(looksLikePdf("application/pdf; charset=binary", buf("x"))).toBe(true);
+  });
+  it("detects the %PDF- header, including a few junk bytes before it", () => {
+    expect(looksLikePdf("", buf("%PDF-1.7\n…"))).toBe(true);
+    expect(looksLikePdf("application/octet-stream", buf("\n\n %PDF-1.4"))).toBe(true);
+  });
+  it("is false for HTML / non-PDF content", () => {
+    expect(looksLikePdf("text/html", buf("<!doctype html><html>…"))).toBe(false);
+    expect(looksLikePdf("", buf("Just some text"))).toBe(false);
   });
 });
