@@ -8,10 +8,63 @@ import { processVideo } from './add-video/pipeline.ts';
 import { createAddArticleRoutes } from './add-article/routes.ts';
 import { ArticleJobQueue } from './add-article/queue.ts';
 import { processArticle } from './add-article/pipeline.ts';
+import { loadPromotionConfig, promotionConfigReady } from './promotion/config.ts';
+import { createGitPromotionService } from './promotion/git.ts';
+import { createGitHubPromotionService } from './promotion/github.ts';
+import { validatePromotionPaths } from './promotion/path-validation.ts';
+import { createPromotionRoutes, type PromotionRouteService } from './promotion/routes.ts';
+import type {
+  PromotionChangesResponse,
+  PromotionPrResponse,
+} from './promotion/types.ts';
 
 export interface AppConfig {
   relayUrl: string;
   relayServerToken?: string;
+}
+
+interface PromotionGitService {
+  getChanges(): Promise<PromotionChangesResponse>;
+  getStatus(path: string): Promise<unknown>;
+  getDiff(path: string): Promise<unknown>;
+  createPromotionBranch(input: { paths: string[] }): Promise<{
+    branch: string;
+    mainSha: string;
+    sourceStagingSha: string;
+  }>;
+}
+
+interface PromotionGitHubService {
+  createPullRequest(input: {
+    branch: string;
+    mainSha: string;
+    sourceStagingSha: string;
+    paths: string[];
+    title?: string;
+  }): Promise<PromotionPrResponse>;
+}
+
+export function createPromotionRouteService(
+  gitPromotion: PromotionGitService,
+  githubPromotion: PromotionGitHubService,
+): PromotionRouteService {
+  return {
+    getChanges: () => gitPromotion.getChanges(),
+    getStatus: path => gitPromotion.getStatus(path),
+    getDiff: path => gitPromotion.getDiff(path),
+    async createPromotionPr(input) {
+      const changes = await gitPromotion.getChanges();
+      const paths = validatePromotionPaths(input.paths, changes.files);
+      const branch = await gitPromotion.createPromotionBranch({ paths });
+      return githubPromotion.createPullRequest({
+        branch: branch.branch,
+        mainSha: branch.mainSha,
+        sourceStagingSha: branch.sourceStagingSha,
+        paths,
+        ...(input.title !== undefined ? { title: input.title } : {}),
+      });
+    },
+  };
 }
 
 /**
@@ -89,6 +142,17 @@ export function createApp(config: AppConfig): Hono {
       return c.text(`Upload failed: ${err}`, 502);
     }
   });
+
+  const promotionConfig = loadPromotionConfig();
+  if (!promotionConfig.enabled) {
+    app.all('/api/promotion/*', c => c.json({ error: 'Promotion is disabled' }, 404));
+  } else if (!promotionConfigReady(promotionConfig)) {
+    app.all('/api/promotion/*', c => c.json({ error: 'Promotion is enabled but not fully configured' }, 503));
+  } else {
+    const gitPromotion = createGitPromotionService(promotionConfig);
+    const githubPromotion = createGitHubPromotionService(promotionConfig);
+    app.route('/api/promotion', createPromotionRoutes(createPromotionRouteService(gitPromotion, githubPromotion)));
+  }
 
   // Static files from Vite build output
   app.use('/*', serveStatic({ root: './dist' }));
