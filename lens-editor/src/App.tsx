@@ -22,7 +22,7 @@ import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
 import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { MultiDocSectionEditor } from './components/SectionEditor';
-import { useDocConnection } from './hooks/useDocConnection';
+import { useDocConnection, waitForProviderSynced } from './hooks/useDocConnection';
 import { applySuggestionAction } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
@@ -373,8 +373,9 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
   useEffect(() => disconnectAll, [disconnectAll]);
 
   const handleAction = async (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => {
-    const { doc } = await getOrConnect(docId);
+    const { doc, provider } = await getOrConnect(docId);
     applySuggestionAction(doc, suggestion, action);
+    await waitForProviderSynced(provider);
   };
 
   return (
