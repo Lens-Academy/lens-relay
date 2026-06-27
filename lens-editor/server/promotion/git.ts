@@ -16,6 +16,7 @@ import {
 
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_KILL_AFTER_TIMEOUT_MS = 1_000;
+const PROMOTION_REPO_OWNER_KEY = 'lens-editor.promotionRepoOwner';
 const gitQueuesByRepoDir = new Map<string, Promise<void>>();
 
 interface BranchHeads {
@@ -136,10 +137,12 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
         throw new PromotionError(500, 'Promotion repository is not a Git checkout', 'invalid_repo');
       }
       await verifyOriginRemote();
+      await verifyPromotionRepoOwner();
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
       await fs.mkdir(path.dirname(config.repoDir), { recursive: true });
       await spawnFile('git', ['clone', config.repoUrl, config.repoDir], { cwd: path.dirname(config.repoDir) });
+      await markPromotionRepoOwner();
     }
 
     await git(['config', 'user.email', 'lens-editor-promotion@example.invalid']);
@@ -160,6 +163,25 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
       if (error instanceof PromotionError && error.code === 'invalid_repo_origin') throw error;
       throw new PromotionError(500, 'Promotion repository origin is not configured', 'invalid_repo_origin');
     }
+  }
+
+  async function markPromotionRepoOwner(): Promise<void> {
+    await git(['config', PROMOTION_REPO_OWNER_KEY, 'true']);
+  }
+
+  async function verifyPromotionRepoOwner(): Promise<void> {
+    try {
+      const owner = await git(['config', '--get', PROMOTION_REPO_OWNER_KEY]);
+      if (owner === 'true') return;
+    } catch {
+      // Fall through to a promotion-specific error so unsafe existing checkouts fail closed.
+    }
+
+    throw new PromotionError(
+      500,
+      'Promotion repository is not owned by the Lens Editor promotion service',
+      'invalid_repo_owner',
+    );
   }
 
   async function fetchBranches(): Promise<BranchHeads> {

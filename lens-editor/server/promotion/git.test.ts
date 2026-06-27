@@ -341,6 +341,23 @@ describe('git promotion service', () => {
     await expect(runGit(fixture.repoDir, ['branch', '--show-current'])).resolves.toBe(initialBranch);
   });
 
+  it('rejects an unowned existing checkout with the same origin before destructive promotion commands', async () => {
+    const fixture = await createFixture();
+    await runGit(fixture.root, ['clone', fixture.remoteDir, fixture.repoDir]);
+    const sentinelPath = path.join(fixture.repoDir, 'sentinel.tmp');
+    await fs.writeFile(sentinelPath, 'must survive clean\n');
+    const initialBranch = await runGit(fixture.repoDir, ['branch', '--show-current']);
+    const service = createGitPromotionService(fixture.config);
+
+    await expect(service.createPromotionBranch({ paths: ['modified.md'] })).rejects.toMatchObject({
+      status: 500,
+      code: 'invalid_repo_owner',
+    });
+
+    await expect(fs.readFile(sentinelPath, 'utf8')).resolves.toBe('must survive clean\n');
+    await expect(runGit(fixture.repoDir, ['branch', '--show-current'])).resolves.toBe(initialBranch);
+  });
+
   it('serializes operations across service instances sharing the same repoDir', async () => {
     const fixture = await createFixture();
     const serviceA = createGitPromotionService(fixture.config);

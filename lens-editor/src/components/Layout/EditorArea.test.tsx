@@ -13,6 +13,13 @@ import { getPromotionStatus } from '../../lib/promotion-api';
 
 const mocks = vi.hoisted(() => ({
   metadata: null as null | Record<string, { id: string; type: 'markdown'; version: number }>,
+  auth: {
+    canWrite: true,
+    canEdit: true,
+    role: 'edit' as const,
+    folderUuid: null as string | null,
+    isAllFolders: true,
+  },
 }));
 
 const renderWithProviders = (ui: React.ReactElement) =>
@@ -48,7 +55,7 @@ vi.mock('../DocumentTitle', () => ({
 
 // Mock AuthContext used by EditorArea
 vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ canWrite: true, canEdit: true, role: 'editor' }),
+  useAuth: () => mocks.auth,
 }));
 
 vi.mock('../../lib/promotion-api', () => ({
@@ -99,6 +106,13 @@ vi.mock('../DiscussionPanel/useHasDiscussion', () => ({
 describe('EditorArea', () => {
   beforeEach(() => {
     mocks.metadata = null;
+    mocks.auth = {
+      canWrite: true,
+      canEdit: true,
+      role: 'edit',
+      folderUuid: null,
+      isAllFolders: true,
+    };
     vi.mocked(getPromotionStatus).mockReset();
   });
 
@@ -128,15 +142,15 @@ describe('EditorArea', () => {
     expect(main).toBeInTheDocument();
   });
 
-  it('checks production status when metadata resolves the current file path', async () => {
+  it('checks production status using the repo-relative path for Lens Edu files', async () => {
     const headerControls = document.createElement('div');
     headerControls.id = 'header-controls';
     document.body.appendChild(headerControls);
     mocks.metadata = {
-      '/Lens/Notes.md': { id: 'note-uuid', type: 'markdown', version: 0 },
+      '/Lens Edu/Notes.md': { id: 'note-uuid', type: 'markdown', version: 0 },
     };
     vi.mocked(getPromotionStatus).mockResolvedValue({
-      path: '/Lens/Notes.md',
+      path: 'Notes.md',
       oldPath: null,
       status: 'identical',
       additions: 0,
@@ -148,9 +162,27 @@ describe('EditorArea', () => {
     renderWithProviders(<EditorArea currentDocId={`${RELAY_ID}-note-uuid`} />);
 
     await waitFor(() => {
-      expect(getPromotionStatus).toHaveBeenCalledWith('/Lens/Notes.md');
+      expect(getPromotionStatus).toHaveBeenCalledWith('Notes.md');
     });
     expect(await screen.findByRole('button', { name: /identical to production/i })).toBeInTheDocument();
+
+    document.body.removeChild(headerControls);
+  });
+
+  it('does not render production promotion controls outside the Lens Edu promotion scope', async () => {
+    const headerControls = document.createElement('div');
+    headerControls.id = 'header-controls';
+    document.body.appendChild(headerControls);
+    mocks.metadata = {
+      '/Lens/Notes.md': { id: 'note-uuid', type: 'markdown', version: 0 },
+    };
+
+    renderWithProviders(<EditorArea currentDocId={`${RELAY_ID}-note-uuid`} />);
+
+    await waitFor(() => {
+      expect(getPromotionStatus).not.toHaveBeenCalled();
+    });
+    expect(screen.queryByRole('button', { name: /production/i })).not.toBeInTheDocument();
 
     document.body.removeChild(headerControls);
   });
@@ -161,8 +193,8 @@ describe('EditorArea', () => {
     headerControls.id = 'header-controls';
     document.body.appendChild(headerControls);
     mocks.metadata = {
-      '/Lens/Notes.md': { id: 'note-uuid', type: 'markdown', version: 0 },
-      '/Lens/Other.md': { id: 'other-uuid', type: 'markdown', version: 0 },
+      '/Lens Edu/Notes.md': { id: 'note-uuid', type: 'markdown', version: 0 },
+      '/Lens Edu/Other.md': { id: 'other-uuid', type: 'markdown', version: 0 },
     };
     vi.mocked(getPromotionStatus).mockImplementation(async (path: string) => ({
       path,
@@ -180,7 +212,7 @@ describe('EditorArea', () => {
     await user.click(screen.getByRole('button', { name: /promote to production/i }));
     await user.click(screen.getByText('This file'));
 
-    expect(within(screen.getByRole('dialog')).getByText('/Lens/Notes.md')).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText('Notes.md')).toBeInTheDocument();
 
     rerender(
       <MemoryRouter>
@@ -191,12 +223,12 @@ describe('EditorArea', () => {
     );
 
     await waitFor(() => {
-      expect(getPromotionStatus).toHaveBeenCalledWith('/Lens/Other.md');
+      expect(getPromotionStatus).toHaveBeenCalledWith('Other.md');
     });
 
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText('/Lens/Notes.md')).toBeInTheDocument();
-    expect(within(dialog).queryByText('/Lens/Other.md')).not.toBeInTheDocument();
+    expect(within(dialog).getByText('Notes.md')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Other.md')).not.toBeInTheDocument();
 
     document.body.removeChild(headerControls);
   });

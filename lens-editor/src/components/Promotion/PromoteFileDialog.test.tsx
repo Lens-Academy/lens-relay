@@ -14,7 +14,7 @@ vi.mock('../../lib/promotion-api', () => ({
 }));
 
 const status: PromotionStatusResponse = {
-  path: '/Lens/Notes.md',
+  path: 'Notes.md',
   oldPath: null,
   status: 'modified',
   additions: 4,
@@ -43,7 +43,7 @@ describe('PromoteFileDialog', () => {
     render(
       <PromoteFileDialog
         open={false}
-        filePath="/Lens/Notes.md"
+        filePath="Notes.md"
         status={status}
         onClose={vi.fn()}
       />
@@ -55,7 +55,7 @@ describe('PromoteFileDialog', () => {
   it('fetches and shows the diff only after View diff is clicked', async () => {
     const user = userEvent.setup();
     vi.mocked(getPromotionDiff).mockResolvedValue({
-      path: '/Lens/Notes.md',
+      path: 'Notes.md',
       mainSha: 'main-sha',
       status: 'modified',
       isBinary: false,
@@ -67,7 +67,7 @@ describe('PromoteFileDialog', () => {
     render(
       <PromoteFileDialog
         open
-        filePath="/Lens/Notes.md"
+        filePath="Notes.md"
         status={status}
         onClose={vi.fn()}
       />
@@ -77,7 +77,7 @@ describe('PromoteFileDialog', () => {
 
     await user.click(screen.getByRole('button', { name: /view diff/i }));
 
-    expect(getPromotionDiff).toHaveBeenCalledWith('/Lens/Notes.md');
+    expect(getPromotionDiff).toHaveBeenCalledWith('Notes.md');
     expect(await screen.findByText(/@@ -1 \+1 @@/)).toBeInTheDocument();
     expect(screen.getByText(/\+new/)).toBeInTheDocument();
   });
@@ -96,7 +96,7 @@ describe('PromoteFileDialog', () => {
     render(
       <PromoteFileDialog
         open
-        filePath="/Lens/Notes.md"
+        filePath="Notes.md"
         status={status}
         onClose={vi.fn()}
         onPromoted={onPromoted}
@@ -106,7 +106,7 @@ describe('PromoteFileDialog', () => {
     await user.click(screen.getByRole('button', { name: /promote file/i }));
 
     await waitFor(() => {
-      expect(createPromotionPr).toHaveBeenCalledWith({ paths: ['/Lens/Notes.md'] });
+      expect(createPromotionPr).toHaveBeenCalledWith({ paths: ['Notes.md'] });
     });
     expect(await screen.findByRole('link', { name: /pull request #42/i })).toHaveAttribute(
       'href',
@@ -129,7 +129,7 @@ describe('PromoteFileDialog', () => {
     const { rerender } = render(
       <PromoteFileDialog
         open
-        filePath="/Lens/Notes.md"
+        filePath="Notes.md"
         status={status}
         onClose={vi.fn()}
       />
@@ -142,7 +142,7 @@ describe('PromoteFileDialog', () => {
     rerender(
       <PromoteFileDialog
         open={false}
-        filePath="/Lens/Notes.md"
+        filePath="Notes.md"
         status={status}
         onClose={vi.fn()}
       />
@@ -150,14 +150,14 @@ describe('PromoteFileDialog', () => {
     rerender(
       <PromoteFileDialog
         open
-        filePath="/Lens/Other.md"
-        status={{ ...status, path: '/Lens/Other.md', additions: 1, deletions: 0 }}
+        filePath="Other.md"
+        status={{ ...status, path: 'Other.md', additions: 1, deletions: 0 }}
         onClose={vi.fn()}
       />
     );
 
     expect(screen.queryByRole('link', { name: /pull request #42/i })).not.toBeInTheDocument();
-    expect(screen.getByText('/Lens/Other.md')).toBeInTheDocument();
+    expect(screen.getByText('Other.md')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /promote file/i })).not.toBeDisabled();
   });
 
@@ -167,7 +167,7 @@ describe('PromoteFileDialog', () => {
     const promotion = deferred<Awaited<ReturnType<typeof createPromotionPr>>>();
     vi.mocked(createPromotionPr).mockReturnValue(promotion.promise);
     vi.mocked(getPromotionDiff).mockResolvedValue({
-      path: '/Lens/Notes.md',
+      path: 'Notes.md',
       mainSha: 'main-sha',
       status: 'modified',
       isBinary: false,
@@ -179,7 +179,7 @@ describe('PromoteFileDialog', () => {
     render(
       <PromoteFileDialog
         open
-        filePath="/Lens/Notes.md"
+        filePath="Notes.md"
         status={status}
         onClose={vi.fn()}
         onPromoted={onPromoted}
@@ -214,7 +214,7 @@ describe('PromoteFileDialog', () => {
     render(
       <PromoteFileDialog
         open
-        filePath="/Lens/Notes.md"
+        filePath="Notes.md"
         status={status}
         onClose={vi.fn()}
       />

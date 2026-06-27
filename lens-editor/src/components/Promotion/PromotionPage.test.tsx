@@ -19,7 +19,7 @@ vi.mock('../../lib/promotion-api', () => ({
 
 const files = [
   {
-    path: '/Lens/Notes.md',
+    path: 'Notes.md',
     oldPath: null,
     status: 'modified' as const,
     additions: 3,
@@ -27,7 +27,7 @@ const files = [
     isBinary: false,
   },
   {
-    path: '/Lens/Other.md',
+    path: 'Other.md',
     oldPath: null,
     status: 'added' as const,
     additions: 9,
@@ -37,12 +37,12 @@ const files = [
 ];
 
 const metadata: FolderMetadata = {
-  '/Lens/Notes.md': {
+  '/Lens Edu/Notes.md': {
     id: '11111111-1111-4111-8111-111111111111',
     type: 'markdown',
     version: 1,
   },
-  '/Lens/Other.md': {
+  '/Lens Edu/Other.md': {
     id: '22222222-2222-4222-8222-222222222222',
     type: 'markdown',
     version: 1,
@@ -56,7 +56,7 @@ function renderPromotionPage(initialEntry = '/promote') {
         value={{
           metadata,
           folderDocs: new Map<string, Y.Doc>(),
-          folderNames: ['Lens'],
+          folderNames: ['Lens Edu'],
           errors: new Map<string, Error>(),
           onNavigate: vi.fn(),
           justCreatedRef: { current: false },
@@ -91,13 +91,13 @@ describe('PromotionPage', () => {
   });
 
   it('preselects path from the query string after loading', async () => {
-    renderPromotionPage('/promote?path=%2FLens%2FNotes.md');
+    renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
 
     expect(screen.getByText('Loading production differences...')).toBeInTheDocument();
 
-    const notesCheckbox = await screen.findByRole('checkbox', { name: /\/Lens\/Notes\.md/ });
+    const notesCheckbox = await screen.findByRole('checkbox', { name: /Notes\.md/ });
     expect(notesCheckbox).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: /\/Lens\/Other\.md/ })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Other\.md/ })).not.toBeChecked();
   });
 
   it('creates a promotion PR for selected files using only selected paths', async () => {
@@ -109,12 +109,12 @@ describe('PromotionPage', () => {
       mainSha: 'main-sha',
       autoMergeEnabled: true,
     });
-    renderPromotionPage('/promote?path=%2FLens%2FNotes.md');
+    renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
 
     await user.click(await screen.findByRole('button', { name: 'Create promotion PR' }));
 
     await waitFor(() => {
-      expect(createPromotionPr).toHaveBeenCalledWith({ paths: ['/Lens/Notes.md'] });
+      expect(createPromotionPr).toHaveBeenCalledWith({ paths: ['Notes.md'] });
     });
     expect(Object.keys(vi.mocked(createPromotionPr).mock.calls[0][0])).toEqual(['paths']);
     expect(await screen.findByText('Pull request created')).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe('PromotionPage', () => {
   it('loads and renders a diff after View diff', async () => {
     const user = userEvent.setup();
     vi.mocked(getPromotionDiff).mockResolvedValue({
-      path: '/Lens/Notes.md',
+      path: 'Notes.md',
       mainSha: 'main-sha',
       status: 'modified',
       isBinary: false,
@@ -137,10 +137,10 @@ describe('PromotionPage', () => {
     });
     renderPromotionPage();
 
-    const row = await screen.findByRole('row', { name: /\/Lens\/Notes\.md/ });
+    const row = await screen.findByRole('row', { name: /Notes\.md/ });
     await user.click(within(row).getByRole('button', { name: 'View diff' }));
 
-    expect(getPromotionDiff).toHaveBeenCalledWith('/Lens/Notes.md');
+    expect(getPromotionDiff).toHaveBeenCalledWith('Notes.md');
     expect(await screen.findByText('@@ -1 +1 @@')).toBeInTheDocument();
     expect(screen.getByText('+new')).toBeInTheDocument();
   });
@@ -154,13 +154,13 @@ describe('PromotionPage', () => {
       .mockReturnValueOnce(otherDiff.promise);
     renderPromotionPage();
 
-    const notesRow = await screen.findByRole('row', { name: /\/Lens\/Notes\.md/ });
-    const otherRow = screen.getByRole('row', { name: /\/Lens\/Other\.md/ });
+    const notesRow = await screen.findByRole('row', { name: /Notes\.md/ });
+    const otherRow = screen.getByRole('row', { name: /Other\.md/ });
     await user.click(within(notesRow).getByRole('button', { name: 'View diff' }));
     await user.click(within(otherRow).getByRole('button', { name: 'View diff' }));
 
     otherDiff.resolve({
-      path: '/Lens/Other.md',
+      path: 'Other.md',
       mainSha: 'main-sha',
       status: 'added',
       isBinary: false,
@@ -169,11 +169,11 @@ describe('PromotionPage', () => {
       diff: '@@ -0 +1 @@\n+other',
     });
 
-    expect(await screen.findByText('Diff: /Lens/Other.md')).toBeInTheDocument();
+    expect(await screen.findByText('Diff: Other.md')).toBeInTheDocument();
     expect(screen.getByText('+other')).toBeInTheDocument();
 
     notesDiff.resolve({
-      path: '/Lens/Notes.md',
+      path: 'Notes.md',
       mainSha: 'main-sha',
       status: 'modified',
       isBinary: false,
@@ -183,26 +183,26 @@ describe('PromotionPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Diff: /Lens/Other.md')).toBeInTheDocument();
+      expect(screen.getByText('Diff: Other.md')).toBeInTheDocument();
     });
-    expect(screen.queryByText('Diff: /Lens/Notes.md')).not.toBeInTheDocument();
+    expect(screen.queryByText('Diff: Notes.md')).not.toBeInTheDocument();
     expect(screen.queryByText('+notes')).not.toBeInTheDocument();
   });
 
   it('filtering hides non-matching files without losing selection', async () => {
     const user = userEvent.setup();
-    renderPromotionPage('/promote?path=%2FLens%2FOther.md');
+    renderPromotionPage('/promote?path=%2FLens%20Edu%2FOther.md');
 
-    expect(await screen.findByRole('checkbox', { name: /\/Lens\/Other\.md/ })).toBeChecked();
+    expect(await screen.findByRole('checkbox', { name: /Other\.md/ })).toBeChecked();
 
     await user.type(screen.getByRole('searchbox', { name: 'Filter changed files' }), 'Notes');
 
-    expect(screen.queryByRole('checkbox', { name: /\/Lens\/Other\.md/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /\/Lens\/Notes\.md/ })).not.toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: /Other\.md/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Notes\.md/ })).not.toBeChecked();
 
     await user.clear(screen.getByRole('searchbox', { name: 'Filter changed files' }));
 
-    expect(screen.getByRole('checkbox', { name: /\/Lens\/Other\.md/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Other\.md/ })).toBeChecked();
   });
 
   it('shows an auto-merge warning when PR result has autoMergeEnabled false', async () => {
@@ -215,7 +215,7 @@ describe('PromotionPage', () => {
       autoMergeEnabled: false,
       warning: 'Auto-merge could not be enabled.',
     });
-    renderPromotionPage('/promote?path=%2FLens%2FNotes.md');
+    renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
 
     await user.click(await screen.findByRole('button', { name: 'Create promotion PR' }));
 
@@ -231,7 +231,7 @@ describe('PromotionPage', () => {
       mainSha: 'main-sha',
       autoMergeEnabled: true,
     });
-    renderPromotionPage('/promote?path=%2FLens%2FNotes.md');
+    renderPromotionPage('/promote?path=%2FLens%20Edu%2FNotes.md');
 
     const createButton = await screen.findByRole('button', { name: 'Create promotion PR' });
     await user.click(createButton);
@@ -246,11 +246,11 @@ describe('PromotionPage', () => {
   it('links changed files back to their editor route', async () => {
     renderPromotionPage();
 
-    const row = await screen.findByRole('row', { name: /\/Lens\/Notes\.md/ });
+    const row = await screen.findByRole('row', { name: /Notes\.md/ });
 
     expect(within(row).getByRole('link', { name: 'Open in editor' })).toHaveAttribute(
       'href',
-      '/11111111/Lens/Notes.md'
+      '/11111111/Lens-Edu/Notes.md'
     );
   });
 });

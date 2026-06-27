@@ -365,6 +365,13 @@ short-lived branches whose names begin with `PROMOTION_BRANCH_PREFIX`. Keep
 GitHub branch protection or rulesets enabled for `main` and `staging`; a
 write-enabled deploy key cannot enforce branch-prefix restrictions by itself.
 
+Let the promotion service create the scratch clone on first use. It marks that
+checkout with local git config and rejects existing checkouts without that
+marker, even when the origin URL matches, so it cannot accidentally clean or
+reset a relay-git-sync checkout. If `PROMOTION_REPO_DIR` already contains a
+manual or old promotion clone, delete that scratch directory before enabling
+promotion and let Lens Editor recreate it.
+
 ### Rollout Gates
 
 Before setting `PROMOTION_ENABLED=true` in production, confirm whether pushing

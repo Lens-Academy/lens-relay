@@ -12,6 +12,7 @@ import {
 import { useNavigation } from '../../contexts/NavigationContext';
 import { urlForDoc } from '../../lib/url-utils';
 import { RELAY_ID } from '../../lib/constants';
+import { editorPathToPromotionPath, promotionPathToEditorPath } from '../../lib/promotion-paths';
 import { DiffViewer } from './DiffViewer';
 
 interface PromotionPrResultState {
@@ -52,8 +53,12 @@ export function PromotionPage() {
   const [searchParams] = useSearchParams();
   const { metadata } = useNavigation();
   const queryPath = searchParams.get('path');
+  const queryPromotionPath = useMemo(
+    () => queryPath ? (editorPathToPromotionPath(queryPath) ?? queryPath) : null,
+    [queryPath],
+  );
   const [changes, setChanges] = useState<PromotionChangesResponse | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(queryPath ? [queryPath] : []));
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(queryPromotionPath ? [queryPromotionPath] : []));
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,8 +77,8 @@ export function PromotionPage() {
       .then(response => {
         if (cancelled) return;
         setChanges(response);
-        if (queryPath && response.files.some(file => file.path === queryPath)) {
-          setSelected(previous => new Set([...previous, queryPath]));
+        if (queryPromotionPath && response.files.some(file => file.path === queryPromotionPath)) {
+          setSelected(previous => new Set([...previous, queryPromotionPath]));
         }
       })
       .catch(loadError => {
@@ -87,7 +92,7 @@ export function PromotionPage() {
     return () => {
       cancelled = true;
     };
-  }, [queryPath]);
+  }, [queryPromotionPath]);
 
   const visibleFiles = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -234,7 +239,8 @@ export function PromotionPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {visibleFiles.map(file => {
-                      const meta = metadata?.[file.path];
+                      const editorPath = promotionPathToEditorPath(file.path);
+                      const meta = metadata?.[editorPath];
                       const editorUrl = meta?.id ? urlForDoc(`${RELAY_ID}-${meta.id}`, metadata) : null;
                       return (
                         <tr key={file.path} className="text-gray-800">

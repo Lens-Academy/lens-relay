@@ -37,8 +37,10 @@ import { resolveAnchorYFromView, resolveAnchorYFromDOM } from '../../lib/anchor-
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
 import { getPromotionStatus, type PromotionStatusResponse } from '../../lib/promotion-api';
+import { editorPathToPromotionPath } from '../../lib/promotion-paths';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
 import { RELAY_ID, PANEL_CONFIG } from '../../App';
+import { EDU_FOLDER_ID } from '../../lib/constants';
 
 /**
  * Editor area component that lives INSIDE the RelayProvider key boundary.
@@ -50,7 +52,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate, folderDocs } = useNavigation();
-  const { canWrite, canEdit } = useAuth();
+  const { canWrite, canEdit, folderUuid, isAllFolders } = useAuth();
   const { manager, headerStage } = useSidebar();
   const { displayName } = useDisplayName();
   const hasDiscussion = useHasDiscussion();
@@ -111,11 +113,16 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const uuid = currentDocId.slice(RELAY_ID.length + 1);
     return findPathByUuid(uuid, metadata) ?? undefined;
   }, [currentDocId, metadata]);
+  const canUsePromotion = canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID);
+  const promotionFilePath = useMemo(
+    () => canUsePromotion ? editorPathToPromotionPath(currentFilePath) : null,
+    [canUsePromotion, currentFilePath],
+  );
 
   const refreshPromotionStatus = useCallback(() => {
     const requestId = ++promotionRequestRef.current;
 
-    if (!currentFilePath || !canEdit) {
+    if (!promotionFilePath) {
       setPromotionStatus(null);
       setPromotionError(null);
       setPromotionLoading(false);
@@ -124,7 +131,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
     setPromotionLoading(true);
     setPromotionError(null);
-    getPromotionStatus(currentFilePath)
+    getPromotionStatus(promotionFilePath)
       .then((nextStatus) => {
         if (promotionRequestRef.current !== requestId) return;
         setPromotionStatus(nextStatus);
@@ -138,14 +145,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         if (promotionRequestRef.current !== requestId) return;
         setPromotionLoading(false);
       });
-  }, [canEdit, currentFilePath]);
+  }, [promotionFilePath]);
 
   useEffect(() => refreshPromotionStatus(), [refreshPromotionStatus]);
 
   const openPromoteDialog = useCallback(() => {
-    if (!currentFilePath) return;
-    setPromoteDialogTarget({ filePath: currentFilePath, status: promotionStatus });
-  }, [currentFilePath, promotionStatus]);
+    if (!promotionFilePath) return;
+    setPromoteDialogTarget({ filePath: promotionFilePath, status: promotionStatus });
+  }, [promotionFilePath, promotionStatus]);
 
   // Stable refs for upload getters (avoids stale closures in imagePasteExtension)
   const folderDocsRef = useRef<Map<string, import('yjs').Doc>>(new Map());
@@ -300,16 +307,16 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             <OverflowMenu>
               <SuggestionModeToggle view={editorView} iconOnly isSuggestionMode={isSuggestionMode} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
-              {currentFilePath && (
+              {promotionFilePath && (
                 <PromotionStatus
-                  filePath={currentFilePath}
+                  filePath={promotionFilePath}
                   canPromote={canEdit}
                   status={promotionStatus}
                   loading={promotionLoading}
                   error={promotionError}
                   onRefresh={refreshPromotionStatus}
                   onPromoteFile={openPromoteDialog}
-                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(currentFilePath)}`)}
+                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(promotionFilePath)}`)}
                 />
               )}
               <PresencePanel />
@@ -320,16 +327,16 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               {/* <DebugYMapPanel /> */}
               <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
-              {currentFilePath && (
+              {promotionFilePath && (
                 <PromotionStatus
-                  filePath={currentFilePath}
+                  filePath={promotionFilePath}
                   canPromote={canEdit}
                   status={promotionStatus}
                   loading={promotionLoading}
                   error={promotionError}
                   onRefresh={refreshPromotionStatus}
                   onPromoteFile={openPromoteDialog}
-                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(currentFilePath)}`)}
+                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(promotionFilePath)}`)}
                 />
               )}
               <PresencePanel />
