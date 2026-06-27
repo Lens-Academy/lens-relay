@@ -21,6 +21,7 @@ import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
 import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
+import { PromotionPage } from './components/Promotion/PromotionPage';
 import { MultiDocSectionEditor } from './components/SectionEditor';
 import { useDocConnection } from './hooks/useDocConnection';
 import { applySuggestionAction } from './lib/suggestion-actions';
@@ -556,6 +557,11 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   } />
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />
                   <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
+                  <Route path="/promote" element={
+                    role === 'edit' && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                      ? <PromotionPage />
+                      : <DefaultLanding />
+                  } />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<DefaultLanding />} />
                 </Routes>
