@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { EditorView } from '@codemirror/view';
 import { EditorState, StateEffect } from '@codemirror/state';
 import { useYDoc } from '@y-sweet/react';
@@ -23,6 +24,8 @@ import { useScrollSource } from '../Comments/useScrollSource';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
+import { PromotionStatus } from '../Promotion/PromotionStatus';
+import { PromoteFileDialog } from '../Promotion/PromoteFileDialog';
 import { ResizeHandle } from './ResizeHandle';
 import { useHasDiscussion } from '../DiscussionPanel/useHasDiscussion';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -33,6 +36,7 @@ import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
 import { resolveAnchorYFromView, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
+import { getPromotionStatus, type PromotionStatusResponse } from '../../lib/promotion-api';
 import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
 import { RELAY_ID, PANEL_CONFIG } from '../../App';
 
@@ -42,6 +46,7 @@ import { RELAY_ID, PANEL_CONFIG } from '../../App';
  * the Sidebar stable outside the boundary.
  */
 export function EditorArea({ currentDocId }: { currentDocId: string }) {
+  const navigate = useNavigate();
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate, folderDocs } = useNavigation();
@@ -91,6 +96,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
   const [isSuggestionMode, setIsSuggestionMode] = useState(false);
+  const [promotionStatus, setPromotionStatus] = useState<PromotionStatusResponse | null>(null);
+  const [promotionLoading, setPromotionLoading] = useState(false);
+  const [promotionError, setPromotionError] = useState<string | null>(null);
+  const [promoteDialogTarget, setPromoteDialogTarget] = useState<{
+    filePath: string;
+    status: PromotionStatusResponse | null;
+  } | null>(null);
+  const promotionRequestRef = useRef(0);
 
   // Derive current file path from doc ID for wikilink resolution
   const currentFilePath = useMemo(() => {
@@ -98,6 +111,41 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const uuid = currentDocId.slice(RELAY_ID.length + 1);
     return findPathByUuid(uuid, metadata) ?? undefined;
   }, [currentDocId, metadata]);
+
+  const refreshPromotionStatus = useCallback(() => {
+    const requestId = ++promotionRequestRef.current;
+
+    if (!currentFilePath || !canEdit) {
+      setPromotionStatus(null);
+      setPromotionError(null);
+      setPromotionLoading(false);
+      return;
+    }
+
+    setPromotionLoading(true);
+    setPromotionError(null);
+    getPromotionStatus(currentFilePath)
+      .then((nextStatus) => {
+        if (promotionRequestRef.current !== requestId) return;
+        setPromotionStatus(nextStatus);
+      })
+      .catch((error: unknown) => {
+        if (promotionRequestRef.current !== requestId) return;
+        setPromotionStatus(null);
+        setPromotionError(error instanceof Error ? error.message : 'Unable to check production');
+      })
+      .finally(() => {
+        if (promotionRequestRef.current !== requestId) return;
+        setPromotionLoading(false);
+      });
+  }, [canEdit, currentFilePath]);
+
+  useEffect(() => refreshPromotionStatus(), [refreshPromotionStatus]);
+
+  const openPromoteDialog = useCallback(() => {
+    if (!currentFilePath) return;
+    setPromoteDialogTarget({ filePath: currentFilePath, status: promotionStatus });
+  }, [currentFilePath, promotionStatus]);
 
   // Stable refs for upload getters (avoids stale closures in imagePasteExtension)
   const folderDocsRef = useRef<Map<string, import('yjs').Doc>>(new Map());
@@ -252,6 +300,18 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             <OverflowMenu>
               <SuggestionModeToggle view={editorView} iconOnly isSuggestionMode={isSuggestionMode} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
+              {currentFilePath && (
+                <PromotionStatus
+                  filePath={currentFilePath}
+                  canPromote={canEdit}
+                  status={promotionStatus}
+                  loading={promotionLoading}
+                  error={promotionError}
+                  onRefresh={refreshPromotionStatus}
+                  onPromoteFile={openPromoteDialog}
+                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(currentFilePath)}`)}
+                />
+              )}
               <PresencePanel />
               <SyncStatus />
             </OverflowMenu>
@@ -260,6 +320,18 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               {/* <DebugYMapPanel /> */}
               <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
+              {currentFilePath && (
+                <PromotionStatus
+                  filePath={currentFilePath}
+                  canPromote={canEdit}
+                  status={promotionStatus}
+                  loading={promotionLoading}
+                  error={promotionError}
+                  onRefresh={refreshPromotionStatus}
+                  onPromoteFile={openPromoteDialog}
+                  onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(currentFilePath)}`)}
+                />
+              )}
               <PresencePanel />
               <SyncStatus />
             </>
@@ -385,6 +457,15 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           </>
         )}
       </div>
+      {promoteDialogTarget && (
+        <PromoteFileDialog
+          open
+          filePath={promoteDialogTarget.filePath}
+          status={promoteDialogTarget.status}
+          onClose={() => setPromoteDialogTarget(null)}
+          onPromoted={refreshPromotionStatus}
+        />
+      )}
     </main>
   );
 }

@@ -2,13 +2,25 @@
 /**
  * @vitest-environment happy-dom
  */
-import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { EditorArea } from './EditorArea';
 import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
+import { RELAY_ID } from '../../App';
+import { getPromotionStatus } from '../../lib/promotion-api';
+
+const mocks = vi.hoisted(() => ({
+  metadata: null as null | Record<string, { id: string; type: 'markdown'; version: number }>,
+}));
 
 const renderWithProviders = (ui: React.ReactElement) =>
-  render(<DisplayNameProvider>{ui}</DisplayNameProvider>);
+  render(
+    <MemoryRouter>
+      <DisplayNameProvider>{ui}</DisplayNameProvider>
+    </MemoryRouter>
+  );
 
 // Mock @y-sweet/react to avoid needing a YDocProvider
 vi.mock('@y-sweet/react', () => {
@@ -20,7 +32,7 @@ vi.mock('@y-sweet/react', () => {
 // Mock the providers that EditorArea needs
 vi.mock('../../contexts/NavigationContext', () => ({
   useNavigation: () => ({
-    metadata: null,
+    metadata: mocks.metadata,
     folderDocs: new Map(),
     folderNames: [],
     errors: new Map(),
@@ -36,7 +48,11 @@ vi.mock('../DocumentTitle', () => ({
 
 // Mock AuthContext used by EditorArea
 vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ canWrite: true, role: 'editor' }),
+  useAuth: () => ({ canWrite: true, canEdit: true, role: 'editor' }),
+}));
+
+vi.mock('../../lib/promotion-api', () => ({
+  getPromotionStatus: vi.fn(),
 }));
 
 // Mock the Editor component to avoid Y.Doc complexity
@@ -81,6 +97,11 @@ vi.mock('../DiscussionPanel/useHasDiscussion', () => ({
 }));
 
 describe('EditorArea', () => {
+  beforeEach(() => {
+    mocks.metadata = null;
+    vi.mocked(getPromotionStatus).mockReset();
+  });
+
   it('renders comment margin panel', () => {
     const { container } = renderWithProviders(<EditorArea currentDocId="test-doc" />);
 
@@ -105,5 +126,78 @@ describe('EditorArea', () => {
     // Check that main uses resizable panel layout
     const main = container.querySelector('main');
     expect(main).toBeInTheDocument();
+  });
+
+  it('checks production status when metadata resolves the current file path', async () => {
+    const headerControls = document.createElement('div');
+    headerControls.id = 'header-controls';
+    document.body.appendChild(headerControls);
+    mocks.metadata = {
+      '/Lens/Notes.md': { id: 'note-uuid', type: 'markdown', version: 0 },
+    };
+    vi.mocked(getPromotionStatus).mockResolvedValue({
+      path: '/Lens/Notes.md',
+      oldPath: null,
+      status: 'identical',
+      additions: 0,
+      deletions: 0,
+      isBinary: false,
+      mainSha: 'main-sha',
+    });
+
+    renderWithProviders(<EditorArea currentDocId={`${RELAY_ID}-note-uuid`} />);
+
+    await waitFor(() => {
+      expect(getPromotionStatus).toHaveBeenCalledWith('/Lens/Notes.md');
+    });
+    expect(await screen.findByRole('button', { name: /identical to production/i })).toBeInTheDocument();
+
+    document.body.removeChild(headerControls);
+  });
+
+  it('keeps an open single-file promotion dialog targeted to the selected file after navigation', async () => {
+    const user = userEvent.setup();
+    const headerControls = document.createElement('div');
+    headerControls.id = 'header-controls';
+    document.body.appendChild(headerControls);
+    mocks.metadata = {
+      '/Lens/Notes.md': { id: 'note-uuid', type: 'markdown', version: 0 },
+      '/Lens/Other.md': { id: 'other-uuid', type: 'markdown', version: 0 },
+    };
+    vi.mocked(getPromotionStatus).mockImplementation(async (path: string) => ({
+      path,
+      oldPath: null,
+      status: 'modified',
+      additions: path.includes('Other') ? 1 : 4,
+      deletions: path.includes('Other') ? 0 : 2,
+      isBinary: false,
+      mainSha: 'main-sha',
+    }));
+
+    const { rerender } = renderWithProviders(<EditorArea currentDocId={`${RELAY_ID}-note-uuid`} />);
+
+    await screen.findByRole('button', { name: /promote to production/i });
+    await user.click(screen.getByRole('button', { name: /promote to production/i }));
+    await user.click(screen.getByText('This file'));
+
+    expect(within(screen.getByRole('dialog')).getByText('/Lens/Notes.md')).toBeInTheDocument();
+
+    rerender(
+      <MemoryRouter>
+        <DisplayNameProvider>
+          <EditorArea currentDocId={`${RELAY_ID}-other-uuid`} />
+        </DisplayNameProvider>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(getPromotionStatus).toHaveBeenCalledWith('/Lens/Other.md');
+    });
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('/Lens/Notes.md')).toBeInTheDocument();
+    expect(within(dialog).queryByText('/Lens/Other.md')).not.toBeInTheDocument();
+
+    document.body.removeChild(headerControls);
   });
 });
