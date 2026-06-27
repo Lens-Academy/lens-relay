@@ -22,6 +22,7 @@
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, cleanup, act } from '@testing-library/react';
 import { useMemo, useRef, type ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { EditorView } from '@codemirror/view';
@@ -95,13 +96,15 @@ function NavigationStub({ children }: { children: ReactNode }) {
 async function renderRealEditorArea() {
   const { EditorArea } = await import('./EditorArea');
   return render(
-    <AuthProvider role="edit" folderUuid={null} isAllFolders>
-      <DisplayNameProvider>
-        <NavigationStub>
-          <EditorArea currentDocId="test-doc" />
-        </NavigationStub>
-      </DisplayNameProvider>
-    </AuthProvider>,
+    <MemoryRouter>
+      <AuthProvider role="edit" folderUuid={null} isAllFolders>
+        <DisplayNameProvider>
+          <NavigationStub>
+            <EditorArea currentDocId="test-doc" />
+          </NavigationStub>
+        </DisplayNameProvider>
+      </AuthProvider>
+    </MemoryRouter>,
   );
 }
 

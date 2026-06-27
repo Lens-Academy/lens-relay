@@ -295,6 +295,127 @@ vim /root/relay-git-sync-data/repos/cb696037-0f72-4e93-8717-4e433129d789/ea4015d
 docker exec relay-git-sync bash -c 'cd /data/repos/cb696037-0f72-4e93-8717-4e433129d789/ea4015da-24af-4d9d-ac49-8c902cb17121 && git add -A && git commit -m "Update workflow" && GIT_SSH_COMMAND="ssh -F /data/ssh/config" git push origin staging'
 ```
 
+## Lens Editor Production Promotion
+
+The Lens Editor promotion feature lets editors compare `staging` and `main` for
+`Lens-Academy/lens-edu-relay`, select specific changed files, and create a
+promotion pull request. The feature uses its own scratch clone and GitHub token;
+it must not reuse or modify the `relay-git-sync` checkout, container, or keys.
+
+### Environment
+
+Add these variables to the production `.env` used by
+`docker-compose.prod.yaml`:
+
+```bash
+PROMOTION_ENABLED=true
+PROMOTION_REPO_HOST_DIR=/root/lens-editor-promotion-data/repositories
+PROMOTION_SSH_DIR=/root/lens-editor-promotion-data/ssh
+PROMOTION_REPO_URL=git@github.com-lens-editor-promotion:Lens-Academy/lens-edu-relay.git
+PROMOTION_REPO_DIR=/data/lens-editor/promotion-repos/lens-edu-relay
+PROMOTION_MAIN_BRANCH=main
+PROMOTION_STAGING_BRANCH=staging
+PROMOTION_BRANCH_PREFIX=promote/lens-editor
+PROMOTION_MERGE_METHOD=SQUASH
+PROMOTION_GITHUB_OWNER=Lens-Academy
+PROMOTION_GITHUB_REPO=lens-edu-relay
+GITHUB_TOKEN=github_pat_with_pull_request_and_automerge_permissions
+```
+
+`PROMOTION_ENABLED=false` disables the routes. With
+`PROMOTION_ENABLED=true`, all required variables above must be present or the
+promotion API returns a configuration error.
+
+`PROMOTION_REPO_HOST_DIR` is mounted into the Lens Editor container at
+`/data/lens-editor/promotion-repos`. `PROMOTION_REPO_DIR` is the container path
+for the scratch clone and should stay under that mount.
+
+Create a dedicated promotion SSH key and config, separate from relay-git-sync:
+
+```bash
+mkdir -p /root/lens-editor-promotion-data/ssh /root/lens-editor-promotion-data/repositories
+ssh-keygen -t ed25519 -f /root/lens-editor-promotion-data/ssh/promotion_key -N ''
+ssh-keyscan github.com > /root/lens-editor-promotion-data/ssh/known_hosts
+cat >/root/lens-editor-promotion-data/ssh/config <<'EOF'
+Host github.com-lens-editor-promotion
+    HostName github.com
+    User git
+    IdentityFile /data/lens-editor-promotion-ssh/promotion_key
+    UserKnownHostsFile /data/lens-editor-promotion-ssh/known_hosts
+    IdentitiesOnly yes
+EOF
+chmod 700 /root/lens-editor-promotion-data/ssh
+chmod 600 /root/lens-editor-promotion-data/ssh/promotion_key /root/lens-editor-promotion-data/ssh/config
+chmod 644 /root/lens-editor-promotion-data/ssh/known_hosts
+```
+
+Verify GitHub's SSH host key fingerprint out of band before rollout; do not
+blindly trust a stale or unexpected `ssh-keyscan` result.
+
+Add `promotion_key.pub` as a write-enabled deploy key for
+`Lens-Academy/lens-edu-relay`. This key is only for promotion branches and must
+not be one of the relay-git-sync keys. The Lens Editor image includes `git` and
+`openssh-client`; compose sets `GIT_SSH_COMMAND=ssh -F
+/data/lens-editor-promotion-ssh/config` for promotion Git operations.
+
+The GitHub token is for GitHub API operations: creating pull requests and
+enabling auto-merge. It is not used by `git clone`/`git push` while the remote
+uses SSH. The promotion service never pushes to `staging`; it only pushes
+short-lived branches whose names begin with `PROMOTION_BRANCH_PREFIX`. Keep
+GitHub branch protection or rulesets enabled for `main` and `staging`; a
+write-enabled deploy key cannot enforce branch-prefix restrictions by itself.
+
+### Rollout Gates
+
+Before setting `PROMOTION_ENABLED=true` in production, confirm whether pushing
+short-lived promotion branches to `Lens-Academy/lens-edu-relay` is acceptable.
+If same-repo promotion branches are not allowed, configure a GitHub App or fork
+push target first and update the promotion remote/head handling accordingly.
+
+Verify relay-git-sync isolation before rollout:
+
+- `PROMOTION_REPO_HOST_DIR` and `PROMOTION_SSH_DIR` must not be inside
+  relay-git-sync's data directory.
+- The promotion service must not mount or reuse relay-git-sync's working
+  checkout.
+- The promotion service must not reuse relay-git-sync's SSH private key.
+- The promotion service must not restart, signal, inspect, or modify the
+  `relay-git-sync` container.
+- Do not run `scripts/start-git-sync.sh` or any Docker command targeting
+  `relay-git-sync` as part of promotion setup.
+- The only Git writes allowed from promotion are pushes of branches matching
+  `PROMOTION_BRANCH_PREFIX`; never `staging`.
+
+Run these checks on the production server:
+
+```bash
+set -euo pipefail
+set -a
+. ./.env
+set +a
+: "${PROMOTION_REPO_HOST_DIR:?set PROMOTION_REPO_HOST_DIR in .env}"
+: "${PROMOTION_SSH_DIR:?set PROMOTION_SSH_DIR in .env}"
+test -d "$PROMOTION_REPO_HOST_DIR"
+test -d "$PROMOTION_SSH_DIR"
+docker inspect relay-git-sync --format '{{json .Mounts}}'
+case "$(realpath -e "$PROMOTION_REPO_HOST_DIR")/" in
+  /root/relay-git-sync-data/*)
+    echo "PROMOTION_REPO_HOST_DIR must not be inside relay-git-sync data" >&2
+    exit 1
+    ;;
+esac
+case "$(realpath -e "$PROMOTION_SSH_DIR")/" in
+  /root/relay-git-sync-data/*)
+    echo "PROMOTION_SSH_DIR must not be inside relay-git-sync data" >&2
+    exit 1
+    ;;
+esac
+```
+
+Then manually confirm `PROMOTION_REPO_HOST_DIR` and `PROMOTION_SSH_DIR` are
+separate persistent directories owned by the Lens Editor service, not by
+relay-git-sync.
+
 ## Known Issues
 
 ### WebSocket File Descriptor Leak

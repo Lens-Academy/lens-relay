@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { render, waitFor, cleanup } from '@testing-library/react';
 import { useMemo, useRef, type ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { EditorView } from '@codemirror/view';
@@ -99,13 +100,15 @@ describe('EditorArea — scroll listener attaches without StrictMode', () => {
       const { EditorArea } = await import('./EditorArea');
       // NOTE: no <StrictMode>. Matches the production runtime.
       render(
-        <AuthProvider role="edit" folderUuid={null} isAllFolders>
-          <DisplayNameProvider>
-            <NavigationStub>
-              <EditorArea currentDocId="test-doc" />
-            </NavigationStub>
-          </DisplayNameProvider>
-        </AuthProvider>,
+        <MemoryRouter>
+          <AuthProvider role="edit" folderUuid={null} isAllFolders>
+            <DisplayNameProvider>
+              <NavigationStub>
+                <EditorArea currentDocId="test-doc" />
+              </NavigationStub>
+            </DisplayNameProvider>
+          </AuthProvider>
+        </MemoryRouter>,
       );
 
       const editorEl = await waitFor(() => {

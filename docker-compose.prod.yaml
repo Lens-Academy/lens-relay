@@ -61,12 +61,26 @@ services:
     container_name: lens-editor
     restart: unless-stopped
     logging: *default-logging
+    volumes:
+      - ${PROMOTION_REPO_HOST_DIR:-/root/lens-editor-promotion-data/repositories}:/data/lens-editor/promotion-repos
+      - ${PROMOTION_SSH_DIR:-/root/lens-editor-promotion-data/ssh}:/data/lens-editor-promotion-ssh:ro
     environment:
       - RELAY_URL=http://relay-server:8080
       - RELAY_SERVER_TOKEN=${RELAY_SERVER_TOKEN}
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
       - SHARE_TOKEN_SECRET=${SHARE_TOKEN_SECRET}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PROMOTION_ENABLED=${PROMOTION_ENABLED:-false}
+      - PROMOTION_REPO_URL=${PROMOTION_REPO_URL:-}
+      - PROMOTION_REPO_DIR=${PROMOTION_REPO_DIR:-}
+      - PROMOTION_MAIN_BRANCH=${PROMOTION_MAIN_BRANCH:-main}
+      - PROMOTION_STAGING_BRANCH=${PROMOTION_STAGING_BRANCH:-staging}
+      - PROMOTION_BRANCH_PREFIX=${PROMOTION_BRANCH_PREFIX:-promote/lens-editor}
+      - PROMOTION_MERGE_METHOD=${PROMOTION_MERGE_METHOD:-SQUASH}
+      - PROMOTION_GITHUB_OWNER=${PROMOTION_GITHUB_OWNER:-}
+      - PROMOTION_GITHUB_REPO=${PROMOTION_GITHUB_REPO:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GIT_SSH_COMMAND=ssh -F /data/lens-editor-promotion-ssh/config
       - PORT=3000
 
   # relay-git-sync is started by scripts/start-git-sync.sh, not compose — see
