@@ -42,6 +42,8 @@ import { useAutoSplitHeight } from '../../hooks/useAutoSplitHeight';
 import { RELAY_ID, PANEL_CONFIG } from '../../App';
 import { EDU_FOLDER_ID } from '../../lib/constants';
 
+const PROMOTION_STATUS_REFRESH_MS = 10_000;
+
 /**
  * Editor area component that lives INSIDE the RelayProvider key boundary.
  * This allows it to remount when switching documents while keeping
@@ -119,7 +121,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     [canUsePromotion, currentFilePath],
   );
 
-  const refreshPromotionStatus = useCallback(() => {
+  const refreshPromotionStatus = useCallback((options: { showLoading?: boolean } = {}) => {
+    const showLoading = options.showLoading ?? true;
     const requestId = ++promotionRequestRef.current;
 
     if (!promotionFilePath) {
@@ -129,7 +132,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       return;
     }
 
-    setPromotionLoading(true);
+    if (showLoading) setPromotionLoading(true);
     setPromotionError(null);
     getPromotionStatus(promotionFilePath)
       .then((nextStatus) => {
@@ -143,11 +146,20 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       })
       .finally(() => {
         if (promotionRequestRef.current !== requestId) return;
-        setPromotionLoading(false);
+        if (showLoading) setPromotionLoading(false);
       });
   }, [promotionFilePath]);
 
-  useEffect(() => refreshPromotionStatus(), [refreshPromotionStatus]);
+  useEffect(() => {
+    refreshPromotionStatus();
+    if (!promotionFilePath) return;
+
+    const intervalId = window.setInterval(() => {
+      refreshPromotionStatus({ showLoading: false });
+    }, PROMOTION_STATUS_REFRESH_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [promotionFilePath, refreshPromotionStatus]);
 
   const openPromoteDialog = useCallback(() => {
     if (!promotionFilePath) return;

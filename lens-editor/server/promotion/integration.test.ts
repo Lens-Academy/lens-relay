@@ -60,7 +60,7 @@ async function createFixture(): Promise<RepoFixture> {
   await fs.mkdir(seedDir, { recursive: true });
 
   await runGit(remoteDir, ['init', '--bare']);
-  await runGit(seedDir, ['init', '--initial-branch=main']);
+  await runGit(seedDir, ['init', '--initial-branch=production']);
   await runGit(seedDir, ['config', 'user.email', 'test@example.com']);
   await runGit(seedDir, ['config', 'user.name', 'Promotion Integration Test']);
 
@@ -70,7 +70,7 @@ async function createFixture(): Promise<RepoFixture> {
   await runGit(seedDir, ['add', '.']);
   await runGit(seedDir, ['commit', '-m', 'main content']);
   await runGit(seedDir, ['remote', 'add', 'origin', remoteDir]);
-  await runGit(seedDir, ['push', 'origin', 'main']);
+  await runGit(seedDir, ['push', 'origin', 'production']);
 
   await runGit(seedDir, ['switch', '-c', 'staging']);
   await writeFile(seedDir, 'selected.md', 'staging selected\n');
@@ -92,13 +92,15 @@ async function createFixture(): Promise<RepoFixture> {
     config: {
       enabled: true,
       repoUrl: remoteDir,
+      productionRepoUrl: remoteDir,
+      stagingRepoUrl: remoteDir,
       repoDir,
-      mainBranch: 'main',
+      mainBranch: 'production',
       stagingBranch: 'staging',
       branchPrefix: 'promote/integration',
       mergeMethod: 'SQUASH',
       githubOwner: 'Lens-Academy',
-      githubRepo: 'lens-edu-relay',
+      githubRepo: 'lens-edu-production',
       githubToken: 'ghs_test_token',
     },
   };
@@ -135,12 +137,12 @@ async function startFakeGitHub(): Promise<{
         return;
       }
 
-      if (req.method === 'POST' && req.url === '/repos/Lens-Academy/lens-edu-relay/pulls') {
+      if (req.method === 'POST' && req.url === '/repos/Lens-Academy/lens-edu-production/pulls') {
         pulls.push({ path: req.url, body: await readRequestBody(req) });
         res.writeHead(201, { ...corsHeaders, 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           number: 123,
-          html_url: 'https://github.com/Lens-Academy/lens-edu-relay/pull/123',
+          html_url: 'https://github.com/Lens-Academy/lens-edu-production/pull/123',
           node_id: 'PR_kwDOIntegration123',
         }));
         return;
@@ -184,7 +186,7 @@ async function branchDiffNames(fixture: RepoFixture, branch: string): Promise<st
     'diff',
     '--name-only',
     '--no-renames',
-    'origin/main',
+    'origin/production',
     `origin/${branch}`,
   ]);
   return output ? output.split('\n') : [];
@@ -218,7 +220,7 @@ describe('promotion route service integration', () => {
     expect(result).toMatchObject({
       branch: expect.stringMatching(/^promote\/integration\//),
       prNumber: 123,
-      prUrl: 'https://github.com/Lens-Academy/lens-edu-relay/pull/123',
+      prUrl: 'https://github.com/Lens-Academy/lens-edu-production/pull/123',
       autoMergeEnabled: true,
     });
     expect(result).not.toHaveProperty('sourceStagingSha');
@@ -230,7 +232,7 @@ describe('promotion route service integration', () => {
     expect(fakeGitHub.pulls[0].body).toMatchObject({
       title: 'Promote selected lesson',
       head: result.branch,
-      base: 'main',
+      base: 'production',
       body: expect.stringContaining(`Source staging commit: ${fixture.stagingSha}`),
     });
     expect(String((fakeGitHub.pulls[0].body as { body: string }).body)).toContain('- `selected.md`');

@@ -49,14 +49,14 @@ describe('PromotionStatus', () => {
     );
 
     await user.click(screen.getByRole('button', { name: /promote to production/i }));
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('menu')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /this file/i }));
 
     expect(onPromoteFile).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: /this file/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /promote to production/i }));
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.getByRole('menu')).toHaveClass('z-[1000]');
     await user.click(screen.getByRole('button', { name: /multiple files/i }));
 
     expect(onPromoteMultiple).toHaveBeenCalledTimes(1);

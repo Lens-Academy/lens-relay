@@ -336,6 +336,58 @@ export default defineConfig(() => {
   }
 
   /**
+   * Vite plugin that adds /api/promotion endpoints in dev.
+   * Dev-only — mounts the same promotion routes/service composition used by
+   * the prod server, so the editor does not hit Vite's SPA fallback for
+   * promotion API calls.
+   */
+  function promotionPlugin(): Plugin {
+    let listener: ReturnType<typeof import('@hono/node-server').getRequestListener> | null = null;
+
+    return {
+      name: 'promotion-api',
+      configureServer(server) {
+        server.middlewares.use('/api/promotion', async (req, res) => {
+          try {
+            const { loadPromotionConfig, promotionConfigReady } = await import('./server/promotion/config.ts');
+            const promotionConfig = loadPromotionConfig();
+            if (!promotionConfig.enabled) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Promotion is disabled' }));
+              return;
+            }
+            if (!promotionConfigReady(promotionConfig)) {
+              res.writeHead(503, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Promotion is enabled but not fully configured' }));
+              return;
+            }
+
+            if (!listener) {
+              const { Hono } = await import('hono');
+              const { getRequestListener } = await import('@hono/node-server');
+              const { createGitPromotionService } = await import('./server/promotion/git.ts');
+              const { createGitHubPromotionService } = await import('./server/promotion/github.ts');
+              const { createPromotionRoutes } = await import('./server/promotion/routes.ts');
+              const { createPromotionRouteService } = await import('./server/app.ts');
+              const app = new Hono();
+              const gitPromotion = createGitPromotionService(promotionConfig);
+              const githubPromotion = createGitHubPromotionService(promotionConfig);
+              app.route('/', createPromotionRoutes(createPromotionRouteService(gitPromotion, githubPromotion)));
+
+              listener = getRequestListener(app.fetch);
+            }
+            console.log(`[promotion] ${req.method} /api/promotion${req.url || '/'}`);
+            await listener(req, res);
+          } catch (error) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+          }
+        });
+      },
+    };
+  }
+
+  /**
    * Dev-only plugin to proxy blob downloads from presigned R2 URLs server-side,
    * mirroring the prod-server /api/blob-fetch endpoint. Needed for dev:local:r2.
    */
@@ -448,7 +500,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), addArticlePlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), addArticlePlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

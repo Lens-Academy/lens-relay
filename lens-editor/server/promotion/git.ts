@@ -2,7 +2,11 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { validatePromotionPaths, validateRepoPath } from './path-validation.ts';
+import {
+  isPromotionPathExcluded,
+  validatePromotionPaths,
+  validatePromotableRepoPath,
+} from './path-validation.ts';
 import {
   PromotionError,
   type PromotionChangesResponse,
@@ -17,6 +21,8 @@ import {
 const GIT_TIMEOUT_MS = 30_000;
 const GIT_KILL_AFTER_TIMEOUT_MS = 1_000;
 const PROMOTION_REPO_OWNER_KEY = 'lens-editor.promotionRepoOwner';
+const PRODUCTION_REMOTE = 'production';
+const STAGING_REMOTE = 'staging';
 const gitQueuesByRepoDir = new Map<string, Promise<void>>();
 
 interface BranchHeads {
@@ -136,23 +142,62 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
       if (!stat.isDirectory()) {
         throw new PromotionError(500, 'Promotion repository is not a Git checkout', 'invalid_repo');
       }
-      await verifyOriginRemote();
+      await verifyExistingCheckoutRemoteSafety();
       await verifyPromotionRepoOwner();
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
       await fs.mkdir(path.dirname(config.repoDir), { recursive: true });
-      await spawnFile('git', ['clone', config.repoUrl, config.repoDir], { cwd: path.dirname(config.repoDir) });
+      await spawnFile('git', ['clone', '-o', PRODUCTION_REMOTE, config.productionRepoUrl, config.repoDir], {
+        cwd: path.dirname(config.repoDir),
+      });
       await markPromotionRepoOwner();
     }
 
+    await ensureConfiguredRemote(PRODUCTION_REMOTE, config.productionRepoUrl);
+    await ensureConfiguredRemote(STAGING_REMOTE, config.stagingRepoUrl);
     await git(['config', 'user.email', 'lens-editor-promotion@example.invalid']);
     await git(['config', 'user.name', 'Lens Editor Promotion']);
   }
 
-  async function verifyOriginRemote(): Promise<void> {
+  async function verifyExistingCheckoutRemoteSafety(): Promise<void> {
+    try {
+      const remoteUrl = await git(['config', '--get', `remote.${PRODUCTION_REMOTE}.url`]);
+      if (remoteUrl !== config.productionRepoUrl) {
+        throw new PromotionError(
+          500,
+          `Promotion repository ${PRODUCTION_REMOTE} remote does not match configured repository: ${remoteUrl}`,
+          'invalid_repo_origin',
+        );
+      }
+    } catch (error) {
+      if (error instanceof PromotionError && error.code === 'invalid_repo_origin') throw error;
+      await verifyLegacyOriginIfPresent(config.productionRepoUrl);
+    }
+  }
+
+  async function ensureConfiguredRemote(name: string, url: string): Promise<void> {
+    try {
+      const remoteUrl = await git(['config', '--get', `remote.${name}.url`]);
+      if (remoteUrl !== url) {
+        throw new PromotionError(
+          500,
+          `Promotion repository ${name} remote does not match configured repository: ${remoteUrl}`,
+          'invalid_repo_origin',
+        );
+      }
+    } catch (error) {
+      if (error instanceof PromotionError && error.code === 'invalid_repo_origin') throw error;
+      if (name === PRODUCTION_REMOTE) {
+        await verifyLegacyOriginIfPresent(url);
+      }
+      await git(['remote', 'add', name, url]);
+    }
+  }
+
+  async function verifyLegacyOriginIfPresent(url: string): Promise<void> {
     try {
       const originUrl = await git(['config', '--get', 'remote.origin.url']);
-      if (originUrl !== config.repoUrl) {
+      if (originUrl !== url) {
         throw new PromotionError(
           500,
           `Promotion repository origin does not match configured repository: ${originUrl}`,
@@ -161,7 +206,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
       }
     } catch (error) {
       if (error instanceof PromotionError && error.code === 'invalid_repo_origin') throw error;
-      throw new PromotionError(500, 'Promotion repository origin is not configured', 'invalid_repo_origin');
+      // No origin remote is fine for checkouts cloned with the explicit production remote.
     }
   }
 
@@ -187,13 +232,18 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
   async function fetchBranches(): Promise<BranchHeads> {
     await git([
       'fetch',
-      'origin',
-      `+refs/heads/${config.mainBranch}:refs/remotes/origin/${config.mainBranch}`,
-      `+refs/heads/${config.stagingBranch}:refs/remotes/origin/${config.stagingBranch}`,
+      PRODUCTION_REMOTE,
+      `+refs/heads/${config.mainBranch}:refs/remotes/${PRODUCTION_REMOTE}/${config.mainBranch}`,
       '--prune',
     ]);
-    const mainSha = await git(['rev-parse', `refs/remotes/origin/${config.mainBranch}`]);
-    const stagingSha = await git(['rev-parse', `refs/remotes/origin/${config.stagingBranch}`]);
+    await git([
+      'fetch',
+      STAGING_REMOTE,
+      `+refs/heads/${config.stagingBranch}:refs/remotes/${STAGING_REMOTE}/${config.stagingBranch}`,
+      '--prune',
+    ]);
+    const mainSha = await git(['rev-parse', productionRef()]);
+    const stagingSha = await git(['rev-parse', stagingRef()]);
     return { mainSha, stagingSha };
   }
 
@@ -203,12 +253,16 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
       '--name-status',
       '--find-renames',
       '-z',
-      `origin/${config.mainBranch}..origin/${config.stagingBranch}`,
+      `${productionRef()}..${stagingRef()}`,
     ]);
     const changes = parseNameStatus(nameStatus);
 
+    const promotableChanges = changes.filter(change => (
+      !isPromotionPathExcluded(change.path) && !(change.oldPath && isPromotionPathExcluded(change.oldPath))
+    ));
+
     return Promise.all(
-      changes.map(async change => {
+      promotableChanges.map(async change => {
         const stats = await getChangeStats(change);
         return { ...change, ...stats };
       }),
@@ -224,7 +278,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
     const output = await git([
       'diff',
       '--numstat',
-      `origin/${config.mainBranch}..origin/${config.stagingBranch}`,
+      `${productionRef()}..${stagingRef()}`,
       '--',
       ...pathspecs,
     ]);
@@ -241,7 +295,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
   }
 
   async function listCurrentChangesNoRenames(): Promise<string[]> {
-    const output = await git(['diff', '--cached', '--name-only', '--no-renames', '-z', `origin/${config.mainBranch}`]);
+    const output = await git(['diff', '--cached', '--name-only', '--no-renames', '-z', productionRef()]);
     return splitNul(output);
   }
 
@@ -262,7 +316,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
     return git([
       'diff',
       '--find-renames',
-      `origin/${config.mainBranch}..origin/${config.stagingBranch}`,
+      `${productionRef()}..${stagingRef()}`,
       '--',
       ...pathspecs,
     ]);
@@ -310,7 +364,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
 
     getStatus(pathValue: string) {
       return withGitLock(async () => {
-        const filePath = validateRepoPath(pathValue);
+        const filePath = validatePromotableRepoPath(pathValue);
         await ensureRepo();
         const heads = await fetchBranches();
         const changes = await getChangedFiles();
@@ -332,7 +386,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
 
     getDiff(pathValue: string) {
       return withGitLock(async () => {
-        const filePath = validateRepoPath(pathValue);
+        const filePath = validatePromotableRepoPath(pathValue);
         await ensureRepo();
         const heads = await fetchBranches();
         const changes = await getChangedFiles();
@@ -345,8 +399,8 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
           mainSha: heads.mainSha,
           status: change?.status ?? 'identical',
           isBinary: change?.isBinary ?? false,
-          beforeBlob: await getBlob(`origin/${config.mainBranch}`, beforePath),
-          afterBlob: await getBlob(`origin/${config.stagingBranch}`, afterPath),
+          beforeBlob: await getBlob(productionRef(), beforePath),
+          afterBlob: await getBlob(stagingRef(), afterPath),
           diff: await getDiffForChange(filePath, change),
         };
       });
@@ -367,8 +421,8 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
 
         await git(['reset', '--hard']);
         await git(['clean', '-fd']);
-        await git(['switch', '-C', branch, `origin/${config.mainBranch}`]);
-        await git(['reset', '--hard', `origin/${config.mainBranch}`]);
+        await git(['switch', '-C', branch, productionRef()]);
+        await git(['reset', '--hard', productionRef()]);
         await git(['clean', '-fd']);
 
         for (const change of selectedChanges) {
@@ -381,7 +435,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
             await git([
               'restore',
               '--source',
-              `origin/${config.stagingBranch}`,
+              stagingRef(),
               '--worktree',
               '--staged',
               '--',
@@ -407,7 +461,7 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
           '-m',
           `Source staging commit: ${heads.stagingSha}`,
         ]);
-        await git(['push', 'origin', `refs/heads/${branch}:refs/heads/${branch}`]);
+        await git(['push', PRODUCTION_REMOTE, `refs/heads/${branch}:refs/heads/${branch}`]);
 
         return {
           branch,
@@ -417,6 +471,14 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
       });
     },
   };
+
+  function productionRef(): string {
+    return `refs/remotes/${PRODUCTION_REMOTE}/${config.mainBranch}`;
+  }
+
+  function stagingRef(): string {
+    return `refs/remotes/${STAGING_REMOTE}/${config.stagingBranch}`;
+  }
 }
 
 function parseNameStatus(output: string): PromotionFileChange[] {
@@ -489,7 +551,7 @@ function validateRequestedPathInputs(paths: unknown): string[] {
     ? paths
         .filter((pathValue): pathValue is string => typeof pathValue === 'string')
         .map(pathValue => ({
-          path: validateRepoPath(pathValue),
+          path: validatePromotableRepoPath(pathValue),
           oldPath: null,
           status: 'modified',
           additions: 0,

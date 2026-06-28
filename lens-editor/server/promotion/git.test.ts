@@ -13,6 +13,8 @@ const fixtureRoots: string[] = [];
 interface RepoFixture {
   root: string;
   remoteDir: string;
+  productionRemoteDir?: string;
+  stagingRemoteDir?: string;
   seedDir: string;
   inspectDir: string;
   repoDir: string;
@@ -60,6 +62,7 @@ async function createFixture(): Promise<RepoFixture> {
   await runGit(seedDir, ['config', 'user.name', 'Promotion Test']);
 
   await writeFile(seedDir, 'modified.md', 'main version\n');
+  await writeFile(seedDir, '.github/workflows/validate.yml', 'main workflow\n');
   await writeFile(seedDir, 'unchanged.md', 'same in both branches\n');
   await writeFile(seedDir, 'deleted.md', 'remove me from staging\n');
   await writeFile(seedDir, 'rename-old.md', 'renamed file content\n');
@@ -72,6 +75,7 @@ async function createFixture(): Promise<RepoFixture> {
 
   await runGit(seedDir, ['switch', '-c', 'staging']);
   await writeFile(seedDir, 'modified.md', 'staging version\n');
+  await writeFile(seedDir, '.github/workflows/validate.yml', 'staging workflow\n');
   await writeFile(seedDir, 'added.md', 'new on staging\n');
   await fs.rm(path.join(seedDir, 'deleted.md'));
   await runGit(seedDir, ['mv', 'rename-old.md', 'rename-new.md']);
@@ -92,6 +96,8 @@ async function createFixture(): Promise<RepoFixture> {
     config: {
       enabled: true,
       repoUrl: remoteDir,
+      productionRepoUrl: remoteDir,
+      stagingRepoUrl: remoteDir,
       repoDir,
       mainBranch: 'main',
       stagingBranch: 'staging',
@@ -99,6 +105,73 @@ async function createFixture(): Promise<RepoFixture> {
       mergeMethod: 'SQUASH',
       githubOwner: 'owner',
       githubRepo: 'repo',
+      githubToken: 'token',
+    },
+  };
+}
+
+async function createSeparateRepoFixture(): Promise<RepoFixture> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'promotion-git-two-repos-'));
+  fixtureRoots.push(root);
+  const productionRemoteDir = path.join(root, 'production.git');
+  const stagingRemoteDir = path.join(root, 'staging.git');
+  const productionSeedDir = path.join(root, 'production-seed');
+  const stagingSeedDir = path.join(root, 'staging-seed');
+  const inspectDir = path.join(root, 'inspect');
+  const repoDir = path.join(root, 'scratch');
+
+  await fs.mkdir(productionRemoteDir, { recursive: true });
+  await fs.mkdir(stagingRemoteDir, { recursive: true });
+  await fs.mkdir(productionSeedDir, { recursive: true });
+  await fs.mkdir(stagingSeedDir, { recursive: true });
+
+  await runGit(productionRemoteDir, ['init', '--bare']);
+  await runGit(stagingRemoteDir, ['init', '--bare']);
+
+  await runGit(productionSeedDir, ['init', '--initial-branch=main']);
+  await runGit(productionSeedDir, ['config', 'user.email', 'test@example.com']);
+  await runGit(productionSeedDir, ['config', 'user.name', 'Production Test']);
+  await writeFile(productionSeedDir, 'selected.md', 'production selected\n');
+  await writeFile(productionSeedDir, 'unselected.md', 'production unselected\n');
+  await writeFile(productionSeedDir, 'unchanged.md', 'same content\n');
+  await runGit(productionSeedDir, ['add', '.']);
+  await runGit(productionSeedDir, ['commit', '-m', 'production main']);
+  await runGit(productionSeedDir, ['remote', 'add', 'origin', productionRemoteDir]);
+  await runGit(productionSeedDir, ['push', 'origin', 'main']);
+
+  await runGit(stagingSeedDir, ['init', '--initial-branch=staging']);
+  await runGit(stagingSeedDir, ['config', 'user.email', 'test@example.com']);
+  await runGit(stagingSeedDir, ['config', 'user.name', 'Staging Test']);
+  await writeFile(stagingSeedDir, 'selected.md', 'staging selected\n');
+  await writeFile(stagingSeedDir, 'unselected.md', 'staging unselected\n');
+  await writeFile(stagingSeedDir, 'unchanged.md', 'same content\n');
+  await runGit(stagingSeedDir, ['add', '.']);
+  await runGit(stagingSeedDir, ['commit', '-m', 'staging content']);
+  await runGit(stagingSeedDir, ['remote', 'add', 'origin', stagingRemoteDir]);
+  await runGit(stagingSeedDir, ['push', 'origin', 'staging']);
+
+  await runGit(root, ['clone', productionRemoteDir, inspectDir]);
+
+  return {
+    root,
+    remoteDir: productionRemoteDir,
+    productionRemoteDir,
+    stagingRemoteDir,
+    seedDir: stagingSeedDir,
+    inspectDir,
+    repoDir,
+    config: {
+      enabled: true,
+      repoUrl: productionRemoteDir,
+      productionRepoUrl: productionRemoteDir,
+      stagingRepoUrl: stagingRemoteDir,
+      repoDir,
+      mainBranch: 'main',
+      stagingBranch: 'staging',
+      branchPrefix: 'promote/two-repos',
+      mergeMethod: 'SQUASH',
+      githubOwner: 'owner',
+      githubRepo: 'production',
       githubToken: 'token',
     },
   };
@@ -217,7 +290,26 @@ describe('git promotion service', () => {
       deletions: 0,
       isBinary: true,
     });
+    expect(byPath.has('.github/workflows/validate.yml')).toBe(false);
     expect(byPath.has('unchanged.md')).toBe(false);
+  });
+
+  it('excludes GitHub workflow files from promotion APIs', async () => {
+    const fixture = await createFixture();
+    const service = createGitPromotionService(fixture.config);
+
+    await expect(service.getStatus('.github/workflows/validate.yml')).rejects.toMatchObject({
+      status: 400,
+      code: 'path_not_promotable',
+    });
+    await expect(service.getDiff('.github/workflows/validate.yml')).rejects.toMatchObject({
+      status: 400,
+      code: 'path_not_promotable',
+    });
+    await expect(service.createPromotionBranch({ paths: ['.github/workflows/validate.yml'] })).rejects.toMatchObject({
+      status: 400,
+      code: 'path_not_promotable',
+    });
   });
 
   it('getStatus returns exactly identical for a truly unchanged file', async () => {
@@ -260,6 +352,21 @@ describe('git promotion service', () => {
     await expect(lastCommitMessage(fixture, result.branch)).resolves.toContain(
       `Source staging commit: ${result.sourceStagingSha}`,
     );
+  });
+
+  it('creates promotion branches from production while restoring selected files from a separate staging repository', async () => {
+    const fixture = await createSeparateRepoFixture();
+    const service = createGitPromotionService(fixture.config);
+
+    const changes = await service.getChanges();
+    expect(changes.files.map(file => file.path).sort()).toEqual(['selected.md', 'unselected.md']);
+
+    const result = await service.createPromotionBranch({ paths: ['selected.md'] });
+
+    expect(result.branch).toMatch(/^promote\/two-repos\//);
+    await expect(branchDiffNames(fixture, result.branch)).resolves.toEqual(['selected.md']);
+    await expect(showFile(fixture, `origin/${result.branch}`, 'selected.md')).resolves.toBe('staging selected');
+    await expect(showFile(fixture, `origin/${result.branch}`, 'unselected.md')).resolves.toBe('production unselected');
   });
 
   it('promotes both sides of a rename when selecting the new path', async () => {

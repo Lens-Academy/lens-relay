@@ -30,6 +30,18 @@ export function validateRepoPath(input: string): string {
   return normalized;
 }
 
+export function isPromotionPathExcluded(filePath: string): boolean {
+  return filePath === '.github' || filePath.startsWith('.github/');
+}
+
+export function validatePromotableRepoPath(input: string): string {
+  const filePath = validateRepoPath(input);
+  if (isPromotionPathExcluded(filePath)) {
+    throw new PromotionError(400, 'Path is excluded from production promotion', 'path_not_promotable');
+  }
+  return filePath;
+}
+
 export function validatePromotionPaths(paths: unknown, changedFiles: PromotionFileChange[]): string[] {
   if (!Array.isArray(paths) || paths.length === 0) {
     throw new PromotionError(400, 'At least one path is required', 'invalid_paths');
@@ -49,7 +61,7 @@ export function validatePromotionPaths(paths: unknown, changedFiles: PromotionFi
     if (typeof pathValue !== 'string') {
       throw new PromotionError(400, 'Path must be a string', 'invalid_path');
     }
-    selectedPaths.add(validateRepoPath(pathValue));
+    selectedPaths.add(validatePromotableRepoPath(pathValue));
   }
 
   const normalized = [...selectedPaths];

@@ -2,8 +2,8 @@
 /**
  * @vitest-environment happy-dom
  */
-import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { EditorArea } from './EditorArea';
@@ -105,6 +105,7 @@ vi.mock('../DiscussionPanel/useHasDiscussion', () => ({
 
 describe('EditorArea', () => {
   beforeEach(() => {
+    vi.useRealTimers();
     mocks.metadata = null;
     mocks.auth = {
       canWrite: true,
@@ -114,6 +115,10 @@ describe('EditorArea', () => {
       isAllFolders: true,
     };
     vi.mocked(getPromotionStatus).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('renders comment margin panel', () => {
@@ -165,6 +170,39 @@ describe('EditorArea', () => {
       expect(getPromotionStatus).toHaveBeenCalledWith('Notes.md');
     });
     expect(await screen.findByRole('button', { name: /identical to production/i })).toBeInTheDocument();
+
+    document.body.removeChild(headerControls);
+  });
+
+  it('refreshes production status on an interval while a Lens Edu file is open', async () => {
+    vi.useFakeTimers();
+    const headerControls = document.createElement('div');
+    headerControls.id = 'header-controls';
+    document.body.appendChild(headerControls);
+    mocks.metadata = {
+      '/Lens Edu/Notes.md': { id: 'note-uuid', type: 'markdown', version: 0 },
+    };
+    vi.mocked(getPromotionStatus).mockResolvedValue({
+      path: 'Notes.md',
+      oldPath: null,
+      status: 'identical',
+      additions: 0,
+      deletions: 0,
+      isBinary: false,
+      mainSha: 'main-sha',
+    });
+
+    renderWithProviders(<EditorArea currentDocId={`${RELAY_ID}-note-uuid`} />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getPromotionStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(getPromotionStatus).toHaveBeenCalledTimes(2);
 
     document.body.removeChild(headerControls);
   });

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { PromotionStatusResponse } from '../../lib/promotion-api';
 
 interface PromotionStatusProps {
@@ -45,14 +46,18 @@ export function PromotionStatus({
   onPromoteMultiple,
 }: PromotionStatusProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
   const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const label = promotionStatusLabel(status, loading, error);
   const actionable = canPromote && !!status && status.status !== 'identical' && !loading && !error;
 
   useEffect(() => {
     if (!menuOpen) return;
     const onPointerDown = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setMenuOpen(false);
       }
     };
@@ -63,6 +68,17 @@ export function PromotionStatus({
   const handleMenuAction = (callback?: () => void) => {
     setMenuOpen(false);
     callback?.();
+  };
+
+  const toggleMenu = () => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (rect) {
+      setMenuPosition({
+        top: rect.bottom + 4,
+        right: Math.max(8, window.innerWidth - rect.right),
+      });
+    }
+    setMenuOpen(open => !open);
   };
 
   if (!actionable) {
@@ -82,16 +98,20 @@ export function PromotionStatus({
   return (
     <div ref={rootRef} className="relative">
       <button
+        ref={buttonRef}
         type="button"
-        onClick={() => setMenuOpen(open => !open)}
+        onClick={toggleMenu}
         className="rounded border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100"
         aria-expanded={menuOpen}
       >
         Promote to production
       </button>
-      {menuOpen && (
+      {menuOpen && createPortal(
         <div
-          className="absolute right-0 top-full z-50 mt-1 w-40 rounded-md border border-gray-200 bg-white p-1 text-sm shadow-lg"
+          ref={menuRef}
+          role="menu"
+          className="fixed z-[1000] w-40 rounded-md border border-gray-200 bg-white p-1 text-sm shadow-lg"
+          style={{ top: menuPosition.top, right: menuPosition.right }}
         >
           <button
             type="button"
@@ -107,7 +127,8 @@ export function PromotionStatus({
           >
             Multiple files
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -46,6 +46,8 @@ export interface PromotionPrResponse {
 export interface PromotionConfig {
   enabled: boolean;
   repoUrl: string;
+  productionRepoUrl: string;
+  stagingRepoUrl: string;
   repoDir: string;
   mainBranch: string;
   stagingBranch: string;

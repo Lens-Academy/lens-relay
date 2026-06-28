@@ -135,7 +135,7 @@ for folder_id, files in d.items():
 | Obsidian Folder | Shared Folder ID | GitHub Repo | Branch |
 |-----------------|------------------|-------------|--------|
 | Lens | `fbd5eb54-73cc-41b0-ac28-2b93d3b4244e` | [Lens-Academy/lens-folder-relay](https://github.com/Lens-Academy/lens-folder-relay) | main |
-| Lens Edu | `ea4015da-24af-4d9d-ac49-8c902cb17121` | [Lens-Academy/lens-edu-relay](https://github.com/Lens-Academy/lens-edu-relay) | staging |
+| Lens Edu | `ea4015da-24af-4d9d-ac49-8c902cb17121` | [Lens-Academy/lens-edu-staging](https://github.com/Lens-Academy/lens-edu-staging) | staging |
 | Lens Edu Private | `24027431-24c0-42c2-9f8f-04ed0dd458aa` | [Lens-Academy/lens-edu-private-relay](https://github.com/Lens-Academy/lens-edu-private-relay) | main |
 
 - **Sync interval:** Changes committed every ~10 seconds
@@ -156,7 +156,7 @@ prefix = ""
 [[git_connector]]
 shared_folder_id = "ea4015da-24af-4d9d-ac49-8c902cb17121"
 relay_id = "cb696037-0f72-4e93-8717-4e433129d789"
-url = "git@github.com-educational:Lens-Academy/lens-edu-relay.git"
+url = "git@github.com-educational:Lens-Academy/lens-edu-staging.git"
 branch = "staging"
 remote_name = "origin"
 prefix = ""
@@ -282,8 +282,8 @@ npx lens-content-processor ./path/to/content --output result.json
 
 ### GitHub Actions Workflow
 
-The `lens-edu-relay` repository has automated validation via `.github/workflows/validate.yml`:
-- Pull requests to `main`, manual dispatch, scheduled every 5 minutes (validates `staging` branch)
+The Lens Edu production/staging repositories have automated validation via `.github/workflows/validate.yml`:
+- Pull requests to production `main`, manual dispatch, scheduled every 5 minutes (validates staging `staging` branch)
 - Skips if commit is < 5 minutes old or already validated
 
 **Modifying the workflow** — never push directly to the educational content repo. Edit via the relay server:
@@ -297,10 +297,12 @@ docker exec relay-git-sync bash -c 'cd /data/repos/cb696037-0f72-4e93-8717-4e433
 
 ## Lens Editor Production Promotion
 
-The Lens Editor promotion feature lets editors compare `staging` and `main` for
-`Lens-Academy/lens-edu-relay`, select specific changed files, and create a
-promotion pull request. The feature uses its own scratch clone and GitHub token;
-it must not reuse or modify the `relay-git-sync` checkout, container, or keys.
+The Lens Editor promotion feature compares the relay-owned staging repository
+(`Lens-Academy/lens-edu-staging`, branch `staging`) against the curated
+production repository (`Lens-Academy/lens-edu-production`, branch `production`).
+Editors select specific changed files and create promotion pull requests into
+the production repo. The feature uses its own scratch clone and GitHub token; it
+must not reuse or modify the `relay-git-sync` checkout, container, or keys.
 
 ### Environment
 
@@ -311,14 +313,15 @@ Add these variables to the production `.env` used by
 PROMOTION_ENABLED=true
 PROMOTION_REPO_HOST_DIR=/root/lens-editor-promotion-data/repositories
 PROMOTION_SSH_DIR=/root/lens-editor-promotion-data/ssh
-PROMOTION_REPO_URL=git@github.com-lens-editor-promotion:Lens-Academy/lens-edu-relay.git
-PROMOTION_REPO_DIR=/data/lens-editor/promotion-repos/lens-edu-relay
-PROMOTION_MAIN_BRANCH=main
+PROMOTION_PRODUCTION_REPO_URL=git@github.com-lens-editor-promotion:Lens-Academy/lens-edu-production.git
+PROMOTION_STAGING_REPO_URL=git@github.com-lens-editor-promotion:Lens-Academy/lens-edu-staging.git
+PROMOTION_REPO_DIR=/data/lens-editor/promotion-repos/lens-edu-production
+PROMOTION_MAIN_BRANCH=production
 PROMOTION_STAGING_BRANCH=staging
 PROMOTION_BRANCH_PREFIX=promote/lens-editor
 PROMOTION_MERGE_METHOD=SQUASH
 PROMOTION_GITHUB_OWNER=Lens-Academy
-PROMOTION_GITHUB_REPO=lens-edu-relay
+PROMOTION_GITHUB_REPO=lens-edu-production
 GITHUB_TOKEN=github_pat_with_pull_request_and_automerge_permissions
 ```
 
@@ -352,18 +355,20 @@ chmod 644 /root/lens-editor-promotion-data/ssh/known_hosts
 Verify GitHub's SSH host key fingerprint out of band before rollout; do not
 blindly trust a stale or unexpected `ssh-keyscan` result.
 
-Add `promotion_key.pub` as a write-enabled deploy key for
-`Lens-Academy/lens-edu-relay`. This key is only for promotion branches and must
-not be one of the relay-git-sync keys. The Lens Editor image includes `git` and
-`openssh-client`; compose sets `GIT_SSH_COMMAND=ssh -F
-/data/lens-editor-promotion-ssh/config` for promotion Git operations.
+Add `promotion_key.pub` as a read/write deploy key for
+`Lens-Academy/lens-edu-production` and as a read-only deploy key for
+`Lens-Academy/lens-edu-staging`. This key must not be one of the relay-git-sync
+keys. The Lens Editor image includes `git` and `openssh-client`; compose sets
+`GIT_SSH_COMMAND=ssh -F /data/lens-editor-promotion-ssh/config` for promotion
+Git operations.
 
 The GitHub token is for GitHub API operations: creating pull requests and
 enabling auto-merge. It is not used by `git clone`/`git push` while the remote
-uses SSH. The promotion service never pushes to `staging`; it only pushes
-short-lived branches whose names begin with `PROMOTION_BRANCH_PREFIX`. Keep
-GitHub branch protection or rulesets enabled for `main` and `staging`; a
-write-enabled deploy key cannot enforce branch-prefix restrictions by itself.
+uses SSH. The promotion service never pushes to the staging repository; it only
+pushes short-lived branches to the production repository whose names begin with
+`PROMOTION_BRANCH_PREFIX`. Keep GitHub branch protection or rulesets enabled for
+production `main` and staging `staging`; a write-enabled deploy key cannot
+enforce branch-prefix restrictions by itself.
 
 Let the promotion service create the scratch clone on first use. It marks that
 checkout with local git config and rejects existing checkouts without that
@@ -374,10 +379,9 @@ promotion and let Lens Editor recreate it.
 
 ### Rollout Gates
 
-Before setting `PROMOTION_ENABLED=true` in production, confirm whether pushing
-short-lived promotion branches to `Lens-Academy/lens-edu-relay` is acceptable.
-If same-repo promotion branches are not allowed, configure a GitHub App or fork
-push target first and update the promotion remote/head handling accordingly.
+Before setting `PROMOTION_ENABLED=true` in production, confirm that
+`relay-git-sync` writes only to `Lens-Academy/lens-edu-staging` and that the
+production platform reads `Lens-Academy/lens-edu-production`.
 
 Verify relay-git-sync isolation before rollout:
 

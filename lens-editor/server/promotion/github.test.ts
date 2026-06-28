@@ -11,14 +11,16 @@ interface RecordedFetch {
 function createConfig(overrides: Partial<PromotionConfig> = {}): PromotionConfig {
   return {
     enabled: true,
-    repoUrl: 'git@github.com:Lens-Academy/lens-edu-relay.git',
-    repoDir: '/tmp/lens-edu-relay',
-    mainBranch: 'main',
+    repoUrl: 'git@github.com:Lens-Academy/lens-edu-production.git',
+    productionRepoUrl: 'git@github.com:Lens-Academy/lens-edu-production.git',
+    stagingRepoUrl: 'git@github.com:Lens-Academy/lens-edu-staging.git',
+    repoDir: '/tmp/lens-edu-production',
+    mainBranch: 'production',
     stagingBranch: 'staging',
     branchPrefix: 'promote/lens-editor',
     mergeMethod: 'SQUASH',
     githubOwner: 'Lens-Academy',
-    githubRepo: 'lens-edu-relay',
+    githubRepo: 'lens-edu-production',
     githubToken: 'ghs_test_token',
     ...overrides,
   };
@@ -56,7 +58,7 @@ describe('GitHub promotion service', () => {
     const { fetchImpl, calls } = createRecordingFetch([
       jsonResponse({
         number: 42,
-        html_url: 'https://github.com/Lens-Academy/lens-edu-relay/pull/42',
+        html_url: 'https://github.com/Lens-Academy/lens-edu-production/pull/42',
         node_id: 'PR_kwDOTest42',
       }),
       jsonResponse({ data: { enablePullRequestAutoMerge: { pullRequest: { id: 'PR_kwDOTest42' } } } }),
@@ -78,14 +80,14 @@ describe('GitHub promotion service', () => {
     expect(result).toEqual({
       branch: 'promote/lens-editor/20260627-abcdef12',
       prNumber: 42,
-      prUrl: 'https://github.com/Lens-Academy/lens-edu-relay/pull/42',
+      prUrl: 'https://github.com/Lens-Academy/lens-edu-production/pull/42',
       mainSha: '1111111111111111111111111111111111111111',
       autoMergeEnabled: true,
     });
     expect(result).not.toHaveProperty('sourceStagingSha');
 
     expect(calls).toHaveLength(2);
-    expect(calls[0].url).toBe('https://api.github.test/repos/Lens-Academy/lens-edu-relay/pulls');
+    expect(calls[0].url).toBe('https://api.github.test/repos/Lens-Academy/lens-edu-production/pulls');
     expect(calls[0].init.method).toBe('POST');
     expect(calls[0].init.headers).toMatchObject({
       Accept: 'application/vnd.github+json',
@@ -96,7 +98,7 @@ describe('GitHub promotion service', () => {
     expect(calls[0].body).toEqual({
       title: 'Promote selected lessons',
       head: 'promote/lens-editor/20260627-abcdef12',
-      base: 'main',
+      base: 'production',
       maintainer_can_modify: true,
       body: [
         'Created by Lens Editor production promotion.',
@@ -129,7 +131,7 @@ describe('GitHub promotion service', () => {
     const { fetchImpl } = createRecordingFetch([
       jsonResponse({
         number: 7,
-        html_url: 'https://github.com/Lens-Academy/lens-edu-relay/pull/7',
+        html_url: 'https://github.com/Lens-Academy/lens-edu-production/pull/7',
         node_id: 'PR_kwDOTest7',
       }),
       jsonResponse({ errors: [{ message: 'Branch protection is not configured for auto-merge' }] }),
@@ -146,7 +148,7 @@ describe('GitHub promotion service', () => {
     expect(result).toMatchObject({
       branch: 'promote/lens-editor/test',
       prNumber: 7,
-      prUrl: 'https://github.com/Lens-Academy/lens-edu-relay/pull/7',
+      prUrl: 'https://github.com/Lens-Academy/lens-edu-production/pull/7',
       mainSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       autoMergeEnabled: false,
     });
@@ -157,7 +159,7 @@ describe('GitHub promotion service', () => {
     const { fetchImpl } = createRecordingFetch([
       jsonResponse({
         number: 8,
-        html_url: 'https://github.com/Lens-Academy/lens-edu-relay/pull/8',
+        html_url: 'https://github.com/Lens-Academy/lens-edu-production/pull/8',
         node_id: 'PR_kwDOTest8',
       }),
       new Error('network unavailable'),
@@ -174,7 +176,7 @@ describe('GitHub promotion service', () => {
     expect(result).toMatchObject({
       branch: 'promote/lens-editor/network-warning',
       prNumber: 8,
-      prUrl: 'https://github.com/Lens-Academy/lens-edu-relay/pull/8',
+      prUrl: 'https://github.com/Lens-Academy/lens-edu-production/pull/8',
       mainSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       autoMergeEnabled: false,
       warning: expect.stringContaining('network unavailable'),
@@ -186,7 +188,7 @@ describe('GitHub promotion service', () => {
     const { fetchImpl } = createRecordingFetch([
       jsonResponse({
         number: 9,
-        html_url: 'https://github.com/Lens-Academy/lens-edu-relay/pull/9',
+        html_url: 'https://github.com/Lens-Academy/lens-edu-production/pull/9',
         node_id: 'PR_kwDOTest9',
       }),
       textResponse('not json', { status: 200, headers: { 'Content-Type': 'application/json' } }),
@@ -203,7 +205,7 @@ describe('GitHub promotion service', () => {
     expect(result).toMatchObject({
       branch: 'promote/lens-editor/malformed-warning',
       prNumber: 9,
-      prUrl: 'https://github.com/Lens-Academy/lens-edu-relay/pull/9',
+      prUrl: 'https://github.com/Lens-Academy/lens-edu-production/pull/9',
       mainSha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       autoMergeEnabled: false,
       warning: expect.stringContaining('GitHub GraphQL auto-merge request failed'),
@@ -292,7 +294,7 @@ describe('GitHub promotion service', () => {
     const { fetchImpl, calls } = createRecordingFetch([
       jsonResponse({
         number: 11,
-        html_url: 'https://github.com/Lens-Academy/lens-edu-relay/pull/11',
+        html_url: 'https://github.com/Lens-Academy/lens-edu-production/pull/11',
         node_id: 'PR_kwDOTest11',
       }),
       jsonResponse({ data: { enablePullRequestAutoMerge: { pullRequest: { id: 'PR_kwDOTest11' } } } }),

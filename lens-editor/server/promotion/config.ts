@@ -1,9 +1,19 @@
 import type { PromotionConfig } from './types.ts';
 
+const LENS_EDU_GITHUB_OWNER = 'Lens-Academy';
+const LENS_EDU_STAGING_GITHUB_REPO = 'lens-edu-staging';
+const LENS_EDU_PRODUCTION_GITHUB_REPO = 'lens-edu-production';
+const LENS_EDU_PRODUCTION_BRANCH = 'production';
+const LENS_EDU_STAGING_BRANCH = 'staging';
+
 export function loadPromotionConfig(env: NodeJS.ProcessEnv = process.env): PromotionConfig {
+  const productionRepoUrl = readEnvString(env.PROMOTION_PRODUCTION_REPO_URL);
+  const stagingRepoUrl = readEnvString(env.PROMOTION_STAGING_REPO_URL);
   return {
     enabled: env.PROMOTION_ENABLED === 'true',
-    repoUrl: readEnvString(env.PROMOTION_REPO_URL),
+    repoUrl: productionRepoUrl,
+    productionRepoUrl,
+    stagingRepoUrl,
     repoDir: readEnvString(env.PROMOTION_REPO_DIR),
     mainBranch: readEnvStringWithDefault(env.PROMOTION_MAIN_BRANCH, 'main'),
     stagingBranch: readEnvStringWithDefault(env.PROMOTION_STAGING_BRANCH, 'staging'),
@@ -19,7 +29,8 @@ export function promotionConfigReady(config: PromotionConfig): boolean {
   if (!config.enabled) return false;
 
   return Boolean(
-    config.repoUrl &&
+    config.productionRepoUrl &&
+      config.stagingRepoUrl &&
       config.repoDir &&
       config.mainBranch &&
       config.stagingBranch &&
@@ -27,8 +38,33 @@ export function promotionConfigReady(config: PromotionConfig): boolean {
       config.mergeMethod &&
       config.githubOwner &&
       config.githubRepo &&
-      config.githubToken,
+      config.githubToken &&
+      config.githubOwner === LENS_EDU_GITHUB_OWNER &&
+      promotionReposTargetLensEdu(config) &&
+      promotionBranchesTargetLensEdu(config) &&
+      config.stagingBranch === LENS_EDU_STAGING_BRANCH,
   );
+}
+
+function promotionReposTargetLensEdu(config: PromotionConfig): boolean {
+  if (config.githubRepo === LENS_EDU_PRODUCTION_GITHUB_REPO) {
+    return repoUrlTargetsGitHubRepo(config.productionRepoUrl, LENS_EDU_PRODUCTION_GITHUB_REPO) &&
+      repoUrlTargetsGitHubRepo(config.stagingRepoUrl, LENS_EDU_STAGING_GITHUB_REPO);
+  }
+
+  return false;
+}
+
+function promotionBranchesTargetLensEdu(config: PromotionConfig): boolean {
+  if (config.githubRepo === LENS_EDU_PRODUCTION_GITHUB_REPO) {
+    return config.mainBranch === LENS_EDU_PRODUCTION_BRANCH;
+  }
+  return false;
+}
+
+function repoUrlTargetsGitHubRepo(repoUrl: string, repo: string): boolean {
+  return repoUrl.endsWith(`:${LENS_EDU_GITHUB_OWNER}/${repo}.git`) ||
+    repoUrl === `https://github.com/${LENS_EDU_GITHUB_OWNER}/${repo}.git`;
 }
 
 function parseMergeMethod(value: string | undefined): PromotionConfig['mergeMethod'] {
