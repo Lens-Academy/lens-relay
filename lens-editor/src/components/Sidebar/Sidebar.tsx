@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useDeferredValue, useMemo, useCallback } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { SearchInput } from './SearchInput';
 import { SearchPanel } from './SearchPanel';
 import { FileTree } from './FileTree';
@@ -50,9 +50,6 @@ export function Sidebar() {
   const [moveTargetFolder, setMoveTargetFolder] = useState<string>('');
   const [moveError, setMoveError] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
-
-  // Navigation for review page link
-  const navigate = useNavigate();
 
   // Ref for Ctrl+K keyboard shortcut focus
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -132,7 +129,7 @@ export function Sidebar() {
     const newPath = parts.join('/');
     try {
       await movePath(prefixedOldPath.slice(1), newPath);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Rename failed:', err);
       setMoveError(moveErrorMessage(err, parts[parts.length - 1]));
     }
@@ -237,7 +234,7 @@ export function Sidebar() {
       await movePath(moveTarget.path.slice(1), moveNewPath, targetFolder);
       setMoveTarget(null);
       setMoveNewPath('');
-    } catch (err: any) {
+    } catch (err: unknown) {
       setMoveError(moveErrorMessage(err, moveNewPath.split('/').pop()));
     } finally {
       setIsMoving(false);
@@ -277,7 +274,7 @@ export function Sidebar() {
 
     try {
       await movePath(oldPrefixedPath.slice(1), newOriginalPath, crossFolder);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Drag move failed:', err);
       setMoveError(moveErrorMessage(err, fileName));
     }
