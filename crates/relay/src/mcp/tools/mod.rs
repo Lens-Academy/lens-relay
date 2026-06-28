@@ -4,6 +4,7 @@ pub mod critic_diff;
 pub mod critic_markup;
 pub mod edit;
 pub mod get_links;
+pub mod get_url;
 pub mod glob;
 pub mod grep;
 pub mod move_doc;
@@ -89,6 +90,25 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         json!({
             "name": "get_links",
             "description": "Get backlinks and forward links for a document. Returns document paths that link TO this document (backlinks) and paths this document links TO (forward links).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["file_path", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the document (e.g. 'Lens/Photosynthesis.md')"
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "get_url",
+            "description": "Get the Lens Editor URL for a document. Returns the canonical link to open the document in the editor. Use this instead of constructing editor URLs by hand — the URL contains a per-document id that is not guessable.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -359,6 +379,10 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
+        "get_url" => match get_url::execute(server, arguments) {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
         "grep" => match grep::execute(server, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
@@ -429,6 +453,67 @@ mod integration_tests {
         );
         assert!(move_tool["inputSchema"]["properties"]["path"].is_object());
         assert!(move_tool["inputSchema"]["properties"]["file_path"].is_object());
+    }
+
+    #[tokio::test]
+    async fn dispatch_get_url_end_to_end() {
+        use y_sweet_core::share_token::McpAccess;
+
+        let server = build_blob_test_server_with_folder().await;
+        let access = McpAccess {
+            writable: true,
+            folder_uuid: None,
+            folder_name: None,
+        };
+
+        // get_url must be advertised even for read-only sessions.
+        assert!(
+            super::tool_definitions(false)
+                .iter()
+                .any(|t| t["name"] == "get_url"),
+            "get_url should be advertised for read-only sessions"
+        );
+
+        // Drive the real MCP entrypoint: create_session -> create -> get_url.
+        let sess = super::dispatch_tool(
+            &server,
+            "create_session",
+            &json!({ "name": "Test" }),
+            &access,
+        )
+        .await;
+        let sid = sess["content"][0]["text"].as_str().unwrap().to_string();
+
+        let created = super::dispatch_tool(
+            &server,
+            "create",
+            &json!({ "file_path": "Lens/Doc.md", "content": "hello", "session_id": sid }),
+            &access,
+        )
+        .await;
+        assert_eq!(created["isError"], json!(false), "create failed: {created}");
+
+        let res = super::dispatch_tool(
+            &server,
+            "get_url",
+            &json!({ "file_path": "Lens/Doc.md", "session_id": sid }),
+            &access,
+        )
+        .await;
+        assert_eq!(res["isError"], json!(false), "get_url errored: {res}");
+
+        // The URL must embed the doc's real, freshly generated prefix.
+        let text = res["content"][0]["text"].as_str().unwrap();
+        let uuid = server
+            .doc_resolver()
+            .resolve_path("Lens/Doc.md")
+            .unwrap()
+            .uuid;
+        let prefix = &uuid[..8];
+        assert!(
+            text.contains(&format!("{}/Lens/Doc.md", prefix)),
+            "URL should embed the real doc prefix {prefix}, got: {text}"
+        );
     }
 
     #[tokio::test]
