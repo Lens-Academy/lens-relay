@@ -147,6 +147,23 @@ describe('EditorArea', () => {
     expect(main).toBeInTheDocument();
   });
 
+  it('places workflow navigation after source controls and before the user badge', () => {
+    const headerControls = document.createElement('div');
+    headerControls.id = 'header-controls';
+    document.body.appendChild(headerControls);
+
+    renderWithProviders(<EditorArea currentDocId="test-doc" />);
+
+    const source = screen.getByTestId('mock-source-toggle');
+    const menu = screen.getByRole('button', { name: /open workflows menu/i });
+    const presence = screen.getByTestId('mock-presence-panel');
+
+    expect(source.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(menu.compareDocumentPosition(presence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    document.body.removeChild(headerControls);
+  });
+
   it('checks production status using the repo-relative path for Lens Edu files', async () => {
     const headerControls = document.createElement('div');
     headerControls.id = 'header-controls';

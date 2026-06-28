@@ -395,22 +395,11 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Review link */}
       {moveError && !moveTarget && (
         <div className="px-3 py-2 border-t border-red-100 bg-red-50 text-sm text-red-700">
           {moveError}
         </div>
       )}
-
-      {/* Review link */}
-      <div className="px-3 py-2 border-t border-gray-200">
-        <button
-          onClick={() => navigate('/review')}
-          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
-        >
-          Review Suggestions
-        </button>
-      </div>
 
       {/* Delete confirmation dialog */}
       <ConfirmDialog

@@ -61,8 +61,18 @@ export function SourceModeToggle({ editorView, isSourceMode, onSourceModeChange 
 
   return (
     <SegmentedToggle
-      leftLabel={<SourceIcon />}
-      rightLabel={<PreviewIcon />}
+      leftLabel={
+        <span className="inline-flex items-center gap-1.5">
+          <SourceIcon />
+          <span>Source</span>
+        </span>
+      }
+      rightLabel={
+        <span className="inline-flex items-center gap-1.5">
+          <PreviewIcon />
+          <span>Preview</span>
+        </span>
+      }
       leftTitle="Source Mode"
       rightTitle="Live Preview"
       value={isSourceMode ? 'left' : 'right'}

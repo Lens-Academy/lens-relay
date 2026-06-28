@@ -26,6 +26,7 @@ import { PanelDebugOverlay } from '../PanelDebugOverlay';
 import { ConnectedDiscussionPanel } from '../DiscussionPanel';
 import { PromotionStatus } from '../Promotion/PromotionStatus';
 import { PromoteFileDialog } from '../Promotion/PromoteFileDialog';
+import { WorkflowMenu } from '../WorkflowMenu';
 import { ResizeHandle } from './ResizeHandle';
 import { useHasDiscussion } from '../DiscussionPanel/useHasDiscussion';
 import { useNavigation } from '../../contexts/NavigationContext';
@@ -331,6 +332,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
                   onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(promotionFilePath)}`)}
                 />
               )}
+              <WorkflowMenu />
               <PresencePanel />
               <SyncStatus />
             </OverflowMenu>
@@ -351,6 +353,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
                   onPromoteMultiple={() => navigate(`/promote?path=${encodeURIComponent(promotionFilePath)}`)}
                 />
               )}
+              <WorkflowMenu />
               <PresencePanel />
               <SyncStatus />
             </>
