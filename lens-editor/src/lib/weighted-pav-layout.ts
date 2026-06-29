@@ -1,13 +1,13 @@
-export interface LayoutItem {
-  key: number;
+export interface LayoutItem<Key = string | number> {
+  key: Key;
   anchorY: number;
   height: number;
   /** 0 = no displacement penalty; ∞ = hard pin (use Number.POSITIVE_INFINITY). */
   weight: number;
 }
 
-export interface LayoutInput {
-  items: LayoutItem[];
+export interface LayoutInput<Key = string | number> {
+  items: LayoutItem<Key>[];
   gap: number;
 }
 
@@ -40,10 +40,10 @@ interface Block {
  *
  * Returns a Map<key, top-y>.
  */
-export function computeWeightedLayout(input: LayoutInput): Map<number, number> {
+export function computeWeightedLayout<Key = string | number>(input: LayoutInput<Key>): Map<Key, number> {
   const { items, gap } = input;
   const sorted = [...items].sort((a, b) => a.anchorY - b.anchorY);
-  const out = new Map<number, number>();
+  const out = new Map<Key, number>();
   if (sorted.length === 0) return out;
 
   // δ_k for a single-member block is 0 (the card is the block).

@@ -209,7 +209,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     const viewport = getViewportRect();
     const mid = viewport.height / 2;
 
-    const items: LayoutItem[] = [];
+    const items: LayoutItem<ThreadKey>[] = [];
     let anyPositiveWeight = false;
     for (const thread of threads) {
       const anchorY = anchorYFor(thread, viewport);

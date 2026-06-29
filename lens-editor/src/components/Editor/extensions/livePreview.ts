@@ -429,6 +429,10 @@ function cursorOnLine(view: EditorView, pos: number): boolean {
   return cursorLine === targetLine;
 }
 
+function rangeSpansLineBreak(view: EditorView, from: number, to: number): boolean {
+  return to > view.state.doc.lineAt(from).to;
+}
+
 /**
  * ViewPlugin that builds decorations based on cursor position
  */
@@ -540,7 +544,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             // Link: replace with clickable widget when cursor not on link
             // Link node contains: LinkMark `[`, link text, LinkMark `]`, LinkMark `(`, URL, LinkMark `)`
             if (node.name === 'Link') {
-              if (!selectionIntersects(selection, node.from, node.to)) {
+              if (!selectionIntersects(selection, node.from, node.to) && !rangeSpansLineBreak(view, node.from, node.to)) {
                 // Extract link text and URL from the Link node's content
                 const content = view.state.doc.sliceString(node.from, node.to);
                 const textMatch = content.match(/^\[([^\]]*)\]/);
@@ -565,7 +569,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             // Image: replace ![alt](url) with inline preview when cursor not on it
             if (node.name === 'Image') {
               if (node.node.parent?.name === 'Link') return;
-              if (!selectionIntersects(selection, node.from, node.to)) {
+              if (!selectionIntersects(selection, node.from, node.to) && !rangeSpansLineBreak(view, node.from, node.to)) {
                 const content = view.state.doc.sliceString(node.from, node.to);
                 const match = content.match(/^!\[([^\]]*)\]\(([^\s)]+)(?:\s+"[^"]*")?\)$/);
                 if (match) {
@@ -582,7 +586,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 
             // Autolink (<url> syntax) and bare URL (https://... GFM autolink)
             if (node.name === 'Autolink' || (node.name === 'URL' && node.node.parent?.name !== 'Autolink' && node.node.parent?.name !== 'Link')) {
-              if (!selectionIntersects(selection, node.from, node.to)) {
+              if (!selectionIntersects(selection, node.from, node.to) && !rangeSpansLineBreak(view, node.from, node.to)) {
                 // For Autolink, extract URL from child; for bare URL, use node directly
                 const urlFrom = node.name === 'Autolink'
                   ? node.node.getChild('URL')?.from ?? node.from
@@ -603,7 +607,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 
             // Wikilink: replace with clickable widget when cursor not on link
             if (node.name === 'Wikilink') {
-              if (!selectionIntersects(selection, node.from, node.to)) {
+              if (!selectionIntersects(selection, node.from, node.to) && !rangeSpansLineBreak(view, node.from, node.to)) {
                 // Extract page name from WikilinkContent child (works for both [[page]] and ![[page]])
                 const contentNode = node.node.getChild('WikilinkContent');
                 if (!contentNode) return;
