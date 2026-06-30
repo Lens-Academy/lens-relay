@@ -1,12 +1,19 @@
 import * as path from "node:path";
 import type { ArticleJob, ArticleMeta } from "./types";
-import { fetchFirstHtml, fetchRenderedHtml } from "./fetch";
+import {
+  fetchFirstHtml,
+  fetchRenderedHtml,
+  fetchRawBytes,
+  looksLikePdf,
+} from "./fetch";
 import { extractArticle } from "./extract";
+import { extractPdf } from "./pdf";
 import { adapterContext, resolveFetchUrls } from "./adapters";
 import { verifyAndRefine } from "./claude";
 import {
   generateArticleMarkdown,
   generateArticleFilenameBase,
+  articleFilenameCandidates,
 } from "./export";
 import { createRelayDoc, checkRelayDocsExist } from "../add-video/relay-docs";
 import { maybeCreateLens } from "../lens-doc";
@@ -34,6 +41,21 @@ const ROUTE_FLAGS = new Set([
 
 function relayArticleFolder(): string {
   return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
+}
+
+// Serializes the resolve-filename → write step across concurrently-running jobs
+// (the queue fires jobs in parallel). Without it, two distinct pages that share
+// a filename base could both see the same candidate free and overwrite each
+// other (the relay upsert replaces on conflict). Process-local; cross-process
+// safety would need a relay create-only upsert (deferred to the relay PR).
+let articleWriteChain: Promise<unknown> = Promise.resolve();
+function withArticleWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = articleWriteChain.then(fn, fn);
+  articleWriteChain = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }
 
 /**
@@ -93,10 +115,25 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   //    full text); we still cite the original URL as source_url.
   let ex: Awaited<ReturnType<typeof extractArticle>> | null = null;
   let rawErr: unknown = null;
+  let detectedPdf = false;
   try {
     const candidates = resolveFetchUrls(adapterContext(job.url, ""));
-    const { html, url: fetchedFrom } = await fetchFirstHtml(candidates);
-    ex = await extractArticle(html, fetchedFrom, { sourceUrl: job.url });
+    if (candidates.length === 1) {
+      // Single candidate (no multi-source adapter): fetch bytes once so we can
+      // detect a PDF; non-PDF bytes decode to HTML with no second fetch.
+      const { bytes, contentType, finalUrl } = await fetchRawBytes(candidates[0]);
+      if (looksLikePdf(contentType, bytes)) {
+        detectedPdf = true;
+        ex = await extractPdf(bytes, job.url);
+      } else {
+        const html = new TextDecoder("utf-8").decode(bytes);
+        ex = await extractArticle(html, finalUrl, { sourceUrl: job.url });
+      }
+    } else {
+      // Multiple HTML candidates (e.g. arXiv html → ar5iv) — never PDFs.
+      const { html, url: fetchedFrom } = await fetchFirstHtml(candidates);
+      ex = await extractArticle(html, fetchedFrom, { sourceUrl: job.url });
+    }
   } catch (err) {
     rawErr = err;
     console.warn(`[add-article] Raw fetch/extract failed: ${err}`);
@@ -107,8 +144,10 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   //    network, so it also clears some bot-blocks. Skipped for link-outs (a
   //    short body that points elsewhere won't grow when rendered). Keep whichever
   //    extraction captured more.
+  // Skip the render tier for PDFs — Jina would just re-fetch the binary.
   const needsRender =
-    !ex || (!ex.linkedOut && ex.body.length < RENDER_ESCALATE_CHARS);
+    !detectedPdf &&
+    (!ex || (!ex.linkedOut && ex.body.length < RENDER_ESCALATE_CHARS));
   if (needsRender) {
     try {
       const rendered = await fetchRenderedHtml(job.url);
@@ -192,25 +231,39 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   }
   job.title = meta.title;
 
-  // 4. Resolve relay path; refuse to overwrite an existing article.
+  // 4. Resolve relay path. The base name (surname-title) can collide across
+  //    DISTINCT pages — e.g. every AI Safety Atlas chapter's "Introduction" — so
+  //    we disambiguate deterministically from the source URL and write to the
+  //    first candidate that doesn't already exist, rather than rejecting a
+  //    genuinely new article. (Interim: true source_url dedup is a relay
+  //    follow-up; until then a re-import of the SAME url under the base name can
+  //    still create one duplicate.)
   const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
   if (!filenameBase) {
     throw new Error(`Could not derive filename from title: ${meta.title}`);
   }
-  const mdPath = `${relayArticleFolder()}/${filenameBase}.md`;
+  const folder = relayArticleFolder();
+  const candidatePaths = articleFilenameCandidates(filenameBase, job.url).map(
+    (b) => `${folder}/${b}.md`,
+  );
+  const finalMd = generateArticleMarkdown(meta, body, createdDate);
+
+  // 5. Pick the first free candidate and write it — serialized so two concurrent
+  //    imports of distinct same-base pages can't select the same name and
+  //    overwrite each other.
+  const mdPath = await withArticleWriteLock(async () => {
+    const existing = await checkRelayDocsExist(candidatePaths);
+    const chosen = candidatePaths.find((p) => !existing[p]);
+    if (!chosen) {
+      throw new Error(`Document already exists: ${candidatePaths[0]}`);
+    }
+    await createRelayDoc(chosen, finalMd);
+    return chosen;
+  });
   const editorBase =
     process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
   job.relay_url = `${editorBase}/open/${encodeURI(mdPath)}`;
   job.updated_at = new Date().toISOString();
-
-  const exists = await checkRelayDocsExist([mdPath]);
-  if (exists[mdPath]) {
-    throw new Error(`Document already exists: ${mdPath}`);
-  }
-
-  // 5. Write the final article directly.
-  const finalMd = generateArticleMarkdown(meta, body, createdDate);
-  await createRelayDoc(mdPath, finalMd);
   console.log(
     `[add-article] Wrote ${mdPath} (via ${ex.via}, ${body.length} chars)`,
   );

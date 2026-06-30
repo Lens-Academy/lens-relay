@@ -97,17 +97,46 @@ function mediaEmbeds(doc: Document): Map<string, MediaEmbed> {
 }
 
 /**
+ * Move a space sitting just INSIDE a `**bold**` delimiter to the outside, so the
+ * emphasis binds in CommonMark. The Atlas `.md` export uses bold lead-ins like
+ * `**Are LLMs robust? **While …` (note the space before the closing `**`), which
+ * otherwise render as literal asterisks. We RELOCATE the edge space rather than
+ * strip it, so the word boundary is preserved (`**a** and **b**` stays intact,
+ * `** **` is left alone).
+ */
+function tidyStrongEdges(md: string): string {
+  // The leading (?<!\*) and trailing (?!\*) keep a `***bold italic***` run from
+  // being sliced into corruption — only standalone `**…**` spans are touched.
+  return md.replace(/(?<!\*)\*\*(?!\*)([^*][\s\S]*?)\*\*(?!\*)/g, (full: string, captured: string) => {
+    let inner = captured;
+    let lead = "";
+    let trail = "";
+    if (/^[ \t]/.test(inner)) {
+      lead = " ";
+      inner = inner.replace(/^[ \t]+/, "");
+    }
+    if (/[ \t]$/.test(inner)) {
+      trail = " ";
+      inner = inner.replace(/[ \t]+$/, "");
+    }
+    return inner === "" ? full : `${lead}**${inner}**${trail}`;
+  });
+}
+
+/**
  * Clean the native `.md` export for import: drop the leading `# Title` (it lives
- * in the frontmatter) and the self-referential "[Read online](…)" link. Keep
- * everything else verbatim — it is already publication-quality Markdown.
+ * in the frontmatter) and the self-referential "[Read online](…)" link, and tidy
+ * the source's space-inside-bold lead-ins. Keep everything else verbatim — it is
+ * already publication-quality Markdown.
  */
 function cleanAtlasMarkdown(raw: string): string {
-  return raw
+  const cleaned = raw
     .replace(/^\uFEFF/, "")
     .replace(/^#\s+.*\r?\n+/, "")
     .replace(/^\[Read online\]\([^)]*\)\s*\r?\n+/m, "")
     .replace(/^\s*---\s*\r?\n+/, "") // leading divider left when there's no intro paragraph
     .trim();
+  return tidyStrongEdges(cleaned);
 }
 
 /**
