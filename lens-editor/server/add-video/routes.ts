@@ -32,7 +32,7 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
     if (payload.purpose !== 'share') {
       return c.json({ error: 'Share token required' }, 403);
     }
-    if (payload.role !== 'edit') {
+    if (payload.role !== 'edit' && payload.role !== 'admin') {
       return c.json({ error: 'Edit access required' }, 403);
     }
     if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {

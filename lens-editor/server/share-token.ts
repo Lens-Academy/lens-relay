@@ -24,8 +24,9 @@ function getSecret(): string {
 const PURPOSE_TO_BYTE: Record<TokenPurpose, number> = { 'share': 0, 'add-video': 1 };
 const BYTE_TO_PURPOSE: Record<number, TokenPurpose> = { 0: 'share', 1: 'add-video' };
 
-const ROLE_TO_BYTE: Record<UserRole, number> = { edit: 1, suggest: 2, view: 3 };
-const BYTE_TO_ROLE: Record<number, UserRole> = { 1: 'edit', 2: 'suggest', 3: 'view' };
+// Byte value encodes privilege order (lower = higher privilege); admin is 0.
+const ROLE_TO_BYTE: Record<UserRole, number> = { admin: 0, edit: 1, suggest: 2, view: 3 };
+const BYTE_TO_ROLE: Record<number, UserRole> = { 0: 'admin', 1: 'edit', 2: 'suggest', 3: 'view' };
 
 const PAYLOAD_LEN = 22;  // 1 purpose + 1 role + 16 uuid + 4 expiry
 const SIG_LEN = 8;       // truncated HMAC-SHA256

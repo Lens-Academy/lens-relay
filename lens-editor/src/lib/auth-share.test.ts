@@ -203,6 +203,10 @@ describe('auth-share', () => {
   });
 
   describe('decodeRoleFromToken', () => {
+    it('should decode admin role (byte 0)', () => {
+      expect(decodeRoleFromToken(makeFakeBinaryToken(0))).toBe('admin');
+    });
+
     it('should decode edit role (byte 1)', () => {
       expect(decodeRoleFromToken(makeFakeBinaryToken(1))).toBe('edit');
     });
@@ -216,7 +220,6 @@ describe('auth-share', () => {
     });
 
     it('should return null for unknown role byte', () => {
-      expect(decodeRoleFromToken(makeFakeBinaryToken(0, 0))).toBeNull();
       expect(decodeRoleFromToken(makeFakeBinaryToken(4))).toBeNull();
       expect(decodeRoleFromToken(makeFakeBinaryToken(255))).toBeNull();
     });

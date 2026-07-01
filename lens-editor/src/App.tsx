@@ -542,24 +542,24 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
               <div className="flex-1 min-w-0">
                 <Routes>
                   <Route path="/review" element={
-                    role === 'edit'
+                    role === 'edit' || role === 'admin'
                       ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
                       : <DefaultLanding />
                   } />
                   <Route path="/add-video" element={
-                    role === 'edit' && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                    (role === 'edit' || role === 'admin') && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <AddVideoPage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
                   <Route path="/add-article" element={
-                    role === 'edit' && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                    (role === 'edit' || role === 'admin') && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <AddArticlePage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />
                   <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
                   <Route path="/promote" element={
-                    role === 'edit' && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                    role === 'admin' && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <PromotionPage />
                       : <DefaultLanding />
                   } />

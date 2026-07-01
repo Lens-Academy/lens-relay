@@ -17,6 +17,16 @@ describe('AuthContext', () => {
     expect(result.current.canEdit).toBe(true);
     expect(result.current.canSuggest).toBe(false);
     expect(result.current.canWrite).toBe(true);
+    expect(result.current.canPromote).toBe(false);
+  });
+
+  it('should return admin role values', () => {
+    const { result } = renderHook(() => useAuth(), { wrapper: wrapper('admin') });
+    expect(result.current.role).toBe('admin');
+    expect(result.current.canEdit).toBe(true);
+    expect(result.current.canSuggest).toBe(false);
+    expect(result.current.canWrite).toBe(true);
+    expect(result.current.canPromote).toBe(true);
   });
 
   it('should return edit role values', () => {
@@ -25,6 +35,7 @@ describe('AuthContext', () => {
     expect(result.current.canEdit).toBe(true);
     expect(result.current.canSuggest).toBe(false);
     expect(result.current.canWrite).toBe(true);
+    expect(result.current.canPromote).toBe(false);
   });
 
   it('should return suggest role values', () => {
@@ -33,6 +44,7 @@ describe('AuthContext', () => {
     expect(result.current.canEdit).toBe(false);
     expect(result.current.canSuggest).toBe(true);
     expect(result.current.canWrite).toBe(true);
+    expect(result.current.canPromote).toBe(false);
   });
 
   it('should return view role values', () => {
@@ -41,5 +53,6 @@ describe('AuthContext', () => {
     expect(result.current.canEdit).toBe(false);
     expect(result.current.canSuggest).toBe(false);
     expect(result.current.canWrite).toBe(false);
+    expect(result.current.canPromote).toBe(false);
   });
 });

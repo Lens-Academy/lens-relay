@@ -27,7 +27,7 @@ function printUsage() {
   console.log(`Usage: npx tsx scripts/generate-share-link.ts [options]
 
 Options:
-  --role <edit|suggest|view>  Access level (required)
+  --role <admin|edit|suggest|view>  Access level (required; only admin can push to prod)
   --folder <id>               Folder ID (required unless --all-folders)
   --all-folders               Grant access to all folders
   --purpose <share|add-video>  Token purpose (default: "share")
@@ -60,8 +60,8 @@ const purpose = (getArg('--purpose') || 'share') as 'share' | 'add-video';
 const expires = getArg('--expires') || '14d';
 const baseUrl = getArg('--base-url') || 'http://localhost:5173';
 
-if (!role || !['edit', 'suggest', 'view'].includes(role)) {
-  console.error('Error: --role is required and must be one of: edit, suggest, view');
+if (!role || !['admin', 'edit', 'suggest', 'view'].includes(role)) {
+  console.error('Error: --role is required and must be one of: admin, edit, suggest, view');
   printUsage();
   process.exit(1);
 }

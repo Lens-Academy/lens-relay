@@ -54,8 +54,8 @@ describe('share-token', () => {
       expect(verifyShareToken('not-a-valid-token')).toBeNull();
     });
 
-    it('should handle all three roles', () => {
-      for (const role of ['edit', 'suggest', 'view'] as const) {
+    it('should handle all roles', () => {
+      for (const role of ['admin', 'edit', 'suggest', 'view'] as const) {
         const payload: ShareTokenPayload = { ...validPayload, role };
         const token = signShareToken(payload);
         const result = verifyShareToken(token);
