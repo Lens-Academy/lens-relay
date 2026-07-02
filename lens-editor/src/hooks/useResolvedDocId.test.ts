@@ -132,6 +132,23 @@ describe('useResolvedDocId', () => {
     expect(result.current).toEqual({ docId: FULL_COMPOUND, notFound: false });
   });
 
+  // Prevents: "Document Not Found" shown for docs that exist when the relay is
+  // down (502 from proxy) or the share token expired (401); only a 404 from the
+  // resolve endpoint is a statement about the doc itself
+  it('does not report notFound on non-404 errors', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 502 });
+
+    const { result } = renderHook(() =>
+      useResolvedDocId(SHORT_COMPOUND, {})
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    expect(result.current).toEqual({ docId: null, notFound: false });
+  });
+
   // Prevents: transient network failure rendered as a permanent "Document Not
   // Found", only a definitive server answer may declare a doc missing
   it('does not report notFound on network error', async () => {

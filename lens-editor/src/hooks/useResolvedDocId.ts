@@ -73,8 +73,9 @@ export function useResolvedDocId(
     })
       .then((res) => {
         if (!res.ok) {
-          // Server answered but has no such doc: a definitive "not found"
-          if (!cancelled) setServerNotFound(true);
+          // Only 404 is a definitive "no such doc" (relay's resolve_doc);
+          // 401 (bad token) or 5xx (relay/proxy down) say nothing about the doc
+          if (!cancelled && res.status === 404) setServerNotFound(true);
           return null;
         }
         return res.json();
