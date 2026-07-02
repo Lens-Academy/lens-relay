@@ -1,6 +1,17 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSuggestions, type FileSuggestions, type SuggestionItem } from '../../hooks/useSuggestions';
+import type { BatchResult } from '../../lib/suggestion-actions';
+import { runWithConcurrency } from '../../lib/concurrency';
+
+/** How many documents to apply bulk actions to at once. Each open doc is a
+ *  websocket + full doc sync on the relay; keep this modest. */
+const BULK_FILE_CONCURRENCY = 3;
+
+/** Identity of a suggestion for optimistic removal after a bulk action. */
+function suggestionKey(docId: string, s: SuggestionItem): string {
+  return `${docId}\u0000${s.from}\u0000${s.raw_markup}`;
+}
 
 /** Set browser tab title to "Review" while this page is mounted */
 function usePageTitle() {
@@ -71,13 +82,15 @@ interface FolderInfo {
   name: string;
 }
 
+/** Apply a whole file's suggestions in one doc transaction + one sync. */
+export type FileActionHandler = (docId: string, suggestions: SuggestionItem[], action: 'accept' | 'reject') => Promise<BatchResult>;
+
 interface ReviewPageProps {
   folderIds: string[];
   folders?: FolderInfo[];
   relayId?: string;
   onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
-  onAcceptAll?: () => Promise<void>;
-  onRejectAll?: () => Promise<void>;
+  onFileAction?: FileActionHandler;
 }
 
 // --- Time slider utilities ---
@@ -353,9 +366,41 @@ function FilterBar({ authors, locations, authorFilter, timeRange, locationFilter
   );
 }
 
-export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onRejectAll }: ReviewPageProps) {
+export function ReviewPage({ folderIds, folders, onAction, onFileAction }: ReviewPageProps) {
   usePageTitle();
-  const { data, loading, error, refresh } = useSuggestions(folderIds);
+  const { data: fetchedData, loading, error, refresh: refetch } = useSuggestions(folderIds);
+
+  // Suggestions applied by a bulk action are removed optimistically instead of
+  // refetching: the server-side suggestions index updates asynchronously, so a
+  // refetch right after applying would re-show the just-accepted suggestions.
+  const [removedKeys, setRemovedKeys] = useState<Set<string>>(new Set());
+  const [bulkRun, setBulkRun] = useState<{ action: 'accept' | 'reject'; done: number; total: number } | null>(null);
+  const [bulkFailedCount, setBulkFailedCount] = useState(0);
+  const bulkRunningRef = useRef(false);
+
+  const data = useMemo(() => {
+    if (removedKeys.size === 0) return fetchedData;
+    return fetchedData
+      .map(f => ({ ...f, suggestions: f.suggestions.filter(s => !removedKeys.has(suggestionKey(f.doc_id, s))) }))
+      .filter(f => f.suggestions.length > 0);
+  }, [fetchedData, removedKeys]);
+
+  // Manual refresh shows server truth again: optimistic removals are dropped
+  // (their position-based keys wouldn't match refetched data anyway).
+  const refresh = useCallback(() => {
+    setRemovedKeys(new Set());
+    setBulkFailedCount(0);
+    refetch();
+  }, [refetch]);
+
+  const markApplied = useCallback((docId: string, applied: SuggestionItem[]) => {
+    if (applied.length === 0) return;
+    setRemovedKeys(prev => {
+      const next = new Set(prev);
+      for (const s of applied) next.add(suggestionKey(docId, s));
+      return next;
+    });
+  }, []);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const autoExpandedRef = useRef(false);
   const navigate = useNavigate();
@@ -540,24 +585,38 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
     }
   }, [navigate]);
 
-  // Global accept/reject operate on filtered data
-  const handleAcceptAllFiltered = onAction ? async () => {
-    for (const file of filteredData) {
-      for (const s of [...file.suggestions].sort((a, b) => b.from - a.from)) {
-        try { await onAction(file.doc_id, s, 'accept'); } catch { /* skip not-found */ }
+  // Global accept/reject operate on filtered data. Files are applied as whole
+  // batches (one sync round-trip per file) with limited parallelism; applied
+  // suggestions vanish from the list immediately, failures stay visible.
+  const runBulk = async (action: 'accept' | 'reject') => {
+    // Ref guard, not state: two clicks in the same tick would both pass a
+    // state check and start concurrent runs (double websocket load, every
+    // second-run suggestion spuriously counted as failed).
+    if (!onFileAction || bulkRunningRef.current) return;
+    bulkRunningRef.current = true;
+    const files = filteredData;
+    const total = totalFiltered;
+    setBulkFailedCount(0);
+    setBulkRun({ action, done: 0, total });
+    let failedTotal = 0;
+    await runWithConcurrency(files, BULK_FILE_CONCURRENCY, async file => {
+      try {
+        const result = await onFileAction(file.doc_id, file.suggestions, action);
+        failedTotal += result.failed.length;
+        markApplied(file.doc_id, result.applied);
+      } catch {
+        // Connection/sync failure — the whole file stays visible for retry
+        failedTotal += file.suggestions.length;
       }
-    }
-    refresh();
-  } : onAcceptAll;
+      setBulkRun(prev => prev && { ...prev, done: prev.done + file.suggestions.length });
+    });
+    setBulkFailedCount(failedTotal);
+    setBulkRun(null);
+    bulkRunningRef.current = false;
+  };
 
-  const handleRejectAllFiltered = onAction ? async () => {
-    for (const file of filteredData) {
-      for (const s of [...file.suggestions].sort((a, b) => b.from - a.from)) {
-        try { await onAction(file.doc_id, s, 'reject'); } catch { /* skip not-found */ }
-      }
-    }
-    refresh();
-  } : onRejectAll;
+  const handleAcceptAllFiltered = onFileAction ? () => runBulk('accept') : undefined;
+  const handleRejectAllFiltered = onFileAction ? () => runBulk('reject') : undefined;
 
   if (loading) {
     return <div className="p-8 text-gray-500">Scanning documents for suggestions...</div>;
@@ -590,17 +649,34 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {bulkFailedCount > 0 && !bulkRun && (
+              <span className="text-sm text-amber-700">
+                {bulkFailedCount} suggestion{bulkFailedCount !== 1 ? 's' : ''} couldn't be applied (changed, already resolved, or connection failed — Refresh to re-check)
+              </span>
+            )}
             {handleAcceptAllFiltered && (
-              <button onClick={() => setConfirmAction('accept')} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700">
-                {isFiltered ? 'Accept Filtered' : 'Accept All'}
+              <button
+                onClick={() => setConfirmAction('accept')}
+                disabled={!!bulkRun}
+                className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {bulkRun?.action === 'accept'
+                  ? `Accepting… ${bulkRun.done}/${bulkRun.total}`
+                  : isFiltered ? 'Accept Filtered' : 'Accept All'}
               </button>
             )}
             {handleRejectAllFiltered && (
-              <button onClick={() => setConfirmAction('reject')} className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700">
-                {isFiltered ? 'Reject Filtered' : 'Reject All'}
+              <button
+                onClick={() => setConfirmAction('reject')}
+                disabled={!!bulkRun}
+                className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {bulkRun?.action === 'reject'
+                  ? `Rejecting… ${bulkRun.done}/${bulkRun.total}`
+                  : isFiltered ? 'Reject Filtered' : 'Reject All'}
               </button>
             )}
-            <button onClick={refresh} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50">
+            <button onClick={refresh} disabled={!!bulkRun} className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-60">
               Refresh
             </button>
           </div>
@@ -644,6 +720,9 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
                   expanded={expandedFiles.has(file.doc_id)}
                   onToggle={toggleFile}
                   onAction={onAction}
+                  onFileAction={onFileAction}
+                  onApplied={markApplied}
+                  bulkDisabled={!!bulkRun}
                   onNavigate={navigateToSuggestion}
                 />
               ))}
@@ -693,48 +772,49 @@ export function ReviewPage({ folderIds, folders, onAction, onAcceptAll, onReject
   );
 }
 
-const FileSection = memo(function FileSection({ file, folderName, expanded, onToggle, onAction, onNavigate }: {
+const FileSection = memo(function FileSection({ file, folderName, expanded, onToggle, onAction, onFileAction, onApplied, bulkDisabled, onNavigate }: {
   file: FileSuggestions;
   folderName?: string;
   expanded: boolean;
   onToggle: (docId: string) => void;
   onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
+  onFileAction?: FileActionHandler;
+  /** Report batch-applied suggestions to the page so they leave the list. */
+  onApplied?: (docId: string, applied: SuggestionItem[]) => void;
+  /** True while a page-level bulk run is in flight — both paths share doc
+   *  connections, so concurrent per-file actions would race the disconnect. */
+  bulkDisabled?: boolean;
   onNavigate: (docId: string, from: number, e?: React.MouseEvent) => void;
 }) {
   type ResolvedStatus = 'accepted' | 'rejected' | 'not-found';
-  const [resolvedMap, setResolvedMap] = useState<Record<number, ResolvedStatus>>({});
+  // Keyed by suggestion identity, not index: applied suggestions leave
+  // `file.suggestions`, which would shift index-based statuses onto wrong rows.
+  const [resolvedMap, setResolvedMap] = useState<Record<string, ResolvedStatus>>({});
+  const [busy, setBusy] = useState(false);
 
-  const setResolved = useCallback((index: number, status: ResolvedStatus) => {
-    setResolvedMap(prev => ({ ...prev, [index]: status }));
-  }, []);
+  const setResolved = useCallback((s: SuggestionItem, status: ResolvedStatus) => {
+    setResolvedMap(prev => ({ ...prev, [suggestionKey(file.doc_id, s)]: status }));
+  }, [file.doc_id]);
 
   const handleToggle = useCallback(() => onToggle(file.doc_id), [onToggle, file.doc_id]);
 
-  const handleAcceptAll = useCallback(async () => {
-    if (!onAction) return;
-    for (let i = 0; i < file.suggestions.length; i++) {
-      if (resolvedMap[i]) continue;
-      try {
-        await onAction(file.doc_id, file.suggestions[i], 'accept');
-        setResolved(i, 'accepted');
-      } catch {
-        setResolved(i, 'not-found');
-      }
-    }
-  }, [onAction, file.doc_id, file.suggestions, resolvedMap, setResolved]);
+  // One transaction + one sync for the whole file. Applied suggestions leave
+  // the list (same as the global bulk); failures stay with a not-found badge.
+  const handleAll = useCallback(async (action: 'accept' | 'reject') => {
+    if (!onFileAction || busy) return;
+    const pending = file.suggestions.filter(s => !resolvedMap[suggestionKey(file.doc_id, s)]);
+    setBusy(true);
+    try {
+      const result = await onFileAction(file.doc_id, pending, action);
+      for (const s of result.failed) setResolved(s, 'not-found');
+      onApplied?.(file.doc_id, result.applied);
+    } catch { /* connection failure — leave rows pending for retry */ }
+    setBusy(false);
+  }, [onFileAction, onApplied, busy, file.doc_id, file.suggestions, resolvedMap, setResolved]);
 
-  const handleRejectAll = useCallback(async () => {
-    if (!onAction) return;
-    for (let i = 0; i < file.suggestions.length; i++) {
-      if (resolvedMap[i]) continue;
-      try {
-        await onAction(file.doc_id, file.suggestions[i], 'reject');
-        setResolved(i, 'rejected');
-      } catch {
-        setResolved(i, 'not-found');
-      }
-    }
-  }, [onAction, file.doc_id, file.suggestions, resolvedMap, setResolved]);
+  const handleAcceptAll = useCallback(() => handleAll('accept'), [handleAll]);
+  const handleRejectAll = useCallback(() => handleAll('reject'), [handleAll]);
+  const fileButtonsDisabled = busy || bulkDisabled;
 
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
@@ -761,13 +841,13 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
         </button>
         {expanded && (
           <div className="flex gap-1 ml-2">
-            {onAction && (
-              <button onClick={handleAcceptAll} title="Accept all in file" className="px-2 py-1 text-xs text-green-700 hover:bg-green-50 rounded">
-                Accept All
+            {onFileAction && (
+              <button onClick={handleAcceptAll} disabled={fileButtonsDisabled} title="Accept all in file" className="px-2 py-1 text-xs text-green-700 hover:bg-green-50 rounded disabled:opacity-50">
+                {busy ? 'Applying…' : 'Accept All'}
               </button>
             )}
-            {onAction && (
-              <button onClick={handleRejectAll} title="Reject all in file" className="px-2 py-1 text-xs text-red-700 hover:bg-red-50 rounded">
+            {onFileAction && (
+              <button onClick={handleRejectAll} disabled={fileButtonsDisabled} title="Reject all in file" className="px-2 py-1 text-xs text-red-700 hover:bg-red-50 rounded disabled:opacity-50">
                 Reject All
               </button>
             )}
@@ -776,13 +856,12 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
       </div>
       {expanded && (
         <div className="divide-y divide-gray-200">
-          {file.suggestions.map((s, i) => (
+          {file.suggestions.map(s => (
             <SuggestionRow
-              key={i}
+              key={suggestionKey(file.doc_id, s)}
               docId={file.doc_id}
               suggestion={s}
-              index={i}
-              resolved={resolvedMap[i] ?? null}
+              resolved={resolvedMap[suggestionKey(file.doc_id, s)] ?? null}
               onAction={onAction}
               onResolved={setResolved}
               onNavigate={onNavigate}
@@ -794,24 +873,23 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
   );
 });
 
-const SuggestionRow = memo(function SuggestionRow({ docId, suggestion, index, resolved, onAction, onResolved, onNavigate }: {
+const SuggestionRow = memo(function SuggestionRow({ docId, suggestion, resolved, onAction, onResolved, onNavigate }: {
   docId: string;
   suggestion: SuggestionItem;
-  index: number;
   resolved: 'accepted' | 'rejected' | 'not-found' | null;
   onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
-  onResolved: (index: number, status: 'accepted' | 'rejected' | 'not-found') => void;
+  onResolved: (s: SuggestionItem, status: 'accepted' | 'rejected' | 'not-found') => void;
   onNavigate: (docId: string, from: number, e?: React.MouseEvent) => void;
 }) {
   const handleAccept = useCallback(async () => {
     if (!onAction) return;
-    try { await onAction(docId, suggestion, 'accept'); onResolved(index, 'accepted'); } catch { onResolved(index, 'not-found'); }
-  }, [onAction, docId, suggestion, index, onResolved]);
+    try { await onAction(docId, suggestion, 'accept'); onResolved(suggestion, 'accepted'); } catch { onResolved(suggestion, 'not-found'); }
+  }, [onAction, docId, suggestion, onResolved]);
 
   const handleReject = useCallback(async () => {
     if (!onAction) return;
-    try { await onAction(docId, suggestion, 'reject'); onResolved(index, 'rejected'); } catch { onResolved(index, 'not-found'); }
-  }, [onAction, docId, suggestion, index, onResolved]);
+    try { await onAction(docId, suggestion, 'reject'); onResolved(suggestion, 'rejected'); } catch { onResolved(suggestion, 'not-found'); }
+  }, [onAction, docId, suggestion, onResolved]);
 
   const handleNavigate = useCallback((e: React.MouseEvent) => {
     onNavigate(docId, suggestion.from, e);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const mockRefresh = vi.fn();
@@ -151,5 +151,131 @@ describe('ReviewPage', () => {
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
       expect(screen.getByText(/No pending suggestions/)).toBeTruthy();
     });
+  });
+});
+
+// --- Bulk accept via onFileAction ---
+
+function makeSuggestion(from: number, text: string) {
+  return {
+    type: 'addition' as const,
+    content: text,
+    old_content: null,
+    new_content: null,
+    author: 'AI',
+    timestamp: recentTimestamp,
+    from,
+    to: from + 10,
+    raw_markup: `{++{"author":"AI","timestamp":${recentTimestamp}}@@${text}++}`,
+    context_before: '',
+    context_after: '',
+  };
+}
+
+function mockTwoFiles() {
+  vi.doMock('../../hooks/useSuggestions', () => ({
+    useSuggestions: () => ({
+      data: [
+        { path: 'Notes/One.md', doc_id: 'relay-doc-1', folder_id: 'f1', suggestions: [makeSuggestion(10, 'aaa'), makeSuggestion(50, 'bbb')] },
+        { path: 'Notes/Two.md', doc_id: 'relay-doc-2', folder_id: 'f1', suggestions: [makeSuggestion(5, 'ccc'), makeSuggestion(90, 'ddd')] },
+      ],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+    }),
+  }));
+}
+
+describe('ReviewPage bulk actions', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mockRefresh.mockClear();
+    mockTwoFiles();
+  });
+
+  async function renderWithFileAction(onFileAction: import('./ReviewPage').FileActionHandler) {
+    const { ReviewPage } = await import('./ReviewPage');
+    render(
+      <MemoryRouter>
+        <ReviewPage folderIds={['f1']} onFileAction={onFileAction} />
+      </MemoryRouter>,
+    );
+  }
+
+  function clickBulkAccept() {
+    // Header button reads "Accept Filtered" (author filter auto-seeds to AI)
+    fireEvent.click(screen.getByText('Accept Filtered'));
+    // Confirm dialog — double-click on purpose: only one run may start
+    const confirmButton = screen.getByRole('button', { name: /^Accept \d+ suggestion/ });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+  }
+
+  it('calls onFileAction once per file with all its suggestions', async () => {
+    // Prevents: bulk accept doing one server round-trip per suggestion
+    // (minutes-long "Accept all filtered" with ~100 suggestions, 2026-07-02).
+    // Also prevents: confirm-button double-click starting a second concurrent
+    // run that re-submits every file.
+    const calls: Array<[string, number, string]> = [];
+    await renderWithFileAction(async (docId, suggestions, action) => {
+      calls.push([docId, suggestions.length, action]);
+      return { applied: suggestions, failed: [] };
+    });
+    clickBulkAccept();
+    await waitFor(() => expect(calls.length).toBe(2));
+    expect(calls).toContainEqual(['relay-doc-1', 2, 'accept']);
+    expect(calls).toContainEqual(['relay-doc-2', 2, 'accept']);
+    // Give a potential second (buggy) run a chance to fire, then re-assert
+    await new Promise(r => setTimeout(r, 10));
+    expect(calls.length).toBe(2);
+  });
+
+  it('marks the correct row as not-found when a later suggestion fails in a per-file batch', async () => {
+    // Prevents: index-keyed resolved statuses landing on the wrong row after
+    // applied suggestions are removed from the list (badge shift)
+    await renderWithFileAction(async (_docId, suggestions) =>
+      // First suggestion applies, second fails
+      ({ applied: suggestions.slice(0, 1), failed: suggestions.slice(1) }),
+    );
+    // File One is auto-expanded; use its per-file Accept All button
+    fireEvent.click(screen.getByTitle('Accept all in file'));
+    await waitFor(() => expect(screen.getByText(/No longer found/)).toBeTruthy());
+    // The applied row ('aaa') left the list; the failed row ('bbb') remains with the badge
+    expect(screen.queryByText('aaa')).toBeNull();
+    expect(screen.getByText('bbb')).toBeTruthy();
+  });
+
+  it('disables bulk buttons and shows progress while running', async () => {
+    // Prevents: double-click starting a second concurrent bulk run while
+    // the first is still applying (button gave no feedback at all)
+    let release: () => void = () => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await renderWithFileAction(async (_docId, suggestions) => {
+      await gate;
+      return { applied: suggestions, failed: [] };
+    });
+    clickBulkAccept();
+    const progressButton = await screen.findByRole('button', { name: /Accepting/ });
+    expect((progressButton as HTMLButtonElement).disabled).toBe(true);
+    release();
+    await waitFor(() => expect(screen.queryByText(/Accepting/)).toBeNull());
+  });
+
+  it('removes applied suggestions without refetching and keeps failed ones visible', async () => {
+    // Prevents: end-of-run refresh() re-showing accepted suggestions from the
+    // lagging server-side suggestions index ("reacts weirdly to reloads")
+    await renderWithFileAction(async (docId, suggestions) => {
+      if (docId === 'relay-doc-1') return { applied: suggestions, failed: [] };
+      return { applied: suggestions.slice(1), failed: suggestions.slice(0, 1) };
+    });
+    clickBulkAccept();
+    // File One fully applied -> disappears; file Two keeps 1 failed suggestion
+    await waitFor(() => expect(screen.queryByText('One')).toBeNull());
+    expect(screen.getByText('Two')).toBeTruthy();
+    expect(screen.getByText(/1 of 1 suggestion across 1 of 1 file/)).toBeTruthy();
+    // No refetch: the suggestions index lags behind just-applied changes
+    expect(mockRefresh).not.toHaveBeenCalled();
+    // Failure surfaced
+    expect(screen.getByText(/couldn't be applied/)).toBeTruthy();
   });
 });

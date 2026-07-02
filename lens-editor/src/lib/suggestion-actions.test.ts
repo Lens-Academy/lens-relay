@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as Y from 'yjs';
-import { applySuggestionAction, getAcceptText, getRejectText } from './suggestion-actions';
+import { applySuggestionAction, applySuggestionActions, getAcceptText, getRejectText } from './suggestion-actions';
 import type { SuggestionItem } from '../hooks/useSuggestions';
 
 function makeDoc(content: string): Y.Doc {
@@ -150,5 +150,49 @@ describe('applySuggestionAction', () => {
         from: 0,
       }), 'accept')
     ).toThrow('Suggestion no longer found in document');
+  });
+});
+
+describe('applySuggestionActions', () => {
+  const markupA = '{++{"author":"AI","timestamp":1000}@@alpha++}';
+  const markupB = '{--{"author":"AI","timestamp":1000}@@beta--}';
+
+  it('applies all suggestions even though earlier applies shift later positions', () => {
+    // Prevents: one apply shifting document offsets so the next apply's
+    // position hint misses and corrupts content
+    const doc = makeDoc(`Start ${markupA} middle ${markupB} end`);
+    const result = applySuggestionActions(doc, [
+      makeSuggestion({ type: 'addition', content: 'alpha', raw_markup: markupA, from: 6 }),
+      makeSuggestion({ type: 'deletion', content: 'beta', raw_markup: markupB, from: 6 + markupA.length + 8 }),
+    ], 'accept');
+    expect(doc.getText('contents').toString()).toBe('Start alpha middle  end');
+    expect(result.applied.length).toBe(2);
+    expect(result.failed.length).toBe(0);
+  });
+
+  it('continues past a stale suggestion and reports it as failed', () => {
+    // Prevents: one already-resolved suggestion aborting the rest of a bulk accept
+    const doc = makeDoc(`Start ${markupA} end`);
+    const result = applySuggestionActions(doc, [
+      makeSuggestion({ type: 'addition', content: 'gone', raw_markup: '{++gone++}', from: 0 }),
+      makeSuggestion({ type: 'addition', content: 'alpha', raw_markup: markupA, from: 6 }),
+    ], 'accept');
+    expect(doc.getText('contents').toString()).toBe('Start alpha end');
+    expect(result.applied.length).toBe(1);
+    expect(result.failed.length).toBe(1);
+    expect(result.failed[0].raw_markup).toBe('{++gone++}');
+  });
+
+  it('applies the whole batch in a single Y.Doc update', () => {
+    // Prevents: per-suggestion transactions each triggering a server sync
+    // round-trip (the minutes-long "Accept all filtered", 2026-07-02)
+    const doc = makeDoc(`Start ${markupA} middle ${markupB} end`);
+    let updates = 0;
+    doc.on('update', () => { updates += 1; });
+    applySuggestionActions(doc, [
+      makeSuggestion({ type: 'addition', content: 'alpha', raw_markup: markupA, from: 6 }),
+      makeSuggestion({ type: 'deletion', content: 'beta', raw_markup: markupB, from: 30 }),
+    ], 'accept');
+    expect(updates).toBe(1);
   });
 });
