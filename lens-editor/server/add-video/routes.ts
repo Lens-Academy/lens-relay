@@ -39,6 +39,8 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
       return c.json({ error: 'Access denied: wrong folder scope' }, 403);
     }
 
+    // add-video is an edit-level capability, so the minted token is always
+    // edit-scoped even when an admin installs it (admin >= edit).
     const addVideoToken = signShareToken({
       purpose: 'add-video',
       role: 'edit',
@@ -69,7 +71,7 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
       return c.json({ error: 'Add-video token required' }, 403);
     }
 
-    if (payload.role !== 'edit') {
+    if (payload.role !== 'edit' && payload.role !== 'admin') {
       return c.json({ error: 'Edit access required' }, 403);
     }
 

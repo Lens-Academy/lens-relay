@@ -24,11 +24,13 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ role, folderUuid, isAllFolders, children }: AuthProviderProps) {
+  const canEdit = role === 'admin' || role === 'edit';
+  const canSuggest = role === 'suggest';
   const value: AuthContextValue = {
     role,
-    canEdit: role === 'admin' || role === 'edit',
-    canSuggest: role === 'suggest',
-    canWrite: role === 'admin' || role === 'edit' || role === 'suggest',
+    canEdit,
+    canSuggest,
+    canWrite: canEdit || canSuggest,
     canPromote: role === 'admin',
     folderUuid,
     isAllFolders,

@@ -411,6 +411,11 @@ function DefaultLanding() {
 function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean; shareToken: string }) {
   const navigate = useNavigate();
 
+  // Capability gates derived from the token role (mirrors AuthContext; this
+  // component renders AuthProvider, so it can't consume useAuth() itself).
+  const canEdit = role === 'admin' || role === 'edit';
+  const canPromote = role === 'admin';
+
   // Filter folders based on token scope
   const accessibleFolders = isAllFolders
     ? FOLDERS
@@ -542,24 +547,24 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
               <div className="flex-1 min-w-0">
                 <Routes>
                   <Route path="/review" element={
-                    role === 'edit' || role === 'admin'
+                    canEdit
                       ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
                       : <DefaultLanding />
                   } />
                   <Route path="/add-video" element={
-                    (role === 'edit' || role === 'admin') && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                    canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <AddVideoPage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
                   <Route path="/add-article" element={
-                    (role === 'edit' || role === 'admin') && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                    canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <AddArticlePage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />
                   <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
                   <Route path="/promote" element={
-                    role === 'admin' && (isAllFolders || folderUuid === EDU_FOLDER_ID)
+                    canPromote && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <PromotionPage />
                       : <DefaultLanding />
                   } />
