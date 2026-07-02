@@ -598,19 +598,40 @@ export function ReviewPage({ folderIds, folders, onAction, onFileAction }: Revie
     const total = totalFiltered;
     setBulkFailedCount(0);
     setBulkRun({ action, done: 0, total });
-    let failedTotal = 0;
-    await runWithConcurrency(files, BULK_FILE_CONCURRENCY, async file => {
-      try {
-        const result = await onFileAction(file.doc_id, file.suggestions, action);
-        failedTotal += result.failed.length;
-        markApplied(file.doc_id, result.applied);
-      } catch {
-        // Connection/sync failure — the whole file stays visible for retry
-        failedTotal += file.suggestions.length;
-      }
-      setBulkRun(prev => prev && { ...prev, done: prev.done + file.suggestions.length });
-    });
-    setBulkFailedCount(failedTotal);
+
+    // One pass over `work`; returns what still failed. countProgress is false
+    // on the retry pass so the progress counter doesn't run past the total.
+    const runPass = async (work: typeof files, countProgress: boolean) => {
+      const stillFailed: typeof files = [];
+      await runWithConcurrency(work, BULK_FILE_CONCURRENCY, async file => {
+        try {
+          const result = await onFileAction(file.doc_id, file.suggestions, action);
+          markApplied(file.doc_id, result.applied);
+          if (result.failed.length > 0) {
+            stillFailed.push({ ...file, suggestions: result.failed });
+          }
+        } catch (err) {
+          // Connection/sync failure — the whole file stays visible for retry
+          console.error(`[bulk ${action}] file failed: ${file.path}`, err);
+          stillFailed.push(file);
+        }
+        if (countProgress) {
+          setBulkRun(prev => prev && { ...prev, done: prev.done + file.suggestions.length });
+        }
+      });
+      return stillFailed;
+    };
+
+    let failures = await runPass(files, true);
+    if (failures.length > 0) {
+      // Transient websocket drops (relay restart, tunnel blip) fail whole
+      // files; by the time the first pass ends the connection is usually back,
+      // so one retry pass recovers them.
+      console.warn(`[bulk ${action}] retrying ${failures.length} failed file(s)`);
+      failures = await runPass(failures, false);
+    }
+
+    setBulkFailedCount(failures.reduce((sum, f) => sum + f.suggestions.length, 0));
     setBulkRun(null);
     bulkRunningRef.current = false;
   };
