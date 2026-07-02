@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'react';
 import * as Y from 'yjs';
-import { EVENT_LOCAL_CHANGES, YSweetProvider } from '@y-sweet/client';
+import { EVENT_CONNECTION_STATUS, EVENT_LOCAL_CHANGES, STATUS_ERROR, YSweetProvider } from '@y-sweet/client';
 import { getClientToken } from '../lib/auth';
 
 export interface DocConnection {
@@ -8,20 +8,7 @@ export interface DocConnection {
   provider: YSweetProvider;
 }
 
-// Connecting is one round trip; syncing pending edits may span a provider
-// reconnect cycle (backoff + resync), so it gets the longer budget.
-const CONNECT_TIMEOUT_MS = 15000;
-const SYNC_TIMEOUT_MS = 30000;
-
-/**
- * Wait until the provider has no unacknowledged local changes.
- *
- * Transient connection drops are NOT treated as failures: the provider
- * reconnects with backoff on its own and re-syncs pending local changes, so
- * the only unrecoverable outcome is the timeout. Rejecting on a transient
- * error status would discard edits that were about to sync.
- */
-export function waitForProviderSynced(provider: YSweetProvider, timeoutMs = SYNC_TIMEOUT_MS): Promise<void> {
+export function waitForProviderSynced(provider: YSweetProvider, timeoutMs = 10000): Promise<void> {
   if (!provider.hasLocalChanges) return Promise.resolve();
 
   return new Promise((resolve, reject) => {
@@ -33,6 +20,7 @@ export function waitForProviderSynced(provider: YSweetProvider, timeoutMs = SYNC
     const cleanup = () => {
       clearTimeout(timeout);
       provider.off(EVENT_LOCAL_CHANGES, handleLocalChanges);
+      provider.off(EVENT_CONNECTION_STATUS, handleConnectionStatus);
     };
 
     const handleLocalChanges = (hasLocalChanges: boolean) => {
@@ -42,7 +30,15 @@ export function waitForProviderSynced(provider: YSweetProvider, timeoutMs = SYNC
       }
     };
 
+    const handleConnectionStatus = (status: string) => {
+      if (status === STATUS_ERROR) {
+        cleanup();
+        reject(new Error('Connection lost before document changes synced'));
+      }
+    };
+
     provider.on(EVENT_LOCAL_CHANGES, handleLocalChanges);
+    provider.on(EVENT_CONNECTION_STATUS, handleConnectionStatus);
   });
 }
 
@@ -61,32 +57,11 @@ export function useDocConnection() {
     const authEndpoint = () => getClientToken(docId);
     const provider = new YSweetProvider(authEndpoint, docId, doc, { connect: true });
 
-    try {
-      await new Promise<void>((resolve, reject) => {
-        // 'connection-error' fires on transient errors too (the provider
-        // retries by itself), so it only feeds the timeout message instead of
-        // rejecting outright.
-        let lastError: unknown = null;
-        const timeout = setTimeout(() => {
-          cleanup();
-          reject(new Error(`Connection timeout${lastError ? ` (last error: ${lastError})` : ''}`));
-        }, CONNECT_TIMEOUT_MS);
-        const onSynced = () => { cleanup(); resolve(); };
-        const onError = (err: unknown) => { lastError = err; };
-        const cleanup = () => {
-          clearTimeout(timeout);
-          provider.off('synced', onSynced);
-          provider.off('connection-error', onError);
-        };
-        provider.on('synced', onSynced);
-        provider.on('connection-error', onError);
-      });
-    } catch (err) {
-      // Without this the provider keeps reconnecting in the background forever
-      provider.destroy();
-      doc.destroy();
-      throw err;
-    }
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
+      provider.on('synced', () => { clearTimeout(timeout); resolve(); });
+      provider.on('connection-error', (err: Error) => { clearTimeout(timeout); reject(err); });
+    });
 
     const connection: DocConnection = { doc, provider };
     connections.current.set(docId, connection);
