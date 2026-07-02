@@ -15,6 +15,7 @@ vi.mock('@y-sweet/client', () => {
       const listeners: Record<string, Function[]> = {};
       this.awareness = awareness;
       this.destroy = vi.fn();
+      this.disconnect = vi.fn();
       this.on = function (event: string, cb: Function) {
         (listeners[event] ??= []).push(cb);
         if (event === 'synced') setTimeout(() => cb(), 0);
