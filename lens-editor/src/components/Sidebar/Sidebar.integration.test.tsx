@@ -64,7 +64,7 @@ vi.mock('../../hooks/useMultiFolderMetadata', async () => {
 
 // Mock useResolvedDocId — this test doesn't test doc resolution
 vi.mock('../../hooks/useResolvedDocId', () => ({
-  useResolvedDocId: (compoundId: string) => compoundId || null,
+  useResolvedDocId: (compoundId: string) => ({ docId: compoundId || null, notFound: false }),
 }));
 
 // Test folder configuration (matches setup-local-relay.mjs)

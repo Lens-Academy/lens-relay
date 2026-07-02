@@ -20,11 +20,11 @@ beforeEach(() => {
 });
 
 describe('useResolvedDocId', () => {
-  it('returns null for empty input', () => {
+  it('returns null docId for empty input', () => {
     const { result } = renderHook(() =>
       useResolvedDocId('', {})
     );
-    expect(result.current).toBeNull();
+    expect(result.current).toEqual({ docId: null, notFound: false });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -32,7 +32,7 @@ describe('useResolvedDocId', () => {
     const { result } = renderHook(() =>
       useResolvedDocId(FULL_COMPOUND, {})
     );
-    expect(result.current).toBe(FULL_COMPOUND);
+    expect(result.current).toEqual({ docId: FULL_COMPOUND, notFound: false });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -43,7 +43,7 @@ describe('useResolvedDocId', () => {
     const { result } = renderHook(() =>
       useResolvedDocId(SHORT_COMPOUND, metadata)
     );
-    expect(result.current).toBe(FULL_COMPOUND);
+    expect(result.current).toEqual({ docId: FULL_COMPOUND, notFound: false });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -57,17 +57,19 @@ describe('useResolvedDocId', () => {
       useResolvedDocId(SHORT_COMPOUND, {})
     );
 
-    // Initially null (loading)
-    expect(result.current).toBeNull();
+    // Initially null (loading), not yet notFound
+    expect(result.current).toEqual({ docId: null, notFound: false });
 
     await waitFor(() => {
-      expect(result.current).toBe(FULL_COMPOUND);
+      expect(result.current).toEqual({ docId: FULL_COMPOUND, notFound: false });
     });
 
     expect(mockFetch).toHaveBeenCalledWith(`/api/relay/doc/resolve/${SHORT_COMPOUND}`, expect.objectContaining({ headers: expect.any(Object) }));
   });
 
-  it('returns null when server resolution fails', async () => {
+  // Prevents: infinite "Loading document..." spinner for nonexistent doc URLs,
+  // where the caller couldn't distinguish "still resolving" from "resolution failed"
+  it('reports notFound when server resolution returns non-ok', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 404,
@@ -77,11 +79,72 @@ describe('useResolvedDocId', () => {
       useResolvedDocId(SHORT_COMPOUND, {})
     );
 
-    // Wait for the fetch to complete
+    await waitFor(() => {
+      expect(result.current).toEqual({ docId: null, notFound: true });
+    });
+  });
+
+  // Prevents: "Document Not Found" flash for a valid doc, a stale notFound from
+  // a previous URL must reset when the compound ID changes
+  it('clears notFound when the compound ID changes to a resolvable one', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ docId: FULL_COMPOUND }),
+    });
+
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useResolvedDocId(id, {}),
+      { initialProps: { id: `${RELAY_ID}-deadbeef` } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.notFound).toBe(true);
+    });
+
+    rerender({ id: SHORT_COMPOUND });
+    expect(result.current.notFound).toBe(false);
+
+    await waitFor(() => {
+      expect(result.current.docId).toBe(FULL_COMPOUND);
+    });
+  });
+
+  // Prevents: notFound shown even though the doc exists in loaded metadata;
+  // client-side resolution must override a stale/failed server answer
+  it('client-side resolution wins over a failed server lookup', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+
+    const metadata = {
+      '/Lens/Welcome.md': { id: FULL_DOC_UUID, type: 'markdown' as const, version: 0 },
+    };
+    const { result, rerender } = renderHook(
+      ({ meta }: { meta: typeof metadata | Record<string, never> }) =>
+        useResolvedDocId(SHORT_COMPOUND, meta),
+      { initialProps: { meta: {} as Record<string, never> } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.notFound).toBe(true);
+    });
+
+    rerender({ meta: metadata });
+    expect(result.current).toEqual({ docId: FULL_COMPOUND, notFound: false });
+  });
+
+  // Prevents: transient network failure rendered as a permanent "Document Not
+  // Found", only a definitive server answer may declare a doc missing
+  it('does not report notFound on network error', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const { result } = renderHook(() =>
+      useResolvedDocId(SHORT_COMPOUND, {})
+    );
+
     await waitFor(() => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(result.current).toBeNull();
+    expect(result.current).toEqual({ docId: null, notFound: false });
   });
 });
