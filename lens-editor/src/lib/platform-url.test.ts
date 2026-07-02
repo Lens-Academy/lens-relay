@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { getPlatformUrl } from './platform-url';
+import { getPlatformUrl, getModulePlatformUrl, headingAnchor } from './platform-url';
 
 describe('getPlatformUrl', () => {
   test('returns article URL for files in /articles/', () => {
@@ -64,5 +64,41 @@ describe('getPlatformUrl', () => {
 
   test('is case-sensitive for folder names (lowercase lenses does not match)', () => {
     expect(getPlatformUrl('/lenses/something.md')).toBeNull();
+  });
+});
+
+describe('headingAnchor', () => {
+  // Prevents: editor anchors diverging from the platform's generateHeadingId(),
+  // which would make lens links scroll to nothing.
+  test('matches platform generateHeadingId behavior', () => {
+    expect(headingAnchor('Welcome')).toBe('welcome');
+    expect(headingAnchor('AI Futures Model Dec 2025')).toBe('ai-futures-model-dec-2025');
+    expect(headingAnchor("What's a Lens? & More")).toBe('whats-a-lens-more');
+  });
+
+  test('truncates to 50 characters', () => {
+    expect(headingAnchor('a'.repeat(60))).toBe('a'.repeat(50));
+  });
+});
+
+describe('getModulePlatformUrl', () => {
+  test('builds course-scoped URL with lens anchor', () => {
+    expect(
+      getModulePlatformUrl('aif-welcome', { courseSlug: 'ai-futurism', lensTitle: 'Welcome' })
+    ).toBe('https://staging.lensacademy.org/course/ai-futurism/module/aif-welcome#welcome');
+  });
+
+  // Prevents: regression to bare /module/... links from course mode, which
+  // drop the platform's course sidebar and progress context.
+  test('falls back to standalone module URL without courseSlug', () => {
+    expect(getModulePlatformUrl('aif-welcome', { lensTitle: 'Welcome' })).toBe(
+      'https://staging.lensacademy.org/module/aif-welcome#welcome'
+    );
+  });
+
+  test('omits anchor without lensTitle', () => {
+    expect(getModulePlatformUrl('aif-welcome', { courseSlug: 'ai-futurism' })).toBe(
+      'https://staging.lensacademy.org/course/ai-futurism/module/aif-welcome'
+    );
   });
 });

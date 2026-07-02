@@ -72,6 +72,18 @@ export function parseFrontmatterFields(text: string): Map<string, string> {
 }
 
 /**
+ * Read a single field from the frontmatter section of a parsed section list.
+ * Returns undefined if there is no frontmatter section or the field is absent.
+ */
+export function getFrontmatterField(
+  sections: Array<{ type: string; content: string }>,
+  fieldName: string,
+): string | undefined {
+  const fm = sections.find(s => s.type === 'frontmatter');
+  return fm ? parseFrontmatterFields(fm.content).get(fieldName) : undefined;
+}
+
+/**
  * Compute the absolute Y.Text offset range [from, to) of a named field's
  * value within a section. Returns the section's full range if the field
  * isn't present.

@@ -10,7 +10,7 @@ import { useNavigation } from '../../contexts/NavigationContext';
 import { RELAY_ID } from '../../lib/constants';
 import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import { getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
-import { getPlatformUrl } from '../../lib/platform-url';
+import { getPlatformUrl, getModulePlatformUrl } from '../../lib/platform-url';
 import { getSubtreeRange } from './getSubtreeRange';
 import * as Y from 'yjs';
 import {
@@ -37,6 +37,14 @@ export type ContentScope =
 
 interface ContentPanelProps {
   scope: ContentScope | null;
+  /** Frontmatter slug of the module the scope belongs to. When set, the
+   *  "Show on Lensacademy.org" link points at the module page anchored to the
+   *  selected lens instead of the standalone /lens/... page. */
+  moduleSlug?: string;
+  /** Frontmatter slug of the course the module belongs to (course mode only).
+   *  Scopes the platform link to /course/:courseSlug/module/:moduleSlug so the
+   *  platform stays inside the course. */
+  courseSlug?: string;
   /** Master switch for the criticmarkup feature inside this panel. When false,
    *  text/heading sections render exactly as before. When true, criticmarkup
    *  syntax is rendered inline, the section editor gets the criticmarkup
@@ -120,6 +128,8 @@ function proseFieldForType(type: string): string | null {
 
 export function ContentPanel({
   scope,
+  moduleSlug,
+  courseSlug,
   criticMarkupEnabled = false,
   suggestionMode = false,
   onCommentInsertPosChange,
@@ -597,10 +607,18 @@ export function ContentPanel({
 
   const tldr = frontmatter.get('tldr');
 
-  // Derive platform URL for the published lensacademy.org link
-  const folderName = lensPath ? getFolderNameFromPath(lensPath, folderNames) : null;
-  const originalPath = lensPath && folderName ? getOriginalPath(lensPath, folderName) : null;
-  const platformUrl = originalPath ? getPlatformUrl(originalPath) : null;
+  // Derive platform URL for the published lensacademy.org link. Prefer the
+  // module page (course-scoped when possible) anchored to the selected lens —
+  // standalone /lens/... URLs get redirected by the platform to the bare
+  // /module/... page, losing course context.
+  const platformUrl = (() => {
+    if (moduleSlug) {
+      return getModulePlatformUrl(moduleSlug, { courseSlug, lensTitle: scope.docName });
+    }
+    const folderName = lensPath ? getFolderNameFromPath(lensPath, folderNames) : null;
+    const originalPath = lensPath && folderName ? getOriginalPath(lensPath, folderName) : null;
+    return originalPath ? getPlatformUrl(originalPath) : null;
+  })();
 
   let visibleFrom = 0;
   let visibleTo = sections.length;
