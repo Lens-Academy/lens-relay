@@ -279,3 +279,84 @@ describe('ReviewPage bulk actions', () => {
     expect(screen.getByText(/couldn't be applied/)).toBeTruthy();
   });
 });
+
+describe('ReviewPage bulk retry', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mockRefresh.mockClear();
+    mockTwoFiles();
+  });
+
+  async function renderWithFileAction(onFileAction: import('./ReviewPage').FileActionHandler) {
+    const { ReviewPage } = await import('./ReviewPage');
+    render(
+      <MemoryRouter>
+        <ReviewPage folderIds={['f1']} onFileAction={onFileAction} />
+      </MemoryRouter>,
+    );
+  }
+
+  it('retries a file whose handler threw and reports no failures when the retry succeeds', async () => {
+    // Prevents: a transient websocket drop mid-run (relay restart, Cloudflare
+    // tunnel blip) permanently failing whole files and discarding their edits
+    // ("181 suggestions couldn't be applied", 2026-07-02)
+    const attempts: Record<string, number> = {};
+    await renderWithFileAction(async (docId, suggestions) => {
+      attempts[docId] = (attempts[docId] ?? 0) + 1;
+      if (docId === 'relay-doc-2' && attempts[docId] === 1) {
+        throw new Error('Connection lost');
+      }
+      return { applied: suggestions, failed: [] };
+    });
+    fireEvent.click(screen.getByText('Accept Filtered'));
+    fireEvent.click(screen.getByRole('button', { name: /^Accept \d+ suggestion/ }));
+    await waitFor(() => expect(screen.queryByText(/Accepting/)).toBeNull());
+    expect(attempts['relay-doc-2']).toBe(2);
+    // Retry succeeded: nothing reported as failed, both files gone from the list
+    expect(screen.queryByText(/couldn't be applied/)).toBeNull();
+    expect(screen.getByText(/No suggestions match|No pending suggestions/)).toBeTruthy();
+  });
+
+  it('reports failures only after the retry also fails', async () => {
+    // Prevents: transient-failure retry masking persistent failures
+    await renderWithFileAction(async (docId, suggestions) => {
+      if (docId === 'relay-doc-2') throw new Error('Connection lost');
+      return { applied: suggestions, failed: [] };
+    });
+    fireEvent.click(screen.getByText('Accept Filtered'));
+    fireEvent.click(screen.getByRole('button', { name: /^Accept \d+ suggestion/ }));
+    await waitFor(() => expect(screen.queryByText(/Accepting/)).toBeNull());
+    expect(screen.getByText(/2 suggestions couldn't be applied/)).toBeTruthy();
+  });
+});
+
+describe('ReviewPage bulk retry scope', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mockRefresh.mockClear();
+    mockTwoFiles();
+  });
+
+  it('does not retry suggestions the handler returned as failed', async () => {
+    // Prevents: deterministic failures (markup changed / already resolved)
+    // burning a pointless reconnect + apply cycle on the retry pass
+    const calls: string[] = [];
+    const { ReviewPage } = await import('./ReviewPage');
+    render(
+      <MemoryRouter>
+        <ReviewPage
+          folderIds={['f1']}
+          onFileAction={async (docId, suggestions) => {
+            calls.push(docId);
+            return { applied: [], failed: suggestions };
+          }}
+        />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByText('Accept Filtered'));
+    fireEvent.click(screen.getByRole('button', { name: /^Accept \d+ suggestion/ }));
+    await waitFor(() => expect(screen.getByText(/couldn't be applied/)).toBeTruthy());
+    // One call per file, no second pass
+    expect(calls).toHaveLength(2);
+  });
+});
