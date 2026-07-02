@@ -24,7 +24,7 @@ import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { PromotionPage } from './components/Promotion/PromotionPage';
 import { MultiDocSectionEditor } from './components/SectionEditor';
 import { useDocConnection, waitForProviderSynced } from './hooks/useDocConnection';
-import { applySuggestionAction } from './lib/suggestion-actions';
+import { applySuggestionAction, applySuggestionActions } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { BlobDocumentView } from './components/BlobViewer';
@@ -369,7 +369,7 @@ export function App() {
 }
 
 function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: string[]; folders: { id: string; name: string }[]; relayId: string }) {
-  const { getOrConnect, disconnectAll } = useDocConnection();
+  const { getOrConnect, disconnect, disconnectAll } = useDocConnection();
 
   useEffect(() => disconnectAll, [disconnectAll]);
 
@@ -379,12 +379,31 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
     await waitForProviderSynced(provider);
   };
 
+  // Whole-file batches: one transaction and one sync round-trip per document
+  // instead of one per suggestion, so bulk accepts finish in seconds. The doc
+  // is disconnected right after syncing — a bulk run over many files must not
+  // accumulate one open websocket + doc copy per file.
+  const handleFileAction = async (docId: string, suggestions: SuggestionItem[], action: 'accept' | 'reject') => {
+    if (suggestions.length === 0) return { applied: [], failed: [] };
+    const { doc, provider } = await getOrConnect(docId);
+    try {
+      const result = applySuggestionActions(doc, suggestions, action);
+      if (result.applied.length > 0) {
+        await waitForProviderSynced(provider);
+      }
+      return result;
+    } finally {
+      disconnect(docId);
+    }
+  };
+
   return (
     <ReviewPage
       folderIds={folderIds}
       folders={folders}
       relayId={relayId}
       onAction={handleAction}
+      onFileAction={handleFileAction}
     />
   );
 }

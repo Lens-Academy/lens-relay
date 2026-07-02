@@ -36,6 +36,40 @@ export function applySuggestionAction(
   });
 }
 
+export interface BatchResult {
+  applied: SuggestionItem[];
+  failed: SuggestionItem[];
+}
+
+/**
+ * Apply accept/reject to many suggestions of one Y.Doc in a single transaction,
+ * so the provider syncs the whole batch in one round-trip instead of one per
+ * suggestion. Applies in descending `from` order so earlier applies don't shift
+ * the positions of later ones. A suggestion whose markup is no longer present
+ * is reported in `failed` without aborting the rest.
+ */
+export function applySuggestionActions(
+  doc: Y.Doc,
+  suggestions: SuggestionItem[],
+  action: 'accept' | 'reject',
+): BatchResult {
+  const applied: SuggestionItem[] = [];
+  const failed: SuggestionItem[] = [];
+
+  doc.transact(() => {
+    for (const s of [...suggestions].sort((a, b) => b.from - a.from)) {
+      try {
+        applySuggestionAction(doc, s, action);
+        applied.push(s);
+      } catch {
+        failed.push(s);
+      }
+    }
+  });
+
+  return { applied, failed };
+}
+
 export function getAcceptText(s: SuggestionItem): string {
   switch (s.type) {
     case 'addition': return s.content;
