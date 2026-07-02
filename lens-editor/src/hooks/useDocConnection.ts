@@ -27,15 +27,35 @@ export interface DocConnection {
  * crawls ("fast for the first ~50 files, then a pause every few edits").
  */
 export function teardownProvider(provider: YSweetProvider): void {
-  const ws = (provider as unknown as { websocket?: WebSocket | null }).websocket;
-  if (ws) {
-    ws.onopen = null;
-    ws.onmessage = null;
-    ws.onclose = null;
-    ws.onerror = null;
+  const p = provider as unknown as {
+    websocket?: WebSocket | null;
+    heartbeatHandle?: ReturnType<typeof setTimeout> | null;
+    connectionTimeoutHandle?: ReturnType<typeof setTimeout> | null;
+    connect: () => Promise<void>;
+  };
+  // 1. Detach socket handlers: closing must not fire onclose -> connect()
+  if (p.websocket) {
+    p.websocket.onopen = null;
+    p.websocket.onmessage = null;
+    p.websocket.onclose = null;
+    p.websocket.onerror = null;
   }
-  provider.disconnect(); // status -> offline, closes the socket (no reconnect now)
+  // 2. Clear the heartbeat/connection-timeout timers: when a CONNECTED
+  //    provider is torn down they survive and call connect() directly a few
+  //    seconds later (not via onclose), reviving the zombie
+  if (p.heartbeatHandle) {
+    clearTimeout(p.heartbeatHandle);
+    p.heartbeatHandle = null;
+  }
+  if (p.connectionTimeoutHandle) {
+    clearTimeout(p.connectionTimeoutHandle);
+    p.connectionTimeoutHandle = null;
+  }
+  provider.disconnect(); // status -> offline, closes the socket
   provider.destroy(); // removes window listeners + awareness state
+  // 3. Belt and braces: any revival path missed above (or added by a future
+  //    @y-sweet/client) becomes a no-op
+  p.connect = async () => {};
 }
 
 export function waitForProviderSynced(provider: YSweetProvider, timeoutMs = 10000): Promise<void> {

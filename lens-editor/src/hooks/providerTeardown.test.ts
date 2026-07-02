@@ -105,4 +105,31 @@ describe('YSweetProvider teardown', () => {
     expect(provider.status).toBe('offline');
     doc.destroy();
   });
+
+  // Prevents: revival paths that bypass the socket handlers — the provider's
+  // heartbeat/connection-timeout timers call connect() directly a few seconds
+  // after a CONNECTED provider is torn down (handler-nulling alone misses this)
+  it('teardown survives stray timers and direct connect() calls', async () => {
+    const { provider, doc } = makeProvider();
+    await settle(50);
+    expect(FakeWebSocket.instances.length).toBe(1);
+
+    // Simulate the connected-case leftovers: a pending heartbeat cycle that
+    // would fire connect() after teardown
+    const p = provider as unknown as {
+      heartbeatHandle?: ReturnType<typeof setTimeout> | null;
+      connect: () => Promise<void>;
+    };
+    const realConnect = p.connect.bind(provider);
+    p.heartbeatHandle = setTimeout(() => { void realConnect(); }, 3000);
+
+    teardownProvider(provider);
+    // Even a direct connect() call (any missed revival path) must be inert
+    await p.connect();
+    await settle(30_000);
+
+    expect(FakeWebSocket.instances.length).toBe(1);
+    expect(provider.status).toBe('offline');
+    doc.destroy();
+  });
 });
