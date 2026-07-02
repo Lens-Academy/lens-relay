@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { serveStatic } from '@hono/node-server/serve-static';
+import { readFile } from 'node:fs/promises';
 import { createAuthHandler, AuthError } from './auth-middleware.ts';
 import { discordRoutes } from './discord/routes.ts';
 import { createAddVideoRoutes } from './add-video/routes.ts';
@@ -154,10 +156,30 @@ export function createApp(config: AppConfig): Hono {
     app.route('/api/promotion', createPromotionRoutes(createPromotionRouteService(gitPromotion, githubPromotion)));
   }
 
-  // Static files from Vite build output
+  // The SPA shell (index.html) references content-hashed asset filenames that
+  // change on every deploy, so it must never be cached hard. Serving it
+  // `no-cache` forces clients to revalidate and pick up the new hashes instead
+  // of requesting a stale hash that no longer exists (which rendered blank).
+  const serveSpaShell = async (c: Context) =>
+    c.html(await readFile('./dist/index.html', 'utf8'), 200, { 'Cache-Control': 'no-cache' });
+
+  app.get('/', serveSpaShell);
+  app.get('/index.html', serveSpaShell);
+
+  // Real static files from the Vite build (hashed assets, favicons, etc.).
   app.use('/*', serveStatic({ root: './dist' }));
-  // SPA fallback
-  app.get('/*', serveStatic({ root: './dist', path: 'index.html' }));
+
+  // A missing hashed asset must 404 rather than fall through to the SPA shell:
+  // otherwise a client holding a stale index.html requests an old asset hash,
+  // receives index.html as its JS/CSS, and renders blank — and CDNs cache the
+  // wrong reply for hours. A clean 404 lets the client recover on reload.
+  app.get('/assets/*', c => {
+    c.header('Cache-Control', 'no-store');
+    return c.notFound();
+  });
+
+  // SPA fallback for client-side routes → the same always-revalidated shell.
+  app.get('/*', serveSpaShell);
 
   return app;
 }
