@@ -33,7 +33,7 @@ export function Sidebar() {
   const docUuidFromUrl = location.pathname.split('/')[1] || '';
   const shortCompoundId = docUuidFromUrl ? `${RELAY_ID}-${docUuidFromUrl}` : '';
   // Resolve short UUID to full compound ID (empty string = no active doc)
-  const activeDocId = useResolvedDocId(shortCompoundId, metadata) || '';
+  const activeDocId = useResolvedDocId(shortCompoundId, metadata).docId || '';
 
   // State for file name filter (separate from full-text search)
   const [fileFilter, setFileFilter] = useState('');

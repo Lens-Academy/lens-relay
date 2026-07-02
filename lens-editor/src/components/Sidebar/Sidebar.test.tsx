@@ -19,7 +19,7 @@ vi.mock('../../App', () => ({
 
 // Mock useResolvedDocId — unit tests don't test doc resolution
 vi.mock('../../hooks/useResolvedDocId', () => ({
-  useResolvedDocId: (compoundId: string) => compoundId || null,
+  useResolvedDocId: (compoundId: string) => ({ docId: compoundId || null, notFound: false }),
 }));
 
 vi.mock('../../lib/relay-api', async () => {

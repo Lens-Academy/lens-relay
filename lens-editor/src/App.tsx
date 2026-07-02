@@ -236,8 +236,9 @@ function DocumentView() {
   const shortCompoundId = docUuid ? `${RELAY_ID}-${docUuid}` : '';
 
   // Resolve short UUID to full compound ID (instant from metadata, or server fetch)
-  // Returns null for empty input or while resolving
-  const activeDocId = useResolvedDocId(shortCompoundId, metadata);
+  // docId is null for empty input or while resolving; notFound means the server
+  // definitively answered that no such doc exists
+  const { docId: activeDocId, notFound } = useResolvedDocId(shortCompoundId, metadata);
 
   // Update URL to use short UUID + decorative path when metadata loads
   useEffect(() => {
@@ -256,6 +257,9 @@ function DocumentView() {
   const editorKind = pickEditor(filePath, fileEntry ?? null);
 
   if (!docUuid) return <DocumentNotFound />;
+
+  // The URL points at a doc that doesn't exist (deleted, or a bad link)
+  if (notFound) return <DocumentNotFound />;
 
   // Show loading while resolving short UUID on cold page load
   if (!activeDocId) {
