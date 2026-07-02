@@ -34,37 +34,37 @@ export function useSuggestions(folderIds: string[]) {
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
-    try {
-      const allFiles: FileSuggestions[] = [];
-      const errors: string[] = [];
-      for (const folderId of folderIds) {
+    const headers: Record<string, string> = {};
+    const token = localStorage.getItem('lens-share-token');
+    if (token) headers['X-Share-Token'] = token;
+
+    const results = await Promise.all(
+      folderIds.map(async (folderId): Promise<FileSuggestions[] | null> => {
         try {
           const res = await fetch(`/api/relay/suggestions?folder_id=${encodeURIComponent(folderId)}`, {
-            headers: (() => {
-              const h: Record<string, string> = {};
-              const token = localStorage.getItem('lens-share-token');
-              if (token) h['X-Share-Token'] = token;
-              return h;
-            })(),
+            headers,
+            // Bound the wait: a hung relay must surface as an error, not an
+            // infinite spinner (2026-07-02 prod incident)
+            signal: AbortSignal.timeout(30_000),
           });
-          if (!res.ok) {
-            errors.push(`Failed to fetch suggestions for ${folderId}`);
-            continue;
-          }
+          if (!res.ok) return null;
           const json: SuggestionsResponse = await res.json();
-          allFiles.push(...json.files.map(f => ({ ...f, folder_id: folderId })));
+          return json.files.map(f => ({ ...f, folder_id: folderId }));
         } catch {
-          errors.push(`Failed to fetch suggestions for ${folderId}`);
+          return null;
         }
-      }
-      setData(allFiles);
-      setError(errors.length > 0 && allFiles.length === 0 ? errors.join('; ') : null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unknown error');
-      setData([]);
-    } finally {
-      setLoading(false);
-    }
+      }),
+    );
+
+    const allFiles = results.filter((r): r is FileSuggestions[] => r !== null).flat();
+    const failed = results.filter(r => r === null).length;
+    setData(allFiles);
+    setError(
+      failed > 0 && allFiles.length === 0
+        ? `Failed to fetch suggestions for ${failed} folder${failed !== 1 ? 's' : ''}`
+        : null,
+    );
+    setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folderIds.join(',')]);
 
