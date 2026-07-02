@@ -8,7 +8,7 @@
  */
 import { signShareToken } from '../server/share-token.ts';
 import type { ShareTokenPayload } from '../server/share-token.ts';
-import type { UserRole } from '../shared/types.ts';
+import { ROLE_ORDER, type UserRole } from '../shared/types.ts';
 
 const ALL_FOLDERS_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
@@ -60,8 +60,8 @@ const purpose = (getArg('--purpose') || 'share') as 'share' | 'add-video';
 const expires = getArg('--expires') || '14d';
 const baseUrl = getArg('--base-url') || 'http://localhost:5173';
 
-if (!role || !['admin', 'edit', 'suggest', 'view'].includes(role)) {
-  console.error('Error: --role is required and must be one of: admin, edit, suggest, view');
+if (!role || !ROLE_ORDER.includes(role)) {
+  console.error(`Error: --role is required and must be one of: ${ROLE_ORDER.join(', ')}`);
   printUsage();
   process.exit(1);
 }

@@ -1,15 +1,36 @@
 import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 
-export type UserRole = 'admin' | 'edit' | 'suggest' | 'view';
+import type { UserRole } from '../../shared/types.ts';
 
-interface AuthContextValue {
-  role: UserRole;
+export type { UserRole };
+
+export interface RoleCapabilities {
   canEdit: boolean;
   canSuggest: boolean;
   canWrite: boolean;
   /** Only admin may push content to production. */
   canPromote: boolean;
+}
+
+/**
+ * Pure role→capability mapping. The single source of truth for what each
+ * role may do in the UI; also callable above the provider (App.tsx renders
+ * AuthProvider itself, so it can't use useAuth()).
+ */
+export function deriveCapabilities(role: UserRole): RoleCapabilities {
+  const canEdit = role === 'admin' || role === 'edit';
+  const canSuggest = role === 'suggest';
+  return {
+    canEdit,
+    canSuggest,
+    canWrite: canEdit || canSuggest,
+    canPromote: role === 'admin',
+  };
+}
+
+interface AuthContextValue extends RoleCapabilities {
+  role: UserRole;
   folderUuid: string | null;
   isAllFolders: boolean;
 }
@@ -24,14 +45,9 @@ interface AuthProviderProps {
 }
 
 export function AuthProvider({ role, folderUuid, isAllFolders, children }: AuthProviderProps) {
-  const canEdit = role === 'admin' || role === 'edit';
-  const canSuggest = role === 'suggest';
   const value: AuthContextValue = {
     role,
-    canEdit,
-    canSuggest,
-    canWrite: canEdit || canSuggest,
-    canPromote: role === 'admin',
+    ...deriveCapabilities(role),
     folderUuid,
     isAllFolders,
   };
@@ -42,7 +58,7 @@ export function AuthProvider({ role, folderUuid, isAllFolders, children }: AuthP
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) {
-    return { role: 'edit', canEdit: true, canSuggest: false, canWrite: true, canPromote: false, folderUuid: null, isAllFolders: true };
+    return { role: 'edit', ...deriveCapabilities('edit'), folderUuid: null, isAllFolders: true };
   }
   return context;
 }

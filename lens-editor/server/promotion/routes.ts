@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { verifyShareToken } from '../share-token.ts';
+import { verifyShareToken, roleAtLeast } from '../share-token.ts';
 import { PromotionError, type PromotionPrResponse } from './types.ts';
 
 const PROMOTION_ERROR_STATUS_CODES = [
@@ -48,7 +48,7 @@ export function createPromotionRoutes(service: PromotionRouteService): Hono {
     if (!payload) {
       return c.json({ error: 'Promotion authentication required' }, 401);
     }
-    if (payload.purpose !== 'share' || payload.role !== 'admin') {
+    if (payload.purpose !== 'share' || !roleAtLeast(payload.role, 'admin')) {
       return c.json({ error: 'Promotion requires an admin share token' }, 403);
     }
     if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {

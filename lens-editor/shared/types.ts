@@ -8,7 +8,9 @@ export interface ClientToken {
 }
 
 /**
- * User role for share token auth. Ordered highest -> lowest privilege.
+ * Roles for share token auth, ordered highest -> lowest privilege.
  * Only `admin` may push to production; `edit` retains every other power.
  */
-export type UserRole = 'admin' | 'edit' | 'suggest' | 'view';
+export const ROLE_ORDER = ['admin', 'edit', 'suggest', 'view'] as const;
+
+export type UserRole = (typeof ROLE_ORDER)[number];

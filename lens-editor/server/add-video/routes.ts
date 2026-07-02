@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { JobQueue } from './queue';
 import type { VideoPayload } from './types';
-import { verifyShareToken, signShareToken } from '../share-token';
+import { verifyShareToken, signShareToken, roleAtLeast } from '../share-token';
 import { checkRelayVideoIds } from './relay-docs';
 
 const EDU_FOLDER = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
@@ -32,7 +32,7 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
     if (payload.purpose !== 'share') {
       return c.json({ error: 'Share token required' }, 403);
     }
-    if (payload.role !== 'edit' && payload.role !== 'admin') {
+    if (!roleAtLeast(payload.role, 'edit')) {
       return c.json({ error: 'Edit access required' }, 403);
     }
     if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {
@@ -71,7 +71,7 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
       return c.json({ error: 'Add-video token required' }, 403);
     }
 
-    if (payload.role !== 'edit' && payload.role !== 'admin') {
+    if (!roleAtLeast(payload.role, 'edit')) {
       return c.json({ error: 'Edit access required' }, 403);
     }
 

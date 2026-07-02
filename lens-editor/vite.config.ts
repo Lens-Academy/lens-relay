@@ -1,6 +1,8 @@
 import path from 'path';
 import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
+import type { ServerResponse } from 'node:http';
+import type { Hono } from 'hono';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
@@ -176,207 +178,31 @@ export default defineConfig(() => {
   }
 
   /**
-   * Vite plugin that adds /api/add-video endpoints for transcript processing.
-   * Dev-only — configureServer only runs in `vite dev`.
+   * Dev-only helper: serve a prod Hono router at a middleware path, built
+   * lazily on first request so server-only deps load on demand. Mounting the
+   * real router keeps dev behavior (auth, CORS, validation) in sync with
+   * prod by construction. `beforeRequest` may respond early (config gating);
+   * returning true stops the request.
    */
-  function addVideoPlugin(): Plugin {
-    let queue: any = null;
-
-    return {
-      name: 'add-video-api',
-      configureServer(server) {
-        // POST /api/add-video
-        server.middlewares.use('/api/add-video', async (req, res) => {
-          // Set CORS headers for cross-origin bookmarklet requests
-          res.setHeader('Access-Control-Allow-Origin', '*');
-          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-          if (req.method === 'OPTIONS') {
-            res.writeHead(204);
-            res.end();
-            return;
-          }
-
-          try {
-            // Lazy init queue
-            if (!queue) {
-              const { JobQueue } = await import('./server/add-video/queue.ts');
-              const { processVideo } = await import('./server/add-video/pipeline.ts');
-              queue = new JobQueue({ processJob: processVideo });
-            }
-
-            // req.url is stripped of the /api/add-video prefix by Vite middleware
-            const subPath = req.url || '/';
-            console.log(`[add-video] ${req.method} /api/add-video${subPath}`);
-
-            const EDU_FOLDER = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
-            const ALL_FOLDERS = '00000000-0000-0000-0000-000000000000';
-            const { verifyShareToken, signShareToken } = await import('./server/share-token.ts');
-
-            // Install-token endpoint: mint add-video token from share token
-            if (req.method === 'POST' && subPath === '/install-token') {
-              const authHeader = req.headers.authorization;
-              if (!authHeader?.startsWith('Bearer ')) {
-                res.writeHead(401, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Authorization header required' }));
-                return;
-              }
-              const payload = verifyShareToken(authHeader.slice(7));
-              if (!payload || payload.purpose !== 'share' || payload.role !== 'edit') {
-                res.writeHead(403, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Edit share token required' }));
-                return;
-              }
-              if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {
-                res.writeHead(403, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Access denied: wrong folder scope' }));
-                return;
-              }
-              const addVideoToken = signShareToken({
-                purpose: 'add-video',
-                role: 'edit',
-                folder: EDU_FOLDER,
-                expiry: payload.expiry,
-              });
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ token: addVideoToken }));
-              return;
-            }
-
-            // Auth check for other endpoints (POST / and GET /status)
-            const authHeader = req.headers.authorization;
-            if (!authHeader?.startsWith('Bearer ')) {
-              res.writeHead(401, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: 'Authorization header required' }));
-              return;
-            }
-            const authPayload = verifyShareToken(authHeader.slice(7));
-            if (!authPayload || authPayload.purpose !== 'add-video' || authPayload.role !== 'edit') {
-              res.writeHead(403, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: 'Valid add-video token required' }));
-              return;
-            }
-
-            if (req.method === 'GET' && subPath === '/status') {
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ jobs: queue.status() }));
-              return;
-            }
-
-            if (req.method === 'POST' && (subPath === '/' || subPath === '')) {
-              const chunks: Buffer[] = [];
-              for await (const chunk of req) {
-                chunks.push(chunk as Buffer);
-              }
-              const body = JSON.parse(Buffer.concat(chunks).toString());
-
-              if (!body.videos || !Array.isArray(body.videos) || body.videos.length === 0) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'videos array is required and must not be empty' }));
-                return;
-              }
-
-              const jobs = body.videos.map((video: any) => queue.add(video));
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({
-                jobs: jobs.map((j: any) => ({
-                  id: j.id,
-                  video_id: j.video_id,
-                  title: j.title,
-                  status: j.status,
-                  relay_url: j.relay_url,
-                })),
-              }));
-              return;
-            }
-
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Not found' }));
-          } catch (error: any) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: error.message }));
-          }
-        });
-      },
-    };
-  }
-
-  /**
-   * Vite plugin that adds /api/add-article endpoints for article importing.
-   * Dev-only — mounts the same Hono router the prod server uses.
-   */
-  function addArticlePlugin(): Plugin {
+  function honoDevPlugin(opts: {
+    name: string;
+    path: string;
+    loadApp: () => Promise<Hono>;
+    beforeRequest?: (res: ServerResponse) => Promise<boolean>;
+  }): Plugin {
     let listener: ReturnType<typeof import('@hono/node-server').getRequestListener> | null = null;
 
     return {
-      name: 'add-article-api',
+      name: opts.name,
       configureServer(server) {
-        server.middlewares.use('/api/add-article', async (req, res) => {
+        server.middlewares.use(opts.path, async (req, res) => {
           try {
+            if (opts.beforeRequest && await opts.beforeRequest(res)) return;
             if (!listener) {
-              const { Hono } = await import('hono');
               const { getRequestListener } = await import('@hono/node-server');
-              const { createAddArticleRoutes } = await import('./server/add-article/routes.ts');
-              const { ArticleJobQueue } = await import('./server/add-article/queue.ts');
-              const { processArticle } = await import('./server/add-article/pipeline.ts');
-              const app = new Hono();
-              app.route('/', createAddArticleRoutes(new ArticleJobQueue({ processJob: processArticle })));
-              listener = getRequestListener(app.fetch);
+              listener = getRequestListener((await opts.loadApp()).fetch);
             }
-            console.log(`[add-article] ${req.method} /api/add-article${req.url || '/'}`);
-            listener(req, res);
-          } catch (error) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
-          }
-        });
-      },
-    };
-  }
-
-  /**
-   * Vite plugin that adds /api/promotion endpoints in dev.
-   * Dev-only — mounts the same promotion routes/service composition used by
-   * the prod server, so the editor does not hit Vite's SPA fallback for
-   * promotion API calls.
-   */
-  function promotionPlugin(): Plugin {
-    let listener: ReturnType<typeof import('@hono/node-server').getRequestListener> | null = null;
-
-    return {
-      name: 'promotion-api',
-      configureServer(server) {
-        server.middlewares.use('/api/promotion', async (req, res) => {
-          try {
-            const { loadPromotionConfig, promotionConfigReady } = await import('./server/promotion/config.ts');
-            const promotionConfig = loadPromotionConfig();
-            if (!promotionConfig.enabled) {
-              res.writeHead(404, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: 'Promotion is disabled' }));
-              return;
-            }
-            if (!promotionConfigReady(promotionConfig)) {
-              res.writeHead(503, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: 'Promotion is enabled but not fully configured' }));
-              return;
-            }
-
-            if (!listener) {
-              const { Hono } = await import('hono');
-              const { getRequestListener } = await import('@hono/node-server');
-              const { createGitPromotionService } = await import('./server/promotion/git.ts');
-              const { createGitHubPromotionService } = await import('./server/promotion/github.ts');
-              const { createPromotionRoutes } = await import('./server/promotion/routes.ts');
-              const { createPromotionRouteService } = await import('./server/app.ts');
-              const app = new Hono();
-              const gitPromotion = createGitPromotionService(promotionConfig);
-              const githubPromotion = createGitHubPromotionService(promotionConfig);
-              app.route('/', createPromotionRoutes(createPromotionRouteService(gitPromotion, githubPromotion)));
-
-              listener = getRequestListener(app.fetch);
-            }
-            console.log(`[promotion] ${req.method} /api/promotion${req.url || '/'}`);
+            console.log(`[${opts.name}] ${req.method} ${opts.path}${req.url || '/'}`);
             await listener(req, res);
           } catch (error) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -385,6 +211,72 @@ export default defineConfig(() => {
         });
       },
     };
+  }
+
+  /** Dev /api/add-video endpoints for transcript processing. */
+  function addVideoPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'add-video-api',
+      path: '/api/add-video',
+      loadApp: async () => {
+        const { createAddVideoRoutes } = await import('./server/add-video/routes.ts');
+        const { JobQueue } = await import('./server/add-video/queue.ts');
+        const { processVideo } = await import('./server/add-video/pipeline.ts');
+        return createAddVideoRoutes(new JobQueue({ processJob: processVideo }));
+      },
+    });
+  }
+
+  /** Dev /api/add-article endpoints for article importing. */
+  function addArticlePlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'add-article-api',
+      path: '/api/add-article',
+      loadApp: async () => {
+        const { createAddArticleRoutes } = await import('./server/add-article/routes.ts');
+        const { ArticleJobQueue } = await import('./server/add-article/queue.ts');
+        const { processArticle } = await import('./server/add-article/pipeline.ts');
+        return createAddArticleRoutes(new ArticleJobQueue({ processJob: processArticle }));
+      },
+    });
+  }
+
+  /**
+   * Dev /api/promotion endpoints, so the editor does not hit Vite's SPA
+   * fallback for promotion API calls. Config is re-checked per request
+   * (matching the prod server's gating) before the router is consulted.
+   */
+  function promotionPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'promotion-api',
+      path: '/api/promotion',
+      beforeRequest: async (res) => {
+        const { loadPromotionConfig, promotionConfigReady } = await import('./server/promotion/config.ts');
+        const promotionConfig = loadPromotionConfig();
+        if (!promotionConfig.enabled) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Promotion is disabled' }));
+          return true;
+        }
+        if (!promotionConfigReady(promotionConfig)) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Promotion is enabled but not fully configured' }));
+          return true;
+        }
+        return false;
+      },
+      loadApp: async () => {
+        const { loadPromotionConfig } = await import('./server/promotion/config.ts');
+        const { createGitPromotionService } = await import('./server/promotion/git.ts');
+        const { createGitHubPromotionService } = await import('./server/promotion/github.ts');
+        const { createPromotionRoutes } = await import('./server/promotion/routes.ts');
+        const { createPromotionRouteService } = await import('./server/app.ts');
+        const promotionConfig = loadPromotionConfig();
+        const gitPromotion = createGitPromotionService(promotionConfig);
+        const githubPromotion = createGitHubPromotionService(promotionConfig);
+        return createPromotionRoutes(createPromotionRouteService(gitPromotion, githubPromotion));
+      },
+    });
   }
 
   /**

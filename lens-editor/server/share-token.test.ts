@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { signShareToken, verifyShareToken, decodeShareTokenPayload } from './share-token.ts';
+import { signShareToken, verifyShareToken, decodeShareTokenPayload, roleAtLeast } from './share-token.ts';
 import type { ShareTokenPayload } from './share-token.ts';
 
 describe('share-token', () => {
@@ -89,6 +89,38 @@ describe('share-token', () => {
       const shareToken = signShareToken({ ...validPayload, purpose: 'share' });
       const addVideoToken = signShareToken({ ...validPayload, purpose: 'add-video' });
       expect(shareToken).not.toBe(addVideoToken);
+    });
+
+    // Prevents: unmapped role silently minting a signed byte-0 token — since
+    // byte 0 decodes as 'admin', a caller passing an unvalidated role string
+    // would fail open into a production-promotion token.
+    it('should throw when signing an unknown role', () => {
+      const payload = { ...validPayload, role: 'editor' as ShareTokenPayload['role'] };
+      expect(() => signShareToken(payload)).toThrow('unknown role "editor"');
+    });
+
+    // Prevents: unmapped purpose silently minting a byte-0 ('share') token.
+    it('should throw when signing an unknown purpose', () => {
+      const payload = { ...validPayload, purpose: 'export' as ShareTokenPayload['purpose'] };
+      expect(() => signShareToken(payload)).toThrow('unknown purpose "export"');
+    });
+  });
+
+  describe('roleAtLeast', () => {
+    // Prevents: a role gate enumerating roles by hand and silently dropping
+    // admin from an edit-level capability (as happened in vite.config.ts).
+    it('admin and edit satisfy edit-level gates; suggest and view do not', () => {
+      expect(roleAtLeast('admin', 'edit')).toBe(true);
+      expect(roleAtLeast('edit', 'edit')).toBe(true);
+      expect(roleAtLeast('suggest', 'edit')).toBe(false);
+      expect(roleAtLeast('view', 'edit')).toBe(false);
+    });
+
+    it('only admin satisfies admin-level gates', () => {
+      expect(roleAtLeast('admin', 'admin')).toBe(true);
+      expect(roleAtLeast('edit', 'admin')).toBe(false);
+      expect(roleAtLeast('suggest', 'admin')).toBe(false);
+      expect(roleAtLeast('view', 'admin')).toBe(false);
     });
   });
 

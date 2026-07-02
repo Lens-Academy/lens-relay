@@ -13,7 +13,7 @@ import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 import { SidebarContext } from './contexts/SidebarContext';
 import { HeaderActionsProvider, type HeaderCommentsControl } from './contexts/HeaderActionsContext';
 import { useMultiFolderMetadata } from './hooks/useMultiFolderMetadata';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { AuthProvider, useAuth, deriveCapabilities } from './contexts/AuthContext';
 import type { UserRole } from './contexts/AuthContext';
 import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTokenExpired, decodeFolderFromToken, isAllFoldersToken } from './lib/auth-share';
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
@@ -411,10 +411,8 @@ function DefaultLanding() {
 function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean; shareToken: string }) {
   const navigate = useNavigate();
 
-  // Capability gates derived from the token role (mirrors AuthContext; this
-  // component renders AuthProvider, so it can't consume useAuth() itself).
-  const canEdit = role === 'admin' || role === 'edit';
-  const canPromote = role === 'admin';
+  // This component renders AuthProvider, so it can't consume useAuth() itself.
+  const { canEdit, canPromote } = deriveCapabilities(role);
 
   // Filter folders based on token scope
   const accessibleFolders = isAllFolders
