@@ -122,6 +122,13 @@ describe('share-token', () => {
       expect(roleAtLeast('suggest', 'admin')).toBe(false);
       expect(roleAtLeast('view', 'admin')).toBe(false);
     });
+
+    // Prevents: unknown role outranking admin — indexOf returns -1 for
+    // strings not in ROLE_ORDER, and -1 <= rank would pass every gate.
+    it('unknown role fails every gate', () => {
+      expect(roleAtLeast('bogus' as ShareTokenPayload['role'], 'admin')).toBe(false);
+      expect(roleAtLeast('bogus' as ShareTokenPayload['role'], 'view')).toBe(false);
+    });
   });
 
   describe('decodeShareTokenPayload', () => {

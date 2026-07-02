@@ -34,7 +34,9 @@ const SIG_LEN = 8;       // truncated HMAC-SHA256
 
 /** True when `role` has at least `min`'s privilege (ROLE_ORDER is highest -> lowest). */
 export function roleAtLeast(role: UserRole, min: UserRole): boolean {
-  return ROLE_ORDER.indexOf(role) <= ROLE_ORDER.indexOf(min);
+  const rank = ROLE_ORDER.indexOf(role);
+  // indexOf returns -1 for unknown roles, which must fail closed, not outrank admin.
+  return rank !== -1 && rank <= ROLE_ORDER.indexOf(min);
 }
 
 /** Pack UUID string "xxxxxxxx-xxxx-..." into 16 raw bytes */
