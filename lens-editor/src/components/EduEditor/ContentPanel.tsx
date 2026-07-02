@@ -38,8 +38,8 @@ export type ContentScope =
 interface ContentPanelProps {
   scope: ContentScope | null;
   /** Frontmatter slug of the module the scope belongs to. When set, the
-   *  "Show on Lensacademy.org" link points at the module page anchored to the
-   *  selected lens instead of the standalone /lens/... page. */
+   *  "Show on Lensacademy.org" link points at the module page instead of the
+   *  standalone /lens/... page, anchored to the selection when it is a lens. */
   moduleSlug?: string;
   /** Frontmatter slug of the course the module belongs to (course mode only).
    *  Scopes the platform link to /course/:courseSlug/module/:moduleSlug so the
@@ -372,9 +372,7 @@ export function ContentPanel({
         setSections(parsed);
 
         const fmSection = parsed.find(s => s.type === 'frontmatter');
-        if (fmSection) {
-          setFrontmatter(parseFrontmatterFields(fmSection.content));
-        }
+        setFrontmatter(fmSection ? parseFrontmatterFields(fmSection.content) : new Map());
       };
 
       setSynced(true);
@@ -613,7 +611,18 @@ export function ContentPanel({
   // /module/... page, losing course context.
   const platformUrl = (() => {
     if (moduleSlug) {
-      return getModulePlatformUrl(moduleSlug, { courseSlug, lensTitle: scope.docName });
+      // Anchor only lens scopes, mirroring the platform's section-title
+      // precedence (lens.title || section.title): the lens doc's frontmatter
+      // title for referenced lenses (every full-doc scope is one), the
+      // title:: field for inline ones, and the tree label as fallback.
+      let lensTitle: string | undefined;
+      if (scope.kind === 'full-doc') {
+        lensTitle = frontmatter.get('title') || scope.docName;
+      } else if (sections[scope.rootSectionIndex]?.type === 'lens-ref') {
+        lensTitle =
+          parseFields(sections[scope.rootSectionIndex].content).get('title') || scope.docName;
+      }
+      return getModulePlatformUrl(moduleSlug, { courseSlug, lensTitle });
     }
     const folderName = lensPath ? getFolderNameFromPath(lensPath, folderNames) : null;
     const originalPath = lensPath && folderName ? getOriginalPath(lensPath, folderName) : null;
