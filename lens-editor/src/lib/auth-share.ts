@@ -2,7 +2,7 @@ import type { UserRole } from '../contexts/AuthContext';
 
 const SESSION_KEY = 'lens-share-token';
 
-/** Role byte values: 1=edit, 2=suggest, 3=view. Lower = higher privilege. */
+/** Role byte values: 0=admin, 1=edit, 2=suggest, 3=view. Lower = higher privilege. */
 function roleLevel(token: string): number {
   try {
     const bytes = base64urlToBytes(token);
@@ -70,7 +70,7 @@ export function stripShareTokenFromUrl(): void {
 }
 
 const BYTE_TO_PURPOSE: Record<number, string> = { 0: 'share', 1: 'add-video' };
-const BYTE_TO_ROLE: Record<number, UserRole> = { 1: 'edit', 2: 'suggest', 3: 'view' };
+const BYTE_TO_ROLE: Record<number, UserRole> = { 0: 'admin', 1: 'edit', 2: 'suggest', 3: 'view' };
 
 /** base64url decode to Uint8Array (browser-compatible, no Buffer) */
 function base64urlToBytes(str: string): Uint8Array {
@@ -126,7 +126,7 @@ function tokenExpiry(token: string): number | null {
 /**
  * Decode the role from a compact binary share token (no signature verification).
  * Token format: base64url(purpose:1 + role:1 + uuid:16 + expiry:4 + hmac:8)
- * Role is byte 1: 1=edit, 2=suggest, 3=view.
+ * Role is byte 1: 0=admin, 1=edit, 2=suggest, 3=view.
  */
 export function decodeRoleFromToken(token: string): UserRole | null {
   try {

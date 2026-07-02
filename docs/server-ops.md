@@ -300,9 +300,12 @@ docker exec relay-git-sync bash -c 'cd /data/repos/cb696037-0f72-4e93-8717-4e433
 The Lens Editor promotion feature compares the relay-owned staging repository
 (`Lens-Academy/lens-edu-staging`, branch `staging`) against the curated
 production repository (`Lens-Academy/lens-edu-production`, branch `production`).
-Editors select specific changed files and create promotion pull requests into
-the production repo. The feature uses its own scratch clone and GitHub token; it
-must not reuse or modify the `relay-git-sync` checkout, container, or keys.
+Users with an `admin` share link select specific changed files and create
+promotion pull requests into the production repo; `edit` links can change
+content but not promote (mint promotion links with
+`generate-share-link.ts --role admin`). The feature uses its own scratch clone
+and GitHub token; it must not reuse or modify the `relay-git-sync` checkout,
+container, or keys.
 
 ### Environment
 

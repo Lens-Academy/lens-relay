@@ -55,7 +55,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate, folderDocs } = useNavigation();
-  const { canWrite, canEdit, folderUuid, isAllFolders } = useAuth();
+  const { canWrite, canEdit, canPromote, folderUuid, isAllFolders } = useAuth();
   const { manager, headerStage } = useSidebar();
   const { displayName } = useDisplayName();
   const hasDiscussion = useHasDiscussion();
@@ -116,7 +116,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const uuid = currentDocId.slice(RELAY_ID.length + 1);
     return findPathByUuid(uuid, metadata) ?? undefined;
   }, [currentDocId, metadata]);
-  const canUsePromotion = canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID);
+  const canUsePromotion = canPromote && (isAllFolders || folderUuid === EDU_FOLDER_ID);
   const promotionFilePath = useMemo(
     () => canUsePromotion ? editorPathToPromotionPath(currentFilePath) : null,
     [canUsePromotion, currentFilePath],
@@ -323,7 +323,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
-                  canPromote={canEdit}
+                  canPromote={canPromote}
                   status={promotionStatus}
                   loading={promotionLoading}
                   error={promotionError}
@@ -344,7 +344,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
-                  canPromote={canEdit}
+                  canPromote={canPromote}
                   status={promotionStatus}
                   loading={promotionLoading}
                   error={promotionError}

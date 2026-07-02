@@ -12,7 +12,7 @@ const OTHER_FOLDER = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
 function makeToken(overrides: Partial<ShareTokenPayload> = {}): string {
   return signShareToken({
     purpose: 'share',
-    role: 'edit',
+    role: 'admin',
     folder: EDU_FOLDER,
     expiry: Math.floor(Date.now() / 1000) + 3600,
     ...overrides,
@@ -83,6 +83,28 @@ describe('promotion routes auth', () => {
     expect(await resp.json()).toMatchObject({ error: expect.any(String) });
   });
 
+  it('rejects edit users (only admin may promote) with 403 JSON', async () => {
+    const { app } = createApp();
+
+    const resp = await app.request('/api/promotion/changes', {
+      headers: { 'X-Share-Token': makeToken({ role: 'edit' }) },
+    });
+
+    expect(resp.status).toBe(403);
+    expect(await resp.json()).toMatchObject({ error: expect.any(String) });
+  });
+
+  it('rejects suggest users with 403 JSON', async () => {
+    const { app } = createApp();
+
+    const resp = await app.request('/api/promotion/changes', {
+      headers: { 'X-Share-Token': makeToken({ role: 'suggest' }) },
+    });
+
+    expect(resp.status).toBe(403);
+    expect(await resp.json()).toMatchObject({ error: expect.any(String) });
+  });
+
   it('rejects non-share purpose tokens with 403 JSON', async () => {
     const { app } = createApp();
 
@@ -94,7 +116,7 @@ describe('promotion routes auth', () => {
     expect(await resp.json()).toMatchObject({ error: expect.any(String) });
   });
 
-  it('rejects edit share tokens scoped to the wrong folder with 403 JSON', async () => {
+  it('rejects admin share tokens scoped to the wrong folder with 403 JSON', async () => {
     const { app } = createApp();
 
     const resp = await app.request('/api/promotion/changes', {
@@ -105,7 +127,7 @@ describe('promotion routes auth', () => {
     expect(await resp.json()).toMatchObject({ error: expect.any(String) });
   });
 
-  it('accepts edit share tokens scoped to all folders', async () => {
+  it('accepts admin share tokens scoped to all folders', async () => {
     const { app, service } = createApp();
 
     const resp = await app.request('/api/promotion/changes', {
@@ -125,7 +147,7 @@ describe('promotion route service delegation', () => {
     ({ app, service } = createApp());
   });
 
-  it('returns changes for edit users', async () => {
+  it('returns changes for admin users', async () => {
     const resp = await app.request('/api/promotion/changes', {
       headers: { 'X-Share-Token': makeToken() },
     });
