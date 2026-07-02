@@ -8,6 +8,11 @@ export interface DocConnection {
   provider: YSweetProvider;
 }
 
+// Connecting is one round trip; syncing pending edits may span a provider
+// reconnect cycle (backoff + resync), so it gets the longer budget.
+const CONNECT_TIMEOUT_MS = 15000;
+const SYNC_TIMEOUT_MS = 30000;
+
 /**
  * Wait until the provider has no unacknowledged local changes.
  *
@@ -16,7 +21,7 @@ export interface DocConnection {
  * the only unrecoverable outcome is the timeout. Rejecting on a transient
  * error status would discard edits that were about to sync.
  */
-export function waitForProviderSynced(provider: YSweetProvider, timeoutMs = 30000): Promise<void> {
+export function waitForProviderSynced(provider: YSweetProvider, timeoutMs = SYNC_TIMEOUT_MS): Promise<void> {
   if (!provider.hasLocalChanges) return Promise.resolve();
 
   return new Promise((resolve, reject) => {
@@ -65,7 +70,7 @@ export function useDocConnection() {
         const timeout = setTimeout(() => {
           cleanup();
           reject(new Error(`Connection timeout${lastError ? ` (last error: ${lastError})` : ''}`));
-        }, 15000);
+        }, CONNECT_TIMEOUT_MS);
         const onSynced = () => { cleanup(); resolve(); };
         const onError = (err: unknown) => { lastError = err; };
         const cleanup = () => {

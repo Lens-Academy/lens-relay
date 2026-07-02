@@ -329,3 +329,34 @@ describe('ReviewPage bulk retry', () => {
     expect(screen.getByText(/2 suggestions couldn't be applied/)).toBeTruthy();
   });
 });
+
+describe('ReviewPage bulk retry scope', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mockRefresh.mockClear();
+    mockTwoFiles();
+  });
+
+  it('does not retry suggestions the handler returned as failed', async () => {
+    // Prevents: deterministic failures (markup changed / already resolved)
+    // burning a pointless reconnect + apply cycle on the retry pass
+    const calls: string[] = [];
+    const { ReviewPage } = await import('./ReviewPage');
+    render(
+      <MemoryRouter>
+        <ReviewPage
+          folderIds={['f1']}
+          onFileAction={async (docId, suggestions) => {
+            calls.push(docId);
+            return { applied: [], failed: suggestions };
+          }}
+        />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByText('Accept Filtered'));
+    fireEvent.click(screen.getByRole('button', { name: /^Accept \d+ suggestion/ }));
+    await waitFor(() => expect(screen.getByText(/couldn't be applied/)).toBeTruthy());
+    // One call per file, no second pass
+    expect(calls).toHaveLength(2);
+  });
+});
