@@ -1,5 +1,5 @@
 import type { Section } from '../SectionEditor/parseSections';
-import { parseFields, parseFrontmatterFields } from '../../lib/parseFields';
+import { parseFields, getFrontmatterField } from '../../lib/parseFields';
 import { resolveWikilinkToUuid, titleFromWikilink } from '../../lib/resolveDocPath';
 import { TreeEntry } from './ModuleTreeEditor/TreeEntry';
 import { RELAY_ID } from '../../lib/constants';
@@ -27,12 +27,9 @@ export function CourseOverview({
   selectedModuleDocId,
   onSelectModule,
 }: CourseOverviewProps) {
-  const frontmatter = (() => {
-    const fm = courseSections.find(s => s.type === 'frontmatter');
-    return fm ? parseFrontmatterFields(fm.content) : new Map<string, string>();
-  })();
-
-  const courseTitle = frontmatter.get('title') ?? coursePath.split('/').pop()?.replace(/\.md$/, '') ?? 'Course';
+  const courseTitle = getFrontmatterField(courseSections, 'title')
+    ?? coursePath.split('/').pop()?.replace(/\.md$/, '')
+    ?? 'Course';
 
   const moduleEntries = courseSections
     .filter(s => s.type === 'module-ref' && s.level === 1)

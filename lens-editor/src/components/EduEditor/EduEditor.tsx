@@ -9,6 +9,7 @@ import { useHeaderCommentsControl } from '../../contexts/HeaderActionsContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { parseSections } from '../SectionEditor/parseSections';
 import type { Section } from '../SectionEditor/parseSections';
+import { deriveEduSlugs } from './deriveSlugs';
 import { ModuleTreeEditor } from './ModuleTreeEditor';
 import { ContentPanel, type ContentScope } from './ContentPanel';
 import { CourseOverview } from './CourseOverview';
@@ -204,7 +205,13 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
     return rect ? { top: rect.top, height: rect.height } : { top: 0, height: 0 };
   }, []);
 
-  const isCourseMode = docSections.some(s => s.type === 'module-ref');
+  // Course/module classification plus frontmatter slugs for the
+  // course-scoped platform links in ContentPanel.
+  const { isCourseMode, courseSlug, moduleSlug } = deriveEduSlugs(
+    docSections,
+    selectedModuleSections,
+    sourcePath,
+  );
 
   // Connect to the primary doc (course or module)
   useEffect(() => {
@@ -410,6 +417,8 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
             >
               <ContentPanel
                 scope={scope}
+                moduleSlug={moduleSlug}
+                courseSlug={courseSlug}
                 criticMarkupEnabled={criticMarkupEnabled}
                 suggestionMode={isSuggestionMode}
                 onClickCriticRange={handleClickCriticRange}
