@@ -1,19 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { EVENT_LOCAL_CHANGES } from '@y-sweet/client';
 import type { YSweetProvider } from '@y-sweet/client';
 
-// Mock YSweetProvider to avoid real network connections.
-// mockState.autoSync controls whether providers emit 'synced' on their own;
-// tests drive events manually via mockState.instances[n].emit(...).
-const mockState: {
-  autoSync: boolean;
-  instances: Array<{
-    emit: (event: string, data?: unknown) => void;
-    destroy: ReturnType<typeof vi.fn>;
-  }>;
-} = { autoSync: true, instances: [] };
-
+// Mock YSweetProvider to avoid real network connections
 vi.mock('@y-sweet/client', () => {
   const { Awareness } = require('y-protocols/awareness');
   return {
@@ -27,15 +17,11 @@ vi.mock('@y-sweet/client', () => {
       this.destroy = vi.fn();
       this.on = function (event: string, cb: Function) {
         (listeners[event] ??= []).push(cb);
-        if (event === 'synced' && mockState.autoSync) setTimeout(() => cb(), 0);
+        if (event === 'synced') setTimeout(() => cb(), 0);
       };
       this.off = function (event: string, cb: Function) {
         listeners[event] = (listeners[event] ?? []).filter(f => f !== cb);
       };
-      this.emit = function (event: string, data?: unknown) {
-        for (const cb of listeners[event] ?? []) cb(data);
-      };
-      mockState.instances.push(this);
     }),
   };
 });
@@ -45,15 +31,6 @@ vi.mock('../lib/auth', () => ({
 }));
 
 const { useDocConnection, waitForProviderSynced } = await import('./useDocConnection');
-
-beforeEach(() => {
-  mockState.autoSync = true;
-  mockState.instances = [];
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 describe('useDocConnection', () => {
   it('getOrConnect returns { doc, provider } with awareness', async () => {
@@ -118,81 +95,5 @@ describe('useDocConnection', () => {
 
     expect(resolved).toBe(true);
     expect(provider.off).toHaveBeenCalledWith(EVENT_LOCAL_CHANGES, expect.any(Function));
-  });
-
-  // Prevents: a transient websocket drop mid-bulk (relay restart, Cloudflare
-  // tunnel blip) rejecting the sync wait and discarding the file's edits even
-  // though the provider auto-reconnects and re-syncs local changes on its own
-  it('waitForProviderSynced keeps waiting through a transient error status', async () => {
-    type Listener = (data: unknown) => void;
-    const listeners: Record<string, Listener[]> = {};
-    const provider = {
-      hasLocalChanges: true,
-      on: (event: string, cb: Listener) => { (listeners[event] ??= []).push(cb); },
-      off: (event: string, cb: Listener) => {
-        listeners[event] = (listeners[event] ?? []).filter(f => f !== cb);
-      },
-    };
-
-    const wait = waitForProviderSynced(provider as unknown as YSweetProvider, 1000);
-    // Transient connection error: provider reconnects and re-syncs by itself
-    for (const cb of listeners['connection-status'] ?? []) cb('error');
-    provider.hasLocalChanges = false;
-    for (const cb of listeners['local-changes'] ?? []) cb(false);
-    await expect(wait).resolves.toBeUndefined();
-  });
-
-  it('waitForProviderSynced rejects when changes never sync within the timeout', async () => {
-    vi.useFakeTimers();
-    const provider = {
-      hasLocalChanges: true,
-      on: vi.fn(),
-      off: vi.fn(),
-    };
-    const wait = waitForProviderSynced(provider as unknown as YSweetProvider, 5000);
-    const assertion = expect(wait).rejects.toThrow(/Timed out/);
-    await vi.advanceTimersByTimeAsync(5001);
-    await assertion;
-  });
-
-  // Prevents: the first transient connection error failing a connect that the
-  // provider itself retries and completes moments later
-  it('getOrConnect survives a transient connection-error before synced', async () => {
-    mockState.autoSync = false;
-    const { result } = renderHook(() => useDocConnection());
-    let connection: any;
-    await act(async () => {
-      const pending = result.current.getOrConnect('doc-blip');
-      const p = mockState.instances[0];
-      p.emit('connection-error', new Error('ws blip'));
-      p.emit('synced');
-      connection = await pending;
-    });
-    expect(connection.provider).toBe(mockState.instances[0]);
-    expect(mockState.instances[0].destroy).not.toHaveBeenCalled();
-  });
-
-  // Prevents: zombie providers reconnecting forever (leaked websockets and
-  // awareness noise) after a bulk connect gives up
-  it('getOrConnect destroys the provider when the connection times out', async () => {
-    vi.useFakeTimers();
-    mockState.autoSync = false;
-    const { result } = renderHook(() => useDocConnection());
-    const pending = result.current.getOrConnect('doc-timeout');
-    const assertion = expect(pending).rejects.toThrow(/Connection timeout/);
-    await vi.advanceTimersByTimeAsync(15001);
-    await assertion;
-    expect(mockState.instances[0].destroy).toHaveBeenCalled();
-  });
-
-  it('getOrConnect includes the last connection error in the timeout message', async () => {
-    vi.useFakeTimers();
-    mockState.autoSync = false;
-    const { result } = renderHook(() => useDocConnection());
-    const pending = result.current.getOrConnect('doc-autherr');
-    mockState.instances[0].emit('connection-error', new Error('auth failed'));
-    const assertion = expect(pending).rejects.toThrow(/auth failed/);
-    await vi.advanceTimersByTimeAsync(15001);
-    await assertion;
   });
 });

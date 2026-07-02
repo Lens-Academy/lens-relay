@@ -374,7 +374,7 @@ export function ReviewPage({ folderIds, folders, onAction, onFileAction }: Revie
   // refetching: the server-side suggestions index updates asynchronously, so a
   // refetch right after applying would re-show the just-accepted suggestions.
   const [removedKeys, setRemovedKeys] = useState<Set<string>>(new Set());
-  const [bulkRun, setBulkRun] = useState<{ action: 'accept' | 'reject'; done: number; total: number; retrying?: boolean } | null>(null);
+  const [bulkRun, setBulkRun] = useState<{ action: 'accept' | 'reject'; done: number; total: number } | null>(null);
   const [bulkFailedCount, setBulkFailedCount] = useState(0);
   const bulkRunningRef = useRef(false);
 
@@ -598,50 +598,19 @@ export function ReviewPage({ folderIds, folders, onAction, onFileAction }: Revie
     const total = totalFiltered;
     setBulkFailedCount(0);
     setBulkRun({ action, done: 0, total });
-
-    // One pass over `work`. Suggestions the handler *returned* as failed are
-    // deterministic (markup changed / already resolved) and retrying cannot
-    // fix them; only files whose handler *threw* (connection/sync failure)
-    // are worth a second attempt. countProgress is false on the retry pass so
-    // the progress counter doesn't run past the total.
-    const runPass = async (work: typeof files, countProgress: boolean) => {
-      const unapplicable: typeof files = [];
-      const threw: typeof files = [];
-      await runWithConcurrency(work, BULK_FILE_CONCURRENCY, async file => {
-        try {
-          const result = await onFileAction(file.doc_id, file.suggestions, action);
-          markApplied(file.doc_id, result.applied);
-          if (result.failed.length > 0) {
-            unapplicable.push({ ...file, suggestions: result.failed });
-          }
-        } catch (err) {
-          // Connection/sync failure — the whole file stays visible for retry.
-          // Caveat: if the sync timed out but the update did reach the server,
-          // the retry sees the markup already gone and reports it failed
-          // (cosmetic); see applySuggestionAction's markup search.
-          console.error(`[bulk ${action}] file failed: ${file.path}`, err);
-          threw.push(file);
-        }
-        if (countProgress) {
-          setBulkRun(prev => prev && { ...prev, done: prev.done + file.suggestions.length });
-        }
-      });
-      return { unapplicable, threw };
-    };
-
-    const first = await runPass(files, true);
-    let failures = first.unapplicable;
-    if (first.threw.length > 0) {
-      // Transient websocket drops (relay restart, tunnel blip) fail whole
-      // files; by the time the first pass ends the connection is usually back,
-      // so one retry pass recovers them.
-      console.warn(`[bulk ${action}] retrying ${first.threw.length} failed file(s)`);
-      setBulkRun(prev => prev && { ...prev, retrying: true });
-      const second = await runPass(first.threw, false);
-      failures = failures.concat(second.unapplicable, second.threw);
-    }
-
-    setBulkFailedCount(failures.reduce((sum, f) => sum + f.suggestions.length, 0));
+    let failedTotal = 0;
+    await runWithConcurrency(files, BULK_FILE_CONCURRENCY, async file => {
+      try {
+        const result = await onFileAction(file.doc_id, file.suggestions, action);
+        failedTotal += result.failed.length;
+        markApplied(file.doc_id, result.applied);
+      } catch {
+        // Connection/sync failure — the whole file stays visible for retry
+        failedTotal += file.suggestions.length;
+      }
+      setBulkRun(prev => prev && { ...prev, done: prev.done + file.suggestions.length });
+    });
+    setBulkFailedCount(failedTotal);
     setBulkRun(null);
     bulkRunningRef.current = false;
   };
@@ -692,7 +661,7 @@ export function ReviewPage({ folderIds, folders, onAction, onFileAction }: Revie
                 className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {bulkRun?.action === 'accept'
-                  ? bulkRun.retrying ? 'Retrying failed files…' : `Accepting… ${bulkRun.done}/${bulkRun.total}`
+                  ? `Accepting… ${bulkRun.done}/${bulkRun.total}`
                   : isFiltered ? 'Accept Filtered' : 'Accept All'}
               </button>
             )}
@@ -703,7 +672,7 @@ export function ReviewPage({ folderIds, folders, onAction, onFileAction }: Revie
                 className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {bulkRun?.action === 'reject'
-                  ? bulkRun.retrying ? 'Retrying failed files…' : `Rejecting… ${bulkRun.done}/${bulkRun.total}`
+                  ? `Rejecting… ${bulkRun.done}/${bulkRun.total}`
                   : isFiltered ? 'Reject Filtered' : 'Reject All'}
               </button>
             )}
