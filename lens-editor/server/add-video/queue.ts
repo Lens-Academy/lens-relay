@@ -116,10 +116,18 @@ export class JobQueue {
  * concurrent video processing (across multiple videos).
  * Each claude process uses ~300MB RAM.
  */
+// A pool wait longer than this means slots are leaked or saturated — fail
+// loudly instead of queueing forever (a leaked slot once wedged all QC jobs).
+// Must stay BELOW the add-article job deadline (12 min default): a job that
+// can't get a slot should fail fast inside its own lifetime, not deadline
+// while queued and then wake up as a zombie.
+const POOL_ACQUIRE_TIMEOUT_MS = 8 * 60_000;
+const POOL_WAIT_LOG_MS = 30_000;
+
 class ClaudeSessionPool {
   private maxConcurrent: number;
   private active = 0;
-  private waiters: Array<() => void> = [];
+  private waiters: Array<{ grant: () => void; cancel: () => void }> = [];
 
   constructor(maxConcurrent: number) {
     this.maxConcurrent = maxConcurrent;
@@ -129,17 +137,55 @@ class ClaudeSessionPool {
     return this.maxConcurrent - this.active;
   }
 
-  async acquire(): Promise<void> {
+  /** Pool state for logs/diagnostics. */
+  stats(): { active: number; waiting: number; max: number } {
+    return {
+      active: this.active,
+      waiting: this.waiters.length,
+      max: this.maxConcurrent,
+    };
+  }
+
+  async acquire(timeoutMs: number = POOL_ACQUIRE_TIMEOUT_MS): Promise<void> {
     if (this.active < this.maxConcurrent) {
       this.active++;
       return;
     }
-    // Wait for a slot to free up
-    return new Promise<void>((resolve) => {
-      this.waiters.push(() => {
-        this.active++;
-        resolve();
-      });
+    const { active, waiting } = this.stats();
+    console.warn(
+      `[claude-pool] All ${active} slots busy — queueing (${waiting + 1} waiting)`,
+    );
+    return new Promise<void>((resolve, reject) => {
+      const startedAt = Date.now();
+      const waiter = {
+        grant: () => {
+          clearTimeout(deadline);
+          clearInterval(waitLogger);
+          this.active++;
+          resolve();
+        },
+        cancel: () => {
+          clearInterval(waitLogger);
+          reject(
+            new Error(
+              `Timed out waiting ${Math.round(timeoutMs / 60_000)} min for a Claude session slot ` +
+                `(active=${this.active}/${this.maxConcurrent}, waiting=${this.waiters.length}) — possible leaked slot`,
+            ),
+          );
+        },
+      };
+      const deadline = setTimeout(() => {
+        const idx = this.waiters.indexOf(waiter);
+        if (idx !== -1) this.waiters.splice(idx, 1);
+        waiter.cancel();
+      }, timeoutMs);
+      const waitLogger = setInterval(() => {
+        console.warn(
+          `[claude-pool] Still waiting for a slot after ${Math.round((Date.now() - startedAt) / 1000)}s ` +
+            `(active=${this.active}/${this.maxConcurrent}, waiting=${this.waiters.length})`,
+        );
+      }, POOL_WAIT_LOG_MS);
+      this.waiters.push(waiter);
     });
   }
 
@@ -147,7 +193,7 @@ class ClaudeSessionPool {
     this.active = Math.max(0, this.active - 1);
     if (this.waiters.length > 0) {
       const next = this.waiters.shift()!;
-      next();
+      next.grant();
     }
   }
 }

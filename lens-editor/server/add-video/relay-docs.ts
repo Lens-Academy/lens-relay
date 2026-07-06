@@ -1,3 +1,11 @@
+import { fetchBytesWithTimeout, bytesToText } from '../fetch-timeout';
+
+// The relay server is known to occasionally hang while background tasks keep
+// running. Without a deadline, one hung relay call blocks its import job forever
+// (and, in add-article, wedges the serialized write lock for ALL later jobs).
+const RELAY_CHECK_TIMEOUT_MS = 30_000;
+const RELAY_WRITE_TIMEOUT_MS = 60_000; // upserts/attachments carry larger payloads
+
 function getRelayConfig() {
   const url = process.env.RELAY_URL || 'http://relay-server:8080';
   const token = process.env.RELAY_SERVER_TOKEN || '';
@@ -10,7 +18,8 @@ function getRelayConfig() {
  */
 async function upsertRelayDoc(
   filePath: string,
-  content: string
+  content: string,
+  signal?: AbortSignal
 ): Promise<{ doc_id: string; path: string; created: boolean }> {
   const { url, token } = getRelayConfig();
 
@@ -22,29 +31,31 @@ async function upsertRelayDoc(
   const folder = filePath.slice(0, slashIdx);
   const path = '/' + filePath.slice(slashIdx + 1);
 
-  const resp = await fetch(`${url}/doc/upsert`, {
+  const resp = await fetchBytesWithTimeout(`${url}/doc/upsert`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ folder, path, content }),
+    timeoutMs: RELAY_WRITE_TIMEOUT_MS,
+    signal,
   });
 
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`Relay upsert failed: ${resp.status} ${text}`);
+    throw new Error(`Relay upsert failed: ${resp.status} ${bytesToText(resp.bytes)}`);
   }
 
-  return await resp.json() as { doc_id: string; path: string; created: boolean };
+  return JSON.parse(bytesToText(resp.bytes)) as { doc_id: string; path: string; created: boolean };
 }
 
 /** Create a new document in Relay */
 export async function createRelayDoc(
   filePath: string,
-  content: string
+  content: string,
+  signal?: AbortSignal
 ): Promise<void> {
-  await upsertRelayDoc(filePath, content);
+  await upsertRelayDoc(filePath, content, signal);
 }
 
 /** Update an existing document with new content */
@@ -61,7 +72,8 @@ export async function updateRelayDoc(
  * Returns a map of path → boolean.
  */
 export async function checkRelayDocsExist(
-  paths: string[]
+  paths: string[],
+  signal?: AbortSignal
 ): Promise<Record<string, boolean>> {
   if (paths.length === 0) return {};
 
@@ -80,21 +92,22 @@ export async function checkRelayDocsExist(
     return '/' + p.slice(idx + 1);
   });
 
-  const resp = await fetch(`${url}/doc/check`, {
+  const resp = await fetchBytesWithTimeout(`${url}/doc/check`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ folder, paths: relPaths }),
+    timeoutMs: RELAY_CHECK_TIMEOUT_MS,
+    signal,
   });
 
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`Relay check failed: ${resp.status} ${text}`);
+    throw new Error(`Relay check failed: ${resp.status} ${bytesToText(resp.bytes)}`);
   }
 
-  const data = (await resp.json()) as { exists: Record<string, boolean> };
+  const data = JSON.parse(bytesToText(resp.bytes)) as { exists: Record<string, boolean> };
 
   // Re-map back to full paths (folder/path)
   const result: Record<string, boolean> = {};
@@ -121,21 +134,21 @@ export async function checkRelayVideoIds(
   const folder = slashIdx !== -1 ? relayFolder.slice(0, slashIdx) : relayFolder;
   const subfolder = slashIdx !== -1 ? relayFolder.slice(slashIdx + 1) : undefined;
 
-  const resp = await fetch(`${url}/doc/check-video-ids`, {
+  const resp = await fetchBytesWithTimeout(`${url}/doc/check-video-ids`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ folder, subfolder, video_ids: videoIds }),
+    timeoutMs: RELAY_CHECK_TIMEOUT_MS,
   });
 
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`Relay check-video-ids failed: ${resp.status} ${text}`);
+    throw new Error(`Relay check-video-ids failed: ${resp.status} ${bytesToText(resp.bytes)}`);
   }
 
-  const data = (await resp.json()) as { found: Record<string, string | null> };
+  const data = JSON.parse(bytesToText(resp.bytes)) as { found: Record<string, string | null> };
   return data.found;
 }
 
@@ -146,7 +159,8 @@ export async function checkRelayVideoIds(
  * matched relative path (or null if not found).
  */
 export async function checkRelayArticleUrls(
-  sourceUrls: string[]
+  sourceUrls: string[],
+  signal?: AbortSignal
 ): Promise<Record<string, string | null>> {
   if (sourceUrls.length === 0) return {};
 
@@ -157,21 +171,22 @@ export async function checkRelayArticleUrls(
   const folder = slashIdx !== -1 ? relayFolder.slice(0, slashIdx) : relayFolder;
   const subfolder = slashIdx !== -1 ? relayFolder.slice(slashIdx + 1) : undefined;
 
-  const resp = await fetch(`${url}/doc/check-source-urls`, {
+  const resp = await fetchBytesWithTimeout(`${url}/doc/check-source-urls`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ folder, subfolder, source_urls: sourceUrls }),
+    timeoutMs: RELAY_CHECK_TIMEOUT_MS,
+    signal,
   });
 
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`Relay check-source-urls failed: ${resp.status} ${text}`);
+    throw new Error(`Relay check-source-urls failed: ${resp.status} ${bytesToText(resp.bytes)}`);
   }
 
-  const data = (await resp.json()) as { found: Record<string, string | null> };
+  const data = JSON.parse(bytesToText(resp.bytes)) as { found: Record<string, string | null> };
   return data.found;
 }
 
@@ -186,22 +201,24 @@ export async function createRelayAttachment(
   folder: string,
   inFolderPath: string,
   data: Uint8Array,
-  mimetype: string
+  mimetype: string,
+  signal?: AbortSignal
 ): Promise<void> {
   const { url, token } = getRelayConfig();
   const qs = new URLSearchParams({ folder, path: inFolderPath, mimetype });
 
-  const resp = await fetch(`${url}/doc/attachment?${qs.toString()}`, {
+  const resp = await fetchBytesWithTimeout(`${url}/doc/attachment?${qs.toString()}`, {
     method: 'POST',
     headers: {
       'Content-Type': mimetype,
       Authorization: `Bearer ${token}`,
     },
     body: data,
+    timeoutMs: RELAY_WRITE_TIMEOUT_MS,
+    signal,
   });
 
   if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`Relay attachment upload failed: ${resp.status} ${text}`);
+    throw new Error(`Relay attachment upload failed: ${resp.status} ${bytesToText(resp.bytes)}`);
   }
 }

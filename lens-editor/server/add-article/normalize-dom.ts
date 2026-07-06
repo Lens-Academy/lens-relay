@@ -78,11 +78,33 @@ function displayNumber(ref: Element): string | null {
   return null;
 }
 
+/**
+ * Whether an <li> is genuinely a footnote definition. `li[id^='fn']` alone is
+ * far too loose — a legitimate list item with id "fnord"/"finally" would be
+ * hijacked into a phantom footnote and vanish from its list. Numeric ids
+ * (`fn-3`, `user-content-fn-2`) always count; hash-style ids (LessWrong's
+ * `fn7menapb2jft`) only count inside a footnotes container.
+ */
+function isFootnoteDefLi(li: Element): boolean {
+  if (li.classList?.contains("footnote-item")) return true;
+  const id = li.getAttribute("id") || "";
+  if (/^(user-content-)?fn[-:]?\d+$/i.test(id)) return true;
+  if (/^fn[-:]?[a-z0-9]+$/i.test(id)) {
+    return !!li.closest(
+      ".footnotes, .footnotes-list, .footnote-section, [data-footnotes], #footnotes, [role='doc-endnotes']",
+    );
+  }
+  return false;
+}
+
+const FOOTNOTE_LI_SELECTOR =
+  "li.footnote-item, li[id^='fn'], li[id^='user-content-fn']";
+
 /** Ids of the footnote definition elements present in the body. */
 function footnoteDefIds(root: Element): Set<string> {
   const ids = new Set<string>();
-  root
-    .querySelectorAll("li.footnote-item, li[id^='fn'], li[id^='user-content-fn']")
+  [...root.querySelectorAll(FOOTNOTE_LI_SELECTOR)]
+    .filter(isFootnoteDefLi)
     .forEach((li) => {
       const id = li.getAttribute("id");
       if (id) ids.add(id);
@@ -231,11 +253,9 @@ function normalizeFootnotes(root: Element): void {
   // Definitions. Map each to its number via the reference map; orphans (never
   // referenced — rare, usually a sub-selected body) keep their content and get
   // numbers continuing after the max, so footnote text is never lost.
-  const defs = [
-    ...root.querySelectorAll(
-      "li.footnote-item, li[id^='fn'], li[id^='user-content-fn']",
-    ),
-  ];
+  const defs = [...root.querySelectorAll(FOOTNOTE_LI_SELECTOR)].filter(
+    isFootnoteDefLi,
+  );
   const numByDef = new Map<Element, number>();
   for (const def of defs) {
     const id = def.getAttribute("id") || "";

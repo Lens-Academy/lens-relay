@@ -57,10 +57,21 @@ export async function spawnClaude(
   await claudeSessionPool.acquire();
   return new Promise((resolve, reject) => {
     const args = argsOverride ?? buildClaudeArgs(workDir);
-    const proc = spawn('claude', args, {
-      cwd: workDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const spawnClaudeProc = () =>
+      spawn('claude', args, {
+        cwd: workDir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    let proc: ReturnType<typeof spawnClaudeProc>;
+    try {
+      proc = spawnClaudeProc();
+    } catch (err) {
+      // A synchronous spawn failure must still release the slot — this was a
+      // permanent-leak path (each leak silently shrinks the pool cap).
+      claudeSessionPool.release();
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
 
     let stdout = '';
     let stderr = '';

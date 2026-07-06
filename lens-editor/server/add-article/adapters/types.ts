@@ -51,6 +51,10 @@ export interface AdapterExtract {
   published: string;
   /** Human-readable publication name (e.g. "AI Safety Atlas"); optional. */
   siteName?: string;
+  /** The article's canonical URL when the page being extracted is a mirror
+   *  (e.g. a GreaterWrong page's "LW link"). Recorded as source_url instead of
+   *  the mirror URL, and checked during duplicate detection. */
+  canonicalUrl?: string;
 }
 
 export interface SiteAdapter {

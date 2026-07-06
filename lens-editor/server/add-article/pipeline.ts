@@ -2,13 +2,17 @@ import * as path from "node:path";
 import type { ArticleJob, ArticleMeta } from "./types";
 import {
   fetchFirstHtml,
+  fetchRawHtml,
   fetchRenderedHtml,
   fetchRawBytes,
   looksLikePdf,
 } from "./fetch";
 import { extractArticle } from "./extract";
-import { extractPdf, embedPdfImages } from "./pdf";
+import { extractPdfSmart, embedPdfImages } from "./pdf";
 import { adapterContext, resolveFetchUrls } from "./adapters";
+import { dedupUrlVariants } from "./url-normalize";
+import { normalizeMetaWithLlm } from "./meta-normalize";
+import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
 import { verifyAndRefine } from "./claude";
 import {
   generateArticleMarkdown,
@@ -111,13 +115,28 @@ export function ensureRequiredMeta(
  * placeholder→final churn in git-sync. On any failure nothing is written and
  * the job is marked failed by the queue.
  */
-export async function processArticle(job: ArticleJob): Promise<void> {
+export async function processArticle(
+  job: ArticleJob,
+  signal?: AbortSignal,
+): Promise<void> {
   console.log(`[add-article] Processing ${job.url}`);
   const createdDate = new Date().toISOString().slice(0, 10);
+  const setStage = (stage: string) => {
+    // A cancelled/deadlined job must actually STOP — Promise.race in the queue
+    // settles the job status but cannot kill this pipeline, so every stage
+    // boundary re-checks the signal. Without this, a "cancelled" job kept
+    // running and wrote its article minutes later (ghost writes; duplicates
+    // after a retry).
+    signal?.throwIfAborted();
+    job.stage = stage;
+    job.updated_at = new Date().toISOString();
+  };
 
   // 1. Fetch raw HTML (SSRF-guarded) and extract deterministically. An adapter
   //    may redirect the fetch to a better source (e.g. arXiv abstract → ar5iv
-  //    full text); we still cite the original URL as source_url.
+  //    full text, LessWrong → the GreaterWrong mirror when LW rate-limits us);
+  //    the cited source_url stays canonical.
+  setStage("fetching");
   let ex: Awaited<ReturnType<typeof extractArticle>> | null = null;
   let rawErr: unknown = null;
   let detectedPdf = false;
@@ -126,21 +145,32 @@ export async function processArticle(job: ArticleJob): Promise<void> {
     if (candidates.length === 1) {
       // Single candidate (no multi-source adapter): fetch bytes once so we can
       // detect a PDF; non-PDF bytes decode to HTML with no second fetch.
-      const { bytes, contentType, finalUrl } = await fetchRawBytes(candidates[0]);
+      const { bytes, contentType, finalUrl } = await fetchRawBytes(
+        candidates[0],
+        signal,
+      );
       if (looksLikePdf(contentType, bytes)) {
         detectedPdf = true;
-        ex = await extractPdf(bytes, job.url);
+        setStage("parsing-pdf");
+        ex = await extractPdfSmart(bytes, job.url, signal);
       } else {
         const html = new TextDecoder("utf-8").decode(bytes);
-        ex = await extractArticle(html, finalUrl, { sourceUrl: job.url });
+        ex = await extractArticle(html, finalUrl, {
+          sourceUrl: job.url,
+          fetchText: (u) => fetchRawHtml(u, signal),
+        });
       }
     } else {
       // Multiple HTML candidates (e.g. arXiv html → ar5iv) — never PDFs.
-      const { html, url: fetchedFrom } = await fetchFirstHtml(candidates);
-      ex = await extractArticle(html, fetchedFrom, { sourceUrl: job.url });
+      const { html, url: fetchedFrom } = await fetchFirstHtml(candidates, signal);
+      ex = await extractArticle(html, fetchedFrom, {
+        sourceUrl: job.url,
+        fetchText: (u) => fetchRawHtml(u, signal),
+      });
     }
   } catch (err) {
     rawErr = err;
+    if (signal?.aborted) throw err; // cancelled/timed out — no render fallback
     console.warn(`[add-article] Raw fetch/extract failed: ${err}`);
   }
 
@@ -154,8 +184,9 @@ export async function processArticle(job: ArticleJob): Promise<void> {
     !detectedPdf &&
     (!ex || (!ex.linkedOut && ex.body.length < RENDER_ESCALATE_CHARS));
   if (needsRender) {
+    setStage("rendering");
     try {
-      const rendered = await fetchRenderedHtml(job.url);
+      const rendered = await fetchRenderedHtml(job.url, signal);
       const exRendered = await extractArticle(rendered, job.url);
       if (!ex || exRendered.body.length > ex.body.length) {
         console.log(
@@ -191,8 +222,29 @@ export async function processArticle(job: ArticleJob): Promise<void> {
       `Extracted article suspiciously short (${ex.body.length} chars) — aborting`,
     );
   }
+  const authorIsFallback = ex.meta.author.length === 0;
+  const dateIsFallback = !ex.meta.published;
   let meta = ensureRequiredMeta(ex.meta, ex.siteName, createdDate);
   let body = ex.body;
+
+  // 3.2. ALWAYS-ON metadata normalizer — one cheap tool-less LLM read of the
+  //      body's first/last chunks. Fixes what the deterministic readers can't
+  //      see (dates printed only in the text, publisher-as-author on PDFs)
+  //      uniformly on every import, under strict anti-fabrication merge rules.
+  //      No-op on any failure; disable with ARTICLE_SKIP_META_LLM=1.
+  if (process.env.ARTICLE_SKIP_META_LLM !== "1") {
+    setStage("metadata");
+    meta = await normalizeMetaWithLlm({
+      meta,
+      siteName: ex.siteName,
+      createdDate,
+      authorIsFallback,
+      dateIsFallback,
+      dateFromPdfInfo: ex.via.startsWith("pdf"),
+      bodyStart: body.slice(0, 5000),
+      bodyEnd: body.slice(-1500),
+    });
+  }
 
   // 3.5. Claude Sonnet QC pass — SELECTIVE. Calibration showed a source-blind
   //      confidence score can't reliably triage quality, but a few specific
@@ -203,6 +255,7 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   //      falls back on formatting; it degrades gracefully if the CLI is absent.
   const needsVerify = ex.assessment.flags.some((f) => ROUTE_FLAGS.has(f));
   if (process.env.ARTICLE_SKIP_VERIFY !== "1" && needsVerify) {
+    setStage("quality-check");
     const articleMd = generateArticleMarkdown(meta, body, createdDate);
     const outcome = await verifyAndRefine(
       path.join(WORK_BASE, job.id),
@@ -238,9 +291,13 @@ export async function processArticle(job: ArticleJob): Promise<void> {
 
   // 4. Duplicate detection by SOURCE URL. The real duplicate signal is the
   //    source_url, not the filename (which is author+title and collides across
-  //    distinct pages). If this URL is already imported — even under a different
-  //    filename — refuse. Degrades gracefully: if the relay check errors, fall
-  //    through to the filename guard below rather than blocking the import.
+  //    distinct pages). Check every spelling of this article's identity — the
+  //    submitted URL, the page's canonical URL, and their normalized forms
+  //    (tracking params / trailing slash / mirror host stripped) — so the same
+  //    article via a mirror or a utm-tagged link is refused too. Degrades
+  //    gracefully: if the relay check errors, fall through to the filename
+  //    guard below rather than blocking the import.
+  setStage("checking-duplicates");
   const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
   if (!filenameBase) {
     throw new Error(`Could not derive filename from title: ${meta.title}`);
@@ -248,7 +305,9 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   const folder = relayArticleFolder();
   let existingByUrl: string | null = null;
   try {
-    existingByUrl = (await checkRelayArticleUrls([job.url]))[job.url] ?? null;
+    const variants = dedupUrlVariants(job.url, meta.source_url);
+    const found = await checkRelayArticleUrls(variants, signal);
+    existingByUrl = variants.map((v) => found[v]).find(Boolean) ?? null;
   } catch (err) {
     console.warn(`[add-article] source_url dedup check failed, proceeding: ${err}`);
   }
@@ -261,28 +320,50 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   // 4.5. Host + embed any PDF figure images: upload each to the folder's
   //      /attachments/ and replace its placeholder with the embed. Images that
   //      fail to upload are dropped (the text stays); never fails the import.
+  const topFolder = folder.split("/")[0];
   if (ex.images?.length) {
-    const topFolder = folder.split("/")[0];
+    setStage("uploading-images");
     body = await embedPdfImages(body, ex.images, filenameBase, (p, png, mime) =>
-      createRelayAttachment(topFolder, p, png, mime),
+      createRelayAttachment(topFolder, p, png, mime, signal),
     );
+  }
+
+  // 4.6. Rehost arXiv/ar5iv figure hotlinks as attachments — mirror-hosted
+  //      asset URLs rot, and the library should be self-contained. Failures
+  //      keep the external URL (an upgrade, never a gate).
+  if (ex.via === "arxiv") {
+    setStage("uploading-images");
+    body = await hostRemoteImages(body, filenameBase, {
+      hostPattern: ARXIV_IMAGE_HOSTS,
+      fetchImage: async (u) => {
+        const r = await fetchRawBytes(u, signal);
+        return { bytes: r.bytes, contentType: r.contentType };
+      },
+      upload: (p, data, mime) =>
+        createRelayAttachment(topFolder, p, data, mime, signal),
+    });
   }
 
   // 5. Resolve a unique filename — disambiguating DISTINCT pages that share a
   //    base name (e.g. each Atlas chapter's "Introduction") — and write it,
   //    serialized so two concurrent imports can't pick the same name and
   //    overwrite each other.
-  const candidatePaths = articleFilenameCandidates(filenameBase, job.url).map(
-    (b) => `${folder}/${b}.md`,
-  );
+  setStage("writing");
+  const candidatePaths = articleFilenameCandidates(
+    filenameBase,
+    meta.source_url || job.url,
+  ).map((b) => `${folder}/${b}.md`);
   const finalMd = generateArticleMarkdown(meta, body, createdDate);
   const mdPath = await withArticleWriteLock(async () => {
-    const existing = await checkRelayDocsExist(candidatePaths);
+    // Last line of defense against post-abort ghost writes: the job may have
+    // been cancelled while queued behind this lock.
+    signal?.throwIfAborted();
+    const existing = await checkRelayDocsExist(candidatePaths, signal);
     const chosen = candidatePaths.find((p) => !existing[p]);
     if (!chosen) {
       throw new Error(`Document already exists: ${candidatePaths[0]}`);
     }
-    await createRelayDoc(chosen, finalMd);
+    await createRelayDoc(chosen, finalMd, signal);
     return chosen;
   });
   const editorBase =
@@ -297,6 +378,7 @@ export async function processArticle(job: ArticleJob): Promise<void> {
   //    into a module (Asana 1215689584721257). Opt out with createLens=false.
   //    A lens failure must not fail the import — the article is already saved.
   if (job.createLens !== false) {
+    setStage("creating-lens");
     try {
       const lensPath = await maybeCreateLens({
         docPath: mdPath,

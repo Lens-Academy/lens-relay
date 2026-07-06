@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ArticleMeta } from "./types";
 
 function yamlQuote(s: string): string {
@@ -62,17 +63,38 @@ function slugifyFilename(s: string): string {
     .replace(/^-|-$/g, "");
 }
 
+// Trailing words that mark an organization name rather than a person — taking
+// their "surname" produces junk prefixes ("Epoch AI" → "ai-…", "Open
+// Philanthropy" → "philanthropy-…"). Org authors use their full name instead.
+const ORG_TAIL_RE =
+  /^(ai|institute|institut|lab|labs|research|forum|foundation|philanthropy|center|centre|org|organization|organisation|team|project|initiative|group|collective|academy|university|college|society|association|journal|magazine|review|report|news|media|blog|press|fund|trust|council|commission|agency|office|department)$/i;
+
 /**
  * Generate filename base following the existing articles convention:
  * "{author-surname}-{title}" lowercased and hyphenated, e.g.
- * "alexander-meditations-on-moloch". Falls back to title only.
+ * "alexander-meditations-on-moloch". Organization authors keep their full name
+ * ("Epoch AI" → "epoch-ai-…"), since an org has no surname. Falls back to
+ * title only.
  */
 export function generateArticleFilenameBase(
   authors: string[],
   title: string,
 ): string {
-  const surname = authors[0]?.trim().split(/\s+/).pop() ?? "";
-  return slugifyFilename(surname ? `${surname}-${title}` : title);
+  const first = authors[0]?.trim() ?? "";
+  const words = first.split(/\s+/).filter(Boolean);
+  const surname = words[words.length - 1] ?? "";
+  const prefix = words.length > 1 && ORG_TAIL_RE.test(surname) ? first : surname;
+  const slug = slugifyFilename(prefix ? `${prefix}-${title}` : title);
+  if (slug) return slug;
+  // Fully non-Latin titles/authors (CJK, Cyrillic, Arabic, …) slugify to ""
+  // under the [a-z0-9-] charset — previously those articles were UNIMPORTABLE
+  // ("Could not derive filename"). Fall back to a stable content hash so every
+  // article gets a deterministic, non-empty name.
+  const digest = createHash("sha1")
+    .update(`${first}|${title}`)
+    .digest("hex")
+    .slice(0, 12);
+  return `article-${digest}`;
 }
 
 /**

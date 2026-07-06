@@ -67,6 +67,10 @@ services:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
       - SHARE_TOKEN_SECRET=${SHARE_TOKEN_SECRET}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - DATALAB_API_KEY=${DATALAB_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - PDF_PARSER=${PDF_PARSER:-}
       - PORT=3000
 
   # relay-git-sync is started by scripts/start-git-sync.sh, not compose — see

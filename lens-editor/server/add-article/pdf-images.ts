@@ -68,12 +68,60 @@ export function encodePng(
 // --- per-page image extraction with positions ---
 
 export interface PdfPageImage {
-  /** PNG bytes, ready to upload. */
+  /** Image bytes, ready to upload. PNG for locally-extracted figures; hosted
+   *  PDF parsers may hand back JPEG/WebP (see `mime`). */
   png: Buffer;
-  /** Distance from the top of the page (smaller = higher); for ordering. */
+  /** MIME type of `png`'s bytes; absent ⇒ image/png. */
+  mime?: string;
+  /** Distance from the top of the page (smaller = higher); for ordering.
+   *  0 when unknown (provider-extracted images are already positioned in the
+   *  markdown flow, so ordering by position is unnecessary). */
   yTop: number;
   width: number;
   height: number;
+}
+
+const MIN_FIGURE_PX = 64; // below this in either dimension ⇒ icon/glyph/bullet
+const MAX_FIGURE_ASPECT = 12; // wider/taller than this ⇒ rule/divider/banner strip
+const MAX_PAGE_COVERAGE = 0.9; // placed area this fraction of the page ⇒ background/cover
+
+/**
+ * Heuristic: is this raster page decoration rather than a content figure?
+ * Designed documents (system cards, policy reports) embed full-page background
+ * scans, logos, header rules and tiny glyphs as images; hosting every one of
+ * them produces dozens of junk embeds. We drop rasters that are tiny (icons),
+ * extreme-aspect (rules/dividers), or near page-sized (backgrounds/covers).
+ * `placed*`/`page*` are in page units (from the CTM); when unknown, the
+ * page-coverage test is skipped. Dimensions come from the image metadata, so
+ * this runs before the (costlier) PNG encode.
+ */
+export function isLikelyDecorative(opts: {
+  width: number;
+  height: number;
+  placedWidth?: number;
+  placedHeight?: number;
+  pageWidth?: number;
+  pageHeight?: number;
+}): boolean {
+  const { width, height, placedWidth, placedHeight, pageWidth, pageHeight } = opts;
+  if (width < MIN_FIGURE_PX || height < MIN_FIGURE_PX) return true;
+  if (Math.max(width, height) / Math.min(width, height) > MAX_FIGURE_ASPECT) return true;
+  if (placedWidth && placedHeight && pageWidth && pageHeight) {
+    const coverage = (placedWidth * placedHeight) / (pageWidth * pageHeight);
+    if (coverage > MAX_PAGE_COVERAGE) return true;
+  }
+  return false;
+}
+
+/** Image hashes occurring at least `minRepeat` times. An identical raster
+ *  repeated across many pages is boilerplate (logo, running header, page
+ *  background/template), not a figure — the caller drops every instance. */
+export function repeatedImageHashes(hashes: string[], minRepeat: number): Set<string> {
+  const counts = new Map<string, number>();
+  for (const h of hashes) counts.set(h, (counts.get(h) ?? 0) + 1);
+  return new Set(
+    [...counts].filter(([, c]) => c >= minRepeat).map(([h]) => h),
+  );
 }
 
 type Matrix = [number, number, number, number, number, number];
@@ -105,29 +153,50 @@ export async function extractPageImages(
 
   const { OPS } = await getResolvedPDFJS();
   const page = await pdf.getPage(pageNum);
-  const viewportHeight = page.getViewport({ scale: 1 }).height;
+  const viewport = page.getViewport({ scale: 1 });
   const ops = await page.getOperatorList();
 
   const stack: Matrix[] = [];
   let m: Matrix = [1, 0, 0, 1, 0, 0];
   const yTopByKey = new Map<string, number>();
+  const sizeByKey = new Map<string, { w: number; h: number }>();
   for (let i = 0; i < ops.fnArray.length; i += 1) {
     const fn = ops.fnArray[i];
     if (fn === OPS.save) stack.push([...m]);
     else if (fn === OPS.restore) m = stack.pop() ?? m;
     else if (fn === OPS.transform) m = mul(m, ops.argsArray[i] as Matrix);
-    else if (fn === OPS.paintImageXObject || fn === OPS.paintJpegXObject) {
+    // paintJpegXObject exists at runtime but is missing from pdf.js's OPS types.
+    else if (
+      fn === OPS.paintImageXObject ||
+      fn === (OPS as Record<string, number>).paintJpegXObject
+    ) {
       const key = (ops.argsArray[i] as unknown[])[0] as string;
       if (key && !yTopByKey.has(key)) {
-        yTopByKey.set(key, Math.round(viewportHeight - m[5]));
+        yTopByKey.set(key, Math.round(viewport.height - m[5]));
+        // Placed size on the page = the CTM's column magnitudes (the image is
+        // drawn in a unit square transformed by m).
+        sizeByKey.set(key, { w: Math.hypot(m[0], m[1]), h: Math.hypot(m[2], m[3]) });
       }
     }
   }
 
-  return images.map((img) => ({
-    png: encodePng(img.data, img.width, img.height, img.channels as 1 | 3 | 4),
-    yTop: yTopByKey.get(img.key) ?? Number.MAX_SAFE_INTEGER,
-    width: img.width,
-    height: img.height,
-  }));
+  // Drop page decoration (backgrounds, logos, rules, glyphs) before encoding.
+  return images
+    .filter((img) => {
+      const sz = sizeByKey.get(img.key);
+      return !isLikelyDecorative({
+        width: img.width,
+        height: img.height,
+        placedWidth: sz?.w,
+        placedHeight: sz?.h,
+        pageWidth: viewport.width,
+        pageHeight: viewport.height,
+      });
+    })
+    .map((img) => ({
+      png: encodePng(img.data, img.width, img.height, img.channels as 1 | 3 | 4),
+      yTop: yTopByKey.get(img.key) ?? Number.MAX_SAFE_INTEGER,
+      width: img.width,
+      height: img.height,
+    }));
 }

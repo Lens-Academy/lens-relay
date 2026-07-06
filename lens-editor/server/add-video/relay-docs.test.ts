@@ -10,15 +10,28 @@ beforeEach(() => {
   mockFetch.mockReset();
 });
 
+/** Minimal Response stand-in for fetchBytesWithTimeout (reads arrayBuffer). */
+function jsonResponse(status: number, payload: unknown) {
+  const bytes = new TextEncoder().encode(
+    typeof payload === 'string' ? payload : JSON.stringify(payload)
+  );
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: '',
+    headers: new Headers(),
+    arrayBuffer: async () => bytes.buffer,
+  };
+}
+
 function mockUpsertSuccess(created: boolean) {
-  mockFetch.mockResolvedValueOnce({
-    ok: true,
-    json: async () => ({
+  mockFetch.mockResolvedValueOnce(
+    jsonResponse(200, {
       doc_id: 'test-doc-id',
       path: 'Lens Edu/video_transcripts/test.md',
       created,
-    }),
-  });
+    })
+  );
 }
 
 describe('createRelayDoc', () => {
@@ -52,11 +65,7 @@ describe('createRelayDoc', () => {
   });
 
   it('throws on 409 conflict for .json files', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 409,
-      text: async () => 'Path already exists',
-    });
+    mockFetch.mockResolvedValueOnce(jsonResponse(409, 'Path already exists'));
 
     await expect(
       createRelayDoc(

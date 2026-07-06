@@ -186,3 +186,47 @@ describe("articleFilenameCandidates", () => {
     for (const name of c) expect(name.length).toBeLessThanOrEqual(160);
   });
 });
+
+describe("generateArticleFilenameBase — organization authors", () => {
+  // Prevents: "Epoch AI" → "ai-eci-documentation"-style junk prefixes. An org
+  // has no surname; use its full name.
+  it("uses the full org name when the last word is an org suffix", () => {
+    expect(generateArticleFilenameBase(["Epoch AI"], "ECI documentation")).toBe(
+      "epoch-ai-eci-documentation",
+    );
+    expect(
+      generateArticleFilenameBase(["Open Philanthropy"], "Worldview report"),
+    ).toBe("open-philanthropy-worldview-report");
+  });
+
+  it("still uses the surname for person authors", () => {
+    expect(
+      generateArticleFilenameBase(["Scott Alexander"], "Meditations on Moloch"),
+    ).toBe("alexander-meditations-on-moloch");
+  });
+
+  it("keeps single-word authors as-is", () => {
+    expect(generateArticleFilenameBase(["METR"], "Some report")).toBe(
+      "metr-some-report",
+    );
+    expect(generateArticleFilenameBase(["paulfchristiano"], "A story")).toBe(
+      "paulfchristiano-a-story",
+    );
+  });
+});
+
+describe("generateArticleFilenameBase — non-Latin fallback", () => {
+  // Prevents: fully non-Latin titles slugifying to "" and failing the import.
+  it("hash-falls-back for CJK/Cyrillic/Arabic instead of returning empty", () => {
+    for (const [authors, title] of [
+      [["山田太郎"], "人工知能"],
+      [["Иванов"], "Искусственный интеллект"],
+      [["كاتب"], "الذكاء الاصطناعي"],
+    ] as Array<[string[], string]>) {
+      const base = generateArticleFilenameBase(authors, title);
+      expect(base).toMatch(/^article-[0-9a-f]{12}$/);
+      // deterministic
+      expect(generateArticleFilenameBase(authors, title)).toBe(base);
+    }
+  });
+});
