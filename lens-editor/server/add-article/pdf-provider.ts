@@ -2,32 +2,24 @@ import { fetchBytesWithTimeout, bytesToText } from "../fetch-timeout";
 import type { PdfPageImage } from "./pdf-images";
 
 /**
- * Hosted PDF→Markdown providers. The local unpdf path (pdf.ts) reconstructs
- * text from positioned glyph runs — solid on clean academic papers, weak on
- * designed reports, complex layouts, and useless on scanned PDFs. These
- * providers are purpose-built parsers that return real Markdown (headings,
- * tables, math) plus the embedded figure images, positioned in the text flow.
- *
- *   - Datalab Marker API (primary): built for academic papers; free monthly
- *     allowance covers our volume. Async: submit, then poll a check URL.
- *   - Mistral OCR (fallback): one synchronous call, images as base64.
- *
- * Selection: PDF_PARSER=datalab|mistral|local overrides; otherwise the first
- * provider with an API key set wins; no key ⇒ null (caller uses local path).
- * Both providers reduce to the same shape — markdown with `![[__pdfimg_N__]]`
- * placeholders + an images array — so the pipeline's existing
- * upload-and-embed step (embedPdfImages) works unchanged.
+ * Hosted PDF→Markdown parsing via the Datalab Marker API — real Markdown
+ * structure (headings, tables, math), scanned-PDF OCR, and figure images in
+ * the text flow. Selected purely by DATALAB_API_KEY being set; without a key
+ * (or on any provider error) the caller falls back to local unpdf extraction,
+ * so the parser is an upgrade, never a gate. Async API: submit, poll a check
+ * URL until complete. Output reduces to markdown with `![[__pdfimg_N__]]`
+ * placeholders + an images array, so the pipeline's existing upload-and-embed
+ * step works unchanged.
  */
 
-const DATALAB_API_URL_DEFAULT = "https://www.datalab.to/api/v1/convert";
-const MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr";
+const DATALAB_API_URL = "https://www.datalab.to/api/v1/convert";
 
-const SUBMIT_TIMEOUT_MS = 120_000; // upload + (Mistral) synchronous parse
+const SUBMIT_TIMEOUT_MS = 120_000; // upload
 const POLL_TIMEOUT_MS = 30_000; // one Datalab status poll
 const POLL_INTERVAL_MS = 2_000;
 const POLL_BUDGET_MS = 6 * 60_000; // total Datalab wait before falling back
 
-export type PdfProviderName = "datalab" | "mistral";
+export type PdfProviderName = "datalab";
 
 export interface ProviderParse {
   provider: PdfProviderName;
@@ -37,24 +29,9 @@ export interface ProviderParse {
   images: PdfPageImage[];
 }
 
-/** Which provider to use, from env. Null ⇒ local extraction. */
+/** Datalab when its key is set; null ⇒ local extraction. */
 export function configuredPdfProvider(): PdfProviderName | null {
-  const forced = (process.env.PDF_PARSER || "").trim().toLowerCase();
-  if (forced === "local" || forced === "off" || forced === "none") return null;
-  if (forced === "datalab" || forced === "mistral") {
-    const key =
-      forced === "datalab"
-        ? process.env.DATALAB_API_KEY
-        : process.env.MISTRAL_API_KEY;
-    if (key) return forced;
-    console.warn(
-      `[add-article] PDF_PARSER=${forced} but its API key is not set — using local PDF extraction`,
-    );
-    return null;
-  }
-  if (process.env.DATALAB_API_KEY) return "datalab";
-  if (process.env.MISTRAL_API_KEY) return "mistral";
-  return null;
+  return process.env.DATALAB_API_KEY ? "datalab" : null;
 }
 
 function mimeFromName(name: string): string {
@@ -149,7 +126,6 @@ async function parseWithDatalab(
   signal?: AbortSignal,
 ): Promise<ProviderParse> {
   const apiKey = process.env.DATALAB_API_KEY!;
-  const apiUrl = process.env.DATALAB_API_URL || DATALAB_API_URL_DEFAULT;
 
   const form = new FormData();
   form.append(
@@ -159,7 +135,7 @@ async function parseWithDatalab(
   );
   form.append("output_format", "markdown");
 
-  const submit = await fetchBytesWithTimeout(apiUrl, {
+  const submit = await fetchBytesWithTimeout(DATALAB_API_URL, {
     method: "POST",
     headers: { "X-Api-Key": apiKey },
     body: form,
@@ -218,67 +194,14 @@ async function parseWithDatalab(
   }
 }
 
-interface MistralOcrPage {
-  index?: number;
-  markdown?: string;
-  images?: Array<{ id?: string; image_base64?: string }>;
-}
-
-/** Mistral OCR: single synchronous call with the PDF inlined as a data URL. */
-async function parseWithMistral(
-  bytes: ArrayBuffer,
-  signal?: AbortSignal,
-): Promise<ProviderParse> {
-  const apiKey = process.env.MISTRAL_API_KEY!;
-  const resp = await fetchBytesWithTimeout(MISTRAL_OCR_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: process.env.MISTRAL_OCR_MODEL || "mistral-ocr-latest",
-      document: {
-        type: "document_url",
-        document_url: `data:application/pdf;base64,${Buffer.from(bytes).toString("base64")}`,
-      },
-      include_image_base64: true,
-    }),
-    timeoutMs: SUBMIT_TIMEOUT_MS,
-    signal,
-  });
-  if (!resp.ok) {
-    throw new Error(
-      `Mistral OCR failed: ${resp.status} ${bytesToText(resp.bytes).slice(0, 300)}`,
-    );
-  }
-  const data = JSON.parse(bytesToText(resp.bytes)) as { pages?: MistralOcrPage[] };
-  const pages = (data.pages || []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  const markdown = pages
-    .map((p) => (p.markdown || "").trim())
-    .filter(Boolean)
-    .join("\n\n");
-  if (!markdown) throw new Error("Mistral OCR returned an empty document");
-  const images = pages.flatMap((p) =>
-    (p.images || [])
-      .filter((i) => i.id && i.image_base64)
-      .map((i) => ({ name: i.id!, base64: i.image_base64! })),
-  );
-  const sub = substituteImageRefs(markdown, images);
-  return { provider: "mistral", body: sub.body, images: sub.images };
-}
 
 /**
- * Parse a PDF with the configured provider. Throws on provider errors — the
- * caller (extractPdfSmart) logs and falls back to local extraction, so a
- * provider outage degrades quality rather than failing the import.
+ * Parse a PDF with Datalab. Throws on provider errors — the caller
+ * (extractPdfSmart) logs and falls back to local extraction.
  */
 export async function parsePdfWithProvider(
   bytes: ArrayBuffer,
-  provider: PdfProviderName,
   signal?: AbortSignal,
 ): Promise<ProviderParse> {
-  return provider === "datalab"
-    ? parseWithDatalab(bytes, signal)
-    : parseWithMistral(bytes, signal);
+  return parseWithDatalab(bytes, signal);
 }

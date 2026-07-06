@@ -31,25 +31,12 @@ function jsonResponse(status: number, payload: unknown) {
 const PNG_B64 = Buffer.from("fake-png-bytes").toString("base64");
 
 describe("configuredPdfProvider", () => {
-  it("selects by available API key, Datalab first", () => {
+  it("selects datalab when its key is set", () => {
     vi.stubEnv("DATALAB_API_KEY", "dk");
-    vi.stubEnv("MISTRAL_API_KEY", "mk");
     expect(configuredPdfProvider()).toBe("datalab");
   });
 
-  it("honors PDF_PARSER override and falls back to local without a key", () => {
-    vi.stubEnv("DATALAB_API_KEY", "dk");
-    vi.stubEnv("PDF_PARSER", "local");
-    expect(configuredPdfProvider()).toBe(null);
-
-    vi.stubEnv("PDF_PARSER", "mistral"); // forced but no key
-    expect(configuredPdfProvider()).toBe(null);
-
-    vi.stubEnv("MISTRAL_API_KEY", "mk");
-    expect(configuredPdfProvider()).toBe("mistral");
-  });
-
-  it("uses local extraction when nothing is configured", () => {
+  it("uses local extraction when no key is configured", () => {
     expect(configuredPdfProvider()).toBe(null);
   });
 });
@@ -110,10 +97,7 @@ describe("parsePdfWithProvider — datalab", () => {
         }),
       );
 
-    const parsed = await parsePdfWithProvider(
-      new TextEncoder().encode("%PDF-").buffer,
-      "datalab",
-    );
+    const parsed = await parsePdfWithProvider(new TextEncoder().encode("%PDF-").buffer);
     expect(parsed.provider).toBe("datalab");
     expect(parsed.body).toContain("# Title");
     expect(parsed.body).toContain("![[__pdfimg_0__]]");
@@ -130,62 +114,11 @@ describe("parsePdfWithProvider — datalab", () => {
       jsonResponse(200, { success: false, error: "unsupported file" }),
     );
     await expect(
-      parsePdfWithProvider(new ArrayBuffer(4), "datalab"),
+      parsePdfWithProvider(new ArrayBuffer(4)),
     ).rejects.toThrow(/unsupported file/);
   });
 });
 
-describe("parsePdfWithProvider — mistral", () => {
-  it("joins page markdown in order and maps base64 images", async () => {
-    vi.stubEnv("MISTRAL_API_KEY", "mk");
-    mockFetch.mockResolvedValueOnce(
-      jsonResponse(200, {
-        pages: [
-          {
-            index: 1,
-            markdown: "Second page.",
-            images: [],
-          },
-          {
-            index: 0,
-            markdown: "# Title\n\n![img-0.jpeg](img-0.jpeg)",
-            images: [
-              {
-                id: "img-0.jpeg",
-                image_base64: `data:image/jpeg;base64,${PNG_B64}`,
-              },
-            ],
-          },
-        ],
-      }),
-    );
-
-    const parsed = await parsePdfWithProvider(new ArrayBuffer(4), "mistral");
-    expect(parsed.provider).toBe("mistral");
-    expect(parsed.body.indexOf("# Title")).toBeLessThan(
-      parsed.body.indexOf("Second page."),
-    );
-    expect(parsed.body).toContain("![[__pdfimg_0__]]");
-    expect(parsed.images).toHaveLength(1);
-    expect(parsed.images[0].mime).toBe("image/jpeg");
-    // data-URL prefix must be stripped before decoding
-    expect(parsed.images[0].png.toString()).toBe("fake-png-bytes");
-
-    const call = mockFetch.mock.calls[0];
-    expect(call[0]).toBe("https://api.mistral.ai/v1/ocr");
-    const body = JSON.parse(call[1].body);
-    expect(body.include_image_base64).toBe(true);
-    expect(body.document.document_url).toMatch(/^data:application\/pdf;base64,/);
-  });
-
-  it("throws on an empty parse (caller falls back to local)", async () => {
-    vi.stubEnv("MISTRAL_API_KEY", "mk");
-    mockFetch.mockResolvedValueOnce(jsonResponse(200, { pages: [] }));
-    await expect(
-      parsePdfWithProvider(new ArrayBuffer(4), "mistral"),
-    ).rejects.toThrow(/empty/i);
-  });
-});
 
 describe("review-hardening: datalab terminal status + empty image names", () => {
   // Prevents: a terminal "failed" status spinning the full 6-min poll budget.
@@ -199,7 +132,7 @@ describe("review-hardening: datalab terminal status + empty image names", () => 
         jsonResponse(200, { status: "failed", success: false, error: "corrupt pdf" }),
       );
     await expect(
-      parsePdfWithProvider(new ArrayBuffer(4), "datalab"),
+      parsePdfWithProvider(new ArrayBuffer(4)),
     ).rejects.toThrow(/corrupt pdf/);
     expect(mockFetch).toHaveBeenCalledTimes(2); // no further polling
   }, 15_000);

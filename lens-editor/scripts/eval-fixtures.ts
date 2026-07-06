@@ -86,9 +86,7 @@ async function scorePdfFixture(slug: string, rootPdf: string, emitDiffDir?: stri
 
   const realFetch = globalThis.fetch;
   const prevKey = process.env.DATALAB_API_KEY;
-  const prevParser = process.env.PDF_PARSER;
   process.env.DATALAB_API_KEY = "fixture-replay";
-  process.env.PDF_PARSER = "datalab";
   globalThis.fetch = (async (url: unknown) => {
     const u = String(url);
     if (u.includes("replay.local")) return new Response(dl, { status: 200 });
@@ -106,7 +104,6 @@ async function scorePdfFixture(slug: string, rootPdf: string, emitDiffDir?: stri
   } finally {
     globalThis.fetch = realFetch;
     if (prevKey === undefined) delete process.env.DATALAB_API_KEY; else process.env.DATALAB_API_KEY = prevKey;
-    if (prevParser === undefined) delete process.env.PDF_PARSER; else process.env.PDF_PARSER = prevParser;
   }
   if (!ex.via.startsWith("pdf-datalab")) throw new Error(`replay did not use datalab (via=${ex.via})`);
 

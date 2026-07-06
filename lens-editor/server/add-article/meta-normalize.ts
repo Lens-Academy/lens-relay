@@ -18,7 +18,7 @@ import type { ArticleMeta } from "./types";
  * need their year in the excerpt, titles must overlap the current title).
  *
  * Cost/latency: Haiku via the shared CLI pool ≈ 1–2¢ and a few seconds.
- * Disable with ARTICLE_SKIP_META_LLM=1.
+ * Degrades to a no-op when the CLI is unavailable.
  */
 
 export const META_LLM_TIMEOUT_MS = 90_000;
@@ -204,7 +204,7 @@ async function defaultRunner(prompt: string): Promise<string> {
       "--max-budget-usd",
       "0.10",
       "--model",
-      process.env.ARTICLE_META_MODEL || "haiku",
+      "haiku",
       "--output-format",
       "json",
     ]);

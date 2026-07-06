@@ -231,8 +231,8 @@ export async function processArticle(
   //      body's first/last chunks. Fixes what the deterministic readers can't
   //      see (dates printed only in the text, publisher-as-author on PDFs)
   //      uniformly on every import, under strict anti-fabrication merge rules.
-  //      No-op on any failure; disable with ARTICLE_SKIP_META_LLM=1.
-  if (process.env.ARTICLE_SKIP_META_LLM !== "1") {
+  //      No-op on any failure (e.g. no claude CLI in local dev).
+  {
     setStage("metadata");
     meta = await normalizeMetaWithLlm({
       meta,

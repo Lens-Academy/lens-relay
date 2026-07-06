@@ -646,7 +646,7 @@ export async function extractPdfSmart(
   const provider = configuredPdfProvider();
   if (provider) {
     try {
-      const parsed = await parsePdfWithProvider(bytes, provider, signal);
+      const parsed = await parsePdfWithProvider(bytes, signal);
       // Info-dict metadata still comes from the PDF itself. Parse a COPY —
       // pdf.js detaches the buffer it is handed, and the local fallback (or a
       // retry) must be able to reuse `bytes`. The same parse yields the text
