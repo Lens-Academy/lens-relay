@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   auth: {
     canWrite: true,
     canEdit: true,
+    canPromote: true,
     role: 'edit' as const,
     folderUuid: null as string | null,
     isAllFolders: true,
@@ -110,6 +111,7 @@ describe('EditorArea', () => {
     mocks.auth = {
       canWrite: true,
       canEdit: true,
+      canPromote: true,
       role: 'edit',
       folderUuid: null,
       isAllFolders: true,

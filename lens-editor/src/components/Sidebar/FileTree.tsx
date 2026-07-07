@@ -4,6 +4,7 @@ import { createDragDropManager } from 'dnd-core';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { FileTreeNode } from './FileTreeNode';
 import { StickyScrollOverlay } from './StickyScrollOverlay';
+import { useMobile } from '../../contexts/MobileContext';
 import type { TreeNode } from '../../lib/tree-utils';
 
 const DragTargetCtx = createContext<string | null>(null);
@@ -53,6 +54,7 @@ interface FileTreeProps {
 }
 
 export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileTreeProps) {
+  const { isMobile } = useMobile();
   const [dragTarget, setDragTarget] = useState<string | null>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const treeRef = useRef<TreeApi<TreeNode> | null>(null);
@@ -170,7 +172,7 @@ export function FileTree({ data, onSelect, onMove, openAll, activeDocId }: FileT
         openByDefault={!!openAll}
         initialOpenState={initialOpenState}
         indent={16}
-        rowHeight={28}
+        rowHeight={isMobile ? 40 : 28}
         width="100%"
         height={treeHeight}
         overscanCount={5}

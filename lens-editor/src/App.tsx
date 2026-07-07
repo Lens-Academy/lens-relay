@@ -39,6 +39,10 @@ import { EduEditor } from './components/EduEditor/EduEditor';
 import { useContainerWidth } from './hooks/useContainerWidth';
 import { usePanelManager, type PanelConfig } from './hooks/usePanelManager';
 import { useHeaderBreakpoints } from './hooks/useHeaderBreakpoints';
+import { MobileProvider, useMobile } from './contexts/MobileContext';
+import { MobileNavBar } from './components/Mobile/MobileNavBar';
+import { MobileDrawer } from './components/Mobile/MobileDrawer';
+import { useEdgeSwipe } from './hooks/useEdgeSwipe';
 
 // Panel configuration — single source of truth for all panel behavior
 // All panels use CSS flexbox with pixel widths.
@@ -369,7 +373,11 @@ export function App() {
   if (authError) {
     return <TokenInvalid />;
   }
-  return <AuthenticatedApp role={shareRole} folderUuid={shareFolderUuid} isAllFolders={shareIsAllFolders} shareToken={shareToken} />;
+  return (
+    <MobileProvider>
+      <AuthenticatedApp role={shareRole} folderUuid={shareFolderUuid} isAllFolders={shareIsAllFolders} shareToken={shareToken} />
+    </MobileProvider>
+  );
 }
 
 function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: string[]; folders: { id: string; name: string }[]; relayId: string }) {
@@ -417,15 +425,22 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
  * Shows a prompt to select a file from the sidebar or quick switcher.
  */
 function DefaultLanding() {
+  const { isMobile } = useMobile();
   return (
-    <main className="flex-1 flex items-center justify-center bg-gray-50 pt-32">
+    <main className="flex-1 flex items-center justify-center bg-gray-50 pt-32 max-md:pt-8">
       <div className="text-center max-w-md px-6">
         <h1 className="text-xl font-semibold text-gray-800 mb-3">Select a document</h1>
-        <p className="text-gray-500">
-          Choose a file from the sidebar, or press{' '}
-          <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+O</kbd>
-          {' '}to open the quick switcher.
-        </p>
+        {isMobile ? (
+          <p className="text-gray-500">
+            Tap <span aria-hidden="true">☰</span> below to browse files, or the magnifier to search.
+          </p>
+        ) : (
+          <p className="text-gray-500">
+            Choose a file from the sidebar, or press{' '}
+            <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-300 rounded">Ctrl+O</kbd>
+            {' '}to open the quick switcher.
+          </p>
+        )}
       </div>
     </main>
   );
@@ -433,6 +448,16 @@ function DefaultLanding() {
 
 function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean; shareToken: string }) {
   const navigate = useNavigate();
+  const { isMobile, activeDrawer, closeDrawer, openDrawer, docPanelsAvailable } = useMobile();
+
+  // Obsidian-style swipes to open the drawers (buttons still work too)
+  useEdgeSwipe({
+    enabled: isMobile && activeDrawer === null,
+    onSwipeRight: useCallback(() => openDrawer('left'), [openDrawer]),
+    onSwipeLeft: useCallback(() => {
+      if (docPanelsAvailable) openDrawer('right');
+    }, [openDrawer, docPanelsAvailable]),
+  });
 
   // This component renders AuthProvider, so it can't consume useAuth() itself.
   const { canEdit, canPromote } = deriveCapabilities(role);
@@ -475,6 +500,8 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
 
   // Navigate by updating the URL — React Router handles the rest
   // Also tracks recent files at this chokepoint (all navigation paths go through here)
+  // Note: open mobile drawers dismiss themselves on route change
+  // (MobileContext watches location), so navigation needn't close them here.
   const onNavigate = useCallback((compoundDocId: string) => {
     const uuid = compoundDocId.slice(RELAY_ID.length + 1);
     pushRecent(uuid);
@@ -503,11 +530,11 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
         <SidebarContext.Provider value={{ manager, headerStage }}>
           <HeaderActionsProvider onCommentsControlChange={setHeaderCommentsControl}>
             <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>
-          <div ref={outerRef as RefObject<HTMLDivElement>} className="h-screen flex flex-col bg-gray-50 overflow-hidden">
+          <div ref={outerRef as RefObject<HTMLDivElement>} className="h-dvh flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}
             <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
               <div className="flex items-center gap-6 min-w-0">
-                <button
+                {!isMobile && <button
                   onClick={() => manager.toggle('left-sidebar')}
                   title="Toggle left sidebar"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
@@ -517,7 +544,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     <path d="M9 3v18" />
                     {!leftCollapsed && <rect x="3" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
                   </svg>
-                </button>
+                </button>}
                 {(headerStage === 'full' || headerStage === 'compact-toggles') && (
                   <h1 className="text-lg font-semibold text-gray-900">Lens Editor</h1>
                 )}
@@ -525,7 +552,10 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
               </div>
               <div className="flex items-center gap-4 flex-shrink-0">
                 <div id="header-controls" className="flex items-center gap-4" />
-                <button
+                {/* Stays visible on mobile when a page registers its own
+                    comments control (HtmlEditor) — the bottom bar only
+                    covers EditorArea's comment sheet */}
+                {(!isMobile || headerCommentsControl != null) && <button
                   onClick={handleToggleComments}
                   title={commentsTitle}
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
@@ -534,8 +564,8 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                     {commentsOpen && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
                   </svg>
-                </button>
-                <button
+                </button>}
+                {!isMobile && <button
                   onClick={() => manager.toggle('right-sidebar')}
                   title="Toggle right sidebar"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
@@ -545,26 +575,30 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     <path d="M15 3v18" />
                     {!rightCollapsed && <rect x="15" y="3" width="6" height="18" rx="2" fill="currentColor" opacity="0.45" />}
                   </svg>
-                </button>
+                </button>}
                 <div id="header-discussion-toggle" className="flex" />
               </div>
             </header>
             <div id="app-outer" className="flex-1 flex min-h-0">
-              <div
-                id="sidebar"
-                className="overflow-hidden flex-shrink-0"
-                style={{ width: leftCollapsed ? 0 : manager.getWidth('left-sidebar') }}
-              >
-                <Sidebar />
-              </div>
-              <ResizeHandle
-                orientation="vertical"
-                reverse
-                onDragStart={() => manager.getWidth('left-sidebar')}
-                onDrag={(size) => manager.setWidth('left-sidebar', size)}
-                onDragEnd={() => manager.onDragEnd('left-sidebar')}
-                disabled={leftCollapsed}
-              />
+              {!isMobile && (
+                <>
+                  <div
+                    id="sidebar"
+                    className="overflow-hidden flex-shrink-0"
+                    style={{ width: leftCollapsed ? 0 : manager.getWidth('left-sidebar') }}
+                  >
+                    <Sidebar />
+                  </div>
+                  <ResizeHandle
+                    orientation="vertical"
+                    reverse
+                    onDragStart={() => manager.getWidth('left-sidebar')}
+                    onDrag={(size) => manager.setWidth('left-sidebar', size)}
+                    onDragEnd={() => manager.onDragEnd('left-sidebar')}
+                    disabled={leftCollapsed}
+                  />
+                </>
+              )}
               <div className="flex-1 min-w-0">
                 <Routes>
                   <Route path="/review" element={
@@ -594,7 +628,20 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                 </Routes>
               </div>
             </div>
+            {isMobile && <MobileNavBar onOpenQuickSwitcher={() => setQuickSwitcherOpen(true)} />}
           </div>
+          {isMobile && (
+            <MobileDrawer
+              open={activeDrawer === 'left'}
+              onClose={closeDrawer}
+              side="left"
+              label="Files"
+            >
+              <div className="h-full">
+                <Sidebar />
+              </div>
+            </MobileDrawer>
+          )}
           <QuickSwitcher
             open={quickSwitcherOpen}
             onOpenChange={setQuickSwitcherOpen}

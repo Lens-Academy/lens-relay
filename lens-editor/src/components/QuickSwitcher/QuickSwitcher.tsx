@@ -208,7 +208,7 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50" />
         <Dialog.Content
-          className="fixed top-[20%] left-1/2 -translate-x-1/2 w-full max-w-[600px] bg-white rounded-lg shadow-xl overflow-hidden"
+          className="fixed top-[20%] max-md:top-2 left-1/2 -translate-x-1/2 w-full max-w-[600px] max-md:w-[calc(100vw-16px)] bg-white rounded-lg shadow-xl overflow-hidden"
           aria-describedby={undefined}
           onKeyDown={handleKeyDown}
         >
@@ -227,7 +227,7 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
               autoFocus
             />
           </div>
-          <div ref={listRef} className="max-h-[400px] overflow-y-auto" role="listbox">
+          <div ref={listRef} className="max-h-[400px] max-md:max-h-[55dvh] overflow-y-auto" role="listbox">
             {isRecentMode && hasItems && (
               <div className="px-3 py-1.5 text-xs text-gray-500 font-medium uppercase tracking-wide">
                 Recent
@@ -251,7 +251,7 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
                   role="option"
                   aria-selected={isSelected}
                   data-selected={isSelected}
-                  className={`flex items-center gap-3 px-3 py-2 cursor-pointer ${
+                  className={`flex items-center gap-3 px-3 py-2 max-md:py-3 cursor-pointer ${
                     isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'
                   }`}
                   onMouseEnter={() => setSelectedIndex(index)}

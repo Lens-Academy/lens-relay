@@ -43,7 +43,7 @@ export function CreateMenu({ folderName, onCreateDocument, onCreateHtmlDocument,
           e.stopPropagation();
           setOpen(!open);
         }}
-        className="p-0.5 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded"
+        className="p-0.5 max-md:p-2 max-md:-my-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded"
       >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />

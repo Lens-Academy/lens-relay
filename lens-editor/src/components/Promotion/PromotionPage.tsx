@@ -101,6 +101,17 @@ export function PromotionPage() {
     return files.filter(file => file.path.toLowerCase().includes(needle));
   }, [changes, filter]);
 
+  const visibleRows = useMemo(
+    () =>
+      visibleFiles.map(file => {
+        const editorPath = promotionPathToEditorPath(file.path);
+        const meta = metadata?.[editorPath];
+        const editorUrl = meta?.id ? urlForDoc(`${RELAY_ID}-${meta.id}`, metadata) : null;
+        return { file, editorUrl };
+      }),
+    [visibleFiles, metadata],
+  );
+
   const selectedPaths = useMemo(() => {
     const files = changes?.files ?? [];
     return files.filter(file => selected.has(file.path)).map(file => file.path);
@@ -224,25 +235,23 @@ export function PromotionPage() {
                 No files differ between staging and production.
               </div>
             ) : (
-              <div className="overflow-hidden rounded-md border border-gray-200 bg-white">
-                <table className="w-full table-fixed text-left text-sm">
-                  <thead className="border-b border-gray-200 bg-gray-100 text-xs uppercase text-gray-500">
-                    <tr>
-                      <th className="w-10 px-3 py-2">
-                        <span className="sr-only">Select file</span>
-                      </th>
-                      <th className="px-3 py-2">Path</th>
-                      <th className="w-24 px-3 py-2">Status</th>
-                      <th className="w-28 px-3 py-2">Changes</th>
-                      <th className="w-44 px-3 py-2">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {visibleFiles.map(file => {
-                      const editorPath = promotionPathToEditorPath(file.path);
-                      const meta = metadata?.[editorPath];
-                      const editorUrl = meta?.id ? urlForDoc(`${RELAY_ID}-${meta.id}`, metadata) : null;
-                      return (
+              <>
+                {/* Desktop table (md and up) */}
+                <div className="hidden overflow-hidden rounded-md border border-gray-200 bg-white md:block">
+                  <table className="w-full table-fixed text-left text-sm">
+                    <thead className="border-b border-gray-200 bg-gray-100 text-xs uppercase text-gray-500">
+                      <tr>
+                        <th className="w-10 px-3 py-2">
+                          <span className="sr-only">Select file</span>
+                        </th>
+                        <th className="px-3 py-2">Path</th>
+                        <th className="w-24 px-3 py-2">Status</th>
+                        <th className="w-28 px-3 py-2">Changes</th>
+                        <th className="w-44 px-3 py-2">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {visibleRows.map(({ file, editorUrl }) => (
                         <tr key={file.path} className="text-gray-800">
                           <td className="px-3 py-2 align-top">
                             <input
@@ -286,16 +295,75 @@ export function PromotionPage() {
                             </div>
                           </td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                {visibleFiles.length === 0 && (
-                  <div className="border-t border-gray-100 px-4 py-6 text-center text-sm text-gray-500">
-                    No changed files match this filter.
-                  </div>
-                )}
-              </div>
+                      ))}
+                    </tbody>
+                  </table>
+                  {visibleRows.length === 0 && (
+                    <div className="border-t border-gray-100 px-4 py-6 text-center text-sm text-gray-500">
+                      No changed files match this filter.
+                    </div>
+                  )}
+                </div>
+
+                {/* Mobile stacked cards (below md) */}
+                <div className="md:hidden">
+                  {visibleRows.length === 0 ? (
+                    <div className="rounded-md border border-gray-200 bg-white px-4 py-6 text-center text-sm text-gray-500">
+                      No changed files match this filter.
+                    </div>
+                  ) : (
+                    <ul className="space-y-3">
+                      {visibleRows.map(({ file, editorUrl }) => (
+                        <li key={file.path} className="rounded-md border border-gray-200 bg-white p-3">
+                          <div className="flex items-start gap-3">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${file.path}`}
+                              checked={selected.has(file.path)}
+                              onChange={() => handleToggle(file.path)}
+                              className="mt-0.5 h-5 w-5 shrink-0 rounded border-gray-300"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="break-all font-mono text-xs text-gray-800">{file.path}</div>
+                              {file.oldPath && (
+                                <div className="mt-1 break-all text-xs text-gray-500">from {file.oldPath}</div>
+                              )}
+                              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-700">
+                                  {statusLabel(file.status)}
+                                </span>
+                                <span className="font-mono">
+                                  <span className="text-emerald-700">+{file.additions}</span>
+                                  <span className="mx-1 text-gray-300">/</span>
+                                  <span className="text-red-700">-{file.deletions}</span>
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleViewDiff(file.path)}
+                              disabled={diffLoadingPath === file.path}
+                              className="inline-flex min-h-10 flex-1 items-center justify-center rounded border border-gray-200 bg-white px-3 text-sm text-gray-700 hover:bg-gray-50 disabled:text-gray-400"
+                            >
+                              {diffLoadingPath === file.path ? 'Loading diff...' : 'View diff'}
+                            </button>
+                            {editorUrl && (
+                              <Link
+                                to={editorUrl}
+                                className="inline-flex min-h-10 flex-1 items-center justify-center rounded border border-gray-200 bg-white px-3 text-sm text-gray-700 hover:bg-gray-50"
+                              >
+                                Open in editor
+                              </Link>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </>
             )}
 
             {diffResult && (

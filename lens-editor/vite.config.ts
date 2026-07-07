@@ -396,7 +396,7 @@ export default defineConfig(() => {
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,
-      allowedHosts: ['dev.vps'],
+      allowedHosts: ['dev.vps', '.walrus-bitterling.ts.net'],
       proxy: {
         // Proxy API requests to relay-server (adds server token server-side)
         '/api/relay': {

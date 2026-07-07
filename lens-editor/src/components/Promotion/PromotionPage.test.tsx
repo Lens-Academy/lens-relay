@@ -95,9 +95,9 @@ describe('PromotionPage', () => {
 
     expect(screen.getByText('Loading production differences...')).toBeInTheDocument();
 
-    const notesCheckbox = await screen.findByRole('checkbox', { name: /Notes\.md/ });
-    expect(notesCheckbox).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: /Other\.md/ })).not.toBeChecked();
+    const table = await screen.findByRole('table');
+    expect(within(table).getByRole('checkbox', { name: /Notes\.md/ })).toBeChecked();
+    expect(within(table).getByRole('checkbox', { name: /Other\.md/ })).not.toBeChecked();
   });
 
   it('creates a promotion PR for selected files using only selected paths', async () => {
@@ -193,16 +193,17 @@ describe('PromotionPage', () => {
     const user = userEvent.setup();
     renderPromotionPage('/promote?path=%2FLens%20Edu%2FOther.md');
 
-    expect(await screen.findByRole('checkbox', { name: /Other\.md/ })).toBeChecked();
+    const table = await screen.findByRole('table');
+    expect(within(table).getByRole('checkbox', { name: /Other\.md/ })).toBeChecked();
 
     await user.type(screen.getByRole('searchbox', { name: 'Filter changed files' }), 'Notes');
 
-    expect(screen.queryByRole('checkbox', { name: /Other\.md/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /Notes\.md/ })).not.toBeChecked();
+    expect(within(table).queryByRole('checkbox', { name: /Other\.md/ })).not.toBeInTheDocument();
+    expect(within(table).getByRole('checkbox', { name: /Notes\.md/ })).not.toBeChecked();
 
     await user.clear(screen.getByRole('searchbox', { name: 'Filter changed files' }));
 
-    expect(screen.getByRole('checkbox', { name: /Other\.md/ })).toBeChecked();
+    expect(within(table).getByRole('checkbox', { name: /Other\.md/ })).toBeChecked();
   });
 
   it('shows an auto-merge warning when PR result has autoMergeEnabled false', async () => {

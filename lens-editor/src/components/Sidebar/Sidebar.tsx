@@ -412,7 +412,7 @@ export function Sidebar() {
       <Dialog.Root open={!!moveTarget} onOpenChange={(open) => { if (!open) { setMoveTarget(null); setMoveError(null); } }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 w-[420px]">
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 w-[min(420px,calc(100vw-24px))]">
             <Dialog.Title className="text-lg font-semibold">
               Move {moveTarget?.path.split('/').pop()}
             </Dialog.Title>

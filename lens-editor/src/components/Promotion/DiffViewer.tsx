@@ -74,7 +74,7 @@ export function DiffViewer({
   return (
     <div
       aria-label="Unified diff"
-      className="max-h-[520px] overflow-auto rounded-md border border-gray-200 bg-white py-2 text-xs leading-5"
+      className="max-h-[520px] min-w-0 overflow-x-auto overflow-y-auto rounded-md border border-gray-200 bg-white py-2 text-xs leading-5"
     >
       {diff.split('\n').map((line, index) => {
         const kind = lineKind(line);
