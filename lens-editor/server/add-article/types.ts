@@ -14,6 +14,10 @@ export interface ArticleJob {
   url: string;
   title?: string;
   status: ArticleJobStatus;
+  /** Current pipeline stage while processing ("fetching", "rendering",
+   *  "quality-check", "uploading-images", "writing", "creating-lens") — lets
+   *  the status UI distinguish a slow stage from a stuck job. */
+  stage?: string;
   error?: string;
   relay_url?: string;
   /** Also auto-create a lens wrapping the imported article (default true). */

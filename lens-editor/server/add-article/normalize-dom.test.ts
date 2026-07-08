@@ -193,3 +193,16 @@ describe("normalizeArticleDom — links", () => {
     expect(a?.querySelector("img")).not.toBeNull();
   });
 });
+
+describe("review-hardening: footnote id false positives", () => {
+  // Prevents: <li id="fnord"> being hijacked into a phantom footnote.
+  it("leaves list items whose ids merely start with fn alone", () => {
+    const dom = new JSDOM(
+      `<body><ul><li id="fnord">Discordians venerate the fnord</li></ul></body>`,
+    );
+    const body = dom.window.document.body;
+    normalizeArticleDom(body as unknown as Element, "https://example.com/");
+    expect(body.querySelector("#fnord")).not.toBeNull();
+    expect(body.innerHTML).not.toContain('id="fn-1"');
+  });
+});

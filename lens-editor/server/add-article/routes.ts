@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ArticleJobQueue } from "./queue";
 import { verifyShareToken, roleAtLeast } from "../share-token";
+import { normalizeUrlForDedup } from "./url-normalize";
 
 export const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
 const ALL_FOLDERS = "00000000-0000-0000-0000-000000000000";
@@ -83,10 +84,19 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         });
         continue;
       }
-      if (seen.has(url)) continue;
-      seen.add(url);
+      // Dedup within the request AND against active jobs by normalized URL, so
+      // utm-tagged / trailing-slash / mirror-host variants of one article don't
+      // spawn parallel jobs.
+      const key = normalizeUrlForDedup(url);
+      if (seen.has(key)) {
+        // Emit an honest row — silently skipping left the client with no
+        // result at all for that input line.
+        results.push({ url, status: "already_queued" });
+        continue;
+      }
+      seen.add(key);
 
-      const active = queue.findActive(url);
+      const active = queue.findActive(url, normalizeUrlForDedup);
       if (active) {
         results.push({ url, status: "already_queued", id: active.id });
         continue;
@@ -100,6 +110,32 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
 
   router.get("/status", (c) => {
     return c.json({ jobs: queue.status() });
+  });
+
+  // Cancel a queued/processing job. Aborts in-flight work; the job shows as
+  // failed with "Cancelled by user". Stuck jobs no longer need a container
+  // restart to clear.
+  router.delete("/:id", (c) => {
+    const ok = queue.cancel(c.req.param("id"));
+    if (!ok) {
+      return c.json({ error: "Job not found or already finished" }, 404);
+    }
+    return c.json({ ok: true });
+  });
+
+  // Re-queue a failed job's URL as a fresh job.
+  router.post("/:id/retry", (c) => {
+    const job = queue.get(c.req.param("id"));
+    if (!job) return c.json({ error: "Job not found" }, 404);
+    if (job.status !== "failed") {
+      return c.json({ error: "Only failed jobs can be retried" }, 400);
+    }
+    const active = queue.findActive(job.url, normalizeUrlForDedup);
+    if (active) {
+      return c.json({ error: "URL is already queued", id: active.id }, 409);
+    }
+    const retried = queue.add(job.url, job.createLens !== false);
+    return c.json({ id: retried.id, status: "queued" });
   });
 
   return router;

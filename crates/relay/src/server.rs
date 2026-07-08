@@ -1776,6 +1776,7 @@ impl Server {
         folder_name: &str,
         in_folder_path: &str,
         data: &[u8],
+        mimetype: &str,
     ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
         // 1. Find folder doc (same logic as create_document)
         let docs = self.docs();
@@ -1873,15 +1874,19 @@ impl Server {
 
             link_indexer::ensure_ancestor_folders(&filemeta, &docs_map, &mut txn, in_folder_path);
 
+            // Images are registered as "image" so clients render them as inline
+            // embeds; other blobs use the generic "file" type.
+            let file_type = if mimetype.starts_with("image/") {
+                "image"
+            } else {
+                "file"
+            };
             let mut map = std::collections::HashMap::new();
             map.insert("id".to_string(), yrs::Any::String(uuid.clone().into()));
-            map.insert("type".to_string(), yrs::Any::String("file".into()));
+            map.insert("type".to_string(), yrs::Any::String(file_type.into()));
             map.insert("version".to_string(), yrs::Any::Number(0.0));
             map.insert("hash".to_string(), yrs::Any::String(hash.clone().into()));
-            map.insert(
-                "mimetype".to_string(),
-                yrs::Any::String("application/json".into()),
-            );
+            map.insert("mimetype".to_string(), yrs::Any::String(mimetype.into()));
             map.insert(
                 "synctime".to_string(),
                 yrs::Any::Number(
@@ -3740,6 +3745,12 @@ impl Server {
             .route("/doc/upsert", post(handle_upsert_document))
             .route("/doc/check", post(handle_check_documents))
             .route("/doc/check-video-ids", post(handle_check_video_ids))
+            .route("/doc/check-source-urls", post(handle_check_source_urls))
+            .route(
+                "/doc/attachment",
+                post(handle_upsert_attachment)
+                    .layer(DefaultBodyLimit::max(30 * 1024 * 1024)),
+            )
             .route("/open/*path", get(handle_open_by_path))
             .route("/debug/resolve", get(handle_debug_resolve))
             .route("/suggestions", get(handle_suggestions));
@@ -4678,7 +4689,7 @@ async fn handle_upsert_document(
     if is_blob {
         // JSON files → blob storage (create-only, no updates)
         match server_state
-            .create_blob_file(&body.folder, &path, body.content.as_bytes())
+            .create_blob_file(&body.folder, &path, body.content.as_bytes(), "application/json")
             .await
         {
             Ok(result) => Ok(Json(UpsertDocResponse {
@@ -4856,24 +4867,9 @@ async fn handle_check_video_ids(
             continue;
         }
 
-        let content = {
-            let doc_ref = match server_state.docs().get(&doc_id) {
-                Some(r) => r,
-                None => continue,
-            };
-            let awareness = doc_ref.awareness();
-            drop(doc_ref);
-            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            let txn = guard.doc.transact();
-            let full = txn
-                .get_text("contents")
-                .map(|t| t.get_string(&txn))
-                .unwrap_or_default();
-            if full.len() > 500 {
-                full[..500].to_string()
-            } else {
-                full
-            }
+        let content = match read_doc_head(&server_state, &doc_id, 500) {
+            Some(c) => c,
+            None => continue,
         };
 
         let rel_path = format!("/{}", &path[body.folder.len()..].trim_start_matches('/'));
@@ -4889,6 +4885,187 @@ async fn handle_check_video_ids(
     }
 
     Ok(Json(CheckVideoIdsResponse { found }))
+}
+
+/// Read up to `max_bytes` (rounded down to a UTF-8 char boundary) of a loaded
+/// doc's `contents` Y.Text. The caller must have ensured the doc is loaded.
+/// Returns None when the doc is not present in the store.
+fn read_doc_head(server_state: &Arc<Server>, doc_id: &str, max_bytes: usize) -> Option<String> {
+    let doc_ref = server_state.docs().get(doc_id)?;
+    let awareness = doc_ref.awareness();
+    drop(doc_ref);
+    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+    let txn = guard.doc.transact();
+    let full = txn
+        .get_text("contents")
+        .map(|t| t.get_string(&txn))
+        .unwrap_or_default();
+    if full.len() <= max_bytes {
+        return Some(full);
+    }
+    let mut end = max_bytes;
+    while end > 0 && !full.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(full[..end].to_string())
+}
+
+/// Extract the `source_url` value from a markdown doc's YAML frontmatter head
+/// (the block between the leading `---` fences). Returns None if absent.
+fn extract_frontmatter_source_url(head: &str) -> Option<String> {
+    let mut in_frontmatter = false;
+    for line in head.lines() {
+        let trimmed = line.trim_end();
+        if trimmed == "---" {
+            if in_frontmatter {
+                break; // closing fence — not in frontmatter
+            }
+            in_frontmatter = true;
+            continue;
+        }
+        if in_frontmatter {
+            if let Some(rest) = trimmed.trim_start().strip_prefix("source_url:") {
+                let value = rest.trim().trim_matches('"').trim();
+                return (!value.is_empty()).then(|| value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Normalize a source URL for dedup comparison: trim whitespace and a trailing
+/// slash (the common variant). Intentionally conservative — scheme/host case and
+/// query strings are left intact so genuinely different URLs aren't merged.
+fn normalize_source_url(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_string()
+}
+
+#[derive(Deserialize)]
+struct CheckSourceUrlsRequest {
+    folder: String,
+    subfolder: Option<String>,
+    source_urls: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CheckSourceUrlsResponse {
+    found: std::collections::HashMap<String, Option<String>>,
+}
+
+/// For each given source URL, find an existing article doc whose `source_url`
+/// frontmatter matches (normalized) — the URL-based duplicate check the
+/// add-article importer uses. Mirrors `handle_check_video_ids`, but matches the
+/// frontmatter field precisely rather than substring-scanning the body.
+async fn handle_check_source_urls(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Json(body): Json<CheckSourceUrlsRequest>,
+) -> Result<Json<CheckSourceUrlsResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    let prefix = match &body.subfolder {
+        Some(sub) => format!("{}/{}/", body.folder, sub),
+        None => format!("{}/", body.folder),
+    };
+
+    let matching_paths: Vec<String> = server_state
+        .doc_resolver()
+        .all_paths()
+        .into_iter()
+        .filter(|p| p.starts_with(&prefix) && p.ends_with(".md"))
+        .collect();
+
+    let queries: Vec<(String, String)> = body
+        .source_urls
+        .iter()
+        .map(|u| (u.clone(), normalize_source_url(u)))
+        .collect();
+    let mut found: std::collections::HashMap<String, Option<String>> =
+        body.source_urls.iter().map(|u| (u.clone(), None)).collect();
+
+    for path in &matching_paths {
+        if found.values().all(|v| v.is_some()) {
+            break;
+        }
+        let doc_id = match server_state.doc_resolver().resolve_path(path) {
+            Some(info) => info.doc_id,
+            None => continue,
+        };
+        if server_state.ensure_doc_loaded(&doc_id).await.is_err() {
+            continue;
+        }
+        let head = match read_doc_head(&server_state, &doc_id, 4000) {
+            Some(h) => h,
+            None => continue,
+        };
+        let stored = match extract_frontmatter_source_url(&head) {
+            Some(s) => normalize_source_url(&s),
+            None => continue,
+        };
+        let rel_path = format!("/{}", &path[body.folder.len()..].trim_start_matches('/'));
+        for (orig, norm) in &queries {
+            if *norm == stored {
+                if let Some(slot) = found.get_mut(orig) {
+                    if slot.is_none() {
+                        *slot = Some(rel_path.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(CheckSourceUrlsResponse { found }))
+}
+
+#[derive(Deserialize)]
+struct AttachmentQuery {
+    folder: String,
+    path: String,
+    mimetype: Option<String>,
+}
+
+/// Create a binary attachment (e.g. an image extracted from an imported PDF) as
+/// a relay blob + `filemeta_v0` entry, so markdown can reference it
+/// (`![[/attachments/x.png]]`). Raw bytes in the body; folder/path/mimetype in
+/// the query. Create-only: an existing path is treated as already-hosted.
+async fn handle_upsert_attachment(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Query(query): Query<AttachmentQuery>,
+    body: axum::body::Bytes,
+) -> Result<Json<UpsertDocResponse>, AppError> {
+    server_state.check_auth(auth_header)?;
+
+    let path = if query.path.starts_with('/') {
+        query.path.clone()
+    } else {
+        format!("/{}", query.path)
+    };
+    let mimetype = query.mimetype.as_deref().unwrap_or("application/octet-stream");
+
+    match server_state
+        .create_blob_file(&query.folder, &path, &body, mimetype)
+        .await
+    {
+        Ok(result) => Ok(Json(UpsertDocResponse {
+            doc_id: result.full_doc_id,
+            path: format!("{}{}", query.folder, path),
+            created: true,
+        })),
+        // Already hosted at this path — idempotent success.
+        Err(CreateDocumentError::Conflict(_)) => Ok(Json(UpsertDocResponse {
+            doc_id: String::new(),
+            path: format!("{}{}", query.folder, path),
+            created: false,
+        })),
+        Err(CreateDocumentError::NotFound(msg)) => {
+            Err(AppError::new(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
+        }
+        Err(e) => Err(AppError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            anyhow!("{:?}", e),
+        )),
+    }
 }
 
 async fn new_doc(
@@ -6566,6 +6743,121 @@ mod test {
 
         assert_eq!(status, StatusCode::OK);
         assert!(body["found"]["GMTDrG3hYJ0"].is_null());
+    }
+
+    async fn post_check_source_urls(
+        server: &Arc<Server>,
+        body: JsonValue,
+    ) -> (StatusCode, JsonValue) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/doc/check-source-urls")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn check_source_urls_matches_frontmatter_and_normalizes_trailing_slash() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(
+            &server,
+            "Lens Edu",
+            &[
+                (
+                    "/articles/a.md",
+                    "11111111-1111-4111-8111-111111111111",
+                    "markdown",
+                ),
+                (
+                    "/articles/b.md",
+                    "22222222-2222-4222-8222-222222222222",
+                    "markdown",
+                ),
+            ],
+        )
+        .await;
+        insert_test_content_doc(
+            &server,
+            "11111111-1111-4111-8111-111111111111",
+            "---\ntitle: \"A\"\nsource_url: \"https://ai-safety-atlas.com/chapters/v1/risks/introduction\"\n---\n\nBody.",
+        )
+        .await;
+        insert_test_content_doc(
+            &server,
+            "22222222-2222-4222-8222-222222222222",
+            "---\ntitle: \"B\"\nsource_url: \"https://example.com/post\"\n---\n\nBody.",
+        )
+        .await;
+
+        let (status, body) = post_check_source_urls(
+            &server,
+            json!({
+                "folder": "Lens Edu",
+                "subfolder": "articles",
+                "source_urls": [
+                    // trailing slash on the query must still match the stored URL
+                    "https://ai-safety-atlas.com/chapters/v1/risks/introduction/",
+                    "https://example.com/post",
+                    "https://unimported.example/x"
+                ]
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["found"]["https://ai-safety-atlas.com/chapters/v1/risks/introduction/"],
+            "/articles/a.md"
+        );
+        assert_eq!(body["found"]["https://example.com/post"], "/articles/b.md");
+        assert!(body["found"]["https://unimported.example/x"].is_null());
+    }
+
+    // Frontmatter-precise: a URL that appears only in the body must NOT match
+    // (unlike a naive substring scan).
+    #[tokio::test]
+    async fn check_source_urls_ignores_url_in_body_only() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(
+            &server,
+            "Lens Edu",
+            &[(
+                "/articles/a.md",
+                "11111111-1111-4111-8111-111111111111",
+                "markdown",
+            )],
+        )
+        .await;
+        insert_test_content_doc(
+            &server,
+            "11111111-1111-4111-8111-111111111111",
+            "---\ntitle: \"A\"\nsource_url: \"https://example.com/real\"\n---\n\nSee https://example.com/body-only for more.",
+        )
+        .await;
+
+        let (status, body) = post_check_source_urls(
+            &server,
+            json!({
+                "folder": "Lens Edu",
+                "subfolder": "articles",
+                "source_urls": ["https://example.com/body-only"]
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["found"]["https://example.com/body-only"].is_null());
     }
 
     #[tokio::test]

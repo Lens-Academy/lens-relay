@@ -1,4 +1,5 @@
 import { assertPublicUrl } from "./ssrf";
+import { fetchBytesWithTimeout } from "../fetch-timeout";
 
 const FETCH_TIMEOUT_MS = 30_000;
 const RENDER_TIMEOUT_MS = 60_000;
@@ -10,23 +11,29 @@ const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /**
- * Fetch the raw HTML of an article page. Throws on non-OK or oversized
- * responses. Redirects are followed manually so the SSRF guard re-runs on
- * every hop — `redirect: 'follow'` would let an allowed page bounce to an
- * internal host without re-validation.
+ * Follow redirects manually (re-validating the SSRF guard on every hop —
+ * `redirect: 'follow'` would let an allowed page bounce to an internal host
+ * without re-validation) and return the final response's raw bytes + content
+ * type. Shared by the HTML and PDF fetchers. Throws on non-OK or oversized
+ * responses. `signal` is the per-job deadline/cancel signal.
  */
-export async function fetchRawHtml(url: string): Promise<string> {
+async function fetchFollowingRedirects(
+  url: string,
+  accept: string,
+  signal?: AbortSignal,
+): Promise<{ bytes: ArrayBuffer; contentType: string; finalUrl: string }> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     await assertPublicUrl(current);
-    const resp = await fetch(current, {
+    const resp = await fetchBytesWithTimeout(current, {
       headers: {
         "User-Agent": BROWSER_UA,
-        Accept: "text/html,application/xhtml+xml",
+        Accept: accept,
         "Accept-Language": "en-US,en;q=0.9",
       },
-      redirect: "manual",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      timeoutMs: FETCH_TIMEOUT_MS,
+      signal,
+      maxBytes: MAX_HTML_BYTES,
     });
 
     if (resp.status >= 300 && resp.status < 400) {
@@ -41,13 +48,52 @@ export async function fetchRawHtml(url: string): Promise<string> {
     if (!resp.ok) {
       throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
     }
-    const buf = await resp.arrayBuffer();
-    if (buf.byteLength > MAX_HTML_BYTES) {
-      throw new Error(`Page too large: ${buf.byteLength} bytes`);
+    if (resp.bytes.byteLength > MAX_HTML_BYTES) {
+      throw new Error(`Page too large: ${resp.bytes.byteLength} bytes`);
     }
-    return new TextDecoder("utf-8").decode(buf);
+    return {
+      bytes: resp.bytes,
+      contentType: resp.headers.get("content-type") || "",
+      finalUrl: current,
+    };
   }
   throw new Error(`Too many redirects (>${MAX_REDIRECTS}) for ${url}`);
+}
+
+/** Fetch the raw HTML of an article page. */
+export async function fetchRawHtml(
+  url: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { bytes } = await fetchFollowingRedirects(
+    url,
+    "text/html,application/xhtml+xml",
+    signal,
+  );
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+/** Fetch raw bytes + content type for a binary resource (e.g. a PDF), using the
+ *  same SSRF/redirect/size guards as fetchRawHtml. */
+export async function fetchRawBytes(
+  url: string,
+  signal?: AbortSignal,
+): Promise<{ bytes: ArrayBuffer; contentType: string; finalUrl: string }> {
+  // Prefer HTML (most single-candidate URLs are pages) but accept a PDF or
+  // anything else — the caller sniffs the result and branches.
+  return fetchFollowingRedirects(
+    url,
+    "text/html,application/xhtml+xml,application/pdf,*/*",
+    signal,
+  );
+}
+
+/** Detect a PDF by response content type or a `%PDF-` header. Scans the first
+ *  1KB because some files have whitespace/junk before the header. */
+export function looksLikePdf(contentType: string, bytes: ArrayBuffer): boolean {
+  if (/application\/pdf/i.test(contentType)) return true;
+  const head = new TextDecoder("latin1").decode(new Uint8Array(bytes).slice(0, 1024));
+  return head.includes("%PDF-");
 }
 
 /**
@@ -57,13 +103,15 @@ export async function fetchRawHtml(url: string): Promise<string> {
  */
 export async function fetchFirstHtml(
   urls: string[],
+  signal?: AbortSignal,
 ): Promise<{ html: string; url: string }> {
   let lastErr: unknown = new Error("No candidate URLs to fetch");
   for (const u of urls) {
     try {
-      return { html: await fetchRawHtml(u), url: u };
+      return { html: await fetchRawHtml(u, signal), url: u };
     } catch (err) {
       lastErr = err;
+      if (signal?.aborted) break; // job cancelled/timed out — stop trying mirrors
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
@@ -77,7 +125,12 @@ export async function fetchFirstHtml(
  * over — "buy the rendering, own the extraction". SSRF: we still validate the
  * target is a public http(s) URL before handing it off.
  */
-export async function fetchRenderedHtml(url: string): Promise<string> {
+let warnedNoJinaKey = false;
+
+export async function fetchRenderedHtml(
+  url: string,
+  signal?: AbortSignal,
+): Promise<string> {
   await assertPublicUrl(url);
   const headers: Record<string, string> = {
     Accept: "text/html",
@@ -86,19 +139,33 @@ export async function fetchRenderedHtml(url: string): Promise<string> {
   };
   if (process.env.JINA_API_KEY) {
     headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
+  } else if (!warnedNoJinaKey) {
+    // Anonymous Jina requests hit a far lower rate limit and get queued/starved
+    // under load — in production this manifested as bot-blocked sites hanging.
+    warnedNoJinaKey = true;
+    console.warn(
+      "[add-article] JINA_API_KEY is not set — render-tier fetches run against " +
+        "Jina's anonymous rate limit and may be throttled or starved. Set it in .env.",
+    );
   }
-  const resp = await fetch(`https://r.jina.ai/${encodeURIComponent(url)}`, {
-    headers,
-    signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
-  });
+  const resp = await fetchBytesWithTimeout(
+    `https://r.jina.ai/${encodeURIComponent(url)}`,
+    { headers, timeoutMs: RENDER_TIMEOUT_MS, signal, maxBytes: MAX_HTML_BYTES },
+  );
+  if (resp.status === 429) {
+    throw new Error(
+      process.env.JINA_API_KEY
+        ? "Render fetch rate-limited by Jina (429) — retry later."
+        : "Render fetch rate-limited by Jina (429) — set JINA_API_KEY to raise the limit.",
+    );
+  }
   if (!resp.ok) {
     throw new Error(`Render fetch failed: ${resp.status} ${resp.statusText}`);
   }
-  const buf = await resp.arrayBuffer();
-  if (buf.byteLength > MAX_HTML_BYTES) {
-    throw new Error(`Rendered page too large: ${buf.byteLength} bytes`);
+  if (resp.bytes.byteLength > MAX_HTML_BYTES) {
+    throw new Error(`Rendered page too large: ${resp.bytes.byteLength} bytes`);
   }
-  return new TextDecoder("utf-8").decode(buf);
+  return new TextDecoder("utf-8").decode(resp.bytes);
 }
 
 export interface HtmlMeta {
@@ -108,6 +175,10 @@ export interface HtmlMeta {
   description: string;
   /** Publication / site name (og:site_name, JSON-LD publisher) — author fallback */
   siteName: string;
+  /** The page's own canonical URL (<link rel="canonical">), "" if absent. Lets
+   *  a mirror/AMP/tracking-parameter URL resolve to the URL the site itself
+   *  considers authoritative — used for source_url and duplicate detection. */
+  canonicalUrl: string;
 }
 
 function decodeEntities(s: string): string {
@@ -171,20 +242,25 @@ function flipCommaName(s: string): string {
   return m ? `${m[2].trim()} ${m[1].trim()}` : s;
 }
 
-/** True if (year, month, day) strings form a plausible calendar date. Guards
- *  against URL/issue numbers producing structurally-invalid dates like
- *  2020-45-01 (which would land, unquoted, in the YAML frontmatter). */
-function isValidYmd(y: string, mo: string, d: string): boolean {
+/** True if (year, month, day) strings form a REAL calendar date. Guards
+ *  against URL/issue numbers and corrupt PDF dates producing invalid dates
+ *  that land, unquoted, in the YAML frontmatter. Round-trips through Date
+ *  because a range check alone accepts impossible days (Feb 30, Apr 31, Feb 29
+ *  in non-leap years) — and YAML parsers silently roll those to the next month
+ *  (2024-02-30 → 2024-03-01), so the stored and parsed dates disagree. */
+export function isValidYmd(y: string, mo: string, d: string): boolean {
   const year = Number(y);
   const month = Number(mo);
   const day = Number(d);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return false;
+  }
+  if (year < 1990 || year > 2100) return false;
+  const dt = new Date(Date.UTC(year, month - 1, day));
   return (
-    year >= 1990 &&
-    year <= 2100 &&
-    month >= 1 &&
-    month <= 12 &&
-    day >= 1 &&
-    day <= 31
+    dt.getUTCFullYear() === year &&
+    dt.getUTCMonth() === month - 1 &&
+    dt.getUTCDate() === day
   );
 }
 
@@ -195,9 +271,20 @@ function normalizeDate(s: string): string {
   if (m && isValidYmd(m[1], m[2], m[3])) {
     return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
   }
+  // Textual dates ("January 1, 2024") via Date.parse — but only when the
+  // string actually contains a 4-digit year (Date.parse("7") fabricates
+  // 2001-06-30), and only if the result is a sane calendar date. Use LOCAL
+  // components: date-only text parses as local midnight, so UTC components
+  // would be off by one east of Greenwich.
+  if (!/\b(19|20)\d{2}\b/.test(s)) return "";
   const t = Date.parse(s);
-  if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
-  return "";
+  if (Number.isNaN(t)) return "";
+  const d = new Date(t);
+  const y = String(d.getFullYear());
+  const mo = String(d.getMonth() + 1);
+  const day = String(d.getDate());
+  if (!isValidYmd(y, mo, day)) return "";
+  return `${y}-${mo.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
 /** Date embedded in a URL path, e.g. /2017/02/14/ or /2016/09/. */
@@ -215,10 +302,42 @@ export function dateFromUrl(url: string): string {
   return "";
 }
 
+/** A standalone 4-digit year path segment (e.g. ".../paper/2017/file/...") →
+ *  "YYYY-01-01". Weaker than a full date but a useful fallback for
+ *  proceedings-style URLs whose only date hint is the publication year. */
+export function yearFromUrl(url: string): string {
+  try {
+    const m = new URL(url).pathname.match(/\/((?:19|20)\d{2})(?=\/|$)/);
+    if (m) return `${m[1]}-01-01`;
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
 /**
  * Best-effort metadata extraction from HTML meta tags and JSON-LD.
  * Claude refines this later with full page context — this only seeds meta.json.
  */
+/** href of `<link rel="canonical">` when it is an absolute http(s) URL. */
+function canonicalFromHtml(html: string): string {
+  const patterns = [
+    /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i,
+    /<link[^>]+href=["']([^"']+)["'][^>]+rel=["']canonical["']/i,
+  ];
+  for (const p of patterns) {
+    const m = html.match(p);
+    if (!m?.[1]) continue;
+    try {
+      const u = new URL(decodeEntities(m[1].trim()));
+      if (u.protocol === "http:" || u.protocol === "https:") return u.href;
+    } catch {
+      /* relative or malformed canonical — ignore */
+    }
+  }
+  return "";
+}
+
 export function extractHtmlMeta(html: string): HtmlMeta {
   const meta: HtmlMeta = {
     title: "",
@@ -226,6 +345,7 @@ export function extractHtmlMeta(html: string): HtmlMeta {
     published: "",
     description: "",
     siteName: "",
+    canonicalUrl: canonicalFromHtml(html),
   };
 
   meta.title =
@@ -252,6 +372,11 @@ export function extractHtmlMeta(html: string): HtmlMeta {
     }
   }
 
+  // Publication-date tags only. article:modified_time / og:updated_time are
+  // deliberately NOT in this chain — a modification date can trail publication
+  // by years (a 2021 post edited in 2023 was imported as published 2023), and a
+  // wrong year is worse than an empty date (which falls back to the import date
+  // that a curator can correct).
   const published =
     metaContent(html, "article:published_time") ||
     metaContent(html, "datePublished") ||
@@ -261,13 +386,14 @@ export function extractHtmlMeta(html: string): HtmlMeta {
     metaContent(html, "sailthru.date") ||
     metaContent(html, "dc.date.issued") ||
     metaContent(html, "dc.date") ||
-    metaContent(html, "date") ||
-    metaContent(html, "article:modified_time") ||
-    metaContent(html, "og:updated_time");
+    metaContent(html, "date");
   meta.published = normalizeDate(published);
   if (!meta.published) {
-    const t = html.match(/<time[^>]+datetime=["']([^"']+)["']/i);
-    if (t) meta.published = normalizeDate(t[1]);
+    // A bare <time datetime> is only trustworthy when it's the page's SINGLE
+    // time element (a blog post's date line). On comment-bearing pages (forums,
+    // mirrors) the first <time> is often a comment timestamp.
+    const times = [...html.matchAll(/<time[^>]+datetime=["']([^"']+)["']/gi)];
+    if (times.length === 1) meta.published = normalizeDate(times[0][1]);
   }
 
   meta.description =
@@ -301,10 +427,11 @@ export function extractHtmlMeta(html: string): HtmlMeta {
             )
             .filter(Boolean);
         }
+        // datePublished ONLY — dateModified is an edit stamp, and using it
+        // reintroduces the wrong-year bug the meta-tag chain above documents
+        // (a 2021 post edited in 2023 importing as published 2023).
         const ldDate =
-          (typeof node.datePublished === "string" && node.datePublished) ||
-          (typeof node.dateModified === "string" && node.dateModified) ||
-          "";
+          typeof node.datePublished === "string" ? node.datePublished : "";
         if (!meta.published && ldDate) {
           meta.published = normalizeDate(ldDate);
         }

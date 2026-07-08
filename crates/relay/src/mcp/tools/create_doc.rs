@@ -99,7 +99,7 @@ async fn create_blob_file(
     let in_folder_path = format!("/{}", &file_path[slash_pos + 1..]);
 
     server
-        .create_blob_file(folder_name, &in_folder_path, content.as_bytes())
+        .create_blob_file(folder_name, &in_folder_path, content.as_bytes(), "application/json")
         .await
         .map_err(|e| e.to_string())?;
 
@@ -131,6 +131,24 @@ mod tests {
         // Verify hash exists in resolver
         let hash = server.doc_resolver().get_file_hash("Lens/data.json");
         assert!(hash.is_some(), "Should have hash in resolver");
+    }
+
+    // create_blob_file now takes a mimetype (image/* → "image" type) so the
+    // add-article importer can host extracted PDF figures as attachments.
+    #[tokio::test]
+    async fn create_blob_file_accepts_image_mimetype() {
+        let server = build_blob_test_server_with_folder().await;
+        server
+            .create_blob_file("Lens", "/attachments/fig.png", &[1u8, 2, 3, 4], "image/png")
+            .await
+            .expect("image blob should be created");
+        assert!(
+            server
+                .doc_resolver()
+                .get_file_hash("Lens/attachments/fig.png")
+                .is_some(),
+            "image attachment should be registered with a hash"
+        );
     }
 
     #[tokio::test]

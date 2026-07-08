@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
-import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useYDoc, useYjsProvider } from '@y-sweet/react';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
@@ -10,6 +10,15 @@ import { DisconnectionModal } from './components/DisconnectionModal/Disconnectio
 import { NavigationContext, useNavigation } from './contexts/NavigationContext';
 import { DisplayNameProvider } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
+
+// The display name feeds collaborative-editing presence. The import tool pages
+// (/add-article, /add-video) don't edit documents, and the blocking modal made
+// them unusable for fresh sessions and automation — skip it there.
+function DisplayNamePromptGate() {
+  const { pathname } = useLocation();
+  if (pathname === '/add-article' || pathname === '/add-video') return null;
+  return <DisplayNamePrompt />;
+}
 import { SidebarContext } from './contexts/SidebarContext';
 import { HeaderActionsProvider, type HeaderCommentsControl } from './contexts/HeaderActionsContext';
 import { useMultiFolderMetadata } from './hooks/useMultiFolderMetadata';
@@ -526,7 +535,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
   return (
     <AuthProvider role={role} folderUuid={folderUuid} isAllFolders={isAllFolders}>
       <DisplayNameProvider>
-        <DisplayNamePrompt />
+        <DisplayNamePromptGate />
         <SidebarContext.Provider value={{ manager, headerStage }}>
           <HeaderActionsProvider onCommentsControlChange={setHeaderCommentsControl}>
             <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef }}>

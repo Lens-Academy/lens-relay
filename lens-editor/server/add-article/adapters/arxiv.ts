@@ -23,6 +23,31 @@ function arxivId(pathname: string): string | null {
   return m[1].replace(/v\d+$/i, ""); // canonical (latest) version
 }
 
+/**
+ * Canonical abstract-page URL for any arXiv-family URL (abs/pdf/html/ar5iv),
+ * "" when the URL isn't arXiv or carries no id. The abstract page's
+ * citation_author / citation_date meta tags are the AUTHORITATIVE metadata —
+ * LaTeXML author markup is too variable to parse reliably (missing leading
+ * authors, "footnotemark:" fragments, affiliations-as-names all observed).
+ */
+export function arxivAbsUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+    if (
+      host !== "arxiv.org" &&
+      host !== "ar5iv.org" &&
+      host !== "ar5iv.labs.arxiv.org"
+    ) {
+      return "";
+    }
+    const id = arxivId(u.pathname);
+    return id ? `https://arxiv.org/abs/${id}` : "";
+  } catch {
+    return "";
+  }
+}
+
 /** Approximate publish date from a modern arXiv id (YYMM.NNNNN → 20YY-MM-01). */
 function publishedFromId(id: string): string {
   const m = id.match(/^(\d{2})(\d{2})\.\d{4,5}/);
@@ -33,23 +58,38 @@ function publishedFromId(id: string): string {
 }
 
 /**
- * Author name from a `.ltx_personname`. LaTeXML puts the name first, with the
- * affiliation/email following (after a <br>, or as later text). Two cases:
+ * Author name(s) from a `.ltx_personname`. LaTeXML puts the name first, with
+ * the affiliation/email following (after a <br>, or as later text). Two cases:
  *   - the name is wrapped in a bold span → use that (older papers, where the
  *     affiliation is a sibling text node, not after a top-level <br>);
  *   - otherwise take the text before the first <br>.
+ * A single personname node can hold SEVERAL authors: LaTeX `\and`/`\quad`
+ * renders them separated only by wide space runs (e.g. "Ryan Greenblatt∗
+ * Buck Shlegeris      Kshitij Sachan"), so split on multi-space gaps, commas,
+ * and "and" — and drop footnote-marker superscripts glued onto names.
  */
-function personName(el: Element): string {
+function personNames(el: Element): string[] {
+  // Footnote/affiliation markers (∗, †, digits) live in <sup> — remove before
+  // reading text so they don't fuse with the preceding name.
+  for (const sup of Array.from(el.querySelectorAll("sup"))) sup.remove();
+
+  let raw = "";
   const bold = el.querySelector(".ltx_font_bold, b, strong");
   if (bold && (bold.textContent || "").trim()) {
-    return cleanAuthorName(bold.textContent || "");
+    raw = bold.textContent || "";
+  } else {
+    const parts: string[] = [];
+    for (const node of Array.from(el.childNodes)) {
+      if (node.nodeName === "BR") break;
+      parts.push(node.textContent || "");
+    }
+    raw = parts.join(" ");
   }
-  const parts: string[] = [];
-  for (const node of Array.from(el.childNodes)) {
-    if (node.nodeName === "BR") break;
-    parts.push(node.textContent || "");
-  }
-  return cleanAuthorName(parts.join(" "));
+
+  return raw
+    .split(/\s{2,}|\n|,|\band\b|&/)
+    .map((s) => cleanAuthorName(s.replace(/[∗†‡§¶*]/g, "")))
+    .filter(Boolean);
 }
 
 export const arxivAdapter: SiteAdapter = {
@@ -89,7 +129,7 @@ export const arxivAdapter: SiteAdapter = {
       .replace(/\s+/g, " ")
       .trim();
     const authors = Array.from(article.querySelectorAll(".ltx_personname"))
-      .map(personName)
+      .flatMap(personNames)
       .filter(Boolean);
 
     // The title and author block are now in metadata; drop them (and the ar5iv

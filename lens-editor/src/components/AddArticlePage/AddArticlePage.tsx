@@ -1,10 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import type { CSSProperties } from "react";
 
 interface ArticleJob {
   id: string;
   url: string;
   title?: string;
   status: "queued" | "processing" | "done" | "failed";
+  /** Pipeline stage while processing (fetching / rendering / quality-check /
+   *  uploading-images / writing / creating-lens). */
+  stage?: string;
   error?: string;
   relay_url?: string;
   created_at: string;
@@ -27,14 +31,36 @@ const STATUS_COLORS: Record<ArticleJob["status"], string> = {
   failed: "#e04e4e",
 };
 
+// Remember the lens checkbox across sessions: bulk importers uncheck it once
+// and shouldn't have to re-uncheck on every visit (45 orphan starter lenses
+// came out of one bulk session that missed it).
+const CREATE_LENS_STORAGE_KEY = "lens-editor-add-article-create-lens";
+
+function readStoredCreateLens(): boolean {
+  try {
+    return localStorage.getItem(CREATE_LENS_STORAGE_KEY) !== "false";
+  } catch {
+    return true; // no storage (tests, private mode) — default to on
+  }
+}
+
 export function AddArticlePage({ shareToken }: { shareToken: string }) {
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [invalidResults, setInvalidResults] = useState<SubmitResult[]>([]);
   const [jobs, setJobs] = useState<ArticleJob[]>([]);
-  const [createLens, setCreateLens] = useState(true);
+  const [createLens, setCreateLensState] = useState(readStoredCreateLens);
   const fetchInFlight = useRef(false);
+
+  const setCreateLens = (value: boolean) => {
+    setCreateLensState(value);
+    try {
+      localStorage.setItem(CREATE_LENS_STORAGE_KEY, String(value));
+    } catch {
+      /* private mode — the checkbox still works for this session */
+    }
+  };
 
   const fetchStatus = useCallback(async () => {
     if (fetchInFlight.current) return;
@@ -119,9 +145,44 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
     }
   }
 
+  async function cancelJob(id: string) {
+    try {
+      await fetch(`/api/add-article/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${shareToken}` },
+      });
+    } catch (err) {
+      console.warn("[add-article] cancel failed:", err);
+    }
+    await fetchStatus();
+  }
+
+  async function retryJob(id: string) {
+    try {
+      await fetch(`/api/add-article/${id}/retry`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${shareToken}` },
+      });
+    } catch (err) {
+      console.warn("[add-article] retry failed:", err);
+    }
+    await fetchStatus();
+  }
+
   const sortedJobs = [...jobs].sort((a, b) =>
     b.created_at.localeCompare(a.created_at),
   );
+
+  const smallButtonStyle: CSSProperties = {
+    background: "transparent",
+    color: "#9aa4c7",
+    border: "1px solid #2a2a4e",
+    borderRadius: 6,
+    padding: "4px 10px",
+    fontSize: 12,
+    cursor: "pointer",
+    flexShrink: 0,
+  };
 
   return (
     <div
@@ -271,6 +332,18 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                 }}
               >
                 {job.status}
+                {job.status === "processing" && job.stage && (
+                  <span
+                    style={{
+                      display: "block",
+                      color: "#9aa4c7",
+                      fontWeight: 400,
+                      textTransform: "none",
+                    }}
+                  >
+                    {job.stage}
+                  </span>
+                )}
               </span>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div
@@ -310,6 +383,24 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                   </div>
                 )}
               </div>
+              {(job.status === "queued" || job.status === "processing") && (
+                <button
+                  onClick={() => cancelJob(job.id)}
+                  title="Cancel this import"
+                  style={smallButtonStyle}
+                >
+                  Cancel
+                </button>
+              )}
+              {job.status === "failed" && (
+                <button
+                  onClick={() => retryJob(job.id)}
+                  title="Queue this URL again"
+                  style={smallButtonStyle}
+                >
+                  Retry
+                </button>
+              )}
             </div>
           ))
         )}
@@ -324,10 +415,11 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
             fontSize: 13,
           }}
         >
-          Each article takes a few minutes: a placeholder document is created
-          immediately, then replaced with the cleaned article when processing
-          finishes. The job list resets when the server restarts — the imported
-          documents themselves are safe in the relay.
+          Each article takes seconds to a few minutes depending on whether a
+          quality-check pass is needed; the finished document is written only
+          when processing completes (nothing is written on failure). The job
+          list resets when the server restarts — the imported documents
+          themselves are safe in the relay.
         </div>
       </div>
     </div>

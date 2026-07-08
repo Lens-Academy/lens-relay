@@ -7,6 +7,7 @@ import { extractHtmlMeta, dateFromUrl, fetchRawHtml } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
 import { normalizeArticleDom } from "./normalize-dom";
+import { arxivAbsUrl } from "./adapters/arxiv";
 import {
   stripSiteSuffix,
   splitAuthors,
@@ -15,6 +16,7 @@ import {
   videoEmbedIframe,
 } from "./adapters/util";
 import type { ArticleMeta } from "./types";
+import type { PdfPageImage } from "./pdf-images";
 
 /**
  * Deterministic article extraction + HTML→Markdown conversion. Replaces the
@@ -43,6 +45,9 @@ export interface ExtractResult {
   linkedOut: boolean;
   /** Deterministic extraction-quality assessment (confidence + signals + flags). */
   assessment: Assessment;
+  /** PDF figure images (PDF path only) — uploaded + embedded by the pipeline,
+   *  replacing `![[__pdfimg_N__]]` placeholders in the body. */
+  images?: PdfPageImage[];
 }
 
 // A post is treated as a "link-out" when the body is short AND points at an
@@ -112,6 +117,75 @@ function makeTurndown(baseUrl: string): TurndownService {
       if (!tex) return "";
       const display = n.className.includes("mjpage__block");
       return display ? `\n\n$$${tex}$$\n\n` : `$${tex}$`;
+    },
+  });
+
+  // FALLBACK for tables the GFM plugin can't convert (no heading row —
+  // ar5iv's ltx_tabular, layout tables): gfm `keep()`s them, dumping raw HTML
+  // with class soup into the body. A plain pipe table (cell text only) trades
+  // layout for readability, which is strictly better than markup. Added BEFORE
+  // the display-equation rule so equation tables keep their $$ conversion, and
+  // filtered to heading-less tables so gfm still handles proper data tables.
+  td.addRule("fallbackTable", {
+    filter: (node: HTMLElement) => {
+      if (node.nodeName !== "TABLE") return false;
+      if (
+        node.classList?.contains("ltx_equation") ||
+        node.classList?.contains("ltx_equationgroup")
+      )
+        return false; // display math — handled by ltxDisplayEquation
+      // A gfm-convertible table has a heading row (THEAD, or all-TH first row).
+      const firstRow = node.querySelector("tr");
+      if (!firstRow) return false;
+      const inThead = !!firstRow.closest?.("thead");
+      const cells = Array.from(firstRow.children);
+      const allTh = cells.length > 0 && cells.every((c) => c.nodeName === "TH");
+      return !(inThead || allTh);
+    },
+    replacement: (content: string, node: TurndownService.Node) => {
+      const table = node as HTMLElement;
+      const rows = Array.from(table.querySelectorAll("tr")).filter(
+        (r) => r.closest("table") === table, // skip nested tables' rows
+      );
+      const cellsOf = (r: Element) =>
+        Array.from(r.children)
+          .filter((c) => c.nodeName === "TD" || c.nodeName === "TH")
+          .map((c) =>
+            (c.textContent || "").replace(/\s+/g, " ").replace(/\|/g, "\\|").trim(),
+          );
+      const grid = rows.map(cellsOf).filter((r) => r.some((c) => c));
+      if (grid.length === 0) return content;
+      const width = Math.max(...grid.map((r) => r.length));
+      const pad = (r: string[]) =>
+        `| ${Array.from({ length: width }, (_, i) => r[i] ?? "").join(" | ")} |`;
+      const sep = `| ${Array.from({ length: width }, () => "---").join(" | ")} |`;
+      return `\n\n${pad(grid[0])}\n${sep}\n${grid.slice(1).map(pad).join("\n")}\n\n`;
+    },
+  });
+
+  // LaTeXML DISPLAY equations: ar5iv/arxiv-html wrap them in
+  // <table class="ltx_equation"> / <table class="ltx_equationgroup"> layout
+  // tables. The GFM table handling can't convert those, so without this rule
+  // they were dumped into the body as kilobytes of raw MathML/HTML — the
+  // single biggest structure defect in the 50-article blind eval (all 13 arXiv
+  // items flagged). Recover the LaTeX from each inner <math alttext> instead.
+  td.addRule("ltxDisplayEquation", {
+    filter: (node: HTMLElement) =>
+      (node.nodeName === "TABLE" || node.nodeName === "DIV") &&
+      (node.classList?.contains("ltx_equation") ||
+        node.classList?.contains("ltx_equationgroup")),
+    replacement: (content: string, node: TurndownService.Node) => {
+      const el = node as HTMLElement;
+      const parts = Array.from(el.querySelectorAll("math[alttext]"))
+        .map((m) =>
+          (m.getAttribute("alttext") || "")
+            .replace(/^\s*\\displaystyle\s*/, "")
+            .trim(),
+        )
+        .filter(Boolean);
+      if (parts.length === 0) return content; // no LaTeX source — keep default
+      // An equation group renders one $$…$$ block with aligned rows.
+      return `\n\n$$${parts.join(" \\\\\n")}$$\n\n`;
     },
   });
 
@@ -268,8 +342,27 @@ interface Chosen {
   published: string;
   via: string;
   siteName?: string;
+  /** Canonical URL the adapter recovered (e.g. a mirror's "LW link"). */
+  canonicalUrl?: string;
   /** True for a site adapter (owns its byline/date); false for the generic path. */
   adapterAuthored: boolean;
+}
+
+/**
+ * A usable canonical URL: absolute http(s) with a real path. Pages sometimes
+ * declare their site root as canonical (misconfigured templates) — adopting
+ * that would collapse every article on the site into one "duplicate".
+ */
+function usableCanonical(canonical: string | undefined): string {
+  if (!canonical) return "";
+  try {
+    const u = new URL(canonical);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+    if (u.pathname === "/" && !u.search) return "";
+    return u.href;
+  } catch {
+    return "";
+  }
 }
 
 export async function extractArticle(
@@ -331,6 +424,7 @@ export async function extractArticle(
           published: ex.published,
           via: adapter.id,
           siteName: ex.siteName,
+          canonicalUrl: ex.canonicalUrl,
           adapterAuthored: true,
         };
       }
@@ -413,6 +507,31 @@ export async function extractArticle(
     throw new Error("No extraction strategy could isolate the article body");
   }
 
+  // arXiv metadata authority: the ABSTRACT page's citation_author/citation_date
+  // metas are complete, ordered, and carry the exact submission date — while
+  // the fetched LaTeXML page's author markup is unreliable (blind eval found
+  // missing leading authors, "footnotemark:" fragments, affiliations-as-names)
+  // and the arXiv id only yields YYYY-MM-01. One small extra fetch fixes
+  // authors, date, and exact title casing at once. Gated on an injected
+  // fetchText so unit tests without a stub never touch the network (the
+  // pipeline always injects it).
+  if (chosen.via === "arxiv" && opts.fetchText) {
+    const absUrl = arxivAbsUrl(sourceUrl) || arxivAbsUrl(url);
+    if (absUrl) {
+      try {
+        const absMeta = extractHtmlMeta(await opts.fetchText(absUrl));
+        if (absMeta.author.length > 0) chosen.author = absMeta.author;
+        if (absMeta.published) chosen.published = absMeta.published;
+        // og:title is the clean paper title; <title> fallback carries an
+        // "[2312.06942]" prefix — strip it either way.
+        const absTitle = absMeta.title.replace(/^\[[^\]]*\]\s*/, "").trim();
+        if (absTitle) chosen.title = absTitle;
+      } catch {
+        /* abs page unavailable — keep the adapter's own extraction */
+      }
+    }
+  }
+
   // A bot-challenge / access-denied interstitial is not an article — fail
   // honestly so the pipeline records a failure instead of a junk document.
   if (looksLikeBlockPage(body)) {
@@ -437,10 +556,42 @@ export async function extractArticle(
     : htmlMeta.published || chosen.published || dateFromUrl(url);
   const siteName = chosen.siteName || htmlMeta.siteName;
 
+  // Cite the canonical URL when one is declared. An adapter's own canonical (a
+  // mirror's recovered "LW link") always wins. The page's <link rel="canonical">
+  // is trusted only when the fetch was NOT redirected to a different host — an
+  // adapter may have redirected (arXiv abstract → ar5iv), where the fetched
+  // page's canonical points at the mirror rather than the submitted URL.
+  let fetchRedirected = false;
+  try {
+    fetchRedirected = new URL(url).hostname !== new URL(sourceUrl).hostname;
+  } catch {
+    /* unparseable — treat as redirected (don't trust page canonical) */
+    fetchRedirected = true;
+  }
+  // A page-declared canonical must also stay on the page's own site: a hostile
+  // page declaring canonical=<some legit post> would otherwise be stored with
+  // that post's source_url and block the real article from ever importing
+  // (dedup poisoning). Adapter-recovered canonicals (fixed host maps) may
+  // legitimately cross hosts and are exempt.
+  const sameSite = (() => {
+    try {
+      const a = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+      const c = new URL(htmlMeta.canonicalUrl).hostname
+        .replace(/^www\./, "")
+        .toLowerCase();
+      return a === c || a.endsWith(`.${c}`) || c.endsWith(`.${a}`);
+    } catch {
+      return false;
+    }
+  })();
+  const canonical =
+    usableCanonical(chosen.canonicalUrl) ||
+    (fetchRedirected || !sameSite ? "" : usableCanonical(htmlMeta.canonicalUrl));
+
   const meta: ArticleMeta = {
     title: chosen.title || stripSiteSuffix(htmlMeta.title),
     author,
-    source_url: sourceUrl,
+    source_url: canonical || sourceUrl,
     published,
     description: htmlMeta.description,
   };

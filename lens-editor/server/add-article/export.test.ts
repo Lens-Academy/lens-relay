@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { generateArticleMarkdown, generateArticleFilenameBase } from "./export";
+import {
+  generateArticleMarkdown,
+  generateArticleFilenameBase,
+  articleFilenameCandidates,
+} from "./export";
 
 describe("generateArticleMarkdown", () => {
   it("collapses control whitespace so a multi-line title can't break the YAML", () => {
@@ -126,5 +130,103 @@ describe("generateArticleFilenameBase", () => {
         "Cascades, Cycles, Insight...",
       ),
     ).toBe("yudkowsky-cascades-cycles-insight");
+  });
+});
+
+describe("articleFilenameCandidates", () => {
+  const atlas = (section: string) =>
+    `https://ai-safety-atlas.com/chapters/v1/${section}/introduction`;
+
+  it("starts with the bare base, then folds in distinguishing URL path segments", () => {
+    const c = articleFilenameCandidates("grey-introduction", atlas("risks"));
+    expect(c[0]).toBe("grey-introduction");
+    expect(c[1]).toBe("grey-introduction-risks");
+    expect(c[2]).toBe("grey-introduction-v1-risks");
+  });
+
+  it("disambiguates the collision the bug hit: same author+title, different chapters", () => {
+    const caps = articleFilenameCandidates("grey-introduction", atlas("capabilities"));
+    const risks = articleFilenameCandidates("grey-introduction", atlas("risks"));
+    expect(caps[0]).toBe(risks[0]); // identical base (the collision)
+    expect(caps[1]).toBe("grey-introduction-capabilities");
+    expect(risks[1]).toBe("grey-introduction-risks");
+    expect(caps[1]).not.toBe(risks[1]); // ...steered to distinct names
+  });
+
+  it("is deterministic — re-importing the same URL yields the same candidate list", () => {
+    expect(articleFilenameCandidates("grey-introduction", atlas("risks"))).toEqual(
+      articleFilenameCandidates("grey-introduction", atlas("risks")),
+    );
+  });
+
+  it("ignores a trailing slash (no empty segment leaks into the suffix)", () => {
+    const c = articleFilenameCandidates("grey-introduction", `${atlas("risks")}/`);
+    expect(c[1]).toBe("grey-introduction-risks");
+  });
+
+  it("falls back to just the base when the URL has no usable path or is malformed", () => {
+    expect(articleFilenameCandidates("foo", "https://example.com")).toEqual(["foo"]);
+    expect(articleFilenameCandidates("foo", "not a url")).toEqual(["foo"]);
+  });
+
+  it("falls back to base when a path segment has a malformed %-escape", () => {
+    // decodeURIComponent throws on "%E0%A4%A"; the catch returns [base].
+    expect(articleFilenameCandidates("foo", "https://x.org/a/%E0%A4%A/b")).toEqual([
+      "foo",
+    ]);
+  });
+
+  it("bounds candidate count and length on a deep URL", () => {
+    const deep =
+      "https://x.org/" +
+      Array.from({ length: 12 }, (_, i) => `seg${i}aaaaaaaaaa`).join("/") +
+      "/title";
+    const c = articleFilenameCandidates("author-title", deep);
+    expect(c.length).toBeLessThanOrEqual(4); // base + up to 3 URL-context levels
+    for (const name of c) expect(name.length).toBeLessThanOrEqual(160);
+  });
+});
+
+describe("generateArticleFilenameBase — organization authors", () => {
+  // Prevents: "Epoch AI" → "ai-eci-documentation"-style junk prefixes. An org
+  // has no surname; use its full name.
+  it("uses the full org name when the last word is an org suffix", () => {
+    expect(generateArticleFilenameBase(["Epoch AI"], "ECI documentation")).toBe(
+      "epoch-ai-eci-documentation",
+    );
+    expect(
+      generateArticleFilenameBase(["Open Philanthropy"], "Worldview report"),
+    ).toBe("open-philanthropy-worldview-report");
+  });
+
+  it("still uses the surname for person authors", () => {
+    expect(
+      generateArticleFilenameBase(["Scott Alexander"], "Meditations on Moloch"),
+    ).toBe("alexander-meditations-on-moloch");
+  });
+
+  it("keeps single-word authors as-is", () => {
+    expect(generateArticleFilenameBase(["METR"], "Some report")).toBe(
+      "metr-some-report",
+    );
+    expect(generateArticleFilenameBase(["paulfchristiano"], "A story")).toBe(
+      "paulfchristiano-a-story",
+    );
+  });
+});
+
+describe("generateArticleFilenameBase — non-Latin fallback", () => {
+  // Prevents: fully non-Latin titles slugifying to "" and failing the import.
+  it("hash-falls-back for CJK/Cyrillic/Arabic instead of returning empty", () => {
+    for (const [authors, title] of [
+      [["山田太郎"], "人工知能"],
+      [["Иванов"], "Искусственный интеллект"],
+      [["كاتب"], "الذكاء الاصطناعي"],
+    ] as Array<[string[], string]>) {
+      const base = generateArticleFilenameBase(authors, title);
+      expect(base).toMatch(/^article-[0-9a-f]{12}$/);
+      // deterministic
+      expect(generateArticleFilenameBase(authors, title)).toBe(base);
+    }
   });
 });
