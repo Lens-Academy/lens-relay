@@ -7,6 +7,7 @@ import {
   dropCursor,
   rectangularSelection,
   crosshairCursor,
+  tooltips,
 } from '@codemirror/view';
 import { EditorState, Prec } from '@codemirror/state';
 import { defaultKeymap } from '@codemirror/commands';
@@ -142,6 +143,10 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // Context menu handler - uses click position, not cursor position
   const handleContextMenu = useCallback(
     (e: React.MouseEvent) => {
+      // Touch devices: long-press must show the NATIVE selection menu
+      // (copy/paste/cut) — comments are reachable via the mobile bottom bar.
+      if (window.matchMedia('(pointer: coarse)').matches) return;
+
       const view = viewRef.current;
       if (!view) return;
 
@@ -342,6 +347,17 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           },
         }])),
         EditorView.lineWrapping,
+        // Keep CM tooltips (wikilink autocomplete) clear of the mobile edit
+        // toolbar and on-screen keyboard, which the layout viewport may not
+        // account for.
+        tooltips({
+          tooltipSpace: () => {
+            const vv = window.visualViewport;
+            const bottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+            const coarse = window.matchMedia('(pointer: coarse)').matches;
+            return { top: 0, left: 0, right: window.innerWidth, bottom: bottom - (coarse ? 52 : 0) };
+          },
+        }),
         EditorView.theme({
           '&': {
             height: '100%',

@@ -14,6 +14,7 @@ pub mod permanent_user_data;
 pub mod search_index;
 pub mod share_token;
 pub mod store;
+pub mod suggestions_index;
 pub mod sync;
 pub mod sync_kv;
 pub mod webhook;

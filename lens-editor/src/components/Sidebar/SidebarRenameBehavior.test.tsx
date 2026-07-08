@@ -16,7 +16,7 @@ vi.mock('../../App', () => ({
 }));
 
 vi.mock('../../hooks/useResolvedDocId', () => ({
-  useResolvedDocId: (compoundId: string) => compoundId || null,
+  useResolvedDocId: (compoundId: string) => ({ docId: compoundId || null, notFound: false }),
 }));
 
 beforeEach(() => {

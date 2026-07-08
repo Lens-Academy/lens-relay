@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { ArticleJobQueue } from "./queue";
-import { verifyShareToken } from "../share-token";
+import { verifyShareToken, roleAtLeast } from "../share-token";
 import { normalizeUrlForDedup } from "./url-normalize";
 
 export const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
@@ -38,7 +38,7 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
     if (payload.purpose !== "share") {
       return c.json({ error: "Share token required" }, 403);
     }
-    if (payload.role !== "edit") {
+    if (!roleAtLeast(payload.role, "edit")) {
       return c.json({ error: "Edit access required" }, 403);
     }
     if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {

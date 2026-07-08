@@ -8,6 +8,7 @@ RUN npx vite build
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apk add --no-cache git openssh-client
 COPY package.json ./
 RUN npm install --omit=dev --no-package-lock
 RUN npm install -g @anthropic-ai/claude-code

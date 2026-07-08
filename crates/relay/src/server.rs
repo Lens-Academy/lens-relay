@@ -57,6 +57,7 @@ use y_sweet_core::{
     metrics::RelayMetrics,
     search_index::SearchIndex,
     store::Store,
+    suggestions_index::SuggestionsIndex,
     sync::awareness::Awareness,
     sync_kv::SyncKv,
     webhook::WebhookConfig,
@@ -455,6 +456,7 @@ async fn search_worker(
     search_index: Arc<SearchIndex>,
     docs: Arc<DashMap<String, DocWithSyncKv>>,
     pending: Arc<DashMap<String, link_indexer::PendingEntry>>,
+    suggestions_index: Arc<SuggestionsIndex>,
 ) {
     tracing::info!("Search index worker started");
 
@@ -513,21 +515,24 @@ async fn search_worker(
                     &docs,
                     &search_index,
                     &filemeta_cache,
+                    &suggestions_index,
                 )
                 .await;
             } else {
                 // Content doc — reindex into search
-                search_handle_content_update(&doc_id, &docs, &search_index);
+                search_handle_content_update(&doc_id, &docs, &search_index, &suggestions_index);
             }
         }
     }
 }
 
-/// Handle a content doc update: read body, look up title from folder metadata, upsert into search index.
+/// Handle a content doc update: read body, look up title from folder metadata, upsert into search
+/// index, and rescan for CriticMarkup to keep the suggestions index current.
 pub(crate) fn search_handle_content_update(
     doc_id: &str,
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
+    suggestions_index: &SuggestionsIndex,
 ) {
     let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
         return;
@@ -556,6 +561,8 @@ pub(crate) fn search_handle_content_update(
         Ok(()) => tracing::debug!("Search indexed content doc: {} ({})", doc_uuid, title),
         Err(e) => tracing::error!("Search index failed for {}: {:?}", doc_uuid, e),
     }
+
+    suggestions_index.update(doc_uuid, critic_scanner::scan_suggestions(&body));
 }
 
 /// Find the title and folder name for a content doc UUID by scanning all folder docs' filemeta_v0.
@@ -613,6 +620,7 @@ async fn search_handle_folder_update(
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
     filemeta_cache: &DashMap<String, std::collections::HashMap<String, String>>,
+    suggestions_index: &SuggestionsIndex,
 ) {
     // Build current uuid -> title map from filemeta
     let current_map: std::collections::HashMap<String, String> = {
@@ -661,6 +669,11 @@ async fn search_handle_folder_update(
                     Ok(()) => tracing::info!("Search: removed doc {}", uuid),
                     Err(e) => tracing::error!("Search: failed to remove {}: {:?}", uuid, e),
                 }
+                // On a cross-folder move this can briefly wipe the entry if the
+                // destination folder's update was processed first (same
+                // semantics as the search-index removal above); the next
+                // content update rescans and restores it.
+                suggestions_index.update(uuid, Vec::new());
             }
         }
 
@@ -674,7 +687,12 @@ async fn search_handle_folder_update(
                 // New or renamed — reindex content
                 let content_id = format!("{}-{}", relay_id, uuid);
                 if docs.contains_key(&content_id) {
-                    search_handle_content_update(&content_id, docs, search_index);
+                    search_handle_content_update(
+                        &content_id,
+                        docs,
+                        search_index,
+                        suggestions_index,
+                    );
                 }
             }
         }
@@ -686,7 +704,7 @@ async fn search_handle_folder_update(
         for uuid in content_uuids {
             let content_id = format!("{}-{}", relay_id, uuid);
             if docs.contains_key(&content_id) {
-                search_handle_content_update(&content_id, docs, search_index);
+                search_handle_content_update(&content_id, docs, search_index, suggestions_index);
             }
         }
     }
@@ -713,6 +731,8 @@ pub struct Server {
     search_ready: Arc<std::sync::atomic::AtomicBool>,
     search_tx: Option<tokio::sync::mpsc::Sender<String>>,
     search_pending: Option<Arc<DashMap<String, link_indexer::PendingEntry>>>,
+    suggestions_index: Arc<SuggestionsIndex>,
+    suggestions_ready: Arc<std::sync::atomic::AtomicBool>,
     doc_resolver: Arc<DocumentResolver>,
     pub(crate) mcp_sessions: Arc<crate::mcp::session::SessionManager>,
     pub(crate) mcp_api_key: Option<String>,
@@ -850,6 +870,8 @@ impl Server {
             search_ready,
             search_tx: search_tx_final,
             search_pending: search_pending_final,
+            suggestions_index: Arc::new(SuggestionsIndex::new()),
+            suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             doc_resolver,
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key,
@@ -950,6 +972,7 @@ impl Server {
             }
             if let Some(ref si) = self.search_index {
                 let si_for_worker = si.clone();
+                let suggestions_for_worker = self.suggestions_index.clone();
                 let docs_for_search = self.docs.clone();
                 let metrics_for_search = self.metrics.clone();
                 let metrics_for_hook = self.metrics.clone();
@@ -966,7 +989,10 @@ impl Server {
                             let si = si_for_worker.clone();
                             let docs = docs_for_search.clone();
                             let pending = search_pending.clone();
-                            Box::pin(async move { search_worker(rx, si, docs, pending).await })
+                            let suggestions = suggestions_for_worker.clone();
+                            Box::pin(async move {
+                                search_worker(rx, si, docs, pending, suggestions).await
+                            })
                         },
                         move |worker, msg, _attempt, _budget| {
                             metrics_for_hook.record_worker_panic(worker);
@@ -1321,7 +1347,12 @@ impl Server {
 
         // 9. Update search index
         if let Some(ref search_index) = self.search_index {
-            search_handle_content_update(&full_doc_id, &self.docs, search_index);
+            search_handle_content_update(
+                &full_doc_id,
+                &self.docs,
+                search_index,
+                &self.suggestions_index,
+            );
         }
 
         tracing::info!(
@@ -1520,7 +1551,12 @@ impl Server {
 
         // 9. Update search index
         if let Some(ref search_index) = self.search_index {
-            search_handle_content_update(&full_doc_id, &self.docs, search_index);
+            search_handle_content_update(
+                &full_doc_id,
+                &self.docs,
+                search_index,
+                &self.suggestions_index,
+            );
         }
 
         tracing::info!(
@@ -1654,7 +1690,12 @@ impl Server {
 
         // 6. Update search index
         if let Some(ref search_index) = self.search_index {
-            search_handle_content_update(&full_doc_id, &self.docs, search_index);
+            search_handle_content_update(
+                &full_doc_id,
+                &self.docs,
+                search_index,
+                &self.suggestions_index,
+            );
         }
 
         tracing::info!(
@@ -2186,7 +2227,12 @@ impl Server {
         // Update search index for the moved document
         if let Some(ref search_index) = self.search_index {
             let content_doc_id = to_content_id(uuid);
-            search_handle_content_update(&content_doc_id, &self.docs, search_index);
+            search_handle_content_update(
+                &content_doc_id,
+                &self.docs,
+                search_index,
+                &self.suggestions_index,
+            );
         }
 
         // Trigger link indexer on_document_update for folder docs
@@ -2726,6 +2772,8 @@ impl Server {
             search_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             search_tx: None,
             search_pending: None,
+            suggestions_index: Arc::new(SuggestionsIndex::new()),
+            suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key: None,
@@ -2759,6 +2807,8 @@ impl Server {
             search_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             search_tx: None,
             search_pending: None,
+            suggestions_index: Arc::new(SuggestionsIndex::new()),
+            suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key: None,
@@ -3246,6 +3296,50 @@ impl Server {
         Ok(())
     }
 
+    /// Scan every loaded content doc for CriticMarkup and (re)build the
+    /// suggestions index, then mark it ready. Called from `startup_reindex`
+    /// while all docs are in memory; incremental updates afterwards come from
+    /// the search worker.
+    pub(crate) fn rebuild_suggestions_index(&self) {
+        // Snapshot keys first: iterating the DashMap while acquiring awareness
+        // locks would violate the lock ordering (shard < awareness), see the
+        // search_worker comment.
+        let doc_ids: Vec<String> = self.docs.iter().map(|e| e.key().clone()).collect();
+        let mut indexed = 0;
+        for doc_id in &doc_ids {
+            let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
+                continue;
+            };
+            let awareness = {
+                let Some(doc_ref) = self.docs.get(doc_id) else {
+                    continue;
+                };
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
+            let content = {
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+                let txn = guard.doc.transact();
+                match txn.get_text("contents") {
+                    Some(text) => text.get_string(&txn),
+                    // Folder docs and blobs have no "contents" text
+                    None => continue,
+                }
+            };
+            let suggestions = critic_scanner::scan_suggestions(&content);
+            if !suggestions.is_empty() {
+                indexed += 1;
+            }
+            self.suggestions_index.update(doc_uuid, suggestions);
+        }
+        self.suggestions_ready
+            .store(true, std::sync::atomic::Ordering::Release);
+        tracing::info!(
+            "Suggestions index built: {} of {} docs have suggestions",
+            indexed,
+            doc_ids.len()
+        );
+    }
+
     /// Load all documents from storage and reindex all backlinks.
     ///
     /// Called once on startup, before accepting connections.
@@ -3258,6 +3352,8 @@ impl Server {
             tracing::info!("No store configured, skipping startup reindex");
             // Even without a store, mark search as ready (empty index)
             self.search_ready
+                .store(true, std::sync::atomic::Ordering::Release);
+            self.suggestions_ready
                 .store(true, std::sync::atomic::Ordering::Release);
             return Ok(());
         }
@@ -3278,6 +3374,9 @@ impl Server {
             "Document resolver built: {} documents",
             self.doc_resolver.all_paths().len()
         );
+
+        // Build the suggestions index while everything is in memory
+        self.rebuild_suggestions_index();
 
         // Build search index from all loaded documents
         if let Some(ref search_index) = self.search_index {
@@ -4344,22 +4443,25 @@ async fn handle_open_by_path(
     }
 }
 
+/// 503 until the given index has finished its startup build.
+fn require_index_ready(ready: &std::sync::atomic::AtomicBool, what: &str) -> Result<(), AppError> {
+    if ready.load(std::sync::atomic::Ordering::Acquire) {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            anyhow!("{} is being built, please try again shortly", what),
+        ))
+    }
+}
+
 async fn handle_search(
     auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
     State(server_state): State<Arc<Server>>,
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<Value>, AppError> {
     server_state.check_auth(auth_header)?;
-    // Check if search is ready (503 during initial indexing)
-    if !server_state
-        .search_ready
-        .load(std::sync::atomic::Ordering::Acquire)
-    {
-        return Err(AppError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            anyhow!("Search index is being built, please try again shortly"),
-        ));
-    }
+    require_index_ready(&server_state.search_ready, "Search index")?;
 
     let limit = params.limit.min(100); // Cap at 100
     let q = params.q.trim().to_string();
@@ -4408,16 +4510,22 @@ async fn handle_folder_name(
     }
 }
 
-/// Scan all documents in a folder for CriticMarkup suggestions.
+/// List CriticMarkup suggestions for all documents in a folder.
 ///
 /// GET /suggestions?folder_id=...
 /// Response: { "files": [{ "path": "...", "doc_id": "...", "suggestions": [...] }] }
+///
+/// Answers from the in-memory suggestions index — it must NOT load content
+/// docs on demand. The previous per-request full-folder scan loaded every doc
+/// from storage and triggered the 2026-07-02 prod hang (see
+/// docs/plans/2026-07-02-suggestions-index.md).
 async fn handle_suggestions(
     auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
     State(server_state): State<Arc<Server>>,
     Query(params): Query<SuggestionsQuery>,
 ) -> Result<Json<Value>, AppError> {
     server_state.check_auth(auth_header)?;
+    require_index_ready(&server_state.suggestions_ready, "Suggestions index")?;
 
     let folder_id = &params.folder_id;
 
@@ -4461,36 +4569,17 @@ async fn handle_suggestions(
 
     let mut files = Vec::new();
 
+    // Stale index entries for docs deleted from the folder are filtered
+    // naturally: only UUIDs currently in filemeta_v0 are consulted.
     for content_uuid in &content_uuids {
+        let Some(suggestions) = server_state.suggestions_index.get(content_uuid) else {
+            continue;
+        };
         let doc_id = format!("{}-{}", relay_id, content_uuid);
         let path = path_map
             .get(content_uuid)
             .cloned()
             .unwrap_or_else(|| content_uuid.clone());
-
-        // Load doc content
-        if server_state.ensure_doc_loaded(&doc_id).await.is_err() {
-            continue;
-        }
-        let content = {
-            let awareness = {
-                let Some(doc_ref) = server_state.docs.get(&doc_id) else {
-                    continue;
-                };
-                doc_ref.awareness() // Arc clone
-            }; // DashMap shard lock released
-            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            let txn = guard.doc.transact();
-            match txn.get_text("contents") {
-                Some(text) => text.get_string(&txn),
-                None => continue,
-            }
-        };
-
-        let suggestions = critic_scanner::scan_suggestions(&content);
-        if suggestions.is_empty() {
-            continue;
-        }
 
         files.push(serde_json::json!({
             "path": path,
@@ -6328,6 +6417,7 @@ mod test {
     use tower::util::ServiceExt;
     use y_sweet_core::api_types::Authorization;
     use y_sweet_core::auth::ExpirationTimeEpochMillis;
+    use y_sweet_core::critic_scanner::scan_suggestions;
     use y_sweet_core::doc_sync::DocWithSyncKv;
     use yrs::GetString;
     use yrs::{Any, Map, ReadTxn, Text, Transact, WriteTxn};
@@ -8336,6 +8426,180 @@ mod test {
 
         assert_eq!(json["ok"], true);
         assert_eq!(json["workers"].as_array().unwrap().len(), 0);
+    }
+
+    async fn get_suggestions(server: &Arc<Server>, folder_id: &str) -> (StatusCode, JsonValue) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/suggestions?folder_id={}", folder_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+        (status, body)
+    }
+
+    const SUGG_UUID: &str = "22222222-2222-4222-8222-222222222222";
+
+    #[tokio::test]
+    async fn suggestions_endpoint_reads_from_index_not_doc_scan() {
+        // Prevents: regression to per-request full-folder doc scans, which
+        // load every doc from storage (caused the 2026-07-02 prod hang)
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, SUGG_UUID, "Hello {++world++} end").await;
+
+        // Index deliberately NOT populated: the endpoint must answer from the
+        // index, not by scanning doc content at request time.
+        let (status, body) = get_suggestions(&server, &folder_doc_id).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["files"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn suggestions_endpoint_returns_indexed_suggestions() {
+        // Prevents: review page showing nothing for docs whose suggestions
+        // are in the index
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        server
+            .suggestions_index
+            .update(SUGG_UUID, scan_suggestions("Hello {++world++} end"));
+
+        let (status, body) = get_suggestions(&server, &folder_doc_id).await;
+        assert_eq!(status, StatusCode::OK);
+        let files = body["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], "/Doc.md");
+        assert_eq!(
+            files[0]["doc_id"],
+            format!("{}-{}", TEST_RELAY_ID, SUGG_UUID)
+        );
+        assert_eq!(files[0]["suggestions"][0]["content"], "world");
+    }
+
+    #[tokio::test]
+    async fn suggestions_endpoint_filters_uuids_not_in_folder() {
+        // Prevents: stale index entries for deleted docs reappearing on the
+        // review page
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        server.suggestions_index.update(
+            "33333333-3333-4333-8333-333333333333",
+            scan_suggestions("Ghost {++entry++}"),
+        );
+
+        let (status, body) = get_suggestions(&server, &folder_doc_id).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["files"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn suggestions_endpoint_503_before_index_ready() {
+        // Prevents: cold-boot requests silently returning empty results while
+        // the startup scan is still running
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        server
+            .suggestions_ready
+            .store(false, std::sync::atomic::Ordering::Release);
+
+        let (status, _body) = get_suggestions(&server, &folder_doc_id).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn content_update_refreshes_suggestions_index() {
+        // Prevents: edits (new/accepted suggestions) never reaching the index
+        // because the worker path doesn't rescan
+        let search_index = Arc::new(SearchIndex::new_in_memory().expect("in-memory search index"));
+        let server = Server::new_for_test_with_search(search_index.clone());
+        insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, SUGG_UUID, "Hello {++world++} end").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+
+        search_handle_content_update(
+            &doc_id,
+            &server.docs,
+            &search_index,
+            &server.suggestions_index,
+        );
+        assert!(server.suggestions_index.get(SUGG_UUID).is_some());
+
+        // Resolve the suggestion (remove markup) and rescan: entry must go away
+        {
+            let doc_ref = server.docs.get(&doc_id).unwrap();
+            let awareness = doc_ref.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            let len = text.get_string(&txn).len() as u32;
+            text.remove_range(&mut txn, 0, len);
+            text.insert(&mut txn, 0, "Hello world end");
+        }
+        search_handle_content_update(
+            &doc_id,
+            &server.docs,
+            &search_index,
+            &server.suggestions_index,
+        );
+        assert!(server.suggestions_index.get(SUGG_UUID).is_none());
+    }
+
+    #[tokio::test]
+    async fn rebuild_suggestions_index_scans_loaded_docs() {
+        // Prevents: startup leaving the index empty, making the review page
+        // blank after every server restart
+        let server = Server::new_for_test();
+        insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, SUGG_UUID, "Hello {++world++} end").await;
+        server
+            .suggestions_ready
+            .store(false, std::sync::atomic::Ordering::Release);
+
+        server.rebuild_suggestions_index();
+
+        assert!(server.suggestions_index.get(SUGG_UUID).is_some());
+        assert!(server
+            .suggestions_ready
+            .load(std::sync::atomic::Ordering::Acquire));
     }
 }
 

@@ -544,3 +544,52 @@
 .sidebar-animating > div {
   transition: width 200ms ease-out;
 }
+
+/* Accidental pull-to-refresh reloads the app mid-edit (Android Chrome) —
+   overscroll at the viewport must never chain to the browser gesture. */
+html, body {
+  overscroll-behavior-y: none;
+}
+
+/* Mobile shell — tighter editor gutters, shorter tail padding.
+   Overrides the fixed padding set in Editor.tsx's CM theme. */
+@media not all and (min-width: 500px) {
+  .cm-editor .cm-content {
+    padding: 12px 16px 120px !important;
+  }
+}
+
+/* Touch devices — inline controls sized for fingers, not cursors */
+@media (pointer: coarse) {
+  .cm-criticmarkup-accept,
+  .cm-criticmarkup-reject {
+    width: 28px;
+    height: 28px;
+    font-size: 15px;
+  }
+
+  .cm-criticmarkup-bulk .cm-criticmarkup-accept,
+  .cm-criticmarkup-bulk .cm-criticmarkup-reject {
+    width: auto;
+    height: 28px;
+    padding: 0 8px;
+    font-size: 13px;
+  }
+
+  .cm-comment-badge {
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    font-size: 12px;
+    border-radius: 11px;
+  }
+
+  .cm-checkbox {
+    width: 20px;
+    height: 20px;
+  }
+
+  .cm-tooltip-autocomplete li {
+    padding: 12px;
+  }
+}

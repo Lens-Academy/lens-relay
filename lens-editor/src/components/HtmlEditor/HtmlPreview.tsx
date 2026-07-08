@@ -392,6 +392,7 @@ export function HtmlPreview({
     clientWidth: 0,
     scrollHeight: 0,
     clientHeight: 0,
+    layoutVersion: 0,
   });
   const restoringFrameIdRef = useRef<number | null>(null);
   const restoringScrollRef = useRef<{ frameId: number; scroll: PreviewScroll } | null>(null);

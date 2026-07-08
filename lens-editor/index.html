@@ -5,7 +5,12 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- interactive-widget=resizes-content: Android Chrome shrinks the layout
+         viewport when the keyboard opens, so bottom bars stay visible and the
+         editor keeps the cursor in view. iOS ignores it (visualViewport
+         tracking covers that case). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#f6f6f6" />
     <title>Editor</title>
   </head>
   <body>

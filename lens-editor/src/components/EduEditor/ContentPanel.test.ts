@@ -150,3 +150,163 @@ describe('ContentPanel', () => {
     });
   });
 });
+
+describe('ContentPanel platform link', () => {
+  const linkHref = () =>
+    screen.getByText('Show on Lensacademy.org').getAttribute('href');
+
+  // Prevents: anchor built from the module's "# Lens: X" label diverging from
+  // the platform's section id, which uses the lens doc's own frontmatter title
+  // (flattener: lens.title || section.title) — link would land at page top.
+  it('anchors referenced-lens links to the lens frontmatter title', async () => {
+    seedLensDoc(
+      'lens-pasta-uuid',
+      '---\ntitle: AI 2027 Forecast\n---\n#### Text\ncontent::\nhi\n',
+    );
+
+    render(
+      React.createElement(ContentPanel, {
+        scope: {
+          kind: 'full-doc' as const,
+          docId: `${RELAY_ID}-lens-pasta-uuid`,
+          docName: 'Intro Reading',
+          docPath: 'modules/mod.md',
+        },
+        moduleSlug: 'demo-module',
+        courseSlug: 'demo-course',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(linkHref()).toBe(
+        'https://staging.lensacademy.org/course/demo-course/module/demo-module#ai-2027-forecast',
+      );
+    });
+  });
+
+  it('falls back to docName when the lens doc has no frontmatter title', async () => {
+    seedLensDoc('lens-pasta-uuid', '#### Text\ncontent::\nhi\n');
+
+    render(
+      React.createElement(ContentPanel, {
+        scope: {
+          kind: 'full-doc' as const,
+          docId: `${RELAY_ID}-lens-pasta-uuid`,
+          docName: 'Intro Reading',
+          docPath: 'modules/mod.md',
+        },
+        moduleSlug: 'demo-module',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(linkHref()).toBe(
+        'https://staging.lensacademy.org/module/demo-module#intro-reading',
+      );
+    });
+  });
+
+  // Prevents: previous doc's frontmatter title leaking into the anchor after
+  // switching to a lens doc without frontmatter (frontmatter state not reset).
+  it('does not reuse the previous doc frontmatter title after a scope switch', async () => {
+    seedLensDoc(
+      'lens-a-uuid',
+      '---\ntitle: Doc A Title\n---\n#### Text\ncontent::\na\n',
+    );
+    seedLensDoc('lens-b-uuid', '#### Text\ncontent::\nb\n');
+
+    const scopeFor = (uuid: string, docName: string) => ({
+      kind: 'full-doc' as const,
+      docId: `${RELAY_ID}-${uuid}`,
+      docName,
+      docPath: 'modules/mod.md',
+    });
+
+    const { rerender } = render(
+      React.createElement(ContentPanel, {
+        scope: scopeFor('lens-a-uuid', 'Aye'),
+        moduleSlug: 'demo-module',
+      }),
+    );
+    await waitFor(() => {
+      expect(linkHref()).toBe(
+        'https://staging.lensacademy.org/module/demo-module#doc-a-title',
+      );
+    });
+
+    rerender(
+      React.createElement(ContentPanel, {
+        scope: scopeFor('lens-b-uuid', 'Bee'),
+        moduleSlug: 'demo-module',
+      }),
+    );
+    await waitFor(() => {
+      expect(linkHref()).toBe(
+        'https://staging.lensacademy.org/module/demo-module#bee',
+      );
+    });
+  });
+
+  // Prevents: inline lens title:: field being ignored — the platform prefers
+  // it over the "# Lens:" heading label when building the section id.
+  it('anchors inline-lens links to the title:: field when present', async () => {
+    seedLensDoc(
+      'lens-pasta-uuid',
+      '---\nslug: demo-module\n---\n' +
+      '# Lens: Welcome\ntitle:: Custom Name\n' +
+      '#### Text\ncontent::\nHello\n',
+    );
+
+    render(
+      React.createElement(ContentPanel, {
+        scope: {
+          kind: 'subtree' as const,
+          docId: `${RELAY_ID}-lens-pasta-uuid`,
+          docName: 'Welcome',
+          docPath: 'modules/mod.md',
+          rootSectionIndex: 1,
+          breadcrumb: 'inside modules/mod.md',
+        },
+        moduleSlug: 'demo-module',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(linkHref()).toBe(
+        'https://staging.lensacademy.org/module/demo-module#custom-name',
+      );
+    });
+  });
+
+  // Prevents: non-lens selections (heading/submodule/Test) emitting anchors
+  // that match no platform section (e.g. #test) in user-visible URLs.
+  it('omits the anchor for non-lens scopes', async () => {
+    seedLensDoc(
+      'lens-pasta-uuid',
+      '---\nslug: demo-module\n---\n' +
+      '## Some Heading\n' +
+      '#### Text\ncontent::\nHello\n',
+    );
+
+    render(
+      React.createElement(ContentPanel, {
+        scope: {
+          kind: 'subtree' as const,
+          docId: `${RELAY_ID}-lens-pasta-uuid`,
+          docName: 'Some Heading',
+          docPath: 'modules/mod.md',
+          rootSectionIndex: 1,
+          breadcrumb: 'inside modules/mod.md',
+        },
+        moduleSlug: 'demo-module',
+        courseSlug: 'demo-course',
+      }),
+    );
+
+    await waitFor(() => {
+      expect(linkHref()).toBe(
+        'https://staging.lensacademy.org/course/demo-course/module/demo-module',
+      );
+    });
+  });
+});

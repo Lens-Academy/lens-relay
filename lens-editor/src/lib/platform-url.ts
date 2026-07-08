@@ -23,6 +23,36 @@ function fileNameToSlug(fileName: string): string {
 }
 
 /**
+ * Convert a section title to the platform's URL hash anchor.
+ * Replicates lens-platform web_frontend/src/utils/extractHeadings.ts generateHeadingId().
+ */
+export function headingAnchor(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 50);
+}
+
+/**
+ * Platform URL for a module, optionally scoped to a course and anchored to a lens.
+ * Course-scoped links keep the platform inside the course (sidebar, progress,
+ * next-module navigation) instead of dropping the user on the standalone
+ * /module/... page.
+ */
+export function getModulePlatformUrl(
+  moduleSlug: string,
+  opts: { courseSlug?: string; lensTitle?: string } = {},
+): string {
+  const base = opts.courseSlug
+    ? `${PLATFORM_BASE}/course/${opts.courseSlug}/module/${moduleSlug}`
+    : `${PLATFORM_BASE}/module/${moduleSlug}`;
+  const anchor = opts.lensTitle ? headingAnchor(opts.lensTitle) : '';
+  return anchor ? `${base}#${anchor}` : base;
+}
+
+/**
  * Derive the Lens Platform URL for a relay document path.
  * Articles and lenses derive slugs from filenames.
  * Modules require an explicit frontmatter slug — returns null without one.

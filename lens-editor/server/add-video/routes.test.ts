@@ -110,6 +110,17 @@ describe('POST /api/add-video', () => {
     expect(resp.status).toBe(403);
   });
 
+  it('accepts admin-role token', async () => {
+    const token = makeAddVideoToken({ role: 'admin' });
+    const resp = await app.request('/api/add-video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ videos: [validVideo] }),
+    });
+
+    expect(resp.status).toBe(200);
+  });
+
   it('rejects token for wrong folder', async () => {
     const token = makeAddVideoToken({ folder: LENS_FOLDER });
     const resp = await app.request('/api/add-video', {
@@ -239,6 +250,21 @@ describe('POST /api/add-video/install-token', () => {
     const payload = verifyShareToken(data.token);
     expect(payload).not.toBeNull();
     expect(payload!.folder).toBe(EDU_FOLDER);
+  });
+
+  it('mints add-video token from admin share token', async () => {
+    const shareToken = makeShareToken({ role: 'admin' });
+    const resp = await app.request('/api/add-video/install-token', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${shareToken}` },
+    });
+
+    expect(resp.status).toBe(200);
+    const data = await resp.json();
+    const payload = verifyShareToken(data.token);
+    expect(payload).not.toBeNull();
+    expect(payload!.purpose).toBe('add-video');
+    expect(payload!.role).toBe('edit');
   });
 
   it('rejects non-edit role', async () => {

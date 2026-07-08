@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { Hono } from "hono";
 import { createApp } from "./app";
 import { signShareToken } from "./share-token";
@@ -29,9 +29,19 @@ function addVideoToken() {
 
 describe("production app (createApp)", () => {
   let app: Hono;
+  const originalPromotionEnabled = process.env.PROMOTION_ENABLED;
 
   beforeAll(() => {
+    delete process.env.PROMOTION_ENABLED;
     app = createApp({ relayUrl: "http://localhost:1", relayServerToken: "test" });
+  });
+
+  afterAll(() => {
+    if (originalPromotionEnabled === undefined) {
+      delete process.env.PROMOTION_ENABLED;
+    } else {
+      process.env.PROMOTION_ENABLED = originalPromotionEnabled;
+    }
   });
 
   it("mounts /api/add-article/status behind share-token auth", async () => {
@@ -81,5 +91,13 @@ describe("production app (createApp)", () => {
       body: JSON.stringify({}),
     });
     expect(resp.status).not.toBe(404);
+  });
+
+  it("returns JSON 404 for promotion routes when promotion is disabled by default", async () => {
+    const resp = await app.request("/api/promotion/changes");
+
+    expect(resp.status).toBe(404);
+    expect(resp.headers.get("content-type")).toContain("application/json");
+    expect(await resp.json()).toEqual({ error: "Promotion is disabled" });
   });
 });

@@ -376,6 +376,15 @@ describe('livePreview - markdown links', () => {
     expect(widgets.length).toBe(1);
     expect(widgets[0].textContent).toContain('Click Here');
   });
+
+  it('leaves multi-line links raw because view-plugin replace decorations cannot span lines', () => {
+    const content = '[Click\nHere](https://example.com) end';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-link-widget')).toBe(false);
+    expect(view.state.doc.toString()).toBe(content);
+  });
 });
 
 describe('livePreview - autolinks (bare URLs)', () => {
@@ -852,6 +861,15 @@ describe('livePreview - inline images', () => {
     const img = view.contentDOM.querySelector('.cm-image-preview') as HTMLImageElement | null;
     expect(img).not.toBeNull();
     expect(img!.src).toBe('https://example.com/img.png');
+  });
+
+  it('leaves multi-line images raw because view-plugin replace decorations cannot span lines', () => {
+    const content = '![photo\ncaption](https://example.com/img.png) end';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    expect(hasClass(view, 'cm-image-widget')).toBe(false);
+    expect(view.state.doc.toString()).toBe(content);
   });
 });
 

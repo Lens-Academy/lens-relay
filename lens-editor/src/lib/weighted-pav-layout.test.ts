@@ -86,7 +86,7 @@ describe('computeWeightedLayout', () => {
       { key: 'b', anchorY: 20,  height: 30, weight: 1 },
       { key: 'c', anchorY: 40,  height: 30, weight: 1 },
       { key: 'd', anchorY: 200, height: 30, weight: 1 },
-    ] as unknown as LayoutItem[]);
+    ]);
     const tops = placed.map((p) => p.top);
     expect(tops.every((t, i) => i === 0 || t > tops[i - 1])).toBe(true);
   });

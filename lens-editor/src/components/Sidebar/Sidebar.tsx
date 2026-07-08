@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useDeferredValue, useMemo, useCallback } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { SearchInput } from './SearchInput';
 import { SearchPanel } from './SearchPanel';
 import { FileTree } from './FileTree';
@@ -33,7 +33,7 @@ export function Sidebar() {
   const docUuidFromUrl = location.pathname.split('/')[1] || '';
   const shortCompoundId = docUuidFromUrl ? `${RELAY_ID}-${docUuidFromUrl}` : '';
   // Resolve short UUID to full compound ID (empty string = no active doc)
-  const activeDocId = useResolvedDocId(shortCompoundId, metadata) || '';
+  const activeDocId = useResolvedDocId(shortCompoundId, metadata).docId || '';
 
   // State for file name filter (separate from full-text search)
   const [fileFilter, setFileFilter] = useState('');
@@ -50,9 +50,6 @@ export function Sidebar() {
   const [moveTargetFolder, setMoveTargetFolder] = useState<string>('');
   const [moveError, setMoveError] = useState<string | null>(null);
   const [isMoving, setIsMoving] = useState(false);
-
-  // Navigation for review page link
-  const navigate = useNavigate();
 
   // Ref for Ctrl+K keyboard shortcut focus
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -132,7 +129,7 @@ export function Sidebar() {
     const newPath = parts.join('/');
     try {
       await movePath(prefixedOldPath.slice(1), newPath);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Rename failed:', err);
       setMoveError(moveErrorMessage(err, parts[parts.length - 1]));
     }
@@ -237,7 +234,7 @@ export function Sidebar() {
       await movePath(moveTarget.path.slice(1), moveNewPath, targetFolder);
       setMoveTarget(null);
       setMoveNewPath('');
-    } catch (err: any) {
+    } catch (err: unknown) {
       setMoveError(moveErrorMessage(err, moveNewPath.split('/').pop()));
     } finally {
       setIsMoving(false);
@@ -277,7 +274,7 @@ export function Sidebar() {
 
     try {
       await movePath(oldPrefixedPath.slice(1), newOriginalPath, crossFolder);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Drag move failed:', err);
       setMoveError(moveErrorMessage(err, fileName));
     }
@@ -395,22 +392,11 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* Review link */}
       {moveError && !moveTarget && (
         <div className="px-3 py-2 border-t border-red-100 bg-red-50 text-sm text-red-700">
           {moveError}
         </div>
       )}
-
-      {/* Review link */}
-      <div className="px-3 py-2 border-t border-gray-200">
-        <button
-          onClick={() => navigate('/review')}
-          className="w-full text-left px-2 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded"
-        >
-          Review Suggestions
-        </button>
-      </div>
 
       {/* Delete confirmation dialog */}
       <ConfirmDialog
@@ -426,7 +412,7 @@ export function Sidebar() {
       <Dialog.Root open={!!moveTarget} onOpenChange={(open) => { if (!open) { setMoveTarget(null); setMoveError(null); } }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/50" />
-          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 w-[420px]">
+          <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 w-[min(420px,calc(100vw-24px))]">
             <Dialog.Title className="text-lg font-semibold">
               Move {moveTarget?.path.split('/').pop()}
             </Dialog.Title>

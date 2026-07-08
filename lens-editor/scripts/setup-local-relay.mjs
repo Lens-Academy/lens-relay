@@ -344,6 +344,54 @@ This is a sample article in the **Lens Edu/articles** folder.
 Go to [/add-article](/add-article) (with an edit-scoped share token for the Lens Edu or all-folders scope) to import a real web article into this folder.
 `,
       },
+      {
+        path: '/courses',
+        id: 'ed000003-0000-4000-8000-0000000000a3',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        // Minimal course → module → lens chain so the Edu editor's course mode
+        // (and its course-scoped platform links) can be tested without dev R2.
+        path: '/courses/Demo Course.md',
+        id: 'ed000004-0000-4000-8000-0000000000a4',
+        type: 'markdown',
+        version: 0,
+        content: `---
+slug: demo-course
+title: "Demo Course"
+---
+
+# Module: [[../modules/Demo Module|Demo Module]]
+`,
+      },
+      {
+        path: '/modules',
+        id: 'ed000005-0000-4000-8000-0000000000a5',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/modules/Demo Module.md',
+        id: 'ed000006-0000-4000-8000-0000000000a6',
+        type: 'markdown',
+        version: 0,
+        content: `---
+slug: demo-module
+title: "Demo Module"
+---
+
+# Lens: Welcome To The Demo
+id:: ed000007-0000-4000-8000-0000000000a7
+
+#### Text
+content::
+Hello from the demo module. This inline lens exists so course-mode lens
+selection has something to render.
+`,
+      },
     ],
   },
 ];

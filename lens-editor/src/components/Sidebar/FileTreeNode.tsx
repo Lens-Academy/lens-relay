@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { NodeRendererProps } from 'react-arborist';
 import type { TreeNode } from '../../lib/tree-utils';
-import { FileTreeContextMenu } from './FileTreeContextMenu';
+import { FileTreeContextMenu, shouldSuppressTreeClick } from './FileTreeContextMenu';
 import { useFileTreeContext } from './FileTreeContext';
 import { useDragTarget } from './FileTree';
 import { CreateMenu } from './CreateMenu';
@@ -129,10 +129,16 @@ export function FileTreeNode({
     <div
       ref={dragHandle}
       style={{ ...style, paddingLeft: 0 }} // Override react-arborist's padding, we handle it ourselves
-      className={`flex items-center py-0.5 pr-2 cursor-pointer select-none
+      className={`flex items-center h-full py-0.5 pr-2 cursor-pointer select-none
                   ${isDropTarget ? 'bg-blue-100 ring-1 ring-blue-300' : isActive ? 'bg-blue-100' : 'hover:bg-gray-100'}`}
       onClick={(e) => {
         if (isEditing) return;
+        // Ghost click after a touch long-press context menu closes — the tap
+        // that picked the menu item must not also activate this row
+        if (shouldSuppressTreeClick()) {
+          e.stopPropagation();
+          return;
+        }
         if (isFolder) {
           node.toggle();
         } else if ((e.ctrlKey || e.metaKey) && ctx.onOpenNewTab && node.data.docId) {

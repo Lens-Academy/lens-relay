@@ -19,7 +19,7 @@ vi.mock('../../App', () => ({
 
 // Mock useResolvedDocId — unit tests don't test doc resolution
 vi.mock('../../hooks/useResolvedDocId', () => ({
-  useResolvedDocId: (compoundId: string) => compoundId || null,
+  useResolvedDocId: (compoundId: string) => ({ docId: compoundId || null, notFound: false }),
 }));
 
 vi.mock('../../lib/relay-api', async () => {
@@ -38,6 +38,31 @@ beforeEach(() => {
 });
 
 describe('Sidebar with multi-folder metadata', () => {
+  it('does not render workflow navigation in the bottom rail', () => {
+    const metadata = {
+      '/Lens/Welcome.md': { id: 'welcome', type: 'markdown' as const, version: 0 },
+    };
+
+    render(
+      <MemoryRouter initialEntries={['/welcome']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs: new Map<string, Y.Doc>([['Lens', new Y.Doc()]]),
+            folderNames: ['Lens'],
+            errors: new Map<string, Error>(),
+            onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('button', { name: /review suggestions/i })).not.toBeInTheDocument();
+  });
+
   it('renders folder prefixes as top-level folder nodes', () => {
     // Metadata with folder-prefixed paths (as produced by mergeMetadata)
     const metadata = {
@@ -179,33 +204,6 @@ describe('Sidebar with multi-folder metadata', () => {
     );
     expect(mockNavigate).not.toHaveBeenCalled();
     windowOpen.mockRestore();
-  });
-
-  it('renders Review Suggestions link', () => {
-    const metadata = {
-      '/Lens/Welcome.md': { id: 'welcome', type: 'markdown' as const, version: 0 },
-    };
-    const folderDocs = new Map<string, Y.Doc>([['Lens', new Y.Doc()]]);
-    const folderNames = ['Lens'];
-    const errors = new Map<string, Error>();
-
-    render(
-      <MemoryRouter initialEntries={['/c0000001']}>
-        <NavigationContext.Provider
-          value={{
-            metadata,
-            folderDocs,
-            folderNames,
-            errors,
-            onNavigate: vi.fn(),
-            justCreatedRef: { current: false },
-          }}
-        >
-          <Sidebar />
-        </NavigationContext.Provider>
-      </MemoryRouter>,
-    );
-    expect(screen.getByText('Review Suggestions')).toBeTruthy();
   });
 
   it('creates document in correct folder when "+" is clicked', async () => {

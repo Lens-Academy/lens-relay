@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { UserRole } from '../shared/types.ts';
+import { ROLE_ORDER, type UserRole } from '../shared/types.ts';
 
 export type TokenPurpose = 'share' | 'add-video';
 
@@ -24,11 +24,20 @@ function getSecret(): string {
 const PURPOSE_TO_BYTE: Record<TokenPurpose, number> = { 'share': 0, 'add-video': 1 };
 const BYTE_TO_PURPOSE: Record<number, TokenPurpose> = { 0: 'share', 1: 'add-video' };
 
-const ROLE_TO_BYTE: Record<UserRole, number> = { edit: 1, suggest: 2, view: 3 };
-const BYTE_TO_ROLE: Record<number, UserRole> = { 1: 'edit', 2: 'suggest', 3: 'view' };
+// Wire encoding — frozen once tokens exist in the wild. Bytes happen to
+// match today's ROLE_ORDER, but privilege ordering lives there, not here.
+const ROLE_TO_BYTE: Record<UserRole, number> = { admin: 0, edit: 1, suggest: 2, view: 3 };
+const BYTE_TO_ROLE: Record<number, UserRole> = { 0: 'admin', 1: 'edit', 2: 'suggest', 3: 'view' };
 
 const PAYLOAD_LEN = 22;  // 1 purpose + 1 role + 16 uuid + 4 expiry
 const SIG_LEN = 8;       // truncated HMAC-SHA256
+
+/** True when `role` has at least `min`'s privilege (ROLE_ORDER is highest -> lowest). */
+export function roleAtLeast(role: UserRole, min: UserRole): boolean {
+  const rank = ROLE_ORDER.indexOf(role);
+  // indexOf returns -1 for unknown roles, which must fail closed, not outrank admin.
+  return rank !== -1 && rank <= ROLE_ORDER.indexOf(min);
+}
 
 /** Pack UUID string "xxxxxxxx-xxxx-..." into 16 raw bytes */
 function uuidToBytes(uuid: string): Buffer {
@@ -42,9 +51,19 @@ function bytesToUuid(buf: Buffer): string {
 }
 
 function packPayload(payload: ShareTokenPayload): Buffer {
+  const purposeByte = PURPOSE_TO_BYTE[payload.purpose];
+  const roleByte = ROLE_TO_BYTE[payload.role];
+  // Unmapped values must throw: `buf[i] = undefined` keeps the zero-fill 0,
+  // which decodes as purpose 'share' / role 'admin' — a signed admin token.
+  if (purposeByte === undefined) {
+    throw new Error(`Cannot sign token with unknown purpose "${payload.purpose}"`);
+  }
+  if (roleByte === undefined) {
+    throw new Error(`Cannot sign token with unknown role "${payload.role}"`);
+  }
   const buf = Buffer.alloc(PAYLOAD_LEN);
-  buf[0] = PURPOSE_TO_BYTE[payload.purpose];
-  buf[1] = ROLE_TO_BYTE[payload.role];
+  buf[0] = purposeByte;
+  buf[1] = roleByte;
   uuidToBytes(payload.folder).copy(buf, 2);
   buf.writeUInt32BE(payload.expiry, 18);
   return buf;
