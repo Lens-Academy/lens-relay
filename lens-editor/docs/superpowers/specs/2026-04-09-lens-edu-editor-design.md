@@ -1,5 +1,13 @@
 # Lens Edu Editor — Power-User View
 
+> [!warning] Status (2026-07-08): partially implemented — this spec describes the original design, not current code.
+> Where the implementation diverged:
+> - Single `EduEditor.tsx` (with `ModuleTreeEditor` + `ContentPanel`) instead of the planned `ModulePanel`/`LensPanel` component split.
+> - Article/video excerpt inline expansion is not wired up: `ArticleEmbed.tsx` and `VideoExcerptEmbed.tsx` exist but are unused; article-excerpt sections render as labels only.
+> - Wikilink→UUID resolution uses folder metadata only (`src/lib/resolveDocPath.ts`), not the planned link-index `get_links` API.
+> - In the left panel only Learning Outcome blocks are collapsible; Pages and Submodules render as static cards.
+> - The right panel also renders module subtrees directly (`ContentScope: 'subtree' | 'full-doc'`), not only separate lens docs.
+
 ## Goal
 
 A two-panel editor for Lens Edu course content. The left panel shows module structure (pages, submodules, learning outcomes, lens references) as a navigable tree. The right panel shows the selected lens rendered in the platform's visual style (Newsreader/DM Sans, warm off-white background, article embed cards) with inline editing via CRDT-synced CodeMirror. Article-excerpt sections expand inline to show the referenced source article text, also editable.

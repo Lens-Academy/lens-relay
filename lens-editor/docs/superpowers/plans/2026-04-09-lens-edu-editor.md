@@ -1,5 +1,7 @@
 # Lens Edu Editor Implementation Plan
 
+> [!warning] Status (2026-07-08): partially implemented. See the status note at the top of the companion design spec (`../specs/2026-04-09-lens-edu-editor-design.md`) for what shipped differently — notably no ModulePanel/LensPanel split, no article/video excerpt expansion, no link-index API resolution.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Two-panel editor for Lens Edu content — left panel shows module structure (pages, submodules, LOs), right panel shows selected lens with platform-style rendering and inline CRDT editing. Article/video excerpts expand inline showing source text.
