@@ -187,7 +187,13 @@ export async function processArticle(
     setStage("rendering");
     try {
       const rendered = await fetchRenderedHtml(job.url, signal);
-      const exRendered = await extractArticle(rendered, job.url);
+      // Same opts as the raw path: without fetchText, an arXiv page arriving
+      // via the render tier silently skips the abs-page metadata enrichment,
+      // and an Atlas .md fetch would ignore the job's cancel signal.
+      const exRendered = await extractArticle(rendered, job.url, {
+        sourceUrl: job.url,
+        fetchText: (u) => fetchRawHtml(u, signal),
+      });
       if (!ex || exRendered.body.length > ex.body.length) {
         console.log(
           `[add-article] Used rendered HTML (${exRendered.body.length} chars vs raw ${ex?.body.length ?? 0})`,

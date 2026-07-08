@@ -21,10 +21,10 @@ describe("hostRemoteImages", () => {
       "![ext](https://example.com/keep.png)\n";
     const o = opts();
     const out = await hostRemoteImages(body, "turner-power", o);
-    expect(out).toContain("![[/attachments/turner-power-img1.png]]");
+    expect(out).toContain("![[/attachments/turner-power-img1-8635d6d1.png]]");
     expect(out).toContain("https://example.com/keep.png"); // non-arXiv untouched
     expect(o.upload).toHaveBeenCalledWith(
-      "/attachments/turner-power-img1.png",
+      "/attachments/turner-power-img1-8635d6d1.png",
       expect.any(Buffer),
       "image/png",
     );
@@ -75,9 +75,9 @@ describe("hostRemoteImages", () => {
       "b",
       o,
     );
-    expect(out).toContain("![[/attachments/b-img1.jpg]]");
+    expect(out).toContain("![[/attachments/b-img1-8635d6d1.jpg]]");
     expect(o.upload).toHaveBeenCalledWith(
-      "/attachments/b-img1.jpg",
+      "/attachments/b-img1-8635d6d1.jpg",
       expect.any(Buffer),
       "image/jpeg",
     );
@@ -90,7 +90,7 @@ describe("review-hardening: URLs containing parentheses", () => {
     const url = "https://arxiv.org/img.png?x=(1)";
     const o = opts();
     const out = await hostRemoteImages(`before ![a](${url}) after`, "s", o);
-    expect(out).toBe("before ![[/attachments/s-img1.png]] after");
+    expect(out).toBe("before ![[/attachments/s-img1-8635d6d1.png]] after");
     expect(o.fetchImage).toHaveBeenCalledWith(url);
   });
 });

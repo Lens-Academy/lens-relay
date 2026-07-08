@@ -133,7 +133,9 @@ describe("POST /api/add-article", () => {
       urls: ["https://example.com/a", "https://example.com/a"],
     });
     const data = await resp.json();
-    expect(data.results).toHaveLength(1);
+    // One queued row + one honest already_queued row for the duplicate line.
+    expect(data.results).toHaveLength(2);
+    expect(data.results[1].status).toBe("already_queued");
     expect(mockQueue.add).toHaveBeenCalledTimes(1);
   });
 

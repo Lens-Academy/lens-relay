@@ -91,12 +91,22 @@ export function parseMetaResponse(cliStdout: string): NormalizedMeta | null {
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-/** Every word of `name` appears in the excerpt (order-insensitive; initials
- *  may drop periods). Anti-fabrication: we only accept names literally there. */
+/** The name appears in the excerpt as a CONTIGUOUS token run ("Eliezer
+ *  Yudkowsky"), or in citation order ("Yudkowsky, Eliezer" — commas fold away
+ *  in normalization). Anti-fabrication: word-independent matching let
+ *  "Mark Page" be fabricated from "mark your calendars…" + "…page of the
+ *  appendix" (adversarial probe), so scattered word hits do NOT count. */
 function nameInText(name: string, text: string): boolean {
   const hay = ` ${norm(text)} `;
-  const words = norm(name).split(" ").filter(Boolean);
-  return words.length > 0 && words.every((w) => hay.includes(` ${w} `));
+  const needle = norm(name);
+  if (!needle) return false;
+  if (hay.includes(` ${needle} `)) return true;
+  const words = needle.split(" ");
+  if (words.length > 1) {
+    const reversed = [...words].reverse().join(" ");
+    return hay.includes(` ${reversed} `);
+  }
+  return false;
 }
 
 function wordOverlap(a: string, b: string): number {

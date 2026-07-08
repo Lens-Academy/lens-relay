@@ -242,20 +242,25 @@ function flipCommaName(s: string): string {
   return m ? `${m[2].trim()} ${m[1].trim()}` : s;
 }
 
-/** True if (year, month, day) strings form a plausible calendar date. Guards
- *  against URL/issue numbers producing structurally-invalid dates like
- *  2020-45-01 (which would land, unquoted, in the YAML frontmatter). */
+/** True if (year, month, day) strings form a REAL calendar date. Guards
+ *  against URL/issue numbers and corrupt PDF dates producing invalid dates
+ *  that land, unquoted, in the YAML frontmatter. Round-trips through Date
+ *  because a range check alone accepts impossible days (Feb 30, Apr 31, Feb 29
+ *  in non-leap years) — and YAML parsers silently roll those to the next month
+ *  (2024-02-30 → 2024-03-01), so the stored and parsed dates disagree. */
 export function isValidYmd(y: string, mo: string, d: string): boolean {
   const year = Number(y);
   const month = Number(mo);
   const day = Number(d);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return false;
+  }
+  if (year < 1990 || year > 2100) return false;
+  const dt = new Date(Date.UTC(year, month - 1, day));
   return (
-    year >= 1990 &&
-    year <= 2100 &&
-    month >= 1 &&
-    month <= 12 &&
-    day >= 1 &&
-    day <= 31
+    dt.getUTCFullYear() === year &&
+    dt.getUTCMonth() === month - 1 &&
+    dt.getUTCDate() === day
   );
 }
 

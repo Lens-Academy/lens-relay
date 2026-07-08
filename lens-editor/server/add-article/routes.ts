@@ -88,7 +88,12 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
       // utm-tagged / trailing-slash / mirror-host variants of one article don't
       // spawn parallel jobs.
       const key = normalizeUrlForDedup(url);
-      if (seen.has(key)) continue;
+      if (seen.has(key)) {
+        // Emit an honest row — silently skipping left the client with no
+        // result at all for that input line.
+        results.push({ url, status: "already_queued" });
+        continue;
+      }
       seen.add(key);
 
       const active = queue.findActive(url, normalizeUrlForDedup);

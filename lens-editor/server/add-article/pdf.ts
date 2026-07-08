@@ -622,7 +622,9 @@ export function ocrSuspectWords(providerBody: string, layerText: string): string
     }
     kept.push(lines[i]);
   }
-  const words = (s: string) => new Set(s.toLowerCase().match(/[a-z]{5,}/g) || []);
+  // Unicode letters, not just [a-z] — otherwise the cross-check is silently
+  // blind on non-English PDFs (accented/CJK substitutions returned []).
+  const words = (s: string) => new Set(s.toLowerCase().match(/\p{L}{5,}/gu) || []);
   // De-hyphenate the text layer's end-of-line word wraps ("inter-\npretable")
   // — providers re-join them, and every wrapped word would otherwise be a
   // false "substitution".
@@ -728,7 +730,15 @@ export async function embedPdfImages(
     if (!out.includes(placeholder)) continue;
     const mime = images[i].mime || "image/png";
     const ext = MIME_EXT[mime] || "png";
-    const inFolderPath = `/attachments/${slugBase}-fig${i + 1}.${ext}`;
+    // Content-hash suffix: the slug base alone is computed BEFORE filename
+    // collision resolution, so two DISTINCT articles sharing a base (every
+    // Atlas chapter's "Introduction") would collide on `<base>-fig1` — and the
+    // relay's create-only attachment endpoint treats the conflict as success,
+    // silently embedding the FIRST article's figure in the second. Hashing the
+    // bytes makes cross-article aliasing impossible (identical bytes deduping
+    // onto one blob is correct).
+    const h8 = createHash("sha1").update(images[i].png).digest("hex").slice(0, 8);
+    const inFolderPath = `/attachments/${slugBase}-fig${i + 1}-${h8}.${ext}`;
     try {
       await upload(inFolderPath, images[i].png, mime);
       out = out.split(placeholder).join(`![[${inFolderPath}]]`);

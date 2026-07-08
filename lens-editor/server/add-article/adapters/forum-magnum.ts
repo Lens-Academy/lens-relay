@@ -68,7 +68,12 @@ function extractGreaterWrong(
   if (Number.isFinite(epochMs) && epochMs > 0) {
     published = new Date(epochMs).toISOString().slice(0, 10);
   } else if (dateEl?.textContent) {
-    const t = Date.parse(dateEl.textContent.replace(/\s+UTC\s*$/i, ""));
+    // Parse WITH the "UTC" suffix first — stripping it made Date.parse read
+    // the timestamp as local time and toISOString() shift it, an off-by-one
+    // day near midnight on non-UTC hosts. Stripping is only the last resort.
+    const raw = dateEl.textContent.trim();
+    let t = Date.parse(raw);
+    if (Number.isNaN(t)) t = Date.parse(raw.replace(/\s+UTC\s*$/i, ""));
     if (!Number.isNaN(t)) published = new Date(t).toISOString().slice(0, 10);
   }
 

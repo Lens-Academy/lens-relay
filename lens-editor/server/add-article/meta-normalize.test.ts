@@ -171,3 +171,31 @@ describe("review-hardening: date validity and title exfiltration guards", () => 
     expect(ok.meta.title).toBe("Coherent Extrapolated Volition Yudkowsky");
   });
 });
+
+describe("nameInText contiguity (adversarial probe: fabricated bylines)", () => {
+  // Prevents: "Mark Page" fabricated from "mark your calendars…" +
+  // "…page of the appendix" — scattered word hits must not count.
+  it("rejects names assembled from scattered common words", () => {
+    const base = input({
+      bodyStart: "Please mark your calendars for the workshop next week.",
+      bodyEnd: "For details see page of the appendix.",
+    });
+    const r = applyNormalizedMeta(base, { authors: ["Mark Page"] });
+    expect(r.meta.author).toEqual(["Intelligence"]); // unchanged
+    const split = applyNormalizedMeta(
+      input({ bodyStart: "John Deere tractors were discussed.", bodyEnd: "Regards, Smith." }),
+      { authors: ["John Smith"] },
+    );
+    expect(split.meta.author).toEqual(["Intelligence"]);
+  });
+
+  it("accepts contiguous names and citation-order names", () => {
+    const contiguous = applyNormalizedMeta(input(), { authors: ["Eliezer Yudkowsky"] });
+    expect(contiguous.meta.author).toEqual(["Eliezer Yudkowsky"]);
+    const citation = applyNormalizedMeta(
+      input({ bodyStart: "A paper about volition.", bodyEnd: "Yudkowsky, Eliezer. 2004." }),
+      { authors: ["Eliezer Yudkowsky"] }, // reversed in the citation line
+    );
+    expect(citation.meta.author).toEqual(["Eliezer Yudkowsky"]);
+  });
+});

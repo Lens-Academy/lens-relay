@@ -61,5 +61,26 @@ export function dedupUrlVariants(
     out.add(u);
     out.add(normalizeUrlForDedup(u));
   }
+  // Also toggle the "www." spelling of every http(s) variant. The relay
+  // compares against the STORED source_url spelling (it only trims trailing
+  // slashes), and stored values commonly carry "www." (e.g. LessWrong
+  // canonicals) — without this, a GreaterWrong-mirror submit would miss the
+  // stored "https://www.lesswrong.com/…" and import a duplicate.
+  for (const u of [...out]) {
+    try {
+      const p = new URL(u);
+      if (p.protocol !== "http:" && p.protocol !== "https:") continue;
+      if (p.hostname.startsWith("www.")) {
+        p.hostname = p.hostname.slice(4);
+      } else if (p.hostname.includes(".") && !/^[\d[]/.test(p.hostname)) {
+        p.hostname = `www.${p.hostname}`;
+      } else {
+        continue;
+      }
+      out.add(p.href);
+    } catch {
+      /* non-URL variant — skip */
+    }
+  }
   return [...out];
 }

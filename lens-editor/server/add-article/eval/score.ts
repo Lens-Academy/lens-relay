@@ -77,7 +77,8 @@ function wordShingles(s: string): Set<string> {
 export interface ArticleScore {
   /** 0–10, one decimal — the headline number. */
   score10: number;
-  /** Word-shingle F1 (content overlap, order-aware). */
+  /** Word-shingle F2 (content overlap; recall-weighted — missing gold text
+   *  costs ~4x more than extra text). */
   content: number;
   /** Structural-feature agreement (headings/footnotes/tables/math/images/links). */
   structure: number;
@@ -130,7 +131,9 @@ export function scoreArticle(output: string, gold: string): ArticleScore {
   // F2, not F1: missing gold text (recall) must cost ~4x more than extra text
   // (precision) — a librarian tolerates junk to trim far more than lost prose.
   const content =
-    4 * precision + recall ? (5 * precision * recall) / (4 * precision + recall) : 0;
+    4 * precision + recall > 0
+      ? (5 * precision * recall) / (4 * precision + recall)
+      : 0;
 
   const co = { ...structureCounts(o), ...inlineStructureCounts(o) };
   const cg = { ...structureCounts(g), ...inlineStructureCounts(g) };

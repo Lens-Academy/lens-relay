@@ -4,6 +4,7 @@ import {
   dateFromUrl,
   yearFromUrl,
   looksLikePdf,
+  isValidYmd,
 } from "./fetch";
 
 const buf = (s: string): ArrayBuffer => new TextEncoder().encode(s).buffer;
@@ -195,5 +196,21 @@ describe("normalizeDate hardening", () => {
     expect(extractHtmlMeta(ld).published).toBe("");
     const ld2 = `<script type="application/ld+json">{"@type":"BlogPosting","datePublished":"2021-04-07"}</script>`;
     expect(extractHtmlMeta(ld2).published).toBe("2021-04-07");
+  });
+});
+
+describe("isValidYmd — real-calendar validation (adversarial probe)", () => {
+  // Prevents: Feb 30 / Apr 31 landing UNQUOTED in YAML frontmatter, where
+  // parsers silently roll them to the next month (2024-02-30 → 2024-03-01).
+  it("rejects impossible days of month", () => {
+    expect(isValidYmd("2024", "02", "30")).toBe(false);
+    expect(isValidYmd("2024", "04", "31")).toBe(false);
+    expect(isValidYmd("2021", "02", "31")).toBe(false);
+    expect(isValidYmd("2023", "02", "29")).toBe(false); // non-leap year
+  });
+  it("still accepts real dates including leap days", () => {
+    expect(isValidYmd("2024", "02", "29")).toBe(true); // leap year
+    expect(isValidYmd("2024", "12", "31")).toBe(true);
+    expect(isValidYmd("1990", "01", "01")).toBe(true);
   });
 });

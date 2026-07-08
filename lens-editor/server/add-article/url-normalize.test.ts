@@ -47,3 +47,14 @@ describe("dedupUrlVariants", () => {
     expect(new Set(variants).size).toBe(variants.length);
   });
 });
+
+describe("dedupUrlVariants — www-spelling coverage (reviewer M2)", () => {
+  // Prevents: a GreaterWrong submit missing a STORED "https://www.lesswrong…"
+  // spelling (the relay compares stored values near-verbatim).
+  it("includes www and non-www spellings of each variant", () => {
+    const v = dedupUrlVariants("https://www.greaterwrong.com/posts/abc/slug");
+    expect(v).toContain("https://lesswrong.com/posts/abc/slug");
+    expect(v).toContain("https://www.lesswrong.com/posts/abc/slug");
+    expect(v).toContain("https://greaterwrong.com/posts/abc/slug");
+  });
+});

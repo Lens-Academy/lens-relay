@@ -13,6 +13,8 @@
 // URL may contain one level of balanced parentheses (Wikipedia "File:(x).png",
 // signed CDN URLs) — a bare [^)]+ would truncate at the first ")" and leave a
 // stray paren in the body.
+import { createHash } from "node:crypto";
+
 const IMG_MD_RE = /!\[[^\]]*\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g;
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -78,10 +80,14 @@ export async function hostRemoteImages(
       const { bytes, contentType } = await opts.fetchImage(url);
       const ext = extFor(url, contentType);
       if (!ext || bytes.byteLength === 0 || bytes.byteLength > maxBytes) continue;
-      n += 1;
-      const inFolderPath = `/attachments/${slugBase}-img${n}.${ext}`;
+      const buf = Buffer.from(bytes);
+      // Content-hash suffix — same cross-article aliasing guard as the PDF
+      // figure path (the slug base predates filename collision resolution).
+      const h8 = createHash("sha1").update(buf).digest("hex").slice(0, 8);
+      const inFolderPath = `/attachments/${slugBase}-img${n + 1}-${h8}.${ext}`;
       const mime = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
-      await opts.upload(inFolderPath, Buffer.from(bytes), mime);
+      await opts.upload(inFolderPath, buf, mime);
+      n += 1; // only successful uploads consume a number (no gaps)
       // Replace every embed of this URL; alt text doesn't survive a wikilink
       // embed (platform convention, same as the PDF figure path).
       out = out.replace(

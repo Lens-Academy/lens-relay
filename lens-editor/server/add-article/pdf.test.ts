@@ -249,12 +249,12 @@ describe("embedPdfImages", () => {
     const out = await embedPdfImages(body, [img(0), img(1)], "grey-x", async (p, png) => {
       uploads.push({ path: p, bytes: png });
     });
-    expect(out).toContain("![[/attachments/grey-x-fig1.png]]");
-    expect(out).toContain("![[/attachments/grey-x-fig2.png]]");
+    expect(out).toContain("![[/attachments/grey-x-fig1-26eb0004.png]]");
+    expect(out).toContain("![[/attachments/grey-x-fig2-686b585e.png]]");
     expect(out).not.toMatch(/__pdfimg_/);
     expect(uploads.map((u) => u.path)).toEqual([
-      "/attachments/grey-x-fig1.png",
-      "/attachments/grey-x-fig2.png",
+      "/attachments/grey-x-fig1-26eb0004.png",
+      "/attachments/grey-x-fig2-686b585e.png",
     ]);
     expect(uploads[0].bytes.toString()).toBe("png-0");
   });
@@ -334,5 +334,35 @@ describe("ocrSuspectWords — hyphenation", () => {
     const layer = "The model is inter-\npretable and highly reli-\nable in tests.";
     const provider = "The model is interpretable and highly reliable in tests.";
     expect(ocrSuspectWords(provider, layer)).toEqual([]);
+  });
+});
+
+describe("ocrSuspectWords — unicode coverage", () => {
+  // Prevents: the OCR cross-check being silently blind on non-English PDFs.
+  it("detects accented-word substitutions", () => {
+    const layer = "le résumé complet était présenté clairement aujourd'hui.";
+    const provider = "le résume complet était présenté clairement aujourd'hui.";
+    expect(ocrSuspectWords(provider, layer)).toEqual(["résume"]);
+  });
+});
+
+describe("embedPdfImages — content-hash attachment names (reviewer M1)", () => {
+  // Prevents: two DISTINCT articles sharing a filename base silently aliasing
+  // each other's figures via the relay's create-only attachment conflict.
+  it("names attachments with a content-hash suffix; different bytes never collide", async () => {
+    const mk = (s: string): PdfPageImage => ({ png: Buffer.from(s), yTop: 0, width: 10, height: 10 });
+    const uploads: string[] = [];
+    const up = async (p: string) => { uploads.push(p); };
+    const outA = await embedPdfImages("![[__pdfimg_0__]]", [mk("article-A-figure")], "grey-introduction", up);
+    const outB = await embedPdfImages("![[__pdfimg_0__]]", [mk("article-B-figure")], "grey-introduction", up);
+    expect(uploads[0]).toMatch(/^\/attachments\/grey-introduction-fig1-[0-9a-f]{8}\.png$/);
+    expect(uploads[1]).toMatch(/^\/attachments\/grey-introduction-fig1-[0-9a-f]{8}\.png$/);
+    expect(uploads[0]).not.toBe(uploads[1]); // different content → different path
+    expect(outA).toContain(uploads[0]);
+    expect(outB).toContain(uploads[1]);
+    // identical bytes → identical path (harmless blob dedup)
+    const outC = await embedPdfImages("![[__pdfimg_0__]]", [mk("article-A-figure")], "grey-introduction", up);
+    expect(uploads[2]).toBe(uploads[0]);
+    expect(outC).toContain(uploads[0]);
   });
 });
