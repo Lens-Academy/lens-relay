@@ -81,6 +81,28 @@ SHARE_TOKEN_SECRET=$(ssh relay-prod 'grep SHARE_TOKEN_SECRET /root/lens-relay/.e
   npx tsx scripts/generate-share-link.ts --role edit --folder b0000001-0000-4000-8000-000000000001 --base-url https://editor.lensacademy.org
 ```
 
+### Deploying to production
+
+Both dev VPS and prod are x86_64, so build the relay binary locally (faster CPU) and ship it. SSH uses the `relay-prod` alias (host/key setup lives in local overrides):
+
+```bash
+# 1. Build release binary on dev VPS
+CARGO_TARGET_DIR=~/code/lens-relay/.cargo-target cargo build --manifest-path=crates/Cargo.toml --release --bin relay
+
+# 2. Push code changes to GitHub, pull on prod
+ssh relay-prod 'cd /root/lens-relay && git pull'
+
+# 3. Copy binary to prod
+scp ~/code/lens-relay/.cargo-target/release/relay relay-prod:/root/lens-relay/crates/relay-binary
+
+# 4. Rebuild Docker image (fast — just copies binary, no compilation) and restart
+ssh relay-prod 'cd /root/lens-relay && docker compose -f docker-compose.prod.yaml build relay-server && docker compose -f docker-compose.prod.yaml up -d --force-recreate relay-server'
+```
+
+For lens-editor changes (no Rust), skip steps 1 and 3 and replace `relay-server` with `lens-editor`.
+
+Source code lives at `/root/lens-relay` on prod (git clone from `Lens-Academy/lens-relay`).
+
 ### Local Dev 
 In local dev, the backend can either use local file storage, or connect to a remote R2 storage that that more closely resembles the production setup.
 
