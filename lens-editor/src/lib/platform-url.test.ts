@@ -24,6 +24,20 @@ describe('getPlatformUrl', () => {
     expect(getPlatformUrl('/modules/Intro to Physics.md')).toBeNull();
   });
 
+  // Prevents: course documents showing no "Show on Lensacademy.org" link —
+  // courses were missing from CONTENT_TYPE_MAP so getPlatformUrl returned null.
+  test('returns course URL when frontmatter slug is provided', () => {
+    expect(getPlatformUrl('/courses/AI Futurism.md', 'ai-futurism')).toBe(
+      'https://staging.lensacademy.org/course/ai-futurism'
+    );
+  });
+
+  // Prevents: linking to /course/<filename-slug>, which 404s — the platform
+  // routes courses by frontmatter slug only.
+  test('returns null for courses without frontmatter slug', () => {
+    expect(getPlatformUrl('/courses/AI Futurism.md')).toBeNull();
+  });
+
   test('articles ignore frontmatter slug and use filename', () => {
     expect(getPlatformUrl('/articles/My Article.md', 'ignored-slug')).toBe(
       'https://staging.lensacademy.org/article/my-article'
