@@ -5,7 +5,11 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
   'articles': 'article',
   'Lenses': 'lens',
   'modules': 'module',
+  'courses': 'course',
 };
+
+/** Content types whose platform URL comes from the frontmatter slug, not the filename. */
+const FRONTMATTER_SLUG_FOLDERS = new Set(['modules', 'courses']);
 
 /**
  * Convert a filename to a URL slug.
@@ -55,10 +59,10 @@ export function getModulePlatformUrl(
 /**
  * Derive the Lens Platform URL for a relay document path.
  * Articles and lenses derive slugs from filenames.
- * Modules require an explicit frontmatter slug — returns null without one.
+ * Modules and courses require an explicit frontmatter slug — returns null without one.
  *
  * @param originalPath - The path within the relay folder (e.g., "/articles/My Article.md")
- * @param frontmatterSlug - Optional slug from the document's YAML frontmatter (used for modules)
+ * @param frontmatterSlug - Optional slug from the document's YAML frontmatter (used for modules and courses)
  * @returns Platform URL or null if the path doesn't map to a known content type
  */
 export function getPlatformUrl(originalPath: string, frontmatterSlug?: string): string | null {
@@ -69,7 +73,7 @@ export function getPlatformUrl(originalPath: string, frontmatterSlug?: string): 
   const urlPrefix = CONTENT_TYPE_MAP[folder];
   if (!urlPrefix) return null;
 
-  if (folder === 'modules') {
+  if (FRONTMATTER_SLUG_FOLDERS.has(folder)) {
     if (!frontmatterSlug) return null;
     return `${PLATFORM_BASE}/${urlPrefix}/${frontmatterSlug}`;
   }

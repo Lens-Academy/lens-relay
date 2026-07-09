@@ -101,7 +101,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
     }
   };
 
-  // Read frontmatter slug from the document's Y.Text (needed for modules)
+  // Read frontmatter slug from the document's Y.Text (needed for modules and courses)
   const ydoc = useYDoc();
   const [frontmatterSlug, setFrontmatterSlug] = useState<string | undefined>();
 
