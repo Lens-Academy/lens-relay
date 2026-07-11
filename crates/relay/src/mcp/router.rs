@@ -140,6 +140,7 @@ mod tests {
             writable: true,
             folder_uuid: None,
             folder_name: None,
+            raw_token: None,
         }
     }
 
@@ -218,22 +219,28 @@ mod tests {
         let result = resp.result.unwrap();
         assert!(result["tools"].is_array());
         let tools_arr = result["tools"].as_array().unwrap();
-        assert_eq!(tools_arr.len(), 10);
 
-        let names: Vec<&str> = tools_arr
+        let mut names: Vec<&str> = tools_arr
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert!(names.contains(&"create_session"));
-        assert!(names.contains(&"read"));
-        assert!(names.contains(&"glob"));
-        assert!(names.contains(&"get_links"));
-        assert!(names.contains(&"grep"));
-        assert!(names.contains(&"edit"));
-        assert!(names.contains(&"create"));
-        assert!(names.contains(&"move"));
-        assert!(names.contains(&"search"));
-        assert!(names.contains(&"get_url"));
+        names.sort_unstable();
+        let mut expected = vec![
+            "create",
+            "create_session",
+            "edit",
+            "get_links",
+            "get_url",
+            "glob",
+            "grep",
+            "import_article",
+            "import_status",
+            "move",
+            "read",
+            "search",
+        ];
+        expected.sort_unstable();
+        assert_eq!(names, expected);
     }
 
     #[tokio::test]
@@ -513,6 +520,7 @@ mod tests {
             writable: false,
             folder_uuid: None,
             folder_name: None,
+            raw_token: None,
         };
 
         let req = make_request(json!(50), "tools/list", None);
@@ -581,6 +589,7 @@ mod tests {
             writable: true,
             folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
             folder_name: Some("Lens Edu".to_string()),
+            raw_token: None,
         };
         let sid = server
             .mcp_sessions

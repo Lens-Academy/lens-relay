@@ -449,6 +449,7 @@ mod tests {
                 writable: true,
                 folder_uuid: None,
                 folder_name: None,
+                raw_token: None,
             },
             None,
         );
