@@ -6,7 +6,9 @@
  * epoch milliseconds (for CommentsPanel compatibility).
  */
 export function formatTimestamp(input: string | number): string {
-  const timestamp = typeof input === 'string' ? new Date(input).getTime() : input;
+  const timestamp = typeof input === 'string'
+    ? /^\d+$/.test(input) ? Number(input) : new Date(input).getTime()
+    : input;
   const now = Date.now();
   const diff = now - timestamp;
 
