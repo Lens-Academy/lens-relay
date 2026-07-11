@@ -600,6 +600,29 @@ describe("extractArticle — metadata hardening (generic path)", () => {
     const ex = await extractArticle(GENERIC(""), "https://example.com/2017/02/14/some-post");
     expect(ex.meta.published).toBe("2017-02-14");
   });
+
+  it("strips a '<title> - og:site_name' suffix on the generic path", async () => {
+    const html = `<!doctype html><html><head>
+      <title>The Coming Wave - Example News</title>
+      <meta property="og:site_name" content="Example News">
+      </head><body><article>
+      <h1>The Coming Wave - Example News</h1>
+      <p>${"Body text long enough for the generic extractors to succeed. ".repeat(20)}</p>
+      </article></body></html>`;
+    const ex = await extractArticle(html, "https://somewhere.com/wave");
+    expect(ex.meta.title).toBe("The Coming Wave");
+  });
+
+  it("strips a suffix naming the URL host even without og:site_name", async () => {
+    const html = `<!doctype html><html><head>
+      <title>Pythia — ExampleNews</title>
+      </head><body><article>
+      <h1>Pythia — ExampleNews</h1>
+      <p>${"Body text long enough for the generic extractors to succeed. ".repeat(20)}</p>
+      </article></body></html>`;
+    const ex = await extractArticle(html, "https://www.examplenews.com/pythia");
+    expect(ex.meta.title).toBe("Pythia");
+  });
 });
 
 // GreaterWrong serves ForumMagnum posts from its own server-rendered DOM. Built

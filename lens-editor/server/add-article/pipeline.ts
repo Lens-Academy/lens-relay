@@ -10,6 +10,7 @@ import {
 import { extractArticle } from "./extract";
 import { extractPdfSmart, embedPdfImages } from "./pdf";
 import { adapterContext, resolveFetchUrls } from "./adapters";
+import { stripSiteSuffix } from "./adapters/util";
 import { dedupUrlVariants } from "./url-normalize";
 import { normalizeMetaWithLlm } from "./meta-normalize";
 import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
@@ -293,6 +294,13 @@ export async function processArticle(
       body = outcome.body;
     }
   }
+  // Final title hygiene: the LLM passes above are asked to drop site-name
+  // suffixes but can miss (or be absent in local dev) — re-strip
+  // deterministically so no "Pythia — LessWrong" style title is ever written.
+  meta = {
+    ...meta,
+    title: stripSiteSuffix(meta.title, { url: job.url, siteName: ex.siteName }),
+  };
   job.title = meta.title;
 
   // 4. Duplicate detection by SOURCE URL. The real duplicate signal is the

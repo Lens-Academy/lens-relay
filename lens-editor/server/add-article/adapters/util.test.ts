@@ -1,5 +1,86 @@
 import { describe, it, expect } from "vitest";
-import { isVideoEmbedUrl, videoEmbedIframe } from "./util";
+import { isVideoEmbedUrl, videoEmbedIframe, stripSiteSuffix } from "./util";
+
+describe("stripSiteSuffix", () => {
+  it("strips known community-site suffixes with no context (tier 1)", () => {
+    expect(stripSiteSuffix("Pythia — LessWrong")).toBe("Pythia");
+    expect(stripSiteSuffix("Foo - AI Alignment Forum")).toBe("Foo");
+    expect(stripSiteSuffix("Bar | EA Forum")).toBe("Bar");
+  });
+
+  it("strips a suffix matching the URL host base (LessWrong sets no og:site_name)", () => {
+    expect(
+      stripSiteSuffix("Pythia — LessWrong", {
+        url: "https://www.lesswrong.com/posts/abc/pythia",
+      }),
+    ).toBe("Pythia");
+    expect(
+      stripSiteSuffix("My Post — Substack Blog", {
+        url: "https://substackblog.com/p/my-post",
+      }),
+    ).toBe("My Post");
+  });
+
+  it("strips a suffix matching og:site_name (hyphen and pipe separators)", () => {
+    expect(
+      stripSiteSuffix("The Coming Wave - The Atlantic", {
+        url: "https://theatlantic.com/x",
+        siteName: "The Atlantic",
+      }),
+    ).toBe("The Coming Wave");
+    expect(
+      stripSiteSuffix("AI Progress Report | The Verge", {
+        siteName: "The Verge",
+      }),
+    ).toBe("AI Progress Report");
+  });
+
+  it("leaves a legit trailing em-dash/hyphen segment untouched", () => {
+    expect(
+      stripSiteSuffix("War — and Peace", {
+        url: "https://theatlantic.com/x",
+        siteName: "The Atlantic",
+      }),
+    ).toBe("War — and Peace");
+    expect(
+      stripSiteSuffix("Attention Is All You Need - A Retrospective", {
+        url: "https://example.com/x",
+        siteName: "Example",
+      }),
+    ).toBe("Attention Is All You Need - A Retrospective");
+  });
+
+  it("never treats an unspaced hyphen as a separator (Spider-Man)", () => {
+    expect(
+      stripSiteSuffix("Spider-Man", {
+        url: "https://man.com/x",
+        siteName: "Man",
+      }),
+    ).toBe("Spider-Man");
+  });
+
+  it("is a no-op with an empty or unparseable URL and no site name", () => {
+    expect(stripSiteSuffix("Foo — Bar", {})).toBe("Foo — Bar");
+    expect(stripSiteSuffix("Foo — Bar", { url: "not a url" })).toBe(
+      "Foo — Bar",
+    );
+  });
+
+  it("splits on the LAST separator only", () => {
+    expect(
+      stripSiteSuffix("Alpha — Beta — The Verge", { siteName: "The Verge" }),
+    ).toBe("Alpha — Beta");
+    expect(
+      stripSiteSuffix("Alpha — The Verge — Beta", { siteName: "The Verge" }),
+    ).toBe("Alpha — The Verge — Beta");
+  });
+
+  it("does not strip when the whole title IS the site name", () => {
+    expect(stripSiteSuffix("The Verge", { siteName: "The Verge" })).toBe(
+      "The Verge",
+    );
+  });
+});
 
 describe("isVideoEmbedUrl — exact hostname allow-list", () => {
   it("accepts real YouTube / Vimeo embeds", () => {
