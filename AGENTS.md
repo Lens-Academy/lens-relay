@@ -83,21 +83,41 @@ SHARE_TOKEN_SECRET=$(ssh relay-prod 'grep SHARE_TOKEN_SECRET /root/lens-relay/.e
 
 ### Deploying to production
 
-Both dev VPS and prod are x86_64, so build the relay binary locally (faster CPU) and ship it. SSH uses the `relay-prod` alias (host/key setup lives in local overrides):
+The relay binary is built for **x86_64 Linux** (prod's arch) on a developer's own
+machine, then shipped to prod and swapped in via `Dockerfile.prebuilt` — a fast copy,
+so **prod never compiles**. SSH uses the `relay-prod` alias (host/key setup lives in
+local overrides).
+
+**Prod is a small 2-vCPU box.** Don't run heavy processes on it — long builds, or an
+agent / Claude Code session — they starve the relay's async runtime and cause the
+intermittent slowness / `/review` failures we've hit before. Access prod over SSH from
+your own machine and keep builds off the box.
 
 ```bash
-# 1. Build release binary on dev VPS
-CARGO_TARGET_DIR=~/code/lens-relay/.cargo-target cargo build --manifest-path=crates/Cargo.toml --release --bin relay
+# 1. Build the x86_64-linux release binary on your machine.
+#    On an x86_64 Linux host, a plain release build works:
+CARGO_TARGET_DIR=~/.cargo-target-relay cargo build --manifest-path=crates/Cargo.toml --release --bin relay
+#    On an arm64 Mac (Apple Silicon), a native build produces an arm64-macOS binary that
+#    won't run on prod — cross-compile instead, e.g. with cargo-zigbuild:
+#      brew install zig && cargo install cargo-zigbuild
+#      rustup target add x86_64-unknown-linux-gnu
+#      cargo zigbuild --manifest-path=crates/Cargo.toml --release --bin relay --target x86_64-unknown-linux-gnu
 
-# 2. Push code changes to GitHub, pull on prod
+# 2. Push code changes to GitHub, pull on prod (keep source in sync with the binary)
 ssh relay-prod 'cd /root/lens-relay && git pull'
 
-# 3. Copy binary to prod
-scp ~/code/lens-relay/.cargo-target/release/relay relay-prod:/root/lens-relay/crates/relay-binary
+# 3. Copy the binary to prod
+scp <path-to-built>/relay relay-prod:/root/lens-relay/crates/relay-binary
 
 # 4. Rebuild Docker image (fast — just copies binary, no compilation) and restart
 ssh relay-prod 'cd /root/lens-relay && docker compose -f docker-compose.prod.yaml build relay-server && docker compose -f docker-compose.prod.yaml up -d --force-recreate relay-server'
 ```
+
+If you genuinely can't build off-prod, the last-resort fallback is a CPU-capped build in
+a container on prod (`docker run --rm --cpus=1.5 -v /root/lens-relay:/build -w
+/build/crates rust:1.89-slim-trixie cargo build --release --bin relay`, then `cp
+crates/target/release/relay crates/relay-binary`) — but this loads the box, so prefer a
+quiet window.
 
 For lens-editor changes (no Rust), skip steps 1 and 3 and replace `relay-server` with `lens-editor`.
 

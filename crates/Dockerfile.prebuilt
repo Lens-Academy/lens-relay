@@ -1,8 +1,10 @@
 # Fast deploy: uses a pre-built binary instead of compiling inside Docker.
-# Build the binary on the dev VPS first, then copy it to prod:
+# Build the x86_64-linux binary on your own machine first (prod is a small 2-vCPU
+# box — keep builds off it), then copy it to prod. See AGENTS.md "Deploying to
+# production" for the full steps, incl. cross-compiling from an arm64 Mac.
 #
-#   CARGO_TARGET_DIR=~/code/lens-relay/.cargo-target cargo build --release --bin relay
-#   scp ~/code/lens-relay/.cargo-target/release/relay relay-prod:/root/lens-relay/crates/relay-binary
+#   cargo build --manifest-path=crates/Cargo.toml --release --bin relay   # x86_64 Linux host
+#   scp <path-to-built>/relay relay-prod:/root/lens-relay/crates/relay-binary
 #   ssh relay-prod 'cd /root/lens-relay && docker compose -f docker-compose.prod.yaml build relay-server'
 #
 # To use this Dockerfile, set the build context in docker-compose.prod.yaml:
