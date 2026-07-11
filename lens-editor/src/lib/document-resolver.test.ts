@@ -263,6 +263,7 @@ describe('Spec Matrix (docs/wikilink-resolution-spec.md)', () => {
   describe('from [I] Relay Folder 1/Notes/Ideas.md', () => {
     const I = '/Relay Folder 1/Notes/Ideas.md';
     it('[[../Welcome]] → W', () => expectResolves('../Welcome', I, 'W'));
+    it('[[../Welcome.md]] → W (.md is equivalent)', () => expectResolves('../Welcome.md', I, 'W'));
     it('[[../Projects/Roadmap]] → R', () => expectResolves('../Projects/Roadmap', I, 'R'));
     it('[[../Getting Started]] → GS', () => expectResolves('../Getting Started', I, 'GS'));
     it('[[Welcome]] → null (no /Notes/Welcome.md)', () => expectNull('Welcome', I));

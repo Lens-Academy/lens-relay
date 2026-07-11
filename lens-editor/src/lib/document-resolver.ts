@@ -10,11 +10,12 @@ export interface ResolvedDocument {
  * Returns an absolute path with .md extension.
  */
 export function resolveRelative(currentFilePath: string, pageName: string): string {
+  const canonicalPageName = pageName.replace(/\.md$/i, '');
   const lastSlash = currentFilePath.lastIndexOf('/');
   const dir = currentFilePath.substring(0, lastSlash);
   const segments = dir.split('/').filter(s => s !== '');
 
-  for (const part of pageName.split('/')) {
+  for (const part of canonicalPageName.split('/')) {
     if (part === '..') {
       if (segments.length > 0) segments.pop();
     } else if (part !== '.' && part !== '') {
@@ -67,8 +68,9 @@ export function resolvePageName(
   metadata: FolderMetadata,
   currentFilePath?: string
 ): ResolvedDocument | null {
-  const relativePath = currentFilePath ? resolveRelative(currentFilePath, pageName) : null;
-  const absolutePath = '/' + pageName + '.md';
+  const canonicalPageName = pageName.replace(/\.md$/i, '');
+  const relativePath = currentFilePath ? resolveRelative(currentFilePath, canonicalPageName) : null;
+  const absolutePath = '/' + canonicalPageName + '.md';
 
   const lowerRelative = relativePath?.toLowerCase() ?? null;
   const lowerAbsolute = absolutePath.toLowerCase();
