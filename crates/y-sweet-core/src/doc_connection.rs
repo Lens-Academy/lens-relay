@@ -418,7 +418,11 @@ impl DocConnection {
                     let client_id = update.clients.keys().next().unwrap();
                     self.client_id.get_or_init(|| *client_id);
                 } else {
-                    tracing::warn!("Received awareness update with more than one client");
+                    // A relay aggregating awareness from several clients into one
+                    // update is normal collaborative traffic, not an error. Logged
+                    // at debug: at warn it floods the log (thousands/sec during
+                    // multi-client editing), burning CPU/disk on the prod box.
+                    tracing::debug!("Received awareness update with more than one client");
                 }
                 let mut awareness = a.write().unwrap_or_else(|e| e.into_inner());
                 protocol.handle_awareness_update(&mut awareness, update)
