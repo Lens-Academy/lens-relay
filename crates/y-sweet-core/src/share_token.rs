@@ -48,6 +48,10 @@ pub struct McpAccess {
     pub writable: bool,
     pub folder_uuid: Option<String>, // None = all folders
     pub folder_name: Option<String>, // Resolved later, not in token
+    /// The raw credential this access was decoded from. Set for signed share
+    /// tokens only (None for the legacy API key) — used to forward the
+    /// caller's own token to sibling services (e.g. lens-editor importers).
+    pub raw_token: Option<String>,
 }
 
 impl ShareTokenPayload {
@@ -62,6 +66,7 @@ impl ShareTokenPayload {
             writable,
             folder_uuid,
             folder_name: None,
+            raw_token: None,
         }
     }
 }
@@ -174,7 +179,9 @@ pub fn decode_mcp_key(
     // Try signed token first
     if let Some(secret) = share_secret {
         if let Some(payload) = verify_share_token(token, secret) {
-            return Some(payload.to_mcp_access());
+            let mut access = payload.to_mcp_access();
+            access.raw_token = Some(token.to_string());
+            return Some(access);
         }
     }
 
@@ -185,6 +192,7 @@ pub fn decode_mcp_key(
                 writable: true,
                 folder_uuid: None,
                 folder_name: None,
+                raw_token: None,
             });
         }
     }

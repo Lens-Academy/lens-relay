@@ -10,6 +10,7 @@ pub(crate) fn default_access() -> McpAccess {
         writable: true,
         folder_uuid: None,
         folder_name: None,
+        raw_token: None,
     }
 }
 

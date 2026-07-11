@@ -94,6 +94,7 @@ async fn html_comment_markers_round_trip_through_relay() {
         writable: true,
         folder_uuid: None,
         folder_name: None,
+        raw_token: None,
     };
     let session_result = dispatch_tool(&server, "create_session", &json!({}), &access).await;
     let session_id = mcp_text(&session_result);

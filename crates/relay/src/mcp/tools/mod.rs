@@ -7,6 +7,7 @@ pub mod get_links;
 pub mod get_url;
 pub mod glob;
 pub mod grep;
+pub mod import_article;
 pub mod move_doc;
 pub mod read;
 pub mod search;
@@ -230,6 +231,45 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
 
     if writable {
         tools.push(json!({
+            "name": "import_article",
+            "description": "Import external articles/webpages into the knowledge base via the article importer. Give it URLs; the server fetches and extracts the full text, writes 'Lens Edu/articles/<author>-<title>.md' with correct frontmatter, and (by default) creates a stub lens. Jobs run in the background — poll import_status until each is done/failed. YouTube URLs are rejected (video imports need the browser bookmarklet). Prefer this over hand-writing article files.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["urls", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Article URLs to import (max 20, http/https)"
+                    },
+                    "create_lens": {
+                        "type": "boolean",
+                        "description": "Also create a stub lens per article (default true)"
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
+                    }
+                }
+            }
+        }));
+        tools.push(json!({
+            "name": "import_status",
+            "description": "Check the status of article import jobs started with import_article (queued / processing / done / failed, with document paths and errors).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
+                    }
+                }
+            }
+        }));
+        tools.push(json!({
             "name": "edit",
             "description": "Edit a document by replacing old_string with new_string. For markdown: wrapped in CriticMarkup for human review. For JSON: direct text replacement. You must read the document first.",
             "inputSchema": {
@@ -356,7 +396,12 @@ pub async fn dispatch_tool(
     server.mcp_sessions.touch(session_id);
 
     // Defense-in-depth: block write tools for read-only access
-    if !access.writable && matches!(name, "edit" | "create" | "move") {
+    if !access.writable
+        && matches!(
+            name,
+            "edit" | "create" | "move" | "import_article" | "import_status"
+        )
+    {
         return tool_error("Access denied: read-only access. Cannot use write tools.");
     }
 
@@ -438,6 +483,14 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
+        "import_article" => match import_article::execute(access, arguments).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "import_status" => match import_article::status(access).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
         "validate_content" => match validate_content::execute(server, access, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
@@ -503,6 +556,7 @@ mod integration_tests {
             writable: true,
             folder_uuid: None,
             folder_name: None,
+            raw_token: None,
         };
 
         // get_url must be advertised even for read-only sessions.
