@@ -19,3 +19,6 @@ __pycache__/
 !tools/asana-task-review/data/
 !tools/asana-task-review/data/tasks.json
 tools/asana-task-review/data/review-state.json
+!tools/batch-validation/data/
+!tools/batch-validation/data/manifest.json
+tools/batch-validation/data/validation-state.json

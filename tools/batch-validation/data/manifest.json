@@ -1,0 +1,62 @@
+{
+  "title": "Lens Editor · Field Validation",
+  "subtitle": "Merged to staging · awaiting Luc's field notes",
+  "generatedAt": "2026-07-11T15:00:00Z",
+  "items": [
+    {
+      "id": "pr-45", "group": "human", "title": "Hashtags read as tags—not code",
+      "summary": "Markdown hashtags now receive a quiet ink-blue live-preview treatment while editing remains lossless.",
+      "instructions": ["Open a Markdown document containing #topic and a heading such as ## Heading.", "Place the cursor away from the hashtag and confirm #topic is styled as one tag while the heading still looks like a heading.", "Place the cursor in #topic, edit it, then leave the line; confirm the raw # text is preserved and the styling returns."],
+      "pr": { "number": 45, "url": "https://github.com/Lens-Academy/lens-relay/pull/45" },
+      "asana": [{ "title": "Style Markdown hashtags", "url": "https://app.asana.com/0/0/1215426639287930" }]
+    },
+    {
+      "id": "pr-46", "group": "human", "title": "Wrapped bullets keep their reading rhythm",
+      "summary": "Continuation lines align under the first character of list content for bullets, numbered items, and tasks.",
+      "instructions": ["Create a narrow editor pane and enter long bullet, numbered, and task-list items that wrap onto a second visual line.", "Confirm every continuation line starts beneath the item text—not beneath the marker or checkbox.", "Move the cursor into and out of each item and confirm indentation stays stable, including nested items."],
+      "pr": { "number": 46, "url": "https://github.com/Lens-Academy/lens-relay/pull/46" },
+      "asana": [{ "title": "Indent wrapped bullet continuations", "url": "https://app.asana.com/0/0/1215419913541977" }]
+    },
+    {
+      "id": "pr-48", "group": "human", "title": "Suggestions accept a full thought",
+      "summary": "Typing continues inside one CriticMarkup substitution instead of splitting every character into a separate suggestion.",
+      "instructions": ["Enable Suggesting mode, select a word, and type a multi-character replacement without pausing.", "Confirm the replacement appears as one coherent suggestion and the original text remains represented as the deletion side.", "Try Backspace and one IME/composition entry if available; accept or reject the suggestion and confirm the resulting text is correct."],
+      "pr": { "number": 48, "url": "https://github.com/Lens-Academy/lens-relay/pull/48" },
+      "asana": [{ "title": "Multi-character typing in suggestions", "url": "https://app.asana.com/0/0/1215419918288840" }]
+    },
+    {
+      "id": "pr-49", "group": "human", "title": "Table cells render, then reveal their source",
+      "summary": "Bold, italic, and inline-code marks render in idle table cells and return to exact Markdown when focused.",
+      "instructions": ["Create a table with **bold**, *italic*, and `inline code` in separate cells.", "With focus outside the table, confirm each cell renders its formatting rather than showing punctuation.", "Click each cell and confirm its exact Markdown source appears; edit it, then leave the cell and confirm formatting returns with the edit preserved."],
+      "pr": { "number": 49, "url": "https://github.com/Lens-Academy/lens-relay/pull/49" },
+      "asana": [{ "title": "Render inline formatting in table cells", "url": "https://app.asana.com/0/0/1215426638728694" }]
+    },
+    {
+      "id": "pr-40", "group": "automated", "title": "Comment timestamps survive serialization",
+      "summary": "Serialized epoch timestamps no longer render as Invalid Date.", "instructions": ["No manual action requested; parsing edge cases and display behavior are covered by tests."],
+      "pr": { "number": 40, "url": "https://github.com/Lens-Academy/lens-relay/pull/40" }, "asana": [{ "title": "Fix serialized comment timestamps", "url": "https://app.asana.com/0/0/1216447100582515" }]
+    },
+    {
+      "id": "pr-41", "group": "automated", "title": "Suggesting mode follows navigation",
+      "summary": "The selected editing mode remains active when moving between documents.", "instructions": ["No manual action requested for this batch; navigation-state tests and code review cover the change."],
+      "pr": { "number": 41, "url": "https://github.com/Lens-Academy/lens-relay/pull/41" }, "asana": [{ "title": "Persist suggesting mode", "url": "https://app.asana.com/0/0/1215424427531590" }]
+    },
+    {
+      "id": "pr-43", "group": "automated", "title": "Expired-key guidance points somewhere useful",
+      "summary": "The access error message now explains the next recovery step.", "instructions": ["No manual action requested; this is a reviewed copy-only correction."],
+      "pr": { "number": 43, "url": "https://github.com/Lens-Academy/lens-relay/pull/43" }, "asana": [{ "title": "Update expired access-key guidance", "url": "https://app.asana.com/0/0/1215684725635374" }]
+    },
+    {
+      "id": "pr-44", "group": "automated", "title": "Quoted file paths stop at the door",
+      "summary": "Relay rejects double quotes in file paths consistently.", "instructions": ["No manual action requested; validation behavior is covered by automated tests."],
+      "pr": { "number": 44, "url": "https://github.com/Lens-Academy/lens-relay/pull/44" }, "asana": [{ "title": "Reject quoted paths", "url": "https://app.asana.com/0/0/1215844818783409" }, { "title": "Duplicate task", "url": "https://app.asana.com/0/0/1215424426690264" }]
+    },
+    {
+      "id": "pr-50", "group": "automated", "title": "Wikilinks agree about .md",
+      "summary": "Wikilinks with or without a terminal .md now resolve to the same note while preserving the source text exactly as written.",
+      "instructions": ["No manual action requested; TypeScript resolver tests and Rust backlink/indexer coverage verify relative and extension-equivalent links."],
+      "pr": { "number": 50, "url": "https://github.com/Lens-Academy/lens-relay/pull/50" },
+      "asana": [{ "title": "Treat wikilinks with and without .md as equivalent", "url": "https://app.asana.com/0/0/1216470141414555" }]
+    }
+  ]
+}

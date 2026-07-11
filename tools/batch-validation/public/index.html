@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lens · Field Validation</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%2320251f'/%3E%3Cpath d='M18 13v38h29v-8H27V13z' fill='%23eee8d9'/%3E%3C/svg%3E"><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <div class="grain"></div>
+  <header class="masthead">
+    <div class="folio">LENS / QA–01</div>
+    <p class="eyebrow">Release field notebook</p>
+    <h1>Small changes.<br><em>Sharp eyes.</em></h1>
+    <div class="ledger" aria-live="polite"><div><strong id="verifiedCount">—</strong><span>verified</span></div><div><strong id="pendingCount">—</strong><span>to inspect</span></div><div><strong id="issueCount">—</strong><span>with notes</span></div></div>
+    <p class="dek">Nine merged changes are gathered here. Four need a quick human pass; the rest have already cleared automated checks and code review.</p>
+  </header>
+  <main>
+    <section aria-labelledby="humanHeading"><div class="section-rule"><span>01</span><h2 id="humanHeading">Field checks</h2><p>Open the editor, follow the script, leave a verdict.</p></div><div id="humanItems" class="cards"></div></section>
+    <section class="archive" aria-labelledby="automatedHeading"><div class="section-rule"><span>02</span><h2 id="automatedHeading">Cleared at the desk</h2><p>Automated evidence; no action expected.</p></div><div id="automatedItems" class="cards compact"></div></section>
+  </main>
+  <footer><span>Notes save as you type.</span><span id="saveState">Opening notebook…</span><a id="stateLink" href="#">Raw state ↗</a></footer>
+  <template id="cardTemplate"><article class="card"><div class="card-top"><span class="stamp"></span><div class="links"></div></div><h3></h3><p class="summary"></p><ol class="instructions"></ol><div class="verdict" role="group" aria-label="Validation verdict"><button data-status="verified"><span>✓</span> Looks good</button><button data-status="issue"><span>!</span> Found an issue</button></div><label class="notes-label">Field notes<textarea rows="3" placeholder="Anything surprising? Leave context for Codex here."></textarea></label><div class="saved">Not yet reviewed</div></article></template>
+  <script type="module" src="/app.js"></script>
+</body></html>
