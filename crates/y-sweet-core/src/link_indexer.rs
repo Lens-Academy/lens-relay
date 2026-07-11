@@ -37,6 +37,14 @@ pub fn parse_doc_id(doc_id: &str) -> Option<(&str, &str)> {
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn without_terminal_md(path: &str) -> &str {
+    let suffix_start = path.len().saturating_sub(3);
+    match path.get(suffix_start..) {
+        Some(suffix) if suffix.eq_ignore_ascii_case(".md") => &path[..suffix_start],
+        _ => path,
+    }
+}
+
 /// Resolve a page name relative to the directory containing `current_file_path`.
 /// Returns an absolute filemeta path with `.md` extension.
 ///
@@ -44,6 +52,7 @@ pub fn parse_doc_id(doc_id: &str) -> Option<(&str, &str)> {
 ///
 /// Example: `resolve_relative("/Notes/Source.md", "../Ideas")` → `"/Ideas.md"`
 pub fn resolve_relative(current_file_path: &str, page_name: &str) -> String {
+    let page_name = without_terminal_md(page_name);
     let last_slash = current_file_path.rfind('/').unwrap_or(0);
     let dir = &current_file_path[..last_slash];
     let mut segments: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
@@ -236,6 +245,7 @@ pub fn resolve_in_virtual_tree<'a>(
     source_virtual_path: Option<&str>,
     entries: &'a [VirtualEntry],
 ) -> Option<&'a VirtualEntry> {
+    let link_name = without_terminal_md(link_name);
     let relative_path = source_virtual_path.map(|svp| resolve_relative(svp, link_name));
     let absolute_path = format!("/{}.md", link_name);
 
@@ -2904,6 +2914,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn relative_link_with_md_extension_creates_backlink_without_rewriting_source() {
+        let folder = create_folder_doc(&[
+            ("/modules/source.md", "uuid-source"),
+            ("/prompts/target.md", "uuid-target"),
+        ]);
+        set_folder_name(&folder, "Lens Edu");
+        let markdown = "Reflect on [[../prompts/target.md]] next.";
+        let content = create_content_doc(markdown);
+
+        index_content_into_folders("uuid-source", &content, &[&folder]).unwrap();
+
+        assert_eq!(read_backlinks(&folder, "uuid-target"), vec!["uuid-source"]);
+        assert_eq!(read_contents(&content), markdown);
+    }
+
     mod virtual_tree_tests {
         use super::super::*;
 
@@ -3028,6 +3054,14 @@ mod tests {
             let e = spec_entries();
             assert_eq!(
                 resolve_in_virtual_tree("../Welcome", Some(I_PATH), &e).map(|e| e.id.as_str()),
+                Some("W")
+            );
+        }
+        #[test]
+        fn i_parent_welcome_with_md_extension() {
+            let e = spec_entries();
+            assert_eq!(
+                resolve_in_virtual_tree("../Welcome.md", Some(I_PATH), &e).map(|e| e.id.as_str()),
                 Some("W")
             );
         }

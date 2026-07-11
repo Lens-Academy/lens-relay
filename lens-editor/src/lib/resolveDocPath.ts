@@ -60,7 +60,8 @@ export function resolveWikilinkToUuid(
   const parsed = parseWikilink(wikilinkText.trim());
   if (!parsed || !parsed.path) return null;
 
-  const resolved = resolveRelativePath(parsed.path, sourceFile);
+  const canonicalPath = parsed.path.replace(/\.md$/i, '');
+  const resolved = resolveRelativePath(canonicalPath, sourceFile);
 
   // Try all combinations: with/without leading /, with/without .md extension
   const candidates = [

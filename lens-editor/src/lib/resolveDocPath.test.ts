@@ -44,6 +44,17 @@ describe('resolveWikilinkToUuid', () => {
     expect(uuid).toBe('abc-123');
   });
 
+  it('resolves a relative wikilink with a terminal .md extension', () => {
+    const source = '[[../Lenses/AI Control.md]]';
+    const uuid = resolveWikilinkToUuid(
+      source,
+      'Lens Edu/modules/feedback-loops.md',
+      metadata
+    );
+    expect(uuid).toBe('abc-123');
+    expect(source).toBe('[[../Lenses/AI Control.md]]');
+  });
+
   it('resolves transclusion to UUID', () => {
     const uuid = resolveWikilinkToUuid(
       '![[../Learning Outcomes/Some LO]]',
