@@ -90,9 +90,12 @@
   font-weight: 600 !important;
 }
 
-/* Hashtags are styled text only; they have no click or hover behavior. */
+/* Hashtags are styled pills only; they have no click or hover behavior. */
 .cm-hashtag {
   color: #7c3aed;
+  background-color: #f3e8ff;
+  padding: 0.05em 0.35em;
+  border-radius: 0.35em;
   font-weight: 500;
 }
 
