@@ -79,14 +79,12 @@ const HASHTAG_EXCLUDED_NODES = new Set([
   'URL',
 ]);
 
-function listLineDecoration(view: EditorView, lineText: string, markerWidth = '1.25em'): Decoration {
+function listLineDecoration(_view: EditorView, lineText: string, markerWidth = '1.25em'): Decoration {
   const depth = lineText.match(/^(\t*)/)?.[1].length ?? 0;
-  // CodeMirror renders each tab from this same measured character width.
-  const tabWidth = view.state.tabSize * view.defaultCharacterWidth / view.scaleX;
   return Decoration.line({
     class: 'cm-list-line',
     attributes: {
-      style: `--cm-list-depth-indent: ${depth * tabWidth}px; --cm-list-marker-width: ${markerWidth}`,
+      style: `--cm-list-depth-indent: ${depth * 1.25}em; --cm-list-marker-width: ${markerWidth}`,
     },
   });
 }
@@ -841,11 +839,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 
             // ListMark in bullet lists: replace with dot widget when cursor not touching
             if (node.name === 'ListMark') {
-              // Only handle bullet lists, not ordered lists
               const parent = node.node.parent; // ListItem
               const grandparent = parent?.parent; // BulletList or OrderedList
-              if (grandparent && grandparent.name === 'BulletList') {
+              if (grandparent && (grandparent.name === 'BulletList' || grandparent.name === 'OrderedList')) {
                 const line = view.state.doc.lineAt(node.from);
+                const isBullet = grandparent.name === 'BulletList';
                 // Skip if this is a task list item (has Task child — handled by checklist code)
                 const listItem = parent;
                 let isTask = false;
@@ -854,24 +852,29 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   for (let child = listItem.firstChild; child; child = child.nextSibling) {
                     if (child.name === 'Task') {
                       isTask = true;
-                      taskTo = child.to;
+                      for (let taskChild = child.firstChild; taskChild; taskChild = taskChild.nextSibling) {
+                        if (taskChild.name === 'TaskMarker') {
+                          taskTo = taskChild.to;
+                          break;
+                        }
+                      }
                       break;
                     }
                   }
                 }
                 const markerWidth = isTask && selectionIntersects(selection, node.from, taskTo)
-                  ? '3em'
-                  : '1.25em';
+                  ? `${Math.ceil((taskTo - node.from + 1) * 0.625 / 1.25) * 1.25}em`
+                  : isBullet ? '1.25em' : `${Math.ceil((view.state.doc.sliceString(node.from, node.to).length + 0.5) / 1.25) * 1.25}em`;
                 decorations.push({
                   from: line.from,
                   to: line.from,
                   deco: listLineDecoration(view, line.text, markerWidth),
                 });
 
-                if (!isTask && !selectionIntersects(selection, node.from, node.to)) {
+                if (isBullet && !isTask && !selectionIntersects(selection, node.from, node.to)) {
                   decorations.push({
                     from: node.from,
-                    to: node.to,
+                    to: Math.min(node.to + 1, line.to),
                     deco: Decoration.replace({
                       widget: new BulletWidget(),
                     }),
@@ -879,7 +882,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 } else if (!isTask) {
                   decorations.push({
                     from: node.from,
-                    to: node.to,
+                    to: Math.min(node.to + 1, line.to),
                     deco: Decoration.mark({
                       class: 'cm-list-raw-marker',
                       attributes: { style: 'width: var(--cm-list-marker-width)' },

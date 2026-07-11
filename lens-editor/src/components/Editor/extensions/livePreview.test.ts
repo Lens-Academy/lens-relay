@@ -247,8 +247,8 @@ describe('livePreview - wrapped bullet indentation', () => {
     cleanup = c;
 
     expect(Array.from(view.contentDOM.querySelectorAll('.cm-list-line')).map((line) => line.textContent)).toEqual([
-      '• outer bullet',
-      '\t• nested bullet',
+      '•outer bullet',
+      '\t•nested bullet',
     ]);
   });
 
@@ -258,10 +258,8 @@ describe('livePreview - wrapped bullet indentation', () => {
     cleanup = c;
 
     const lines = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-list-line'));
-    const tabWidth = view.state.tabSize * view.defaultCharacterWidth / view.scaleX;
-    expect(lines.map((line) => Number.parseFloat(
-      line.style.getPropertyValue('--cm-list-depth-indent'),
-    ))).toEqual([0, tabWidth, tabWidth * 2]);
+    expect(lines.map((line) => line.style.getPropertyValue('--cm-list-depth-indent')))
+      .toEqual(['0em', '1.25em', '2.5em']);
   });
 
   it('reserves the same marker advance for a rendered bullet and its hanging indent', () => {
@@ -282,8 +280,7 @@ describe('livePreview - wrapped bullet indentation', () => {
 
     const taskLine = view.contentDOM.querySelector<HTMLElement>('.cm-line:last-child');
     expect(taskLine).toHaveClass('cm-list-line');
-    const tabWidth = view.state.tabSize * view.defaultCharacterWidth / view.scaleX;
-    expect(Number.parseFloat(taskLine?.style.getPropertyValue('--cm-list-depth-indent') ?? '')).toBe(tabWidth);
+    expect(taskLine?.style.getPropertyValue('--cm-list-depth-indent')).toBe('1.25em');
     expect(taskLine?.querySelector('.cm-checkbox')).not.toBeNull();
     expect(taskLine?.querySelector<HTMLElement>('.cm-task-marker')?.style.width)
       .toBe('var(--cm-list-marker-width)');
@@ -291,7 +288,7 @@ describe('livePreview - wrapped bullet indentation', () => {
 
   it.each([
     ['bullet', '- raw bullet marker', 1, '1.25em'],
-    ['task', '- [ ] raw task marker', 3, '3em'],
+    ['task', '- [ ] raw task marker', 3, '3.75em'],
   ])('reserves the hanging-indent marker width while editing a raw %s marker', (_kind, content, cursor, width) => {
     const { view, cleanup: c } = createTestEditor(content, cursor);
     cleanup = c;
