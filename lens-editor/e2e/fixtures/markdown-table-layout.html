@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Markdown table layout fixture</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body, #shell { height: 100%; margin: 0; }
+      #shell { display: flex; width: 100%; overflow: hidden; }
+      #left-sidebar, #right-sidebar { flex: 0 0 220px; background: #eee; }
+      #editor-pane { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+      #editor { height: 100%; }
+      @media (max-width: 800px) {
+        #left-sidebar { display: none; }
+        #right-sidebar { flex-basis: 160px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="shell">
+      <aside id="left-sidebar"></aside>
+      <main id="editor-pane"><div id="editor"></div></main>
+      <aside id="right-sidebar"></aside>
+    </div>
+    <script type="module" src="./markdown-table-layout.ts"></script>
+  </body>
+</html>
