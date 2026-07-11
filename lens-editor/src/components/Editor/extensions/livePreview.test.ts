@@ -126,6 +126,105 @@ describe('livePreview - heading markers', () => {
   });
 });
 
+describe('livePreview - hashtags', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  it('styles hashtag tokens in ordinary prose', () => {
+    const { view, cleanup: c } = createTestEditor('Topics: #research and #course/design', 0);
+    cleanup = c;
+
+    const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
+    expect(tags.map((tag) => tag.textContent)).toEqual(['#research', '#course/design']);
+  });
+
+  it('does not style headings, URL fragments, word-internal hashes, or code', () => {
+    const content = [
+      '# Heading',
+      'https://example.com/#fragment',
+      'word#suffix',
+      '`#inline`',
+      '```text',
+      '#fenced',
+      '```',
+      'Actual #tag',
+    ].join('\n');
+    const { view, cleanup: c } = createTestEditor(content, 0);
+    cleanup = c;
+
+    const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
+    expect(tags.map((tag) => tag.textContent)).toEqual(['#tag']);
+  });
+
+  it('does not style hashtags in setext headings', () => {
+    const content = '#primary title\n===\n\n#secondary title\n---\n\nActual #tag';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
+    expect(tags.map((tag) => tag.textContent)).toEqual(['#tag']);
+  });
+
+  it('does not style hashtags in indented code blocks', () => {
+    const content = '    #code-tag\n\nActual #tag';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
+    expect(tags.map((tag) => tag.textContent)).toEqual(['#tag']);
+  });
+
+  it('does not style hashtags in HTML comments or blocks', () => {
+    const content = '<!-- #comment -->\n\n<div>\n#html\n</div>\n\nActual #tag';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
+    expect(tags.map((tag) => tag.textContent)).toEqual(['#tag']);
+  });
+
+  it('does not style hashtags in expanded YAML frontmatter', async () => {
+    const content = '---\ntags: #metadata\n---\n\nActual #tag';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const bar = view.contentDOM.querySelector('.cm-frontmatter-bar') as HTMLElement;
+    bar.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    moveCursor(view, content.indexOf('#metadata'));
+    view.requestMeasure();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(view.contentDOM.querySelector('.cm-frontmatter-header')).not.toBeNull();
+    const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
+    expect(tags.map((tag) => tag.textContent)).toEqual(['#tag']);
+  });
+
+  it('does not style hashtags in Obsidian comment ranges', () => {
+    const content = 'Before %% hidden #comment\ncontinues #also-hidden %% after #tag';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const tags = Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'));
+    expect(tags.map((tag) => tag.textContent)).toEqual(['#tag']);
+  });
+
+  it('reuses cached Obsidian comment ranges for selection-only updates', () => {
+    const content = 'Before %% hidden #comment %% after #tag';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+    const toStringSpy = vi.spyOn(view.state.doc, 'toString');
+
+    moveCursor(view, 0);
+
+    expect(toStringSpy).not.toHaveBeenCalled();
+    expect(Array.from(view.contentDOM.querySelectorAll('.cm-hashtag'), (tag) => tag.textContent))
+      .toEqual(['#tag']);
+  });
+});
+
 describe('livePreview - wikilinks', () => {
   let cleanup: () => void;
 
