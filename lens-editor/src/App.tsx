@@ -84,6 +84,9 @@ function clearTokenAndReload() {
   window.location.reload();
 }
 
+const ACCESS_KEY_MESSAGE_URL =
+  'https://discord.com/channels/1440725236843806762/1481581688705519689/1510923946168684624';
+
 function AccessDenied() {
   return (
     <div className="h-screen flex items-center justify-center bg-gray-50">
@@ -96,23 +99,22 @@ function AccessDenied() {
   );
 }
 
-function TokenExpired() {
+export function TokenExpired() {
   return (
     <div className="h-screen flex items-center justify-center bg-gray-50">
       <div className="text-center max-w-md px-6">
         <div className="text-5xl mb-4">⏱️</div>
         <h1 className="text-2xl font-semibold text-gray-800 mb-2">Link Expired</h1>
         <p className="text-gray-500">
-          Your share link has expired. Check{' '}
+          Your access key has expired. Get the current access key from{' '}
           <a
-            href="https://discord.com/channels/1440725236843806762/1464359318865448970"
+            href={ACCESS_KEY_MESSAGE_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-600 hover:text-blue-800 underline"
           >
-            #lens-internal
-          </a>{' '}
-          for a current editing link.
+            this Discord message
+          </a>.
         </p>
         <button
           onClick={clearTokenAndReload}
@@ -125,7 +127,7 @@ function TokenExpired() {
   );
 }
 
-function TokenInvalid() {
+export function TokenInvalid() {
   const folderName = FOLDERS.find(f => f.id === shareFolderUuid)?.name;
   return (
     <div className="h-screen flex items-center justify-center bg-gray-50">
@@ -145,16 +147,15 @@ function TokenInvalid() {
           <>
             <h1 className="text-2xl font-semibold text-gray-800 mb-2">Access Link Invalid</h1>
             <p className="text-gray-500">
-              Your access link is no longer valid. Check{' '}
+              Your access key is no longer valid. Get the current access key from{' '}
               <a
-                href="https://discord.com/channels/1440725236843806762/1464359318865448970"
+                href={ACCESS_KEY_MESSAGE_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-600 hover:text-blue-800 underline"
               >
-                #lens-internal
-              </a>{' '}
-              for a current editing link.
+                this Discord message
+              </a>.
             </p>
           </>
         )}
