@@ -29,7 +29,7 @@ import { markdownTableCompartment, markdownTableExtension } from './markdownTabl
 import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
-import { RangeSetBuilder, Compartment, EditorSelection, StateEffect } from '@codemirror/state';
+import { RangeSetBuilder, Compartment, EditorSelection, StateEffect, StateField } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { isImageEmbedTarget } from '../../../lib/isImageEmbedTarget';
 
@@ -55,6 +55,29 @@ const STRONG_CLASS = 'cm-strong';
 
 // Inline code class
 const INLINE_CODE_CLASS = 'cm-inline-code';
+
+// Hashtags are presentation-only: they remain ordinary document text and do
+// not acquire navigation or indexing behavior.
+const HASHTAG_CLASS = 'cm-hashtag';
+const HASHTAG_PATTERN = /(^|[\s([{])#(?=[\p{L}_-])[\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*/gu;
+const HASHTAG_EXCLUDED_NODES = new Set([
+  'ATXHeading1',
+  'ATXHeading2',
+  'ATXHeading3',
+  'ATXHeading4',
+  'ATXHeading5',
+  'ATXHeading6',
+  'Autolink',
+  'CodeBlock',
+  'CommentBlock',
+  'FencedCode',
+  'HTMLBlock',
+  'InlineCode',
+  'Link',
+  'SetextHeading1',
+  'SetextHeading2',
+  'URL',
+]);
 
 /**
  * WikilinkContext for navigation callbacks
@@ -433,6 +456,49 @@ function rangeSpansLineBreak(view: EditorView, from: number, to: number): boolea
   return to > view.state.doc.lineAt(from).to;
 }
 
+interface TextRange {
+  from: number;
+  to: number;
+}
+
+function findObsidianCommentRanges(text: string): TextRange[] {
+  return Array.from(text.matchAll(/%%[\s\S]*?%%/g), (match) => ({
+    from: match.index,
+    to: match.index + match[0].length,
+  }));
+}
+
+const obsidianCommentRangesField = StateField.define<readonly TextRange[]>({
+  create(state) {
+    return findObsidianCommentRanges(state.doc.toString());
+  },
+  update(ranges, transaction) {
+    return transaction.docChanged
+      ? findObsidianCommentRanges(transaction.newDoc.toString())
+      : ranges;
+  },
+});
+
+function isHashtagContextExcluded(
+  view: EditorView,
+  pos: number,
+  obsidianCommentRanges: readonly TextRange[]
+): boolean {
+  const frontmatter = view.state.field(frontmatterField);
+  if (frontmatter.enabled && frontmatter.range &&
+      pos >= frontmatter.range.from && pos <= frontmatter.range.to) {
+    return true;
+  }
+  if (obsidianCommentRanges.some((range) => pos >= range.from && pos < range.to)) {
+    return true;
+  }
+  for (let node = syntaxTree(view.state).resolveInner(pos, 1); node; node = node.parent!) {
+    if (HASHTAG_EXCLUDED_NODES.has(node.name)) return true;
+    if (!node.parent) break;
+  }
+  return false;
+}
+
 /**
  * ViewPlugin that builds decorations based on cursor position
  */
@@ -466,9 +532,27 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       // Track decorations to sort them (required for RangeSetBuilder)
       let decorations: Array<{ from: number; to: number; deco: Decoration }> =
         [];
+      const obsidianCommentRanges = view.state.field(obsidianCommentRangesField);
 
       // Iterate syntax tree within visible ranges only (performance)
       for (const { from, to } of view.visibleRanges) {
+        // Scan prose text for hashtag tokens. Include one character before the
+        // visible range so a clipped viewport cannot manufacture a boundary.
+        const scanFrom = Math.max(0, from - 1);
+        const text = view.state.doc.sliceString(scanFrom, to);
+        HASHTAG_PATTERN.lastIndex = 0;
+        for (const match of text.matchAll(HASHTAG_PATTERN)) {
+          const boundaryLength = match[1].length;
+          const tagFrom = scanFrom + match.index + boundaryLength;
+          const tagTo = scanFrom + match.index + match[0].length;
+          if (tagFrom < from || isHashtagContextExcluded(view, tagFrom, obsidianCommentRanges)) continue;
+          decorations.push({
+            from: tagFrom,
+            to: tagTo,
+            deco: Decoration.mark({ class: HASHTAG_CLASS }),
+          });
+        }
+
         syntaxTree(view.state).iterate({
           from,
           to,
@@ -968,6 +1052,7 @@ export function livePreview(context?: WikilinkContext) {
   return [
     drawSelection(), // Required for proper cursor with hidden content
     frontmatterField, // StateField outside compartment (survives source mode toggle)
+    obsidianCommentRangesField,
     livePreviewCompartment.of([livePreviewPlugin, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];
 }
@@ -1001,16 +1086,9 @@ const obsidianCommentPlugin = ViewPlugin.fromClass(
     buildDecorations(view: EditorView): DecorationSet {
       const builder = new RangeSetBuilder<Decoration>();
       const deco = Decoration.mark({ class: 'cm-obsidian-comment' });
-      const matches: Array<{ from: number; to: number }> = [];
-
-      for (const { from, to } of view.visibleRanges) {
-        const text = view.state.doc.sliceString(from, to);
-        const re = /%%[\s\S]*?%%/g;
-        let m;
-        while ((m = re.exec(text)) !== null) {
-          matches.push({ from: from + m.index, to: from + m.index + m[0].length });
-        }
-      }
+      const matches = view.state.field(obsidianCommentRangesField).filter((match) =>
+        view.visibleRanges.some(({ from, to }) => match.from < to && match.to > from)
+      );
 
       matches.sort((a, b) => a.from - b.from);
       for (const { from, to } of matches) {

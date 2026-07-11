@@ -90,6 +90,12 @@
   font-weight: 600 !important;
 }
 
+/* Hashtags are styled text only; they have no click or hover behavior. */
+.cm-hashtag {
+  color: #7c3aed;
+  font-weight: 500;
+}
+
 /* Link widget */
 .cm-link-widget {
   color: #2563eb;
