@@ -29,6 +29,11 @@ const DEFAULT_PLATFORM_URL: &str = "https://staging.lensacademy.org";
 const DEFAULT_FOLDER: &str = "Lens Edu";
 // Validation runs take seconds; the platform runs a TS subprocess per call.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+// Hard ceilings so one tool call can never wedge on storage loads (the doc
+// map may pull GC-evicted docs from R2, like grep does) or ship an
+// unbounded payload to the platform.
+const MAP_BUILD_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_PAYLOAD_BYTES: usize = 50 * 1024 * 1024;
 
 pub fn platform_url_from_env() -> String {
     std::env::var("LENS_PLATFORM_URL")
@@ -76,18 +81,45 @@ pub async fn execute_with_platform(
         }
     }
 
-    // Folder-scoped tokens validate their folder; all-folder tokens default
-    // to the course-content folder.
+    // Folder-scoped tokens validate their folder. All-folder tokens default
+    // to the course-content folder ("Lens Edu") rather than mixing folders:
+    // each folder is an independent content root, and validating them
+    // together would create cross-folder wikilink noise. (Note: the dispatch
+    // folder-scope check doesn't apply here — this tool takes no path args
+    // and derives its folder from the token itself. Keep it that way; a
+    // user-supplied `folder` arg would bypass token isolation.)
     let folder = access
         .folder_name
         .clone()
         .unwrap_or_else(|| DEFAULT_FOLDER.to_string());
 
-    let files = build_file_map(server, &folder, accept_drafts).await;
+    let files = tokio::time::timeout(
+        MAP_BUILD_TIMEOUT,
+        build_file_map(server, &folder, accept_drafts),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Error: timed out collecting documents from '{}' after {}s — try again (docs may still be loading from storage)",
+            folder,
+            MAP_BUILD_TIMEOUT.as_secs()
+        )
+    })?;
     if files.is_empty() {
         return Err(format!(
             "Error: no readable documents found in folder '{}'",
             folder
+        ));
+    }
+    let payload_bytes: usize = files
+        .iter()
+        .map(|(k, v)| k.len() + v.as_str().map(str::len).unwrap_or(0))
+        .sum();
+    if payload_bytes > MAX_PAYLOAD_BYTES {
+        return Err(format!(
+            "Error: folder content too large to validate ({} MB, max {} MB)",
+            payload_bytes / (1024 * 1024),
+            MAX_PAYLOAD_BYTES / (1024 * 1024)
         ));
     }
 
