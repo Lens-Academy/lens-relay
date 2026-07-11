@@ -10,6 +10,7 @@ pub mod grep;
 pub mod move_doc;
 pub mod read;
 pub mod search;
+pub mod session_intro;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
@@ -24,7 +25,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "create_session",
-            "description": "Create a session for this conversation. Call this once before using other tools. Returns a session_id that must be passed to all subsequent tool calls. Pass `name` to attribute suggestions to the user (shown as \"{name}'s AI\" in the review UI).",
+            "description": "Create a session for this conversation. Call this once before using other tools. The first line of the response is the session_id that must be passed to all subsequent tool calls; any text after it is orientation notes from the knowledge base — follow their reading pointers when they match your task. Pass `name` to attribute suggestions to the user (shown as \"{name}'s AI\" in the review UI).",
             "inputSchema": {
                 "type": "object",
                 "required": [],
@@ -304,7 +305,12 @@ pub async fn dispatch_tool(
         let sid = server
             .mcp_sessions
             .create_session(access.clone(), human_name);
-        return tool_success(&sid);
+        // Append curator-maintained orientation notes, if any folder the
+        // token can access has an "AI Guide/_intro.md" (see session_intro).
+        return match session_intro::session_intro(server, access).await {
+            Some(intro) => tool_success(&format!("{}\n\n{}", sid, intro)),
+            None => tool_success(&sid),
+        };
     }
 
     // All other tools require session_id argument and validation
