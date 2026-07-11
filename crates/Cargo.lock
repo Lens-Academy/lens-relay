@@ -2121,6 +2121,7 @@ dependencies = [
  "p256",
  "prometheus",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
