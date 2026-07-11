@@ -230,22 +230,7 @@
 
 /* Bullet list dot */
 .cm-bullet {
-  display: inline-block;
   color: #6b7280;
-}
-
-.cm-task-marker,
-.cm-list-raw-marker {
-  display: inline-block;
-}
-
-/* Keep wrapped bullet text aligned with the first line's content. */
-.cm-line.cm-list-line {
-  --cm-line-inline-start: 6px;
-  --cm-list-indent: calc(var(--cm-list-marker-width) + var(--cm-list-depth-indent));
-  tab-size: 1.25em;
-  padding-left: calc(var(--cm-line-inline-start) + var(--cm-list-indent));
-  text-indent: calc(0px - var(--cm-list-indent));
 }
 
 /* Checklist checkbox */
