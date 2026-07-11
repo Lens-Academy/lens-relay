@@ -3766,8 +3766,7 @@ impl Server {
             .route("/doc/check-source-urls", post(handle_check_source_urls))
             .route(
                 "/doc/attachment",
-                post(handle_upsert_attachment)
-                    .layer(DefaultBodyLimit::max(30 * 1024 * 1024)),
+                post(handle_upsert_attachment).layer(DefaultBodyLimit::max(30 * 1024 * 1024)),
             )
             .route("/open/*path", get(handle_open_by_path))
             .route("/debug/resolve", get(handle_debug_resolve))
@@ -4707,7 +4706,12 @@ async fn handle_upsert_document(
     if is_blob {
         // JSON files → blob storage (create-only, no updates)
         match server_state
-            .create_blob_file(&body.folder, &path, body.content.as_bytes(), "application/json")
+            .create_blob_file(
+                &body.folder,
+                &path,
+                body.content.as_bytes(),
+                "application/json",
+            )
             .await
         {
             Ok(result) => Ok(Json(UpsertDocResponse {
@@ -5059,7 +5063,10 @@ async fn handle_upsert_attachment(
     } else {
         format!("/{}", query.path)
     };
-    let mimetype = query.mimetype.as_deref().unwrap_or("application/octet-stream");
+    let mimetype = query
+        .mimetype
+        .as_deref()
+        .unwrap_or("application/octet-stream");
 
     match server_state
         .create_blob_file(&query.folder, &path, &body, mimetype)

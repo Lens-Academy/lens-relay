@@ -218,7 +218,7 @@ mod tests {
         let result = resp.result.unwrap();
         assert!(result["tools"].is_array());
         let tools_arr = result["tools"].as_array().unwrap();
-        assert_eq!(tools_arr.len(), 10);
+        assert_eq!(tools_arr.len(), 11);
 
         let names: Vec<&str> = tools_arr
             .iter()
@@ -234,6 +234,7 @@ mod tests {
         assert!(names.contains(&"move"));
         assert!(names.contains(&"search"));
         assert!(names.contains(&"get_url"));
+        assert!(names.contains(&"validate_content"));
     }
 
     #[tokio::test]

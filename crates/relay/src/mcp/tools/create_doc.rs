@@ -99,7 +99,12 @@ async fn create_blob_file(
     let in_folder_path = format!("/{}", &file_path[slash_pos + 1..]);
 
     server
-        .create_blob_file(folder_name, &in_folder_path, content.as_bytes(), "application/json")
+        .create_blob_file(
+            folder_name,
+            &in_folder_path,
+            content.as_bytes(),
+            "application/json",
+        )
         .await
         .map_err(|e| e.to_string())?;
 
