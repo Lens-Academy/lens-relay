@@ -50,5 +50,11 @@ describe('formatTimestamp', () => {
       const twoWeeksAgo = new Date('2025-06-01T12:00:00.000Z').getTime();
       expect(formatTimestamp(twoWeeksAgo)).toBe('Jun 1');
     });
+
+    it('formats epoch milliseconds serialized as a string by the comments adapter', () => {
+      vi.setSystemTime(new Date('2026-07-11T12:00:00.000Z'));
+
+      expect(formatTimestamp('1783672052355')).toBe('1d ago');
+    });
   });
 });

@@ -65,9 +65,9 @@ vi.mock('../../lib/promotion-api', () => ({
 
 // Mock the Editor component to avoid Y.Doc complexity
 vi.mock('../Editor/Editor', () => ({
-  Editor: ({ onEditorReady }: { onEditorReady?: (view: unknown) => void }) => {
+  Editor: ({ initialSuggestionMode }: { initialSuggestionMode?: boolean }) => {
     // Don't call onEditorReady to keep editorView null (easier to test)
-    return <div data-testid="mock-editor">Mock Editor</div>;
+    return <div data-testid="mock-editor" data-initial-suggestion-mode={String(initialSuggestionMode)}>Mock Editor</div>;
   },
 }));
 
@@ -81,7 +81,9 @@ vi.mock('../PresencePanel/PresencePanel', () => ({
 }));
 
 vi.mock('../SuggestionModeToggle/SuggestionModeToggle', () => ({
-  SuggestionModeToggle: () => <div data-testid="mock-suggestion-toggle">Suggestion Mode</div>,
+  SuggestionModeToggle: ({ onSuggestionModeChange }: { onSuggestionModeChange?: (next: boolean) => void }) => (
+    <button data-testid="mock-suggestion-toggle" onClick={() => onSuggestionModeChange?.(true)}>Suggestion Mode</button>
+  ),
 }));
 
 vi.mock('../SourceModeToggle/SourceModeToggle', () => ({
@@ -107,6 +109,7 @@ vi.mock('../DiscussionPanel/useHasDiscussion', () => ({
 describe('EditorArea', () => {
   beforeEach(() => {
     vi.useRealTimers();
+    localStorage.removeItem('lens-editor:suggestion-mode');
     mocks.metadata = null;
     mocks.auth = {
       canWrite: true,
@@ -130,6 +133,22 @@ describe('EditorArea', () => {
     // but the panel container should exist)
     const main = container.querySelector('main');
     expect(main).toBeInTheDocument();
+  });
+
+  it('restores suggesting mode when the editor remounts for another document', async () => {
+    const user = userEvent.setup();
+    const headerControls = document.createElement('div');
+    headerControls.id = 'header-controls';
+    document.body.appendChild(headerControls);
+    const firstDocument = renderWithProviders(<EditorArea currentDocId="first-doc" />);
+
+    await user.click(screen.getAllByTestId('mock-suggestion-toggle')[0]);
+    firstDocument.unmount();
+
+    renderWithProviders(<EditorArea currentDocId="second-doc" />);
+
+    expect(screen.getByTestId('mock-editor')).toHaveAttribute('data-initial-suggestion-mode', 'true');
+    document.body.removeChild(headerControls);
   });
 
   it('renders TableOfContents in sidebar', () => {

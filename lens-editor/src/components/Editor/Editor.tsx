@@ -36,7 +36,7 @@ import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
 import { remoteCursorTheme } from './remoteCursorTheme';
-import { criticMarkupExtension, commentClickCallback } from './extensions/criticmarkup';
+import { criticMarkupExtension, commentClickCallback, toggleSuggestionMode } from './extensions/criticmarkup';
 import { ContextMenu } from './ContextMenu';
 import { getContextMenuItems } from './extensions/criticmarkup-context-menu';
 import type { ContextMenuItem } from './extensions/criticmarkup-context-menu';
@@ -65,6 +65,7 @@ interface EditorProps {
   metadata?: FolderMetadata;
   currentFilePath?: string;
   getFolderDoc?: () => Y.Doc | null;
+  initialSuggestionMode?: boolean;
 }
 
 /**
@@ -105,9 +106,10 @@ function LoadingOverlay() {
  * Editor always renders so yCollab can sync initial content.
  * Loading overlay hides once synced.
  */
-export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath, getFolderDoc }: EditorProps) {
+export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, onSynced, onNavigate, onRequestAddComment, onCommentClick, metadata, currentFilePath, getFolderDoc, initialSuggestionMode = false }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const [initialSuggestionModeOnMount] = useState(initialSuggestionMode);
   const ydoc = useYDoc();
   const provider = useYjsProvider();
   const [synced, setSynced] = useState(false);
@@ -408,6 +410,10 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
       parent: containerRef.current,
     });
 
+    if (initialSuggestionModeOnMount) {
+      view.dispatch({ effects: toggleSuggestionMode.of(true) });
+    }
+
     viewRef.current = view;
 
     // Notify parent that editor is ready
@@ -422,7 +428,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
     };
   // Note: wikilinkContext is NOT a dependency - we update it via updateWikilinkContext()
   // to avoid recreating the editor (which would lose Y.Text sync state)
-  }, [ydoc, provider, onEditorReady, onDocChange, readOnly, canAcceptReject]);
+  }, [ydoc, provider, onEditorReady, onDocChange, readOnly, canAcceptReject, initialSuggestionModeOnMount]);
 
   return (
     <div className="relative h-full w-full">
