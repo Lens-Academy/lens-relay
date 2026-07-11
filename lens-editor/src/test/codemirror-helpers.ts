@@ -1,7 +1,8 @@
 import { EditorState, Prec } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
-import { Autolink, TaskList } from '@lezer/markdown';
+import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { Autolink, Strikethrough, TaskList } from '@lezer/markdown';
 import { defaultKeymap } from '@codemirror/commands';
 import { WikilinkExtension } from '../components/Editor/extensions/wikilinkParser';
 import { livePreview } from '../components/Editor/extensions/livePreview';
@@ -167,7 +168,8 @@ export function createCriticMarkupEditorWithSourceMode(
     doc: content,
     selection: { anchor: cursorPos },
     extensions: [
-      markdown(),
+      markdown({ extensions: [Strikethrough] }),
+      syntaxHighlighting(defaultHighlightStyle),
       livePreview(),
       criticMarkupExtension(),
     ],

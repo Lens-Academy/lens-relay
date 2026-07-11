@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
+import { syntaxTree } from '@codemirror/language';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSelection, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
 import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
@@ -766,6 +767,23 @@ describe('CriticMarkup Extension', () => {
   });
 
   describe('Source Mode Integration', () => {
+    it('suppresses Markdown strikethrough inside substitutions but preserves standalone strikethrough', () => {
+      const { view, cleanup: c } = createCriticMarkupEditorWithSourceMode(
+        '{~~old~>new~~} and ~~strike~~',
+        17
+      );
+      cleanup = c;
+
+      toggleSourceMode(view, true);
+
+      const substitution = view.contentDOM.querySelector('.cm-substitution');
+      expect(substitution).toHaveClass('cm-criticmarkup-no-strikethrough');
+
+      const standaloneFrom = view.state.doc.toString().lastIndexOf('~~strike~~');
+      const standaloneStrike = syntaxTree(view.state).resolveInner(standaloneFrom + 3, 1);
+      expect(standaloneStrike.name).toBe('Strikethrough');
+    });
+
     it('hides CriticMarkup decorations when source mode is ON', () => {
       const { view, cleanup: c } = createCriticMarkupEditorWithSourceMode(
         'hello {++world++} end',

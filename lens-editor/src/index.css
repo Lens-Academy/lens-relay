@@ -414,6 +414,12 @@
   text-decoration: line-through;
 }
 
+/* CriticMarkup's ~~ substitution delimiters are also valid GFM strikethrough
+   markers. Keep the replacement readable without affecting real ~~strike~~. */
+.cm-criticmarkup-no-strikethrough {
+  text-decoration: none !important;
+}
+
 /* Colored left border for blank/hidden lines within suggestions.
    min-height ensures cursor remains visible on lines with only font-size:0 content. */
 .cm-addition-line {

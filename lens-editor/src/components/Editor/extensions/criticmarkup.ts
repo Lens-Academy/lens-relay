@@ -81,6 +81,12 @@ const TYPE_CLASSES: Record<CriticMarkupRange['type'], string> = {
   highlight: 'cm-highlight',
 };
 
+function typeClass(range: CriticMarkupRange): string {
+  return range.type === 'substitution'
+    ? `${TYPE_CLASSES[range.type]} cm-criticmarkup-no-strikethrough`
+    : TYPE_CLASSES[range.type];
+}
+
 // Line-level CSS classes for blank lines within suggestions
 const LINE_CLASSES: Partial<Record<CriticMarkupRange['type'], string>> = {
   addition: 'cm-addition-line',
@@ -463,7 +469,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
 
       for (let ri = 0; ri < ranges.length; ri++) {
         const range = ranges[ri];
-        const className = TYPE_CLASSES[range.type];
+        const className = typeClass(range);
         const cursorInside = selectionIntersects(selection, range.from, range.to);
 
         // Comments: hide all text, show badge widget for first in thread
@@ -737,7 +743,7 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
         decorations.push({
           from: range.contentFrom,
           to: range.contentTo,
-          deco: Decoration.mark({ class: TYPE_CLASSES[range.type] }),
+          deco: Decoration.mark({ class: typeClass(range) }),
         });
 
         if (selectionIntersects(selection, range.from, range.to) && !isBulkSelection && canAcceptReject) {
