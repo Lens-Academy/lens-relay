@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Review Codex recommendations for autonomous Lens Relay and Editor tasks." />
+    <title>Relay Work Ledger</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%2317211d'/%3E%3Cpath d='M15 13h21c10 0 16 5 16 13 0 6-4 10-10 12l12 13H40L30 39h-3v12H15V13Zm12 9v9h8c3 0 5-2 5-5s-2-4-5-4h-8Z' fill='%23e84b2c'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="masthead">
+        <div class="masthead__eyebrow">Lens engineering / agent workbench</div>
+        <div class="masthead__main">
+          <div>
+            <h1>Relay Work<br /><em>Ledger</em></h1>
+            <p class="lede">Choose the work worth delegating. Every mark and margin note saves directly to the shared batch file.</p>
+          </div>
+          <div class="issue-stamp" aria-label="Current review issue">
+            <span>Review issue</span>
+            <strong>01</strong>
+            <small>Dev::Relay&amp;editor</small>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <section class="ledger" aria-label="Batch summary">
+          <div class="ledger__metric ledger__metric--ink">
+            <span>Selected</span>
+            <strong id="selected-count">—</strong>
+            <small>for the agent queue</small>
+          </div>
+          <div class="ledger__metric">
+            <span>Visual checks</span>
+            <strong id="visual-count">—</strong>
+            <small>need Luc at the finish</small>
+          </div>
+          <div class="ledger__metric">
+            <span>Margin notes</span>
+            <strong id="comment-count">—</strong>
+            <small>instructions from Luc</small>
+          </div>
+          <div class="ledger__metric ledger__metric--status">
+            <span>Persistence</span>
+            <strong id="save-status" role="status">Loading</strong>
+            <small id="source-note">Reading Asana snapshot…</small>
+          </div>
+        </section>
+
+        <section class="controls" aria-label="Task filters">
+          <label class="search-field">
+            <span>Search the ledger</span>
+            <input id="search" type="search" placeholder="filename, Markdown, MCP…" autocomplete="off" />
+          </label>
+          <label>
+            <span>Selection</span>
+            <select id="selection-filter">
+              <option value="all">All tasks</option>
+              <option value="selected">Selected only</option>
+              <option value="unselected">Unselected only</option>
+              <option value="recommended">Codex recommended</option>
+              <option value="commented">With my comments</option>
+            </select>
+          </label>
+          <label>
+            <span>Fit</span>
+            <select id="fit-filter">
+              <option value="all">Every fit</option>
+              <option value="autonomous">Autonomous</option>
+              <option value="autonomous-with-validation">Human validation</option>
+              <option value="needs-clarification">Needs clarification</option>
+              <option value="defer">Defer</option>
+            </select>
+          </label>
+          <label>
+            <span>Repository</span>
+            <select id="repository-filter"><option value="all">Every repository</option></select>
+          </label>
+          <label>
+            <span>Validation</span>
+            <select id="visual-filter">
+              <option value="all">Every validation</option>
+              <option value="visual">Human visual check</option>
+              <option value="automated">Automated checks only</option>
+            </select>
+          </label>
+          <button id="apply-recommendations" class="button button--dark" type="button">Use Codex picks</button>
+          <button id="clear-selection" class="button button--plain" type="button">Clear visible</button>
+        </section>
+
+        <div class="results-rule">
+          <span id="result-count">— tasks</span>
+          <span>Selections save instantly · comments save after you pause</span>
+        </div>
+
+        <section id="task-list" class="task-list" aria-live="polite"></section>
+        <div id="empty-state" class="empty-state" hidden>
+          <span>∅</span>
+          <h2>No ledger entries match.</h2>
+          <p>Try clearing a filter or searching for a broader term.</p>
+        </div>
+      </main>
+    </div>
+
+    <template id="task-template">
+      <article class="task-card">
+        <div class="task-card__rail">
+          <label class="select-mark">
+            <input class="task-select" type="checkbox" />
+            <span aria-hidden="true"></span>
+            <small>Queue</small>
+          </label>
+          <div class="task-number"></div>
+        </div>
+        <div class="task-card__body">
+          <div class="task-card__meta">
+            <span class="fit-badge"></span>
+            <span class="size-badge"></span>
+            <span class="visual-badge" hidden>Human visual check</span>
+            <span class="delivery-badge"></span>
+            <span class="repository"></span>
+          </div>
+          <h2 class="task-name"></h2>
+          <div class="task-description"></div>
+          <details class="assessment" open>
+            <summary>Codex assessment</summary>
+            <div class="assessment__grid">
+              <div><span>Why</span><p class="rationale"></p></div>
+              <div><span>How to verify</span><p class="verification"></p></div>
+            </div>
+          </details>
+          <div class="task-card__footer">
+            <label class="comment-field">
+              <span>Your note to the agents</span>
+              <textarea class="task-comment" rows="2" placeholder="Add constraints, questions, or why this should wait…"></textarea>
+            </label>
+            <a class="asana-link" target="_blank" rel="noreferrer">Open in Asana <span>↗</span></a>
+          </div>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

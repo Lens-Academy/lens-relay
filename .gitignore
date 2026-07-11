@@ -16,3 +16,6 @@ __pycache__/
 ~
 .igit
 .DS_Store
+!tools/asana-task-review/data/
+!tools/asana-task-review/data/tasks.json
+tools/asana-task-review/data/review-state.json
