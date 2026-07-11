@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as Y from 'yjs';
-import { createDocument, renameDocument, renameFolder, deleteDocument, createFolder, movePath } from './relay-api';
+import {
+  createDocument,
+  renameDocument,
+  renameFolder,
+  deleteDocument,
+  createFolder,
+  moveDocument,
+  movePath,
+  writeFileMeta,
+} from './relay-api';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 
 // Mock fetch for server calls
@@ -55,6 +64,15 @@ describe('relay-api', () => {
   });
 
   describe('createDocument', () => {
+    it('rejects paths containing double quotes before creating a server document', async () => {
+      await expect(createDocument(doc, '/Bad "Name".md')).rejects.toThrow(
+        'File names cannot contain double quotes'
+      );
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(filemeta.size).toBe(0);
+    });
+
     it('creates document with valid UUID', async () => {
       const id = await createDocument(doc, '/New File.md');
 
@@ -159,7 +177,28 @@ describe('relay-api', () => {
     });
   });
 
+  describe('writeFileMeta', () => {
+    it('rejects paths containing double quotes without changing metadata', () => {
+      expect(() => writeFileMeta(doc, '/Bad "Name".md', 'doc-id', 'markdown')).toThrow(
+        'File names cannot contain double quotes'
+      );
+
+      expect(filemeta.size).toBe(0);
+      expect(legacyDocs.size).toBe(0);
+    });
+  });
+
   describe('renameDocument', () => {
+    it('rejects paths containing double quotes without changing metadata', async () => {
+      const id = await createDocument(doc, '/Old.md');
+
+      expect(() => renameDocument(doc, '/Old.md', '/Bad "Name".md')).toThrow(
+        'File names cannot contain double quotes'
+      );
+      expect(filemeta.get('/Old.md')?.id).toBe(id);
+      expect(filemeta.has('/Bad "Name".md')).toBe(false);
+    });
+
     it('moves metadata from old path to new path', async () => {
       const id = await createDocument(doc, '/Old.md');
       renameDocument(doc, '/Old.md', '/New.md');
@@ -205,6 +244,16 @@ describe('relay-api', () => {
   });
 
   describe('renameFolder', () => {
+    it('rejects folder paths containing double quotes without changing metadata', () => {
+      createFolder(doc, '/Projects/Old');
+
+      expect(() => renameFolder(doc, '/Projects/Old', '/Projects/Bad "Name"')).toThrow(
+        'File names cannot contain double quotes'
+      );
+      expect(filemeta.has('/Projects/Old')).toBe(true);
+      expect(filemeta.has('/Projects/Bad "Name"')).toBe(false);
+    });
+
     it('moves folder metadata and descendants to the new folder path', () => {
       createFolder(doc, '/Projects/Alpha');
       filemeta.set('/Projects/Alpha/README.md', { id: 'readme-id', type: 'markdown', version: 0 });
@@ -246,6 +295,14 @@ describe('relay-api', () => {
   });
 
   describe('movePath', () => {
+    it('rejects paths containing double quotes before calling the move endpoint', async () => {
+      await expect(movePath('Lens/Old.md', '/Bad "Name".md')).rejects.toThrow(
+        'File names cannot contain double quotes'
+      );
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('calls path-based move endpoint', async () => {
       mockFetch.mockResolvedValue({
         ok: true,
@@ -265,6 +322,16 @@ describe('relay-api', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: 'Lens/Old.md', new_path: '/New.md' }),
       });
+    });
+  });
+
+  describe('moveDocument', () => {
+    it('rejects paths containing double quotes before calling the move endpoint', async () => {
+      await expect(moveDocument('doc-id', '/Bad "Name".md')).rejects.toThrow(
+        'File names cannot contain double quotes'
+      );
+
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 
@@ -292,6 +359,15 @@ describe('relay-api', () => {
   });
 
   describe('createFolder', () => {
+    it('rejects paths containing double quotes without creating metadata', () => {
+      expect(() => createFolder(doc, '/Bad "Folder"')).toThrow(
+        'File names cannot contain double quotes'
+      );
+
+      expect(filemeta.size).toBe(0);
+      expect(legacyDocs.size).toBe(0);
+    });
+
     it('creates folder entry in filemeta_v0 with type folder', () => {
       createFolder(doc, '/NewFolder');
 

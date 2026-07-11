@@ -295,6 +295,13 @@ pub struct CreateDocumentResult {
     pub in_folder_path: String,
 }
 
+fn validate_file_path(path: &str) -> std::result::Result<(), &'static str> {
+    if path.contains('"') {
+        return Err("File names cannot contain double quotes");
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 struct FileDownloadQueryParams {
     hash: Option<String>,
@@ -1194,6 +1201,9 @@ impl Server {
         in_folder_path: &str,
         content: &str,
     ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
+        validate_file_path(in_folder_path)
+            .map_err(|message| CreateDocumentError::BadRequest(message.to_string()))?;
+
         // 1. Find all folder docs, match folder_name
         let docs = self.docs();
         let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
@@ -1398,6 +1408,9 @@ impl Server {
         in_folder_path: &str,
         content: &str,
     ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
+        validate_file_path(in_folder_path)
+            .map_err(|message| CreateDocumentError::BadRequest(message.to_string()))?;
+
         // 1. Find all folder docs, match folder_name
         let docs = self.docs();
         let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
@@ -1796,6 +1809,9 @@ impl Server {
         data: &[u8],
         mimetype: &str,
     ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
+        validate_file_path(in_folder_path)
+            .map_err(|message| CreateDocumentError::BadRequest(message.to_string()))?;
+
         // 1. Find folder doc (same logic as create_document)
         let docs = self.docs();
         let folder_doc_ids = link_indexer::find_all_folder_docs(docs);
@@ -1971,6 +1987,9 @@ impl Server {
         new_path: &str,
         target_folder: Option<&str>,
     ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
+        validate_file_path(new_path)
+            .map_err(|message| MoveDocumentError::BadRequest(message.to_string()))?;
+
         // Validate new_path format
         if !new_path.starts_with('/') {
             return Err(MoveDocumentError::BadRequest(
@@ -2283,6 +2302,9 @@ impl Server {
         new_path: &str,
         target_folder: Option<&str>,
     ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
+        validate_file_path(new_path)
+            .map_err(|message| MoveDocumentError::BadRequest(message.to_string()))?;
+
         if !new_path.starts_with('/') {
             return Err(MoveDocumentError::BadRequest(
                 "new_path must start with '/'".into(),
@@ -4725,6 +4747,9 @@ async fn handle_upsert_document(
             Err(CreateDocumentError::NotFound(msg)) => {
                 Err(AppError::new(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
             }
+            Err(CreateDocumentError::BadRequest(msg)) => {
+                Err(AppError::new(StatusCode::BAD_REQUEST, anyhow!("{}", msg)))
+            }
             Err(e) => Err(AppError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 anyhow!("{}", e),
@@ -4757,6 +4782,9 @@ async fn handle_upsert_document(
             }
             Err(CreateDocumentError::NotFound(msg)) => {
                 Err(AppError::new(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
+            }
+            Err(CreateDocumentError::BadRequest(msg)) => {
+                Err(AppError::new(StatusCode::BAD_REQUEST, anyhow!("{}", msg)))
             }
             Err(e) => Err(AppError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -5085,6 +5113,9 @@ async fn handle_upsert_attachment(
         })),
         Err(CreateDocumentError::NotFound(msg)) => {
             Err(AppError::new(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
+        }
+        Err(CreateDocumentError::BadRequest(msg)) => {
+            Err(AppError::new(StatusCode::BAD_REQUEST, anyhow!("{}", msg)))
         }
         Err(e) => Err(AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -6565,6 +6596,29 @@ mod test {
         (status, body)
     }
 
+    async fn post_request(
+        server: &Arc<Server>,
+        uri: &str,
+        content_type: &str,
+        body: Body,
+    ) -> (StatusCode, String) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(uri)
+                    .header("content-type", content_type)
+                    .body(body)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     async fn post_check_video_ids(
         server: &Arc<Server>,
         body: JsonValue,
@@ -6611,6 +6665,104 @@ mod test {
         assert_eq!(result.new_path, "/New.md");
         assert!(!filemeta_has(&server, &folder_doc_id, "/Old.md"));
         assert!(filemeta_has(&server, &folder_doc_id, "/New.md"));
+    }
+
+    #[tokio::test]
+    async fn move_path_rejects_double_quotes_without_mutation() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[(
+                "/Old.md",
+                "11111111-1111-4111-8111-111111111111",
+                "markdown",
+            )],
+        )
+        .await;
+        insert_test_content_doc(&server, "11111111-1111-4111-8111-111111111111", "Old").await;
+
+        let result = server
+            .move_path("Relay Folder 1/Old.md", "/Bad \"Name\".md", None)
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::BadRequest(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/Old.md"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Bad \"Name\".md"));
+    }
+
+    #[tokio::test]
+    async fn create_document_rejects_double_quotes_without_mutation() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(&server, "Relay Folder 1", &[]).await;
+
+        let result = server
+            .create_document("Relay Folder 1", "/Bad \"Name\".md", "content")
+            .await;
+
+        assert!(matches!(result, Err(CreateDocumentError::BadRequest(_))));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/Bad \"Name\".md"));
+    }
+
+    #[tokio::test]
+    async fn upsert_document_rejects_double_quotes_as_bad_request() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(&server, "Relay Folder 1", &[]).await;
+        let request = json!({
+            "folder": "Relay Folder 1",
+            "path": "/Bad \"Name\".md",
+            "content": "content"
+        });
+
+        let (status, body) = post_request(
+            &server,
+            "/doc/upsert",
+            "application/json",
+            Body::from(request.to_string()),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("File names cannot contain double quotes"));
+    }
+
+    #[tokio::test]
+    async fn upsert_blob_rejects_double_quotes_as_bad_request() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(&server, "Relay Folder 1", &[]).await;
+        let request = json!({
+            "folder": "Relay Folder 1",
+            "path": "/Bad \"Name\".json",
+            "content": "{}"
+        });
+
+        let (status, body) = post_request(
+            &server,
+            "/doc/upsert",
+            "application/json",
+            Body::from(request.to_string()),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("File names cannot contain double quotes"));
+    }
+
+    #[tokio::test]
+    async fn upsert_attachment_rejects_double_quotes_as_bad_request() {
+        let server = Server::new_for_test();
+        insert_test_folder_doc(&server, "Relay Folder 1", &[]).await;
+
+        let (status, body) = post_request(
+            &server,
+            "/doc/attachment?folder=Relay%20Folder%201&path=%2FBad%20%22Name%22.png",
+            "application/octet-stream",
+            Body::from(vec![1, 2, 3]),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.contains("File names cannot contain double quotes"));
     }
 
     /// Add a filemeta + legacy-docs entry to an already-loaded folder doc WITHOUT
