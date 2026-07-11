@@ -24,7 +24,6 @@ use serde_json::{json, Value};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use y_sweet_core::share_token::McpAccess;
-use yrs::{GetString, ReadTxn, Transact};
 
 const DEFAULT_PLATFORM_URL: &str = "https://staging.lensacademy.org";
 const DEFAULT_FOLDER: &str = "Lens Edu";
@@ -156,43 +155,21 @@ async fn build_file_map(
             continue;
         };
 
-        let content = if super::blob::is_blob_file(&path) {
-            let Some(hash) = doc_info.hash.as_ref() else {
-                continue;
-            };
-            match super::blob::read_blob(server, &doc_info.doc_id, hash).await {
-                Ok(data) => match String::from_utf8(data) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                },
-                Err(e) => {
-                    tracing::warn!("validate_content: skipping blob {}: {}", path, e);
-                    continue;
-                }
-            }
-        } else {
-            if server.ensure_doc_loaded(&doc_info.doc_id).await.is_err() {
-                tracing::warn!("validate_content: failed to load {}", path);
-                continue;
-            }
-            let raw = {
-                let Some(doc_ref) = server.docs().get(&doc_info.doc_id) else {
-                    continue;
-                };
-                let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                let txn = guard.doc.transact();
-                match txn.get_text("contents") {
-                    Some(text) => text.get_string(&txn),
-                    None => continue,
-                }
-            };
+        let Some(raw) = super::grep::read_doc_content(server, &doc_info.doc_id, &path).await else {
+            tracing::warn!("validate_content: skipping unreadable {}", path);
+            continue;
+        };
+        // Markdown carries CriticMarkup — resolve it to the requested view.
+        // .json blobs (timestamp files) have none and go through raw.
+        let content = if is_md {
             let spans = critic_markup::parse(&raw);
             if accept_drafts {
                 critic_markup::accepted_view(&spans)
             } else {
                 critic_markup::base_view(&spans)
             }
+        } else {
+            raw
         };
 
         files.insert(rel.to_string(), Value::String(content));
