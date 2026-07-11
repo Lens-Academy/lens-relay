@@ -50,13 +50,13 @@ npm run build
 
 Expected: all page tests pass and the production build succeeds.
 
-- [ ] **Step 5: Push and deploy**
+- [x] **Step 5: Push and deploy**
 
 Describe the change, rebase onto updated `main` if needed, move the `main`
 bookmark, push it, pull on production, rebuild only `lens-editor`, and recreate
 only that service.
 
-- [ ] **Step 6: Verify production**
+- [x] **Step 6: Verify production**
 
 Open `/promote` with an admin token and confirm `Select all files` selects every
 row and updates the count without creating a PR.
