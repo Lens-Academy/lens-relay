@@ -10,6 +10,7 @@ interface SuggestionModeToggleProps {
   iconOnly?: boolean;
   /** Controlled suggestion mode state (from EditorArea's updateListener) */
   isSuggestionMode: boolean;
+  onSuggestionModeChange?: (next: boolean) => void;
 }
 
 /**
@@ -19,12 +20,13 @@ interface SuggestionModeToggleProps {
  * - For 'suggest' role: Locked into Suggesting mode (shows badge instead of toggle)
  * - For 'view' role: Locked "Read-Only" badge (no editing capabilities)
  */
-export function SuggestionModeToggle({ view, iconOnly = false, isSuggestionMode }: SuggestionModeToggleProps) {
+export function SuggestionModeToggle({ view, iconOnly = false, isSuggestionMode, onSuggestionModeChange }: SuggestionModeToggleProps) {
   const handleChange = (next: boolean) => {
     if (!view) return;
     view.dispatch({
       effects: toggleSuggestionMode.of(next),
     });
+    onSuggestionModeChange?.(next);
   };
 
   return (
