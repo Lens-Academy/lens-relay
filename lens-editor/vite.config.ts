@@ -7,18 +7,19 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { bridgeBundlePlugin } from './vite-plugin-bridge-bundle';
+import { getWorkspacePortsFromPaths } from './server/workspace-ports.mjs';
 
 // Extract workspace number from directory name (e.g., "lens-editor-ws2" → 2)
 // or parent directory (e.g., "ws2/lens-editor" → 2).
 // Used to auto-assign ports: ws1 gets 5173/8090, ws2 gets 5273/8190, etc.
 // No workspace suffix → 5173/8090 (default)
-const workspaceMatch = path.basename(__dirname).match(/-ws(\d+)$/)
-  || path.basename(path.dirname(__dirname)).match(/^ws(\d+)$/);
-const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
-const portOffset = (wsNum - 1) * 100; // ws1=0, ws2=100, ws3=200...
-const defaultVitePort = 5173 + portOffset;
-const defaultRelayPort = 8090 + portOffset;
-const defaultBridgePort = 8091 + portOffset;
+const workspacePorts = getWorkspacePortsFromPaths(
+  path.basename(__dirname),
+  path.basename(path.dirname(__dirname)),
+);
+const defaultVitePort = workspacePorts.vite;
+const defaultRelayPort = workspacePorts.relay;
+const defaultBridgePort = workspacePorts.discordBridge;
 
 // https://vite.dev/config/
 export default defineConfig(() => {
@@ -47,7 +48,7 @@ export default defineConfig(() => {
     process.env.EDITOR_BASE_URL ??= `https://localhost:${vitePort}`;
   }
 
-  console.log(`[vite] Workspace ${wsNum}: Vite port ${defaultVitePort}, Relay port ${relayPort}`);
+  console.log(`[vite] Workspace ${workspacePorts.workspace.label}: Vite port ${defaultVitePort}, Relay port ${relayPort}`);
   console.log(`[vite] Relay target: ${relayTarget}`);
   console.log(`[vite] Discord bridge port ${bridgePort}`);
 

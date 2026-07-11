@@ -20,13 +20,12 @@ import { describe, it, expect, afterAll } from 'vitest';
 import path from 'path';
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
+import { getWorkspacePortsFromPaths } from '../../server/workspace-ports.mjs';
 
 // Auto-detect workspace number from directory name for default port
 const projectDir = path.basename(path.resolve(import.meta.dirname, '../..'));
 const parentDir = path.basename(path.resolve(import.meta.dirname, '../../..'));
-const workspaceMatch = projectDir.match(/-ws(\d+)$/) || parentDir.match(/^ws(\d+)$/);
-const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
-const defaultPort = 8090 + (wsNum - 1) * 100;
+const defaultPort = getWorkspacePortsFromPaths(projectDir, parentDir).relay;
 
 // Server configuration - defaults to local relay-server
 const SERVER_URL = process.env.RELAY_URL || `http://localhost:${defaultPort}`;

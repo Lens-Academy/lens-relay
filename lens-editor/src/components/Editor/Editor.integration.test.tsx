@@ -21,13 +21,12 @@ import { YSweetProvider } from '@y-sweet/client';
 import { Editor } from './Editor';
 import { YDocProvider } from '@y-sweet/react';
 import path from 'path';
+import { getWorkspacePortsFromPaths } from '../../../server/workspace-ports.mjs';
 
 // Auto-detect workspace number from directory name for default port
 const projectDir = path.basename(path.resolve(import.meta.dirname, '../../..'));
 const parentDir = path.basename(path.resolve(import.meta.dirname, '../../../..'));
-const workspaceMatch = projectDir.match(/-ws(\d+)$/) || parentDir.match(/^ws(\d+)$/);
-const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
-const defaultPort = 8090 + (wsNum - 1) * 100;
+const defaultPort = getWorkspacePortsFromPaths(projectDir, parentDir).relay;
 
 const RELAY_URL = process.env.RELAY_URL || `http://localhost:${defaultPort}`;
 

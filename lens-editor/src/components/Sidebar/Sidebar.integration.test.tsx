@@ -13,13 +13,12 @@ import { MemoryRouter } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import { useMultiFolderMetadata, type FolderConfig } from '../../hooks/useMultiFolderMetadata';
+import { getWorkspacePortsFromPaths } from '../../../server/workspace-ports.mjs';
 
 // Auto-detect relay port from workspace directory name
 const projectDir = path.basename(path.resolve(import.meta.dirname, '../../..'));
 const parentDir = path.basename(path.resolve(import.meta.dirname, '../../../..'));
-const workspaceMatch = projectDir.match(/-ws(\d+)$/) || parentDir.match(/^ws(\d+)$/);
-const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
-const defaultPort = 8090 + (wsNum - 1) * 100;
+const defaultPort = getWorkspacePortsFromPaths(projectDir, parentDir).relay;
 const YSWEET_URL = process.env.RELAY_URL || `http://localhost:${defaultPort}`;
 
 const TEST_RELAY_ID = 'a0000000-0000-4000-8000-000000000000';
@@ -36,8 +35,9 @@ vi.mock('../../lib/auth', () => {
   const _path = require('path');
   const _projectDir = _path.basename(_path.resolve(__dirname, '../../..'));
   const _parentDir = _path.basename(_path.resolve(__dirname, '../../../..'));
-  const _m = _projectDir.match(/-ws(\d+)$/) || _parentDir.match(/^ws(\d+)$/);
-  const _port = 8090 + ((_m ? parseInt(_m[1], 10) : 1) - 1) * 100;
+  const _m = _projectDir.match(/-ws(\d+)([a-z]?)$/) || _parentDir.match(/^ws(\d+)([a-z]?)$/);
+  const _suffixOffset = _m?.[2] ? _m[2].charCodeAt(0) - 96 : 0;
+  const _port = 8090 + ((_m ? parseInt(_m[1], 10) : 1) - 1) * 100 + _suffixOffset;
   const _url = process.env.RELAY_URL || `http://localhost:${_port}`;
 
   return {

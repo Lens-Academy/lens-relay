@@ -16,13 +16,12 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'path';
+import { getWorkspacePortsFromPaths } from '../../server/workspace-ports.mjs';
 
 // ── Port auto-detection (same logic as App.tsx / vite.config.ts) ──────────
 const projectDir = path.basename(path.resolve(import.meta.dirname, '../..'));
 const parentDir = path.basename(path.resolve(import.meta.dirname, '../../..'));
-const workspaceMatch = projectDir.match(/-ws(\d+)$/) || parentDir.match(/^ws(\d+)$/);
-const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
-const defaultPort = 8090 + (wsNum - 1) * 100;
+const defaultPort = getWorkspacePortsFromPaths(projectDir, parentDir).relay;
 const SERVER_URL = process.env.RELAY_URL || `http://localhost:${defaultPort}`;
 
 // ── IDs that must match App.tsx + setup-local-relay.mjs ───────────────────

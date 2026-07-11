@@ -21,6 +21,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import path from 'path';
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
+import { getWorkspacePortsFromPaths } from '../../server/workspace-ports.mjs';
 
 // ---------------------------------------------------------------------------
 // Server configuration (duplicated from relay-api.integration.test.ts to
@@ -29,9 +30,7 @@ import { YSweetProvider } from '@y-sweet/client';
 
 const projectDir = path.basename(path.resolve(import.meta.dirname, '../..'));
 const parentDir = path.basename(path.resolve(import.meta.dirname, '../../..'));
-const workspaceMatch = projectDir.match(/-ws(\d+)$/) || parentDir.match(/^ws(\d+)$/);
-const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
-const defaultPort = 8090 + (wsNum - 1) * 100;
+const defaultPort = getWorkspacePortsFromPaths(projectDir, parentDir).relay;
 
 const SERVER_URL = process.env.RELAY_URL || `http://localhost:${defaultPort}`;
 const SERVER_TOKEN = process.env.RELAY_TOKEN || '';

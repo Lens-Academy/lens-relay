@@ -2,9 +2,9 @@
 # Start local relay-server with workspace-specific port
 #
 # Port auto-detection:
-#   - lens-editor-ws1 (or no suffix): port 8090
-#   - lens-editor-ws2: port 8190
-#   - lens-editor-ws3: port 8290
+#   - ws1 (or no suffix): port 8090
+#   - ws1a: port 8091, ws1b: port 8092, etc.
+#   - ws2: port 8190, ws2a: port 8191, etc.
 #
 # Storage mode (RELAY_STORAGE env var):
 #   - "memory" (default): in-memory, data lost on restart
@@ -20,17 +20,25 @@ RELAY_CRATES_DIR="$(dirname "$PROJECT_DIR")/crates"
 # or parent directory (e.g., "ws2/lens-editor")
 DIR_NAME=$(basename "$PROJECT_DIR")
 PARENT_NAME=$(basename "$(dirname "$PROJECT_DIR")")
-if [[ "$DIR_NAME" =~ -ws([0-9]+)$ ]]; then
+WS_SUFFIX=""
+if [[ "$DIR_NAME" =~ -ws([0-9]+)([a-z]?)$ ]]; then
     WS_NUM="${BASH_REMATCH[1]}"
-elif [[ "$PARENT_NAME" =~ ^ws([0-9]+)$ ]]; then
+    WS_SUFFIX="${BASH_REMATCH[2]}"
+elif [[ "$PARENT_NAME" =~ ^ws([0-9]+)([a-z]?)$ ]]; then
     WS_NUM="${BASH_REMATCH[1]}"
+    WS_SUFFIX="${BASH_REMATCH[2]}"
 else
     WS_NUM=1
 fi
 
 # Calculate port offset
 PORT_OFFSET=$(( (WS_NUM - 1) * 100 ))
-RELAY_PORT=${RELAY_PORT:-$((8090 + PORT_OFFSET))}
+SUFFIX_OFFSET=0
+if [[ -n "$WS_SUFFIX" ]]; then
+    printf -v SUFFIX_CODE '%d' "'$WS_SUFFIX"
+    SUFFIX_OFFSET=$((SUFFIX_CODE - 96))
+fi
+RELAY_PORT=${RELAY_PORT:-$((8090 + PORT_OFFSET + SUFFIX_OFFSET))}
 
 # Select config based on storage mode
 RELAY_STORAGE=${RELAY_STORAGE:-memory}
@@ -66,7 +74,7 @@ if [ "$RELAY_STORAGE" = "r2" ] && [ -f "$RELAY_CRATES_DIR/auth.local.env" ]; the
     set +a
 fi
 
-echo "Workspace $WS_NUM: Starting relay-server on port $RELAY_PORT ($STORAGE_LABEL storage)"
+echo "Workspace ws${WS_NUM}${WS_SUFFIX}: Starting relay-server on port $RELAY_PORT ($STORAGE_LABEL storage)"
 echo ""
 
 cd "$RELAY_CRATES_DIR"

@@ -23,16 +23,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
+import { getWorkspacePortsFromPaths } from '../server/workspace-ports.mjs';
 
 // Auto-detect workspace number from directory name (e.g., "lens-editor-ws2")
 // or parent directory (e.g., "ws2/lens-editor")
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.basename(path.resolve(__dirname, '..'));
 const parentDir = path.basename(path.resolve(__dirname, '../..'));
-const workspaceMatch = projectDir.match(/-ws(\d+)$/) || parentDir.match(/^ws(\d+)$/);
-const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
-const portOffset = (wsNum - 1) * 100;
-const defaultRelayPort = 8090 + portOffset;
+const workspacePorts = getWorkspacePortsFromPaths(projectDir, parentDir);
+const wsNum = workspacePorts.workspace.number;
+const workspaceLabel = workspacePorts.workspace.label;
+const defaultRelayPort = workspacePorts.relay;
 const relayPort = parseInt(process.env.RELAY_PORT || String(defaultRelayPort), 10);
 
 const RELAY_URL = `http://localhost:${relayPort}`;
@@ -562,7 +563,7 @@ async function main() {
   console.log('Setting up local relay-server for development...\n');
 
   // Check if server is running
-  console.log(`Workspace ${wsNum}: expecting relay-server on port ${relayPort}\n`);
+  console.log(`Workspace ${workspaceLabel}: expecting relay-server on port ${relayPort}\n`);
 
   const serverUp = await checkServer();
   if (!serverUp) {

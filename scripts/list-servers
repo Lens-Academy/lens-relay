@@ -4,9 +4,9 @@
 # Discovers servers by checking known port ranges.
 #
 # Port conventions (from CLAUDE.local.md):
-#   ws1: Vite 5173, Relay 8090
-#   ws2: Vite 5273, Relay 8190
-#   wsN: Vite 5173+(N-1)*100, Relay 8090+(N-1)*100
+#   ws1: Vite 5173, Relay 8090, Discord 8050
+#   ws1a: Vite 5174, Relay 8091, Discord 8051
+#   wsN<letter>: persistent base + letter position (a=1, b=2, ...)
 #
 # Usage:
 #   ./scripts/list-servers          # List all running servers
@@ -20,12 +20,16 @@ MAX_WS=4  # Check ws1 through ws4
 # Detect current workspace from directory name
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+WORKSPACES_DIR="$(dirname "$PROJECT_DIR")"
 DIR_NAME=$(basename "$PROJECT_DIR")
-if [[ "$DIR_NAME" =~ ws([0-9]+)$ ]]; then
+if [[ "$DIR_NAME" =~ ^ws([0-9]+)([a-z]?)$ ]]; then
     CURRENT_WS="${BASH_REMATCH[1]}"
+    CURRENT_SUFFIX="${BASH_REMATCH[2]}"
 else
     CURRENT_WS=1
+    CURRENT_SUFFIX=""
 fi
+CURRENT_LABEL="ws${CURRENT_WS}${CURRENT_SUFFIX}"
 
 MINE_ONLY=false
 if [[ "${1:-}" == "--mine" ]]; then
@@ -45,36 +49,84 @@ printf "%-8s %-7s %-8s %-6s %s\n" "-------" "----" "---" "--" "-------"
 
 found=0
 
+declare -A PORT_PIDS
+current_pid=""
+while IFS= read -r field; do
+    case "$field" in
+        p*) current_pid="${field#p}" ;;
+        n*)
+            port="${field##*:}"
+            if [[ "$port" =~ ^[0-9]+$ && -n "$current_pid" ]]; then
+                PORT_PIDS["$port"]+=" $current_pid"
+            fi
+            ;;
+    esac
+done < <(lsof -nP -iTCP -sTCP:LISTEN -Fpn 2>/dev/null || true)
+
+find_owned_pid() {
+    local port="$1"
+    local label="$2"
+    local pid cwd
+
+    for pid in ${PORT_PIDS[$port]:-}; do
+        cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)
+        if [[ "$cwd/" == "$WORKSPACES_DIR/$label/"* ]]; then
+            echo "$pid"
+            return
+        fi
+    done
+}
+
 for ws in $(seq 1 $MAX_WS); do
-    if $MINE_ONLY && [[ "$ws" -ne "$CURRENT_WS" ]]; then
+  for suffix in "" {a..z}; do
+    label="ws${ws}${suffix}"
+    if $MINE_ONLY && [[ "$label" != "$CURRENT_LABEL" ]]; then
         continue
     fi
 
-    relay_port=$((8090 + (ws - 1) * 100))
-    vite_port=$((5173 + (ws - 1) * 100))
+    suffix_offset=0
+    if [[ -n "$suffix" ]]; then
+        printf -v suffix_code '%d' "'$suffix"
+        suffix_offset=$((suffix_code - 96))
+    fi
+
+    relay_port=$((8090 + (ws - 1) * 100 + suffix_offset))
+    vite_port=$((5173 + (ws - 1) * 100 + suffix_offset))
+    discord_port=$((8050 + (ws - 1) * 100 + suffix_offset))
 
     # Check relay server
-    relay_pid=$(lsof -ti:"$relay_port" -sTCP:LISTEN 2>/dev/null || true)
+    relay_pid=$(find_owned_pid "$relay_port" "$label")
     if [[ -n "$relay_pid" ]]; then
         # Get the command name (first line if multiple PIDs)
         pid=$(echo "$relay_pid" | head -1)
         cmd=$(ps -p "$pid" -o args= 2>/dev/null | head -c 40)
         marker=""
-        [[ "$ws" -eq "$CURRENT_WS" ]] && marker=" ${GREEN}*${RESET}"
-        printf "%-8s %-7s %-8s ${YELLOW}ws%-4s${RESET}%b %s\n" "relay" "$relay_port" "$pid" "$ws" "$marker" "$cmd"
+        [[ "$label" == "$CURRENT_LABEL" ]] && marker=" ${GREEN}*${RESET}"
+        printf "%-8s %-7s %-8s ${YELLOW}%-6s${RESET}%b %s\n" "relay" "$relay_port" "$pid" "$label" "$marker" "$cmd"
         found=$((found + 1))
     fi
 
     # Check vite server
-    vite_pid=$(lsof -ti:"$vite_port" -sTCP:LISTEN 2>/dev/null || true)
+    vite_pid=$(find_owned_pid "$vite_port" "$label")
     if [[ -n "$vite_pid" ]]; then
         pid=$(echo "$vite_pid" | head -1)
         cmd=$(ps -p "$pid" -o args= 2>/dev/null | head -c 40)
         marker=""
-        [[ "$ws" -eq "$CURRENT_WS" ]] && marker=" ${GREEN}*${RESET}"
-        printf "%-8s %-7s %-8s ${YELLOW}ws%-4s${RESET}%b %s\n" "vite" "$vite_port" "$pid" "$ws" "$marker" "$cmd"
+        [[ "$label" == "$CURRENT_LABEL" ]] && marker=" ${GREEN}*${RESET}"
+        printf "%-8s %-7s %-8s ${YELLOW}%-6s${RESET}%b %s\n" "vite" "$vite_port" "$pid" "$label" "$marker" "$cmd"
         found=$((found + 1))
     fi
+
+    discord_pid=$(find_owned_pid "$discord_port" "$label")
+    if [[ -n "$discord_pid" ]]; then
+        pid=$(echo "$discord_pid" | head -1)
+        cmd=$(ps -p "$pid" -o args= 2>/dev/null | head -c 40)
+        marker=""
+        [[ "$label" == "$CURRENT_LABEL" ]] && marker=" ${GREEN}*${RESET}"
+        printf "%-8s %-7s %-8s ${YELLOW}%-6s${RESET}%b %s\n" "discord" "$discord_port" "$pid" "$label" "$marker" "$cmd"
+        found=$((found + 1))
+    fi
+  done
 done
 
 if [[ $found -eq 0 ]]; then
@@ -82,5 +134,5 @@ if [[ $found -eq 0 ]]; then
 fi
 
 echo ""
-printf "${DIM}Current workspace: ws%s  (* = yours)${RESET}\n" "$CURRENT_WS"
+printf "${DIM}Current workspace: %s  (* = yours)${RESET}\n" "$CURRENT_LABEL"
 printf "${DIM}Kill by port: lsof -ti:<PORT> | xargs kill${RESET}\n"

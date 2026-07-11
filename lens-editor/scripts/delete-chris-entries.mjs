@@ -11,13 +11,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
+import { getWorkspacePorts } from '../server/workspace-ports.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const parentDir = path.basename(path.resolve(__dirname, '../..'));
-const workspaceMatch = parentDir.match(/^ws(\d+)$/);
-const wsNum = workspaceMatch ? parseInt(workspaceMatch[1], 10) : 1;
-const portOffset = (wsNum - 1) * 100;
-const RELAY_PORT = process.env.RELAY_PORT || (8090 + portOffset);
+const RELAY_PORT = process.env.RELAY_PORT || getWorkspacePorts(parentDir).relay;
 const RELAY_URL = process.env.RELAY_URL || `http://localhost:${RELAY_PORT}`;
 const RELAY_ID = process.env.RELAY_ID || 'a0000000-0000-4000-8000-000000000000';
 
