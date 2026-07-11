@@ -1109,6 +1109,24 @@ impl Server {
         &self.doc_resolver
     }
 
+    /// List the user-facing names of all folders on this relay,
+    /// deduplicated and in stable (sorted) order.
+    pub fn all_folder_names(&self) -> Vec<String> {
+        let mut names = std::collections::BTreeSet::new();
+        for folder_doc_id in link_indexer::find_all_folder_docs(&self.docs) {
+            let Some(doc_ref) = self.docs.get(&folder_doc_id) else {
+                continue;
+            };
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            names.insert(y_sweet_core::doc_resolver::read_folder_name(
+                &guard.doc,
+                &folder_doc_id,
+            ));
+        }
+        names.into_iter().collect()
+    }
+
     /// Resolve a folder UUID to its display name by finding any document in that folder.
     pub fn folder_name_for_uuid(&self, folder_uuid: &str) -> Option<String> {
         for folder_doc_id in link_indexer::find_all_folder_docs(&self.docs) {
