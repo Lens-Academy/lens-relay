@@ -48,6 +48,23 @@ import { RELAY_ID, PANEL_CONFIG } from '../../App';
 import { EDU_FOLDER_ID } from '../../lib/constants';
 
 const PROMOTION_STATUS_REFRESH_MS = 10_000;
+const SUGGESTION_MODE_KEY = 'lens-editor:suggestion-mode';
+
+function readSuggestionMode(): boolean {
+  try {
+    return localStorage.getItem(SUGGESTION_MODE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function writeSuggestionMode(value: boolean): void {
+  try {
+    localStorage.setItem(SUGGESTION_MODE_KEY, String(value));
+  } catch {
+    // Storage may be unavailable (for example, in private browsing mode).
+  }
+}
 
 /**
  * Editor area component that lives INSIDE the RelayProvider key boundary.
@@ -121,7 +138,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
 
   const [synced, setSynced] = useState(false);
   const [isSourceMode, setIsSourceMode] = useState(false);
-  const [isSuggestionMode, setIsSuggestionMode] = useState(false);
+  const [isSuggestionMode, setIsSuggestionMode] = useState(readSuggestionMode);
+  const handleSuggestionModeChange = useCallback((next: boolean) => {
+    setIsSuggestionMode(next);
+    writeSuggestionMode(next);
+  }, []);
   const [promotionStatus, setPromotionStatus] = useState<PromotionStatusResponse | null>(null);
   const [promotionLoading, setPromotionLoading] = useState(false);
   const [promotionError, setPromotionError] = useState<string | null>(null);
@@ -376,7 +397,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           {/* <PanelDebugOverlay config={PANEL_CONFIG} manager={manager} /> */}
           {headerStage === 'overflow' ? (
             <OverflowMenu>
-              <SuggestionModeToggle view={editorView} iconOnly isSuggestionMode={isSuggestionMode} />
+              <SuggestionModeToggle view={editorView} iconOnly isSuggestionMode={isSuggestionMode} onSuggestionModeChange={handleSuggestionModeChange} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               {promotionFilePath && (
                 <PromotionStatus
@@ -397,7 +418,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           ) : (
             <>
               {/* <DebugYMapPanel /> */}
-              <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} />
+              <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} onSuggestionModeChange={handleSuggestionModeChange} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               {promotionFilePath && (
                 <PromotionStatus
@@ -458,6 +479,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               metadata={metadata}
               currentFilePath={currentFilePath}
               getFolderDoc={getFolderDoc}
+              initialSuggestionMode={isSuggestionMode}
             />
           </div>
         </div>
