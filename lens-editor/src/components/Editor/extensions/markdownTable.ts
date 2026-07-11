@@ -587,8 +587,19 @@ export const markdownTableCompartment = new Compartment();
 // ---------------------------------------------------------------------------
 
 const tableTheme = EditorView.theme({
+  // Query the actual editor pane rather than the viewport so a wide table
+  // never grows underneath adjacent sidebars.
+  '.cm-scroller': {
+    containerType: 'inline-size',
+  },
   '.cm-md-table-wrapper': {
     display: 'block',
+    position: 'relative',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    width: 'fit-content',
+    minWidth: '100%',
+    maxWidth: 'calc(100cqi - 32px)',
     overflowX: 'auto',
     margin: '6px 0',
     borderRadius: '6px',
@@ -596,7 +607,8 @@ const tableTheme = EditorView.theme({
   },
   '.cm-md-table': {
     borderCollapse: 'collapse',
-    width: '100%',
+    width: 'max-content',
+    minWidth: '100%',
     fontSize: '14px',
     lineHeight: '1.5',
   },
