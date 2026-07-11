@@ -3,6 +3,7 @@ import { YSweetProvider } from '@y-sweet/client';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 import { getClientToken } from './auth';
 import { RELAY_ID } from './constants';
+import { validateFilePath } from './path-validation';
 
 // Transaction origin identifier - Obsidian uses this pattern to identify
 // the source of Y.js changes and avoid processing its own updates
@@ -165,6 +166,7 @@ export function writeFileMeta(
   type: 'markdown' | 'canvas' | 'file',
   version: number = 0,
 ): void {
+  validateFilePath(path);
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
   const legacyDocs = folderDoc.getMap<string>('docs');
   const meta: FileMetadata = { id, type, version };
@@ -193,6 +195,7 @@ export async function createDocument(
   path: string,
   type: 'markdown' | 'canvas' | 'file' = 'markdown'
 ): Promise<string> {
+  validateFilePath(path);
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
   const legacyDocs = folderDoc.getMap<string>('docs');
   const id = generateUUID();
@@ -261,6 +264,7 @@ export function renameDocument(
   oldPath: string,
   newPath: string
 ): void {
+  validateFilePath(newPath);
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
   const legacyDocs = folderDoc.getMap<string>('docs');
   const meta = filemeta.get(oldPath);
@@ -298,6 +302,7 @@ export function renameFolder(
   oldPath: string,
   newPath: string
 ): void {
+  validateFilePath(newPath);
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
   const legacyDocs = folderDoc.getMap<string>('docs');
   const oldPrefix = `${oldPath}/`;
@@ -379,6 +384,7 @@ export function createFolder(
   folderDoc: Y.Doc,
   path: string
 ): void {
+  validateFilePath(path);
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
   const legacyDocs = folderDoc.getMap<string>('docs');
 
@@ -463,6 +469,7 @@ export async function moveDocument(
   newPath: string,
   targetFolder?: string
 ): Promise<MoveDocumentResponse> {
+  validateFilePath(newPath);
   const body: Record<string, string> = { uuid, new_path: newPath };
   if (targetFolder) {
     body.target_folder = targetFolder;
@@ -490,6 +497,7 @@ export async function movePath(
   newPath: string,
   targetFolder?: string
 ): Promise<MoveDocumentResponse> {
+  validateFilePath(newPath);
   const body: Record<string, string> = { path, new_path: newPath };
   if (targetFolder) {
     body.target_folder = targetFolder;
