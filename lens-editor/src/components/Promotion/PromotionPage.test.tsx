@@ -206,6 +206,30 @@ describe('PromotionPage', () => {
     expect(within(table).getByRole('checkbox', { name: /Other\.md/ })).toBeChecked();
   });
 
+  it('selects and clears every changed file', async () => {
+    const user = userEvent.setup();
+    renderPromotionPage();
+
+    const table = await screen.findByRole('table');
+    const selectAll = screen.getByRole('checkbox', { name: 'Select all files' });
+    const notes = within(table).getByRole('checkbox', { name: /Notes\.md/ });
+    const other = within(table).getByRole('checkbox', { name: /Other\.md/ });
+
+    await user.click(selectAll);
+
+    expect(selectAll).toBeChecked();
+    expect(notes).toBeChecked();
+    expect(other).toBeChecked();
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+    await user.click(selectAll);
+
+    expect(selectAll).not.toBeChecked();
+    expect(notes).not.toBeChecked();
+    expect(other).not.toBeChecked();
+    expect(screen.getByText('0 selected')).toBeInTheDocument();
+  });
+
   it('shows an auto-merge warning when PR result has autoMergeEnabled false', async () => {
     const user = userEvent.setup();
     vi.mocked(createPromotionPr).mockResolvedValue({

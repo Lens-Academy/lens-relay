@@ -118,9 +118,18 @@ export function PromotionPage() {
   }, [changes, selected]);
   const selectedPathsKey = useMemo(() => JSON.stringify(selectedPaths), [selectedPaths]);
   const prMatchesSelection = prResult?.pathsKey === selectedPathsKey;
+  const allFilesSelected = (changes?.files.length ?? 0) > 0
+    && changes!.files.every(file => selected.has(file.path));
 
   const handleToggle = (path: string) => {
     setSelected(current => togglePath(current, path));
+    setPrResult(null);
+  };
+
+  const handleToggleAll = () => {
+    setSelected(allFilesSelected
+      ? new Set()
+      : new Set((changes?.files ?? []).map(file => file.path)));
     setPrResult(null);
   };
 
@@ -225,8 +234,19 @@ export function PromotionPage() {
                   className="w-full rounded border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-800 outline-none focus:border-gray-400"
                 />
               </label>
-              <div className="text-sm text-gray-500">
-                {selectedPaths.length} selected
+              <div className="flex items-center gap-4 text-sm text-gray-500">
+                {changes.files.length > 0 && (
+                  <label className="flex cursor-pointer items-center gap-2 text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={allFilesSelected}
+                      onChange={handleToggleAll}
+                      className="h-4 w-4 rounded border-gray-300"
+                    />
+                    Select all files
+                  </label>
+                )}
+                <span>{selectedPaths.length} selected</span>
               </div>
             </div>
 

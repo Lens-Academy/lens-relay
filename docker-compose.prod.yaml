@@ -59,6 +59,7 @@ services:
       dockerfile: Dockerfile
     image: lens-editor:custom
     container_name: lens-editor
+    init: true
     restart: unless-stopped
     logging: *default-logging
     volumes:

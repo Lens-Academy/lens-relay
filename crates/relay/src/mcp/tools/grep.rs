@@ -186,7 +186,11 @@ fn build_context_ranges(
 ///
 /// For blob files (e.g. `.json`), reads from the store using the file hash.
 /// For markdown files, reads Y.Text from the Y.Doc.
-async fn read_doc_content(server: &Arc<Server>, doc_id: &str, path: &str) -> Option<String> {
+pub(super) async fn read_doc_content(
+    server: &Arc<Server>,
+    doc_id: &str,
+    path: &str,
+) -> Option<String> {
     // Blob files: read from store
     if super::blob::is_blob_file(path) {
         let hash = server.doc_resolver().get_file_hash(path)?;

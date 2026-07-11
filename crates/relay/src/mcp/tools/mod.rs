@@ -14,6 +14,7 @@ pub mod search;
 pub mod session_intro;
 #[cfg(test)]
 pub(crate) mod test_helpers;
+pub mod validate_content;
 
 use crate::server::Server;
 use serde_json::{json, Value};
@@ -190,6 +191,34 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     "limit": {
                         "type": "number",
                         "description": "Maximum number of results to return (default 20, max 100)."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "validate_content",
+            "description": "Validate the folder's course content with the platform content validator (same engine as staging.lensacademy.org/validate) and return errors/warnings. accept_drafts=false validates only human-approved content; accept_drafts=true validates as if all pending suggestions were accepted — use it to check your own drafts before handing them to a reviewer. Filter by course slug ('__orphaned__' for files no course reaches) and category ('production' blocks releases, 'wip' is draft-only). Run this after making suggestions and fix production-category errors in files you touched.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "accept_drafts": {
+                        "type": "boolean",
+                        "description": "Validate with all pending suggestions applied (default false)"
+                    },
+                    "course": {
+                        "type": "string",
+                        "description": "Only issues in files reachable from this course slug; '__orphaned__' for files no course reaches"
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["production", "wip"],
+                        "description": "Only issues of this category"
                     },
                     "session_id": {
                         "type": "string",
@@ -459,6 +488,10 @@ pub async fn dispatch_tool(
             Err(msg) => tool_error(&msg),
         },
         "import_status" => match import_article::status(access).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "validate_content" => match validate_content::execute(server, access, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },

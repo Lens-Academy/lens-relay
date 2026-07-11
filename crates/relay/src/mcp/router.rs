@@ -235,6 +235,7 @@ mod tests {
             "grep",
             "import_article",
             "import_status",
+            "validate_content",
             "move",
             "read",
             "search",

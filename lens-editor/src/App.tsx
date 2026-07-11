@@ -30,7 +30,7 @@ import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
 import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
 import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
-import { PromotionPage } from './components/Promotion/PromotionPage';
+import { PromotionRoute } from './components/Promotion/PromotionRoute';
 import { MultiDocSectionEditor } from './components/SectionEditor';
 import { useDocConnection, waitForProviderSynced } from './hooks/useDocConnection';
 import { applySuggestionAction, applySuggestionActions } from './lib/suggestion-actions';
@@ -469,7 +469,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
   });
 
   // This component renders AuthProvider, so it can't consume useAuth() itself.
-  const { canEdit, canPromote } = deriveCapabilities(role);
+  const { canEdit } = deriveCapabilities(role);
 
   // Filter folders based on token scope
   const accessibleFolders = isAllFolders
@@ -627,11 +627,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   } />
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />
                   <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
-                  <Route path="/promote" element={
-                    canPromote && (isAllFolders || folderUuid === EDU_FOLDER_ID)
-                      ? <PromotionPage />
-                      : <DefaultLanding />
-                  } />
+                  <Route path="/promote" element={<PromotionRoute />} />
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<DefaultLanding />} />
                 </Routes>

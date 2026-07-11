@@ -1,7 +1,7 @@
 import path from 'node:path/posix';
 import { PromotionError, type PromotionFileChange } from './types.ts';
 
-const MAX_PROMOTION_PATHS = 100;
+const MAX_PROMOTION_PATHS = 1000;
 const GIT_PATHSPEC_METACHARS = /[*?[]/;
 const CONTROL_CHARS = /[\x00-\x1F\x7F]/;
 

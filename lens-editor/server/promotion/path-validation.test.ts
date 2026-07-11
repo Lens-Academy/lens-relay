@@ -62,8 +62,22 @@ describe('promotion path validation', () => {
     ]);
   });
 
-  it('rejects more than 100 paths', () => {
+  it('accepts 101 changed paths', () => {
     const paths = Array.from({ length: 101 }, (_, index) => `Courses/${index}.md`);
-    expect(() => validatePromotionPaths(paths, changedFiles)).toThrow(/At most 100/);
+    const manyChangedFiles = paths.map(path => ({
+      path,
+      oldPath: null,
+      status: 'modified' as const,
+      additions: 1,
+      deletions: 1,
+      isBinary: false,
+    }));
+
+    expect(validatePromotionPaths(paths, manyChangedFiles)).toEqual(paths);
+  });
+
+  it('rejects more than 1000 paths', () => {
+    const paths = Array.from({ length: 1001 }, (_, index) => `Courses/${index}.md`);
+    expect(() => validatePromotionPaths(paths, changedFiles)).toThrow(/At most 1000/);
   });
 });
