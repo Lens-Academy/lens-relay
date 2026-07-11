@@ -79,6 +79,17 @@ const HASHTAG_EXCLUDED_NODES = new Set([
   'URL',
 ]);
 
+function listLineDecoration(view: EditorView, lineText: string, markerWidth = '1.25em'): Decoration {
+  const depth = lineText.match(/^(\t*)/)?.[1].length ?? 0;
+  // CodeMirror renders each tab from this same measured character width.
+  const tabWidth = view.state.tabSize * view.defaultCharacterWidth / view.scaleX;
+  return Decoration.line({
+    class: 'cm-list-line',
+    attributes: {
+      style: `--cm-list-depth-indent: ${depth * tabWidth}px; --cm-list-marker-width: ${markerWidth}`,
+    },
+  });
+}
 /**
  * WikilinkContext for navigation callbacks
  * Set via livePreview() function parameter
@@ -389,6 +400,7 @@ class BulletWidget extends WidgetType {
     const span = document.createElement('span');
     span.className = 'cm-bullet';
     span.textContent = '\u2022';
+    span.style.width = 'var(--cm-list-marker-width)';
     return span;
   }
 
@@ -416,6 +428,9 @@ class CheckboxWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
+    const marker = document.createElement('span');
+    marker.className = 'cm-task-marker';
+    marker.style.width = 'var(--cm-list-marker-width)';
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.className = 'cm-checkbox';
@@ -424,7 +439,8 @@ class CheckboxWidget extends WidgetType {
       e.preventDefault();
       this.onToggle();
     };
-    return input;
+    marker.appendChild(input);
+    return marker;
   }
 
   eq(other: CheckboxWidget): boolean {
@@ -505,8 +521,10 @@ function isHashtagContextExcluded(
 const livePreviewPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    private tabWidth: number;
 
     constructor(view: EditorView) {
+      this.tabWidth = view.state.tabSize * view.defaultCharacterWidth / view.scaleX;
       this.decorations = this.buildDecorations(view);
     }
 
@@ -514,13 +532,18 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       const metadataChanged = update.transactions.some(
         tr => tr.effects.some(e => e.is(wikilinkMetadataChanged))
       );
+      const tabWidth = update.view.state.tabSize
+        * update.view.defaultCharacterWidth / update.view.scaleX;
+      const tabGeometryChanged = update.geometryChanged && tabWidth !== this.tabWidth;
 
       if (
         update.docChanged ||
         update.viewportChanged ||
+        tabGeometryChanged ||
         update.selectionSet ||
         metadataChanged
       ) {
+        this.tabWidth = tabWidth;
         this.decorations = this.buildDecorations(update.view);
       }
     }
@@ -822,20 +845,44 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               const parent = node.node.parent; // ListItem
               const grandparent = parent?.parent; // BulletList or OrderedList
               if (grandparent && grandparent.name === 'BulletList') {
+                const line = view.state.doc.lineAt(node.from);
                 // Skip if this is a task list item (has Task child — handled by checklist code)
                 const listItem = parent;
                 let isTask = false;
+                let taskTo = node.to;
                 if (listItem) {
                   for (let child = listItem.firstChild; child; child = child.nextSibling) {
-                    if (child.name === 'Task') { isTask = true; break; }
+                    if (child.name === 'Task') {
+                      isTask = true;
+                      taskTo = child.to;
+                      break;
+                    }
                   }
                 }
+                const markerWidth = isTask && selectionIntersects(selection, node.from, taskTo)
+                  ? '3em'
+                  : '1.25em';
+                decorations.push({
+                  from: line.from,
+                  to: line.from,
+                  deco: listLineDecoration(view, line.text, markerWidth),
+                });
+
                 if (!isTask && !selectionIntersects(selection, node.from, node.to)) {
                   decorations.push({
                     from: node.from,
                     to: node.to,
                     deco: Decoration.replace({
                       widget: new BulletWidget(),
+                    }),
+                  });
+                } else if (!isTask) {
+                  decorations.push({
+                    from: node.from,
+                    to: node.to,
+                    deco: Decoration.mark({
+                      class: 'cm-list-raw-marker',
+                      attributes: { style: 'width: var(--cm-list-marker-width)' },
                     }),
                   });
                 }
@@ -925,6 +972,15 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     });
                   }
                 }
+              } else {
+                decorations.push({
+                  from: replaceFrom,
+                  to: replaceTo,
+                  deco: Decoration.mark({
+                    class: 'cm-list-raw-marker',
+                    attributes: { style: 'width: var(--cm-list-marker-width)' },
+                  }),
+                });
               }
             }
           },
@@ -942,9 +998,14 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       // - Max indent jump of +1 from the previous bullet's indent
       // - Blank lines are ignored; non-blank non-bullet lines reset context
       const lezerBulletDecos = new Map<number, number>();
+      const lezerListLineDecos = new Map<number, number>();
       decorations.forEach((d, idx) => {
-        if ('widget' in (d.deco as any).spec && (d.deco as any).spec.widget instanceof BulletWidget) {
+        const spec = d.deco.spec as { widget?: WidgetType; class?: string };
+        if (spec.widget instanceof BulletWidget) {
           lezerBulletDecos.set(view.state.doc.lineAt(d.from).number, idx);
+        }
+        if (spec.class === 'cm-list-line') {
+          lezerListLineDecos.set(view.state.doc.lineAt(d.from).number, idx);
         }
       });
 
@@ -964,12 +1025,21 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 
           const indent = match[1].length;
           const hasLezerBullet = lezerBulletDecos.has(line.number);
+          const hasLezerListLine = lezerListLineDecos.has(line.number);
 
           // Indent 0: always valid
           if (indent === 0) {
+            if (!lezerListLineDecos.has(line.number)) {
+              decorations.push({ from: line.from, to: line.from,
+                deco: listLineDecoration(view, line.text) });
+            }
             if (!hasLezerBullet && !selectionIntersects(selection, line.from, line.from + 2)) {
               decorations.push({ from: line.from, to: line.from + 2,
                 deco: Decoration.replace({ widget: new BulletWidget() }) });
+            } else if (!hasLezerListLine && selectionIntersects(selection, line.from, line.from + 2)) {
+              decorations.push({ from: line.from, to: line.from + 2,
+                deco: Decoration.mark({ class: 'cm-list-raw-marker',
+                  attributes: { style: 'width: var(--cm-list-marker-width)' } }) });
             }
             continue;
           }
@@ -987,15 +1057,25 @@ const livePreviewPlugin = ViewPlugin.fromClass(
           }
 
           if (valid) {
+            if (!lezerListLineDecos.has(line.number)) {
+              decorations.push({ from: line.from, to: line.from,
+                deco: listLineDecoration(view, line.text) });
+            }
             if (!hasLezerBullet) {
               const dashFrom = line.from + indent;
               if (!selectionIntersects(selection, dashFrom, dashFrom + 2)) {
                 decorations.push({ from: dashFrom, to: dashFrom + 2,
                   deco: Decoration.replace({ widget: new BulletWidget() }) });
+              } else if (!hasLezerListLine) {
+                decorations.push({ from: dashFrom, to: dashFrom + 2,
+                  deco: Decoration.mark({ class: 'cm-list-raw-marker',
+                    attributes: { style: 'width: var(--cm-list-marker-width)' } }) });
               }
             }
-          } else if (hasLezerBullet) {
-            removeDeco.add(lezerBulletDecos.get(line.number)!);
+          } else {
+            if (hasLezerBullet) removeDeco.add(lezerBulletDecos.get(line.number)!);
+            const listLineDeco = lezerListLineDecos.get(line.number);
+            if (listLineDeco !== undefined) removeDeco.add(listLineDeco);
           }
         }
       }

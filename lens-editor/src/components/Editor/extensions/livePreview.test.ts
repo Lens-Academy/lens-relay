@@ -225,6 +225,93 @@ describe('livePreview - hashtags', () => {
   });
 });
 
+describe('livePreview - wrapped bullet indentation', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  it('marks bullet lines for a hanging indent when their text wraps', () => {
+    const content = '- This deliberately long bullet wraps onto continuation lines in a narrow editor pane.';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const line = view.contentDOM.querySelector('.cm-line');
+    expect(line).toHaveClass('cm-list-line');
+  });
+
+  it('marks every valid nested bullet line without marking rejected bullets', () => {
+    const content = '- outer bullet\n\t- nested bullet\nplain text\n\t- rejected bullet';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    expect(Array.from(view.contentDOM.querySelectorAll('.cm-list-line')).map((line) => line.textContent)).toEqual([
+      '• outer bullet',
+      '\t• nested bullet',
+    ]);
+  });
+
+  it('uses CodeMirror rendered tab geometry for nested bullet hanging indents', () => {
+    const content = '- outer bullet\n\t- nested bullet\n\t\t- deeply nested bullet';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const lines = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-list-line'));
+    const tabWidth = view.state.tabSize * view.defaultCharacterWidth / view.scaleX;
+    expect(lines.map((line) => Number.parseFloat(
+      line.style.getPropertyValue('--cm-list-depth-indent'),
+    ))).toEqual([0, tabWidth, tabWidth * 2]);
+  });
+
+  it('reserves the same marker advance for a rendered bullet and its hanging indent', () => {
+    const content = '- rendered bullet with enough text to wrap in a narrow editor';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const line = view.contentDOM.querySelector<HTMLElement>('.cm-list-line');
+    const marker = line?.querySelector<HTMLElement>('.cm-bullet');
+    expect(line?.style.getPropertyValue('--cm-list-marker-width')).toBe('1.25em');
+    expect(marker?.style.width).toBe('var(--cm-list-marker-width)');
+  });
+
+  it('emits a depth-aware hanging indent for rendered task items', () => {
+    const content = '- outer bullet\n\t- [ ] nested task item that wraps';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const taskLine = view.contentDOM.querySelector<HTMLElement>('.cm-line:last-child');
+    expect(taskLine).toHaveClass('cm-list-line');
+    const tabWidth = view.state.tabSize * view.defaultCharacterWidth / view.scaleX;
+    expect(Number.parseFloat(taskLine?.style.getPropertyValue('--cm-list-depth-indent') ?? '')).toBe(tabWidth);
+    expect(taskLine?.querySelector('.cm-checkbox')).not.toBeNull();
+    expect(taskLine?.querySelector<HTMLElement>('.cm-task-marker')?.style.width)
+      .toBe('var(--cm-list-marker-width)');
+  });
+
+  it.each([
+    ['bullet', '- raw bullet marker', 1, '1.25em'],
+    ['task', '- [ ] raw task marker', 3, '3em'],
+  ])('reserves the hanging-indent marker width while editing a raw %s marker', (_kind, content, cursor, width) => {
+    const { view, cleanup: c } = createTestEditor(content, cursor);
+    cleanup = c;
+
+    const line = view.contentDOM.querySelector<HTMLElement>('.cm-list-line');
+    const rawMarker = line?.querySelector<HTMLElement>('.cm-list-raw-marker');
+    expect(rawMarker?.style.width).toBe('var(--cm-list-marker-width)');
+    expect(line?.style.getPropertyValue('--cm-list-marker-width')).toBe(width);
+  });
+
+  it('does not add hanging-indent metadata to a rejected nested task', () => {
+    const content = 'plain text\n\t- [ ] rejected nested task';
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+
+    const rejectedLine = view.contentDOM.querySelector<HTMLElement>('.cm-line:last-child');
+    expect(rejectedLine).not.toHaveClass('cm-list-line');
+  });
+});
+
 describe('livePreview - wikilinks', () => {
   let cleanup: () => void;
 
@@ -679,6 +766,18 @@ describe('livePreview - Obsidian bullet compatibility', () => {
     const { view, cleanup: c } = createTestEditor('- a\n\n\t- b\n\nend', 12);
     cleanup = c;
     expect(countClass(view, 'cm-bullet')).toBe(2);
+  });
+
+  it('reserves marker width for a valid fallback-only nested bullet while editing its marker', () => {
+    const content = '- a\n\t- b\n\n\t\t- fallback bullet';
+    const dashFrom = content.lastIndexOf('-');
+    const { view, cleanup: c } = createTestEditor(content, dashFrom);
+    cleanup = c;
+
+    const fallbackLine = view.contentDOM.querySelector<HTMLElement>('.cm-line:last-child');
+    expect(fallbackLine).toHaveClass('cm-list-line');
+    expect(fallbackLine?.querySelector<HTMLElement>('.cm-list-raw-marker')?.style.width)
+      .toBe('var(--cm-list-marker-width)');
   });
 
   it('many blank lines between bullets do not break the chain', () => {

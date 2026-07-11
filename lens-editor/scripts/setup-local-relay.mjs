@@ -108,6 +108,26 @@ You can also create new documents using the {~~{"author":"Carol","timestamp":${T
 `,
       },
       {
+        path: '/Bullet Wrap Regression.md',
+        id: 'c0000012-0000-4000-8000-000000000012',
+        type: 'markdown',
+        version: 0,
+        content: `# Bullet Wrap Regression
+
+Use this document to reproduce the wrapped bullet indentation bug. Narrow the editor pane until each item wraps onto multiple visual lines.
+
+- This deliberately long bullet item should wrap in a normal editor pane and make the regression obvious: every continuation line starts at the far-left edge instead of aligning with the first content character after the bullet marker.
+- This second deliberately long bullet provides a comparison and confirms the behavior is consistent across adjacent list items rather than being caused by a single unusual line.
+	- This nested bullet is deliberately long so its wrapped continuation lines must preserve the leading tab as well as the rendered bullet marker width.
+		- This deeply nested bullet confirms that each additional list depth moves both the first content line and every wrapped continuation line together.
+	- [ ] This nested task item is deliberately long so its checkbox and wrapped continuation text use the same depth-aware alignment as ordinary bullets.
+
+Expected: wrapped continuation lines align with the text after each bullet or task marker at every nesting depth.
+
+Actual before the fix: wrapped continuation lines lose the marker width, and nested continuations also lose the leading-tab indentation.
+`,
+      },
+      {
         path: '/Getting Started.md',
         id: 'c0000002-0000-4000-8000-000000000002',
         type: 'markdown',
