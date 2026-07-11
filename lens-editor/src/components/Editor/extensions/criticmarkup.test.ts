@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
-import { createCriticMarkupEditor, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
+import { createCriticMarkupEditor, createCriticMarkupEditorWithSelection, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
 import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
 
@@ -350,6 +350,85 @@ describe('CriticMarkup Extension', () => {
     });
 
     describe('wrapping replacements', () => {
+      it('continues typing inside a substitution after replacing a selection', () => {
+        const { view, cleanup: c } = createCriticMarkupEditorWithSelection('hello world', 6, 11);
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+
+        view.dispatch({
+          changes: { from: 6, to: 11, insert: 't' },
+          annotations: Transaction.userEvent.of('input.type'),
+        });
+        view.dispatch({
+          changes: { from: view.state.selection.main.head, insert: 'h' },
+          annotations: Transaction.userEvent.of('input.type'),
+        });
+
+        expect(view.state.doc.toString()).toMatch(/\{~~.*@@world~>th~~\}/);
+      });
+
+      it('keeps composition replacements inside the substitution new content', () => {
+        const { view, cleanup: c } = createCriticMarkupEditorWithSelection('hello world', 6, 11);
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+        view.dispatch({
+          changes: { from: 6, to: 11, insert: 'e' },
+          annotations: Transaction.userEvent.of('input.type'),
+        });
+
+        const substitution = view.state.field(criticMarkupField)[0];
+        const newContentFrom = substitution.contentTo - substitution.newContent!.length;
+        view.dispatch({
+          changes: { from: newContentFrom, to: substitution.contentTo, insert: 'é' },
+          annotations: Transaction.userEvent.of('input.type.compose'),
+        });
+
+        expect(view.state.doc.toString()).toMatch(/\{~~.*@@world~>é~~\}/);
+        expect(view.state.field(criticMarkupField)).toHaveLength(1);
+      });
+
+      it('keeps backspace edits inside the substitution new content', () => {
+        const { view, cleanup: c } = createCriticMarkupEditorWithSelection('hello world', 6, 11);
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+        view.dispatch({
+          changes: { from: 6, to: 11, insert: 'th' },
+          annotations: Transaction.userEvent.of('input.type'),
+        });
+
+        const substitution = view.state.field(criticMarkupField)[0];
+        view.dispatch({
+          changes: { from: substitution.contentTo - 1, to: substitution.contentTo, insert: '' },
+          annotations: Transaction.userEvent.of('delete.backward'),
+        });
+
+        expect(view.state.doc.toString()).toMatch(/\{~~.*@@world~>t~~\}/);
+        expect(view.state.field(criticMarkupField)).toHaveLength(1);
+      });
+
+      it('turns a substitution into a deletion when its replacement is emptied', () => {
+        const { view, cleanup: c } = createCriticMarkupEditorWithSelection('hello world', 6, 11);
+        cleanup = c;
+
+        view.dispatch({ effects: toggleSuggestionMode.of(true) });
+        view.dispatch({
+          changes: { from: 6, to: 11, insert: 't' },
+          annotations: Transaction.userEvent.of('input.type'),
+        });
+
+        const substitution = view.state.field(criticMarkupField)[0];
+        view.dispatch({
+          changes: { from: substitution.contentTo - 1, to: substitution.contentTo, insert: '' },
+          annotations: Transaction.userEvent.of('delete.backward'),
+        });
+
+        expect(view.state.doc.toString()).toMatch(/\{--.*@@world--\}/);
+        expect(view.state.field(criticMarkupField)[0].type).toBe('deletion');
+      });
+
       it('wraps selection replacement in substitution markup', () => {
         const { view, cleanup: c } = createCriticMarkupEditor('hello world', 6);
         cleanup = c;

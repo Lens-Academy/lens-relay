@@ -865,6 +865,41 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
     return tr;
   }
 
+  // Keep subsequent typing in the replacement half of a substitution. The
+  // first replacement transaction positions the cursor immediately before
+  // the closing delimiter, which is also the end of `newContent`.
+  const ownSubstitutions = ranges.filter(
+    (r) => r.type === 'substitution' && r.metadata?.author === currentAuthor
+  );
+
+  for (const ownSubstitution of ownSubstitutions) {
+    const newContentFrom = ownSubstitution.contentTo - (ownSubstitution.newContent?.length ?? 0);
+    let changesStayInNewContent = true;
+    let newContentLength = ownSubstitution.newContent?.length ?? 0;
+    tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+      if (fromA < newContentFrom || toA > ownSubstitution.contentTo) {
+        changesStayInNewContent = false;
+      }
+      newContentLength += inserted.length - (toA - fromA);
+    });
+    if (!changesStayInNewContent) continue;
+
+    if (newContentLength === 0) {
+      const metadataPrefix = tr.startState.doc.sliceString(
+        ownSubstitution.from + 3,
+        ownSubstitution.contentFrom,
+      );
+      const deletion = `{--${metadataPrefix}${ownSubstitution.oldContent ?? ''}--}`;
+      return {
+        changes: { from: ownSubstitution.from, to: ownSubstitution.to, insert: deletion },
+        selection: EditorSelection.cursor(ownSubstitution.from),
+        effects: tr.effects,
+      };
+    }
+
+    return tr;
+  }
+
   // Check if cursor is inside an existing deletion by the same author
   const ownDeletion = ranges.find(
     (r) =>
@@ -953,11 +988,15 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
 
     if (deleted && added) {
       // Replacement -> substitution
+      const replacement = `{~~${meta}@@${deleted}~>${added}~~}`;
       newChanges.push({
         from: fromA,
         to: toA,
-        insert: `{~~${meta}@@${deleted}~>${added}~~}`,
+        insert: replacement,
       });
+      // Keep the cursor in the visible replacement text so the next input
+      // extends this substitution instead of creating an adjacent addition.
+      newCursorPos = fromA + replacement.length - 3;
     } else if (deleted) {
       // Check for adjacent own deletion to extend (sequential backspace)
       const adjacentAfter = ranges.find(
