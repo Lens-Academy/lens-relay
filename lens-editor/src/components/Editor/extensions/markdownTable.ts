@@ -42,6 +42,69 @@ function unescapeFromCell(s: string): string {
   return out;
 }
 
+function findClosingMarker(source: string, marker: string, from: number): number {
+  for (let i = from; i <= source.length - marker.length; i++) {
+    if (source[i] === '\\') {
+      i++;
+      continue;
+    }
+    if (source.startsWith(marker, i)) return i;
+  }
+  return -1;
+}
+
+/** Render the small inline-Markdown subset supported by table live preview. */
+function renderInlineCell(el: HTMLElement, source: string): void {
+  el.replaceChildren();
+  let text = '';
+  const flushText = () => {
+    if (!text) return;
+    el.appendChild(document.createTextNode(text));
+    text = '';
+  };
+
+  for (let i = 0; i < source.length;) {
+    if (source[i] === '\\' && i + 1 < source.length) {
+      text += source[i + 1];
+      i += 2;
+      continue;
+    }
+
+    const marker = source.startsWith('**', i)
+      ? '**'
+      : source.startsWith('__', i)
+        ? '__'
+        : source[i] === '*' || source[i] === '_' || source[i] === '`'
+          ? source[i]
+          : null;
+    if (marker) {
+      const close = findClosingMarker(source, marker, i + marker.length);
+      if (close > i + marker.length) {
+        flushText();
+        const mark = document.createElement(
+          marker === '**' || marker === '__' ? 'strong' : marker === '`' ? 'code' : 'em',
+        );
+        const inner = source.slice(i + marker.length, close);
+        if (marker === '`') mark.textContent = unescapeFromCell(inner);
+        else renderInlineCell(mark, inner);
+        el.appendChild(mark);
+        i = close + marker.length;
+        continue;
+      }
+    }
+
+    text += source[i];
+    i++;
+  }
+  flushText();
+}
+
+function updateCellDisplay(el: HTMLElement, markdown: string): void {
+  const source = markdown.trim();
+  el.dataset.cellMarkdown = source;
+  renderInlineCell(el, source);
+}
+
 function parseAlignments(delimText: string): Align[] {
   const parts = delimText.split('|');
   return parts.slice(1, parts.length - 1).map(cell => {
@@ -91,7 +154,7 @@ class TableWidget extends WidgetType {
       if (!el) return;
       el.dataset.cellFrom = String(cell.from);
       el.dataset.cellTo = String(cell.to);
-      if (document.activeElement !== el) el.textContent = unescapeFromCell(cell.content.trim());
+      if (document.activeElement !== el) updateCellDisplay(el, cell.content);
     });
 
     this.data.rows.forEach((row, ri) => {
@@ -103,7 +166,7 @@ class TableWidget extends WidgetType {
         if (!el) return;
         el.dataset.cellFrom = String(cell.from);
         el.dataset.cellTo = String(cell.to);
-        if (document.activeElement !== el) el.textContent = unescapeFromCell(cell.content.trim());
+        if (document.activeElement !== el) updateCellDisplay(el, cell.content);
       });
     });
 
@@ -124,7 +187,7 @@ class TableWidget extends WidgetType {
     this.data.headers.forEach((cell, ci) => {
       const th = document.createElement('th');
       th.contentEditable = 'true';
-      th.textContent = unescapeFromCell(cell.content.trim());
+      updateCellDisplay(th, cell.content);
       th.style.textAlign = cell.align;
       th.dataset.cellFrom = String(cell.from);
       th.dataset.cellTo = String(cell.to);
@@ -147,7 +210,7 @@ class TableWidget extends WidgetType {
           return;
         }
         td.contentEditable = 'true';
-        td.textContent = unescapeFromCell(cell.content.trim());
+        updateCellDisplay(td, cell.content);
         td.style.textAlign = cell.align;
         td.dataset.cellFrom = String(cell.from);
         td.dataset.cellTo = String(cell.to);
@@ -163,6 +226,15 @@ class TableWidget extends WidgetType {
   private attachCellHandlers(el: HTMLElement, view: EditorView) {
     // Stop CM6 from stealing mouse events (which would blur the contenteditable)
     el.addEventListener('mousedown', e => e.stopPropagation());
+
+    // Editing remains plain Markdown so the inline delimiters survive round trips
+    // through contenteditable. The idle cell is rendered again when focus leaves.
+    el.addEventListener('focus', () => {
+      el.textContent = el.dataset.cellMarkdown ?? '';
+    });
+    el.addEventListener('blur', () => {
+      updateCellDisplay(el, el.textContent ?? '');
+    });
 
     // Plain-text paste only; newlines collapse to spaces so the paste
     // doesn't split the markdown row across multiple lines. Pipes and

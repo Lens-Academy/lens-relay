@@ -102,6 +102,83 @@ describe('markdownTable - rendering', () => {
     expect(Array.from(tds).map(el => el.textContent)).toEqual(['Alice', '30']);
   });
 
+  it('renders bold, italic, and inline code marks inside table cells', () => {
+    const content = '| **Name** | *Role* |\n| - | - |\n| `Alice` | **Editor** and *writer* |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const table = view.contentDOM.querySelector('.cm-md-table')!;
+    expect(table.querySelector('th strong')?.textContent).toBe('Name');
+    expect(table.querySelector('th em')?.textContent).toBe('Role');
+    expect(table.querySelector('td code')?.textContent).toBe('Alice');
+    expect(table.querySelector('tbody strong')?.textContent).toBe('Editor');
+    expect(table.querySelector('tbody em')?.textContent).toBe('writer');
+    expect(table.textContent).not.toContain('**');
+    expect(table.textContent).not.toContain('`');
+  });
+
+  it('renders underscore bold and italic marks inside table cells', () => {
+    const content = '| __Name__ | _Role_ |\n| - | - |\n| __Alice__ | _Editor_ |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const table = view.contentDOM.querySelector('.cm-md-table')!;
+    expect(table.querySelector('th strong')?.textContent).toBe('Name');
+    expect(table.querySelector('th em')?.textContent).toBe('Role');
+    expect(table.querySelector('td strong')?.textContent).toBe('Alice');
+    expect(table.querySelector('td em')?.textContent).toBe('Editor');
+    expect(table.textContent).not.toContain('__');
+  });
+
+  it('shows exact Markdown while a formatted cell is focused and restores marks on blur', () => {
+    const content = '| A |\n| - |\n| **bold** and `code` |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+    expect(td.querySelector('strong')?.textContent).toBe('bold');
+    expect(td.querySelector('code')?.textContent).toBe('code');
+
+    td.focus();
+    expect(td.textContent).toBe('**bold** and `code`');
+    expect(td.querySelector('strong')).toBeNull();
+
+    td.blur();
+    expect(td.querySelector('strong')?.textContent).toBe('bold');
+    expect(td.querySelector('code')?.textContent).toBe('code');
+    expect(view.state.doc.toString()).toBe(content);
+  });
+
+  it('preserves exact underscore emphasis source across focus and blur', () => {
+    const content = '| A |\n| - |\n| __bold__ and _italic_ |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+    expect(td.querySelector('strong')?.textContent).toBe('bold');
+    expect(td.querySelector('em')?.textContent).toBe('italic');
+
+    td.focus();
+    expect(td.textContent).toBe('__bold__ and _italic_');
+    td.blur();
+
+    expect(td.querySelector('strong')?.textContent).toBe('bold');
+    expect(td.querySelector('em')?.textContent).toBe('italic');
+    expect(view.state.doc.toString()).toBe(content);
+  });
+
+  it('keeps inline delimiters intact when editing a formatted cell', () => {
+    const content = '| A |\n| - |\n| **bold** |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector<HTMLElement>('.cm-md-table td')!;
+    td.focus();
+    td.textContent = '**bolder** and *italic* with `code`';
+    td.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(view.state.doc.toString()).toContain('| **bolder** and *italic* with `code` |');
+    td.blur();
+    expect(td.querySelector('strong')?.textContent).toBe('bolder');
+    expect(td.querySelector('em')?.textContent).toBe('italic');
+    expect(td.querySelector('code')?.textContent).toBe('code');
+  });
+
   it('applies column alignment from the delimiter row', () => {
     const content = '| L | C | R |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |\n\nend';
     view = createEditor(content, content.indexOf('end'));
