@@ -289,6 +289,12 @@ export function cleanPdfText(raw: string): string {
     // tokens don't merge; the whitespace collapse below tidies the result.
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x08\x0B-\x1F]/g, " ")
+    // The platform renders bodies with rehype-raw, so a literal `<word>` in
+    // PDF prose would be parsed as an HTML tag and silently vanish — the same
+    // failure the HTML path escapes in makeTurndown. This text is a plain
+    // reconstructed text layer (never intentional HTML), so escape every
+    // tag-opening `<`. Comparisons like "P<0.05" or "1 < 2" don't match.
+    .replace(/<(?=[a-zA-Z/!?])/g, "\\<")
     .split("\n")
     .map((l) => l.replace(/[ \t]+/g, " ").trimEnd())
     .filter((l) => !/^\d{1,4}$/.test(l.trim())) // bare page numbers

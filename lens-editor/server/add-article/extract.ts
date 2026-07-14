@@ -106,6 +106,18 @@ function makeTurndown(baseUrl: string): TurndownService {
   td.use(gfm);
   td.remove(["script", "style", "nav", "header", "footer", "aside", "noscript"]);
 
+  // Turndown's default escaping covers Markdown punctuation but never `<`.
+  // The platform renders bodies with rehype-raw (required for the video
+  // <iframe> embeds below), so an unescaped `<word>` in prose — e.g. the
+  // placeholder in "train a 'brain embeddings to <behavior>' model" — is
+  // parsed as an HTML tag and silently disappears. Escape any `<` that could
+  // open a tag/comment/PI. This runs on TEXT nodes only: code spans/blocks
+  // bypass escape() in turndown, and rule replacements (video iframes, math)
+  // are never passed through it.
+  const baseEscape = td.escape.bind(td);
+  td.escape = (text: string) =>
+    baseEscape(text).replace(/<(?=[a-zA-Z/!?])/g, "\\<");
+
   // MathJax v2 CommonHTML: LaTeX source lives in .mjx-math[aria-label].
   td.addRule("mathjax", {
     filter: (node: HTMLElement) =>
@@ -314,7 +326,13 @@ function makeTurndown(baseUrl: string): TurndownService {
       } catch {
         /* keep */
       }
-      const alt = (n.getAttribute("alt") || "").trim();
+      // Alt text is attribute data, not a text node, so it never passes
+      // through escape() on its own (turndown's default img rule escapes alt;
+      // this custom rule must do the same or `[`/`<` in alt breaks the image
+      // syntax / vanishes under rehype-raw).
+      const alt = td.escape(
+        (n.getAttribute("alt") || "").replace(/\s+/g, " ").trim(),
+      );
       return `![${alt}](${src})`;
     },
   });

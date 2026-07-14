@@ -56,6 +56,28 @@ describe("extractArticle — ForumMagnum adapter", () => {
     expect(ex.body).toMatch(/^\[\^1\]:/m); // definition
     expect(ex.body).not.toContain("↩");
   });
+
+  it("escapes raw < in prose so placeholders survive the platform's rehype-raw", async () => {
+    const body = `
+      <p>Train a 'brain embeddings to &lt;behavior&gt;' model. ${"Padding text. ".repeat(40)}</p>
+      <p>Comparison 1 &lt; 2 stays plain, code stays raw: <code>&lt;script&gt;x&lt;/script&gt;</code>.</p>`;
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.alignmentforum.org/posts/x/y");
+    expect(ex.body).toContain("brain embeddings to \\<behavior>'");
+    expect(ex.body).toContain("1 < 2"); // not tag-like — left alone
+    expect(ex.body).toContain("`<script>x</script>`"); // code spans untouched
+  });
+
+  it("escapes markdown syntax in image alt text (attribute, not a text node)", async () => {
+    const body = `
+      <p>${"Padding text to clear the length floor. ".repeat(40)}</p>
+      <p><img src="https://example.com/fig.png" alt="the <behavior> [labeled] figure"></p>`;
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.alignmentforum.org/posts/x/y");
+    expect(ex.body).toContain(
+      "![the \\<behavior> \\[labeled\\] figure](https://example.com/fig.png)",
+    );
+  });
 });
 
 describe("extractArticle — link-out detection", () => {
