@@ -730,6 +730,21 @@ describe("extractArticle — fallback table conversion", () => {
     expect(ex.body).not.toMatch(/ltx_tabular|<td|class=/);
   });
 
+  it("escapes tag-like < in cell text (raw textContent bypasses td.escape)", async () => {
+    const html = `<!doctype html><html><head><title>[9999.00003] T</title></head>
+    <body><article class="ltx_document">
+      <h1 class="ltx_title ltx_title_document">T</h1>
+      <section class="ltx_section"><p class="ltx_p">${"Body text well past the adapter floor. ".repeat(15)}</p>
+      <table class="ltx_tabular"><tbody>
+        <tr><td class="ltx_td">text to &lt;behavior&gt;</td><td class="ltx_td">P&lt;0.05</td></tr>
+      </tbody></table>
+      </section></article></body></html>`;
+    const ex = await extractArticle(html, "https://ar5iv.labs.arxiv.org/html/9999.00003", {
+      sourceUrl: "https://arxiv.org/abs/9999.00003",
+    });
+    expect(ex.body).toContain("| text to \\<behavior> | P<0.05 |");
+  });
+
   it("leaves properly-headed tables to the GFM converter", async () => {
     const html = `<!doctype html><html><head><title>H</title></head>
     <body><article><h1>H</h1><p>${"Generic body text for extraction to hold onto. ".repeat(20)}</p>

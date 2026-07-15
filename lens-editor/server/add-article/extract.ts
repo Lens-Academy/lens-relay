@@ -7,6 +7,7 @@ import { extractHtmlMeta, dateFromUrl, fetchRawHtml } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
 import { normalizeArticleDom } from "./normalize-dom";
+import { escapeTagOpeners } from "./escape";
 import { arxivAbsUrl } from "./adapters/arxiv";
 import {
   stripSiteSuffix,
@@ -106,17 +107,12 @@ function makeTurndown(baseUrl: string): TurndownService {
   td.use(gfm);
   td.remove(["script", "style", "nav", "header", "footer", "aside", "noscript"]);
 
-  // Turndown's default escaping covers Markdown punctuation but never `<`.
-  // The platform renders bodies with rehype-raw (required for the video
-  // <iframe> embeds below), so an unescaped `<word>` in prose — e.g. the
-  // placeholder in "train a 'brain embeddings to <behavior>' model" — is
-  // parsed as an HTML tag and silently disappears. Escape any `<` that could
-  // open a tag/comment/PI. This runs on TEXT nodes only: code spans/blocks
+  // Turndown's default escaping covers Markdown punctuation but never `<` —
+  // see escapeTagOpeners. This runs on TEXT nodes only: code spans/blocks
   // bypass escape() in turndown, and rule replacements (video iframes, math)
   // are never passed through it.
   const baseEscape = td.escape.bind(td);
-  td.escape = (text: string) =>
-    baseEscape(text).replace(/<(?=[a-zA-Z/!?])/g, "\\<");
+  td.escape = (text: string) => escapeTagOpeners(baseEscape(text));
 
   // MathJax v2 CommonHTML: LaTeX source lives in .mjx-math[aria-label].
   td.addRule("mathjax", {
@@ -163,7 +159,11 @@ function makeTurndown(baseUrl: string): TurndownService {
         Array.from(r.children)
           .filter((c) => c.nodeName === "TD" || c.nodeName === "TH")
           .map((c) =>
-            (c.textContent || "").replace(/\s+/g, " ").replace(/\|/g, "\\|").trim(),
+            // Raw textContent bypasses td.escape, so tag-like `<word>` must be
+            // escaped here too or it vanishes under rehype-raw.
+            escapeTagOpeners(
+              (c.textContent || "").replace(/\s+/g, " ").replace(/\|/g, "\\|").trim(),
+            ),
           );
       const grid = rows.map(cellsOf).filter((r) => r.some((c) => c));
       if (grid.length === 0) return content;
