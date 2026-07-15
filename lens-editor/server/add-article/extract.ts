@@ -7,6 +7,7 @@ import { extractHtmlMeta, dateFromUrl, fetchRawHtml } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
 import { normalizeArticleDom } from "./normalize-dom";
+import { escapeTagOpeners } from "./escape";
 import { arxivAbsUrl } from "./adapters/arxiv";
 import {
   stripSiteSuffix,
@@ -106,6 +107,13 @@ function makeTurndown(baseUrl: string): TurndownService {
   td.use(gfm);
   td.remove(["script", "style", "nav", "header", "footer", "aside", "noscript"]);
 
+  // Turndown's default escaping covers Markdown punctuation but never `<` —
+  // see escapeTagOpeners. This runs on TEXT nodes only: code spans/blocks
+  // bypass escape() in turndown, and rule replacements (video iframes, math)
+  // are never passed through it.
+  const baseEscape = td.escape.bind(td);
+  td.escape = (text: string) => escapeTagOpeners(baseEscape(text));
+
   // MathJax v2 CommonHTML: LaTeX source lives in .mjx-math[aria-label].
   td.addRule("mathjax", {
     filter: (node: HTMLElement) =>
@@ -151,7 +159,11 @@ function makeTurndown(baseUrl: string): TurndownService {
         Array.from(r.children)
           .filter((c) => c.nodeName === "TD" || c.nodeName === "TH")
           .map((c) =>
-            (c.textContent || "").replace(/\s+/g, " ").replace(/\|/g, "\\|").trim(),
+            // Raw textContent bypasses td.escape, so tag-like `<word>` must be
+            // escaped here too or it vanishes under rehype-raw.
+            escapeTagOpeners(
+              (c.textContent || "").replace(/\s+/g, " ").replace(/\|/g, "\\|").trim(),
+            ),
           );
       const grid = rows.map(cellsOf).filter((r) => r.some((c) => c));
       if (grid.length === 0) return content;
@@ -314,7 +326,13 @@ function makeTurndown(baseUrl: string): TurndownService {
       } catch {
         /* keep */
       }
-      const alt = (n.getAttribute("alt") || "").trim();
+      // Alt text is attribute data, not a text node, so it never passes
+      // through escape() on its own (turndown's default img rule escapes alt;
+      // this custom rule must do the same or `[`/`<` in alt breaks the image
+      // syntax / vanishes under rehype-raw).
+      const alt = td.escape(
+        (n.getAttribute("alt") || "").replace(/\s+/g, " ").trim(),
+      );
       return `![${alt}](${src})`;
     },
   });

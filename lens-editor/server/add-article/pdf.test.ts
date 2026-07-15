@@ -70,6 +70,14 @@ describe("cleanPdfText", () => {
     // No surrounding spaces → must not merge the neighbours into one token.
     expect(cleanPdfText("Pdrop\x0fls")).toBe("Pdrop ls");
   });
+
+  it("escapes tag-opening < so placeholders survive the platform's rehype-raw", () => {
+    expect(cleanPdfText("a 'text to <behavior>' model")).toBe(
+      "a 'text to \\<behavior>' model",
+    );
+    // Comparisons are not tag-like — left alone.
+    expect(cleanPdfText("P<0.05 and 1 < 2")).toBe("P<0.05 and 1 < 2");
+  });
 });
 
 describe("parsePdfDate", () => {

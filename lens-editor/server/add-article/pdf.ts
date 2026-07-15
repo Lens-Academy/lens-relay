@@ -8,6 +8,7 @@ import {
   type PdfPageImage,
 } from "./pdf-images";
 import { configuredPdfProvider, parsePdfWithProvider } from "./pdf-provider";
+import { escapeTagOpeners } from "./escape";
 import type { ArticleMeta } from "./types";
 import type { ExtractResult } from "./extract";
 
@@ -282,7 +283,9 @@ export function pageText(items: unknown[]): string {
 /** Tidy reconstructed text: collapse intra-line whitespace, drop standalone
  *  page-number lines, and collapse blank-line runs. */
 export function cleanPdfText(raw: string): string {
-  return raw
+  // This text is a plain reconstructed text layer (never intentional HTML),
+  // so tag-like `<` must be escaped — see escapeTagOpeners.
+  return escapeTagOpeners(raw)
     // Drop C0 control bytes (keep \t and \n). A broken font encoding can decode
     // a glyph to e.g. 0x0F (where an "ϵ" belonged); left in, it corrupts the
     // body and breaks rendering/copy-paste. Replace with a space so adjacent

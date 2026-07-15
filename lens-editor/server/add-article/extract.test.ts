@@ -56,6 +56,28 @@ describe("extractArticle — ForumMagnum adapter", () => {
     expect(ex.body).toMatch(/^\[\^1\]:/m); // definition
     expect(ex.body).not.toContain("↩");
   });
+
+  it("escapes raw < in prose so placeholders survive the platform's rehype-raw", async () => {
+    const body = `
+      <p>Train a 'brain embeddings to &lt;behavior&gt;' model. ${"Padding text. ".repeat(40)}</p>
+      <p>Comparison 1 &lt; 2 stays plain, code stays raw: <code>&lt;script&gt;x&lt;/script&gt;</code>.</p>`;
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.alignmentforum.org/posts/x/y");
+    expect(ex.body).toContain("brain embeddings to \\<behavior>'");
+    expect(ex.body).toContain("1 < 2"); // not tag-like — left alone
+    expect(ex.body).toContain("`<script>x</script>`"); // code spans untouched
+  });
+
+  it("escapes markdown syntax in image alt text (attribute, not a text node)", async () => {
+    const body = `
+      <p>${"Padding text to clear the length floor. ".repeat(40)}</p>
+      <p><img src="https://example.com/fig.png" alt="the <behavior> [labeled] figure"></p>`;
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.alignmentforum.org/posts/x/y");
+    expect(ex.body).toContain(
+      "![the \\<behavior> \\[labeled\\] figure](https://example.com/fig.png)",
+    );
+  });
 });
 
 describe("extractArticle — link-out detection", () => {
@@ -706,6 +728,21 @@ describe("extractArticle — fallback table conversion", () => {
     expect(ex.body).toContain("| Model | Accuracy |");
     expect(ex.body).toContain("| MNIST \\| baseline | 99.1 |");
     expect(ex.body).not.toMatch(/ltx_tabular|<td|class=/);
+  });
+
+  it("escapes tag-like < in cell text (raw textContent bypasses td.escape)", async () => {
+    const html = `<!doctype html><html><head><title>[9999.00003] T</title></head>
+    <body><article class="ltx_document">
+      <h1 class="ltx_title ltx_title_document">T</h1>
+      <section class="ltx_section"><p class="ltx_p">${"Body text well past the adapter floor. ".repeat(15)}</p>
+      <table class="ltx_tabular"><tbody>
+        <tr><td class="ltx_td">text to &lt;behavior&gt;</td><td class="ltx_td">P&lt;0.05</td></tr>
+      </tbody></table>
+      </section></article></body></html>`;
+    const ex = await extractArticle(html, "https://ar5iv.labs.arxiv.org/html/9999.00003", {
+      sourceUrl: "https://arxiv.org/abs/9999.00003",
+    });
+    expect(ex.body).toContain("| text to \\<behavior> | P<0.05 |");
   });
 
   it("leaves properly-headed tables to the GFM converter", async () => {
