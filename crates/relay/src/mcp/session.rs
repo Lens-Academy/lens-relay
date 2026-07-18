@@ -51,6 +51,12 @@ pub struct McpSession {
     pub access: McpAccess,
     /// Author label stamped on CriticMarkup suggestions: "AI" or "{name}'s AI".
     pub author_name: String,
+    /// Dedicated yjs clientID this session's edits are minted under, so the
+    /// editor can attribute AI text per character (provenance design doc).
+    pub ai_client_id: u64,
+    /// Provenance actor key registered in each doc's "users" map:
+    /// `ai:<model>:<behalf>` (or `ai:<model>` when no name was given).
+    pub ai_actor: String,
 }
 
 pub struct SessionManager {
@@ -78,27 +84,29 @@ impl SessionManager {
     /// Runs an opportunistic cleanup pass when the map is over
     /// `CLEANUP_THRESHOLD` entries, so memory stays bounded even between runs
     /// of the periodic cleanup task.
-    pub fn create_session(&self, access: McpAccess, human_name: Option<&str>) -> String {
+    pub fn create_session(
+        &self,
+        access: McpAccess,
+        human_name: Option<&str>,
+        model: Option<&str>,
+    ) -> String {
         if self.sessions.len() >= CLEANUP_THRESHOLD {
             self.cleanup_stale(SESSION_TTL);
         }
-        let author_name = match human_name {
-            Some(name) => {
-                // Strip chars that would break the JSON author field in CriticMarkup
-                // (format: {"author":"NAME","timestamp":...}@@)
-                let sanitized: String = name
-                    .chars()
-                    .filter(|c| *c != '"' && *c != '\\' && !c.is_control())
-                    .collect();
-                let trimmed = sanitized.trim();
-                if trimmed.is_empty() {
-                    "AI".to_string()
-                } else {
-                    format!("{}'s AI", trimmed)
-                }
-            }
-            None => "AI".to_string(),
+        // Strip chars that would break the JSON author field in CriticMarkup
+        // (format: {"author":"NAME","timestamp":...}@@)
+        let sanitized_name: Option<String> = human_name.map(|name| {
+            name.chars()
+                .filter(|c| *c != '"' && *c != '\\' && !c.is_control())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        });
+        let author_name = match sanitized_name.as_deref() {
+            Some("") | None => "AI".to_string(),
+            Some(trimmed) => format!("{}'s AI", trimmed),
         };
+        let ai_actor = Self::ai_actor(sanitized_name.as_deref(), model);
         let session_id = nanoid::nanoid!(8);
         let now = Instant::now();
         let session = McpSession {
@@ -108,9 +116,39 @@ impl SessionManager {
             read_docs: HashSet::new(),
             access,
             author_name,
+            ai_client_id: Self::fresh_ai_client_id(),
+            ai_actor,
         };
         self.sessions.insert(session_id.clone(), session);
         session_id
+    }
+
+    /// Provenance actor key: `ai:<model>:<behalf>` / `ai:<model>`. Colons are
+    /// stripped from the segments because the actor format is colon-separated.
+    fn ai_actor(behalf: Option<&str>, model: Option<&str>) -> String {
+        let clean = |s: &str, max: usize| -> String {
+            s.chars()
+                .filter(|c| *c != ':' && *c != '"' && *c != '\\' && !c.is_control())
+                .take(max)
+                .collect::<String>()
+                .trim()
+                .to_string()
+        };
+        let model = match model.map(|m| clean(m, 40)) {
+            Some(m) if !m.is_empty() => m,
+            _ => "unknown".to_string(),
+        };
+        match behalf.map(|b| clean(b, 60)) {
+            Some(b) if !b.is_empty() => format!("ai:{}:{}", model, b),
+            _ => format!("ai:{}", model),
+        }
+    }
+
+    /// Random clientID for a session's AI edits. Kept within u32 range for
+    /// safe interop with JS clients (yjs clientIDs are JS numbers).
+    fn fresh_ai_client_id() -> u64 {
+        use rand::Rng;
+        rand::thread_rng().gen_range(1..=u32::MAX as u64)
     }
 
     /// Look up a session by ID.
@@ -175,14 +213,14 @@ mod tests {
     #[test]
     fn create_session_returns_8_char_id() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
         assert_eq!(id.len(), 8);
     }
 
     #[test]
     fn create_session_no_name_defaults_to_ai() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
         let session = mgr.get_session(&id).unwrap();
         assert_eq!(session.author_name, "AI");
     }
@@ -190,7 +228,7 @@ mod tests {
     #[test]
     fn create_session_with_name_formats_possessive() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), Some("Chris"));
+        let id = mgr.create_session(default_access(), Some("Chris"), None);
         let session = mgr.get_session(&id).unwrap();
         assert_eq!(session.author_name, "Chris's AI");
     }
@@ -198,7 +236,7 @@ mod tests {
     #[test]
     fn create_session_trims_whitespace_in_name() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), Some("  Luc  "));
+        let id = mgr.create_session(default_access(), Some("  Luc  "), None);
         let session = mgr.get_session(&id).unwrap();
         assert_eq!(session.author_name, "Luc's AI");
     }
@@ -206,7 +244,7 @@ mod tests {
     #[test]
     fn create_session_empty_name_defaults_to_ai() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), Some("   "));
+        let id = mgr.create_session(default_access(), Some("   "), None);
         let session = mgr.get_session(&id).unwrap();
         assert_eq!(session.author_name, "AI");
     }
@@ -215,7 +253,7 @@ mod tests {
     fn create_session_name_strips_json_breaking_chars() {
         let mgr = SessionManager::new();
         // A name with quotes and backslash would break the CriticMarkup JSON author field
-        let id = mgr.create_session(default_access(), Some("Ch\"ris\\"));
+        let id = mgr.create_session(default_access(), Some("Ch\"ris\\"), None);
         let session = mgr.get_session(&id).unwrap();
         assert_eq!(session.author_name, "Chris's AI");
     }
@@ -223,15 +261,15 @@ mod tests {
     #[test]
     fn two_sessions_have_different_ids() {
         let mgr = SessionManager::new();
-        let id1 = mgr.create_session(default_access(), None);
-        let id2 = mgr.create_session(default_access(), None);
+        let id1 = mgr.create_session(default_access(), None, None);
+        let id2 = mgr.create_session(default_access(), None, None);
         assert_ne!(id1, id2);
     }
 
     #[test]
     fn get_session_valid_id() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
         let session = mgr.get_session(&id).expect("session should exist");
         assert_eq!(session.session_id, id);
         assert!(session.read_docs.is_empty());
@@ -246,7 +284,7 @@ mod tests {
     #[test]
     fn touch_updates_last_activity() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
 
         // Backdate last_activity so we can detect the touch.
         {
@@ -270,7 +308,7 @@ mod tests {
     #[test]
     fn remove_session_makes_it_inaccessible() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
         assert!(mgr.get_session(&id).is_some());
         assert!(mgr.remove_session(&id));
         assert!(mgr.get_session(&id).is_none());
@@ -285,7 +323,7 @@ mod tests {
     #[test]
     fn read_docs_can_be_modified() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
 
         {
             let mut session = mgr.get_session_mut(&id).unwrap();
@@ -300,7 +338,7 @@ mod tests {
     #[test]
     fn cleanup_stale_removes_old_sessions() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
         assert!(mgr.get_session(&id).is_some());
 
         mgr.cleanup_stale(std::time::Duration::from_secs(0));
@@ -311,7 +349,7 @@ mod tests {
     #[test]
     fn cleanup_stale_keeps_fresh_sessions() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
 
         mgr.cleanup_stale(std::time::Duration::from_secs(3600));
 
@@ -321,7 +359,7 @@ mod tests {
     #[test]
     fn touch_keeps_session_alive_past_ttl() {
         let mgr = SessionManager::new();
-        let id = mgr.create_session(default_access(), None);
+        let id = mgr.create_session(default_access(), None, None);
 
         // Backdate last_activity beyond a 30s TTL.
         {

@@ -149,7 +149,7 @@ pub async fn execute(
     }
 
     // 3. Check read-before-edit: session must have read this document first
-    let author = {
+    let (author, ai_client_id, ai_actor) = {
         let session = server
             .mcp_sessions
             .get_session(session_id)
@@ -160,7 +160,11 @@ pub async fn execute(
                 file_path
             ));
         }
-        session.author_name.clone()
+        (
+            session.author_name.clone(),
+            session.ai_client_id,
+            session.ai_actor.clone(),
+        )
         // Drop session guard before accessing Y.Doc
     };
 
@@ -170,7 +174,16 @@ pub async fn execute(
     }
 
     if raw_ytext_file {
-        return edit_raw_ytext_file(server, &doc_info, file_path, old_string, new_string).await;
+        return edit_raw_ytext_file(
+            server,
+            &doc_info,
+            file_path,
+            old_string,
+            new_string,
+            ai_client_id,
+            &ai_actor,
+        )
+        .await;
     }
 
     // 4. Reload from storage if GC evicted the doc
@@ -228,7 +241,10 @@ pub async fn execute(
         return Ok(format!("No changes needed for {}", file_path));
     }
 
-    // 8. Apply targeted edit under write lock with TOCTOU re-verify
+    // 8. Apply targeted edit under write lock with TOCTOU re-verify.
+    // The mutation goes through apply_attributed_edit so inserted items are
+    // minted under the session's AI clientID (provenance design doc); holding
+    // the awareness write guard keeps verify + apply atomic.
     {
         let doc_ref = server
             .docs()
@@ -236,41 +252,46 @@ pub async fn execute(
             .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
         let awareness = doc_ref.awareness();
         let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-        let mut txn = guard.doc.transact_mut();
-        let text = txn.get_or_insert_text("contents");
 
         // Re-verify: re-parse under lock, check accepted view still matches
-        let current_raw = text.get_string(&txn);
-        let current_spans = critic_markup::parse(&current_raw);
-        let current_accepted = critic_markup::accepted_view(&current_spans);
-        let actual = current_accepted.get(match_start..match_start + effective_old.len());
-        if actual != Some(&effective_old) {
-            return Err(
-                "Document changed since last read. Please re-read and try again.".to_string(),
-            );
-        }
+        let final_merge = {
+            let txn = guard.doc.transact();
+            let text = match txn.get_text("contents") {
+                Some(t) => t,
+                None => return Err("Document has no content".to_string()),
+            };
+            let current_raw = text.get_string(&txn);
+            let current_spans = critic_markup::parse(&current_raw);
+            let current_accepted = critic_markup::accepted_view(&current_spans);
+            let actual = current_accepted.get(match_start..match_start + effective_old.len());
+            if actual != Some(&effective_old) {
+                return Err(
+                    "Document changed since last read. Please re-read and try again.".to_string(),
+                );
+            }
 
-        // Recompute merge against current raw (in case of concurrent changes)
-        let final_merge = critic_markup::merge_edit(
-            &current_raw,
-            &effective_old,
-            &new_string,
-            &author,
+            // Recompute merge against current raw (in case of concurrent changes)
+            critic_markup::merge_edit(
+                &current_raw,
+                &effective_old,
+                &new_string,
+                &author,
+                timestamp,
+            )
+            .map_err(|e| format!("Error: {}", e))?
+        };
+
+        crate::mcp::provenance::apply_attributed_edit(
+            &guard.doc,
+            ai_client_id,
+            &ai_actor,
             timestamp,
+            |txn, text| {
+                text.remove_range(txn, final_merge.raw_offset as u32, final_merge.raw_len as u32);
+                text.insert(txn, final_merge.raw_offset as u32, &final_merge.replacement);
+            },
         )
         .map_err(|e| format!("Error: {}", e))?;
-
-        // Targeted replacement in Y.Doc
-        text.remove_range(
-            &mut txn,
-            final_merge.raw_offset as u32,
-            final_merge.raw_len as u32,
-        );
-        text.insert(
-            &mut txn,
-            final_merge.raw_offset as u32,
-            &final_merge.replacement,
-        );
     }
 
     // 9. Explicit persist for immediate durability
@@ -293,12 +314,15 @@ pub async fn execute(
 }
 
 /// Edit a raw Y.Text file (e.g. .html) by direct text replacement — no CriticMarkup wrapping.
+#[allow(clippy::too_many_arguments)]
 async fn edit_raw_ytext_file(
     server: &Arc<Server>,
     doc_info: &y_sweet_core::doc_resolver::DocInfo,
     file_path: &str,
     old_string: &str,
     new_string: &str,
+    ai_client_id: u64,
+    ai_actor: &str,
 ) -> Result<String, String> {
     server
         .ensure_doc_loaded(&doc_info.doc_id)
@@ -312,31 +336,51 @@ async fn edit_raw_ytext_file(
             .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
         let awareness = doc_ref.awareness();
         let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-        let mut txn = guard.doc.transact_mut();
-        let text = txn.get_or_insert_text("contents");
-        let content = text.get_string(&txn);
+        let (start, len) = {
+            let txn = guard.doc.transact();
+            let content = match txn.get_text("contents") {
+                Some(text) => text.get_string(&txn),
+                None => String::new(),
+            };
 
-        let matches: Vec<usize> = content.match_indices(old_string).map(|(i, _)| i).collect();
-        let match_start = match matches.len() {
-            0 => {
-                return Err(format!(
-                    "Error: old_string not found in {}. Make sure it matches exactly.",
-                    file_path
-                ))
-            }
-            1 => matches[0],
-            n => {
-                return Err(format!(
-                    "Error: old_string is not unique in {} ({} occurrences). Include more context.",
-                    file_path, n
-                ))
-            }
+            let matches: Vec<usize> = content.match_indices(old_string).map(|(i, _)| i).collect();
+            let match_start = match matches.len() {
+                0 => {
+                    return Err(format!(
+                        "Error: old_string not found in {}. Make sure it matches exactly.",
+                        file_path
+                    ))
+                }
+                1 => matches[0],
+                n => {
+                    return Err(format!(
+                        "Error: old_string is not unique in {} ({} occurrences). Include more context.",
+                        file_path, n
+                    ))
+                }
+            };
+
+            (
+                content[..match_start].chars().count() as u32,
+                old_string.chars().count() as u32,
+            )
         };
 
-        let start = content[..match_start].chars().count() as u32;
-        let len = old_string.chars().count() as u32;
-        text.remove_range(&mut txn, start, len);
-        text.insert(&mut txn, start, new_string);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        crate::mcp::provenance::apply_attributed_edit(
+            &guard.doc,
+            ai_client_id,
+            ai_actor,
+            timestamp,
+            |txn, text| {
+                text.remove_range(txn, start, len);
+                text.insert(txn, start, new_string);
+            },
+        )
+        .map_err(|e| format!("Error: {}", e))?;
     }
 
     {
@@ -1157,7 +1201,7 @@ mod tests {
         // Named session: comments should be attributed to "Chris's AI".
         let sid = server
             .mcp_sessions
-            .create_session(default_access(), Some("Chris"));
+            .create_session(default_access(), Some("Chris"), None);
         server
             .mcp_sessions
             .get_session_mut(&sid)

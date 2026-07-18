@@ -244,6 +244,54 @@ mod tests {
     }
 
     #[test]
+    fn test_preserves_provenance_meta() {
+        // The provenance layer (crates/relay/src/mcp/provenance.rs and
+        // lens-editor/src/lib/provenance.ts) extends PUD entries with a
+        // `meta` map: String(clientID) → { registeredAt }. Compaction must
+        // leave it intact even when it rewrites the entry's ids/ds arrays.
+        let doc = make_doc_with_users(&[("ai:fable-5:luc", &[7, 7, 8], 2)]);
+        {
+            let users_map = doc.get_or_insert_map("users");
+            let mut txn = doc.transact_mut();
+            let user_map = match users_map.get(&txn, "ai:fable-5:luc") {
+                Some(Out::YMap(m)) => m,
+                other => panic!("expected user map, got {:?}", other),
+            };
+            let meta = user_map.insert(&mut txn, "meta", yrs::MapPrelim::default());
+            let record = yrs::Any::Map(std::sync::Arc::new(std::collections::HashMap::from([(
+                "registeredAt".to_string(),
+                yrs::Any::Number(1_784_380_170_036.0),
+            )])));
+            meta.insert(&mut txn, "7", record);
+        }
+
+        let result = compact_user_data(&doc);
+        assert_eq!(result.ids_removed, 1);
+        assert_eq!(result.ds_removed, 2);
+        assert_eq!(read_ids(&doc, "ai:fable-5:luc"), vec![7, 8]);
+
+        let users_map = doc.get_or_insert_map("users");
+        let txn = doc.transact();
+        let user_map = match users_map.get(&txn, "ai:fable-5:luc") {
+            Some(Out::YMap(m)) => m,
+            other => panic!("expected user map, got {:?}", other),
+        };
+        let meta = match user_map.get(&txn, "meta") {
+            Some(Out::YMap(m)) => m,
+            other => panic!("meta map must survive compaction, got {:?}", other),
+        };
+        match meta.get(&txn, "7") {
+            Some(Out::Any(yrs::Any::Map(record))) => {
+                assert_eq!(
+                    record.get("registeredAt"),
+                    Some(&yrs::Any::Number(1_784_380_170_036.0))
+                );
+            }
+            other => panic!("registeredAt record must survive compaction, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_idempotent() {
         let doc = make_doc_with_users(&[("alice", &[1, 2, 1, 3, 2], 4)]);
 

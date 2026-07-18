@@ -72,6 +72,72 @@ export function getRejectReplacement(range: CriticMarkupRange): string {
   }
 }
 
+type CmChange = { from: number; to: number; insert?: string };
+
+/**
+ * Build the changes for accepting/rejecting one range, deleting only the
+ * markers/metadata/discarded content so the kept payload characters survive
+ * in place. This preserves per-character authorship (provenance): the old
+ * whole-span replace re-minted kept text under whoever clicked accept.
+ * Falls back to the legacy full replace when positions don't line up.
+ */
+export function surgicalChangesFor(
+  view: EditorView,
+  range: CriticMarkupRange,
+  action: 'accept' | 'reject'
+): CmChange[] {
+  const fallback: CmChange[] = [{
+    from: range.from,
+    to: range.to,
+    insert: action === 'accept' ? getAcceptReplacement(range) : getRejectReplacement(range),
+  }];
+
+  const wholeSpan: CmChange[] = [{ from: range.from, to: range.to }];
+
+  switch (range.type) {
+    case 'comment':
+      return wholeSpan;
+    case 'addition':
+      if (action === 'reject') return wholeSpan;
+      break;
+    case 'deletion':
+      if (action === 'accept') return wholeSpan;
+      break;
+    case 'highlight':
+      break;
+    case 'substitution': {
+      const oldContent = range.oldContent ?? '';
+      const newContent = range.newContent ?? '';
+      const doc = view.state.doc;
+      if (action === 'accept') {
+        const newStart = range.contentTo - newContent.length;
+        if (newStart < range.contentFrom) return fallback;
+        if (doc.sliceString(newStart, range.contentTo) !== newContent) return fallback;
+        return [
+          { from: range.from, to: newStart },
+          { from: range.contentTo, to: range.to },
+        ];
+      }
+      const oldEnd = range.contentFrom + oldContent.length;
+      if (oldEnd > range.contentTo) return fallback;
+      if (doc.sliceString(range.contentFrom, oldEnd) !== oldContent) return fallback;
+      return [
+        { from: range.from, to: range.contentFrom },
+        { from: oldEnd, to: range.to },
+      ];
+    }
+    default:
+      return fallback;
+  }
+
+  // addition-accept / deletion-reject / highlight: keep [contentFrom, contentTo).
+  if (range.contentFrom < range.from || range.contentTo > range.to) return fallback;
+  return [
+    { from: range.from, to: range.contentFrom },
+    { from: range.contentTo, to: range.to },
+  ];
+}
+
 /**
  * Accept CriticMarkup changes. If a non-collapsed selection exists,
  * accepts all ranges overlapping the selection. Otherwise accepts
@@ -81,19 +147,14 @@ export function getRejectReplacement(range: CriticMarkupRange): string {
 export function acceptChangeAtCursor(view: EditorView): boolean {
   const selected = findRangesInSelection(view);
   if (selected.length > 0) {
-    const changes = selected.map(r => ({
-      from: r.from, to: r.to, insert: getAcceptReplacement(r),
-    }));
-    view.dispatch({ changes });
+    view.dispatch({ changes: selected.flatMap(r => surgicalChangesFor(view, r, 'accept')) });
     return true;
   }
 
   const range = findRangeAtCursor(view);
   if (!range) return false;
 
-  view.dispatch({
-    changes: { from: range.from, to: range.to, insert: getAcceptReplacement(range) },
-  });
+  view.dispatch({ changes: surgicalChangesFor(view, range, 'accept') });
   return true;
 }
 
@@ -106,19 +167,14 @@ export function acceptChangeAtCursor(view: EditorView): boolean {
 export function rejectChangeAtCursor(view: EditorView): boolean {
   const selected = findRangesInSelection(view);
   if (selected.length > 0) {
-    const changes = selected.map(r => ({
-      from: r.from, to: r.to, insert: getRejectReplacement(r),
-    }));
-    view.dispatch({ changes });
+    view.dispatch({ changes: selected.flatMap(r => surgicalChangesFor(view, r, 'reject')) });
     return true;
   }
 
   const range = findRangeAtCursor(view);
   if (!range) return false;
 
-  view.dispatch({
-    changes: { from: range.from, to: range.to, insert: getRejectReplacement(range) },
-  });
+  view.dispatch({ changes: surgicalChangesFor(view, range, 'reject') });
   return true;
 }
 

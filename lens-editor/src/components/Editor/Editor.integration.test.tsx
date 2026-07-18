@@ -20,6 +20,7 @@ import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
 import { Editor } from './Editor';
 import { YDocProvider } from '@y-sweet/react';
+import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
 import path from 'path';
 
 // Auto-detect workspace number from directory name for default port
@@ -151,17 +152,19 @@ describe('Editor Loading State Integration', () => {
 
     // Render Editor with a wrapper that tracks sync state
     const { container } = render(
-      <YDocProvider docId={docId} authEndpoint={() => getClientToken(docId)}>
-        <SyncStateTracker
-          onSyncedChange={(synced, content) => {
-            if (synced && !syncedObserved) {
-              syncedObserved = true;
-              contentWhenSyncedBecameTrue = content;
-            }
-          }}
-        />
-        <Editor />
-      </YDocProvider>
+      <DisplayNameProvider>
+        <YDocProvider docId={docId} authEndpoint={() => getClientToken(docId)}>
+          <SyncStateTracker
+            onSyncedChange={(synced, content) => {
+              if (synced && !syncedObserved) {
+                syncedObserved = true;
+                contentWhenSyncedBecameTrue = content;
+              }
+            }}
+          />
+          <Editor />
+        </YDocProvider>
+      </DisplayNameProvider>
     );
 
     // Wait for the editor to show content
@@ -189,9 +192,11 @@ describe('Editor Loading State Integration', () => {
     await setupDocumentWithContent(docId, testContent);
 
     const { container } = render(
-      <YDocProvider docId={docId} authEndpoint={() => getClientToken(docId)}>
-        <Editor />
-      </YDocProvider>
+      <DisplayNameProvider>
+        <YDocProvider docId={docId} authEndpoint={() => getClientToken(docId)}>
+          <Editor />
+        </YDocProvider>
+      </DisplayNameProvider>
     );
 
     // Loading overlay should be visible immediately after render

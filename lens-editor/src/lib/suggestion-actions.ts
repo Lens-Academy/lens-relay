@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import type { SuggestionItem } from '../hooks/useSuggestions';
+import { surgicalDeletions } from './criticmarkup-surgical';
 
 /**
  * Apply accept/reject to a suggestion in a Y.Doc.
@@ -24,14 +25,32 @@ export function applySuggestionAction(
     throw new Error('Suggestion no longer found in document');
   }
 
-  const replacement = action === 'accept'
-    ? getAcceptText(suggestion)
-    : getRejectText(suggestion);
+  // Surgical path: delete only markers/metadata/discarded content so the kept
+  // payload keeps its original authorship (clientID). Falls back to the legacy
+  // whole-span rewrite when the markup structure can't be verified.
+  const deletions = surgicalDeletions({
+    markup,
+    start: idx,
+    type: suggestion.type,
+    action,
+    content: suggestion.content,
+    oldContent: suggestion.old_content,
+    newContent: suggestion.new_content,
+  });
 
   doc.transact(() => {
-    text.delete(idx, markup.length);
-    if (replacement) {
-      text.insert(idx, replacement);
+    if (deletions) {
+      for (const d of [...deletions].sort((a, b) => b.from - a.from)) {
+        text.delete(d.from, d.to - d.from);
+      }
+    } else {
+      const replacement = action === 'accept'
+        ? getAcceptText(suggestion)
+        : getRejectText(suggestion);
+      text.delete(idx, markup.length);
+      if (replacement) {
+        text.insert(idx, replacement);
+      }
     }
   });
 }

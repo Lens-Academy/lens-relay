@@ -1200,6 +1200,7 @@ impl Server {
         folder_name: &str,
         in_folder_path: &str,
         content: &str,
+        attribution: Option<&crate::mcp::provenance::AiAttribution>,
     ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
         validate_file_path(in_folder_path)
             .map_err(|message| CreateDocumentError::BadRequest(message.to_string()))?;
@@ -1287,8 +1288,6 @@ impl Server {
                 doc_ref.awareness() // Arc clone
             }; // DashMap shard lock released
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-            let mut txn = guard.doc.transact_mut();
-            let text = txn.get_or_insert_text("contents");
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -1297,7 +1296,21 @@ impl Server {
                 "{{++{{\"author\":\"AI\",\"timestamp\":{}}}@@{}++}}",
                 timestamp, content
             );
-            text.insert(&mut txn, 0, &wrapped);
+            match attribution {
+                Some(attr) => crate::mcp::provenance::apply_attributed_edit(
+                    &guard.doc,
+                    attr.client_id,
+                    &attr.actor,
+                    timestamp,
+                    |txn, text| text.insert(txn, 0, &wrapped),
+                )
+                .map_err(CreateDocumentError::Internal)?,
+                None => {
+                    let mut txn = guard.doc.transact_mut();
+                    let text = txn.get_or_insert_text("contents");
+                    text.insert(&mut txn, 0, &wrapped);
+                }
+            }
         }
 
         // 6. Write folder metadata (filemeta_v0 + legacy docs map)
@@ -1407,6 +1420,7 @@ impl Server {
         folder_name: &str,
         in_folder_path: &str,
         content: &str,
+        attribution: Option<&crate::mcp::provenance::AiAttribution>,
     ) -> std::result::Result<CreateDocumentResult, CreateDocumentError> {
         validate_file_path(in_folder_path)
             .map_err(|message| CreateDocumentError::BadRequest(message.to_string()))?;
@@ -1494,9 +1508,27 @@ impl Server {
                 doc_ref.awareness() // Arc clone
             }; // DashMap shard lock released
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-            let mut txn = guard.doc.transact_mut();
-            let text = txn.get_or_insert_text("contents");
-            text.insert(&mut txn, 0, content);
+            match attribution {
+                Some(attr) => {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
+                    crate::mcp::provenance::apply_attributed_edit(
+                        &guard.doc,
+                        attr.client_id,
+                        &attr.actor,
+                        timestamp,
+                        |txn, text| text.insert(txn, 0, content),
+                    )
+                    .map_err(CreateDocumentError::Internal)?
+                }
+                None => {
+                    let mut txn = guard.doc.transact_mut();
+                    let text = txn.get_or_insert_text("contents");
+                    text.insert(&mut txn, 0, content);
+                }
+            }
         }
 
         // 6. Write folder metadata (filemeta_v0; legacy docs map only for markdown)
@@ -4758,7 +4790,7 @@ async fn handle_upsert_document(
     } else {
         // Markdown/other → Y.Doc (existing behavior with upsert semantics)
         match server_state
-            .create_document_direct(&body.folder, &path, &body.content)
+            .create_document_direct(&body.folder, &path, &body.content, None)
             .await
         {
             Ok(result) => Ok(Json(UpsertDocResponse {
@@ -6697,7 +6729,7 @@ mod test {
         let folder_doc_id = insert_test_folder_doc(&server, "Relay Folder 1", &[]).await;
 
         let result = server
-            .create_document("Relay Folder 1", "/Bad \"Name\".md", "content")
+            .create_document("Relay Folder 1", "/Bad \"Name\".md", "content", None)
             .await;
 
         assert!(matches!(result, Err(CreateDocumentError::BadRequest(_))));
