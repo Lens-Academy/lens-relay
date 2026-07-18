@@ -272,19 +272,26 @@ impl DocConnection {
         // get_or_insert_map takes a write txn internally, call before any read txn.
         let users_map = doc.get_or_insert_map("users");
 
-        // Check if already registered.
+        // Skip if this client_id is registered under ANY actor, not just this
+        // user: provenance actors (human:<name>, ai:<model>:<behalf>) own the
+        // IDs they registered, and double registration makes the editor's
+        // reverse clientID→actor map ambiguous. First registration wins,
+        // mirroring lens-editor's provenance.ts. This also covers idempotence
+        // for the connection user's own IDs.
         {
             let txn = doc.transact();
-            if let Some(Out::YMap(user_map)) = users_map.get(&txn, user_id) {
-                if let Some(Out::YArray(ids_arr)) = user_map.get(&txn, "ids") {
-                    for item in ids_arr.iter(&txn) {
-                        let existing_id = match &item {
-                            Out::Any(yrs::Any::Number(n)) => Some(*n as u64),
-                            Out::Any(yrs::Any::BigInt(n)) => Some(*n as u64),
-                            _ => None,
-                        };
-                        if existing_id == Some(client_id) {
-                            return;
+            for (_actor, entry) in users_map.iter(&txn) {
+                if let Out::YMap(user_map) = entry {
+                    if let Some(Out::YArray(ids_arr)) = user_map.get(&txn, "ids") {
+                        for item in ids_arr.iter(&txn) {
+                            let existing_id = match &item {
+                                Out::Any(yrs::Any::Number(n)) => Some(*n as u64),
+                                Out::Any(yrs::Any::BigInt(n)) => Some(*n as u64),
+                                _ => None,
+                            };
+                            if existing_id == Some(client_id) {
+                                return;
+                            }
                         }
                     }
                 }
@@ -952,5 +959,80 @@ mod tests {
         let result = connection.handle_msg(&DefaultProtocol, update);
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
+    }
+
+    /// Pre-register a client_id under an actor the way the provenance layer
+    /// writes it (crates/relay mcp/provenance.rs, lens-editor provenance.ts).
+    fn register_under_actor(doc: &yrs::Doc, actor: &str, client_id: u64) {
+        let users_map = doc.get_or_insert_map("users");
+        let mut txn = doc.transact_mut();
+        let entry = users_map.insert(&mut txn, actor, yrs::MapPrelim::default());
+        let ids = entry.insert(&mut txn, "ids", yrs::ArrayPrelim::default());
+        ids.push_back(&mut txn, yrs::Any::Number(client_id as f64));
+    }
+
+    #[test]
+    fn test_register_pud_skips_ids_owned_by_another_actor() {
+        let doc = yrs::Doc::new();
+        register_under_actor(&doc, "ai:fable-5:luc", 42);
+
+        // A Relay.md connection (token user set) observes clientID 42 as new
+        // in the state vector and tries to claim it. It must not: the ID is
+        // already attributed, and double registration makes attribution
+        // ambiguous in the editor's reverse map.
+        DocConnection::register_pud_client_id_on_doc(&doc, "idheqwn0f6k0xxt", 42);
+
+        let users_map = doc.get_or_insert_map("users");
+        let txn = doc.transact();
+        assert!(
+            users_map.get(&txn, "idheqwn0f6k0xxt").is_none(),
+            "clientID owned by another actor must not be re-registered"
+        );
+    }
+
+    #[test]
+    fn test_register_pud_still_registers_unclaimed_ids() {
+        let doc = yrs::Doc::new();
+        register_under_actor(&doc, "ai:fable-5:luc", 42);
+
+        DocConnection::register_pud_client_id_on_doc(&doc, "idheqwn0f6k0xxt", 43);
+
+        let users_map = doc.get_or_insert_map("users");
+        let txn = doc.transact();
+        let entry = match users_map.get(&txn, "idheqwn0f6k0xxt") {
+            Some(Out::YMap(m)) => m,
+            other => panic!("expected user entry for unclaimed id, got {:?}", other),
+        };
+        let ids: Vec<u64> = match entry.get(&txn, "ids") {
+            Some(Out::YArray(a)) => a
+                .iter(&txn)
+                .filter_map(|v| match v {
+                    Out::Any(yrs::Any::Number(n)) => Some(n as u64),
+                    Out::Any(yrs::Any::BigInt(n)) => Some(n as u64),
+                    _ => None,
+                })
+                .collect(),
+            other => panic!("expected ids array, got {:?}", other),
+        };
+        assert_eq!(ids, vec![43]);
+    }
+
+    #[test]
+    fn test_register_pud_own_ids_stay_idempotent() {
+        let doc = yrs::Doc::new();
+        DocConnection::register_pud_client_id_on_doc(&doc, "idheqwn0f6k0xxt", 7);
+        DocConnection::register_pud_client_id_on_doc(&doc, "idheqwn0f6k0xxt", 7);
+
+        let users_map = doc.get_or_insert_map("users");
+        let txn = doc.transact();
+        let entry = match users_map.get(&txn, "idheqwn0f6k0xxt") {
+            Some(Out::YMap(m)) => m,
+            other => panic!("expected user entry, got {:?}", other),
+        };
+        let len = match entry.get(&txn, "ids") {
+            Some(Out::YArray(a)) => a.len(&txn),
+            other => panic!("expected ids array, got {:?}", other),
+        };
+        assert_eq!(len, 1);
     }
 }

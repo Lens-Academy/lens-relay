@@ -407,6 +407,161 @@
   text-decoration: none !important;
 }
 
+/* Authorship provenance (docs/plans/2026-07-18-provenance-design.md).
+   Gutter mode: a 3px strip rendered by a ::before pseudo-element offset to
+   the left of the line box, so it sits in the margin rather than hugging the
+   text (no layout shift). Inline mode adds per-character tints.
+   Palette note: green/red are reserved for the CriticMarkup suggestion
+   layer, so provenance uses blue (human) / orange (AI) — also the classic
+   colorblind-safe pair. */
+.cm-authline-human,
+.cm-authline-ai,
+.cm-authline-unknown,
+.cm-authline-mixed {
+  position: relative;
+}
+
+.cm-authline-human::before,
+.cm-authline-ai::before,
+.cm-authline-unknown::before,
+.cm-authline-mixed::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  pointer-events: none;
+}
+
+.cm-authline-human::before {
+  background-color: #60a5fa; /* blue-400 */
+}
+
+.cm-authline-ai::before {
+  background-color: #fb923c; /* orange-400 */
+}
+
+.cm-authline-unknown::before {
+  background-color: #d1d5db; /* gray-300 */
+}
+
+/* Genuinely mixed human/AI lines: fixed-pitch two-color dashes. The pattern
+   is a constant texture (never derived from run positions), so it stays
+   visually calm while typing. */
+.cm-authline-mixed::before {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    #60a5fa 0 5px,
+    #fb923c 5px 10px
+  );
+}
+
+/* Expanded mode: author name rendered in the margin left of the strip,
+   blame-style (only on the first line of a same-authors block). Pure
+   overlay — never shifts the text. */
+.cm-line[data-auth-label]::after {
+  content: attr(data-auth-label);
+  position: absolute;
+  right: calc(100% + 20px);
+  top: 0;
+  width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 11px;
+  line-height: inherit;
+  color: #6b7280;
+  pointer-events: none;
+  animation: cm-auth-label-in 120ms ease-out;
+}
+
+@keyframes cm-auth-label-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Persistent Expanded mode: reserve some horizontal space for the label
+   column (labels also use the natural centering margin; this padding just
+   guarantees breathing room instead of the full label width). Widens the
+   box by the same amount so the text column keeps its width. */
+.cm-editor[data-authorship-mode='expanded'] .cm-content,
+.cm-editor[data-authorship-mode='inline'] .cm-content {
+  max-width: 768px;
+  padding-left: 92px;
+}
+
+/* Hover-preview labels: fixed-position chips on document.body — they escape
+   the scroller's overflow clipping and paint above the file sidebar. */
+.cm-authorship-hover-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.cm-auth-hoverlabel {
+  position: fixed;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #374151;
+  background-color: white;
+  background-size: 3px 100%;
+  background-repeat: no-repeat;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 0 8px 0 10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  animation: cm-auth-label-in 120ms ease-out;
+}
+
+.cm-auth-hoverlabel-human {
+  background-image: linear-gradient(#60a5fa, #60a5fa);
+}
+
+.cm-auth-hoverlabel-ai {
+  background-image: linear-gradient(#fb923c, #fb923c);
+}
+
+.cm-auth-hoverlabel-unknown {
+  background-image: linear-gradient(#d1d5db, #d1d5db);
+}
+
+.cm-auth-hoverlabel-mixed {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    #60a5fa 0 5px,
+    #fb923c 5px 10px
+  );
+}
+
+.cm-auth-human {
+  background-color: rgba(96, 165, 250, 0.13);
+}
+
+.cm-auth-ai {
+  background-color: rgba(251, 146, 60, 0.16);
+}
+
+.cm-auth-unknown {
+  background-color: rgba(209, 213, 219, 0.25);
+}
+
+.cm-authorship-tooltip {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+
 /* Colored left border for blank/hidden lines within suggestions.
    min-height ensures cursor remains visible on lines with only font-size:0 content. */
 .cm-addition-line {

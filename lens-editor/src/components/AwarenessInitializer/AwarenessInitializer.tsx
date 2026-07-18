@@ -1,7 +1,8 @@
-import { useYjsProvider } from '@y-sweet/react';
-import { useEffect } from 'react';
+import { useYjsProvider, useYDoc } from '@y-sweet/react';
+import { useEffect, useRef } from 'react';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
+import { attachProvenanceRegistration, humanActor } from '../../lib/provenance';
 
 // 6-color palette per CONTEXT.md - good contrast on white backgrounds
 const USER_COLORS = [
@@ -20,7 +21,21 @@ function generateUserColor(clientId: number): string {
 
 export function AwarenessInitializer() {
   const provider = useYjsProvider();
+  const ydoc = useYDoc();
   const { displayName } = useDisplayName();
+
+  // Provenance: lazily map this doc instance's clientID to the current human
+  // actor on the first local edit (read-only viewers never register).
+  // The ref keeps the attached listener reading the latest display name.
+  const displayNameRef = useRef(displayName);
+  displayNameRef.current = displayName;
+
+  useEffect(() => {
+    if (!ydoc) return;
+    return attachProvenanceRegistration(ydoc, () =>
+      humanActor(displayNameRef.current ?? '')
+    );
+  }, [ydoc]);
 
   useEffect(() => {
     if (!provider) return;

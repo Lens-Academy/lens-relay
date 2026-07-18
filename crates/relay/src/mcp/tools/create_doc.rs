@@ -20,13 +20,28 @@ pub async fn execute(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
+    // Session identity for provenance attribution + comment author labels.
+    let (author, attribution) = {
+        let session = server
+            .mcp_sessions
+            .get_session(session_id)
+            .ok_or_else(|| "Error: Session not found".to_string())?;
+        (
+            session.author_name.clone(),
+            crate::mcp::provenance::AiAttribution {
+                client_id: session.ai_client_id,
+                actor: session.ai_actor.clone(),
+            },
+        )
+    };
+
     // Blob files (.json) — different storage path
     if blob::is_blob_file(file_path) {
         return create_blob_file(server, file_path, content).await;
     }
 
     if file_path.ends_with(".html") {
-        return create_html_file(server, file_path, content).await;
+        return create_html_file(server, file_path, content, &attribution).await;
     }
 
     // --- Markdown path (existing behavior) ---
@@ -35,14 +50,6 @@ pub async fn execute(
     if !file_path.ends_with(".md") {
         return Err("file_path must end with one of: .md, .html, .json".to_string());
     }
-
-    // Attribute any comment in the initial content to the session's author label.
-    let author = server
-        .mcp_sessions
-        .get_session(session_id)
-        .ok_or_else(|| "Error: Session not found".to_string())?
-        .author_name
-        .clone();
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -61,7 +68,7 @@ pub async fn execute(
     let in_folder_path = format!("/{}", &file_path[slash_pos + 1..]);
 
     let _result = server
-        .create_document(folder_name, &in_folder_path, md_content)
+        .create_document(folder_name, &in_folder_path, md_content, Some(&attribution))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -72,6 +79,7 @@ async fn create_html_file(
     server: &Arc<Server>,
     file_path: &str,
     content: &str,
+    attribution: &crate::mcp::provenance::AiAttribution,
 ) -> Result<String, String> {
     let slash_pos = file_path
         .find('/')
@@ -80,7 +88,7 @@ async fn create_html_file(
     let in_folder_path = format!("/{}", &file_path[slash_pos + 1..]);
 
     server
-        .create_document_direct(folder_name, &in_folder_path, content)
+        .create_document_direct(folder_name, &in_folder_path, content, Some(attribution))
         .await
         .map_err(|e| e.to_string())?;
 

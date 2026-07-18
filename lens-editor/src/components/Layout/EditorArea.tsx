@@ -13,6 +13,7 @@ import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
 import { DocumentTitle } from '../DocumentTitle';
 import { SourceModeToggle } from '../SourceModeToggle/SourceModeToggle';
+import { AuthorshipModeToggle } from '../AuthorshipModeToggle/AuthorshipModeToggle';
 import { SuggestionModeToggle } from '../SuggestionModeToggle/SuggestionModeToggle';
 import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
@@ -399,6 +400,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             <OverflowMenu>
               <SuggestionModeToggle view={editorView} iconOnly isSuggestionMode={isSuggestionMode} onSuggestionModeChange={handleSuggestionModeChange} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
+              <AuthorshipModeToggle view={editorView} />
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
@@ -420,6 +422,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               {/* <DebugYMapPanel /> */}
               <SuggestionModeToggle view={editorView} iconOnly={headerStage !== 'full'} isSuggestionMode={isSuggestionMode} onSuggestionModeChange={handleSuggestionModeChange} />
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
+              <AuthorshipModeToggle view={editorView} />
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}

@@ -36,6 +36,10 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     "name": {
                         "type": "string",
                         "description": "User's first name; suggestions show as \"{name}'s AI\". Ask the user if you don't reliably know it. Omit if truly unavailable."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "The AI model you are running as (e.g. 'fable-5', 'opus-4.8'). Used to attribute your edits in the authorship display. Omit if unknown."
                     }
                 }
             }
@@ -371,9 +375,10 @@ pub async fn dispatch_tool(
     // payload rather than the HTTP transport.
     if name == "create_session" {
         let human_name = arguments.get("name").and_then(|v| v.as_str());
+        let model = arguments.get("model").and_then(|v| v.as_str());
         let sid = server
             .mcp_sessions
-            .create_session(access.clone(), human_name);
+            .create_session(access.clone(), human_name, model);
         // Append curator-maintained orientation notes, if any folder the
         // token can access has an "AI Guide/_intro.md" (see session_intro).
         return match session_intro::session_intro(server, access).await {

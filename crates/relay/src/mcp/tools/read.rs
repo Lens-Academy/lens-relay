@@ -452,6 +452,7 @@ mod tests {
                 raw_token: None,
             },
             None,
+            None,
         );
 
         // THIS IS THE BUG: read should reload from store, not fail

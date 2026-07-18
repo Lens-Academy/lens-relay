@@ -1,4 +1,5 @@
 pub mod jsonrpc;
+pub mod provenance;
 pub mod router;
 pub mod session;
 pub mod tools;

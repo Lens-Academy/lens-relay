@@ -37,6 +37,17 @@ import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
 import { remoteCursorTheme } from './remoteCursorTheme';
 import { criticMarkupExtension, commentClickCallback, toggleSuggestionMode } from './extensions/criticmarkup';
+import { authorshipExtension } from './extensions/authorship';
+import {
+  pasteClassification,
+  pasteClassifyCallback,
+  type PendingPaste,
+} from './extensions/paste-classification';
+import {
+  classifyPendingPaste,
+  resolvePendingClassification,
+} from '../../lib/provenance';
+import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { ContextMenu } from './ContextMenu';
 import { getContextMenuItems } from './extensions/criticmarkup-context-menu';
 import type { ContextMenuItem } from './extensions/criticmarkup-context-menu';
@@ -112,11 +123,57 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   const [initialSuggestionModeOnMount] = useState(initialSuggestionMode);
   const ydoc = useYDoc();
   const provider = useYjsProvider();
+  const { displayName } = useDisplayName();
   const [synced, setSynced] = useState(false);
   const [contextMenu, setContextMenu] = useState<{
     items: ContextMenuItem[];
     position: { x: number; y: number };
   } | null>(null);
+
+  // Paste provenance popover: which pending paste (if any) awaits
+  // classification, and where to show the prompt.
+  const [pastePrompt, setPastePrompt] = useState<{
+    pasteId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const pastePromptTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const closePastePrompt = (pasteId: number) => {
+    resolvePendingClassification(pasteId);
+    if (pastePromptTimer.current) clearTimeout(pastePromptTimer.current);
+    pastePromptTimer.current = null;
+    setPastePrompt((current) => (current?.pasteId === pasteId ? null : current));
+  };
+
+  const classifyPaste = (pasteId: number, origin: 'human' | 'ai') => {
+    // Same identity source as the lazy registration in AwarenessInitializer,
+    // so a "Me" answer and ordinary typing land under the same actor key.
+    classifyPendingPaste(ydoc, pasteId, origin, displayName);
+    closePastePrompt(pasteId);
+  };
+
+  const handlePendingPaste = (paste: PendingPaste, view: EditorView) => {
+    // Replace any previous unanswered prompt (its ID stays unmapped/unknown).
+    setPastePrompt((current) => {
+      if (current) resolvePendingClassification(current.pasteId);
+      return null;
+    });
+    const coords = view.coordsAtPos(Math.min(paste.from, view.state.doc.length));
+    if (!coords) {
+      resolvePendingClassification(paste.pasteId);
+      return;
+    }
+    // Clamp to the viewport: the popover is position:fixed, so an offscreen
+    // anchor (paste at the bottom edge) would make it unreachable.
+    const x = Math.max(8, Math.min(coords.left, window.innerWidth - 360));
+    const y = Math.max(8, Math.min(coords.bottom + 6, window.innerHeight - 48));
+    setPastePrompt({ pasteId: paste.pasteId, x, y });
+    if (pastePromptTimer.current) clearTimeout(pastePromptTimer.current);
+    pastePromptTimer.current = setTimeout(() => closePastePrompt(paste.pasteId), 8000);
+  };
+  const handlePendingPasteRef = useRef(handlePendingPaste);
+  handlePendingPasteRef.current = handlePendingPaste;
 
   // Store metadata in ref for autocomplete getter (avoids stale closures)
   const metadataRef = useRef<FolderMetadata | null>(null);
@@ -333,6 +390,17 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         Prec.high(keymap.of(markdownFormattingKeymap)),
         listIndentKeymap,
         yCollab(ytext, provider.awareness, { undoManager }),
+        // Must come after yCollab: reads the Y.Text during plugin update()
+        authorshipExtension(ytext),
+        // Large pastes get a temporary clientID + "who wrote this?" popover
+        ...(readOnly
+          ? []
+          : [
+              pasteClassification(ydoc),
+              pasteClassifyCallback.of((paste, view) =>
+                handlePendingPasteRef.current(paste, view)
+              ),
+            ]),
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
         remoteCursorTheme,
         criticMarkupExtension({ canAcceptReject }),
@@ -444,6 +512,37 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           position={contextMenu.position}
           onClose={handleCloseContextMenu}
         />
+      )}
+      {pastePrompt && (
+        <div
+          className="fixed z-50 flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 shadow-lg text-sm"
+          style={{ left: pastePrompt.x, top: pastePrompt.y }}
+          data-testid="paste-classification-popover"
+        >
+          <span className="text-gray-600">Pasted text — who wrote it?</span>
+          <button
+            type="button"
+            className="rounded bg-blue-50 px-2 py-0.5 text-blue-700 hover:bg-blue-100"
+            onClick={() => classifyPaste(pastePrompt.pasteId, 'human')}
+          >
+            Me
+          </button>
+          <button
+            type="button"
+            className="rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100"
+            onClick={() => classifyPaste(pastePrompt.pasteId, 'ai')}
+          >
+            AI
+          </button>
+          <button
+            type="button"
+            className="px-1 text-gray-400 hover:text-gray-600"
+            aria-label="Dismiss (leave as unknown)"
+            onClick={() => closePastePrompt(pastePrompt.pasteId)}
+          >
+            ✕
+          </button>
+        </div>
       )}
     </div>
   );
