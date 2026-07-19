@@ -138,6 +138,32 @@ export function parse(doc: string): CriticMarkupRange[] {
   return ranges;
 }
 
+/**
+ * An adjacent deletion+addition pair — the edit tool's encoding of a
+ * substitution. Both the merged accept/reject buttons and edit counting
+ * treat such a pair as one logical edit.
+ */
+export function isAdjacentEditPair(a: CriticMarkupRange, b: CriticMarkupRange): boolean {
+  return a.type === 'deletion' && b.type === 'addition' && a.to === b.from;
+}
+
+/**
+ * Count pending CriticMarkup edits (additions/deletions/substitutions) in a
+ * text slice. An adjacent deletion+addition pair counts as one edit.
+ * Comments and highlights are not edits.
+ */
+export function countPendingEdits(text: string): number {
+  const ranges = parse(text);
+  let count = 0;
+  for (let i = 0; i < ranges.length; i++) {
+    const r = ranges[i];
+    if (r.type !== 'addition' && r.type !== 'deletion' && r.type !== 'substitution') continue;
+    if (i > 0 && isAdjacentEditPair(ranges[i - 1], r)) continue;
+    count++;
+  }
+  return count;
+}
+
 export interface CommentThread {
   comments: CriticMarkupRange[];
   from: number;

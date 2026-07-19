@@ -39,6 +39,7 @@ import { MobileCommentsSheet, type PendingCommentAction } from '../Mobile/Mobile
 import { MobileEditToolbar } from '../Mobile/MobileEditToolbar';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
+import { revealFrontmatterPos } from '../Editor/extensions/frontmatter';
 import { resolveAnchorYFromView, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
@@ -50,6 +51,24 @@ import { EDU_FOLDER_ID } from '../../lib/constants';
 
 const PROMOTION_STATUS_REFRESH_MS = 10_000;
 const SUGGESTION_MODE_KEY = 'lens-editor:suggestion-mode';
+
+/**
+ * Move the cursor to `pos`, scroll it into view, and flash its line — the
+ * shared landing behavior for URL navigation targets (#L{n} and ?pos={offset}).
+ * A position inside collapsed frontmatter first expands it, otherwise the
+ * target would stay hidden behind the properties bar.
+ */
+function jumpToPos(view: EditorView, pos: number): void {
+  revealFrontmatterPos(view, pos);
+  const line = view.state.doc.lineAt(pos);
+  view.dispatch({
+    selection: { anchor: pos },
+    effects: [
+      EditorView.scrollIntoView(pos, { y: 'center' }),
+      persistentHighlightLine.of(line.from),
+    ],
+  });
+}
 
 function readSuggestionMode(): boolean {
   try {
@@ -331,21 +350,33 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     if (!synced || !editorView) return;
     const match = window.location.hash.match(/^#L(\d+)$/i);
     if (!match) return;
+    // ?pos= is the more precise target — let its effect handle the jump
+    if (new URLSearchParams(window.location.search).has('pos')) return;
     const lineNum = parseInt(match[1], 10);
     if (lineNum < 1) return;
     const doc = editorView.state.doc;
-    const clampedLine = Math.min(lineNum, doc.lines);
-    const line = doc.line(clampedLine);
+    const line = doc.line(Math.min(lineNum, doc.lines));
 
-    editorView.dispatch({
-      selection: { anchor: line.from },
-      effects: [
-        EditorView.scrollIntoView(line.from, { y: 'center' }),
-        persistentHighlightLine.of(line.from),
-      ],
-    });
+    jumpToPos(editorView, line.from);
 
     history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, [synced, editorView]);
+
+  // Scroll to ?pos={offset} on initial load (review page "Open" links)
+  useEffect(() => {
+    if (!synced || !editorView) return;
+    const params = new URLSearchParams(window.location.search);
+    const posParam = params.get('pos');
+    if (posParam === null) return;
+    const parsed = parseInt(posParam, 10);
+    if (Number.isNaN(parsed)) return;
+    const pos = Math.min(Math.max(parsed, 0), editorView.state.doc.length);
+
+    jumpToPos(editorView, pos);
+
+    params.delete('pos');
+    const qs = params.toString();
+    history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
   }, [synced, editorView]);
 
   // Auto-split ToC/Backlinks vertical split inside right sidebar
