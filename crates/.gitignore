@@ -12,3 +12,4 @@ relay.staging.toml
 relay-binary
 fly.toml
 fly.staging.toml
+data-local/

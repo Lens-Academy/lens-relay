@@ -260,7 +260,9 @@ function DocumentView() {
     const expectedUrl = urlForDoc(activeDocId, metadata);
     const currentPath = `/${docUuid}${splatPath ? `/${splatPath}` : ''}`;
     if (currentPath !== expectedUrl) {
-      navigate(expectedUrl, { replace: true });
+      // Keep query/hash (?pos= navigation targets, #L line anchors) — they are
+      // consumed and cleaned up by EditorArea once the editor has synced
+      navigate(expectedUrl + window.location.search + window.location.hash, { replace: true });
     }
   }, [metadata, activeDocId, docUuid, splatPath, navigate]);
 

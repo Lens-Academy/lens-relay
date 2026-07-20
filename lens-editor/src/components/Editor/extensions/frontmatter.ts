@@ -21,6 +21,7 @@ import {
 import type { DecorationSet, Tooltip } from '@codemirror/view';
 import { StateField, StateEffect, EditorSelection } from '@codemirror/state';
 import type { StateCommand } from '@codemirror/state';
+import { countPendingEdits } from '../../../lib/criticmarkup-parser';
 
 // ── Frontmatter detection ─────────────────────────────────────────
 
@@ -58,7 +59,9 @@ const FRONTMATTER_FONT_SIZE = '13px';
 
 function measureTextWidth(text: string, refElement: HTMLElement): number {
   if (!measureCtx) {
-    measureCtx = document.createElement('canvas').getContext('2d')!;
+    measureCtx = document.createElement('canvas').getContext('2d');
+    // jsdom has no canvas — fall back to a rough estimate
+    if (!measureCtx) return text.length * 7;
   }
   const style = getComputedStyle(refElement);
   // Build font string with frontmatter's actual font-size, not the editor's
@@ -88,7 +91,11 @@ class SpacerWidget extends WidgetType {
 
 /** Toggle bar — used for both collapsed and expanded header */
 class FrontmatterBarWidget extends WidgetType {
-  constructor(private keyCount: number, private expanded: boolean) { super(); }
+  constructor(
+    private keyCount: number,
+    private expanded: boolean,
+    private suggestionCount: number = 0,
+  ) { super(); }
 
   toDOM(): HTMLElement {
     const bar = document.createElement('div');
@@ -106,6 +113,17 @@ class FrontmatterBarWidget extends WidgetType {
       : `Frontmatter: ${this.keyCount} properties`;
     bar.appendChild(label);
 
+    // Pending suggestions are hidden by the collapsed block-replace widget, so
+    // the bar itself must announce them or reviewers never know they exist
+    if (!this.expanded && this.suggestionCount > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'cm-frontmatter-suggestions-badge';
+      badge.textContent = this.suggestionCount === 1
+        ? '1 suggested edit'
+        : `${this.suggestionCount} suggested edits`;
+      bar.appendChild(badge);
+    }
+
     const expanded = this.expanded;
     bar.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -117,7 +135,9 @@ class FrontmatterBarWidget extends WidgetType {
   }
 
   eq(other: FrontmatterBarWidget): boolean {
-    return this.keyCount === other.keyCount && this.expanded === other.expanded;
+    return this.keyCount === other.keyCount
+      && this.expanded === other.expanded
+      && this.suggestionCount === other.suggestionCount;
   }
 }
 
@@ -130,11 +150,18 @@ interface FrontmatterState {
   collapsed: boolean;
   enabled: boolean;
   range: FrontmatterRange | null;
+  /** Pending CriticMarkup edits inside the frontmatter range */
+  suggestionCount: number;
+}
+
+function frontmatterSuggestionCount(doc: { sliceString(from: number, to: number): string }, range: FrontmatterRange | null): number {
+  return range ? countPendingEdits(doc.sliceString(range.from, range.to)) : 0;
 }
 
 const frontmatterField = StateField.define<FrontmatterState>({
   create(state) {
-    return { collapsed: true, enabled: true, range: detectFrontmatter(state.doc) };
+    const range = detectFrontmatter(state.doc);
+    return { collapsed: true, enabled: true, range, suggestionCount: frontmatterSuggestionCount(state.doc, range) };
   },
 
   update(value, tr) {
@@ -148,7 +175,10 @@ const frontmatterField = StateField.define<FrontmatterState>({
 
     const range = tr.docChanged ? detectFrontmatter(tr.state.doc) : value.range;
     if (changed || tr.docChanged) {
-      return { collapsed, enabled, range };
+      const suggestionCount = tr.docChanged
+        ? frontmatterSuggestionCount(tr.state.doc, range)
+        : value.suggestionCount;
+      return { collapsed, enabled, range, suggestionCount };
     }
     return value;
   },
@@ -158,7 +188,7 @@ const frontmatterField = StateField.define<FrontmatterState>({
     if (val.collapsed) {
       return Decoration.set([
         Decoration.replace({
-          widget: new FrontmatterBarWidget(val.range.keyCount, false),
+          widget: new FrontmatterBarWidget(val.range.keyCount, false, val.suggestionCount),
           block: true,
         }).range(val.range.from, val.range.to),
       ]);
@@ -173,6 +203,19 @@ const frontmatterField = StateField.define<FrontmatterState>({
     ]);
   }),
 });
+
+/**
+ * Expand a collapsed frontmatter block when `pos` falls inside it, so that
+ * navigation targets (e.g. the review page's "Open" link) are not hidden
+ * behind the collapsed properties bar. No-op otherwise.
+ */
+export function revealFrontmatterPos(view: EditorView, pos: number): void {
+  const fm = view.state.field(frontmatterField, false);
+  if (!fm?.range || !fm.collapsed || !fm.enabled) return;
+  if (pos >= fm.range.from && pos <= fm.range.to) {
+    view.dispatch({ effects: setFrontmatterCollapsed.of(false) });
+  }
+}
 
 // ── ViewPlugin (expanded decorations) ─────────────────────────────
 

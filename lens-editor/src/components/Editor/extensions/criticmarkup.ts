@@ -19,7 +19,7 @@ import {
 } from '@codemirror/view';
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
 import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
-import { parse, parseThreads, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+import { parse, parseThreads, isAdjacentEditPair, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 export interface CriticMarkupCommentBadgeInfo {
   badgeNumber: number;
@@ -459,9 +459,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       const adjacentPairEnd = new Set<number>();   // indices of additions that are part of a pair
       const adjacentPairStart = new Set<number>(); // indices of deletions that are part of a pair
       for (let i = 0; i < ranges.length - 1; i++) {
-        const curr = ranges[i];
-        const next = ranges[i + 1];
-        if (curr.type === 'deletion' && next.type === 'addition' && curr.to === next.from) {
+        if (isAdjacentEditPair(ranges[i], ranges[i + 1])) {
           adjacentPairStart.add(i);
           adjacentPairEnd.add(i + 1);
         }
