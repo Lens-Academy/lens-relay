@@ -1,36 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createTestEditor } from '../../../test/codemirror-helpers';
-import { countPendingEdits } from '../../../lib/criticmarkup-parser';
 import { revealFrontmatterPos } from './frontmatter';
 
 const META = '{"author":"Elias\'s AI","timestamp":1784282820091}';
-
-describe('countPendingEdits', () => {
-  it('counts a single addition', () => {
-    expect(countPendingEdits(`title: Repro {++${META}@@ Renamed++}`)).toBe(1);
-  });
-
-  it('counts an adjacent deletion+addition pair as one edit', () => {
-    // The MCP edit tool encodes a replacement as {--old--}{++new++}
-    expect(countPendingEdits(`x: {--${META}@@old--}{++${META}@@new++}`)).toBe(1);
-  });
-
-  it('counts separated deletion and addition as two edits', () => {
-    expect(countPendingEdits(`x: {--${META}@@old--} gap {++${META}@@new++}`)).toBe(2);
-  });
-
-  it('counts a substitution', () => {
-    expect(countPendingEdits(`x: {~~${META}@@old~>new~~}`)).toBe(1);
-  });
-
-  it('ignores comments', () => {
-    expect(countPendingEdits(`x: {>>${META}@@a note<<}`)).toBe(0);
-  });
-
-  it('returns zero for plain text', () => {
-    expect(countPendingEdits('title: Nothing pending')).toBe(0);
-  });
-});
 
 describe('frontmatter suggestions badge', () => {
   let cleanup: (() => void) | null = null;

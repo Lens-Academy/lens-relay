@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { EditorView } from '@codemirror/view';
 import { EditorState, StateEffect } from '@codemirror/state';
 import { useYDoc } from '@y-sweet/react';
@@ -40,6 +40,7 @@ import { MobileEditToolbar } from '../Mobile/MobileEditToolbar';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { persistentHighlightLine } from '../Editor/extensions/headingFlash';
 import { revealFrontmatterPos } from '../Editor/extensions/frontmatter';
+import { utf8ByteToUtf16Offset } from '../../lib/text-offsets';
 import { resolveAnchorYFromView, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import { findPathByUuid } from '../../lib/uuid-to-path';
 import { pathToSegments } from '../../lib/path-display';
@@ -93,6 +94,7 @@ function writeSuggestionMode(value: boolean): void {
  */
 export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const navigate = useNavigate();
+  const routerLocation = useLocation();
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [stateVersion, setStateVersion] = useState(0);
   const { metadata, onNavigate, folderDocs } = useNavigation();
@@ -345,39 +347,43 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     }
   }, [synced, editorView, manager, isMobile]);
 
-  // Scroll to #L{number} line on initial load
-  useEffect(() => {
-    if (!synced || !editorView) return;
-    const match = window.location.hash.match(/^#L(\d+)$/i);
-    if (!match) return;
-    // ?pos= is the more precise target — let its effect handle the jump
-    if (new URLSearchParams(window.location.search).has('pos')) return;
-    const lineNum = parseInt(match[1], 10);
-    if (lineNum < 1) return;
-    const doc = editorView.state.doc;
-    const line = doc.line(Math.min(lineNum, doc.lines));
-
-    jumpToPos(editorView, line.from);
-
-    history.replaceState(null, '', window.location.pathname + window.location.search);
-  }, [synced, editorView]);
-
-  // Scroll to ?pos={offset} on initial load (review page "Open" links)
+  // Consume URL navigation targets once the editor has synced:
+  //   ?pos={offset} — review page "Open" links; a UTF-8 byte offset from the
+  //                   relay's suggestion scan, translated to a CM position here
+  //   #L{number}    — line anchors
+  // One effect handles both (?pos wins when both are present) so there is a
+  // single jump and a single cleanup that strips every consumed target from
+  // the URL — even malformed ones, which would otherwise linger and confuse
+  // later navigation. Reads window.location (the router's location goes stale
+  // after our raw replaceState); depends on routerLocation so an in-app
+  // navigation to a new target on an already-mounted editor re-runs it.
   useEffect(() => {
     if (!synced || !editorView) return;
     const params = new URLSearchParams(window.location.search);
     const posParam = params.get('pos');
-    if (posParam === null) return;
-    const parsed = parseInt(posParam, 10);
-    if (Number.isNaN(parsed)) return;
-    const pos = Math.min(Math.max(parsed, 0), editorView.state.doc.length);
+    const lineMatch = window.location.hash.match(/^#L(\d+)$/i);
+    if (posParam === null && !lineMatch) return;
 
-    jumpToPos(editorView, pos);
+    const doc = editorView.state.doc;
+    let target: number | null = null;
+    if (posParam !== null) {
+      const byteOffset = parseInt(posParam, 10);
+      if (!Number.isNaN(byteOffset) && byteOffset >= 0) {
+        target = utf8ByteToUtf16Offset(doc.toString(), byteOffset);
+      }
+    }
+    if (target === null && lineMatch) {
+      const lineNum = parseInt(lineMatch[1], 10);
+      if (lineNum >= 1) target = doc.line(Math.min(lineNum, doc.lines)).from;
+    }
+
+    if (target !== null) jumpToPos(editorView, target);
 
     params.delete('pos');
     const qs = params.toString();
-    history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
-  }, [synced, editorView]);
+    const hash = lineMatch ? '' : window.location.hash;
+    history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + hash);
+  }, [synced, editorView, routerLocation]);
 
   // Auto-split ToC/Backlinks vertical split inside right sidebar
   const sidebarContainerRef = useRef<HTMLDivElement>(null);

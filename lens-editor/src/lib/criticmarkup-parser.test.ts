@@ -1,6 +1,6 @@
 // src/lib/criticmarkup-parser.test.ts
 import { describe, it, expect } from 'vitest';
-import { parse, parseThreads, decodeCommentContent } from './criticmarkup-parser';
+import { parse, parseThreads, decodeCommentContent, countPendingEdits } from './criticmarkup-parser';
 
 describe('CriticMarkup Parser', () => {
   describe('basic patterns', () => {
@@ -296,5 +296,34 @@ multi-line comment
       // 🎉 is 2 UTF-16 code units
       expect(result[0].from).toBe(2);
     });
+  });
+});
+
+describe('countPendingEdits', () => {
+  const META = '{"author":"Elias\'s AI","timestamp":1784282820091}';
+
+  it('counts a single addition', () => {
+    expect(countPendingEdits(`title: Repro {++${META}@@ Renamed++}`)).toBe(1);
+  });
+
+  it('counts an adjacent deletion+addition pair as one edit', () => {
+    // The MCP edit tool encodes a replacement as {--old--}{++new++}
+    expect(countPendingEdits(`x: {--${META}@@old--}{++${META}@@new++}`)).toBe(1);
+  });
+
+  it('counts separated deletion and addition as two edits', () => {
+    expect(countPendingEdits(`x: {--${META}@@old--} gap {++${META}@@new++}`)).toBe(2);
+  });
+
+  it('counts a substitution', () => {
+    expect(countPendingEdits(`x: {~~${META}@@old~>new~~}`)).toBe(1);
+  });
+
+  it('ignores comments', () => {
+    expect(countPendingEdits(`x: {>>${META}@@a note<<}`)).toBe(0);
+  });
+
+  it('returns zero for plain text', () => {
+    expect(countPendingEdits('title: Nothing pending')).toBe(0);
   });
 });
