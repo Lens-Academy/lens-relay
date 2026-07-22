@@ -18,10 +18,12 @@
 # as the compose services (json-file, 50m x 5).
 #
 # File mounts over the stock image: persistence.py and webhook_handler.py carry
-# our custom sync logic; app.py carries the COMMIT_INTERVAL env-var support (see
-# Lens-Academy/relay-git-sync). COMMIT_INTERVAL sets the git commit+push cadence
-# in seconds (default 10 upstream; we run 5 for snappier GitHub sync). These
-# override files must be present in $DATA_DIR on the box.
+# our custom sync logic; app.py carries the COMMIT_INTERVAL env-var support;
+# sync_engine.py carries the stale-export fix (record document hash only after
+# a successful write - Lens-Academy/relay-git-sync#5). COMMIT_INTERVAL sets the
+# git commit+push cadence in seconds (default 10 upstream; we run 5 for
+# snappier GitHub sync). These override files must be present in $DATA_DIR on
+# the box.
 set -euo pipefail
 
 DATA_DIR=/root/relay-git-sync-data
@@ -32,6 +34,12 @@ IMAGE=docker.system3.md/relay-git-sync:latest
 
 [[ -r "$KEY_FILE" ]] || { echo "ERROR: SSH key not readable: $KEY_FILE" >&2; exit 1; }
 [[ -r "$ENV_FILE" ]] || { echo "ERROR: env file not readable: $ENV_FILE" >&2; exit 1; }
+
+# A missing override file would make Docker mount an empty directory in its
+# place and crash-loop the container - fail fast instead.
+for override in webhook_handler.py persistence.py app.py sync_engine.py; do
+  [[ -f "$DATA_DIR/$override" ]] || { echo "ERROR: override file missing: $DATA_DIR/$override" >&2; exit 1; }
+done
 docker network inspect "$NETWORK" >/dev/null 2>&1 \
   || { echo "ERROR: docker network '$NETWORK' not found (is the compose stack up?)" >&2; exit 1; }
 
@@ -67,6 +75,7 @@ docker run -d \
   -v "$DATA_DIR/webhook_handler.py:/app/webhook_handler.py" \
   -v "$DATA_DIR/persistence.py:/app/persistence.py" \
   -v "$DATA_DIR/app.py:/app/app.py" \
+  -v "$DATA_DIR/sync_engine.py:/app/sync_engine.py" \
   -e RELAY_GIT_DATA_DIR=/data \
   -e RELAY_SERVER_URL=http://relay-server:8080 \
   -e RELAY_SERVER_API_KEY="$RELAY_SERVER_API_KEY" \
