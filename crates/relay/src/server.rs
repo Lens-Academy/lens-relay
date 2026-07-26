@@ -5015,6 +5015,54 @@ fn extract_frontmatter_source_url(head: &str) -> Option<String> {
     None
 }
 
+/// Return whether a YAML frontmatter `tags` field contains the exact tag.
+/// Supports the block-list form written by the article importer and common
+/// inline lists such as `tags: [article-stub, validator-ignore]`.
+fn frontmatter_has_tag(head: &str, wanted: &str) -> bool {
+    let mut in_frontmatter = false;
+    let mut in_tags = false;
+    for line in head.lines() {
+        let trimmed_end = line.trim_end();
+        if trimmed_end == "---" {
+            if in_frontmatter {
+                break;
+            }
+            in_frontmatter = true;
+            continue;
+        }
+        if !in_frontmatter {
+            continue;
+        }
+
+        let is_top_level = !line.starts_with(' ') && !line.starts_with('\t');
+        if is_top_level {
+            in_tags = false;
+            if let Some(rest) = trimmed_end.strip_prefix("tags:") {
+                in_tags = true;
+                if rest
+                    .split(|c: char| c == ',' || c == '[' || c == ']')
+                    .map(|part| part.trim().trim_matches(['"', '\'']))
+                    .any(|tag| tag == wanted)
+                {
+                    return true;
+                }
+            }
+            continue;
+        }
+
+        if in_tags
+            && trimmed_end
+                .trim()
+                .strip_prefix('-')
+                .map(|tag| tag.trim().trim_matches(['"', '\'']) == wanted)
+                .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Normalize a source URL for dedup comparison: trim whitespace and a trailing
 /// slash (the common variant). Intentionally conservative — scheme/host case and
 /// query strings are left intact so genuinely different URLs aren't merged.
@@ -5032,6 +5080,16 @@ struct CheckSourceUrlsRequest {
 #[derive(Serialize)]
 struct CheckSourceUrlsResponse {
     found: std::collections::HashMap<String, Option<String>>,
+    /// Full content is returned only for lightweight article stubs. This lets
+    /// the importer preserve discussion notes during promotion without sending
+    /// already-imported article bodies over the duplicate-check endpoint.
+    stubs: std::collections::HashMap<String, Option<ArticleStubMatch>>,
+}
+
+#[derive(Clone, Serialize)]
+struct ArticleStubMatch {
+    path: String,
+    content: String,
 }
 
 /// For each given source URL, find an existing article doc whose `source_url`
@@ -5064,6 +5122,8 @@ async fn handle_check_source_urls(
         .collect();
     let mut found: std::collections::HashMap<String, Option<String>> =
         body.source_urls.iter().map(|u| (u.clone(), None)).collect();
+    let mut stubs: std::collections::HashMap<String, Option<ArticleStubMatch>> =
+        body.source_urls.iter().map(|u| (u.clone(), None)).collect();
 
     for path in &matching_paths {
         if found.values().all(|v| v.is_some()) {
@@ -5085,18 +5145,32 @@ async fn handle_check_source_urls(
             None => continue,
         };
         let rel_path = format!("/{}", &path[body.folder.len()..].trim_start_matches('/'));
+        let stub_content = if frontmatter_has_tag(&head, "article-stub") {
+            read_doc_head(&server_state, &doc_id, usize::MAX)
+        } else {
+            None
+        };
         for (orig, norm) in &queries {
             if *norm == stored {
                 if let Some(slot) = found.get_mut(orig) {
                     if slot.is_none() {
                         *slot = Some(rel_path.clone());
+                        if let Some(content) = &stub_content {
+                            stubs.insert(
+                                orig.clone(),
+                                Some(ArticleStubMatch {
+                                    path: rel_path.clone(),
+                                    content: content.clone(),
+                                }),
+                            );
+                        }
                     }
                 }
             }
         }
     }
 
-    Ok(Json(CheckSourceUrlsResponse { found }))
+    Ok(Json(CheckSourceUrlsResponse { found, stubs }))
 }
 
 #[derive(Deserialize)]
@@ -7005,7 +7079,7 @@ mod test {
         insert_test_content_doc(
             &server,
             "22222222-2222-4222-8222-222222222222",
-            "---\ntitle: \"B\"\nsource_url: \"https://example.com/post\"\n---\n\nBody.",
+            "---\ntitle: \"B\"\nsource_url: \"https://example.com/post\"\ntags:\n  - article-stub\n  - validator-ignore\n---\n\n%%\nA discussion note.\n%%",
         )
         .await;
 
@@ -7030,6 +7104,18 @@ mod test {
             "/articles/a.md"
         );
         assert_eq!(body["found"]["https://example.com/post"], "/articles/b.md");
+        assert_eq!(
+            body["stubs"]["https://example.com/post"]["path"],
+            "/articles/b.md"
+        );
+        assert!(body["stubs"]["https://example.com/post"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("A discussion note."));
+        // Full articles remain lightweight: their bodies are not returned.
+        assert!(
+            body["stubs"]["https://ai-safety-atlas.com/chapters/v1/risks/introduction/"].is_null()
+        );
         assert!(body["found"]["https://unimported.example/x"].is_null());
     }
 

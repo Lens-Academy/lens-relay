@@ -8,7 +8,7 @@ import { ResizeHandle } from './components/Layout/ResizeHandle';
 import { AwarenessInitializer } from './components/AwarenessInitializer/AwarenessInitializer';
 import { DisconnectionModal } from './components/DisconnectionModal/DisconnectionModal';
 import { NavigationContext, useNavigation } from './contexts/NavigationContext';
-import { DisplayNameProvider } from './contexts/DisplayNameContext';
+import { DisplayNameProvider, useDisplayName } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 
 // The display name feeds collaborative-editing presence. The import tool pages
@@ -394,6 +394,7 @@ export function App() {
 
 function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: string[]; folders: { id: string; name: string }[]; relayId: string }) {
   const { getOrConnect, disconnect, disconnectAll } = useDocConnection();
+  const { displayName } = useDisplayName();
 
   useEffect(() => disconnectAll, [disconnectAll]);
 
@@ -426,6 +427,7 @@ function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: str
       folderIds={folderIds}
       folders={folders}
       relayId={relayId}
+      currentUserName={displayName}
       onAction={handleAction}
       onFileAction={handleFileAction}
     />

@@ -16,9 +16,11 @@ import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
 import { verifyAndRefine } from "./claude";
 import {
   generateArticleMarkdown,
+  generateArticleStubMarkdown,
   generateArticleFilenameBase,
   articleFilenameCandidates,
 } from "./export";
+import { parsePromotableArticleStub } from "./stub";
 import {
   createRelayDoc,
   checkRelayDocsExist,
@@ -50,6 +52,25 @@ const ROUTE_FLAGS = new Set([
 
 function relayArticleFolder(): string {
   return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
+}
+
+interface ExistingArticleMatch {
+  path: string;
+  stubContent?: string;
+}
+
+async function findExistingArticle(
+  urls: string[],
+  signal?: AbortSignal,
+): Promise<ExistingArticleMatch | null> {
+  const variants = dedupUrlVariants(...urls);
+  const result = await checkRelayArticleUrls(variants, signal);
+  const path = variants.map((variant) => result.found[variant]).find(Boolean);
+  if (!path) return null;
+  const stub = variants
+    .map((variant) => result.stubs[variant])
+    .find((candidate) => candidate?.path === path);
+  return { path, stubContent: stub?.content };
 }
 
 // Serializes the resolve-filename → write step across concurrently-running jobs
@@ -121,6 +142,9 @@ export async function processArticle(
 ): Promise<void> {
   console.log(`[add-article] Processing ${job.url}`);
   const createdDate = new Date().toISOString().slice(0, 10);
+  const folder = relayArticleFolder();
+  const topFolder = folder.split("/")[0];
+  const isStubOnly = job.importMode === "stub";
   const setStage = (stage: string) => {
     // A cancelled/deadlined job must actually STOP — Promise.race in the queue
     // settles the job status but cannot kill this pipeline, so every stage
@@ -131,6 +155,36 @@ export async function processArticle(
     job.stage = stage;
     job.updated_at = new Date().toISOString();
   };
+
+  // Reject the common duplicate case before downloading and parsing the page.
+  // A matched stub is retained for a later full import to promote in place.
+  let existingStub: ExistingArticleMatch | null = null;
+  setStage("checking-duplicates");
+  try {
+    const existing = await findExistingArticle([job.url], signal);
+    if (existing) {
+      if (!existing.stubContent) {
+        throw new Error(
+          `This URL was already imported: ${topFolder}${existing.path}`,
+        );
+      }
+      if (isStubOnly) {
+        throw new Error(
+          `An article stub already exists for this URL: ${topFolder}${existing.path}`,
+        );
+      }
+      existingStub = existing;
+    }
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      (err.message.startsWith("This URL was already imported:") ||
+        err.message.startsWith("An article stub already exists"))
+    ) {
+      throw err;
+    }
+    console.warn(`[add-article] early source_url dedup check failed, proceeding: ${err}`);
+  }
 
   // 1. Fetch raw HTML (SSRF-guarded) and extract deterministically. An adapter
   //    may redirect the fetch to a better source (e.g. arXiv abstract → ar5iv
@@ -218,12 +272,12 @@ export async function processArticle(
   if (!ex.meta.title) {
     throw new Error("Could not determine article title from page");
   }
-  if (ex.linkedOut) {
+  if (!isStubOnly && ex.linkedOut) {
     throw new Error(
       "This post is a link-out announcement (the article lives in an external Google Doc/arXiv/PDF). Import the linked source directly instead.",
     );
   }
-  if (ex.body.length < MIN_ARTICLE_CHARS) {
+  if (!isStubOnly && ex.body.length < MIN_ARTICLE_CHARS) {
     throw new Error(
       `Extracted article suspiciously short (${ex.body.length} chars) — aborting`,
     );
@@ -259,7 +313,8 @@ export async function processArticle(
   //      on flagged extractions; clean ones pass deterministically (instant).
   //      The pass verifies + repairs metadata + gates paywalls/blocks +
   //      falls back on formatting; it degrades gracefully if the CLI is absent.
-  const needsVerify = ex.assessment.flags.some((f) => ROUTE_FLAGS.has(f));
+  const needsVerify =
+    !isStubOnly && ex.assessment.flags.some((f) => ROUTE_FLAGS.has(f));
   if (process.env.ARTICLE_SKIP_VERIFY !== "1" && needsVerify) {
     setStage("quality-check");
     const articleMd = generateArticleMarkdown(meta, body, createdDate);
@@ -308,26 +363,45 @@ export async function processArticle(
   if (!filenameBase) {
     throw new Error(`Could not derive filename from title: ${meta.title}`);
   }
-  const folder = relayArticleFolder();
-  let existingByUrl: string | null = null;
   try {
-    const variants = dedupUrlVariants(job.url, meta.source_url);
-    const found = await checkRelayArticleUrls(variants, signal);
-    existingByUrl = variants.map((v) => found[v]).find(Boolean) ?? null;
-  } catch (err) {
-    console.warn(`[add-article] source_url dedup check failed, proceeding: ${err}`);
-  }
-  if (existingByUrl) {
-    throw new Error(
-      `This URL was already imported: ${folder.split("/")[0]}${existingByUrl}`,
+    const existing = await findExistingArticle(
+      [job.url, meta.source_url],
+      signal,
     );
+    if (existing) {
+      if (!existing.stubContent) {
+        throw new Error(
+          `This URL was already imported: ${topFolder}${existing.path}`,
+        );
+      }
+      if (isStubOnly) {
+        throw new Error(
+          `An article stub already exists for this URL: ${topFolder}${existing.path}`,
+        );
+      }
+      if (existingStub && existingStub.path !== existing.path) {
+        throw new Error(
+          `Multiple article stubs match this URL (${topFolder}${existingStub.path} and ${topFolder}${existing.path}). Resolve the duplicate stubs before importing the full article.`,
+        );
+      }
+      existingStub = existing;
+    }
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      (err.message.startsWith("This URL was already imported:") ||
+        err.message.startsWith("An article stub already exists") ||
+        err.message.startsWith("Multiple article stubs match"))
+    ) {
+      throw err;
+    }
+    console.warn(`[add-article] source_url dedup check failed, proceeding: ${err}`);
   }
 
   // 4.5. Host + embed any PDF figure images: upload each to the folder's
   //      /attachments/ and replace its placeholder with the embed. Images that
   //      fail to upload are dropped (the text stays); never fails the import.
-  const topFolder = folder.split("/")[0];
-  if (ex.images?.length) {
+  if (!isStubOnly && ex.images?.length) {
     setStage("uploading-images");
     body = await embedPdfImages(body, ex.images, filenameBase, (p, png, mime) =>
       createRelayAttachment(topFolder, p, png, mime, signal),
@@ -337,7 +411,7 @@ export async function processArticle(
   // 4.6. Rehost arXiv/ar5iv figure hotlinks as attachments — mirror-hosted
   //      asset URLs rot, and the library should be self-contained. Failures
   //      keep the external URL (an upgrade, never a gate).
-  if (ex.via === "arxiv") {
+  if (!isStubOnly && ex.via === "arxiv") {
     setStage("uploading-images");
     body = await hostRemoteImages(body, filenameBase, {
       hostPattern: ARXIV_IMAGE_HOSTS,
@@ -359,17 +433,47 @@ export async function processArticle(
     filenameBase,
     meta.source_url || job.url,
   ).map((b) => `${folder}/${b}.md`);
-  const finalMd = generateArticleMarkdown(meta, body, createdDate);
   const mdPath = await withArticleWriteLock(async () => {
     // Last line of defense against post-abort ghost writes: the job may have
     // been cancelled while queued behind this lock.
     signal?.throwIfAborted();
+    if (existingStub) {
+      const refreshed = await findExistingArticle(
+        [job.url, meta.source_url],
+        signal,
+      );
+      if (!refreshed || refreshed.path !== existingStub.path || !refreshed.stubContent) {
+        throw new Error(
+          `The article stub changed or disappeared while importing: ${topFolder}${existingStub.path}. No changes were written; inspect the stub and retry.`,
+        );
+      }
+      const parsed = parsePromotableArticleStub(
+        refreshed.stubContent,
+        `${topFolder}${refreshed.path}`,
+      );
+      const promotedMd = generateArticleMarkdown(
+        meta,
+        body,
+        parsed.created || createdDate,
+        {
+          discussionBlocks: parsed.discussionBlocks,
+          extraTags: parsed.extraTags,
+        },
+      );
+      const promotedPath = `${topFolder}${refreshed.path}`;
+      await createRelayDoc(promotedPath, promotedMd, signal);
+      return promotedPath;
+    }
+
     const existing = await checkRelayDocsExist(candidatePaths, signal);
     const chosen = candidatePaths.find((p) => !existing[p]);
     if (!chosen) {
       throw new Error(`Document already exists: ${candidatePaths[0]}`);
     }
-    await createRelayDoc(chosen, finalMd, signal);
+    const markdown = isStubOnly
+      ? generateArticleStubMarkdown(meta, createdDate)
+      : generateArticleMarkdown(meta, body, createdDate);
+    await createRelayDoc(chosen, markdown, signal);
     return chosen;
   });
   const editorBase =
@@ -380,10 +484,10 @@ export async function processArticle(
     `[add-article] Wrote ${mdPath} (via ${ex.via}, ${body.length} chars)`,
   );
 
-  // 6. Auto-create a lens wrapping the article so it can be dropped straight
-  //    into a module (Asana 1215689584721257). Opt out with createLens=false.
-  //    A lens failure must not fail the import — the article is already saved.
-  if (job.createLens !== false) {
+  // 6. The "full article + lens" mode wraps the article so it can be dropped
+  //    straight into a module. A lens failure must not fail the import — the
+  //    article is already saved.
+  if (job.importMode === "article-and-lens" || !job.importMode) {
     setStage("creating-lens");
     try {
       const lensPath = await maybeCreateLens({

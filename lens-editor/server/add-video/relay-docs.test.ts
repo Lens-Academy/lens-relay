@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createRelayDoc, updateRelayDoc } from './relay-docs';
+import {
+  checkRelayArticleUrls,
+  createRelayDoc,
+  updateRelayDoc,
+} from './relay-docs';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -89,5 +93,33 @@ describe('updateRelayDoc', () => {
     expect(mockFetch).toHaveBeenCalledOnce();
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.content).toBe('New content');
+  });
+});
+
+describe('checkRelayArticleUrls', () => {
+  it('returns paths and stub contents from the duplicate-check response', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(200, {
+        found: {
+          'https://example.com/a': '/articles/a.md',
+          'https://example.com/b': '/articles/b.md',
+        },
+        stubs: {
+          'https://example.com/a': {
+            path: '/articles/a.md',
+            content: '---\\ntags: [article-stub]\\n---\\n',
+          },
+          'https://example.com/b': null,
+        },
+      }),
+    );
+
+    const result = await checkRelayArticleUrls([
+      'https://example.com/a',
+      'https://example.com/b',
+    ]);
+
+    expect(result.found['https://example.com/b']).toBe('/articles/b.md');
+    expect(result.stubs['https://example.com/a']?.path).toBe('/articles/a.md');
   });
 });

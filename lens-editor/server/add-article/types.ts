@@ -1,4 +1,5 @@
 export type ArticleJobStatus = "queued" | "processing" | "done" | "failed";
+export type ArticleImportMode = "stub" | "article" | "article-and-lens";
 
 /** Metadata for an article, accumulated from Jina, HTML meta tags, and Claude */
 export interface ArticleMeta {
@@ -20,8 +21,8 @@ export interface ArticleJob {
   stage?: string;
   error?: string;
   relay_url?: string;
-  /** Also auto-create a lens wrapping the imported article (default true). */
-  createLens?: boolean;
+  /** What the importer should write. Defaults to a full article plus lens. */
+  importMode?: ArticleImportMode;
   created_at: string;
   updated_at: string;
 }

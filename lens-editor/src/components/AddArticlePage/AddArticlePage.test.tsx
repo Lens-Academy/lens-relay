@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { AddArticlePage, POLL_INTERVAL_MS } from "./AddArticlePage";
 
 const POLL_MS = POLL_INTERVAL_MS;
@@ -76,5 +76,56 @@ describe("AddArticlePage status polling", () => {
     const callsAfterMount = fetchMock.mock.calls.length;
     await advance(POLL_MS * 3);
     expect(fetchMock.mock.calls.length).toBe(callsAfterMount);
+  });
+
+  it("defaults to full article + lens and submits the selected import mode", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({ results: [] }),
+        };
+      }
+      return { ok: true, json: async () => ({ jobs: [] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AddArticlePage shareToken="test-token" />);
+    await advance(0);
+
+    expect(
+      screen.getByRole("radio", { name: "Full article + lens" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: "Stub only" }));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "https://example.com/article" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Import Articles" }));
+    await advance(0);
+
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      urls: ["https://example.com/article"],
+      importMode: "stub",
+    });
+  });
+
+  it("explains what stub-only imports do", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ jobs: [] }) }),
+    );
+    render(<AddArticlePage shareToken="test-token" />);
+    await advance(0);
+
+    const stubOption = screen.getByRole("radio", { name: "Stub only" });
+    const infoButton = screen.getByRole("button", {
+      name: "About stub-only imports",
+    });
+    expect(stubOption.parentElement).toContainElement(infoButton);
+    fireEvent.mouseEnter(infoButton);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      /only create an article stub without the article body/i,
+    );
   });
 });

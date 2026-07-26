@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   generateArticleMarkdown,
+  generateArticleStubMarkdown,
   generateArticleFilenameBase,
   articleFilenameCandidates,
 } from "./export";
@@ -49,8 +50,33 @@ tags:
   - "article-importer"
 ---
 
+%%
+Add discussion note here:
+
+...
+
+%%
+
 Body text.
 `);
+  });
+
+  it("generates a body-free stub with discussion and validation tags", () => {
+    const md = generateArticleStubMarkdown(
+      {
+        title: "A proposed source",
+        author: ["A. Writer"],
+        source_url: "https://example.com/source",
+        published: "2026-01-02",
+        description: "Worth discussing.",
+      },
+      "2026-07-26",
+    );
+
+    expect(md).toContain('  - "article-stub"\n  - "validator-ignore"');
+    expect(md).toContain("%%\nAdd discussion note here:\n\n...\n\n%%");
+    expect(md).not.toContain('"article-importer"');
+    expect(md.endsWith("%%\n")).toBe(true);
   });
 
   // Prevents: invalid YAML when title/description contain quotes

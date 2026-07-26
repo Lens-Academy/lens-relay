@@ -70,6 +70,38 @@ function mockEmpty() {
   }));
 }
 
+function mockSessionAuthors() {
+  const suggestion = (author: string, content: string, from: number) => ({
+    type: 'addition' as const,
+    content,
+    old_content: null,
+    new_content: null,
+    author,
+    timestamp: recentTimestamp,
+    from,
+    to: from + 10,
+    raw_markup: `{++{"author":"${author}","timestamp":${recentTimestamp}}@@${content}++}`,
+    context_before: '',
+    context_after: '',
+  });
+  vi.doMock('../../hooks/useSuggestions', () => ({
+    useSuggestions: () => ({
+      data: [{
+        path: 'Notes/Session authors.md',
+        doc_id: 'relay-id-session-authors',
+        suggestions: [
+          suggestion('Luc', 'human suggestion', 10),
+          suggestion("Luc's AI", 'session AI suggestion', 30),
+          suggestion("Someone else's AI", 'other suggestion', 50),
+        ],
+      }],
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+    }),
+  }));
+}
+
 // Helper: find the file header button by the rendered filename (path without .md)
 function getFileHeader() {
   // The filename "Test" is rendered in a span inside a button; get the button
@@ -151,6 +183,33 @@ describe('ReviewPage', () => {
       render(<MemoryRouter><ReviewPage folderIds={['test-folder']} /></MemoryRouter>);
       expect(screen.getByText(/No pending suggestions/)).toBeTruthy();
     });
+  });
+});
+
+describe('ReviewPage session author defaults', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mockRefresh.mockClear();
+    mockSessionAuthors();
+  });
+
+  it("preselects the current user and the current user's AI", async () => {
+    const { ReviewPage } = await import('./ReviewPage');
+    render(
+      <MemoryRouter>
+        <ReviewPage folderIds={['test-folder']} currentUserName="Luc" />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Luc' })).toHaveClass('bg-blue-100');
+      expect(screen.getByRole('button', { name: "Luc's AI" })).toHaveClass('bg-blue-100');
+    });
+    expect(screen.getByRole('button', { name: "Someone else's AI" }))
+      .not.toHaveClass('bg-blue-100');
+    expect(screen.getByText('human suggestion')).toBeTruthy();
+    expect(screen.getByText('session AI suggestion')).toBeTruthy();
+    expect(screen.queryByText('other suggestion')).toBeNull();
   });
 });
 

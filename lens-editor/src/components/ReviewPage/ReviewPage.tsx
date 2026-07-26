@@ -89,6 +89,8 @@ interface ReviewPageProps {
   folderIds: string[];
   folders?: FolderInfo[];
   relayId?: string;
+  /** Lens Editor session display name used to seed the initial author filter. */
+  currentUserName?: string | null;
   onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
   onFileAction?: FileActionHandler;
 }
@@ -366,7 +368,7 @@ function FilterBar({ authors, locations, authorFilter, timeRange, locationFilter
   );
 }
 
-export function ReviewPage({ folderIds, folders, onAction, onFileAction }: ReviewPageProps) {
+export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFileAction }: ReviewPageProps) {
   usePageTitle();
   const { data: fetchedData, loading, error, refresh: refetch } = useSuggestions(folderIds);
 
@@ -439,13 +441,31 @@ export function ReviewPage({ folderIds, folders, onAction, onFileAction }: Revie
     return Array.from(authors).sort();
   }, [data]);
 
-  // Seed the author filter to AI-only once the first batch of data arrives
+  // Seed once suggestions and the session identity are available. In the real
+  // app, a null name means the display-name prompt has not been completed yet,
+  // so wait instead of briefly selecting every AI author.
   useEffect(() => {
     if (filterSeededRef.current || uniqueAuthors.length === 0) return;
-    filterSeededRef.current = true;
-    const aiAuthors = uniqueAuthors.filter(isAiAuthor);
-    if (aiAuthors.length > 0) setAuthorFilter(new Set(aiAuthors));
-  }, [uniqueAuthors]);
+    if (currentUserName === null) return;
+    let initialAuthors: Set<string>;
+    if (currentUserName !== undefined) {
+      const name = currentUserName.trim();
+      const sessionAuthors = new Set([name, `${name}'s AI`]);
+      initialAuthors = new Set(
+        uniqueAuthors.filter(author => sessionAuthors.has(author)),
+      );
+    } else {
+      // Backward-compatible fallback for standalone component consumers.
+      initialAuthors = new Set(uniqueAuthors.filter(isAiAuthor));
+    }
+
+    const timer = window.setTimeout(() => {
+      if (filterSeededRef.current) return;
+      filterSeededRef.current = true;
+      setAuthorFilter(initialAuthors);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [currentUserName, uniqueAuthors]);
 
   // Derive location entries from data + folders
   const locations = useMemo<LocationEntry[]>(() => {

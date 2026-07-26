@@ -11,9 +11,12 @@ interface ArticleJob {
   stage?: string;
   error?: string;
   relay_url?: string;
+  importMode?: ImportMode;
   created_at: string;
   updated_at: string;
 }
+
+type ImportMode = "stub" | "article" | "article-and-lens";
 
 interface SubmitResult {
   url: string;
@@ -31,36 +34,15 @@ const STATUS_COLORS: Record<ArticleJob["status"], string> = {
   failed: "#e04e4e",
 };
 
-// Remember the lens checkbox across sessions: bulk importers uncheck it once
-// and shouldn't have to re-uncheck on every visit (45 orphan starter lenses
-// came out of one bulk session that missed it).
-const CREATE_LENS_STORAGE_KEY = "lens-editor-add-article-create-lens";
-
-function readStoredCreateLens(): boolean {
-  try {
-    return localStorage.getItem(CREATE_LENS_STORAGE_KEY) !== "false";
-  } catch {
-    return true; // no storage (tests, private mode) — default to on
-  }
-}
-
 export function AddArticlePage({ shareToken }: { shareToken: string }) {
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [invalidResults, setInvalidResults] = useState<SubmitResult[]>([]);
   const [jobs, setJobs] = useState<ArticleJob[]>([]);
-  const [createLens, setCreateLensState] = useState(readStoredCreateLens);
+  const [importMode, setImportMode] = useState<ImportMode>("article-and-lens");
+  const [showModeInfo, setShowModeInfo] = useState(false);
   const fetchInFlight = useRef(false);
-
-  const setCreateLens = (value: boolean) => {
-    setCreateLensState(value);
-    try {
-      localStorage.setItem(CREATE_LENS_STORAGE_KEY, String(value));
-    } catch {
-      /* private mode — the checkbox still works for this session */
-    }
-  };
 
   const fetchStatus = useCallback(async () => {
     if (fetchInFlight.current) return;
@@ -95,7 +77,8 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
   }, [anyActive, fetchStatus]);
 
   useEffect(() => {
-    fetchStatus();
+    const timer = window.setTimeout(() => void fetchStatus(), 0);
+    return () => window.clearTimeout(timer);
   }, [fetchStatus]);
 
   useEffect(() => {
@@ -122,7 +105,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${shareToken}`,
         },
-        body: JSON.stringify({ urls, createLens }),
+        body: JSON.stringify({ urls, importMode }),
       });
       const data = (await resp.json().catch(() => ({}))) as {
         results?: SubmitResult[];
@@ -238,23 +221,123 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
           }}
         />
 
-        <label
+        <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            margin: "0 0 12px",
+            margin: "0 0 18px",
             fontSize: 14,
-            cursor: "pointer",
           }}
         >
-          <input
-            type="checkbox"
-            checked={createLens}
-            onChange={(e) => setCreateLens(e.target.checked)}
-          />
-          Also create a lens for each article
-        </label>
+          <div style={{ marginBottom: 8 }}>
+            <span style={{ color: "#c9cee2", fontWeight: 600 }}>Import mode</span>
+          </div>
+          <div
+            role="radiogroup"
+            aria-label="Import mode"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              padding: 3,
+              border: "1px solid #303858",
+              borderRadius: 9,
+              background: "#101327",
+            }}
+          >
+            {([
+              ["stub", "Stub only"],
+              ["article", "Full article"],
+              ["article-and-lens", "Full article + lens"],
+            ] as const).map(([value, label]) => {
+              const selected = importMode === value;
+              return (
+                <div
+                  key={value}
+                  style={{
+                    position: "relative",
+                  }}
+                >
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setImportMode(value)}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      border: selected ? "1px solid #6578d8" : "1px solid transparent",
+                      borderRadius: 6,
+                      padding: value === "stub" ? "8px 32px 8px 9px" : "8px 9px",
+                      background: selected ? "#293466" : "transparent",
+                      color: selected ? "#fff" : "#9fa8c9",
+                      boxShadow: selected ? "0 2px 8px rgba(0,0,0,.22)" : "none",
+                      fontSize: 13,
+                      fontWeight: selected ? 650 : 500,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {label}
+                  </button>
+                  {value === "stub" && (
+                    <>
+                      <button
+                        type="button"
+                        aria-label="About stub-only imports"
+                        aria-expanded={showModeInfo}
+                        onMouseEnter={() => setShowModeInfo(true)}
+                        onMouseLeave={() => setShowModeInfo(false)}
+                        onFocus={() => setShowModeInfo(true)}
+                        onBlur={() => setShowModeInfo(false)}
+                        style={{
+                          position: "absolute",
+                          right: 9,
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          width: 18,
+                          height: 18,
+                          borderRadius: "50%",
+                          border: selected ? "1px solid #9ba9ed" : "1px solid #58628a",
+                          background: selected ? "#35437f" : "#171b33",
+                          color: selected ? "#fff" : "#aeb8dc",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          lineHeight: "16px",
+                          padding: 0,
+                          cursor: "help",
+                        }}
+                      >
+                        i
+                      </button>
+                      {showModeInfo && (
+                        <span
+                          role="tooltip"
+                          style={{
+                            position: "absolute",
+                            zIndex: 10,
+                            left: 8,
+                            top: 43,
+                            width: 310,
+                            padding: "10px 12px",
+                            border: "1px solid #3d466d",
+                            borderRadius: 7,
+                            background: "#101327",
+                            boxShadow: "0 10px 30px rgba(0,0,0,.35)",
+                            color: "#d9dded",
+                            fontSize: 12,
+                            lineHeight: 1.45,
+                          }}
+                        >
+                          Only create an article stub without the article body.
+                          This is useful for discussing articles while not taking
+                          up as much space and slowing down our relay system with
+                          thousands of articles we&apos;re not using.
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
         <button
           onClick={submit}

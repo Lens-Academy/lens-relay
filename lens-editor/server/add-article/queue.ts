@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ArticleJob } from "./types";
+import type { ArticleImportMode, ArticleJob } from "./types";
 import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 
 // Hard ceiling on a single import job. Individual stages carry their own
@@ -34,7 +34,10 @@ export class ArticleJobQueue {
     this.processJob = options.processJob;
   }
 
-  add(url: string, createLens = true): ArticleJob {
+  add(
+    url: string,
+    importMode: ArticleImportMode = "article-and-lens",
+  ): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
@@ -42,7 +45,7 @@ export class ArticleJobQueue {
       id,
       url,
       status: "queued",
-      createLens,
+      importMode,
       created_at: now,
       updated_at: now,
     };

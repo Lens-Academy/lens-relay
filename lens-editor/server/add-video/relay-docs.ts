@@ -161,8 +161,11 @@ export async function checkRelayVideoIds(
 export async function checkRelayArticleUrls(
   sourceUrls: string[],
   signal?: AbortSignal
-): Promise<Record<string, string | null>> {
-  if (sourceUrls.length === 0) return {};
+): Promise<{
+  found: Record<string, string | null>;
+  stubs: Record<string, { path: string; content: string } | null>;
+}> {
+  if (sourceUrls.length === 0) return { found: {}, stubs: {} };
 
   const { url, token } = getRelayConfig();
 
@@ -186,8 +189,11 @@ export async function checkRelayArticleUrls(
     throw new Error(`Relay check-source-urls failed: ${resp.status} ${bytesToText(resp.bytes)}`);
   }
 
-  const data = JSON.parse(bytesToText(resp.bytes)) as { found: Record<string, string | null> };
-  return data.found;
+  const data = JSON.parse(bytesToText(resp.bytes)) as {
+    found: Record<string, string | null>;
+    stubs?: Record<string, { path: string; content: string } | null>;
+  };
+  return { found: data.found, stubs: data.stubs ?? {} };
 }
 
 /**

@@ -57,13 +57,38 @@ describe("POST /api/add-article", () => {
     expect(data.results).toEqual([
       { url: "https://example.com/article", status: "queued", id: "job1" },
     ]);
-    // createLens defaults to true.
-    expect(mockQueue.add).toHaveBeenCalledWith("https://example.com/article", true);
+    expect(mockQueue.add).toHaveBeenCalledWith(
+      "https://example.com/article",
+      "article-and-lens",
+    );
   });
 
-  it("passes createLens:false through to the queue when the client opts out", async () => {
+  it("maps the legacy createLens:false option to a full article without a lens", async () => {
     await post({ urls: ["https://example.com/article"], createLens: false });
-    expect(mockQueue.add).toHaveBeenCalledWith("https://example.com/article", false);
+    expect(mockQueue.add).toHaveBeenCalledWith(
+      "https://example.com/article",
+      "article",
+    );
+  });
+
+  it.each(["stub", "article", "article-and-lens"] as const)(
+    "passes the %s import mode through to the queue",
+    async (importMode) => {
+      await post({ urls: ["https://example.com/article"], importMode });
+      expect(mockQueue.add).toHaveBeenCalledWith(
+        "https://example.com/article",
+        importMode,
+      );
+    },
+  );
+
+  it("rejects unknown import modes", async () => {
+    const resp = await post({
+      urls: ["https://example.com/article"],
+      importMode: "surprise",
+    });
+    expect(resp.status).toBe(400);
+    expect(mockQueue.add).not.toHaveBeenCalled();
   });
 
   it("rejects request with no auth header", async () => {
@@ -198,7 +223,7 @@ describe("DELETE /api/add-article/:id and POST /:id/retry", () => {
         id: "job1",
         url: "https://example.com/a",
         status: "failed",
-        createLens: true,
+        importMode: "stub",
       })),
     };
     app = new Hono();
@@ -233,7 +258,10 @@ describe("DELETE /api/add-article/:id and POST /:id/retry", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.id).toBe("new1");
-    expect(mockQueue.add).toHaveBeenCalledWith("https://example.com/a", true);
+    expect(mockQueue.add).toHaveBeenCalledWith(
+      "https://example.com/a",
+      "stub",
+    );
   });
 
   it("refuses to retry a job that is not failed", async () => {

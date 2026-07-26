@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import type { ArticleMeta } from "./types";
 
+export const ARTICLE_DISCUSSION_PROMPT =
+  "%%\nAdd discussion note here:\n\n...\n\n%%";
+
 function yamlQuote(s: string): string {
   // Collapse control whitespace too — a raw newline inside a double-quoted YAML
   // scalar (e.g. a title with an embedded line break) breaks frontmatter parsing.
@@ -25,6 +28,10 @@ export function generateArticleMarkdown(
   meta: ArticleMeta,
   body: string,
   createdDate: string,
+  options: {
+    discussionBlocks?: string;
+    extraTags?: string[];
+  } = {},
 ): string {
   const lines = ["---", `title: ${yamlQuote(meta.title)}`];
 
@@ -46,9 +53,31 @@ export function generateArticleMarkdown(
       ? `description: ${yamlQuote(meta.description)}`
       : "description:",
   );
-  lines.push("tags:", '  - "article-importer"', "---");
+  lines.push("tags:", '  - "article-importer"');
+  for (const tag of options.extraTags ?? []) {
+    if (tag !== "article-importer") lines.push(`  - ${yamlQuote(tag)}`);
+  }
+  lines.push("---");
 
-  return lines.join("\n") + "\n\n" + body.trim() + "\n";
+  return (
+    lines.join("\n") +
+    "\n\n" +
+    (options.discussionBlocks || ARTICLE_DISCUSSION_PROMPT) +
+    "\n\n" +
+    body.trim() +
+    "\n"
+  );
+}
+
+/** Generate a discussion-ready article record without storing the article body. */
+export function generateArticleStubMarkdown(
+  meta: ArticleMeta,
+  createdDate: string,
+): string {
+  const full = generateArticleMarkdown(meta, "", createdDate);
+  return full
+    .replace('  - "article-importer"', '  - "article-stub"\n  - "validator-ignore"')
+    .trimEnd() + "\n";
 }
 
 /** Lowercase + hyphenate a string to the `[a-z0-9-]` filename charset used by
