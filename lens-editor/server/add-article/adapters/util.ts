@@ -1,11 +1,67 @@
 /** Shared text helpers used by site adapters (and the generic path). */
 
+// A plain hyphen only counts as a title/site separator when preceded by
+// whitespace — otherwise "E-LessWrong" / "Anti-EA Forum" style compounds lose
+// their tail. Em/en dashes, pipe and middot are unambiguous even when tight.
 const SITE_SUFFIX_RE =
-  /\s*[—–|·-]\s*(LessWrong|AI Alignment Forum|Effective Altruism Forum|EA Forum|Less ?Wrong|AI Safety Atlas)\s*$/i;
+  /(?:\s[—–|·-]|[—–|·])\s*(LessWrong|AI Alignment Forum|Effective Altruism Forum|EA Forum|Less ?Wrong|AI Safety Atlas)\s*$/i;
 
-/** Strip a known trailing " — SiteName" suffix from a page <title>. */
+// Titles can reach us with residual HTML entities: Readability derives its
+// title from the <h1> without decoding, so "biggest&nbsp;problems" arrives
+// with the literal entity. ONE single pass over the source string — produced
+// text is never re-scanned, so "&amp;nbsp;" and "&#38;nbsp;" both decode
+// exactly one level (to the literal "&nbsp;"), and NBSP becomes a plain space
+// (it would otherwise leak into filenames/YAML).
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: " ",
+  amp: "&",
+  quot: '"',
+  apos: "'",
+  lsquo: "‘",
+  rsquo: "’",
+  ldquo: "“",
+  rdquo: "”",
+  ndash: "–",
+  mdash: "—",
+  hellip: "…",
+  lt: "<",
+  gt: ">",
+};
+
+/** Decode a numeric character reference, refusing code points that corrupt
+ * downstream consumers: NUL/C0/C1 controls break filenames, lone surrogates
+ * break UTF-8 serialization (String.fromCodePoint emits both happily). */
+function fromCodePointSafe(cp: number): string {
+  if (!Number.isFinite(cp)) return "";
+  if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || (cp >= 0xd800 && cp <= 0xdfff))
+    return "";
+  try {
+    return String.fromCodePoint(cp);
+  } catch {
+    return ""; // > 0x10FFFF
+  }
+}
+
+/** Decode residual HTML entities in a plain-text string (titles, bylines).
+ * Also strips zero-width and bidi-control characters (spoofing vectors with
+ * no place in a title) and collapses whitespace. */
+export function decodeTextEntities(s: string): string {
+  return (s || "")
+    .replace(/&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));/gi, (m, hex, dec, name) => {
+      if (hex || dec) return fromCodePointSafe(parseInt(hex || dec, hex ? 16 : 10));
+      return NAMED_ENTITIES[(name as string).toLowerCase()] ?? m;
+    })
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060\ufeff]/g, "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Strip a known trailing " — SiteName" suffix from a page <title>. Decodes
+ * FIRST so an entity-encoded separator ("Post &mdash; LessWrong") cannot
+ * smuggle the suffix past the strip. */
 export function stripSiteSuffix(title: string): string {
-  return (title || "").replace(SITE_SUFFIX_RE, "").trim();
+  return decodeTextEntities(title).replace(SITE_SUFFIX_RE, "").trim();
 }
 
 /**

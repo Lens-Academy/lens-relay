@@ -756,3 +756,234 @@ describe("extractArticle — fallback table conversion", () => {
     expect(ex.body).toContain("| 1 | 2 |");
   });
 });
+
+describe("extractArticle — link titles never leak into markdown", () => {
+  it("drops the title attribute from ordinary links", async () => {
+    const html = FORUM_SHELL(
+      `<p>Go <a href="https://example.com/a" title="The hover title text">here</a> now. ${"Body padding sentence. ".repeat(30)}</p>`,
+      "/users/a?from=post_header",
+      "Author A",
+    );
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain("[here](https://example.com/a)");
+    expect(ex.body).not.toContain("hover title");
+  });
+
+  it("collapses block content inside a text link to a single line", async () => {
+    const html = FORUM_SHELL(
+      `<p>${"Body padding sentence. ".repeat(30)}</p>
+       <a href="https://example.com/b"><div>Part one</div><div>Part two</div></a>`,
+      "/users/a?from=post_header",
+      "Author A",
+    );
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain("[Part one Part two](https://example.com/b)");
+    expect(ex.body).not.toMatch(/^\[$/m);
+  });
+});
+
+describe("extractArticle — image-only links (Substack lightbox pattern)", () => {
+  const CDN = "https://cdn.example.com/image/fetch";
+
+  it("unwraps a lightbox link whose target is another rendition of the image", async () => {
+    const fig = `<figure><a target="_blank" href="${CDN}/f_auto,q_auto/https%3A%2F%2Fbucket.example.com%2Fpub%2Fpic_958x540.png" class="image-link image2"><div class="image2-inset"><picture><source type="image/webp" srcset="${CDN}/w_424/pic.webp 424w"/><img src="${CDN}/w_1456,c_limit/https%3A%2F%2Fbucket.example.com%2Fpub%2Fpic_958x540.png" width="958" height="540"/></picture></div></a></figure>`;
+    const html = FORUM_SHELL(
+      `<p>${"Body padding sentence. ".repeat(30)}</p>${fig}`,
+      "/users/a?from=post_header",
+      "Author A",
+    );
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain(`![](${CDN}/w_1456,c_limit/https%3A%2F%2Fbucket.example.com%2Fpub%2Fpic_958x540.png)`);
+    // No wrapper link, no stray "[" / "](url)" lines.
+    expect(ex.body).not.toContain(`](${CDN}/f_auto`);
+    expect(ex.body).not.toMatch(/^\[$/m);
+  });
+
+  it("keeps a single-line linked image when the target is NOT an image", async () => {
+    const html = FORUM_SHELL(
+      `<p>${"Body padding sentence. ".repeat(30)}</p>
+       <p><a href="https://example.com/report"><span><img src="https://cdn.example.com/badge.png" alt="badge"/></span></a></p>`,
+      "/users/a?from=post_header",
+      "Author A",
+    );
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain("[![badge](https://cdn.example.com/badge.png)](https://example.com/report)");
+    expect(ex.body).not.toMatch(/^\[$/m);
+  });
+});
+
+describe("extractArticle — 80000hours-style footnotes (generic path)", () => {
+  it("converts title-stuffed rel=footnote refs to [^N] and recovers the definitions", async () => {
+    const ref = (n: number) =>
+      `<a id="fn-ref-${n}" href="#fn-${n}" title="&lt;p&gt;Hover copy ${n} that must never appear.&lt;/p&gt;" rel="footnote" class="footnote-link"><sup>${n}</sup></a>`;
+    const html = `<!doctype html><html><head><title>The Pressing Problem</title></head><body>
+      <main><article><h1>The Pressing Problem</h1>
+        <p>A key argument for the claim.${ref(1)} And a supporting one.${ref(2)}</p>
+        <p>${"Article prose so the generic extractors keep the content container. ".repeat(30)}</p>
+      </article></main>
+      <div class="wrap-footnotes"><h3>Notes and references</h3><div class="footnotes"><div><ol>
+        <li id="fn-1"> First note body with <a href="https://example.com/source">a source</a>.<a href="#fn-ref-1" class="fn-return">↩</a></li>
+        <li id="fn-2"> Second note body.<a href="#fn-ref-2" class="fn-return">↩</a></li>
+      </ol></div></div></div>
+    </body></html>`;
+    const ex = await extractArticle(html, "https://80000hours.org/problem-profiles/example/");
+    expect(ex.body).toMatch(/claim\.\[\^1\]/);
+    expect(ex.body).toMatch(/^\[\^1\]: First note body with \[a source\]\(https:\/\/example\.com\/source\)\./m);
+    expect(ex.body).toMatch(/^\[\^2\]: Second note body\./m);
+    // The hover-preview titles and back-arrows never leak.
+    expect(ex.body).not.toContain("Hover copy");
+    expect(ex.body).not.toContain("](#fn-");
+    expect(ex.body).not.toContain("↩");
+  });
+});
+
+describe("extractArticle — link destination hardening", () => {
+  it("angle-wraps destinations containing whitespace", async () => {
+    const html = FORUM_SHELL(
+      `<p>Go <a href="#foo bar">jump</a> now. ${"Body padding sentence. ".repeat(30)}</p>`,
+      "/users/a?from=post_header",
+      "Author A",
+    );
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain("[jump](<#foo bar>)");
+  });
+
+  it("unlinks javascript:/data: targets but keeps the visible text", async () => {
+    const html = FORUM_SHELL(
+      `<p>Click <a href="javascript:alert(1)">the button</a> or <a href="data:text/html,hi">data link</a>. ${"Body padding sentence. ".repeat(30)}</p>`,
+      "/users/a?from=post_header",
+      "Author A",
+    );
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain("the button");
+    expect(ex.body).toContain("data link");
+    expect(ex.body).not.toContain("javascript:");
+    expect(ex.body).not.toContain("](data:");
+  });
+
+  it("keeps an image-only link whose IMAGE-extension href is on a different host (wiki File: pages)", async () => {
+    const html = FORUM_SHELL(
+      `<p>${"Body padding sentence. ".repeat(30)}</p>
+       <p><a href="https://en.wikipedia.org/wiki/File:Chart.jpg"><img src="https://upload.wikimedia.org/thumb/Chart.jpg" alt="chart"/></a></p>`,
+      "/users/a?from=post_header",
+      "Author A",
+    );
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain(
+      "[![chart](https://upload.wikimedia.org/thumb/Chart.jpg)](https://en.wikipedia.org/wiki/File:Chart.jpg)",
+    );
+  });
+
+  it("survives srcset-only images and picks the largest descriptor", async () => {
+    const html = FORUM_SHELL(
+      `<p>${"Body padding sentence. ".repeat(30)}</p>
+       <img srcset="https://cdn.example.com/a-480.png 480w, https://cdn.example.com/a-1600.png 1600w" alt="fig"/>`,
+      "/users/a?from=post_header",
+      "Author A",
+    );
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain("![fig](https://cdn.example.com/a-1600.png)");
+  });
+});
+
+describe("extractArticle — block-page detection weighting", () => {
+  const GENERIC_PAGE = (body: string) => `<!doctype html><html><head><title>T</title></head><body><article><h1>T</h1>${body}</article></body></html>`;
+
+  it("does not reject a short article whose prose contains 'just a moment'", async () => {
+    const prose = `<p>Wait, just a moment, said the gardener, before continuing down the winding path. ${"The story continued with more ordinary sentences of prose. ".repeat(10)}</p>`;
+    const ex = await extractArticle(GENERIC_PAGE(prose), "https://example.org/story");
+    expect(ex.body).toContain("just a moment");
+  });
+
+  it("still rejects a real challenge page (strong marker)", async () => {
+    const page = GENERIC_PAGE(`<p>Checking your browser before accessing the site. Enable JavaScript and cookies to continue.</p>`);
+    await expect(extractArticle(page, "https://example.org/x")).rejects.toThrow(/bot-verification/);
+  });
+
+  it("still rejects a tiny access-denied stub (weak marker, near-empty body)", async () => {
+    const page = GENERIC_PAGE(`<p>Access Denied. You don't have permission to access this resource. Reference #18.c4f</p>`);
+    await expect(extractArticle(page, "https://example.org/x")).rejects.toThrow(/bot-verification/);
+  });
+});
+
+describe("extractArticle — multi-line footnote definitions", () => {
+  it("keeps blockquote structure inside a definition on continuation lines", async () => {
+    const body = `
+      <p>Claim.<sup class="footnote-ref"><a href="#fn-1" id="fnref-1">[1]</a></sup></p>
+      <p>${"Body text to clear the length floor. ".repeat(20)}</p>
+      <section class="footnotes"><ol class="footnotes-list">
+        <li class="footnote-item" id="fn-1"><p>Bessen explained:</p><blockquote><p>Tellers increased after the ATM arrived.</p></blockquote></li>
+      </ol></section>`;
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toMatch(/^\[\^1\]: Bessen explained:\n {4}/m);
+    expect(ex.body).toMatch(/^ {4}> Tellers increased after the ATM arrived\./m);
+  });
+});
+
+describe("extractArticle — 80000hours adapter", () => {
+  const EIGHTYK_PAGE = `<!doctype html><html><head>
+    <title>How AI could create problems - 80,000 Hours</title>
+    <script type="application/ld+json">{"@type":"Article","author":{"@type":"Person","name":"Zed Author"},"datePublished":"2026-02-24T09:00:00Z"}</script>
+  </head><body><div class="wrap"><main class="wrap"><div class="container"><div class="row"><div class="main col-sm-10">
+    <header class="clearfix"><h1>How AI could create the world&#8217;s biggest&nbsp;problems</h1><p class="entry-meta">By Zed Author · Published February 2026</p></header>
+    <div class="wrap-sidebar-toc"><div class="sidebar-toc__title-wrap"><h2>On this page:</h2></div><ul><li><a href="#s1">Section one</a></li></ul></div>
+    <div class="eightyk-header-image"><img data-src="https://80000hours.org/hero.jpg" alt=""/><p>Hero credit line</p></div>
+    <div class="problem-profile__introduction margin-top">
+      <p>Imagine the intro paragraph that the generic path always dropped.${"More intro words here. ".repeat(10)}</p>
+      <h2>Summary</h2><p>The summary paragraph.</p>
+    </div>
+    <div class="problem-profile-content padding-bottom-large">
+      <div class="toc_white no_bullets"><p class="toc_title">Table of Contents</p><ul><li><a href="#s1">1 Section</a></li></ul></div>
+      <h2 id="s1">Section one</h2>
+      <p>Main body content with a citation.<a id="fn-ref-1" href="#fn-1" title="&lt;p&gt;Hover copy that must never appear.&lt;/p&gt;" rel="footnote" class="footnote-link"><sup>1</sup></a></p>
+      <p>${"Long article body sentence. ".repeat(30)}</p>
+      <div class="panel"><h4 class="panel-title"><a class="collapsed" data-toggle="collapse" data-target="#-14">Is this like every other technology?</a></h4>
+        <div id="-14" class="panel-collapse collapse"><div class="panel-body"><p>In some senses, yes.</p></div></div></div>
+      <div class="ab-cta ab-cta-a"><p>Get free one-on-one advice from our pitch.</p></div>
+      <div class="ab-cta ab-cta-b hidden"><p>Get one-on-one advice variant b.</p></div>
+    </div>
+  </div></div></div></main>
+  <div class="container"><div class="row margin-top-large"><div class="col-sm-10">
+    <div class="wrap-footnotes large-mobile-margin"><h3 class="no-toc">Notes and references</h3><div class="footnotes"><div><ol>
+      <li id="fn-1"> The real footnote text.<a href="#fn-ref-1" class="fn-return">↩</a></li>
+    </ol></div></div></div>
+  </div></div></div></div></body></html>`;
+
+  it("stitches intro + content + footnotes, drops TOC and CTAs", async () => {
+    const ex = await extractArticle(EIGHTYK_PAGE, "https://80000hours.org/problem-profiles/example/");
+    expect(ex.via).toBe("80000hours");
+    expect(ex.meta.title).toBe("How AI could create the world’s biggest problems");
+    expect(ex.meta.author).toEqual(["Zed Author"]);
+    expect(ex.meta.published).toBe("2026-02-24");
+    expect(ex.body).toContain("Imagine the intro paragraph");
+    expect(ex.body).toMatch(/^## Summary$/m);
+    expect(ex.body).toContain("Hero credit line");
+    expect(ex.body).toMatch(/^#### Is this like every other technology\?$/m);
+    expect(ex.body).toContain("In some senses, yes.");
+    expect(ex.body).toMatch(/citation\.\[\^1\]/);
+    expect(ex.body).toMatch(/^\[\^1\]: The real footnote text\./m);
+    expect(ex.body).not.toContain("Table of Contents");
+    expect(ex.body).not.toContain("one-on-one advice");
+    expect(ex.body).not.toContain("Hover copy");
+    expect(ex.body).not.toContain("↩");
+    expect(ex.body).not.toContain("On this page");
+  });
+
+  it("defers to the generic path on non-profile 80k pages", async () => {
+    const html = `<!doctype html><html><head><title>Podcast</title></head><body><article><h1>Podcast</h1><p>${"Episode notes body text. ".repeat(40)}</p></article></body></html>`;
+    const ex = await extractArticle(html, "https://80000hours.org/podcast/episodes/example/");
+    expect(["defuddle", "readability"]).toContain(ex.via);
+  });
+});
+
+describe("extractArticle — subtitle capture (generic path)", () => {
+  it("prepends an h3.subtitle dropped by the extractors as an italic lede", async () => {
+    const html = `<!doctype html><html><head><title>The Post</title></head><body>
+      <div class="post-header"><h1 class="post-title">The Post</h1><h3 class="subtitle">The cause is losing. Consider asking: how can we win?</h3></div>
+      <article><p>${"The body of the post that the extractor keeps. ".repeat(30)}</p></article>
+    </body></html>`;
+    const ex = await extractArticle(html, "https://example.substack.com/p/the-post");
+    expect(ex.body.startsWith("_The cause is losing. Consider asking: how can we win?_")).toBe(true);
+  });
+});

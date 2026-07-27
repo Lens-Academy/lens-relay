@@ -3,6 +3,7 @@ import { forumMagnumAdapter } from "./forum-magnum";
 import { wikipediaAdapter } from "./wikipedia";
 import { aiSafetyAtlasAdapter } from "./ai-safety-atlas";
 import { arxivAdapter } from "./arxiv";
+import { eightyThousandHoursAdapter } from "./eighty-thousand-hours";
 
 export type { AdapterContext, AdapterExtract, SiteAdapter } from "./types";
 
@@ -17,6 +18,7 @@ export const ADAPTERS: SiteAdapter[] = [
   wikipediaAdapter,
   aiSafetyAtlasAdapter,
   arxivAdapter,
+  eightyThousandHoursAdapter,
 ];
 
 /** Build the cheap context every adapter's `matches`/`extract` receives. */

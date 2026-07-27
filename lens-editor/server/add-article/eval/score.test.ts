@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { scoreBody, structureCounts, scoreArticle } from "./score";
+import { scoreBody, structureCounts, scoreArticle, normalizeForScore } from "./score";
+
+describe("normalizeForScore — link-title dialect", () => {
+  it('treats [t](url "title") and [t](url) as identical', () => {
+    const gold = 'See [beta](https://example.com/x "Beta page title") for details.';
+    const out = "See [beta](https://example.com/x) for details.";
+    expect(normalizeForScore(out)).toBe(normalizeForScore(gold));
+  });
+});
 
 describe("scoreBody", () => {
   it("recall=1 when output covers all gold lines; precision<1 when output adds lines", () => {
