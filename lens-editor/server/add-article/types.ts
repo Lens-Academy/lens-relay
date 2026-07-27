@@ -1,5 +1,7 @@
+import type { ArticleImportMode } from "../../shared/article-import-contract";
+
+export type { ArticleImportMode };
 export type ArticleJobStatus = "queued" | "processing" | "done" | "failed";
-export type ArticleImportMode = "stub" | "article" | "article-and-lens";
 
 /** Metadata for an article, accumulated from Jina, HTML meta tags, and Claude */
 export interface ArticleMeta {
@@ -21,8 +23,8 @@ export interface ArticleJob {
   stage?: string;
   error?: string;
   relay_url?: string;
-  /** What the importer should write. Defaults to a full article plus lens. */
-  importMode?: ArticleImportMode;
+  /** What the importer should write. */
+  importMode: ArticleImportMode;
   created_at: string;
   updated_at: string;
 }

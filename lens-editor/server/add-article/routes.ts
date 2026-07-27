@@ -1,18 +1,15 @@
 import { Hono } from "hono";
 import type { ArticleJobQueue } from "./queue";
-import type { ArticleImportMode } from "./types";
+import {
+  isArticleImportMode,
+  type ArticleImportMode,
+} from "../../shared/article-import-contract";
 import { verifyShareToken, roleAtLeast } from "../share-token";
 import { normalizeUrlForDedup } from "./url-normalize";
 
 export const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
 const ALL_FOLDERS = "00000000-0000-0000-0000-000000000000";
 const MAX_URLS_PER_REQUEST = 20;
-const IMPORT_MODES = new Set<ArticleImportMode>([
-  "stub",
-  "article",
-  "article-and-lens",
-]);
-
 function validateUrl(raw: string): string | null {
   let parsed: URL;
   try {
@@ -57,9 +54,8 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
     const body = await c.req
       .json<{
         urls?: string[];
-        importMode?: ArticleImportMode;
-        /** Backward compatibility for clients deployed before import modes. */
-        createLens?: boolean;
+        importMode?: unknown;
+        createLens?: unknown;
       }>()
       .catch(() => null);
     if (!body?.urls || !Array.isArray(body.urls) || body.urls.length === 0) {
@@ -74,14 +70,22 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         400,
       );
     }
-    const importMode: ArticleImportMode = body.importMode
-      ? body.importMode
-      : body.createLens === false
-        ? "article"
-        : "article-and-lens";
-    if (!IMPORT_MODES.has(importMode)) {
-      return c.json({ error: "Invalid importMode" }, 400);
+    if (body.createLens !== undefined) {
+      return c.json(
+        { error: "createLens is not supported; importMode is required" },
+        400,
+      );
     }
+    if (!isArticleImportMode(body.importMode)) {
+      return c.json(
+        {
+          error:
+            "importMode is required and must be one of: stub, article, article-and-lens",
+        },
+        400,
+      );
+    }
+    const importMode: ArticleImportMode = body.importMode;
 
     const results: Array<{
       url: string;
@@ -151,10 +155,7 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
     if (active) {
       return c.json({ error: "URL is already queued", id: active.id }, 409);
     }
-    const retried = queue.add(
-      job.url,
-      job.importMode ?? "article-and-lens",
-    );
+    const retried = queue.add(job.url, job.importMode);
     return c.json({ id: retried.id, status: "queued" });
   });
 

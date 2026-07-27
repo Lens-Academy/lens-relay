@@ -24,6 +24,7 @@ use y_sweet_core::share_token::McpAccess;
 /// Return tool definitions for MCP tools/list response.
 /// When `writable` is false, write tools (edit, create, move) are excluded.
 pub fn tool_definitions(writable: bool) -> Vec<Value> {
+    let article_import_modes = import_article::ARTICLE_IMPORT_MODES;
     let mut tools = vec![
         json!({
             "name": "create_session",
@@ -236,10 +237,10 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
     if writable {
         tools.push(json!({
             "name": "import_article",
-            "description": "Import external articles/webpages into the knowledge base via the article importer. Give it URLs; the server fetches and extracts the full text, writes 'Lens Edu/articles/<author>-<title>.md' with correct frontmatter, and (by default) creates a stub lens. Jobs run in the background — poll import_status until each is done/failed. YouTube URLs are rejected (video imports need the browser bookmarklet). Prefer this over hand-writing article files.",
+            "description": "Import external articles/webpages into the knowledge base via the article importer. Choose whether to create only an article stub, a full article, or a full article plus lens. Jobs run in the background — poll import_status until each is done/failed. YouTube URLs are rejected (video imports need the browser bookmarklet). Prefer this over hand-writing article files.",
             "inputSchema": {
                 "type": "object",
-                "required": ["urls", "session_id"],
+                "required": ["urls", "import_mode", "session_id"],
                 "additionalProperties": false,
                 "properties": {
                     "urls": {
@@ -247,9 +248,10 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                         "items": { "type": "string" },
                         "description": "Article URLs to import (max 20, http/https)"
                     },
-                    "create_lens": {
-                        "type": "boolean",
-                        "description": "Also create a stub lens per article (default true)"
+                    "import_mode": {
+                        "type": "string",
+                        "enum": article_import_modes,
+                        "description": "What to create for each URL: an article stub, a full article without a lens, or a full article plus lens"
                     },
                     "session_id": {
                         "type": "string",
@@ -550,6 +552,30 @@ mod integration_tests {
         );
         assert!(move_tool["inputSchema"]["properties"]["path"].is_object());
         assert!(move_tool["inputSchema"]["properties"]["file_path"].is_object());
+    }
+
+    #[test]
+    fn import_article_schema_requires_the_shared_modes() {
+        let tools = super::tool_definitions(true);
+        let import_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "import_article")
+            .expect("import_article tool should be present");
+
+        assert_eq!(
+            import_tool["inputSchema"]["required"],
+            json!(["urls", "import_mode", "session_id"])
+        );
+        assert_eq!(
+            import_tool["inputSchema"]["properties"]["import_mode"]["enum"],
+            json!(super::import_article::ARTICLE_IMPORT_MODES)
+        );
+        assert!(
+            import_tool["inputSchema"]["properties"]
+                .get("create_lens")
+                .is_none(),
+            "removed create_lens option must not be advertised"
+        );
     }
 
     #[tokio::test]

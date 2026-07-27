@@ -18,6 +18,7 @@ use y_sweet_core::share_token::McpAccess;
 const DEFAULT_EDITOR_URL: &str = "http://lens-editor:3000";
 const MAX_URLS: usize = 20;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const ARTICLE_IMPORT_MODES: [&str; 3] = ["stub", "article", "article-and-lens"];
 
 pub fn editor_url_from_env() -> String {
     std::env::var("LENS_EDITOR_URL")
@@ -89,13 +90,23 @@ pub async fn execute_with_editor_url(
         ));
     }
 
-    let token = request_token(access)?;
-    let create_lens = arguments.get("create_lens").and_then(|v| v.as_bool());
-
-    let mut body = json!({ "urls": urls });
-    if let Some(cl) = create_lens {
-        body["createLens"] = json!(cl);
+    let import_mode = arguments
+        .get("import_mode")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            "Missing required parameter: import_mode (stub, article, or article-and-lens)"
+                .to_string()
+        })?;
+    if !ARTICLE_IMPORT_MODES.contains(&import_mode) {
+        return Err(format!(
+            "Invalid import_mode '{}'; expected one of: {}",
+            import_mode,
+            ARTICLE_IMPORT_MODES.join(", ")
+        ));
     }
+
+    let token = request_token(access)?;
+    let body = json!({ "urls": urls, "importMode": import_mode });
 
     proxy(
         reqwest::Method::POST,
@@ -250,23 +261,43 @@ mod tests {
     // Prevents: importer requests going out without the caller's own share
     // token, or with a mangled payload
     #[tokio::test]
-    async fn forwards_token_and_payload_to_editor() {
-        let (editor_url, mut rx) = mock_editor().await;
+    async fn forwards_every_import_mode_to_editor() {
+        for mode in ARTICLE_IMPORT_MODES {
+            let (editor_url, mut rx) = mock_editor().await;
 
-        let out = execute_with_editor_url(
-            &access_with_token("tok-123"),
-            &json!({"urls": ["https://example.com/a"], "create_lens": false}),
-            &editor_url,
-        )
-        .await
-        .expect("import should succeed");
+            let out = execute_with_editor_url(
+                &access_with_token("tok-123"),
+                &json!({"urls": ["https://example.com/a"], "import_mode": mode}),
+                &editor_url,
+            )
+            .await
+            .expect("import should succeed");
 
-        assert!(out.contains("queued"));
-        let (auth, body) = rx.recv().await.unwrap();
-        assert_eq!(auth, "Bearer tok-123");
-        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(body["urls"][0], "https://example.com/a");
-        assert_eq!(body["createLens"], false);
+            assert!(out.contains("queued"));
+            let (auth, body) = rx.recv().await.unwrap();
+            assert_eq!(auth, "Bearer tok-123");
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["urls"][0], "https://example.com/a");
+            assert_eq!(body["importMode"], mode);
+            assert!(body.get("createLens").is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_missing_or_invalid_import_mode() {
+        for arguments in [
+            json!({"urls": ["https://example.com/a"]}),
+            json!({"urls": ["https://example.com/a"], "import_mode": "surprise"}),
+        ] {
+            let err = execute_with_editor_url(
+                &access_with_token("tok"),
+                &arguments,
+                "http://127.0.0.1:1",
+            )
+            .await
+            .expect_err("mode must be rejected before contacting the editor");
+            assert!(err.contains("import_mode"), "got: {err}");
+        }
     }
 
     // Prevents: YouTube URLs silently producing garbage article imports
@@ -274,7 +305,10 @@ mod tests {
     async fn rejects_youtube_urls_with_bookmarklet_pointer() {
         let err = execute_with_editor_url(
             &access_with_token("tok"),
-            &json!({"urls": ["https://www.youtube.com/watch?v=abc123"]}),
+            &json!({
+                "urls": ["https://www.youtube.com/watch?v=abc123"],
+                "import_mode": "article"
+            }),
             "http://127.0.0.1:1", // must not be contacted
         )
         .await
@@ -288,7 +322,10 @@ mod tests {
     async fn legacy_key_session_gets_clear_error() {
         let err = execute_with_editor_url(
             &access_without_token(),
-            &json!({"urls": ["https://example.com/a"]}),
+            &json!({
+                "urls": ["https://example.com/a"],
+                "import_mode": "article"
+            }),
             "http://127.0.0.1:1",
         )
         .await
@@ -319,5 +356,24 @@ mod tests {
         assert!(is_youtube_url("https://user@youtube.com/watch?v=x"));
         assert!(!is_youtube_url("https://example.com/youtube.com-article"));
         assert!(!is_youtube_url("https://notyoutube.com/watch"));
+    }
+
+    #[test]
+    fn rust_modes_match_the_editor_contract() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../../lens-editor/shared/article-import-modes.json"
+        ))
+        .expect("article import contract must be valid JSON");
+        let mut contract_modes: Vec<_> = contract
+            .as_object()
+            .expect("article import contract must be an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        contract_modes.sort_unstable();
+
+        let mut rust_modes = ARTICLE_IMPORT_MODES.to_vec();
+        rust_modes.sort_unstable();
+        assert_eq!(rust_modes, contract_modes);
     }
 }

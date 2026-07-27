@@ -1292,9 +1292,15 @@ impl Server {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64;
+            let suggestion_author = attribution
+                .map(|attr| attr.suggestion_author.as_str())
+                .unwrap_or("AI");
+            let suggestion_author = serde_json::to_string(suggestion_author).map_err(|e| {
+                CreateDocumentError::Internal(format!("Failed to encode suggestion author: {}", e))
+            })?;
             let wrapped = format!(
-                "{{++{{\"author\":\"AI\",\"timestamp\":{}}}@@{}++}}",
-                timestamp, content
+                "{{++{{\"author\":{},\"timestamp\":{}}}@@{}++}}",
+                suggestion_author, timestamp, content
             );
             match attribution {
                 Some(attr) => crate::mcp::provenance::apply_attributed_edit(

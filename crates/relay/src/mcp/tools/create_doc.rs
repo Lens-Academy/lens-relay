@@ -31,6 +31,7 @@ pub async fn execute(
             crate::mcp::provenance::AiAttribution {
                 client_id: session.ai_client_id,
                 actor: session.ai_actor.clone(),
+                suggestion_author: session.author_name.clone(),
             },
         )
     };
@@ -211,6 +212,63 @@ mod tests {
             result.is_ok(),
             "MD create should succeed: {:?}",
             result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_md_uses_named_session_for_review_and_provenance() {
+        use yrs::{Map, Out, ReadTxn, Transact};
+
+        let server = build_blob_test_server_with_folder().await;
+        let sid =
+            server
+                .mcp_sessions
+                .create_session(default_access(), Some("Luc"), Some("fable-5"));
+        let (ai_client_id, ai_actor) = {
+            let session = server.mcp_sessions.get_session(&sid).unwrap();
+            (session.ai_client_id, session.ai_actor.clone())
+        };
+
+        execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Named.md",
+                "content": "Hello world",
+            }),
+        )
+        .await
+        .expect("named-session create should succeed");
+
+        let doc_info = server
+            .doc_resolver()
+            .resolve_path("Lens/Named.md")
+            .expect("created path should resolve");
+        let raw = read_doc_content(&server, &doc_info.doc_id);
+        assert!(
+            raw.contains(r#""author":"Luc's AI""#),
+            "review author should use the named session: {raw}"
+        );
+        assert!(
+            !raw.contains(r#""author":"AI""#),
+            "review author must not fall back to generic AI: {raw}"
+        );
+
+        let content_doc = server
+            .docs()
+            .get(&doc_info.doc_id)
+            .expect("content doc should be loaded");
+        let awareness = content_doc.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        assert!(
+            txn.state_vector().get(&ai_client_id) > 0,
+            "created text should be minted under the session AI client ID"
+        );
+        let users = txn.get_map("users").expect("users map should exist");
+        assert!(
+            matches!(users.get(&txn, &ai_actor), Some(Out::YMap(_))),
+            "session actor should be registered in provenance"
         );
     }
 

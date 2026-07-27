@@ -34,10 +34,7 @@ export class ArticleJobQueue {
     this.processJob = options.processJob;
   }
 
-  add(
-    url: string,
-    importMode: ArticleImportMode = "article-and-lens",
-  ): ArticleJob {
+  add(url: string, importMode: ArticleImportMode): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();

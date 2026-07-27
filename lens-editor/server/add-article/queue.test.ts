@@ -9,14 +9,14 @@ describe("ArticleJobQueue", () => {
   // Prevents: caller observing 'processing' before the POST response is built
   it("returns jobs as queued before processing starts", () => {
     const queue = new ArticleJobQueue({ processJob: vi.fn(async () => {}) });
-    const job = queue.add("https://example.com/a");
+    const job = queue.add("https://example.com/a", "article-and-lens");
     expect(job.status).toBe("queued");
   });
 
   it("processes jobs and marks them done", async () => {
     const processJob = vi.fn(async () => {});
     const queue = new ArticleJobQueue({ processJob });
-    const job = queue.add("https://example.com/a");
+    const job = queue.add("https://example.com/a", "article-and-lens");
     await flushMicrotasks();
     expect(processJob).toHaveBeenCalledTimes(1);
     expect(queue.get(job.id)?.status).toBe("done");
@@ -28,7 +28,7 @@ describe("ArticleJobQueue", () => {
         throw new Error("boom");
       }),
     });
-    const job = queue.add("https://example.com/a");
+    const job = queue.add("https://example.com/a", "article-and-lens");
     await flushMicrotasks();
     expect(queue.get(job.id)?.status).toBe("failed");
     expect(queue.get(job.id)?.error).toBe("boom");
@@ -36,7 +36,7 @@ describe("ArticleJobQueue", () => {
 
   it("findActive matches queued/processing jobs but not finished ones", async () => {
     const queue = new ArticleJobQueue({ processJob: vi.fn(async () => {}) });
-    queue.add("https://example.com/a");
+    queue.add("https://example.com/a", "article-and-lens");
     expect(queue.findActive("https://example.com/a")?.url).toBe(
       "https://example.com/a",
     );
@@ -49,7 +49,7 @@ describe("ArticleJobQueue", () => {
   // Prevents: in-memory job map growing unbounded over the server's lifetime
   it("evicts finished jobs older than the TTL on add", async () => {
     const queue = new ArticleJobQueue({ processJob: vi.fn(async () => {}) });
-    const old = queue.add("https://example.com/old");
+    const old = queue.add("https://example.com/old", "article-and-lens");
     await flushMicrotasks();
     expect(queue.get(old.id)?.status).toBe("done");
     // Age the finished job past the 7-day TTL
@@ -57,19 +57,19 @@ describe("ArticleJobQueue", () => {
       Date.now() - 8 * 24 * 60 * 60 * 1000,
     ).toISOString();
 
-    queue.add("https://example.com/new");
+    queue.add("https://example.com/new", "article-and-lens");
     expect(queue.get(old.id)).toBeUndefined();
   });
 
   it("never evicts active jobs, even old ones", () => {
     const neverResolves = vi.fn(() => new Promise<void>(() => {}));
     const queue = new ArticleJobQueue({ processJob: neverResolves });
-    const stuck = queue.add("https://example.com/stuck");
+    const stuck = queue.add("https://example.com/stuck", "article-and-lens");
     stuck.updated_at = new Date(
       Date.now() - 30 * 24 * 60 * 60 * 1000,
     ).toISOString();
 
-    queue.add("https://example.com/new");
+    queue.add("https://example.com/new", "article-and-lens");
     expect(queue.get(stuck.id)).toBeDefined();
   });
 });
@@ -83,7 +83,7 @@ describe("ArticleJobQueue — deadline, cancel, signal", () => {
       const queue = new ArticleJobQueue({
         processJob: () => new Promise<void>(() => {}), // hangs forever
       });
-      const job = queue.add("https://example.com/hang");
+      const job = queue.add("https://example.com/hang", "article-and-lens");
       await new Promise((r) => setTimeout(r, 200));
       expect(queue.get(job.id)?.status).toBe("failed");
       expect(queue.get(job.id)?.error).toMatch(/timed out/i);
@@ -104,7 +104,10 @@ describe("ArticleJobQueue — deadline, cancel, signal", () => {
         });
       },
     });
-    const job = queue.add("https://example.com/cancel-me");
+    const job = queue.add(
+      "https://example.com/cancel-me",
+      "article-and-lens",
+    );
     await flushMicrotasks();
     expect(seenSignal).toBeInstanceOf(AbortSignal);
     expect(queue.cancel(job.id)).toBe(true);
@@ -116,14 +119,14 @@ describe("ArticleJobQueue — deadline, cancel, signal", () => {
 
   it("cancels a queued job before it starts", () => {
     const queue = new ArticleJobQueue({ processJob: vi.fn(async () => {}) });
-    const job = queue.add("https://example.com/queued");
+    const job = queue.add("https://example.com/queued", "article-and-lens");
     expect(queue.cancel(job.id)).toBe(true); // still queued (drain is deferred)
     expect(queue.get(job.id)?.status).toBe("failed");
   });
 
   it("refuses to cancel finished or unknown jobs", async () => {
     const queue = new ArticleJobQueue({ processJob: vi.fn(async () => {}) });
-    const job = queue.add("https://example.com/done");
+    const job = queue.add("https://example.com/done", "article-and-lens");
     await flushMicrotasks();
     expect(queue.get(job.id)?.status).toBe("done");
     expect(queue.cancel(job.id)).toBe(false);
@@ -136,7 +139,7 @@ describe("ArticleJobQueue — deadline, cancel, signal", () => {
         job.stage = "fetching";
       },
     });
-    const job = queue.add("https://example.com/stage");
+    const job = queue.add("https://example.com/stage", "article-and-lens");
     await flushMicrotasks();
     expect(queue.get(job.id)?.status).toBe("done");
     expect(queue.get(job.id)?.stage).toBeUndefined();
@@ -146,7 +149,7 @@ describe("ArticleJobQueue — deadline, cancel, signal", () => {
     const queue = new ArticleJobQueue({
       processJob: () => new Promise<void>(() => {}),
     });
-    queue.add("https://example.com/post");
+    queue.add("https://example.com/post", "article-and-lens");
     await flushMicrotasks();
     const strip = (u: string) => u.replace(/\?.*$/, "");
     expect(

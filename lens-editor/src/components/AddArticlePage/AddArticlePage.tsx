@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { CSSProperties } from "react";
+import {
+  ARTICLE_IMPORT_MODE_DEFINITIONS,
+  ARTICLE_IMPORT_MODES,
+  type ArticleImportMode,
+} from "../../../shared/article-import-contract";
 
 interface ArticleJob {
   id: string;
@@ -11,12 +16,10 @@ interface ArticleJob {
   stage?: string;
   error?: string;
   relay_url?: string;
-  importMode?: ImportMode;
+  importMode: ArticleImportMode;
   created_at: string;
   updated_at: string;
 }
-
-type ImportMode = "stub" | "article" | "article-and-lens";
 
 interface SubmitResult {
   url: string;
@@ -40,7 +43,8 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [invalidResults, setInvalidResults] = useState<SubmitResult[]>([]);
   const [jobs, setJobs] = useState<ArticleJob[]>([]);
-  const [importMode, setImportMode] = useState<ImportMode>("article-and-lens");
+  const [importMode, setImportMode] =
+    useState<ArticleImportMode>("article-and-lens");
   const [showModeInfo, setShowModeInfo] = useState(false);
   const fetchInFlight = useRef(false);
 
@@ -242,11 +246,8 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
               background: "#101327",
             }}
           >
-            {([
-              ["stub", "Stub only"],
-              ["article", "Full article"],
-              ["article-and-lens", "Full article + lens"],
-            ] as const).map(([value, label]) => {
+            {ARTICLE_IMPORT_MODES.map((value) => {
+              const definition = ARTICLE_IMPORT_MODE_DEFINITIONS[value];
               const selected = importMode === value;
               return (
                 <div
@@ -274,7 +275,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                       cursor: "pointer",
                     }}
                   >
-                    {label}
+                    {definition.label}
                   </button>
                   {value === "stub" && (
                     <>
@@ -325,10 +326,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                             lineHeight: 1.45,
                           }}
                         >
-                          Only create an article stub without the article body.
-                          This is useful for discussing articles while not taking
-                          up as much space and slowing down our relay system with
-                          thousands of articles we&apos;re not using.
+                          {definition.description}
                         </span>
                       )}
                     </>

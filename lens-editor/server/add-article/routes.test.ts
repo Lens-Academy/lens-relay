@@ -51,7 +51,10 @@ describe("POST /api/add-article", () => {
   }
 
   it("queues valid urls and returns job ids", async () => {
-    const resp = await post({ urls: ["https://example.com/article"] });
+    const resp = await post({
+      urls: ["https://example.com/article"],
+      importMode: "article-and-lens",
+    });
     expect(resp.status).toBe(200);
     const data = await resp.json();
     expect(data.results).toEqual([
@@ -63,12 +66,19 @@ describe("POST /api/add-article", () => {
     );
   });
 
-  it("maps the legacy createLens:false option to a full article without a lens", async () => {
-    await post({ urls: ["https://example.com/article"], createLens: false });
-    expect(mockQueue.add).toHaveBeenCalledWith(
-      "https://example.com/article",
-      "article",
-    );
+  it("rejects the removed createLens option", async () => {
+    const resp = await post({
+      urls: ["https://example.com/article"],
+      createLens: false,
+    });
+    expect(resp.status).toBe(400);
+    expect(mockQueue.add).not.toHaveBeenCalled();
+  });
+
+  it("rejects requests without an import mode", async () => {
+    const resp = await post({ urls: ["https://example.com/article"] });
+    expect(resp.status).toBe(400);
+    expect(mockQueue.add).not.toHaveBeenCalled();
   });
 
   it.each(["stub", "article", "article-and-lens"] as const)(
@@ -144,6 +154,7 @@ describe("POST /api/add-article", () => {
   it("marks non-http(s) urls invalid without queueing them", async () => {
     const resp = await post({
       urls: ["file:///etc/passwd", "ftp://x", "not a url"],
+      importMode: "article",
     });
     expect(resp.status).toBe(200);
     const data = await resp.json();
@@ -156,6 +167,7 @@ describe("POST /api/add-article", () => {
   it("dedupes urls within one request", async () => {
     const resp = await post({
       urls: ["https://example.com/a", "https://example.com/a"],
+      importMode: "article",
     });
     const data = await resp.json();
     // One queued row + one honest already_queued row for the duplicate line.
@@ -171,7 +183,10 @@ describe("POST /api/add-article", () => {
       url: "https://example.com/a",
       status: "processing",
     });
-    const resp = await post({ urls: ["https://example.com/a"] });
+    const resp = await post({
+      urls: ["https://example.com/a"],
+      importMode: "article",
+    });
     const data = await resp.json();
     expect(data.results[0]).toEqual({
       url: "https://example.com/a",

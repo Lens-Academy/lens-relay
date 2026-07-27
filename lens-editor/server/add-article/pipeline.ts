@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { ArticleJob, ArticleMeta } from "./types";
+import type { ArticleImportMode, ArticleJob, ArticleMeta } from "./types";
 import {
   fetchFirstHtml,
   fetchRawHtml,
@@ -57,6 +57,28 @@ function relayArticleFolder(): string {
 interface ExistingArticleMatch {
   path: string;
   stubContent?: string;
+}
+
+interface ArticleImportBehavior {
+  stubOnly: boolean;
+  createLens: boolean;
+}
+
+export function articleImportBehavior(
+  mode: ArticleImportMode,
+): ArticleImportBehavior {
+  switch (mode) {
+    case "stub":
+      return { stubOnly: true, createLens: false };
+    case "article":
+      return { stubOnly: false, createLens: false };
+    case "article-and-lens":
+      return { stubOnly: false, createLens: true };
+    default: {
+      const exhaustive: never = mode;
+      throw new Error(`Unhandled article import mode: ${exhaustive}`);
+    }
+  }
 }
 
 async function findExistingArticle(
@@ -144,7 +166,8 @@ export async function processArticle(
   const createdDate = new Date().toISOString().slice(0, 10);
   const folder = relayArticleFolder();
   const topFolder = folder.split("/")[0];
-  const isStubOnly = job.importMode === "stub";
+  const behavior = articleImportBehavior(job.importMode);
+  const isStubOnly = behavior.stubOnly;
   const setStage = (stage: string) => {
     // A cancelled/deadlined job must actually STOP — Promise.race in the queue
     // settles the job status but cannot kill this pipeline, so every stage
@@ -487,7 +510,7 @@ export async function processArticle(
   // 6. The "full article + lens" mode wraps the article so it can be dropped
   //    straight into a module. A lens failure must not fail the import — the
   //    article is already saved.
-  if (job.importMode === "article-and-lens" || !job.importMode) {
+  if (behavior.createLens) {
     setStage("creating-lens");
     try {
       const lensPath = await maybeCreateLens({

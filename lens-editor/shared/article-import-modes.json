@@ -1,0 +1,14 @@
+{
+  "stub": {
+    "label": "Stub only",
+    "description": "Only create an article stub without the article body. This is useful for discussing articles without storing full text that is not yet being used."
+  },
+  "article": {
+    "label": "Full article",
+    "description": "Import the full article without creating a lens."
+  },
+  "article-and-lens": {
+    "label": "Full article + lens",
+    "description": "Import the full article and create a lens for it."
+  }
+}

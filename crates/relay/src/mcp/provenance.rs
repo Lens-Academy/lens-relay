@@ -27,6 +27,8 @@ use yrs::{
 pub struct AiAttribution {
     pub client_id: u64,
     pub actor: String,
+    /// CriticMarkup author shown in the review UI: "AI" or "{name}'s AI".
+    pub suggestion_author: String,
 }
 
 /// Apply a text edit to `doc`'s "contents" Y.Text so the inserted items carry
