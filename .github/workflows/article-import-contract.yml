@@ -32,7 +32,11 @@ jobs:
           server/add-article/pipeline-mode.test.ts
           server/add-article/pipeline-duplicate.test.ts
           src/components/AddArticlePage/AddArticlePage.test.tsx
-      - run: npm run build
+      # NOTE: no `npm run build` here — package-lock.json resolves
+      # lens-content-processor as a local filesystem link
+      # (../../../lens-platform/ws2/content_processor) that does not exist on
+      # CI runners, so the build fails on every PR regardless of its changes.
+      # Restore the step once that dependency is published or vendored.
 
   relay-mcp:
     runs-on: ubuntu-latest
