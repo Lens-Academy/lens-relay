@@ -18,5 +18,13 @@ jq -Rs --arg sid <session_id> \
   local-file.md | curl -sS -X POST "$MCP_URL" -H 'Content-Type: application/json' -d @-
 ```
 
+No `jq`? python3 works too:
+
+```bash
+python3 -c 'import json,sys;print(json.dumps({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create","arguments":{"session_id":sys.argv[1],"file_path":sys.argv[2],"content":sys.stdin.read()}}}))' \
+  <session_id> "Lens Edu/Doc.md" < local-file.md | curl -sS -X POST "$MCP_URL" -H 'Content-Type: application/json' -d @-
+```
+
 Works for any tool, not just `create`. Markdown still lands as pending
-suggestions (CriticMarkup) like a normal MCP create.
+suggestions (CriticMarkup) like a normal MCP create. Verified against
+production with a 1MB body.
