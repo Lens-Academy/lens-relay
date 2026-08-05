@@ -13,7 +13,7 @@
 
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tokio::task::yield_now;
 use y_sweet_core::doc_sync::DocWithSyncKv;
@@ -58,6 +58,45 @@ fn watchdog(done: Arc<AtomicBool>, test_name: &'static str) {
             std::process::exit(1);
         }
     });
+}
+
+/// Wait until the shared state counter reaches `n`.
+fn wait_for_state(state: &(Mutex<u32>, Condvar), n: u32) {
+    let (lock, cvar) = state;
+    let mut s = lock.lock().unwrap();
+    while *s < n {
+        s = cvar.wait(s).unwrap();
+    }
+}
+
+/// Advance the shared state counter to `n`.
+fn set_state(state: &(Mutex<u32>, Condvar), n: u32) {
+    let (lock, cvar) = state;
+    *lock.lock().unwrap() = n;
+    cvar.notify_all();
+}
+
+/// Reader thread for awareness-contention tests: clone the awareness Arc out
+/// of the map (dropping the shard guard), take `awareness.read()`, signal
+/// state=1, and hold the read lock for `hold` to starve any concurrent
+/// `awareness.write()`. In production this contention window is unbounded
+/// under continuous awareness readers.
+fn spawn_awareness_reader(
+    docs: Arc<DashMap<String, DocWithSyncKv>>,
+    doc_id: String,
+    state: Arc<(Mutex<u32>, Condvar)>,
+    hold: Duration,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let awareness_arc = {
+            let doc_ref = docs.get(&doc_id).expect("doc missing");
+            doc_ref.value().awareness()
+            // DashMap Ref dropped here — shard lock released
+        };
+        let _guard = awareness_arc.read().unwrap();
+        set_state(&state, 1);
+        std::thread::sleep(hold);
+    })
 }
 
 // ============================================================================
@@ -455,8 +494,6 @@ async fn combined_stress_test_multiple_code_paths() {
 // ============================================================================
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gc_remove_not_blocked_by_index_document_holding_dashmap_guard() {
-    use std::sync::{Condvar, Mutex};
-
     let done = Arc::new(AtomicBool::new(false));
     watchdog(
         done.clone(),
@@ -485,37 +522,17 @@ async fn gc_remove_not_blocked_by_index_document_holding_dashmap_guard() {
     let contention_ms: u64 = 50;
 
     // T1 (reader): hold awareness.read() for `contention_ms` to starve the writer.
-    let reader = std::thread::spawn(move || {
-        let awareness_arc = {
-            let doc_ref = docs_reader.get(&fid_r).expect("folder doc missing");
-            doc_ref.value().awareness()
-            // DashMap Ref dropped here — shard lock released
-        };
-        let _guard = awareness_arc.read().unwrap();
-
-        // Signal state=1: awareness.read() is held
-        {
-            let (lock, cvar) = &*state_r;
-            *lock.lock().unwrap() = 1;
-            cvar.notify_all();
-        }
-
-        // Hold awareness.read() for the contention window.
-        // This simulates continuous readers starving the writer.
-        std::thread::sleep(Duration::from_millis(contention_ms));
-        drop(_guard);
-    });
+    let reader = spawn_awareness_reader(
+        docs_reader,
+        fid_r,
+        state_r,
+        Duration::from_millis(contention_ms),
+    );
 
     // T2 (indexer): the BUGGY pattern — docs.get() held across awareness.write()
     let indexer = std::thread::spawn(move || {
         // Wait for reader to hold awareness.read()
-        {
-            let (lock, cvar) = &*state_i;
-            let mut s = lock.lock().unwrap();
-            while *s < 1 {
-                s = cvar.wait(s).unwrap();
-            }
-        }
+        wait_for_state(&state_i, 1);
 
         // *** FIXED PATTERN (link_indexer.rs:1580-1587): ***
         // Clone awareness Arc, release shard lock, THEN acquire awareness.write()
@@ -526,11 +543,7 @@ async fn gc_remove_not_blocked_by_index_document_holding_dashmap_guard() {
         // DashMap shard lock released here (doc_ref dropped)
 
         // Signal state=2: we've accessed the DashMap (shard lock now released)
-        {
-            let (lock, cvar) = &*state_i;
-            *lock.lock().unwrap() = 2;
-            cvar.notify_all();
-        }
+        set_state(&state_i, 2);
 
         // awareness.write() blocks until reader releases awareness.read(),
         // but the DashMap shard lock is NOT held during this wait.
@@ -543,13 +556,7 @@ async fn gc_remove_not_blocked_by_index_document_holding_dashmap_guard() {
     // With fix: completes quickly (shard lock not held during awareness wait)
     let gc = std::thread::spawn(move || {
         // Wait for indexer to hold shard lock
-        {
-            let (lock, cvar) = &*state_g;
-            let mut s = lock.lock().unwrap();
-            while *s < 2 {
-                s = cvar.wait(s).unwrap();
-            }
-        }
+        wait_for_state(&state_g, 2);
         // Small delay to ensure indexer is blocked on awareness.write()
         std::thread::sleep(Duration::from_millis(2));
 
@@ -581,6 +588,103 @@ async fn gc_remove_not_blocked_by_index_document_holding_dashmap_guard() {
          blocking GC for the entire awareness contention window ({contention_ms}ms). \
          Fix: clone awareness Arc out of docs.get() before calling awareness.write().",
         gc_duration,
+        threshold_ms,
+    );
+
+    done.store(true, Ordering::SeqCst);
+}
+
+// ============================================================================
+// Test 7: the real GC step must not hold the DashMap shard guard across
+// compact_user_data()'s blocking awareness.write()
+//
+// Production failure 2026-07-31 / 2026-08-02: relay server hung; last log
+// line "GCing doc", then silence, until the watchdog restarted it. The GC
+// worker held docs.get()'s shard READ guard while compact_user_data()
+// waited on awareness.write(). A doc load on the same shard then queued a
+// shard WRITER (parking_lot), which blocks all NEW shard readers — every
+// task touching the shard piles up on blocking std locks, pinning the
+// (two, on prod) runtime workers and wedging the whole server.
+//
+// This test drives the REAL production GC step
+// (relay::server::Server::gc_compact_and_remove) under awareness contention
+// and asserts a concurrent shard writer (docs.remove + insert) is not
+// blocked for the contention window. Reverting the fix (re-introducing a
+// held shard guard across the awareness lock) makes this test fail.
+// ============================================================================
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn gc_compaction_does_not_block_shard_writers() {
+    use relay::server::Server;
+
+    let done = Arc::new(AtomicBool::new(false));
+    watchdog(done.clone(), "gc_compaction_does_not_block_shard_writers");
+
+    let docs: Arc<DashMap<String, DocWithSyncKv>> = Arc::new(DashMap::new());
+    let folder_id = "folder-doc-0".to_string();
+    docs.insert(folder_id.clone(), create_folder_doc(&folder_id).await);
+
+    let state = Arc::new((Mutex::new(0u32), Condvar::new()));
+
+    let docs_gc = Arc::clone(&docs);
+    let docs_writer = Arc::clone(&docs);
+    let fid_g = folder_id.clone();
+    let fid_w = folder_id.clone();
+    let state_g = Arc::clone(&state);
+    let state_w = Arc::clone(&state);
+
+    // How long the reader starves compaction's awareness.write(). In
+    // production this is unbounded under continuous awareness readers.
+    let contention_ms: u64 = 50;
+
+    // T1 (reader): hold awareness.read() so the GC step's awareness.write()
+    // blocks for the contention window.
+    let reader = spawn_awareness_reader(
+        Arc::clone(&docs),
+        folder_id.clone(),
+        Arc::clone(&state),
+        Duration::from_millis(contention_ms),
+    );
+
+    // T2 (GC): the real production GC step. It must drop its shard guard
+    // before blocking on awareness.write() inside compaction.
+    let gc = std::thread::spawn(move || {
+        // Wait for reader to hold awareness.read()
+        wait_for_state(&state_g, 1);
+        // Signal state=2: GC step starting (it will block on awareness.write)
+        set_state(&state_g, 2);
+        Server::gc_compact_and_remove(&docs_gc, &fid_g);
+    });
+
+    // T3 (shard writer): a doc load/unload on the same shard. With the buggy
+    // pattern it is blocked for ~contention_ms; with the fix it completes
+    // in microseconds.
+    let writer = std::thread::spawn(move || {
+        wait_for_state(&state_w, 2);
+        // Small delay to ensure GC is inside compaction, blocked on
+        // awareness.write()
+        std::thread::sleep(Duration::from_millis(5));
+
+        let start = std::time::Instant::now();
+        if let Some((k, v)) = docs_writer.remove(&fid_w) {
+            docs_writer.insert(k, v);
+        }
+        start.elapsed()
+    });
+
+    reader.join().expect("reader panicked");
+    gc.join().expect("gc panicked");
+    let write_duration = writer.join().expect("writer panicked");
+
+    let threshold_ms = 20;
+    assert!(
+        write_duration.as_millis() < threshold_ms,
+        "Shard write took {:?} — expected <{}ms. \
+         gc_compact_and_remove() is holding a DashMap shard guard across \
+         compact_user_data()'s awareness.write(), blocking shard writers \
+         for the entire awareness contention window ({contention_ms}ms). \
+         Fix: clone the awareness/sync_kv Arcs out of docs.get() and drop \
+         the guard before compacting.",
+        write_duration,
         threshold_ms,
     );
 

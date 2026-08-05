@@ -3554,6 +3554,45 @@ impl Server {
         Ok(())
     }
 
+    /// GC step for a single doc: compact its PermanentUserData, shut down
+    /// its persistence, and remove it from the docs map.
+    ///
+    /// Blocking — takes the awareness write lock and compaction can run
+    /// long on bloated PUD; call via spawn_blocking from async context.
+    /// Clones the awareness/sync_kv Arcs out of the map ref and drops the
+    /// DashMap shard guard BEFORE locking awareness: holding the guard
+    /// across a blocking lock blocks docs.insert()/remove() on the same
+    /// shard (parking_lot queues a writer, which then blocks all new
+    /// readers) and, with blocked std locks pinning the few runtime
+    /// workers, wedges the whole server (2026-07-31/08-02 prod hangs;
+    /// regression test: search_deadlock.rs Test 7).
+    pub fn gc_compact_and_remove(docs: &DashMap<String, DocWithSyncKv>, doc_id: &str) {
+        let handles = docs.get(doc_id).map(|doc| (doc.awareness(), doc.sync_kv()));
+        // Shard guard dropped here.
+        if let Some((awareness, sync_kv)) = handles {
+            // Compact PUD before shutdown: dedup ids, clear ds. The
+            // mutations create tombstones which yrs GC will clean up, and
+            // the update observer marks SyncKv dirty so the compacted
+            // state gets persisted.
+            let started = std::time::Instant::now();
+            let result = y_sweet_core::permanent_user_data::compact_user_data_locked(&awareness);
+            if !result.is_empty() {
+                tracing::info!(
+                    ids_removed = result.ids_removed,
+                    ds_removed = result.ds_removed,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "Compacted PermanentUserData"
+                );
+            }
+            sync_kv.shutdown();
+        }
+        // Unconditional remove is safe today because GC is the only path
+        // that removes docs. If other removers appear, re-get and compare
+        // Arc::ptr_eq on sync_kv first, so a doc reinserted during the
+        // compaction window isn't dropped uncompacted.
+        docs.remove(doc_id);
+    }
+
     async fn doc_gc_worker(
         docs: Arc<DashMap<String, DocWithSyncKv>>,
         doc_id: String,
@@ -3580,22 +3619,18 @@ impl Server {
 
                     if checkpoints_without_refs >= 2 {
                         tracing::info!("GCing doc");
-                        if let Some(doc) = docs.get(&doc_id) {
-                            // Compact PUD before shutdown: dedup ids, clear ds.
-                            // The mutations create tombstones which yrs GC will
-                            // clean up, and the update observer marks SyncKv
-                            // dirty so the compacted state gets persisted.
-                            let result = doc.compact_user_data();
-                            if !result.is_empty() {
-                                tracing::debug!(
-                                    ids_removed = result.ids_removed,
-                                    ds_removed = result.ds_removed,
-                                    "Compacted PermanentUserData"
-                                );
-                            }
-                            doc.sync_kv().shutdown();
+                        // Off the async runtime: the GC step takes blocking
+                        // std locks and compaction can run long, which would
+                        // otherwise pin one of the few worker threads.
+                        let docs = Arc::clone(&docs);
+                        let doc_id = doc_id.clone();
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                            Self::gc_compact_and_remove(&docs, &doc_id)
+                        })
+                        .await
+                        {
+                            tracing::error!(?e, "GC compact task panicked");
                         }
-                        docs.remove(&doc_id);
                         break;
                     }
                 }

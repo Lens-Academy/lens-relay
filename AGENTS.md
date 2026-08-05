@@ -208,7 +208,7 @@ Edu content CI workflow files live in that repo (`.github/workflows/validate.yml
 
 ## Known Issues
 
-- **Production relay hangs** — the relay-server occasionally stops accepting inbound connections while background tasks (GC, saves, webhooks) continue running. Do NOT assume the cause is FD/socket exhaustion; CLOSE-WAIT accumulation is normal and the server handles thousands of leaked FDs fine. Diagnose before restarting: check logs for deadlock signs (no new log output from tokio workers), thread states, and accept queue depth. Past confirmed causes include lock ordering deadlocks (see `docs/plans/2026-03-08-debounce-deadlock-fix.md`).
+- **Production relay hangs** — the relay-server occasionally stops accepting inbound connections while background tasks (GC, saves, webhooks) continue running. Do NOT assume the cause is FD/socket exhaustion; CLOSE-WAIT accumulation is normal and the server handles thousands of leaked FDs fine. Diagnose before restarting: check logs for deadlock signs (no new log output from tokio workers), thread states, and accept queue depth. Past confirmed causes include lock ordering deadlocks (see `docs/plans/2026-03-08-debounce-deadlock-fix.md`) and the GC worker holding a DashMap shard guard across the blocking awareness write lock in PUD compaction (2026-07-31/08-02, last log line "GCing doc"; fixed in `gc_compact_and_remove`, regression test `search_deadlock.rs` Test 7). Rule: never hold a `docs.get()` ref across an awareness lock or other blocking work — clone the Arcs out and drop the guard first.
 - **WebSocket FD leak** in relay-server (sockets accumulate in CLOSE-WAIT). This is cosmetically ugly but NOT the cause of hangs. Workaround: `--ulimit nofile=65536:524288` provides headroom.
 
 ## Regression Detector
