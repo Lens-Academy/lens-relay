@@ -1,6 +1,24 @@
 use std::collections::HashSet;
 use yrs::{Array, ArrayRef, Doc, Map, Out, Transact};
 
+/// Compact a doc's PermanentUserData under its awareness lock.
+///
+/// EXCLUSIVE: [`compact_user_data`] does internal `transact_mut` on the doc;
+/// a shared lock would allow a concurrent `awareness.read()` to open
+/// `transact()` and panic with yrs `SharedAcqFailed` (prod incident
+/// 2026-05-18).
+///
+/// Callers must NOT hold a DashMap shard guard (a live `docs.get()` ref)
+/// while calling this — the blocking write lock can stall the shard and
+/// wedge the server (prod incidents 2026-07-31 / 2026-08-02; regression
+/// test: relay's search_deadlock.rs Test 7).
+pub fn compact_user_data_locked(
+    awareness: &std::sync::RwLock<crate::sync::awareness::Awareness>,
+) -> CompactionResult {
+    let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+    compact_user_data(&guard.doc)
+}
+
 /// Compact the "users" Y-Map in a document by deduplicating `ids` arrays and
 /// clearing `ds` arrays.
 ///
@@ -287,7 +305,10 @@ mod tests {
                     Some(&yrs::Any::Number(1_784_380_170_036.0))
                 );
             }
-            other => panic!("registeredAt record must survive compaction, got {:?}", other),
+            other => panic!(
+                "registeredAt record must survive compaction, got {:?}",
+                other
+            ),
         }
     }
 
