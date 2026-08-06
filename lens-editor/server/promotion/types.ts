@@ -56,6 +56,8 @@ export interface PromotionConfig {
   githubOwner: string;
   githubRepo: string;
   githubToken: string;
+  /** Minimum ms between remote git fetches for read endpoints. Default 30s. */
+  fetchMinIntervalMs?: number;
 }
 
 export class PromotionError extends Error {
