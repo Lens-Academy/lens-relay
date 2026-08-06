@@ -19,11 +19,32 @@ import {
 } from './types.ts';
 
 const GIT_TIMEOUT_MS = 30_000;
+const DEFAULT_FETCH_MIN_INTERVAL_MS = 30_000;
 const GIT_KILL_AFTER_TIMEOUT_MS = 1_000;
 const PROMOTION_REPO_OWNER_KEY = 'lens-editor.promotionRepoOwner';
 const PRODUCTION_REMOTE = 'production';
 const STAGING_REMOTE = 'staging';
 const gitQueuesByRepoDir = new Map<string, Promise<void>>();
+
+interface PromotionReadCache {
+  heads: BranchHeads | null;
+  lastFetchMs: number;
+  changes: { heads: BranchHeads; files: PromotionFileChange[]; generatedAt: string } | null;
+}
+
+// Keyed by resolved repoDir, like gitQueuesByRepoDir: service instances
+// sharing a checkout must also share the read cache, or one instance's
+// fetch would move refs under another's stale cached heads.
+const readCachesByRepoDir = new Map<string, PromotionReadCache>();
+
+function getOrCreateReadCache(key: string): PromotionReadCache {
+  let cache = readCachesByRepoDir.get(key);
+  if (!cache) {
+    cache = { heads: null, lastFetchMs: 0, changes: null };
+    readCachesByRepoDir.set(key, cache);
+  }
+  return cache;
+}
 
 interface BranchHeads {
   mainSha: string;
@@ -103,6 +124,10 @@ export function spawnFile(command: string, args: string[], options: { cwd: strin
 }
 
 export function createGitPromotionService(config: PromotionConfig): GitPromotionService {
+  const fetchMinIntervalMs = config.fetchMinIntervalMs ?? DEFAULT_FETCH_MIN_INTERVAL_MS;
+  const cacheKey = config.repoDir ? path.resolve(config.repoDir) : '<unconfigured-promotion-repo>';
+  const cache = getOrCreateReadCache(cacheKey);
+
   async function withGitLock<T>(operation: () => Promise<T>): Promise<T> {
     return withRepoGitLock(config.repoDir, operation);
   }
@@ -247,6 +272,46 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
     return { mainSha, stagingSha };
   }
 
+  // Read endpoints are polled every 10s by every open editor tab
+  // (EditorArea's PROMOTION_STATUS_REFRESH_MS). Uncached, each poll cost two
+  // remote fetches plus one `git diff --numstat` per changed file, which
+  // saturated prod's 2 vCPUs (2026-08-06). Throttle remote fetches and key
+  // the changed-files list on the branch heads so the per-file diff fan-out
+  // reruns only when a branch actually moves.
+  async function fetchBranchesThrottled(): Promise<BranchHeads> {
+    if (cache.heads && Date.now() - cache.lastFetchMs < fetchMinIntervalMs) {
+      return cache.heads;
+    }
+    const heads = await fetchBranches();
+    cache.heads = heads;
+    cache.lastFetchMs = Date.now();
+    return heads;
+  }
+
+  async function getChangedFilesCached(
+    heads: BranchHeads,
+  ): Promise<{ files: PromotionFileChange[]; generatedAt: string }> {
+    if (
+      cache.changes &&
+      cache.changes.heads.mainSha === heads.mainSha &&
+      cache.changes.heads.stagingSha === heads.stagingSha
+    ) {
+      return { files: [...cache.changes.files], generatedAt: cache.changes.generatedAt };
+    }
+    const files = await getChangedFiles();
+    cache.changes = { heads, files, generatedAt: new Date().toISOString() };
+    console.log(
+      `Promotion changed-files cache refreshed: ${files.length} file(s) for ${heads.mainSha.slice(0, 8)}..${heads.stagingSha.slice(0, 8)}`,
+    );
+    return { files: [...files], generatedAt: cache.changes.generatedAt };
+  }
+
+  function invalidatePromotionCache(): void {
+    cache.heads = null;
+    cache.changes = null;
+    cache.lastFetchMs = 0;
+  }
+
   async function getChangedFiles(): Promise<PromotionFileChange[]> {
     const nameStatus = await git([
       'diff',
@@ -352,11 +417,11 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
     getChanges() {
       return withGitLock(async () => {
         await ensureRepo();
-        const heads = await fetchBranches();
-        const files = await getChangedFiles();
+        const heads = await fetchBranchesThrottled();
+        const { files, generatedAt } = await getChangedFilesCached(heads);
         return {
           mainSha: heads.mainSha,
-          generatedAt: new Date().toISOString(),
+          generatedAt,
           files,
         };
       });
@@ -366,8 +431,8 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
       return withGitLock(async () => {
         const filePath = validatePromotableRepoPath(pathValue);
         await ensureRepo();
-        const heads = await fetchBranches();
-        const changes = await getChangedFiles();
+        const heads = await fetchBranchesThrottled();
+        const { files: changes } = await getChangedFilesCached(heads);
         const change = findChangeForPath(changes, filePath);
         if (!change) {
           return {
@@ -388,8 +453,8 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
       return withGitLock(async () => {
         const filePath = validatePromotableRepoPath(pathValue);
         await ensureRepo();
-        const heads = await fetchBranches();
-        const changes = await getChangedFiles();
+        const heads = await fetchBranchesThrottled();
+        const { files: changes } = await getChangedFilesCached(heads);
         const change = findChangeForPath(changes, filePath);
         const beforePath = change?.oldPath ?? filePath;
         const afterPath = change?.path ?? filePath;
@@ -408,6 +473,9 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
 
     createPromotionBranch(request: Pick<PromotionPrRequest, 'paths'>) {
       return withGitLock(async () => {
+        // Mutations always work from a fresh fetch; drop caches so reads
+        // after the promotion also refetch.
+        invalidatePromotionCache();
         await ensureRepo();
         const heads = await fetchBranches();
         const changes = await getChangedFiles();

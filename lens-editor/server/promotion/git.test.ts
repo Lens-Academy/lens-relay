@@ -338,6 +338,49 @@ describe('git promotion service', () => {
     });
   });
 
+  it('getStatus reuses cached heads and changed files inside the fetch throttle window', async () => {
+    const fixture = await createFixture();
+    const service = createGitPromotionService({ ...fixture.config, fetchMinIntervalMs: 60_000 });
+
+    const first = await service.getStatus('modified.md');
+    expect(first.status).toBe('modified');
+
+    // Staging moves remotely, but a throttled reader must serve the cached
+    // view instead of refetching and re-diffing on every poll.
+    await resetStagingToMain(fixture);
+    const second = await service.getStatus('modified.md');
+    expect(second).toEqual(first);
+  });
+
+  it('getStatus sees remote updates when the fetch throttle has expired', async () => {
+    const fixture = await createFixture();
+    const service = createGitPromotionService({ ...fixture.config, fetchMinIntervalMs: 0 });
+
+    const before = await service.getStatus('modified.md');
+    expect(before.status).toBe('modified');
+
+    await resetStagingToMain(fixture);
+    await expect(service.getStatus('modified.md')).resolves.toMatchObject({
+      path: 'modified.md',
+      status: 'identical',
+    });
+  });
+
+  it('createPromotionBranch works from a fresh fetch despite a warm read cache', async () => {
+    const fixture = await createFixture();
+    const service = createGitPromotionService({ ...fixture.config, fetchMinIntervalMs: 60_000 });
+
+    // Warm the read cache, then make branches identical remotely.
+    await expect(service.getStatus('modified.md')).resolves.toMatchObject({ status: 'modified' });
+    await resetStagingToMain(fixture);
+
+    // The mutation must not trust the stale cache claiming a difference.
+    await expect(service.createPromotionBranch({ paths: ['modified.md'] })).rejects.toMatchObject({
+      status: 409,
+      code: 'nothing_to_promote',
+    });
+  });
+
   it('creates a promotion branch containing only one selected modified file', async () => {
     const fixture = await createFixture();
     const service = createGitPromotionService(fixture.config);
