@@ -412,6 +412,30 @@ describe('git promotion service', () => {
     await expect(showFile(fixture, `origin/${result.branch}`, 'unselected.md')).resolves.toBe('production unselected');
   });
 
+  it('returns curriculum memberships from the exact fetched staging ref', async () => {
+    const fixture = await createFixture();
+    await writeFile(fixture.seedDir, 'courses/Graph Course.md', '# Module: [[../modules/Graph Module|Graph module]]\n');
+    await writeFile(fixture.seedDir, 'modules/Graph Module.md', 'source::\n[[../Lenses/Graph Lens]]\n');
+    await writeFile(fixture.seedDir, 'Lenses/Graph Lens.md', 'source:: [[../articles/Graph Article]]\n');
+    await writeFile(fixture.seedDir, 'articles/Graph Article.md', 'article\n');
+    await runGit(fixture.seedDir, ['add', '.']);
+    await runGit(fixture.seedDir, ['commit', '-m', 'add curriculum graph']);
+    await runGit(fixture.seedDir, ['push', 'origin', 'staging']);
+
+    const service = createGitPromotionService(fixture.config);
+    const result = await service.getChanges();
+
+    expect(result.curriculum.courses).toContainEqual({
+      path: 'courses/Graph Course.md',
+      label: 'Graph Course',
+      modulePaths: ['modules/Graph Module.md'],
+    });
+    expect(result.curriculum.memberships['articles/Graph Article.md']).toEqual({
+      coursePaths: ['courses/Graph Course.md'],
+      modulePaths: ['modules/Graph Module.md'],
+    });
+  });
+
   it('promotes both sides of a rename when selecting the new path', async () => {
     const fixture = await createFixture();
     const service = createGitPromotionService(fixture.config);

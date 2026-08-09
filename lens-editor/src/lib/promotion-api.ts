@@ -15,6 +15,18 @@ export interface PromotionChangesResponse {
   mainSha: string;
   generatedAt: string;
   files: PromotionFileChange[];
+  curriculum: PromotionCurriculumIndex;
+}
+
+export interface PromotionCurriculumMembership {
+  coursePaths: string[];
+  modulePaths: string[];
+}
+
+export interface PromotionCurriculumIndex {
+  courses: Array<{ path: string; label: string; modulePaths: string[] }>;
+  modules: Array<{ path: string; label: string; coursePaths: string[] }>;
+  memberships: Record<string, PromotionCurriculumMembership>;
 }
 
 export interface PromotionStatusResponse extends PromotionFileChange {

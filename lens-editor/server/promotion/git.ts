@@ -17,6 +17,7 @@ import {
   type PromotionPrRequest,
   type PromotionStatusResponse,
 } from './types.ts';
+import { buildPromotionCurriculumIndex, type PromotionTreeSnapshot } from './curriculum.ts';
 
 const GIT_TIMEOUT_MS = 30_000;
 const DEFAULT_FETCH_MIN_INTERVAL_MS = 30_000;
@@ -154,6 +155,81 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
   async function git(args: string[]): Promise<string> {
     const { stdout } = await spawnFile('git', args, { cwd: config.repoDir });
     return stdout.trimEnd();
+  }
+
+  async function readTreeSnapshot(ref: string): Promise<PromotionTreeSnapshot> {
+    const rawPaths = await git(['ls-tree', '-r', '-z', '--name-only', ref]);
+    const paths = new Set(splitNul(rawPaths));
+    const markdownPaths = [...paths].filter(filePath => filePath.toLowerCase().endsWith('.md'));
+    const markdown = await readBlobsBatch(ref, markdownPaths);
+    return { paths, markdown };
+  }
+
+  async function readBlobsBatch(ref: string, filePaths: string[]): Promise<Map<string, string>> {
+    if (filePaths.length === 0) return new Map();
+    const child = spawn('git', ['cat-file', '--batch'], {
+      cwd: config.repoDir,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        GCM_INTERACTIVE: 'Never',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const stdoutChunks: Buffer[] = [];
+    let stderr = '';
+    child.stdout.on('data', chunk => stdoutChunks.push(Buffer.from(chunk)));
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', chunk => { stderr += chunk; });
+
+    const completed = new Promise<Buffer>((resolve, reject) => {
+      let settled = false;
+      let killTimer: NodeJS.Timeout | null = null;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new PromotionError(504, 'Command timed out: git cat-file --batch', 'git_timeout'));
+        child.kill('SIGTERM');
+        killTimer = setTimeout(() => child.kill('SIGKILL'), gitKillAfterTimeoutMs());
+      }, gitTimeoutMs());
+      child.on('error', error => {
+        clearTimeout(timeout);
+        if (killTimer) clearTimeout(killTimer);
+        if (settled) return;
+        settled = true;
+        reject(error);
+      });
+      child.on('close', code => {
+        clearTimeout(timeout);
+        if (killTimer) clearTimeout(killTimer);
+        if (settled) return;
+        settled = true;
+        if (code !== 0) {
+          reject(new PromotionError(500, stderr.trim() || 'git cat-file --batch failed', 'git_failed'));
+        } else {
+          resolve(Buffer.concat(stdoutChunks));
+        }
+      });
+    });
+
+    child.stdin.end(filePaths.map(filePath => `${ref}:${filePath}\n`).join(''));
+    const output = await completed;
+    const result = new Map<string, string>();
+    let offset = 0;
+    for (const filePath of filePaths) {
+      const headerEnd = output.indexOf(0x0a, offset);
+      if (headerEnd === -1) throw new PromotionError(500, 'Malformed git cat-file response', 'git_failed');
+      const header = output.subarray(offset, headerEnd).toString('utf8');
+      const sizeMatch = header.match(/\sblob\s(\d+)$/);
+      if (!sizeMatch) throw new PromotionError(500, `Unable to read Git blob: ${filePath}`, 'git_failed');
+      const size = Number.parseInt(sizeMatch[1], 10);
+      const start = headerEnd + 1;
+      const end = start + size;
+      if (end > output.length) throw new PromotionError(500, 'Truncated git cat-file response', 'git_failed');
+      result.set(filePath, output.subarray(start, end).toString('utf8'));
+      offset = end + 1;
+    }
+    return result;
   }
 
   async function ensureRepo(): Promise<void> {
@@ -419,10 +495,15 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
         await ensureRepo();
         const heads = await fetchBranchesThrottled();
         const { files, generatedAt } = await getChangedFilesCached(heads);
+        const [stagingTree, productionTree] = await Promise.all([
+          readTreeSnapshot(stagingRef()),
+          readTreeSnapshot(productionRef()),
+        ]);
         return {
           mainSha: heads.mainSha,
           generatedAt,
           files,
+          curriculum: buildPromotionCurriculumIndex(stagingTree, productionTree, files),
         };
       });
     },

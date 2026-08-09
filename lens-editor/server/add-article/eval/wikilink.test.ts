@@ -32,6 +32,11 @@ source:: [[../video_transcripts/clip]]
     const md = `--}source:: ![[../Lenses/Y]]`;
     expect(parseSourceTargets(md)).toEqual(["../Lenses/Y"]);
   });
+
+  it("captures an embed on the line immediately after source::", () => {
+    const md = `# Lens:\nsource::\n![[../Lenses/Multiline Lens|Lens]]`;
+    expect(parseSourceTargets(md)).toEqual(["../Lenses/Multiline Lens"]);
+  });
 });
 
 describe("parseModuleLinks", () => {

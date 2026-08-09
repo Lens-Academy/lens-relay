@@ -87,6 +87,7 @@ describe('PromotionPage', () => {
       mainSha: 'main-sha',
       generatedAt: '2026-06-27T00:00:00Z',
       files,
+      curriculum: { courses: [], modules: [], memberships: {} },
     });
   });
 
@@ -206,28 +207,166 @@ describe('PromotionPage', () => {
     expect(within(table).getByRole('checkbox', { name: /Other\.md/ })).toBeChecked();
   });
 
-  it('selects and clears every changed file', async () => {
+  it('adds and removes every filtered file explicitly', async () => {
     const user = userEvent.setup();
     renderPromotionPage();
 
     const table = await screen.findByRole('table');
-    const selectAll = screen.getByRole('checkbox', { name: 'Select all files' });
     const notes = within(table).getByRole('checkbox', { name: /Notes\.md/ });
     const other = within(table).getByRole('checkbox', { name: /Other\.md/ });
 
-    await user.click(selectAll);
+    await user.click(screen.getByRole('button', { name: 'Add 2 filtered files to selection' }));
 
-    expect(selectAll).toBeChecked();
     expect(notes).toBeChecked();
     expect(other).toBeChecked();
-    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    expect(screen.getByText(/2 selected in results/)).toBeInTheDocument();
 
-    await user.click(selectAll);
+    await user.click(screen.getByRole('button', { name: 'Remove 2 filtered files from selection' }));
 
-    expect(selectAll).not.toBeChecked();
     expect(notes).not.toBeChecked();
     expect(other).not.toBeChecked();
-    expect(screen.getByText('0 selected')).toBeInTheDocument();
+    expect(screen.getByText(/0 selected in results/)).toBeInTheDocument();
+  });
+
+  it('filters course unions and narrows them with mutually exclusive module choices', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getPromotionChanges).mockResolvedValue({
+      mainSha: 'main-sha',
+      generatedAt: '2026-08-09T00:00:00Z',
+      files: [
+        { ...files[0], path: 'courses/One.md' },
+        { ...files[0], path: 'modules/A.md' },
+        { ...files[0], path: 'modules/B.md' },
+        { ...files[0], path: 'Lenses/Shared.md' },
+        { ...files[0], path: 'articles/Only A.md' },
+        { ...files[0], path: 'courses/Two.md' },
+        { ...files[0], path: 'modules/C.md' },
+        { ...files[0], path: 'Lenses/Only C.md' },
+        { ...files[0], path: 'Unrelated.md' },
+      ],
+      curriculum: {
+        courses: [
+          { path: 'courses/One.md', label: 'Course One', modulePaths: ['modules/A.md', 'modules/B.md'] },
+          { path: 'courses/Two.md', label: 'Course Two', modulePaths: ['modules/C.md'] },
+        ],
+        modules: [
+          { path: 'modules/A.md', label: 'Module A', coursePaths: ['courses/One.md'] },
+          { path: 'modules/B.md', label: 'Module B', coursePaths: ['courses/One.md'] },
+          { path: 'modules/C.md', label: 'Module C', coursePaths: ['courses/Two.md'] },
+        ],
+        memberships: {
+          'courses/One.md': { coursePaths: ['courses/One.md'], modulePaths: [] },
+          'modules/A.md': { coursePaths: ['courses/One.md'], modulePaths: ['modules/A.md'] },
+          'modules/B.md': { coursePaths: ['courses/One.md'], modulePaths: ['modules/B.md'] },
+          'Lenses/Shared.md': { coursePaths: ['courses/One.md'], modulePaths: ['modules/A.md', 'modules/B.md'] },
+          'articles/Only A.md': { coursePaths: ['courses/One.md'], modulePaths: ['modules/A.md'] },
+          'courses/Two.md': { coursePaths: ['courses/Two.md'], modulePaths: [] },
+          'modules/C.md': { coursePaths: ['courses/Two.md'], modulePaths: ['modules/C.md'] },
+          'Lenses/Only C.md': { coursePaths: ['courses/Two.md'], modulePaths: ['modules/C.md'] },
+        },
+      },
+    });
+    renderPromotionPage();
+    const table = await screen.findByRole('table');
+
+    await user.click(screen.getByText('All courses'));
+    await user.click(screen.getByRole('checkbox', { name: /Course One/ }));
+    expect(within(table).getByText('courses/One.md')).toBeInTheDocument();
+    expect(within(table).queryByText('courses/Two.md')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All modules' })).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByText('Choose modules', { selector: 'summary span' }));
+    await user.click(screen.getByRole('checkbox', { name: /Module A/ }));
+    expect(screen.getByRole('button', { name: 'All modules' })).toHaveAttribute('aria-pressed', 'false');
+    expect(within(table).getByText('modules/A.md')).toBeInTheDocument();
+    expect(within(table).getByText('articles/Only A.md')).toBeInTheDocument();
+    expect(within(table).queryByText('modules/B.md')).not.toBeInTheDocument();
+    expect(within(table).queryByText('courses/One.md')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'All modules' }));
+    expect(screen.getByRole('checkbox', { name: /Module A/ })).not.toBeChecked();
+    expect(within(table).getByText('modules/B.md')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('checkbox', { name: /Course Two/ }));
+    expect(within(table).getByText('Lenses/Only C.md')).toBeInTheDocument();
+  });
+
+  it('keeps selected modules visible after the course changes and shows a zero count', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getPromotionChanges).mockResolvedValue({
+      mainSha: 'main-sha', generatedAt: 'now',
+      files: [
+        { ...files[0], path: 'modules/A.md' },
+        { ...files[0], path: 'modules/B.md' },
+      ],
+      curriculum: {
+        courses: [
+          { path: 'courses/One.md', label: 'Course One', modulePaths: ['modules/A.md'] },
+          { path: 'courses/Two.md', label: 'Course Two', modulePaths: ['modules/B.md'] },
+        ],
+        modules: [
+          { path: 'modules/A.md', label: 'Module A', coursePaths: ['courses/One.md'] },
+          { path: 'modules/B.md', label: 'Module B', coursePaths: ['courses/Two.md'] },
+        ],
+        memberships: {
+          'modules/A.md': { coursePaths: ['courses/One.md'], modulePaths: ['modules/A.md'] },
+          'modules/B.md': { coursePaths: ['courses/Two.md'], modulePaths: ['modules/B.md'] },
+        },
+      },
+    });
+    renderPromotionPage();
+    await screen.findByRole('table');
+    await user.click(screen.getByText('All courses'));
+    await user.click(screen.getByRole('checkbox', { name: /Course One/ }));
+    await user.click(screen.getByText('Choose modules', { selector: 'summary span' }));
+    await user.click(screen.getByRole('checkbox', { name: /Module A/ }));
+    await user.click(screen.getByText('Course One', { selector: 'summary span' }));
+    await user.click(screen.getByRole('checkbox', { name: /Course Two/ }));
+    await user.click(screen.getByRole('checkbox', { name: /Course One/ }));
+    expect(screen.getByRole('checkbox', { name: /Module A/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Module A/ }).closest('label')).toHaveTextContent('0');
+    expect(screen.getAllByText('No changed files match the current filters.')).toHaveLength(2);
+  });
+
+  it('filters by old rename path, folder, and selection without losing hidden selections', async () => {
+    const user = userEvent.setup();
+    vi.mocked(getPromotionChanges).mockResolvedValue({
+      mainSha: 'main-sha', generatedAt: 'now',
+      files: [
+        { ...files[0], path: 'Lenses/New.md', oldPath: 'Lenses/Old.md', status: 'renamed' },
+        { ...files[1], path: 'articles/Article.md' },
+      ],
+      curriculum: { courses: [], modules: [], memberships: {} },
+    });
+    renderPromotionPage('/promote?path=Lenses%2FNew.md');
+    const table = await screen.findByRole('table');
+    expect(screen.getByText('Out of filtered files, show:')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Files to show' })).toContainElement(
+      screen.getByRole('button', { name: /^all$/i }),
+    );
+    await user.type(screen.getByRole('searchbox', { name: 'Filter changed files' }), 'Old.md');
+    expect(within(table).getByText('Lenses/New.md')).toBeInTheDocument();
+    await user.clear(screen.getByRole('searchbox', { name: 'Filter changed files' }));
+    await user.click(screen.getByText('All folders'));
+    await user.click(screen.getByRole('checkbox', { name: /^articles 1$/i }));
+    expect(within(table).queryByText('Lenses/New.md')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /unselected/i }));
+    expect(within(table).getByText('articles/Article.md')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(within(table).getByRole('checkbox', { name: /Lenses\/New\.md/ })).toBeChecked();
+  });
+
+  it('rejects an atomic filtered addition over the 1000-file limit', async () => {
+    const user = userEvent.setup();
+    const manyFiles = Array.from({ length: 1001 }, (_, index) => ({ ...files[0], path: `Lenses/${index}.md` }));
+    vi.mocked(getPromotionChanges).mockResolvedValue({
+      mainSha: 'main-sha', generatedAt: 'now', files: manyFiles,
+      curriculum: { courses: [], modules: [], memberships: {} },
+    });
+    renderPromotionPage();
+    await user.click(await screen.findByRole('button', { name: 'Add 1001 filtered files to selection' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('exceed the 1000-file limit by 1');
+    expect(screen.getByText(/0 selected in results/)).toBeInTheDocument();
   });
 
   it('shows an auto-merge warning when PR result has autoMergeEnabled false', async () => {
