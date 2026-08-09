@@ -20,10 +20,13 @@
 # File mounts over the stock image: persistence.py and webhook_handler.py carry
 # our custom sync logic; app.py carries the COMMIT_INTERVAL env-var support;
 # sync_engine.py carries the stale-export fix (record document hash only after
-# a successful write - Lens-Academy/relay-git-sync#5). COMMIT_INTERVAL sets the
-# git commit+push cadence in seconds (default 10 upstream; we run 5 for
-# snappier GitHub sync). These override files must be present in $DATA_DIR on
-# the box.
+# a successful write - Lens-Academy/relay-git-sync#5); operations_queue.py and
+# persistence.py also carry the commit-timer race fix (edits landing during a
+# slow commit+push were left uncommitted, and failed pushes were never
+# retried - Lens-Academy/relay-git-sync fix/commit-timer-race). COMMIT_INTERVAL
+# sets the git commit+push cadence in seconds (default 10 upstream; we run 5
+# for snappier GitHub sync). These override files must be present in $DATA_DIR
+# on the box.
 set -euo pipefail
 
 DATA_DIR=/root/relay-git-sync-data
@@ -37,7 +40,7 @@ IMAGE=docker.system3.md/relay-git-sync:latest
 
 # A missing override file would make Docker mount an empty directory in its
 # place and crash-loop the container - fail fast instead.
-for override in webhook_handler.py persistence.py app.py sync_engine.py; do
+for override in webhook_handler.py persistence.py app.py sync_engine.py operations_queue.py; do
   [[ -f "$DATA_DIR/$override" ]] || { echo "ERROR: override file missing: $DATA_DIR/$override" >&2; exit 1; }
 done
 docker network inspect "$NETWORK" >/dev/null 2>&1 \
@@ -76,6 +79,7 @@ docker run -d \
   -v "$DATA_DIR/persistence.py:/app/persistence.py" \
   -v "$DATA_DIR/app.py:/app/app.py" \
   -v "$DATA_DIR/sync_engine.py:/app/sync_engine.py" \
+  -v "$DATA_DIR/operations_queue.py:/app/operations_queue.py" \
   -e RELAY_GIT_DATA_DIR=/data \
   -e RELAY_SERVER_URL=http://relay-server:8080 \
   -e RELAY_SERVER_API_KEY="$RELAY_SERVER_API_KEY" \
