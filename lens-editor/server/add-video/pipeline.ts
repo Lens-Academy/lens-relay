@@ -8,7 +8,7 @@ import {
   generateTimestampsJson,
   generateFilenameBase,
 } from "./export";
-import { runClaude } from "./claude";
+import { clip, runClaude, summarizeClaudeOutcome } from "./claude";
 import { createRelayDoc, updateRelayDoc } from "./relay-docs";
 import { maybeCreateLens } from "../lens-doc";
 
@@ -83,18 +83,31 @@ export async function processVideo(
     // 3. Run Claude for formatting
     console.log(`[add-video] Running Claude on ${wordCount} words...`);
     const result = await runClaude(workDir, TIMEOUT_MS);
+    const outcome = summarizeClaudeOutcome(result);
     if (result.exitCode !== 0) {
       throw new Error(
-        `Claude exited with code ${result.exitCode}: ${result.stderr.slice(0, 500)}`,
+        `Claude exited with code ${result.exitCode} — ${outcome}`,
       );
     }
 
-    console.log(`[add-video] Claude finished (exit ${result.exitCode})`);
-    // 4. Read corrected text
-    const correctedText = await fs.readFile(
-      path.join(workDir, "corrected.txt"),
-      "utf-8",
-    );
+    console.log(`[add-video] Claude finished (${outcome})`);
+    // 4. Read corrected text. A missing file with exit 0 means Claude ended
+    //    its turn without writing (e.g. refused, or answered in chat text) —
+    //    surface its final message instead of a bare ENOENT.
+    let correctedText: string;
+    try {
+      correctedText = await fs.readFile(
+        path.join(workDir, "corrected.txt"),
+        "utf-8",
+      );
+    } catch (readErr) {
+      if ((readErr as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `Claude exited 0 but wrote no corrected.txt — ${outcome}`,
+        );
+      }
+      throw readErr;
+    }
 
     // 5. Align timestamps
     // Flatten multi-word entries (sentence-level) into individual words for alignment
@@ -140,12 +153,21 @@ export async function processVideo(
       }
     }
   } catch (err) {
-    // Update placeholder to show failure
+    // Update placeholder to show failure. Include the reason: the in-memory
+    // job (and its error) is lost on restart/eviction, and prod logs need SSH
+    // access — the placeholder is often the only surviving evidence.
+    const reason = clip(err instanceof Error ? err.message : String(err));
     const failedContent = generateMarkdown({
       title: job.title,
       channel: job.channel,
       url: job.url,
-      body: `*Transcript processing failed.* You can resubmit this video from the Add Video page.\n\nFailed at: ${new Date().toISOString()}`,
+      body: [
+        `*Transcript processing failed.* You can resubmit this video from the Add Video page.`,
+        ``,
+        `Failed at: ${new Date().toISOString()}`,
+        ``,
+        `Error: ${reason}`,
+      ].join("\n"),
     });
     await updateRelayDoc(mdPath, "", failedContent).catch(() => {});
     throw err;

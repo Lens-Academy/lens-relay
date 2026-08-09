@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildClaudeArgs, buildPrompt, splitIntoChunks } from './claude';
+import {
+  buildClaudeArgs,
+  buildPrompt,
+  splitIntoChunks,
+  summarizeClaudeOutcome,
+} from './claude';
 
 describe('buildPrompt', () => {
   it('includes the raw text file path and formatting instructions', () => {
@@ -22,6 +27,44 @@ describe('buildClaudeArgs', () => {
     expect(args.join(' ')).toContain('--max-turns');
     expect(args.join(' ')).toContain('--model');
     expect(args).toContain('sonnet');
+  });
+});
+
+describe('summarizeClaudeOutcome', () => {
+  it('extracts subtype, error flag, cost and result text from stdout JSON', () => {
+    const stdout = JSON.stringify({
+      subtype: 'error_max_budget_usd',
+      is_error: true,
+      total_cost_usd: 4.01,
+      num_turns: 12,
+      result: 'Budget exceeded before completion',
+    });
+    const summary = summarizeClaudeOutcome({ stdout, stderr: '' });
+    expect(summary).toContain('subtype=error_max_budget_usd');
+    expect(summary).toContain('is_error=true');
+    expect(summary).toContain('cost=$4.01');
+    expect(summary).toContain('turns=12');
+    expect(summary).toContain('Budget exceeded');
+  });
+
+  it('falls back to stderr/stdout tails when stdout is not JSON', () => {
+    const summary = summarizeClaudeOutcome({
+      stdout: 'garbage output',
+      stderr: 'API error 429: rate limited',
+    });
+    expect(summary).toContain('stderr: API error 429: rate limited');
+    expect(summary).toContain('stdout: garbage output');
+  });
+
+  it('reports when there is no output at all', () => {
+    const summary = summarizeClaudeOutcome({ stdout: '', stderr: '' });
+    expect(summary).toBe('no output on stdout or stderr');
+  });
+
+  it('truncates long result text', () => {
+    const stdout = JSON.stringify({ result: 'x'.repeat(1000) });
+    const summary = summarizeClaudeOutcome({ stdout, stderr: '' });
+    expect(summary.length).toBeLessThan(400);
   });
 });
 
