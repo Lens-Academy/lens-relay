@@ -7,6 +7,12 @@ import { claudeSessionPool } from './queue';
 const CHUNK_WORD_THRESHOLD = 6_000;
 const CHUNK_TARGET_WORDS = 5_000;
 
+// Runaway-cost guard only — sized to the chunk limits above. Measured
+// 2026-08-09: a 4.4K-word single-chunk video cost $1.21 with prompt caching
+// (sonnet-5, thinking-heavy), so the old $2.00 cap left almost no headroom
+// for chunks near CHUNK_WORD_THRESHOLD or cache-miss runs.
+const MAX_BUDGET_USD = '4.00';
+
 /** Build the formatting prompt for Claude */
 export function buildPrompt(workDir: string): string {
   return `You are formatting a YouTube video transcript. Your task:
@@ -40,12 +46,54 @@ export function buildClaudeArgs(workDir: string): string[] {
     '--max-turns',
     '30',
     '--max-budget-usd',
-    '2.00',
+    MAX_BUDGET_USD,
     '--model',
     'sonnet',
     '--output-format',
     'json',
   ];
+}
+
+/** Single-line clip for error/log messages. */
+export const clip = (s: string, n = 300): string =>
+  s.replace(/\s+/g, ' ').trim().slice(0, n);
+
+/**
+ * Summarize a Claude run for error messages and logs. With
+ * --output-format json the useful error detail is the result JSON on stdout
+ * (subtype, is_error, result text) — stderr is usually empty, which
+ * previously made failures undiagnosable ("Claude exited with code 1: ").
+ */
+export function summarizeClaudeOutcome(result: {
+  stdout: string;
+  stderr: string;
+}): string {
+  const stdout = result.stdout.trim();
+  if (stdout.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(stdout) as {
+        subtype?: string;
+        is_error?: boolean;
+        result?: string;
+        total_cost_usd?: number;
+        num_turns?: number;
+      };
+      const parts: string[] = [];
+      if (parsed.subtype) parts.push(`subtype=${parsed.subtype}`);
+      if (parsed.is_error !== undefined) parts.push(`is_error=${parsed.is_error}`);
+      if (parsed.total_cost_usd !== undefined)
+        parts.push(`cost=$${parsed.total_cost_usd.toFixed(2)}`);
+      if (parsed.num_turns !== undefined) parts.push(`turns=${parsed.num_turns}`);
+      if (parsed.result) parts.push(`result: ${clip(parsed.result)}`);
+      if (parts.length > 0) return parts.join(' ');
+    } catch {
+      // fall through to raw tails
+    }
+  }
+  const tails: string[] = [];
+  if (result.stderr.trim()) tails.push(`stderr: ${clip(result.stderr)}`);
+  if (stdout) tails.push(`stdout: ${clip(stdout)}`);
+  return tails.join(' ') || 'no output on stdout or stderr';
 }
 
 /** Spawn Claude Code and wait for completion. Acquires a session from the global pool. */
@@ -99,7 +147,16 @@ export async function spawnClaude(
     }, timeoutMs);
 
     proc.on('close', (code) => {
-      finish(() => resolve({ exitCode: code ?? 1, stdout, stderr }));
+      finish(() => {
+        // Log failures here so every spawnClaude consumer (add-video and
+        // add-article) gets the stdout JSON detail in the server logs.
+        if (code !== 0) {
+          console.warn(
+            `[claude] exited ${code}: ${summarizeClaudeOutcome({ stdout, stderr })}`
+          );
+        }
+        resolve({ exitCode: code ?? 1, stdout, stderr });
+      });
     });
 
     proc.on('error', (err) => {
@@ -171,13 +228,25 @@ export async function runClaude(
   const failed = results.find((r) => r.exitCode !== 0);
   if (failed) return failed;
 
-  // Concatenate corrected chunks in order
+  // Concatenate corrected chunks in order. A chunk that exited 0 without
+  // writing its file (e.g. the model answered in chat text instead of using
+  // Write) must surface that chunk's final message, not a bare ENOENT.
   const correctedParts: string[] = [];
-  for (const dir of chunkDirs) {
-    const corrected = await fs.readFile(
-      path.join(dir, 'corrected.txt'),
-      'utf-8'
-    );
+  for (let i = 0; i < chunkDirs.length; i++) {
+    let corrected: string;
+    try {
+      corrected = await fs.readFile(
+        path.join(chunkDirs[i], 'corrected.txt'),
+        'utf-8'
+      );
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(
+          `Chunk ${i + 1}/${chunkDirs.length} exited 0 but wrote no corrected.txt — ${summarizeClaudeOutcome(results[i])}`
+        );
+      }
+      throw err;
+    }
     correctedParts.push(corrected.trim());
   }
 
@@ -186,5 +255,14 @@ export async function runClaude(
     correctedParts.join('\n\n')
   );
 
-  return { exitCode: 0, stdout: '', stderr: '' };
+  // Synthesize a summary envelope so the caller's success log carries the
+  // chunk count instead of "no output on stdout or stderr".
+  return {
+    exitCode: 0,
+    stdout: JSON.stringify({
+      subtype: 'success',
+      result: `${chunkDirs.length} chunks processed`,
+    }),
+    stderr: '',
+  };
 }

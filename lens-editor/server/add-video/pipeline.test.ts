@@ -11,7 +11,12 @@ vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
   rm: vi.fn(),
 }));
-vi.mock('./claude');
+// Partial mock: runClaude is stubbed, but summarizeClaudeOutcome stays real so
+// error-propagation tests exercise the actual summary formatting.
+vi.mock('./claude', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./claude')>();
+  return { ...actual, runClaude: vi.fn() };
+});
 vi.mock('./relay-docs');
 
 const mockFs = vi.mocked(fs);
@@ -116,5 +121,53 @@ describe('processVideo', () => {
     mockClaude.runClaude.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'failed' });
 
     await expect(processVideo(makeJobWithPayload())).rejects.toThrow();
+  });
+
+  it('propagates claude stdout JSON detail on nonzero exit', async () => {
+    mockClaude.runClaude.mockResolvedValue({
+      exitCode: 1,
+      stdout: JSON.stringify({
+        subtype: 'error_max_budget_usd',
+        is_error: true,
+        result: 'Budget exceeded',
+      }),
+      stderr: '',
+    });
+
+    await expect(processVideo(makeJobWithPayload())).rejects.toThrow(
+      /error_max_budget_usd.*Budget exceeded/,
+    );
+  });
+
+  it('reports a clear error when claude exits 0 without writing corrected.txt', async () => {
+    mockClaude.runClaude.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ subtype: 'success', result: 'I cannot help with that.' }),
+      stderr: '',
+    });
+    const enoent = Object.assign(new Error('ENOENT: no such file'), {
+      code: 'ENOENT',
+    });
+    mockFs.readFile.mockRejectedValue(enoent);
+
+    await expect(processVideo(makeJobWithPayload())).rejects.toThrow(
+      /wrote no corrected\.txt.*I cannot help with that/,
+    );
+  });
+
+  it('writes the failure reason into the failure placeholder', async () => {
+    mockClaude.runClaude.mockResolvedValue({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'API error 429: rate limited',
+    });
+
+    await expect(processVideo(makeJobWithPayload())).rejects.toThrow();
+
+    // The only updateRelayDoc call on the failure path is the placeholder update.
+    const [, , content] = mockRelayDocs.updateRelayDoc.mock.lastCall!;
+    expect(content).toContain('Transcript processing failed');
+    expect(content).toContain('Error: Claude exited with code 1');
+    expect(content).toContain('rate limited');
   });
 });
