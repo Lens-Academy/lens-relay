@@ -23,7 +23,15 @@
 # a successful write - Lens-Academy/relay-git-sync#5); operations_queue.py and
 # persistence.py also carry the commit-timer race fix (edits landing during a
 # slow commit+push were left uncommitted, and failed pushes were never
-# retried - Lens-Academy/relay-git-sync fix/commit-timer-race). COMMIT_INTERVAL
+# retried - Lens-Academy/relay-git-sync fix/commit-timer-race). sync_engine.py,
+# operations_queue.py and relay_client.py additionally carry the sweep-NOOP +
+# per-doc retry fixes (folder sweeps no longer re-fetch every markdown doc,
+# and failed per-doc syncs are retried with capped backoff instead of being
+# dropped - Lens-Academy/relay-git-sync fix/sweep-noop-and-retry); models.py,
+# app.py, sync_engine.py and operations_queue.py also carry the periodic
+# forced reconcile sweep (daily safety net re-fetching docs whose webhook or
+# retry was lost - same PR). models.py MUST be mounted alongside them: it adds
+# SyncRequest.force, which the other overrides read on every sweep. COMMIT_INTERVAL
 # sets the git commit+push cadence in seconds (default 10 upstream; we run 5
 # for snappier GitHub sync). These override files must be present in $DATA_DIR
 # on the box.
@@ -40,7 +48,7 @@ IMAGE=docker.system3.md/relay-git-sync:latest
 
 # A missing override file would make Docker mount an empty directory in its
 # place and crash-loop the container - fail fast instead.
-for override in webhook_handler.py persistence.py app.py sync_engine.py operations_queue.py; do
+for override in webhook_handler.py persistence.py app.py sync_engine.py operations_queue.py relay_client.py models.py; do
   [[ -f "$DATA_DIR/$override" ]] || { echo "ERROR: override file missing: $DATA_DIR/$override" >&2; exit 1; }
 done
 docker network inspect "$NETWORK" >/dev/null 2>&1 \
@@ -80,6 +88,8 @@ docker run -d \
   -v "$DATA_DIR/app.py:/app/app.py" \
   -v "$DATA_DIR/sync_engine.py:/app/sync_engine.py" \
   -v "$DATA_DIR/operations_queue.py:/app/operations_queue.py" \
+  -v "$DATA_DIR/relay_client.py:/app/relay_client.py" \
+  -v "$DATA_DIR/models.py:/app/models.py" \
   -e RELAY_GIT_DATA_DIR=/data \
   -e RELAY_SERVER_URL=http://relay-server:8080 \
   -e RELAY_SERVER_API_KEY="$RELAY_SERVER_API_KEY" \
