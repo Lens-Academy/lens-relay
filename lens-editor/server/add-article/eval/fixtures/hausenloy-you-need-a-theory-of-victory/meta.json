@@ -1,0 +1,18 @@
+{
+ "slug": "hausenloy-you-need-a-theory-of-victory",
+ "relay_path": "articles/hausenloy-you-need-a-theory-of-victory.md",
+ "source_url": "https://firstscattering.com/p/you-need-a-theory-of-victory",
+ "resolved_fetch_url": "https://firstscattering.com/p/you-need-a-theory-of-victory",
+ "host": "firstscattering.com",
+ "expected_via": "generic",
+ "needs_body_markdown": false,
+ "status": "ok",
+ "title": "You Need A Theory of Victory",
+ "author": [
+  "Jason Hausenloy"
+ ],
+ "published": "2026-05-06",
+ "reviewed": false,
+ "reviewed_note": "provisional gold = fixed pipeline output frozen 2026-07-27 (Asana 1216184941841945 / 1216890255994743) — verify against the live article, then set reviewed:true. Do NOT rebuild from the relay copy; it was hand-cleaned.",
+ "refrozen_at": "2026-07-27"
+}

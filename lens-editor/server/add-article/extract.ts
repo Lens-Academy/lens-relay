@@ -6,7 +6,7 @@ import { Defuddle } from "defuddle/node";
 import { extractHtmlMeta, dateFromUrl, fetchRawHtml } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
-import { normalizeArticleDom } from "./normalize-dom";
+import { normalizeArticleDom, largestSrcsetCandidate } from "./normalize-dom";
 import { escapeTagOpeners } from "./escape";
 import { arxivAbsUrl } from "./adapters/arxiv";
 import {
@@ -70,18 +70,66 @@ const MIN_ADAPTER_CHARS = 500;
 
 // Bot-challenge / access-denied interstitials sometimes return HTTP 200 (or are
 // returned by the render API for blocked sites). They must fail honestly, not
-// be written as a fake article. High confidence = short body + a strong marker.
-const BLOCK_PAGE_RE =
-  /(performing security verification|verify you are (not )?a (human|bot)|checking your browser|just a moment|enable javascript and cookies to continue|access denied|attention required|error 101[0-9]|cf-browser-verification|please (verify|confirm) you are a human|requests from your browser)/i;
+// be written as a fake article. STRONG markers are challenge-page boilerplate
+// that ordinary prose never contains; WEAK markers ("just a moment", "access
+// denied") are plausible English, so they only count on near-empty bodies —
+// a short story opening with "Wait, just a moment, said the gardener" is an
+// article, an Akamai stub ("Access Denied … Reference #18…") is not.
+const BLOCK_STRONG_RE =
+  /(performing security verification|verify you are (not )?a (human|bot)|checking your browser|enable javascript and cookies to continue|attention required|error 101[0-9]|cf-browser-verification|please (verify|confirm) you are a human)/i;
+const BLOCK_WEAK_RE = /(just a moment|access denied|requests from your browser)/i;
 
 function looksLikeBlockPage(body: string): boolean {
-  return body.length < 2000 && BLOCK_PAGE_RE.test(body);
+  if (body.length >= 2000) return false;
+  if (BLOCK_STRONG_RE.test(body)) return true;
+  return body.length < 400 && BLOCK_WEAK_RE.test(body);
 }
 
 /** Trailing digits of a string, e.g. "user-content-fn-3" → "3" ("" if none). */
 function trailingNum(s: string | null | undefined): string {
   const m = String(s || "").match(/(\d+)\s*$/);
   return m ? m[1] : "";
+}
+
+/** An href that is itself an image resource — directly, or a CDN "fetch"
+ * rendition whose (possibly percent-encoded) source ends in an image
+ * extension (substackcdn.com/image/fetch/…/https%3A%2F%2F…%2Fpic.png). */
+const IMAGE_HREF_RE = /\.(png|jpe?g|gif|webp|avif|svg)([?#].*)?$/i;
+function looksLikeImageUrl(href: string): boolean {
+  let path = href;
+  try {
+    path = new URL(href).pathname;
+  } catch {
+    /* not absolute — test the raw string */
+  }
+  if (IMAGE_HREF_RE.test(path)) return true;
+  try {
+    return IMAGE_HREF_RE.test(decodeURIComponent(path));
+  } catch {
+    return false;
+  }
+}
+
+/** Markdown link destinations follow turndown's escaping: parens are escaped,
+ * and a destination containing whitespace/angle brackets is angle-wrapped —
+ * `[jump](#foo bar)` is broken markdown, `[jump](<#foo bar>)` is not. */
+function escapeLinkDestination(href: string): string {
+  if (/[\s<>]/.test(href)) {
+    return `<${href.replace(/</g, "\\<").replace(/>/g, "\\>")}>`;
+  }
+  return href.replace(/([()])/g, "\\$1");
+}
+
+/** Schemes that must never survive as clickable markdown links. */
+const UNSAFE_HREF_SCHEME = /^\s*(javascript|data|vbscript|file):/i;
+
+/** Hostname of a URL resolved against the page base ("" if unparseable). */
+function hostOf(url: string, baseUrl: string): string {
+  try {
+    return new URL(url, baseUrl).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return "";
+  }
 }
 
 /** Whether an element is a footnotes section/list wrapper (either convention). */
@@ -113,6 +161,28 @@ function makeTurndown(baseUrl: string): TurndownService {
   // are never passed through it.
   const baseEscape = td.escape.bind(td);
   td.escape = (text: string) => escapeTagOpeners(baseEscape(text));
+
+  // Never emit link titles. Turndown's default rule copies the title
+  // attribute into the markdown link — on sites that stuff full footnote /
+  // hover-preview HTML into `title` (80000hours), that dumped kilobytes of
+  // escaped markup into the body. Also collapses newlines inside link text so
+  // an anchor wrapping block content can't split into a multi-line "[ … ](…)"
+  // blob. Registered FIRST so every later, more specific anchor rule
+  // (deadLink, footnoteBackref, imageOnlyLink, videoEmbed) still wins —
+  // turndown gives later-added rules precedence.
+  td.addRule("linkNoTitle", {
+    filter: (node: HTMLElement) =>
+      node.nodeName === "A" && !!node.getAttribute("href"),
+    replacement: (content: string, node: TurndownService.Node) => {
+      const href = (node as HTMLElement).getAttribute("href") || "";
+      const text = content.replace(/\s*\n\s*/g, " ").trim();
+      if (!text) return "";
+      // javascript:/data:/… targets must not survive as clickable links —
+      // keep the visible text, drop the destination.
+      if (UNSAFE_HREF_SCHEME.test(href)) return text;
+      return `[${text}](${escapeLinkDestination(href)})`;
+    },
+  });
 
   // MathJax v2 CommonHTML: LaTeX source lives in .mjx-math[aria-label].
   td.addRule("mathjax", {
@@ -253,7 +323,11 @@ function makeTurndown(baseUrl: string): TurndownService {
     },
   });
 
-  // Footnote definitions -> [^N]: content  (uses already-converted content)
+  // Footnote definitions -> [^N]: content  (uses already-converted content).
+  // Single-paragraph definitions stay on one line. Definitions with BLOCK
+  // content (blockquotes, lists, multiple paragraphs) keep it, on 4-space
+  // continuation lines — flattening them left literal "> " and "- " tokens
+  // sprinkled mid-sentence and destroyed quoted passages.
   td.addRule("footnoteItem", {
     filter: (node: HTMLElement) =>
       node.nodeName === "LI" &&
@@ -261,8 +335,12 @@ function makeTurndown(baseUrl: string): TurndownService {
         /^(user-content-)?fn[-:]?\d+$/i.test(node.id || "")),
     replacement: (content: string, node: TurndownService.Node) => {
       const num = trailingNum((node as HTMLElement).id);
-      const text = content.trim().replace(/\n+/g, " ");
-      return num ? `\n[^${num}]: ${text}\n` : content;
+      if (!num) return content;
+      const trimmed = content.trim();
+      const text = trimmed.includes("\n")
+        ? trimmed.replace(/\n{3,}/g, "\n\n").replace(/\n/g, "\n    ")
+        : trimmed;
+      return `\n[^${num}]: ${text}\n`;
     },
   });
 
@@ -293,6 +371,40 @@ function makeTurndown(baseUrl: string): TurndownService {
     replacement: () => "",
   });
 
+  // Lightbox / zoom links that wrap ONLY an image (Substack's `.image-link`
+  // figure wrappers): the default conversion renders the wrapper as a
+  // multi-line "[ ![](…) ](…)" blob because the image sits inside block
+  // elements. When the link target is another RENDITION of the same figure —
+  // an image URL on the same host as the image itself — the wrapper is pure
+  // lightbox chrome: drop it and keep the image. An image-extension href on a
+  // DIFFERENT host is real navigation (Wikipedia thumbnails link to their
+  // `/wiki/File:X.jpg` description pages) and keeps a single-line linked
+  // image.
+  td.addRule("imageOnlyLink", {
+    filter: (node: HTMLElement) =>
+      node.nodeName === "A" &&
+      !!node.querySelector("img") &&
+      (node.textContent || "").trim() === "",
+    replacement: (content: string, node: TurndownService.Node) => {
+      const el = node as HTMLElement;
+      const inner = content.trim();
+      if (!inner) return "";
+      const href = el.getAttribute("href") || "";
+      if (!href || UNSAFE_HREF_SCHEME.test(href)) return content;
+      const img = el.querySelector("img");
+      const imgSrc =
+        img?.getAttribute("data-src") || img?.getAttribute("src") || "";
+      const sameHostRendition =
+        looksLikeImageUrl(href) &&
+        !!hostOf(href, baseUrl) &&
+        hostOf(href, baseUrl) === hostOf(imgSrc, baseUrl);
+      // Content spacing is preserved verbatim on unwrap: a block figure keeps
+      // its own paragraph breaks, an inline thumbnail stays inline.
+      if (sameHostRendition) return content;
+      return `[${inner.replace(/\s*\n\s*/g, " ")}](${escapeLinkDestination(href)})`;
+    },
+  });
+
   // Preserve video embeds (YouTube / Vimeo) as raw <iframe> so the player
   // renders inline where it was in the article (the platform runs rehype-raw).
   // Turndown otherwise drops iframes entirely. Non-video iframes are still
@@ -310,15 +422,23 @@ function makeTurndown(baseUrl: string): TurndownService {
     },
   });
 
-  // Lazy images: prefer data-src, resolve relative URLs.
+  // Lazy images: prefer data-src, then the largest EXPLICITLY-SIZED srcset
+  // candidate, then src, then a bare srcset entry as a last resort. The srcset
+  // steps matter twice over: responsive images usually list their largest
+  // rendition only in srcset, and some sites ship srcset-only images (no src
+  // at all) that previously vanished entirely. A descriptor-less srcset never
+  // beats an explicit src — without widths there's no evidence it's better.
   td.addRule("lazyImg", {
     filter: "img",
     replacement: (_content: string, node: TurndownService.Node) => {
       const n = node as HTMLElement;
+      const sized = largestSrcsetCandidate(n.getAttribute("srcset"));
       let src =
         n.getAttribute("data-src") ||
-        n.getAttribute("data-srcset")?.split(" ")[0] ||
+        largestSrcsetCandidate(n.getAttribute("data-srcset"))?.url ||
+        (sized && sized.width > 0 ? sized.url : "") ||
         n.getAttribute("src") ||
+        sized?.url ||
         "";
       if (!src || src.startsWith("data:")) return "";
       try {
@@ -342,14 +462,21 @@ function makeTurndown(baseUrl: string): TurndownService {
 
 /**
  * HTML body → Markdown. Parses the body with the base URL, runs the deterministic
- * DOM normalization pass (footnote canonicalization + link absolutization), then
- * converts with the shared turndown rules. Single choke point so BOTH the adapter
- * and generic (Defuddle/Readability) paths get identical normalization.
+ * DOM normalization pass (footnote rescue + canonicalization + link
+ * absolutization), then converts with the shared turndown rules. Single choke
+ * point so BOTH the adapter and generic (Defuddle/Readability) paths get
+ * identical normalization. `getFullDoc` lazily supplies the FULL page document
+ * for the footnote-definition rescue (only invoked when a reference's
+ * definition is missing from the extracted body).
  */
-function htmlToMarkdown(bodyHtml: string, baseUrl: string): string {
+function htmlToMarkdown(
+  bodyHtml: string,
+  baseUrl: string,
+  getFullDoc?: () => Document | null,
+): string {
   const dom = new JSDOM(`<body>${bodyHtml}</body>`, { url: baseUrl });
   const body = dom.window.document.body;
-  normalizeArticleDom(body as unknown as Element, baseUrl);
+  normalizeArticleDom(body as unknown as Element, baseUrl, getFullDoc);
   return makeTurndown(baseUrl).turndown(body.innerHTML).trim();
 }
 
@@ -402,6 +529,20 @@ export async function extractArticle(
   const htmlMeta = extractHtmlMeta(html);
   const ctx = adapterContext(url, html);
 
+  // Lazy full-page DOM for the footnote-definition rescue — parsed at most
+  // once, and only when an extracted body references a footnote definition it
+  // doesn't contain (see rescueDroppedFootnotes). Kept separate from the
+  // adapter/Readability DOMs, which may be mutated by their consumers.
+  let fullDom: JSDOM | null = null;
+  const getFullDoc = (): Document | null => {
+    try {
+      fullDom ??= new JSDOM(html, { url });
+      return fullDom.window.document as unknown as Document;
+    } catch {
+      return null;
+    }
+  };
+
   let chosen: Chosen | null = null;
   let body: string | null = null;
   // Candidate bodies kept for the cross-extractor consensus confidence signal.
@@ -429,10 +570,10 @@ export async function extractArticle(
           const raw = await fetchText(ex.bodyMarkdownUrl);
           md = (ex.transformMarkdown ? ex.transformMarkdown(raw) : raw).trim();
         } catch {
-          md = ex.bodyHtml ? htmlToMarkdown(ex.bodyHtml, url) : "";
+          md = ex.bodyHtml ? htmlToMarkdown(ex.bodyHtml, url, getFullDoc) : "";
         }
       } else if (ex.bodyHtml) {
-        md = htmlToMarkdown(ex.bodyHtml, url);
+        md = htmlToMarkdown(ex.bodyHtml, url, getFullDoc);
       }
       if (md.length >= MIN_ADAPTER_CHARS) {
         body = md;
@@ -496,7 +637,7 @@ export async function extractArticle(
     if (candidates.length > 0) {
       const converted = candidates.map((c) => ({
         c,
-        md: htmlToMarkdown(c.bodyHtml, url),
+        md: htmlToMarkdown(c.bodyHtml, url, getFullDoc),
       }));
       const def = converted.find((x) => x.c.via === "defuddle");
       const rea = converted.find((x) => x.c.via === "readability");
@@ -523,6 +664,24 @@ export async function extractArticle(
 
   if (!chosen || body == null) {
     throw new Error("No extraction strategy could isolate the article body");
+  }
+
+  // Substack-style subtitle: the `h3.subtitle` under the post title sits
+  // outside the content container, so both generic extractors drop it ("The
+  // cause of AI safety is losing. Consider asking: how can we win?" vanished).
+  // Prepend it as an italic lede when the body doesn't already open with it.
+  // The cheap string gate avoids a full-page parse on the common no-subtitle
+  // case; adapters own their body and are exempt.
+  if (!chosen.adapterAuthored && /\bsubtitle\b/.test(html)) {
+    const sub = getFullDoc()?.querySelector("h3.subtitle, header .subtitle");
+    const subText = (sub?.textContent || "").replace(/\s+/g, " ").trim();
+    if (
+      subText &&
+      subText.length <= 300 &&
+      !body.slice(0, 2000).includes(subText.slice(0, 60))
+    ) {
+      body = `_${subText.replace(/_/g, "\\_")}_\n\n${body}`;
+    }
   }
 
   // arXiv metadata authority: the ABSTRACT page's citation_author/citation_date

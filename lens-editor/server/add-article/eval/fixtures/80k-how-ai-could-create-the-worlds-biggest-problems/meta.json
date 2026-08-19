@@ -1,0 +1,18 @@
+{
+ "slug": "80k-how-ai-could-create-the-worlds-biggest-problems",
+ "relay_path": "articles/80k-how-ai-could-create-the-world's-biggest-problems.md",
+ "source_url": "https://80000hours.org/problem-profiles/artificial-intelligence/",
+ "resolved_fetch_url": "https://80000hours.org/problem-profiles/artificial-intelligence/",
+ "host": "80000hours.org",
+ "expected_via": "80000hours",
+ "needs_body_markdown": false,
+ "status": "ok",
+ "title": "How AI could create the world\u2019s biggest problems",
+ "author": [
+  "Zershaaneh Qureshi"
+ ],
+ "published": "2026-02-24",
+ "reviewed": false,
+ "reviewed_note": "provisional gold = fixed pipeline output frozen 2026-07-27 (Asana 1216184941841945 / 1216890255994743) \u2014 verify against the live article, then set reviewed:true. Do NOT rebuild from the relay copy; it was hand-cleaned.",
+ "refrozen_at": "2026-07-27"
+}

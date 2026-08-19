@@ -43,6 +43,9 @@ export function stripFrontmatter(md: string): string {
  *  `1. item` — a real false-positive source), whitespace runs. */
 export function normalizeForScore(md: string): string {
   return stripFrontmatter(md)
+    // Link-title dialect: `[t](url "title")` == `[t](url)` — the title is
+    // invisible metadata a converter may or may not emit, not content.
+    .replace(/\]\(([^)\s]+)\s+"[^"]*"\)/g, "]($1)")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/…/g, "...")

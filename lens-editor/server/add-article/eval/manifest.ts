@@ -17,6 +17,11 @@ export function classifyVia(sourceUrl: string): string {
   if (/(^|\.)wikipedia\.org$/.test(host)) return "wikipedia";
   if (host === "ai-safety-atlas.com") return "ai-safety-atlas";
   if (host === "arxiv.org" || host.endsWith("ar5iv.org") || host === "ar5iv.labs.arxiv.org") return "arxiv";
+  if (host === "80000hours.org") {
+    try {
+      if (new URL(sourceUrl).pathname.startsWith("/problem-profiles/")) return "80000hours";
+    } catch { /* fall through */ }
+  }
   return "generic";
 }
 

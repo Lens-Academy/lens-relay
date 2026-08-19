@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { JSDOM } from "jsdom";
-import { normalizeArticleDom } from "./normalize-dom";
+import { normalizeArticleDom, largestSrcsetCandidate } from "./normalize-dom";
 
 const BASE = "https://www.lesswrong.com/posts/abc/the-post";
 
@@ -204,5 +204,268 @@ describe("review-hardening: footnote id false positives", () => {
     normalizeArticleDom(body as unknown as Element, "https://example.com/");
     expect(body.querySelector("#fnord")).not.toBeNull();
     expect(body.innerHTML).not.toContain('id="fn-1"');
+  });
+});
+
+describe("normalizeArticleDom — footnote rescue (80000hours pattern)", () => {
+  /** Body fragment + separate FULL page doc, as extract.ts wires them. */
+  function normalizeWithFull(bodyHtml: string, fullHtml: string | null, base = "https://80000hours.org/problem-profiles/ai/") {
+    const dom = new JSDOM(`<body>${bodyHtml}</body>`, { url: base });
+    const body = dom.window.document.body;
+    const fullDoc = fullHtml ? new JSDOM(fullHtml, { url: base }).window.document : null;
+    normalizeArticleDom(body as unknown as Element, base, () => fullDoc as unknown as Document | null);
+    return body;
+  }
+
+  const REF = (n: number, title = "") =>
+    `<a id="fn-ref-${n}" href="#fn-${n}"${title ? ` title="${title}"` : ""} rel="footnote" class="footnote-link no-visited-styling" aria-label="Footnote"><sup>${n}</sup></a>`;
+
+  it("recognizes anchor-wrapping-sup references and rescues definitions from the full page", () => {
+    const body = `<p>First claim.${REF(1)} Second claim.${REF(2)}</p>`;
+    const full = `<html><body><main><p>First claim. Second claim.</p></main>
+      <div class="wrap-footnotes"><div class="footnotes"><div><ol>
+        <li id="fn-1"> The first note with <a href="https://example.com/a">a link</a>.<a href="#fn-ref-1" class="no-visited-styling fn-return" aria-label="Back to content">↩</a></li>
+        <li id="fn-2"> The second note.<a href="#fn-ref-2" class="fn-return">↩</a></li>
+      </ol></div></div></div></body></html>`;
+    const out = normalizeWithFull(body, full);
+
+    // Markers canonicalized to numeric refs.
+    const markers = [...out.querySelectorAll("a[data-footnote-ref]")].map((a) =>
+      a.getAttribute("data-footnote-ref"),
+    );
+    expect(markers).toEqual(["1", "2"]);
+    // Definitions rescued from the sibling container the extractor dropped.
+    const defs = [...out.querySelectorAll("li")].map((li) => li.id);
+    expect(defs).toEqual(["fn-1", "fn-2"]);
+    expect(out.textContent).toContain("The first note with");
+    // Back-to-content arrows (#fn-ref-N / .fn-return) stripped from the defs.
+    expect(out.querySelector("a.fn-return")).toBeNull();
+    expect(out.textContent).not.toContain("↩");
+    // The hover-preview title never survives (marker node is replaced).
+    expect(out.innerHTML).not.toContain("title=");
+  });
+
+  it("synthesizes the definition from the reference's title attribute when the full page lacks it", () => {
+    const title = "&lt;p&gt;The AI Impacts website has &lt;a href=&quot;https://example.com/args&quot;&gt;a summary of arguments&lt;/a&gt;, plus articles.&lt;/p&gt;";
+    const body = `<p>A cited claim.${REF(1, title)}</p>`;
+    const out = normalizeWithFull(body, null);
+
+    expect(out.querySelector("a[data-footnote-ref='1']")).not.toBeNull();
+    const def = out.querySelector("li#fn-1");
+    expect(def).not.toBeNull();
+    expect(def!.textContent).toContain("The AI Impacts website has");
+    // The escaped HTML parsed into real elements, not literal markup text.
+    expect(def!.querySelector("a")?.getAttribute("href")).toBe("https://example.com/args");
+    expect(out.textContent).not.toContain("<p>");
+  });
+
+  it("does not fabricate a definition from a short UI-label title", () => {
+    const body = `<p>Claim.${REF(1, "Footnote 1")}</p>`;
+    const out = normalizeWithFull(body, null);
+    expect(out.querySelector("a[data-footnote-ref='1']")).not.toBeNull();
+    expect(out.querySelector("li#fn-1")).toBeNull();
+  });
+
+  it("leaves natively-present definitions alone (rescue is a no-op)", () => {
+    const body = `<p>Claim.${REF(1)}</p>
+      <ol class="footnotes"><li id="fn-1">Native def.</li></ol>`;
+    const out = normalizeWithFull(body, `<html><body><li id="fn-1">WRONG copy</li></body></html>`);
+    expect(out.textContent).toContain("Native def.");
+    expect(out.textContent).not.toContain("WRONG copy");
+    expect(out.querySelectorAll("li").length).toBe(1);
+  });
+
+  it("does not treat a #fn-ref back-link as a footnote marker", () => {
+    const body = `<p>Claim.${REF(1)}</p>
+      <ol class="footnotes"><li id="fn-1">Def text.<a href="#fn-ref-1" class="fn-return">↩</a></li></ol>`;
+    const out = normalizeWithFull(body, null);
+    expect(out.querySelectorAll("a[data-footnote-ref]").length).toBe(1);
+    expect(out.textContent).not.toContain("↩");
+  });
+});
+
+describe("normalizeArticleDom — reviewer-hardened footnote guards", () => {
+  function normalizeWithFull2(bodyHtml: string, fullHtml: string | null, base = "https://example.org/a") {
+    const dom = new JSDOM(`<body>${bodyHtml}</body>`, { url: base });
+    const body = dom.window.document.body;
+    const fullDoc = fullHtml ? new JSDOM(fullHtml, { url: base }).window.document : null;
+    normalizeArticleDom(body as unknown as Element, base, () => fullDoc as unknown as Document | null);
+    return body;
+  }
+
+  it("leaves a rel=footnote link with an EXTERNAL href untouched (text + URL survive)", () => {
+    const body = normalizeWithFull2(
+      `<p>See <a rel="footnote" href="https://other.org/notes.html#3">my longer note on decision theory</a> inline.</p>`,
+      null,
+    );
+    const a = body.querySelector("a")!;
+    expect(a.textContent).toBe("my longer note on decision theory");
+    expect(a.getAttribute("href")).toBe("https://other.org/notes.html#3");
+    expect(body.querySelector("a[data-footnote-ref]")).toBeNull();
+  });
+
+  it("leaves a prose-length .footnote-link untouched (not marker-shaped)", () => {
+    const body = normalizeWithFull2(
+      `<p><a class="footnote-link" href="#fn-3">as discussed in footnote 3</a></p>
+       <ol class="footnotes"><li id="fn-3">The note.</li></ol>`,
+      null,
+    );
+    expect(body.querySelector("a.footnote-link")?.textContent).toBe(
+      "as discussed in footnote 3",
+    );
+  });
+
+  it("treats named ids like fn-reform as targets, not back-links", () => {
+    const body = normalizeWithFull2(
+      `<p>Claim<sup class="footnote-ref"><a href="#fn-reform">2</a></sup>.</p>
+       <div class="footnotes"><ol>
+         <li id="fn-reform">Reform note; see <a href="#fn-other">the other note</a>.<a href="#fn-ref-2" class="fn-return">↩</a></li>
+         <li id="fn-other">Other note.</li>
+       </ol></div>`,
+      null,
+    );
+    // The marker was collected and numbered from its display number.
+    expect(body.querySelector("a[data-footnote-ref='2']")).not.toBeNull();
+    // The cross-reference link inside the definition survived, text and all…
+    expect(body.textContent).toContain("see the other note");
+    // …while the true back-link (#fn-ref-2 / .fn-return) was removed.
+    expect(body.textContent).not.toContain("↩");
+  });
+
+  it("refuses to clone a section-sized container as a footnote definition", () => {
+    const paras = Array.from({ length: 10 }, (_, i) => `<p>Excluded methods paragraph ${i} with plenty of words in it.</p>`).join("");
+    const body = normalizeWithFull2(
+      `<p>Claim<sup><a href="#fn-methods">1</a></sup>.</p>`,
+      `<html><body><div id="fn-methods"><h2>Methods</h2>${paras}</div></body></html>`,
+    );
+    expect(body.querySelector("li")).toBeNull();
+    expect(body.textContent).not.toContain("Excluded methods paragraph");
+  });
+
+  it("skips rescue when the definition text already survived in the body (unwrapped wrapper)", () => {
+    const note = "The fnord div content that the extractor kept as a plain paragraph.";
+    const body = normalizeWithFull2(
+      `<p>Claim<sup><a href="#fnord9">3</a></sup>.</p><p>${note}</p>`,
+      `<html><body><div id="fnord9"><p>${note}</p></div></body></html>`,
+    );
+    expect(body.querySelector("li")).toBeNull();
+    expect((body.textContent!.match(/fnord div content/g) || []).length).toBe(1);
+  });
+
+  it("chain-rescues definitions referenced from inside rescued definitions", () => {
+    const body = normalizeWithFull2(
+      `<p>Claim<sup><a href="#fnA1">1</a></sup>.</p>`,
+      `<html><body>
+        <li id="fnA1">First note, see also<sup><a href="#fnA2">2</a></sup> for details.</li>
+        <li id="fnA2">Second note reached only through the first.</li>
+      </body></html>`,
+    );
+    const ids = [...body.querySelectorAll("li")].map((li) => li.id).sort();
+    expect(ids).toEqual(["fn-1", "fn-2"]);
+    expect(body.textContent).toContain("Second note reached only through the first");
+  });
+
+  it("does not fabricate a definition from a long PLAIN-TEXT tooltip title", () => {
+    const body = normalizeWithFull2(
+      `<p>Claim<a rel="footnote" href="#fn-1" title="Jump to the footnote content at the bottom of this page"><sup>1</sup></a>.</p>`,
+      null,
+    );
+    expect(body.querySelector("li")).toBeNull();
+    expect(body.textContent).not.toContain("Jump to the footnote");
+  });
+
+  it("sanitizes active content out of title-synthesized definitions", () => {
+    const title =
+      "&lt;p&gt;Note text with an embed &lt;iframe src='https://www.youtube.com/embed/EVIL'&gt;&lt;/iframe&gt; inside.&lt;/p&gt;";
+    const body = normalizeWithFull2(
+      `<p>Claim<a rel="footnote" href="#fn-1" title="${title}"><sup>1</sup></a>.</p>`,
+      null,
+    );
+    const def = body.querySelector("li#fn-1")!;
+    expect(def).not.toBeNull();
+    expect(def.textContent).toContain("Note text with an embed");
+    expect(def.querySelector("iframe")).toBeNull();
+  });
+
+  it("renumbers duplicate definition ids instead of emitting two identical [^N] defs", () => {
+    const body = normalizeWithFull2(
+      `<p>Claim<sup class="footnote-ref"><a href="#fn-1">1</a></sup>.</p>
+       <ol class="footnotes">
+         <li id="fn-1">First copy.</li>
+         <li id="fn-1">Second copy with different content.</li>
+       </ol>`,
+      null,
+    );
+    const ids = [...body.querySelectorAll("li")].map((li) => li.id);
+    expect(new Set(ids).size).toBe(2); // distinct numbers
+    expect(body.textContent).toContain("First copy.");
+    expect(body.textContent).toContain("Second copy with different content");
+  });
+});
+
+describe("normalizeArticleDom — heading level restore (Defuddle flattening)", () => {
+  function withFull(bodyHtml: string, fullHtml: string, base = "https://example.org/a") {
+    const dom = new JSDOM(`<body>${bodyHtml}</body>`, { url: base });
+    const body = dom.window.document.body;
+    const fullDoc = new JSDOM(fullHtml, { url: base }).window.document;
+    normalizeArticleDom(body as unknown as Element, base, () => fullDoc as unknown as Document);
+    return body;
+  }
+
+  it("demotes body h2s that were h2 in the source when siblings were h1", () => {
+    const body = withFull(
+      `<h2>Overview</h2><p>a</p><h2>ToVs in AI Safety</h2><p>b</p><h2>Camp 1</h2><p>c</p>`,
+      `<html><body><h1>The Post Title</h1>
+        <h1>Overview</h1><h1>ToVs in AI Safety</h1><h2>Camp 1</h2></body></html>`,
+    );
+    expect([...body.querySelectorAll("h2")].map((h) => h.textContent)).toEqual([
+      "Overview",
+      "ToVs in AI Safety",
+    ]);
+    expect([...body.querySelectorAll("h3")].map((h) => h.textContent)).toEqual([
+      "Camp 1",
+    ]);
+  });
+
+  it("is a no-op when the source hierarchy really was flat h2s", () => {
+    const body = withFull(
+      `<h2>One</h2><p>a</p><h2>Two</h2><p>b</p>`,
+      `<html><body><h1>Title</h1><h2>One</h2><h2>Two</h2></body></html>`,
+    );
+    expect(body.querySelectorAll("h3").length).toBe(0);
+    expect(body.querySelectorAll("h2").length).toBe(2);
+  });
+});
+
+describe("parseSrcset / image rendition restore", () => {
+  it("parses srcsets whose URLs contain commas (fetch-CDN parameter lists)", () => {
+    const srcset =
+      "https://cdn.example.com/image/fetch/$s_!X!,w_424,c_limit,f_webp/https%3A%2F%2Fx.com%2Fpic.png 424w, https://cdn.example.com/image/fetch/$s_!X!,w_1456,c_limit,f_webp/https%3A%2F%2Fx.com%2Fpic.png 1456w";
+    const best = largestSrcsetCandidate(srcset)!;
+    expect(best.width).toBe(1456);
+    expect(best.url).toContain("w_1456,c_limit");
+    expect(best.url.startsWith("https://cdn.example.com/")).toBe(true);
+  });
+
+  it("restores the largest rendition of a fetch-CDN image from the full page", () => {
+    const small =
+      "https://cdn.example.com/image/fetch/$s_!X!,w_424,c_limit/https%3A%2F%2Fx.com%2Fpic_958x540.png";
+    const large =
+      "https://cdn.example.com/image/fetch/$s_!X!,w_1456,c_limit/https%3A%2F%2Fx.com%2Fpic_958x540.png";
+    const dom = new JSDOM(`<body><p>t</p><img src="${small}" srcset="${small}"></body>`, {
+      url: "https://example.org/a",
+    });
+    const body = dom.window.document.body;
+    const fullDoc = new JSDOM(
+      `<html><body><picture>
+        <source srcset="${small} 424w, ${large} 1456w">
+        <img src="${large}">
+      </picture></body></html>`,
+      { url: "https://example.org/a" },
+    ).window.document;
+    normalizeArticleDom(body as unknown as Element, "https://example.org/a", () => fullDoc as unknown as Document);
+    const img = body.querySelector("img")!;
+    expect(img.getAttribute("src")).toBe(large);
+    expect(img.getAttribute("srcset")).toBeNull();
   });
 });

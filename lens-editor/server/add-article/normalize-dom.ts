@@ -1,7 +1,8 @@
 /**
  * Pre-turndown DOM normalization. Runs on the article body DOM (with the fetch
- * base URL available) BEFORE the HTML→Markdown conversion in extract.ts. Two
- * deterministic transforms that turndown alone cannot do correctly:
+ * base URL available) BEFORE the HTML→Markdown conversion in extract.ts.
+ * Deterministic transforms that turndown alone cannot do correctly — footnote
+ * definition rescue from the full page (see rescueDroppedFootnotes), plus:
  *
  *  1. Footnote canonicalization. Sites render footnotes in incompatible ways —
  *     ForumMagnum (LessWrong / AlignmentForum / EA Forum) uses content-hash ids
@@ -38,13 +39,23 @@ function refAnchor(ref: Element): Element | null {
   return ref.matches("a") ? ref : ref.querySelector("a");
 }
 
+/** A back-reference href: legacy `#fnref…` (any suffix — hash ids included) or
+ * 80000hours' dashed-numeric `#fn-ref-N`. The dashed form REQUIRES trailing
+ * digits so named definition ids like `fn-reform` / `fn-refugees` are never
+ * misread as back-links. */
+function isBackLinkHref(href: string): boolean {
+  return href.startsWith("#fnref") || /^#fn-ref-\d+$/i.test(href);
+}
+
 /** A back-reference (definition → marker), NOT an inline marker. Must be tested
- * BEFORE the inclusion test because `"#fnref".startsWith("#fn")` is true. */
+ * BEFORE the inclusion test because `"#fnref".startsWith("#fn")` is true.
+ * Covers the `.fn-return` class 80k puts on its "back to content" arrows. */
 function isBackLink(el: Element): boolean {
   if (el.closest(".footnote-back-link")) return true;
-  if (el.matches("a[data-footnote-backref]")) return true;
+  if (el.matches("a[data-footnote-backref], a.fn-return, a.footnote-return"))
+    return true;
   const a = refAnchor(el);
-  return (a?.getAttribute("href") || "").startsWith("#fnref");
+  return isBackLinkHref(a?.getAttribute("href") || "");
 }
 
 /** The definition id this reference points at (strip a leading `#`). */
@@ -53,14 +64,17 @@ function targetId(ref: Element): string {
   if (href.startsWith("#")) {
     const id = href.slice(1);
     // A non-back-link reference normally points straight at the def id.
-    if (id && !id.startsWith("fnref")) return id;
+    // Named ids like `fn-reform` are real targets, not back-links.
+    if (id && !isBackLinkHref(`#${id}`)) return id;
     if (id.startsWith("fnref")) return "fn" + id.slice(5);
+    if (/^fn-ref-\d+$/i.test(id)) return id.replace(/^fn-ref-/i, "fn-");
   }
   // Fall back to the reference's own id with the `ref` marker removed
-  // (`fnref<HASH>` → `fn<HASH>`); anchored to the prefix so we don't mangle an
-  // id that merely contains the letters "ref" (e.g. `fn-preface-3`).
+  // (`fnref<HASH>` → `fn<HASH>`, `fn-ref-3` → `fn-3`); anchored to the prefix
+  // so we don't mangle an id that merely contains "ref" (e.g. `fn-preface-3`).
   const ownId =
     ref.getAttribute("id") || refAnchor(ref)?.getAttribute("id") || "";
+  if (/^fn-ref-\d+$/i.test(ownId)) return ownId.replace(/^fn-ref-/i, "fn-");
   return ownId.replace(/^fnref/i, "fn");
 }
 
@@ -124,6 +138,20 @@ function collectReferences(root: Element): Element[] {
     const sup = a.closest("sup");
     set.add(sup && root.contains(sup) ? sup : a);
   });
+  // Anchor-style references (80000hours and other WordPress footnote
+  // renderers): the ANCHOR wraps its own <sup> marker (`<a rel="footnote"
+  // href="#fn-1"><sup>1</sup></a>`) — the inverse nesting of the sup-based
+  // branch below, which can't see them. The label alone is NOT enough: the
+  // anchor must also be marker-SHAPED (same-document `#` target, and a <sup>
+  // child or short marker text) — otherwise a prose link that happens to carry
+  // the class/rel (`<a class="footnote-link" href="/notes#3">my longer note on
+  // decision theory</a>`) would have its text and URL destroyed.
+  root.querySelectorAll('a[rel~="footnote"], a.footnote-link').forEach((a) => {
+    const href = a.getAttribute("href") || "";
+    if (!href.startsWith("#")) return;
+    const text = (a.textContent || "").replace(/[[\]\s]/g, "");
+    if (a.querySelector("sup") || /^[\d*†‡§]{1,4}$/.test(text)) set.add(a);
+  });
   // An UNlabelled `<sup>` linking to `#fn…` is only a footnote marker when its
   // text is a number (e.g. "1" / "[1]") OR it targets a real footnote
   // definition — otherwise an ordinary superscript in-page link (e.g.
@@ -135,6 +163,13 @@ function collectReferences(root: Element): Element[] {
     const text = (a.textContent || "").replace(/[[\]\s]/g, "");
     const target = (a.getAttribute("href") || "").slice(1);
     if (/^\d+$/.test(text) || defIds.has(target)) set.add(sup);
+  });
+  // Same guard for the unlabelled inverse nesting: `<a href="#fn…"><sup>…</sup></a>`.
+  root.querySelectorAll('a[href^="#fn"]').forEach((a) => {
+    if (!a.querySelector("sup")) return;
+    const text = (a.textContent || "").replace(/[[\]\s]/g, "");
+    const target = (a.getAttribute("href") || "").slice(1);
+    if (/^\d+$/.test(text) || defIds.has(target)) set.add(a);
   });
 
   let refs = [...set].filter((e) => !isBackLink(e));
@@ -257,15 +292,29 @@ function normalizeFootnotes(root: Element): void {
     isFootnoteDefLi,
   );
   const numByDef = new Map<Element, number>();
+  // A duplicate definition id (malformed page) must not produce two `[^N]:`
+  // entries with the same number — the first occurrence keeps the reference's
+  // number, later ones are renumbered as orphans so their content survives.
+  const claimed = new Set<string>();
   for (const def of defs) {
     const id = def.getAttribute("id") || "";
-    const n = numByTarget.get(id) ?? takeFree();
+    const n =
+      numByTarget.has(id) && !claimed.has(id)
+        ? numByTarget.get(id)!
+        : takeFree();
+    claimed.add(id);
     def.setAttribute("id", `fn-${n}`);
     def
       .querySelectorAll(
-        ".footnote-back-link, a[data-footnote-backref], a[href^='#fnref']",
+        ".footnote-back-link, a[data-footnote-backref], a.fn-return, a.footnote-return",
       )
       .forEach((b) => b.remove());
+    // Back-reference LINKS are removed by exact href shape only — a bare CSS
+    // prefix (`a[href^='#fn-ref']`) would also delete legitimate cross-links
+    // to named definitions like `#fn-reform`, text and all.
+    def.querySelectorAll("a[href]").forEach((b) => {
+      if (isBackLinkHref(b.getAttribute("href") || "")) b.remove();
+    });
     numByDef.set(def, Number(n));
   }
 
@@ -278,6 +327,298 @@ function normalizeFootnotes(root: Element): void {
       .filter((ch) => numByDef.has(ch))
       .sort((a, b) => numByDef.get(a)! - numByDef.get(b)!);
     for (const it of items) c.appendChild(it);
+  }
+}
+
+/**
+ * Footnote-definition rescue. The generic extractors (Readability/Defuddle)
+ * pick ONE content container — on sites that render the footnote list in a
+ * sibling container (80000hours' `.wrap-footnotes`), every definition is
+ * silently dropped while the inline markers survive, so the imported article
+ * loses all footnote content. For each in-body reference whose target id is
+ * missing from the body, recover the definition from the FULL page document
+ * when available; failing that, synthesize it from the reference's `title`
+ * attribute (80k stuffs the complete footnote HTML there for hover previews).
+ * Runs BEFORE normalizeFootnotes so rescued definitions are numbered and
+ * ordered exactly like natively-present ones.
+ */
+/** Active/embedded elements have no place inside a footnote definition —
+ * especially one synthesized from a title attribute, where a second decode
+ * level can turn previously-inert text into live markup (the videoEmbed rule
+ * passes YouTube/Vimeo iframes through as raw HTML). */
+function sanitizeDef(li: Element): void {
+  li.querySelectorAll(
+    "script, style, iframe, frame, object, embed, form, link, meta, video, audio",
+  ).forEach((e) => e.remove());
+}
+
+const NORM_WS = (s: string) => s.replace(/\s+/g, " ").trim();
+
+function rescueDroppedFootnotes(
+  root: Element,
+  getFullDoc?: () => Document | null,
+): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+
+  let fullDoc: Document | null | undefined;
+  let list: Element | null = null;
+  const appendDef = (li: Element) => {
+    if (!list) {
+      list = doc.createElement("ol");
+      list.className = "footnotes";
+      root.appendChild(list);
+    }
+    list.appendChild(li);
+  };
+
+  /** Resolve a missing definition from the full page, refusing candidates that
+   * are not note-shaped: cloning a section-sized container (a `#fn-methods`
+   * div holding headings and 30 paragraphs, or a whole `#footnotes` section)
+   * would inline an entire excluded region as one flattened "footnote". */
+  const resolveFromFullPage = (tid: string): Element | null => {
+    if (fullDoc === undefined) fullDoc = getFullDoc?.() ?? null;
+    const src = fullDoc?.getElementById(tid);
+    if (!src) return null;
+    const el = src.closest("li") ?? src;
+    const text = NORM_WS(el.textContent || "");
+    if (el.nodeName === "LI") {
+      // A list item is structurally a note — but not one that CONTAINS other
+      // footnote definitions (a mis-targeted wrapper), and not unbounded.
+      if ([...el.querySelectorAll("li")].some(isFootnoteDefLi)) return null;
+      if (text.length > 8000) return null;
+    } else {
+      if (el.querySelector("h1, h2, h3, h4, h5, h6")) return null;
+      if (el.querySelectorAll("ol li, ul li").length >= 2) return null;
+      if (text.length > 4000) return null;
+    }
+    return el;
+  };
+
+  // Iterate to a fixpoint (bounded): a rescued definition may itself contain
+  // footnote references (cross-referencing notes) whose definitions must be
+  // rescued too, or the marker would render as a dangling literal `[^N]`.
+  const attempted = new Set<string>();
+  for (let pass = 0; pass < 4; pass++) {
+    const missing: { tid: string; ref: Element }[] = [];
+    for (const ref of collectReferences(root)) {
+      const tid = targetId(ref);
+      if (!tid || attempted.has(tid)) continue;
+      attempted.add(tid);
+      // The htmlToMarkdown wrapper document contains ONLY the body fragment,
+      // so getElementById is scoped to the article body here.
+      if (doc.getElementById(tid)) continue;
+      missing.push({ tid, ref });
+    }
+    if (missing.length === 0) return;
+
+    // Extractors sometimes UNWRAP a definition's id-bearing wrapper while
+    // keeping its text in the body — the id then looks missing although the
+    // content is present, and rescuing it would duplicate the text. Compare
+    // against the body's normalized text (recomputed per pass; the body grows).
+    const bodyText = NORM_WS(root.textContent || "");
+
+    let added = 0;
+    for (const { tid, ref } of missing) {
+      const src = resolveFromFullPage(tid);
+      let li: Element | null = null;
+      if (src) {
+        const probe = NORM_WS(src.textContent || "").slice(0, 160);
+        if (probe.length >= 24 && bodyText.includes(probe)) continue;
+        li = doc.createElement("li");
+        li.className = "footnote-item";
+        li.setAttribute("id", tid);
+        // Import the definition's CONTENT (the source element may be an <li>
+        // or any id-bearing wrapper) into a fresh <li> so normalizeFootnotes
+        // always sees its canonical shape.
+        const clone = doc.importNode(src, true) as Element;
+        while (clone.firstChild) li.appendChild(clone.firstChild);
+      } else {
+        // Fallback: hover-preview title (80k stuffs the full footnote HTML
+        // there). Two guards against fabricating scholarship out of UI text:
+        // a length floor for short labels ("Footnote 1"), and a requirement
+        // that the value actually parses into markup — a plain-text tooltip
+        // ("Jump to the footnote content at the bottom of this page") is not
+        // a definition.
+        const title =
+          refAnchor(ref)?.getAttribute("title") ||
+          ref.getAttribute("title") ||
+          "";
+        if (title.trim().length < 40) continue;
+        li = doc.createElement("li");
+        li.className = "footnote-item";
+        li.setAttribute("id", tid);
+        li.innerHTML = title; // attribute value is decoded — parses as HTML
+        if (!li.querySelector("p, a, em, strong, i, b, ul, ol, blockquote, code")) {
+          continue;
+        }
+      }
+      sanitizeDef(li);
+      appendDef(li);
+      added += 1;
+    }
+    if (added === 0) return;
+  }
+}
+
+/** Parse a srcset into {url, width} candidates. Candidates are separated by
+ * commas, but URLs themselves may contain commas (fetch-CDN parameter lists
+ * like substack's `$s_!X!,w_424,c_limit,…`) — a naive split(",") shreds them
+ * into fragments. A comma FOLLOWED BY WHITESPACE is an unambiguous separator;
+ * for space-less lists, fall back to url+descriptor pair extraction. */
+export function parseSrcset(
+  srcset: string | null,
+): { url: string; width: number }[] {
+  if (!srcset) return [];
+  const out: { url: string; width: number }[] = [];
+  for (const part of srcset.split(/,(?=\s)/)) {
+    const m = part.trim().match(/^(\S+)(?:\s+(\d+(?:\.\d+)?)[wx])?$/i);
+    if (m) {
+      out.push({ url: m[1], width: m[2] ? parseFloat(m[2]) : 0 });
+      continue;
+    }
+    for (const mm of part.matchAll(/(\S+?)\s+(\d+(?:\.\d+)?)[wx](?=,|$)/gi)) {
+      out.push({ url: mm[1].replace(/^,/, ""), width: parseFloat(mm[2]) });
+    }
+  }
+  return out;
+}
+
+/** Largest candidate in a srcset by width/density descriptor. width=0 when no
+ * candidate carries an explicit descriptor. Exported for the lazyImg rule. */
+export function largestSrcsetCandidate(
+  srcset: string | null,
+): { url: string; width: number } | null {
+  let best: { url: string; width: number } | null = null;
+  for (const c of parseSrcset(srcset)) {
+    if (!best || c.width > best.width) best = c;
+  }
+  return best;
+}
+
+/** Width a fetch-CDN rendition URL advertises via its `w_N` parameter (0 if none). */
+function urlRenditionWidth(url: string): number {
+  const m = url.match(/[,/]w_(\d+)[,/]/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+/** The percent-encoded source URL embedded in a fetch-CDN rendition path
+ * (substackcdn.com/image/fetch/w_424,…/https%3A%2F%2F…%2Fpic.png) — a unique
+ * per-figure key that is stable across renditions. "" for ordinary URLs. */
+function encodedSourceKey(url: string): string {
+  const m = url.match(/\/(https?%3A[^/?#]+)/i);
+  return m ? m[1] : "";
+}
+
+/**
+ * Restore full-size image renditions. Defuddle rewrites <img src> to the
+ * FIRST srcset candidate — the smallest — and collapses the srcset, so
+ * Substack slide images came out at w_424 instead of the element's original
+ * w_1456 (text-dense slides, materially less legible). For fetch-CDN images
+ * the encoded source key identifies the figure across renditions: look it up
+ * in the FULL page and adopt the largest rendition offered there (src plus
+ * every srcset candidate of the img and its <picture> sources). Images
+ * without an encoded key are left untouched.
+ */
+function restoreImageRenditions(
+  root: Element,
+  getFullDoc?: () => Document | null,
+): void {
+  if (!getFullDoc) return;
+  const bodyImgs = [...root.querySelectorAll("img")].filter((img) =>
+    encodedSourceKey(img.getAttribute("src") || ""),
+  );
+  if (bodyImgs.length === 0) return;
+
+  const fullDoc = getFullDoc();
+  if (!fullDoc) return;
+  // key → best rendition URL seen anywhere on the full page.
+  const bestByKey = new Map<string, { url: string; width: number }>();
+  const consider = (url: string, descriptorWidth: number) => {
+    const key = encodedSourceKey(url);
+    if (!key) return;
+    const width = Math.max(descriptorWidth, urlRenditionWidth(url));
+    const cur = bestByKey.get(key);
+    if (!cur || width > cur.width) bestByKey.set(key, { url, width });
+  };
+  fullDoc.querySelectorAll("img, source").forEach((el) => {
+    const src = el.getAttribute("src");
+    if (src) consider(src, 0);
+    for (const attr of ["srcset", "data-srcset"]) {
+      for (const c of parseSrcset(el.getAttribute(attr))) {
+        consider(c.url, c.width);
+      }
+    }
+  });
+
+  for (const img of bodyImgs) {
+    const src = img.getAttribute("src") || "";
+    const best = bestByKey.get(encodedSourceKey(src));
+    if (!best || best.url === src) continue;
+    if (best.width <= urlRenditionWidth(src)) continue;
+    img.setAttribute("src", best.url);
+    // The collapsed small-rendition srcset would win over src in the lazyImg
+    // preference order — drop it so the restored src is what converts.
+    img.removeAttribute("srcset");
+    img.removeAttribute("data-srcset");
+    img.removeAttribute("data-src");
+  }
+}
+
+/**
+ * Restore heading hierarchy flattened by Defuddle. Defuddle demotes content
+ * <h1>s to <h2> (title dedup), so an article using h1 sections with h2
+ * subsections (Substack posts) comes out as one flat run of h2s — "Camp 1"
+ * loses its subordination to "ToVs in AI Safety". Detect the collapse by
+ * matching body-h2 texts against the FULL page's heading levels (skipping the
+ * page-title h1) and re-open the gap: h2s that were h2 in the source drop to
+ * h3. Conservative: only fires when the body has NO h1, and both original
+ * levels are represented by unambiguous text matches.
+ */
+function restoreHeadingLevels(
+  root: Element,
+  getFullDoc?: () => Document | null,
+): void {
+  if (!getFullDoc) return;
+  if (root.querySelector("h1")) return;
+  const bodyH2s = [...root.querySelectorAll("h2")];
+  if (bodyH2s.length < 2) return;
+
+  const fullDoc = getFullDoc();
+  if (!fullDoc) return;
+  const fullHs = [...fullDoc.querySelectorAll("h1, h2")];
+  const firstH1 = fullHs.find((h) => h.nodeName === "H1");
+  // Map heading text → source level; texts seen at more than one level are
+  // ambiguous and dropped from the map.
+  const levelByText = new Map<string, number | null>();
+  for (const h of fullHs) {
+    if (h === firstH1) continue; // the page title, not a section
+    const key = NORM_WS(h.textContent || "").toLowerCase();
+    if (!key) continue;
+    const level = h.nodeName === "H1" ? 1 : 2;
+    if (levelByText.has(key) && levelByText.get(key) !== level) {
+      levelByText.set(key, null);
+    } else if (!levelByText.has(key)) {
+      levelByText.set(key, level);
+    }
+  }
+
+  const matched = bodyH2s.map((h) => ({
+    h,
+    level: levelByText.get(NORM_WS(h.textContent || "").toLowerCase()) ?? null,
+  }));
+  const sawH1 = matched.some((m) => m.level === 1);
+  const sawH2 = matched.some((m) => m.level === 2);
+  if (!sawH1 || !sawH2) return; // source really was flat — nothing to restore
+
+  const doc = root.ownerDocument;
+  if (!doc) return;
+  for (const { h, level } of matched) {
+    if (level !== 2) continue;
+    const h3 = doc.createElement("h3");
+    while (h.firstChild) h3.appendChild(h.firstChild);
+    for (const attr of [...h.attributes]) h3.setAttribute(attr.name, attr.value);
+    h.replaceWith(h3);
   }
 }
 
@@ -295,8 +636,17 @@ function absolutizeLinks(root: Element, baseUrl: string): void {
   });
 }
 
-/** Normalize an article body DOM subtree in place (footnotes + links). */
-export function normalizeArticleDom(root: Element, baseUrl: string): void {
+/** Normalize an article body DOM subtree in place (footnotes + links).
+ *  `getFullDoc` (optional, lazy) provides the FULL page document so footnote
+ *  definitions the extractor's container selection dropped can be rescued. */
+export function normalizeArticleDom(
+  root: Element,
+  baseUrl: string,
+  getFullDoc?: () => Document | null,
+): void {
+  rescueDroppedFootnotes(root, getFullDoc);
+  restoreHeadingLevels(root, getFullDoc);
+  restoreImageRenditions(root, getFullDoc);
   normalizeFootnotes(root);
   absolutizeLinks(root, baseUrl);
 }
