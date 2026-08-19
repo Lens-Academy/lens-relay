@@ -45,6 +45,7 @@ export interface HostImagesOptions {
   ) => Promise<void>;
   maxImages?: number;
   maxBytesPerImage?: number;
+  publicUrl?: (inFolderPath: string) => string;
 }
 
 export async function hostRemoteImages(
@@ -88,11 +89,12 @@ export async function hostRemoteImages(
       const mime = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
       await opts.upload(inFolderPath, buf, mime);
       n += 1; // only successful uploads consume a number (no gaps)
-      // Replace every embed of this URL; alt text doesn't survive a wikilink
-      // embed (platform convention, same as the PDF figure path).
+      const publicUrl = opts.publicUrl?.(inFolderPath) ??
+        `https://raw.githubusercontent.com/Lens-Academy/lens-edu-staging/staging${inFolderPath}`;
+      // Preserve each image's alt text while replacing its destination.
       out = out.replace(
-        new RegExp(`!\\[[^\\]]*\\]\\(${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)`, "g"),
-        `![[${inFolderPath}]]`,
+        new RegExp(`(!\\[[^\\]]*\\]\\()${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\))`, "g"),
+        `$1${publicUrl}$2`,
       );
     } catch (err) {
       console.warn(`[add-article] image rehost failed, keeping external: ${url} (${err})`);

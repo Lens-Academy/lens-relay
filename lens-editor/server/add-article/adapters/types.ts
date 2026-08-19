@@ -43,6 +43,10 @@ export interface AdapterExtract {
   /** Post-process the text fetched from `bodyMarkdownUrl` (clean it, inject
    *  figures, …). Receives the raw markdown, returns the final body. */
   transformMarkdown?: (raw: string) => string;
+  /** Deterministic Markdown placed before the extracted body on every adapter
+   *  path (native Markdown and HTML fallback). The pipeline carries this value
+   *  forward as a post-LLM invariant. */
+  bodyPrefixMarkdown?: string;
   /** Article title (site-name suffix already removed). */
   title: string;
   /** Author(s) in natural "First Last" order; [] lets the pipeline fall back. */

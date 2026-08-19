@@ -65,6 +65,7 @@ services:
     volumes:
       - ${PROMOTION_REPO_HOST_DIR:-/root/lens-editor-promotion-data/repositories}:/data/lens-editor/promotion-repos
       - ${PROMOTION_SSH_DIR:-/root/lens-editor-promotion-data/ssh}:/data/lens-editor-promotion-ssh:ro
+      - ${ARTICLE_REVIEW_REPORT_HOST_DIR:-/root/lens-editor-data/article-review-reports}:/data/lens-editor/article-review-reports
     environment:
       - RELAY_URL=http://relay-server:8080
       - RELAY_SERVER_TOKEN=${RELAY_SERVER_TOKEN}
@@ -79,6 +80,11 @@ services:
       - JINA_API_KEY=${JINA_API_KEY:-}
       - YT_PROXY_URL=${YT_PROXY_URL:-}
       - DATALAB_API_KEY=${DATALAB_API_KEY:-}
+      - LENS_PLATFORM_URL=${LENS_PLATFORM_URL:-https://staging.lensacademy.org}
+      - ADHOC_VALIDATION_SECRET=${ADHOC_VALIDATION_SECRET:?ADHOC_VALIDATION_SECRET must match Lens Platform}
+      - ARTICLE_REVIEW_REPORT_DIR=/data/lens-editor/article-review-reports
+      - ARTICLE_REVIEW_REPORT_RETENTION_DAYS=${ARTICLE_REVIEW_REPORT_RETENTION_DAYS:-90}
+      - ARTICLE_REVIEW_EVIDENCE_RETENTION_DAYS=${ARTICLE_REVIEW_EVIDENCE_RETENTION_DAYS:-30}
       - PROMOTION_ENABLED=${PROMOTION_ENABLED:-false}
       - PROMOTION_PRODUCTION_REPO_URL=${PROMOTION_PRODUCTION_REPO_URL:-}
       - PROMOTION_STAGING_REPO_URL=${PROMOTION_STAGING_REPO_URL:-}

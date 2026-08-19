@@ -9,6 +9,60 @@ const ORIGIN = "https://ai-safety-atlas.com";
 // credits — incl. extra contributors — from the page's metadata comment.
 const ATLAS_AUTHORS = ["Markov Grey", "Charbel-Raphaël Segerie"];
 
+const CHAPTER_FILES_PREFIX = "Chapter files:";
+
+function downloadAnchor(doc: Document, label: RegExp): HTMLAnchorElement | null {
+  return (
+    Array.from(doc.querySelectorAll("a")).find((anchor) =>
+      label.test((anchor.textContent || "").replace(/\s+/g, " ").trim()),
+    ) ?? null
+  );
+}
+
+function atlasDownloadLinks(doc: Document, pageUrl: string): string {
+  const chapter = new URL(pageUrl).pathname.match(
+    /^\/chapters\/v1\/([^/]+)\//,
+  )?.[1];
+  if (!chapter) {
+    throw new Error(`AI Safety Atlas article URL has no chapter slug: ${pageUrl}`);
+  }
+
+  const markdownHref = downloadAnchor(doc, /^Download chapter as markdown$/i)?.getAttribute("href");
+  const pdfHref = downloadAnchor(doc, /^Download chapter PDF$/i)?.getAttribute("href");
+  if (!markdownHref || !pdfHref) {
+    throw new Error(
+      "AI Safety Atlas page is missing its official Markdown or PDF chapter download link",
+    );
+  }
+
+  const markdownUrl = new URL(markdownHref, pageUrl);
+  const pdfUrl = new URL(pdfHref, pageUrl);
+  if (
+    markdownUrl.protocol !== "https:" ||
+    markdownUrl.hostname !== "ai-safety-atlas.com" ||
+    markdownUrl.pathname !== `/chapters/v1/${chapter}.md`
+  ) {
+    throw new Error(`Unsafe or mismatched AI Safety Atlas Markdown download URL: ${markdownUrl.href}`);
+  }
+  if (
+    pdfUrl.protocol !== "https:" ||
+    pdfUrl.hostname !== "atlas.foreviewusercontent.com" ||
+    !/^\/pdf\/[^/]+\.pdf$/.test(pdfUrl.pathname)
+  ) {
+    throw new Error(`Unsafe AI Safety Atlas PDF download URL: ${pdfUrl.href}`);
+  }
+
+  return `*${CHAPTER_FILES_PREFIX} [View Markdown](${markdownUrl.href}) · [Download PDF](${pdfUrl.href})*`;
+}
+
+function canonicalAtlasPageUrl(pageUrl: string): string {
+  const url = new URL(pageUrl);
+  url.search = "";
+  url.hash = "";
+  if (!url.pathname.endsWith("/")) url.pathname += "/";
+  return url.href;
+}
+
 /**
  * Atlas embeds a machine-readable metadata comment on every HTML page, e.g.
  *   <!-- … Authors: Markov Grey, Charbel-Raphaël Segerie  Version: v1 … -->
@@ -52,6 +106,65 @@ interface MediaEmbed {
   kind: "img" | "video";
   src: string;
   alt: string;
+}
+
+interface AtlasNotebox {
+  title: string;
+  readingTime: string;
+}
+
+/**
+ * Atlas renders optional asides as `.notebox-wrapper` elements, while its
+ * chapter Markdown export flattens them into an ordinary bold heading and body.
+ * Capture the UI metadata from HTML so the native Markdown path can restore the
+ * authored boundary as a closed Lens callout.
+ */
+function atlasNoteboxes(doc: Document): AtlasNotebox[] {
+  return Array.from(doc.querySelectorAll(".notebox-wrapper"))
+    .map((wrapper) => {
+      const content = wrapper.querySelector(".notebox-content");
+      const title =
+        content?.getAttribute("data-notebox-title")?.trim() ||
+        wrapper.querySelector(".font-bold")?.textContent?.trim() ||
+        "";
+      const readingTime =
+        content?.getAttribute("data-notebox-time")?.replace(/\s+/g, " ").trim() || "";
+      return { title, readingTime };
+    })
+    .filter((box) => box.title.length > 0);
+}
+
+function escapeDirectiveAttribute(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function wrapAtlasNoteboxes(md: string, noteboxes: AtlasNotebox[]): string {
+  let result = md;
+  for (const box of noteboxes) {
+    const lines = result.split("\n");
+    const marker = `**${box.title}**`;
+    const start = lines.findIndex((line) => line.trim() === marker);
+    if (start < 0) continue;
+
+    // Atlas noteboxes are section-level asides. The next Markdown heading is
+    // the first content outside the aside; if there is none, it runs to EOF.
+    let end = lines.findIndex((line, index) => index > start && /^#{1,6}\s+\S/.test(line));
+    if (end < 0) end = lines.length;
+
+    const body = lines
+      .slice(start + 1, end)
+      .join("\n")
+      .trim();
+    if (!body) continue;
+
+    const time = box.readingTime
+      ? ` · ${box.readingTime}${/\bread\b/i.test(box.readingTime) ? "" : " read"}`
+      : "";
+    const title = escapeDirectiveAttribute(`${box.title} — Optional${time}`);
+    const callout = `:::callout {title="${title}" tone="neutral" collapse="closed"}\n${body}\n\n:::\n`;
+    result = [...lines.slice(0, start), callout, ...lines.slice(end)].join("\n");
+  }
+  return result;
 }
 
 /**
@@ -231,6 +344,18 @@ export const aiSafetyAtlasAdapter: SiteAdapter = {
     return host === "ai-safety-atlas.com" && pathname.includes("/chapters/");
   },
 
+  resolveFetchUrls(ctx: AdapterContext): string[] {
+    if (/^\/chapters\/v1\/[^/]+\.md$/.test(ctx.pathname)) {
+      throw new Error(
+        "Import a specific AI Safety Atlas section page, not a whole-chapter Markdown download",
+      );
+    }
+    if (/^\/chapters\/v1\/[^/]+\/[^/]+\.md$/.test(ctx.pathname)) {
+      return [ctx.url.replace(/\.md(?:[?#].*)?$/, "/")];
+    }
+    return [ctx.url];
+  },
+
   extract(doc: Document, ctx: AdapterContext): AdapterExtract | null {
     // Direct `.md` URL (no companion HTML available): use it as-is. NOTE: the
     // HTML-only Acknowledgements can't be recovered on this path (extract() is
@@ -259,7 +384,9 @@ export const aiSafetyAtlasAdapter: SiteAdapter = {
       .forEach((e) => e.remove());
 
     const media = mediaEmbeds(doc);
+    const noteboxes = atlasNoteboxes(doc);
     const authors = atlasAuthors(ctx.html);
+    const bodyPrefixMarkdown = atlasDownloadLinks(doc, ctx.url);
     // The `.md` export omits the Acknowledgements; re-append it from the HTML.
     // (The HTML-fallback body below already contains it inline.)
     const acknowledgements = acknowledgementsMarkdown(doc);
@@ -267,8 +394,12 @@ export const aiSafetyAtlasAdapter: SiteAdapter = {
 
     return {
       bodyMarkdownUrl: mdUrl,
+      bodyPrefixMarkdown,
       transformMarkdown: (raw) => {
-        const body = injectMedia(cleanAtlasMarkdown(raw), media);
+        const body = wrapAtlasNoteboxes(
+          injectMedia(cleanAtlasMarkdown(raw), media),
+          noteboxes,
+        );
         return acknowledgements ? `${body}\n\n${acknowledgements}` : body;
       },
       bodyHtml: article.innerHTML,
@@ -276,6 +407,7 @@ export const aiSafetyAtlasAdapter: SiteAdapter = {
       author: authors.length > 0 ? authors : [SITE_NAME],
       published: "",
       siteName: SITE_NAME,
+      canonicalUrl: canonicalAtlasPageUrl(ctx.url),
     };
   },
 };

@@ -331,6 +331,7 @@ describe("DELETE /api/add-article/:id and POST /:id/retry", () => {
     expect(mockQueue.add).toHaveBeenCalledWith(
       "https://example.com/a",
       "stub",
+      "job1",
     );
   });
 

@@ -1,19 +1,25 @@
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import type { ArticleImportMode, ArticleJob, ArticleMeta } from "./types";
-import {
-  fetchFirstHtml,
-  fetchRawHtml,
-  fetchRenderedHtml,
-  fetchRawBytes,
-  looksLikePdf,
-} from "./fetch";
-import { extractArticle } from "./extract";
-import { extractPdfSmart, embedPdfImages } from "./pdf";
-import { adapterContext, resolveFetchUrls } from "./adapters";
+import { fetchRawBytes } from "./fetch";
+import { embedPdfImages } from "./pdf";
 import { dedupUrlVariants } from "./url-normalize";
-import { normalizeMetaWithLlm } from "./meta-normalize";
 import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
-import { verifyAndRefine } from "./claude";
+import {
+  ArticleReviewRejectedError,
+  REVIEW_MODEL,
+  REVIEW_VERSION,
+  reviewArticle,
+  type ReviewOutcome,
+} from "./claude";
+import { buildSourceEvidence, writeSourceEvidence } from "./source-evidence";
+import { normalizeArticleBody } from "./normalize-article";
+import { assertArticleValid, validateArticleDraft } from "./platform-validation";
+import { articleReviewDigest } from "./review-digest";
+import {
+  createMemoryArticleReviewReporter,
+  type ArticleReviewReporter,
+} from "./review-report";
 import {
   generateArticleMarkdown,
   generateArticleStubMarkdown,
@@ -36,25 +42,24 @@ import { importVideo } from "../add-video/pipeline";
 import { maybeCreateLens } from "../lens-doc";
 
 const WORK_BASE = "/tmp/articles";
+const EVIDENCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+let lastEvidencePrune = 0;
+
+async function pruneExpiredEvidence(): Promise<void> {
+  if (Date.now() - lastEvidencePrune < 24 * 60 * 60 * 1000) return;
+  lastEvidencePrune = Date.now();
+  for (const entry of await fs.readdir(WORK_BASE, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(WORK_BASE, entry.name);
+    const stat = await fs.stat(full).catch(() => null);
+    if (stat && stat.mtimeMs < Date.now() - EVIDENCE_RETENTION_MS) {
+      await fs.rm(full, { recursive: true }).catch(() => {});
+    }
+  }
+}
 // Below this the extraction almost certainly failed (empty/wrong container)
 // rather than producing a real article body.
 const MIN_ARTICLE_CHARS = 200;
-// Below this, the raw fetch is likely a JS-only skeleton — try the render tier.
-const RENDER_ESCALATE_CHARS = 1000;
-// Assessment flags that route an extraction to the Claude QC pass. Calibrated
-// against the 120-article verdicts: these are the precise signals (thin &
-// low-consensus predict broken bodies; no-author/publisher-author flag metadata
-// to repair). `no-date` is intentionally excluded — it's rarely fixable (the
-// date usually isn't on the page) and would route many articles for no gain.
-// `truncation` is also excluded: paywall teasers are short and already caught by
-// `thin`, while a non-terminal ending alone is too noisy to route on.
-const ROUTE_FLAGS = new Set([
-  "thin",
-  "low-consensus",
-  "link-heavy",
-  "no-author",
-  "publisher-author",
-]);
 
 function relayArticleFolder(): string {
   return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
@@ -171,6 +176,35 @@ function withArticleWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
+function markdownBody(markdown: string): string {
+  const match = markdown.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/);
+  return (match ? markdown.slice(match[0].length) : markdown)
+    .trim()
+    .replace(/^%%\r?\n[\s\S]*?\r?\n%%\r?\n+/, "")
+    .trim();
+}
+
+export function assertRequiredBodyPrefix(
+  body: string,
+  requiredPrefix?: string,
+): void {
+  if (!requiredPrefix) return;
+  const trimmed = body.trimStart();
+  const occurrences = trimmed.split(requiredPrefix).length - 1;
+  if (
+    occurrences !== 1 ||
+    (trimmed !== requiredPrefix && !trimmed.startsWith(`${requiredPrefix}\n\n`))
+  ) {
+    throw new Error(
+      "The mandatory source download links were removed, changed, moved, or duplicated during article processing",
+    );
+  }
+}
+
+function occurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
 /**
  * Readable publisher from a URL host, e.g. "https://bluedot.org/x" → "Bluedot".
  * Uses the registrable label (the part before the public suffix) rather than the
@@ -222,14 +256,17 @@ export function ensureRequiredMeta(
 export async function processArticle(
   job: ArticleJob,
   signal?: AbortSignal,
+  suppliedReporter?: ArticleReviewReporter,
 ): Promise<void> {
   console.log(`[add-article] Processing ${job.url}`);
+  void pruneExpiredEvidence();
   const createdDate = new Date().toISOString().slice(0, 10);
   const folder = relayArticleFolder();
   const topFolder = folder.split("/")[0];
   const behavior = articleImportBehavior(job.importMode);
   const isStubOnly = behavior.stubOnly;
-  const setStage = (stage: string) => {
+  const reporter = suppliedReporter ?? createMemoryArticleReviewReporter(job);
+  const setStage = async (stage: string) => {
     // A cancelled/deadlined job must actually STOP — Promise.race in the queue
     // settles the job status but cannot kill this pipeline, so every stage
     // boundary re-checks the signal. Without this, a "cancelled" job kept
@@ -238,6 +275,7 @@ export async function processArticle(
     signal?.throwIfAborted();
     job.stage = stage;
     job.updated_at = new Date().toISOString();
+    await reporter.stage(stage);
   };
 
   // YouTube URLs import the video's transcript through the video pipeline
@@ -251,7 +289,7 @@ export async function processArticle(
   // Reject the common duplicate case before downloading and parsing the page.
   // A matched stub is retained for a later full import to promote in place.
   let existingStub: ExistingArticleMatch | null = null;
-  setStage("checking-duplicates");
+  await setStage("checking-duplicates");
   try {
     const existing = await findExistingArticle([job.url], signal);
     if (existing) {
@@ -278,87 +316,25 @@ export async function processArticle(
     console.warn(`[add-article] early source_url dedup check failed, proceeding: ${err}`);
   }
 
-  // 1. Fetch raw HTML (SSRF-guarded) and extract deterministically. An adapter
-  //    may redirect the fetch to a better source (e.g. arXiv abstract → ar5iv
-  //    full text, LessWrong → the GreaterWrong mirror when LW rate-limits us);
-  //    the cited source_url stays canonical.
-  setStage("fetching");
-  let ex: Awaited<ReturnType<typeof extractArticle>> | null = null;
-  let rawErr: unknown = null;
-  let detectedPdf = false;
-  try {
-    const candidates = resolveFetchUrls(adapterContext(job.url, ""));
-    if (candidates.length === 1) {
-      // Single candidate (no multi-source adapter): fetch bytes once so we can
-      // detect a PDF; non-PDF bytes decode to HTML with no second fetch.
-      const { bytes, contentType, finalUrl } = await fetchRawBytes(
-        candidates[0],
-        signal,
-      );
-      if (looksLikePdf(contentType, bytes)) {
-        detectedPdf = true;
-        setStage("parsing-pdf");
-        ex = await extractPdfSmart(bytes, job.url, signal);
-      } else {
-        const html = new TextDecoder("utf-8").decode(bytes);
-        ex = await extractArticle(html, finalUrl, {
-          sourceUrl: job.url,
-          fetchText: (u) => fetchRawHtml(u, signal),
-        });
-      }
-    } else {
-      // Multiple HTML candidates (e.g. arXiv html → ar5iv) — never PDFs.
-      const { html, url: fetchedFrom } = await fetchFirstHtml(candidates, signal);
-      ex = await extractArticle(html, fetchedFrom, {
-        sourceUrl: job.url,
-        fetchText: (u) => fetchRawHtml(u, signal),
-      });
-    }
-  } catch (err) {
-    rawErr = err;
-    if (signal?.aborted) throw err; // cancelled/timed out — no render fallback
-    console.warn(`[add-article] Raw fetch/extract failed: ${err}`);
-  }
-
-  // 2. Escalate to RENDERED HTML (Jina browser engine) when the raw result is a
-  //    JS-only skeleton or the raw fetch was blocked — Jina renders from its own
-  //    network, so it also clears some bot-blocks. Skipped for link-outs (a
-  //    short body that points elsewhere won't grow when rendered). Keep whichever
-  //    extraction captured more.
-  // Skip the render tier for PDFs — Jina would just re-fetch the binary.
-  const needsRender =
-    !detectedPdf &&
-    (!ex || (!ex.linkedOut && ex.body.length < RENDER_ESCALATE_CHARS));
-  if (needsRender) {
-    setStage("rendering");
-    try {
-      const rendered = await fetchRenderedHtml(job.url, signal);
-      // Same opts as the raw path: without fetchText, an arXiv page arriving
-      // via the render tier silently skips the abs-page metadata enrichment,
-      // and an Atlas .md fetch would ignore the job's cancel signal.
-      const exRendered = await extractArticle(rendered, job.url, {
-        sourceUrl: job.url,
-        fetchText: (u) => fetchRawHtml(u, signal),
-      });
-      if (!ex || exRendered.body.length > ex.body.length) {
-        console.log(
-          `[add-article] Used rendered HTML (${exRendered.body.length} chars vs raw ${ex?.body.length ?? 0})`,
-        );
-        ex = exRendered;
-      }
-    } catch (err) {
-      if (!ex) {
-        throw new Error(
-          `Could not fetch article (raw: ${rawErr}; render: ${err})`,
-        );
-      }
-      console.warn(`[add-article] Render fallback failed, keeping raw: ${err}`);
-    }
-  }
-
-  if (!ex) {
-    throw rawErr instanceof Error ? rawErr : new Error("Extraction failed");
-  }
+  // Fetch once and retain the source independently of the chosen extractor.
+  // Claude reads only these local evidence files; it never fetches the source.
+  await setStage("fetching-source-evidence");
+  const workDir = path.join(WORK_BASE, job.id);
+  const evidence = await buildSourceEvidence(job.url, signal);
+  await writeSourceEvidence(workDir, evidence);
+  const ex = evidence.extraction;
+  await reporter.extraction({
+    via: ex.via,
+    linked_out: ex.linkedOut,
+    assessment_flags: ex.assessment.flags,
+    source_digest: evidence.manifest.source_digest,
+    source_kind: evidence.manifest.source_kind,
+    media_type: evidence.manifest.media_type,
+    fetched_url: evidence.manifest.fetched_url,
+    candidate_chars: ex.body.length,
+    source_text_chars: evidence.manifest.source_text_chars,
+    alignment: evidence.manifest.alignment,
+  });
 
   // 3. Validate.
   if (!ex.meta.title) {
@@ -374,72 +350,9 @@ export async function processArticle(
       `Extracted article suspiciously short (${ex.body.length} chars) — aborting`,
     );
   }
-  const authorIsFallback = ex.meta.author.length === 0;
-  const dateIsFallback = !ex.meta.published;
   let meta = ensureRequiredMeta(ex.meta, ex.siteName, createdDate);
   let body = ex.body;
-
-  // 3.2. ALWAYS-ON metadata normalizer — one cheap tool-less LLM read of the
-  //      body's first/last chunks. Fixes what the deterministic readers can't
-  //      see (dates printed only in the text, publisher-as-author on PDFs)
-  //      uniformly on every import, under strict anti-fabrication merge rules.
-  //      No-op on any failure (e.g. no claude CLI in local dev).
-  {
-    setStage("metadata");
-    meta = await normalizeMetaWithLlm({
-      meta,
-      siteName: ex.siteName,
-      createdDate,
-      authorIsFallback,
-      dateIsFallback,
-      dateFromPdfInfo: ex.via.startsWith("pdf"),
-      bodyStart: body.slice(0, 5000),
-      bodyEnd: body.slice(-1500),
-    });
-  }
-
-  // 3.5. Claude Sonnet QC pass — SELECTIVE. Calibration showed a source-blind
-  //      confidence score can't reliably triage quality, but a few specific
-  //      flags ARE precise (thin/low-consensus = likely-broken body;
-  //      no-author/publisher-author = metadata to repair). We invoke Claude only
-  //      on flagged extractions; clean ones pass deterministically (instant).
-  //      The pass verifies + repairs metadata + gates paywalls/blocks +
-  //      falls back on formatting; it degrades gracefully if the CLI is absent.
-  const needsVerify =
-    !isStubOnly && ex.assessment.flags.some((f) => ROUTE_FLAGS.has(f));
-  if (process.env.ARTICLE_SKIP_VERIFY !== "1" && needsVerify) {
-    setStage("quality-check");
-    const articleMd = generateArticleMarkdown(meta, body, createdDate);
-    const outcome = await verifyAndRefine(
-      path.join(WORK_BASE, job.id),
-      articleMd,
-      meta,
-      body,
-    );
-    if (outcome.verdict) {
-      const s = outcome.verdict.status;
-      if (s === "paywalled") {
-        throw new Error(
-          "Content is paywalled — only a public preview is available, not the full article.",
-        );
-      }
-      if (s === "blocked") {
-        throw new Error(
-          "Page is not publicly accessible (bot-verification / access denied).",
-        );
-      }
-      if (s === "not_article") {
-        throw new Error("URL does not point to a single article.");
-      }
-      if (s === "truncated") {
-        throw new Error(
-          "Article appears incomplete (truncated or paywalled) — the full text is not publicly available.",
-        );
-      }
-      meta = outcome.meta;
-      body = outcome.body;
-    }
-  }
+  const requiredBodyPrefix = ex.requiredBodyPrefixMarkdown;
   job.title = meta.title;
 
   // 4. Duplicate detection by SOURCE URL. The real duplicate signal is the
@@ -450,8 +363,8 @@ export async function processArticle(
   //    article via a mirror or a utm-tagged link is refused too. Degrades
   //    gracefully: if the relay check errors, fall through to the filename
   //    guard below rather than blocking the import.
-  setStage("checking-duplicates");
-  const filenameBase = generateArticleFilenameBase(meta.author, meta.title);
+  await setStage("checking-duplicates");
+  let filenameBase = generateArticleFilenameBase(meta.author, meta.title);
   if (!filenameBase) {
     throw new Error(`Could not derive filename from title: ${meta.title}`);
   }
@@ -494,17 +407,25 @@ export async function processArticle(
   //      /attachments/ and replace its placeholder with the embed. Images that
   //      fail to upload are dropped (the text stays); never fails the import.
   if (!isStubOnly && ex.images?.length) {
-    setStage("uploading-images");
+    await setStage("uploading-images");
+    const beforeImages = body;
     body = await embedPdfImages(body, ex.images, filenameBase, (p, png, mime) =>
       createRelayAttachment(topFolder, p, png, mime, signal),
     );
+    await reporter.programmatic({
+      code: "programmatic.pdf-images-hosted",
+      count: ex.images.filter((_, index) => beforeImages.includes(`![[__pdfimg_${index}__]]`)).length,
+      before: beforeImages,
+      after: body,
+    });
   }
 
   // 4.6. Rehost arXiv/ar5iv figure hotlinks as attachments — mirror-hosted
   //      asset URLs rot, and the library should be self-contained. Failures
   //      keep the external URL (an upgrade, never a gate).
   if (!isStubOnly && ex.via === "arxiv") {
-    setStage("uploading-images");
+    await setStage("uploading-images");
+    const beforeImages = body;
     body = await hostRemoteImages(body, filenameBase, {
       hostPattern: ARXIV_IMAGE_HOSTS,
       fetchImage: async (u) => {
@@ -514,13 +435,139 @@ export async function processArticle(
       upload: (p, data, mime) =>
         createRelayAttachment(topFolder, p, data, mime, signal),
     });
+    if (body !== beforeImages) {
+      await reporter.programmatic({
+        code: "programmatic.arxiv-images-hosted",
+        count: Math.max(
+          1,
+          occurrences(body, "raw.githubusercontent.com/Lens-Academy/lens-edu-staging") -
+            occurrences(beforeImages, "raw.githubusercontent.com/Lens-Academy/lens-edu-staging"),
+        ),
+        before: beforeImages,
+        after: body,
+      });
+    }
+  }
+
+  // Safe normalization happens before validation. The first validation's
+  // warnings and errors are review evidence; hybrid errors are repairable by
+  // Claude, while the second validation is the hard gate.
+  let reviewed = false;
+  if (!isStubOnly) {
+    await setStage("normalizing");
+    const normalized = normalizeArticleBody(body, meta.source_url || job.url);
+    body = normalized.body;
+    assertRequiredBodyPrefix(body, requiredBodyPrefix);
+    if (normalized.changes.length) {
+      console.log(`[add-article] Applied normalizations: ${JSON.stringify(normalized.changes)}`);
+      for (const change of normalized.changes) {
+        await reporter.programmatic({
+          code: change.code,
+          count: change.count,
+          before: change.samples[0]?.before,
+          after: change.samples[0]?.after,
+          detail: { samples: change.samples },
+        });
+      }
+    }
+
+    await setStage("validating-draft");
+    let draft = generateArticleMarkdown(meta, body, createdDate);
+    let validationStarted = Date.now();
+    let validation = await validateArticleDraft(
+      `articles/${filenameBase}.md`,
+      draft,
+      { signal },
+    );
+    await reporter.validation("initial", validation, Date.now() - validationStarted);
+
+    await setStage("source-review");
+    let reviewStarted = Date.now();
+    const metaBeforeReview = meta;
+    let outcome: ReviewOutcome;
+    try {
+      outcome = await reviewArticle(workDir, draft, meta, validation.issues, 0, signal);
+      await reporter.llm(
+        0,
+        outcome.review,
+        validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+        metaBeforeReview,
+        outcome.meta,
+        Date.now() - reviewStarted,
+      );
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (error instanceof ArticleReviewRejectedError) {
+        await reporter.llmRejected(
+          0,
+          error.review,
+          validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+          metaBeforeReview,
+          Date.now() - reviewStarted,
+        );
+      } else {
+        await reporter.llmFailure(0, error, Date.now() - reviewStarted);
+      }
+      throw error;
+    }
+    meta = outcome.meta;
+    body = markdownBody(outcome.markdown);
+    assertRequiredBodyPrefix(body, requiredBodyPrefix);
+    filenameBase = generateArticleFilenameBase(meta.author, meta.title);
+    draft = generateArticleMarkdown(meta, body, createdDate);
+
+    await setStage("validating-repair");
+    validationStarted = Date.now();
+    validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
+    await reporter.validation("post-review", validation, Date.now() - validationStarted);
+    if (!validation.valid) {
+      await setStage("repair-review");
+      reviewStarted = Date.now();
+      const metaBeforeRepair = meta;
+      try {
+        outcome = await reviewArticle(workDir, draft, meta, validation.issues, 1, signal);
+        await reporter.llm(
+          1,
+          outcome.review,
+          validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+          metaBeforeRepair,
+          outcome.meta,
+          Date.now() - reviewStarted,
+        );
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        if (error instanceof ArticleReviewRejectedError) {
+          await reporter.llmRejected(
+            1,
+            error.review,
+            validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+            metaBeforeRepair,
+            Date.now() - reviewStarted,
+          );
+        } else {
+          await reporter.llmFailure(1, error, Date.now() - reviewStarted);
+        }
+        throw error;
+      }
+      meta = outcome.meta;
+      body = markdownBody(outcome.markdown);
+      assertRequiredBodyPrefix(body, requiredBodyPrefix);
+      filenameBase = generateArticleFilenameBase(meta.author, meta.title);
+      draft = generateArticleMarkdown(meta, body, createdDate);
+      validationStarted = Date.now();
+      validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
+      await reporter.validation("post-repair-review", validation, Date.now() - validationStarted);
+    }
+    assertArticleValid(validation);
+    reviewed = true;
+    job.title = meta.title;
   }
 
   // 5. Resolve a unique filename — disambiguating DISTINCT pages that share a
   //    base name (e.g. each Atlas chapter's "Introduction") — and write it,
   //    serialized so two concurrent imports can't pick the same name and
   //    overwrite each other.
-  setStage("writing");
+  await setStage("writing");
   const candidatePaths = articleFilenameCandidates(
     filenameBase,
     meta.source_url || job.url,
@@ -543,7 +590,7 @@ export async function processArticle(
         refreshed.stubContent,
         `${topFolder}${refreshed.path}`,
       );
-      const promotedMd = generateArticleMarkdown(
+      const promotedBase = generateArticleMarkdown(
         meta,
         body,
         parsed.created || createdDate,
@@ -553,6 +600,26 @@ export async function processArticle(
         },
       );
       const promotedPath = `${topFolder}${refreshed.path}`;
+      const promotedMd = reviewed
+        ? generateArticleMarkdown(meta, body, parsed.created || createdDate, {
+            discussionBlocks: parsed.discussionBlocks,
+            extraTags: parsed.extraTags,
+            review: {
+              reviewed: createdDate,
+              version: REVIEW_VERSION,
+              model: REVIEW_MODEL,
+              digest: articleReviewDigest(promotedBase),
+              sourceDigest: evidence.manifest.source_digest,
+              sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
+              sourceKind: evidence.manifest.source_kind,
+            },
+          })
+        : promotedBase;
+      const finalValidationStarted = Date.now();
+      const finalValidation = await validateArticleDraft(refreshed.path.replace(/^\//, ""), promotedMd, { signal });
+      await reporter.validation("final", finalValidation, Date.now() - finalValidationStarted);
+      assertArticleValid(finalValidation);
+      await reporter.finalDocument(promotedMd);
       await createRelayDoc(promotedPath, promotedMd, signal);
       return promotedPath;
     }
@@ -562,13 +629,34 @@ export async function processArticle(
     if (!chosen) {
       throw new Error(`Document already exists: ${candidatePaths[0]}`);
     }
-    const markdown = isStubOnly
+    const baseMarkdown = isStubOnly
       ? generateArticleStubMarkdown(meta, createdDate)
       : generateArticleMarkdown(meta, body, createdDate);
+    const markdown = reviewed
+      ? generateArticleMarkdown(meta, body, createdDate, {
+          review: {
+            reviewed: createdDate,
+            version: REVIEW_VERSION,
+            model: REVIEW_MODEL,
+            digest: articleReviewDigest(baseMarkdown),
+            sourceDigest: evidence.manifest.source_digest,
+            sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
+            sourceKind: evidence.manifest.source_kind,
+          },
+        })
+      : baseMarkdown;
+    if (reviewed) {
+      const finalValidationStarted = Date.now();
+      const finalValidation = await validateArticleDraft(chosen.replace(`${topFolder}/`, ""), markdown, { signal });
+      await reporter.validation("final", finalValidation, Date.now() - finalValidationStarted);
+      assertArticleValid(finalValidation);
+    }
+    await reporter.finalDocument(markdown);
     await createRelayDoc(chosen, markdown, signal);
     return chosen;
   });
   job.relay_url = editorOpenUrl(mdPath);
+  job.relay_path = mdPath;
   job.updated_at = new Date().toISOString();
   console.log(
     `[add-article] Wrote ${mdPath} (via ${ex.via}, ${body.length} chars)`,
@@ -578,7 +666,7 @@ export async function processArticle(
   //    straight into a module. A lens failure must not fail the import — the
   //    article is already saved.
   if (behavior.createLens) {
-    setStage("creating-lens");
+    await setStage("creating-lens");
     try {
       const lensPath = await maybeCreateLens({
         docPath: mdPath,

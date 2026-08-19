@@ -25,6 +25,7 @@
     "discord:start": "tsx watch server/discord/dev-server.ts",
     "discord:setup": "echo 'Set DISCORD_BOT_TOKEN env var and run npm run discord:start'",
     "generate-link": "tsx scripts/generate-share-link.ts",
+    "article-review": "tsx scripts/article-review.ts",
     "start:prod": "tsx server/prod-server.ts"
   },
   "dependencies": {

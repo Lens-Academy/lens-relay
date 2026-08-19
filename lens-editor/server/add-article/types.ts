@@ -26,6 +26,23 @@ export interface ArticleJob {
   stage?: string;
   error?: string;
   relay_url?: string;
+  relay_path?: string;
+  /** Persistent troubleshooting report (full report is server-local). */
+  report_id?: string;
+  report_persistence?: "pending" | "persisted" | "failed";
+  report_summary?: {
+    programmatic_fixes: number;
+    validator_detected_llm_fixes: number;
+    llm_detected_llm_fixes: number;
+    validator_errors: number;
+    validator_warnings: number;
+    llm_findings: number;
+    validator_fixed_by_llm: number;
+    validator_remaining: number;
+    validator_introduced: number;
+    llm_findings_unrepaired: number;
+  };
+  retry_of?: string;
   /** What the importer should write. */
   importMode: ArticleImportMode;
   /** Set when the URL is a single YouTube video — classified once at enqueue so

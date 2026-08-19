@@ -6,6 +6,20 @@ function flushMicrotasks() {
 }
 
 describe("ArticleJobQueue", () => {
+  it("fails before processing when mandatory report creation fails", async () => {
+    const processJob = vi.fn(async () => {});
+    const queue = new ArticleJobQueue({
+      processJob,
+      reporterFactory: async () => { throw new Error("report disk unavailable"); },
+    });
+    const job = queue.add("https://example.com/report-failure", "article");
+    await flushMicrotasks();
+    expect(processJob).not.toHaveBeenCalled();
+    expect(queue.get(job.id)?.status).toBe("failed");
+    expect(queue.get(job.id)?.report_persistence).toBe("failed");
+    expect(queue.get(job.id)?.error).toContain("Report persistence failed before import started");
+  });
+
   // Prevents: caller observing 'processing' before the POST response is built
   it("returns jobs as queued before processing starts", () => {
     const queue = new ArticleJobQueue({ processJob: vi.fn(async () => {}) });

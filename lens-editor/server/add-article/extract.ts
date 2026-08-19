@@ -49,6 +49,8 @@ export interface ExtractResult {
   /** PDF figure images (PDF path only) — uploaded + embedded by the pipeline,
    *  replacing `![[__pdfimg_N__]]` placeholders in the body. */
   images?: PdfPageImage[];
+  /** Adapter-authored prefix that must survive normalization and LLM review. */
+  requiredBodyPrefixMarkdown?: string;
 }
 
 // A post is treated as a "link-out" when the body is short AND points at an
@@ -364,6 +366,7 @@ interface Chosen {
   canonicalUrl?: string;
   /** True for a site adapter (owns its byline/date); false for the generic path. */
   adapterAuthored: boolean;
+  requiredBodyPrefixMarkdown?: string;
 }
 
 /**
@@ -434,6 +437,8 @@ export async function extractArticle(
       } else if (ex.bodyHtml) {
         md = htmlToMarkdown(ex.bodyHtml, url);
       }
+      const bodyPrefix = ex.bodyPrefixMarkdown?.trim();
+      if (bodyPrefix && md) md = `${bodyPrefix}\n\n${md.trim()}`;
       if (md.length >= MIN_ADAPTER_CHARS) {
         body = md;
         chosen = {
@@ -444,6 +449,7 @@ export async function extractArticle(
           siteName: ex.siteName,
           canonicalUrl: ex.canonicalUrl,
           adapterAuthored: true,
+          requiredBodyPrefixMarkdown: bodyPrefix,
         };
       }
     }
@@ -636,5 +642,6 @@ export async function extractArticle(
     via: chosen.via,
     linkedOut: onArxiv ? false : looksLikeLinkOut(body),
     assessment,
+    requiredBodyPrefixMarkdown: chosen.requiredBodyPrefixMarkdown,
   };
 }

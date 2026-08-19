@@ -186,7 +186,7 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
     if (active) {
       return c.json({ error: "URL is already queued", id: active.id }, 409);
     }
-    const retried = queue.add(job.url, job.importMode);
+    const retried = queue.add(job.url, job.importMode, job.id);
     return c.json({ id: retried.id, status: "queued" });
   });
 
