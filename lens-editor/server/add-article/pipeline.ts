@@ -115,6 +115,7 @@ async function processYouTubeVideo(
   }
   if (existingPath) {
     const topFolder = relayTranscriptFolder().split("/")[0];
+    job.relay_url = editorOpenUrl(topFolder + existingPath);
     throw new Error(
       `This video was already imported: ${topFolder}${existingPath}`,
     );

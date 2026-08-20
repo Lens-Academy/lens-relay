@@ -180,7 +180,12 @@ export async function importVideo(
       const failedContent = generateMarkdown({
         title: payload.title,
         channel: payload.channel,
-        url: payload.url,
+        // youtu.be form on purpose: the relay's video-id dedup scan matches
+        // "watch?v=<id>" / "/shorts/<id>" in doc heads, and a failure doc
+        // that matched would block every resubmission of this video until a
+        // human deleted the doc. youtu.be links stay clickable but invisible
+        // to that scan, so retrying just overwrites the failure doc.
+        url: `https://youtu.be/${payload.video_id}`,
         body: `*Transcript processing failed.* You can resubmit this video.\n\nFailed at: ${new Date().toISOString()}`,
       });
       await updateRelayDoc(mdPath, "", failedContent).catch(() => {});

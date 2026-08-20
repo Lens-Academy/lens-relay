@@ -17,9 +17,11 @@ export interface ArticleJob {
   url: string;
   title?: string;
   status: ArticleJobStatus;
-  /** Current pipeline stage while processing ("fetching", "rendering",
-   *  "quality-check", "uploading-images", "writing", "creating-lens") — lets
-   *  the status UI distinguish a slow stage from a stuck job. */
+  /** Current pipeline stage while processing — lets the status UI distinguish
+   *  a slow stage from a stuck job. Articles: "fetching", "rendering",
+   *  "quality-check", "uploading-images", "writing", "creating-lens".
+   *  YouTube videos: "checking-duplicates", "fetching-transcript",
+   *  "preparing", "formatting", "aligning", "writing", "creating-lens". */
   stage?: string;
   error?: string;
   relay_url?: string;

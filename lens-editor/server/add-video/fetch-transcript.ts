@@ -172,18 +172,30 @@ export async function fetchYouTubeTranscript(
   }
   const track = pickCaptionTrack(tracks);
 
-  const resp = await fetchBytesWithTimeout(toJson3Url(track.baseUrl), {
-    timeoutMs: CAPTION_TIMEOUT_MS,
-    maxBytes: CAPTION_MAX_BYTES,
-    signal,
-    headers: { "User-Agent": ANDROID_UA },
-  });
-  if (!resp.ok) {
-    throw new Error(`Transcript fetch returned ${resp.status}`);
-  }
-  const text = bytesToText(resp.bytes);
-  if (!text) {
-    throw new Error("Transcript response was empty");
+  // One bounded retry, matching the mint's resilience: a transient timedtext
+  // 5xx or empty body shouldn't fail the whole job.
+  let text = "";
+  for (let attempt = 1; ; attempt++) {
+    const resp = await fetchBytesWithTimeout(toJson3Url(track.baseUrl), {
+      timeoutMs: CAPTION_TIMEOUT_MS,
+      maxBytes: CAPTION_MAX_BYTES,
+      signal,
+      headers: { "User-Agent": ANDROID_UA },
+    });
+    if (resp.ok) {
+      text = bytesToText(resp.bytes);
+      if (text) break;
+    }
+    if (attempt >= 2) {
+      throw new Error(
+        resp.ok
+          ? "Transcript response was empty"
+          : `Transcript fetch returned ${resp.status}`,
+      );
+    }
+    console.warn(
+      `[fetch-transcript] caption fetch attempt ${attempt} for ${input.video_id} failed (status ${resp.status}, ${resp.bytes.byteLength} bytes), retrying`,
+    );
   }
   const raw = JSON.parse(text) as TranscriptRaw;
   if (!raw.events?.some((e) => e.segs)) {
