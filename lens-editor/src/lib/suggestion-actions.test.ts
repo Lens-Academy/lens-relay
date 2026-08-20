@@ -1,13 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import * as Y from 'yjs';
-import { applySuggestionAction, applySuggestionActions, getAcceptText, getRejectText } from './suggestion-actions';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { applySuggestionActionsViaServer } from './suggestion-actions';
 import type { SuggestionItem } from '../hooks/useSuggestions';
-
-function makeDoc(content: string): Y.Doc {
-  const doc = new Y.Doc();
-  doc.getText('contents').insert(0, content);
-  return doc;
-}
 
 function makeSuggestion(overrides: Partial<SuggestionItem> & { type: SuggestionItem['type'] }): SuggestionItem {
   return {
@@ -25,174 +18,117 @@ function makeSuggestion(overrides: Partial<SuggestionItem> & { type: SuggestionI
   };
 }
 
-describe('getAcceptText', () => {
-  it('returns content for addition', () => {
-    expect(getAcceptText(makeSuggestion({ type: 'addition', content: 'hello' }))).toBe('hello');
+describe('applySuggestionActionsViaServer', () => {
+  const docId = 'relay-1234-doc-5678';
+  const folderId = 'relay-1234-folder-9abc';
+  const sub = makeSuggestion({
+    type: 'substitution',
+    old_content: 'hello',
+    new_content: 'goodbye',
+    raw_markup: '{~~{"author":"AI"}@@hello~>goodbye~~}',
+    from: 4,
+  });
+  const add = makeSuggestion({
+    type: 'addition',
+    content: 'world',
+    raw_markup: '{++{"author":"AI"}@@world++}',
+    from: 42,
   });
 
-  it('returns empty string for deletion', () => {
-    expect(getAcceptText(makeSuggestion({ type: 'deletion', content: 'bye' }))).toBe('');
+  function mockFetch(body: unknown, status = 200) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.removeItem('lens-share-token');
   });
 
-  it('returns new_content for substitution', () => {
-    expect(getAcceptText(makeSuggestion({ type: 'substitution', old_content: 'old', new_content: 'new' }))).toBe('new');
-  });
-});
+  it('POSTs the apply contract and maps response indices back to SuggestionItems', async () => {
+    const fetchMock = mockFetch({
+      applied: [1],
+      failed: [{ index: 0, reason: 'markup not found' }],
+      remaining_suggestions: 3,
+    });
+    localStorage.setItem('lens-share-token', 'tok-123');
 
-describe('getRejectText', () => {
-  it('returns empty string for addition', () => {
-    expect(getRejectText(makeSuggestion({ type: 'addition', content: 'hello' }))).toBe('');
-  });
+    const result = await applySuggestionActionsViaServer(docId, folderId, [sub, add], 'accept');
 
-  it('returns content for deletion', () => {
-    expect(getRejectText(makeSuggestion({ type: 'deletion', content: 'bye' }))).toBe('bye');
-  });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`/api/relay/suggestions/apply?folder_id=${encodeURIComponent(folderId)}`);
+    expect(init.method).toBe('POST');
+    expect(init.headers['X-Share-Token']).toBe('tok-123');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(JSON.parse(init.body)).toEqual({
+      doc_id: docId,
+      action: 'accept',
+      suggestions: [
+        {
+          raw_markup: sub.raw_markup,
+          type: 'substitution',
+          content: sub.content,
+          old_content: 'hello',
+          new_content: 'goodbye',
+        },
+        {
+          raw_markup: add.raw_markup,
+          type: 'addition',
+          content: 'world',
+          old_content: null,
+          new_content: null,
+        },
+      ],
+    });
 
-  it('returns old_content for substitution', () => {
-    expect(getRejectText(makeSuggestion({ type: 'substitution', old_content: 'old', new_content: 'new' }))).toBe('old');
-  });
-});
-
-describe('applySuggestionAction', () => {
-  it('accept addition: keeps content, removes markup', () => {
-    const markup = '{++{"author":"AI","timestamp":1000}@@world++}';
-    const doc = makeDoc(`Hello ${markup} end`);
-    applySuggestionAction(doc, makeSuggestion({
-      type: 'addition',
-      content: 'world',
-      raw_markup: markup,
-      from: 6,
-    }), 'accept');
-    expect(doc.getText('contents').toString()).toBe('Hello world end');
-  });
-
-  it('reject addition: removes entirely', () => {
-    const markup = '{++{"author":"AI","timestamp":1000}@@world++}';
-    const doc = makeDoc(`Hello ${markup} end`);
-    applySuggestionAction(doc, makeSuggestion({
-      type: 'addition',
-      content: 'world',
-      raw_markup: markup,
-      from: 6,
-    }), 'reject');
-    expect(doc.getText('contents').toString()).toBe('Hello  end');
+    expect(result.applied).toEqual([add]);
+    expect(result.failed).toEqual([sub]);
   });
 
-  it('accept deletion: removes content', () => {
-    const markup = '{--{"author":"AI","timestamp":1000}@@removed--}';
-    const doc = makeDoc(`Keep ${markup} this`);
-    applySuggestionAction(doc, makeSuggestion({
-      type: 'deletion',
-      content: 'removed',
-      raw_markup: markup,
-      from: 5,
-    }), 'accept');
-    expect(doc.getText('contents').toString()).toBe('Keep  this');
+  it('omits X-Share-Token when no token is stored', async () => {
+    const fetchMock = mockFetch({ applied: [0], failed: [], remaining_suggestions: 0 });
+
+    await applySuggestionActionsViaServer(docId, folderId, [add], 'reject');
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.headers['X-Share-Token']).toBeUndefined();
+    expect(JSON.parse(init.body).action).toBe('reject');
   });
 
-  it('reject deletion: keeps content', () => {
-    const markup = '{--{"author":"AI","timestamp":1000}@@removed--}';
-    const doc = makeDoc(`Keep ${markup} this`);
-    applySuggestionAction(doc, makeSuggestion({
-      type: 'deletion',
-      content: 'removed',
-      raw_markup: markup,
-      from: 5,
-    }), 'reject');
-    expect(doc.getText('contents').toString()).toBe('Keep removed this');
+  it('returns an empty result without fetching for an empty batch', async () => {
+    const fetchMock = mockFetch({ applied: [], failed: [], remaining_suggestions: 0 });
+
+    const result = await applySuggestionActionsViaServer(docId, folderId, [], 'accept');
+
+    expect(result).toEqual({ applied: [], failed: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('accept substitution: keeps new content', () => {
-    const markup = '{~~{"author":"AI","timestamp":1000}@@hello~>goodbye~~}';
-    const doc = makeDoc(`Say ${markup} now`);
-    applySuggestionAction(doc, makeSuggestion({
-      type: 'substitution',
-      old_content: 'hello',
-      new_content: 'goodbye',
-      raw_markup: markup,
-      from: 4,
-    }), 'accept');
-    expect(doc.getText('contents').toString()).toBe('Say goodbye now');
+  it('throws on a non-ok response so callers keep the whole file visible for retry', async () => {
+    mockFetch({ error: 'boom' }, 502);
+
+    await expect(applySuggestionActionsViaServer(docId, folderId, [add], 'accept'))
+      .rejects.toThrow('Failed to apply suggestions: 502');
   });
 
-  it('reject substitution: keeps old content', () => {
-    const markup = '{~~{"author":"AI","timestamp":1000}@@hello~>goodbye~~}';
-    const doc = makeDoc(`Say ${markup} now`);
-    applySuggestionAction(doc, makeSuggestion({
-      type: 'substitution',
-      old_content: 'hello',
-      new_content: 'goodbye',
-      raw_markup: markup,
-      from: 4,
-    }), 'reject');
-    expect(doc.getText('contents').toString()).toBe('Say hello now');
-  });
+  it('ignores out-of-range indices in the response', async () => {
+    mockFetch({
+      applied: [0, 7],
+      failed: [{ index: -1, reason: 'nope' }, { index: 1, reason: 'markup not found' }],
+      remaining_suggestions: 1,
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-  it('finds markup even if position has shifted', () => {
-    const markup = '{++{"author":"AI","timestamp":1000}@@world++}';
-    const doc = makeDoc(`Extra --- Hello ${markup} end`);
-    applySuggestionAction(doc, makeSuggestion({
-      type: 'addition',
-      content: 'world',
-      raw_markup: markup,
-      from: 5, // stale position
-    }), 'accept');
-    expect(doc.getText('contents').toString()).toBe('Extra --- Hello world end');
-  });
+    const result = await applySuggestionActionsViaServer(docId, folderId, [sub, add], 'accept');
 
-  it('throws if markup not found in document', () => {
-    const doc = makeDoc('No markup here');
-    expect(() =>
-      applySuggestionAction(doc, makeSuggestion({
-        type: 'addition',
-        content: 'world',
-        raw_markup: '{++world++}',
-        from: 0,
-      }), 'accept')
-    ).toThrow('Suggestion no longer found in document');
-  });
-});
-
-describe('applySuggestionActions', () => {
-  const markupA = '{++{"author":"AI","timestamp":1000}@@alpha++}';
-  const markupB = '{--{"author":"AI","timestamp":1000}@@beta--}';
-
-  it('applies all suggestions even though earlier applies shift later positions', () => {
-    // Prevents: one apply shifting document offsets so the next apply's
-    // position hint misses and corrupts content
-    const doc = makeDoc(`Start ${markupA} middle ${markupB} end`);
-    const result = applySuggestionActions(doc, [
-      makeSuggestion({ type: 'addition', content: 'alpha', raw_markup: markupA, from: 6 }),
-      makeSuggestion({ type: 'deletion', content: 'beta', raw_markup: markupB, from: 6 + markupA.length + 8 }),
-    ], 'accept');
-    expect(doc.getText('contents').toString()).toBe('Start alpha middle  end');
-    expect(result.applied.length).toBe(2);
-    expect(result.failed.length).toBe(0);
-  });
-
-  it('continues past a stale suggestion and reports it as failed', () => {
-    // Prevents: one already-resolved suggestion aborting the rest of a bulk accept
-    const doc = makeDoc(`Start ${markupA} end`);
-    const result = applySuggestionActions(doc, [
-      makeSuggestion({ type: 'addition', content: 'gone', raw_markup: '{++gone++}', from: 0 }),
-      makeSuggestion({ type: 'addition', content: 'alpha', raw_markup: markupA, from: 6 }),
-    ], 'accept');
-    expect(doc.getText('contents').toString()).toBe('Start alpha end');
-    expect(result.applied.length).toBe(1);
-    expect(result.failed.length).toBe(1);
-    expect(result.failed[0].raw_markup).toBe('{++gone++}');
-  });
-
-  it('applies the whole batch in a single Y.Doc update', () => {
-    // Prevents: per-suggestion transactions each triggering a server sync
-    // round-trip (the minutes-long "Accept all filtered", 2026-07-02)
-    const doc = makeDoc(`Start ${markupA} middle ${markupB} end`);
-    let updates = 0;
-    doc.on('update', () => { updates += 1; });
-    applySuggestionActions(doc, [
-      makeSuggestion({ type: 'addition', content: 'alpha', raw_markup: markupA, from: 6 }),
-      makeSuggestion({ type: 'deletion', content: 'beta', raw_markup: markupB, from: 30 }),
-    ], 'accept');
-    expect(updates).toBe(1);
+    expect(result.applied).toEqual([sub]);
+    expect(result.failed).toEqual([add]);
+    warn.mockRestore();
   });
 });

@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'react';
 import * as Y from 'yjs';
-import { EVENT_CONNECTION_STATUS, EVENT_LOCAL_CHANGES, STATUS_ERROR, YSweetProvider } from '@y-sweet/client';
+import { YSweetProvider } from '@y-sweet/client';
 import { getClientToken } from '../lib/auth';
 
 export interface DocConnection {
@@ -56,40 +56,6 @@ export function teardownProvider(provider: YSweetProvider): void {
   // 3. Belt and braces: any revival path missed above (or added by a future
   //    @y-sweet/client) becomes a no-op
   p.connect = async () => {};
-}
-
-export function waitForProviderSynced(provider: YSweetProvider, timeoutMs = 10000): Promise<void> {
-  if (!provider.hasLocalChanges) return Promise.resolve();
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error('Timed out waiting for document changes to sync'));
-    }, timeoutMs);
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      provider.off(EVENT_LOCAL_CHANGES, handleLocalChanges);
-      provider.off(EVENT_CONNECTION_STATUS, handleConnectionStatus);
-    };
-
-    const handleLocalChanges = (hasLocalChanges: boolean) => {
-      if (!hasLocalChanges) {
-        cleanup();
-        resolve();
-      }
-    };
-
-    const handleConnectionStatus = (status: string) => {
-      if (status === STATUS_ERROR) {
-        cleanup();
-        reject(new Error('Connection lost before document changes synced'));
-      }
-    };
-
-    provider.on(EVENT_LOCAL_CHANGES, handleLocalChanges);
-    provider.on(EVENT_CONNECTION_STATUS, handleConnectionStatus);
-  });
 }
 
 /**

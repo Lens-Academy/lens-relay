@@ -2,6 +2,7 @@ pub mod api_types;
 pub mod auth;
 pub mod config;
 pub mod critic_scanner;
+pub mod critic_surgical;
 pub mod cwt;
 pub mod doc_connection;
 pub mod doc_resolver;

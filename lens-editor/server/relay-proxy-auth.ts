@@ -76,6 +76,22 @@ export function checkProxyAccess(
     return { allowed: true };
   }
 
+  // POST /suggestions/apply — allowed only if the folder_id query param matches
+  // the token folder (same rule as GET /suggestions; view role is blocked by
+  // the write check above). The relay additionally verifies the doc named in
+  // the body actually belongs to that folder.
+  if (method === 'POST' && path === '/suggestions/apply') {
+    const params = new URLSearchParams(query);
+    const requestedFolder = params.get('folder_id');
+    if (!requestedFolder) {
+      return { allowed: false, reason: 'Suggestions apply requires folder_id parameter' };
+    }
+    if (!requestedFolder.endsWith('-' + folder)) {
+      return { allowed: false, reason: 'Suggestions apply denied for this folder' };
+    }
+    return { allowed: true };
+  }
+
   // GET /suggestions — allowed only if folder_id matches token folder
   if (method === 'GET' && path === '/suggestions') {
     const params = new URLSearchParams(query);

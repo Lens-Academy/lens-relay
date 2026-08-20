@@ -378,6 +378,17 @@ const SEARCH_DEBOUNCE: Duration = Duration::from_secs(2);
 /// - Content docs: debounce 2 seconds, then re-read Y.Text("contents") and upsert
 /// - Folder docs: process immediately, detect added/removed docs, update search index
 const SEARCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Max heavy-lane items (tantivy + title lookups) per worker tick. Keeps a
+/// deep backlog (startup, folder membership change) from freezing the loop —
+/// the fast suggestions lane covers review freshness in the meantime.
+const SEARCH_HEAVY_PER_TICK: usize = 64;
+/// Max fast-lane suggestion rescans per tick, so a huge ready backlog can't
+/// turn one tick into thousands of synchronous body scans.
+const SEARCH_FAST_PER_TICK: usize = 256;
+/// Content-doc batches at or below this size resolve titles per doc; larger
+/// batches build the all-folders title cache once (the per-doc scan is
+/// cheaper until several docs would each pay it).
+const TITLE_CACHE_THRESHOLD: usize = 4;
 
 fn search_is_ready(entry: &link_indexer::PendingEntry) -> bool {
     entry.is_ready(SEARCH_DEBOUNCE)
@@ -499,39 +510,159 @@ async fn search_worker(
             .collect();
         // Iterator dropped — all shard locks released.
 
-        // 3b. Filter to ready (safe to acquire awareness locks now)
-        let ready: Vec<(String, link_indexer::PendingEntry)> = snapshot
-            .into_iter()
-            .filter(|(key, entry)| {
-                let is_folder = link_indexer::is_folder_doc(key, &docs).is_some();
-                is_folder || search_is_ready(entry)
-            })
-            .collect();
-
-        // 4. Process each ready doc
-        for (doc_id, queued) in ready {
-            if let Some(content_uuids) = link_indexer::is_folder_doc(&doc_id, &docs) {
-                // Folder doc — detect added/removed documents
-                search_handle_folder_update(
-                    &doc_id,
-                    &content_uuids,
-                    &docs,
-                    &search_index,
-                    &filemeta_cache,
-                    &suggestions_index,
-                )
-                .await;
-            } else {
-                // Content doc — reindex into search
-                search_handle_content_update(&doc_id, &docs, &search_index, &suggestions_index);
+        // 3b. Partition into ready folders / ready content docs (safe to
+        // acquire awareness locks now; folder docs skip the debounce).
+        let mut folders: Vec<(String, link_indexer::PendingEntry, Vec<String>)> = Vec::new();
+        let mut contents: Vec<(String, link_indexer::PendingEntry)> = Vec::new();
+        for (key, entry) in snapshot {
+            if let Some(content_uuids) = link_indexer::is_folder_doc(&key, &docs) {
+                folders.push((key, entry, content_uuids));
+            } else if search_is_ready(&entry) {
+                contents.push((key, entry));
             }
+        }
+        let folder_take = folders.len().min(SEARCH_HEAVY_PER_TICK);
+        // Oldest first, so a sustained backlog can't starve any one doc's
+        // search refresh indefinitely (snapshot order is shard order).
+        contents.sort_by_key(|(_, entry)| entry.first_queued);
+        let content_take = (SEARCH_HEAVY_PER_TICK - folder_take).min(contents.len());
 
+        // 4a. Fast lane: rescan suggestions for ready content docs the heavy
+        // lane won't reach this tick, when their latest generation is
+        // unscanned. Cheap (body read + regex), so review freshness stays
+        // debounce-bounded even under a deep heavy backlog. Gated on the
+        // pause debounce only (not the ceiling): under sustained typing the
+        // heavy lane's ceiling still refreshes every ~2s, and scanning every
+        // keystroke's generation here would reintroduce the per-tick rescan
+        // loop. Capped and yielding so one tick can't monopolize the thread.
+        let mut fast_budget = SEARCH_FAST_PER_TICK;
+        for (i, (doc_id, queued)) in contents.iter().enumerate().skip(content_take) {
+            if fast_budget == 0 {
+                break;
+            }
+            if queued.suggestions_scanned_generation >= queued.generation
+                || queued.last_updated.elapsed() < SEARCH_DEBOUNCE
+            {
+                continue;
+            }
+            fast_budget -= 1;
+            if suggestions_fast_scan(doc_id, &docs, &suggestions_index) {
+                link_indexer::acknowledge_suggestions_generation(
+                    &pending,
+                    doc_id,
+                    queued.generation,
+                );
+            }
+            if i % 32 == 31 {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        // 4b. Heavy lane, capped per tick: folders first (their filemeta
+        // feeds content titles), then content docs. Batches above
+        // TITLE_CACHE_THRESHOLD resolve titles through a cache built once
+        // (the per-doc all-folders scan was O(N²) under backlog).
+        // Unprocessed items keep their entries and drain on later ticks.
+        for (doc_id, queued, content_uuids) in folders.into_iter().take(folder_take) {
+            search_handle_folder_update(
+                &doc_id,
+                &content_uuids,
+                &docs,
+                &search_index,
+                &filemeta_cache,
+                &suggestions_index,
+            )
+            .await;
             // A concurrent update increments generation. Only acknowledge
             // the exact generation we scanned; newer work stays queued (with
             // its debounce ceiling restarted — see acknowledge_generation).
             link_indexer::acknowledge_generation(&pending, &doc_id, queued.generation);
         }
+        let titles =
+            (content_take > TITLE_CACHE_THRESHOLD).then(|| build_title_folder_cache(&docs));
+        for (doc_id, queued) in contents.into_iter().take(content_take) {
+            // Skip the suggestions rescan when the fast lane already covered
+            // this generation — halves body reads on the steady-state path.
+            let update_suggestions = queued.suggestions_scanned_generation < queued.generation;
+            search_handle_content_update_inner(
+                &doc_id,
+                &docs,
+                &search_index,
+                &suggestions_index,
+                titles.as_ref(),
+                update_suggestions,
+            );
+            link_indexer::acknowledge_generation(&pending, &doc_id, queued.generation);
+        }
     }
+}
+
+/// Fast-lane refresh: read the doc body and rescan CriticMarkup suggestions
+/// only — no tantivy, no title lookups. Returns false when the doc is
+/// missing from the map (retain last indexed state, retry next tick).
+fn suggestions_fast_scan(
+    doc_id: &str,
+    docs: &DashMap<String, DocWithSyncKv>,
+    suggestions_index: &SuggestionsIndex,
+) -> bool {
+    let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
+        return true; // junk id: report scanned so the watermark stops retrying
+    };
+    let awareness = {
+        let Some(doc_ref) = docs.get(doc_id) else {
+            return false;
+        };
+        doc_ref.awareness() // Arc clone
+    }; // DashMap shard lock released
+       // Guard held through the index update — see the ordering note in
+       // search_handle_content_update_inner.
+    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+    let body = {
+        let txn = guard.doc.transact();
+        match txn.get_text("contents") {
+            Some(text) => text.get_string(&txn),
+            None => String::new(),
+        }
+    };
+    suggestions_index.update(doc_uuid, critic_scanner::scan_suggestions(&body));
+    true
+}
+
+/// Build uuid -> (title, folder_name) for every doc listed in any folder's
+/// filemeta_v0, in one pass. The per-tick heavy lane uses this instead of
+/// scanning every folder doc per content doc.
+fn build_title_folder_cache(
+    docs: &DashMap<String, DocWithSyncKv>,
+) -> std::collections::HashMap<String, (String, String)> {
+    let mut cache = std::collections::HashMap::new();
+    for folder_doc_id in link_indexer::find_all_folder_docs(docs) {
+        let awareness = {
+            let Some(doc_ref) = docs.get(&folder_doc_id) else {
+                continue;
+            };
+            doc_ref.awareness() // Arc clone
+        }; // DashMap shard lock released
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let txn = guard.doc.transact();
+        let Some(filemeta) = txn.get_map("filemeta_v0") else {
+            continue;
+        };
+        let folder_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, &folder_doc_id);
+        for (path, value) in filemeta.iter(&txn) {
+            if let Some(id) = link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
+                // Last folder wins, matching startup_reindex's tie-break for
+                // docs listed in multiple folders.
+                cache.insert(
+                    id,
+                    (
+                        link_indexer::title_from_filemeta_path(&path),
+                        folder_name.clone(),
+                    ),
+                );
+            }
+        }
+    }
+    cache
 }
 
 /// Handle a content doc update: read body, look up title from folder metadata, upsert into search
@@ -541,6 +672,22 @@ pub(crate) fn search_handle_content_update(
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
     suggestions_index: &SuggestionsIndex,
+) {
+    search_handle_content_update_inner(doc_id, docs, search_index, suggestions_index, None, true)
+}
+
+/// Like [`search_handle_content_update`], but resolves titles through a
+/// prebuilt per-tick cache when one is given (the worker's heavy lane), so a
+/// backlog of N content docs costs one all-folders scan instead of N, and
+/// optionally skips the suggestions rescan when the fast lane already
+/// covered this generation.
+fn search_handle_content_update_inner(
+    doc_id: &str,
+    docs: &DashMap<String, DocWithSyncKv>,
+    search_index: &SearchIndex,
+    suggestions_index: &SuggestionsIndex,
+    titles: Option<&std::collections::HashMap<String, (String, String)>>,
+    update_suggestions: bool,
 ) {
     let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
         return;
@@ -558,23 +705,37 @@ pub(crate) fn search_handle_content_update(
             };
             doc_ref.awareness() // Arc clone
         }; // DashMap shard lock released
+           // Suggestions are rescanned and stored while the read guard is held:
+           // the apply endpoint updates the index under the doc's write lock, so
+           // ordering through the awareness lock means a scan of an older body
+           // can never overwrite a newer index state.
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-        let txn = guard.doc.transact();
-        match txn.get_text("contents") {
-            Some(text) => text.get_string(&txn),
-            None => String::new(),
+        let body = {
+            let txn = guard.doc.transact();
+            match txn.get_text("contents") {
+                Some(text) => text.get_string(&txn),
+                None => String::new(),
+            }
+        };
+        if update_suggestions {
+            suggestions_index.update(doc_uuid, critic_scanner::scan_suggestions(&body));
         }
+        body
     };
 
     // Find which folder doc contains this UUID and extract title
-    let (title, folder_name) = search_find_title_and_folder(doc_uuid, docs);
+    let (title, folder_name) = match titles {
+        Some(cache) => cache
+            .get(doc_uuid)
+            .cloned()
+            .unwrap_or_else(|| (doc_uuid.to_string(), "Unknown".to_string())),
+        None => search_find_title_and_folder(doc_uuid, docs),
+    };
 
     match search_index.add_document(doc_uuid, &title, &body, &folder_name) {
         Ok(()) => tracing::debug!("Search indexed content doc: {} ({})", doc_uuid, title),
         Err(e) => tracing::error!("Search index failed for {}: {:?}", doc_uuid, e),
     }
-
-    suggestions_index.update(doc_uuid, critic_scanner::scan_suggestions(&body));
 }
 
 /// Find the title and folder name for a content doc UUID by scanning all folder docs' filemeta_v0.
@@ -600,21 +761,9 @@ fn search_find_title_and_folder(
         for (path, value) in filemeta.iter(&txn) {
             if let Some(id) = link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
                 if id == doc_uuid {
-                    // Extract title: strip leading "/" and trailing ".md", take basename
-                    let path_str: &str = path;
-                    let title = path_str
-                        .strip_prefix('/')
-                        .unwrap_or(path_str)
-                        .strip_suffix(".md")
-                        .unwrap_or(path_str)
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(path_str)
-                        .to_string();
-
+                    let title = link_indexer::title_from_filemeta_path(&path);
                     let folder_name =
                         y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
-
                     return (title, folder_name);
                 }
             }
@@ -635,7 +784,7 @@ async fn search_handle_folder_update(
     suggestions_index: &SuggestionsIndex,
 ) {
     // Build current uuid -> title map from filemeta
-    let current_map: std::collections::HashMap<String, String> = {
+    let (current_map, folder_name): (std::collections::HashMap<String, String>, String) = {
         let awareness = {
             let Some(doc_ref) = docs.get(folder_doc_id) else {
                 return;
@@ -651,21 +800,18 @@ async fn search_handle_folder_update(
         let mut map = std::collections::HashMap::new();
         for (path, value) in filemeta.iter(&txn) {
             if let Some(id) = link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
-                let path_str: &str = path;
-                let title = path_str
-                    .strip_prefix('/')
-                    .unwrap_or(path_str)
-                    .strip_suffix(".md")
-                    .unwrap_or(path_str)
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(path_str)
-                    .to_string();
-                map.insert(id, title);
+                map.insert(id, link_indexer::title_from_filemeta_path(&path));
             }
         }
-        map
+        let folder_name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
+        (map, folder_name)
     };
+    // Titles for this folder's docs, so the reindex calls below don't each
+    // rescan every folder doc.
+    let titles: std::collections::HashMap<String, (String, String)> = current_map
+        .iter()
+        .map(|(uuid, title)| (uuid.clone(), (title.clone(), folder_name.clone())))
+        .collect();
 
     // Get old snapshot from cache
     let old_map = filemeta_cache.get(folder_doc_id).map(|r| r.clone());
@@ -699,11 +845,13 @@ async fn search_handle_folder_update(
                 // New or renamed — reindex content
                 let content_id = format!("{}-{}", relay_id, uuid);
                 if docs.contains_key(&content_id) {
-                    search_handle_content_update(
+                    search_handle_content_update_inner(
                         &content_id,
                         docs,
                         search_index,
                         suggestions_index,
+                        Some(&titles),
+                        true,
                     );
                 }
             }
@@ -716,7 +864,14 @@ async fn search_handle_folder_update(
         for uuid in content_uuids {
             let content_id = format!("{}-{}", relay_id, uuid);
             if docs.contains_key(&content_id) {
-                search_handle_content_update(&content_id, docs, search_index, suggestions_index);
+                search_handle_content_update_inner(
+                    &content_id,
+                    docs,
+                    search_index,
+                    suggestions_index,
+                    Some(&titles),
+                    true,
+                );
             }
         }
     }
@@ -918,23 +1073,21 @@ impl Server {
             search_rx,
         } = receivers;
 
-        // Drain stale messages that accumulated during doc loading and startup_reindex.
-        // startup_reindex already indexed everything synchronously, so these are redundant.
-        let mut drained = 0usize;
-        while index_rx.try_recv().is_ok() {
-            drained += 1;
-        }
-        if drained > 0 {
-            tracing::info!(
-                "Drained {} stale link indexer messages from startup",
-                drained
-            );
-        }
-
-        // Also drain the link indexer's pending map so the worker starts clean
-        if let Some(ref indexer) = self.link_indexer {
-            indexer.clear_pending();
-        }
+        // The channels are only wakeup signals; the pending MAPS are the
+        // work lists, and they are deliberately NOT cleared here. Entries
+        // queued while startup_reindex ran (a webhook edit, an MCP accept)
+        // represent real work; wiping them permanently lost those refreshes
+        // — a doc edited mid-startup kept stale suggestions until its next
+        // edit. Redundant re-scans of already-reindexed docs are bounded by
+        // the workers' per-tick caps.
+        tracing::info!(
+            link_pending = self
+                .link_indexer
+                .as_ref()
+                .map(|i| i.pending_len())
+                .unwrap_or(0),
+            "Spawning index workers"
+        );
 
         // Spawn supervised link indexing worker.
         if let Some(ref indexer) = self.link_indexer {
@@ -978,18 +1131,8 @@ impl Server {
 
         // Spawn supervised search index worker.
         if let Some((mut search_rx, search_pending)) = search_rx {
-            // Drain stale search messages too (startup_reindex builds the search index)
-            let mut search_drained = 0usize;
-            while search_rx.try_recv().is_ok() {
-                search_drained += 1;
-            }
-            search_pending.clear();
-            if search_drained > 0 {
-                tracing::info!(
-                    "Drained {} stale search index messages from startup",
-                    search_drained
-                );
-            }
+            // See the wakeup-vs-worklist note above: nothing to drain or
+            // clear here.
             if let Some(ref si) = self.search_index {
                 let si_for_worker = si.clone();
                 let suggestions_for_worker = self.suggestions_index.clone();
@@ -3937,7 +4080,8 @@ impl Server {
             )
             .route("/open/*path", get(handle_open_by_path))
             .route("/debug/resolve", get(handle_debug_resolve))
-            .route("/suggestions", get(handle_suggestions));
+            .route("/suggestions", get(handle_suggestions))
+            .route("/suggestions/apply", post(handle_apply_suggestions));
 
         // Register /mcp if MCP_API_KEY or SHARE_TOKEN_SECRET is set
         if self.mcp_api_key.is_some() || self.share_token_secret.is_some() {
@@ -4773,6 +4917,179 @@ async fn handle_suggestions(
     }
 
     Ok(Json(serde_json::json!({ "files": files })))
+}
+
+#[derive(serde::Deserialize)]
+struct ApplySuggestionsRequest {
+    doc_id: String,
+    action: String,
+    /// Wire format shared with the GET /suggestions response; only
+    /// `raw_markup`, `type`, `content`, `old_content`, `new_content` are
+    /// consulted (the rest default).
+    suggestions: Vec<critic_scanner::Suggestion>,
+}
+
+/// Apply accept/reject to a batch of suggestions in one document, server-side.
+///
+/// POST /suggestions/apply?folder_id=<compound folder doc id>
+/// Body: { doc_id, action: "accept"|"reject", suggestions: [...] }
+/// Response: { applied: [idx], failed: [{index, reason}], remaining_suggestions }
+///
+/// This replaces the review page's per-file client-side flow (browser opening
+/// every Y.Doc over websocket — unusable at thousands of suggestions across
+/// hundreds of files). folder_id rides in the query so the editor proxy can
+/// scope-check folder tokens without buffering the body; the doc must belong
+/// to that folder. All ops for one doc commit in a single transaction,
+/// deletions are surgical (kept payload keeps its original authorship), and
+/// the suggestions index is updated under the same awareness write lock the
+/// edit commits under, so a racing worker scan can never overwrite it with
+/// pre-apply state and the next refresh is read-your-writes.
+async fn handle_apply_suggestions(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Query(params): Query<SuggestionsQuery>,
+    Json(req): Json<ApplySuggestionsRequest>,
+) -> Result<Json<Value>, AppError> {
+    use y_sweet_core::critic_surgical::{plan_batch, SuggestionAction};
+
+    server_state.check_auth(auth_header)?;
+    require_index_ready(&server_state.suggestions_ready, "Suggestions index")?;
+
+    let action = match req.action.as_str() {
+        "accept" => SuggestionAction::Accept,
+        "reject" => SuggestionAction::Reject,
+        other => {
+            return Err(AppError::new(
+                StatusCode::BAD_REQUEST,
+                anyhow!("Invalid action: {}", other),
+            ))
+        }
+    };
+
+    let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(&req.doc_id) else {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            anyhow!("Invalid doc_id"),
+        ));
+    };
+    let doc_uuid = doc_uuid.to_string();
+
+    // ACL: the doc must belong to the given folder (folder-scoped share
+    // tokens are checked against the folder_id query by the editor proxy;
+    // this makes the pair internally consistent).
+    server_state
+        .ensure_doc_loaded(&params.folder_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder not found: {}", e)))?;
+    let folder_members = link_indexer::is_folder_doc(&params.folder_id, &server_state.docs)
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, anyhow!("Not a folder document")))?;
+    if !folder_members.contains(&doc_uuid) {
+        return Err(AppError::new(
+            StatusCode::FORBIDDEN,
+            anyhow!("Document is not part of the given folder"),
+        ));
+    }
+
+    server_state
+        .ensure_doc_loaded(&req.doc_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::NOT_FOUND, anyhow!("Doc not found: {}", e)))?;
+
+    let awareness = {
+        let Some(doc_ref) = server_state.docs.get(&req.doc_id) else {
+            return Err(AppError::new(
+                StatusCode::NOT_FOUND,
+                anyhow!("Doc not loaded"),
+            ));
+        };
+        doc_ref.awareness() // Arc clone
+    }; // DashMap shard lock released
+
+    // Plan + apply + rescan under one awareness write guard: the plan is
+    // computed against the exact body the transaction mutates, and the index
+    // update commits before any other writer can read the doc. Everything in
+    // here is O(body + items) — see critic_surgical::plan_batch.
+    let (applied, failed, remaining_suggestions) = {
+        let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+        let body = {
+            let txn = guard.doc.transact();
+            match txn.get_text("contents") {
+                Some(text) => text.get_string(&txn),
+                None => String::new(),
+            }
+        };
+
+        let (ops, failures) = plan_batch(&body, &req.suggestions, action);
+        let applied: Vec<usize> = {
+            let mut idx: Vec<usize> = ops.iter().map(|op| op.index).collect();
+            idx.sort_unstable();
+            idx
+        };
+        let failed: Vec<Value> = failures
+            .iter()
+            .map(|f| serde_json::json!({"index": f.index, "reason": f.reason}))
+            .collect();
+
+        {
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            for op in &ops {
+                debug_assert!(
+                    op.deletions.windows(2).all(|w| w[0].from >= w[1].to),
+                    "plan_batch must yield descending, non-overlapping deletions"
+                );
+                for d in &op.deletions {
+                    text.remove_range(&mut txn, d.from as u32, (d.to - d.from) as u32);
+                }
+                if let Some(insert) = &op.fallback_insert {
+                    if !insert.is_empty() {
+                        text.insert(&mut txn, op.span_start as u32, insert);
+                    }
+                }
+            }
+        }
+
+        let new_body = {
+            let txn = guard.doc.transact();
+            match txn.get_text("contents") {
+                Some(text) => text.get_string(&txn),
+                None => String::new(),
+            }
+        };
+        let suggestions = critic_scanner::scan_suggestions(&new_body);
+        let remaining = suggestions.len();
+        server_state
+            .suggestions_index
+            .update(&doc_uuid, suggestions);
+        (applied, failed, remaining)
+    }; // awareness write released
+
+    // Heavy derived state (tantivy, backlinks) flows through the normal
+    // worker queues via the update callback that just fired. Persist
+    // explicitly for immediate durability (same policy as the MCP edit tool).
+    let sync_kv = server_state
+        .docs
+        .get(&req.doc_id)
+        .map(|doc_ref| doc_ref.sync_kv());
+    if let Some(sync_kv) = sync_kv {
+        if let Err(e) = sync_kv.persist().await {
+            tracing::error!(doc_id = %req.doc_id, "Persist after suggestion apply failed: {:?}", e);
+        }
+    }
+
+    tracing::info!(
+        doc_id = %req.doc_id,
+        applied = applied.len(),
+        failed = failed.len(),
+        remaining = remaining_suggestions,
+        "Applied suggestion batch"
+    );
+
+    Ok(Json(serde_json::json!({
+        "applied": applied,
+        "failed": failed,
+        "remaining_suggestions": remaining_suggestions,
+    })))
 }
 
 /// Move a document to a new path within or across folders.
@@ -9177,6 +9494,186 @@ mod test {
             search_entry.get(&doc_id).unwrap().lease.is_some(),
             "helper must lease the search queue too"
         );
+    }
+
+    fn apply_item(markup: &str, kind: &str, content: &str) -> serde_json::Value {
+        serde_json::json!({
+            "raw_markup": markup,
+            "from": 0,
+            "type": kind,
+            "content": content,
+            "old_content": null,
+            "new_content": null,
+        })
+    }
+
+    async fn call_apply(
+        server: &Arc<Server>,
+        folder_doc_id: &str,
+        doc_id: &str,
+        action: &str,
+        items: Vec<serde_json::Value>,
+    ) -> Result<Value, AppError> {
+        let req: ApplySuggestionsRequest = serde_json::from_value(serde_json::json!({
+            "doc_id": doc_id,
+            "action": action,
+            "suggestions": items,
+        }))
+        .unwrap();
+        let params = SuggestionsQuery {
+            folder_id: folder_doc_id.to_string(),
+        };
+        handle_apply_suggestions(None, State(server.clone()), Query(params), Json(req))
+            .await
+            .map(|j| j.0)
+    }
+
+    #[tokio::test]
+    async fn apply_suggestions_accepts_batch_and_refreshes_index() {
+        let server = Server::new_for_test();
+        let folder_doc_id =
+            insert_test_folder_doc(&server, "TestFolder", &[("/Doc.md", SUGG_UUID, "markdown")])
+                .await;
+        insert_test_content_doc(&server, SUGG_UUID, "Hello {++world++} and {--gone--} end").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+        // Stale index state, as after edits queued behind a backlog.
+        server.suggestions_index.update(
+            SUGG_UUID,
+            scan_suggestions("Hello {++world++} and {--gone--} end"),
+        );
+
+        let resp = call_apply(
+            &server,
+            &folder_doc_id,
+            &doc_id,
+            "accept",
+            vec![
+                apply_item("{++world++}", "addition", "world"),
+                apply_item("{--gone--}", "deletion", "gone"),
+            ],
+        )
+        .await
+        .expect("apply should succeed");
+
+        assert_eq!(resp["applied"], serde_json::json!([0, 1]));
+        assert_eq!(resp["failed"], serde_json::json!([]));
+        assert_eq!(resp["remaining_suggestions"], 0);
+        // Read-your-writes: index already reflects the accept.
+        assert!(server.suggestions_index.get(SUGG_UUID).is_none());
+        // Doc content: addition kept payload, deletion removed span.
+        let body = {
+            let awareness = server.docs.get(&doc_id).unwrap().awareness();
+            let guard = awareness.read().unwrap();
+            let txn = guard.doc.transact();
+            txn.get_text("contents").unwrap().get_string(&txn)
+        };
+        assert_eq!(body, "Hello world and  end");
+    }
+
+    #[tokio::test]
+    async fn apply_suggestions_rejects_doc_outside_folder() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "TestFolder",
+            &[("/Other.md", "someone-else", "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, SUGG_UUID, "Hello {++world++}").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+
+        let result = call_apply(
+            &server,
+            &folder_doc_id,
+            &doc_id,
+            "accept",
+            vec![apply_item("{++world++}", "addition", "world")],
+        )
+        .await;
+        assert!(result.is_err(), "doc outside folder must be rejected");
+    }
+
+    #[tokio::test]
+    async fn apply_suggestions_reports_missing_markup_without_aborting_batch() {
+        let server = Server::new_for_test();
+        let folder_doc_id =
+            insert_test_folder_doc(&server, "TestFolder", &[("/Doc.md", SUGG_UUID, "markdown")])
+                .await;
+        insert_test_content_doc(&server, SUGG_UUID, "Hello {++world++}").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+
+        let resp = call_apply(
+            &server,
+            &folder_doc_id,
+            &doc_id,
+            "accept",
+            vec![
+                apply_item("{++already-gone++}", "addition", "already-gone"),
+                apply_item("{++world++}", "addition", "world"),
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["applied"], serde_json::json!([1]));
+        assert_eq!(resp["failed"][0]["index"], 0);
+        assert_eq!(resp["remaining_suggestions"], 0);
+    }
+
+    #[tokio::test]
+    async fn apply_suggestions_duplicate_markups_claim_distinct_occurrences() {
+        let server = Server::new_for_test();
+        let folder_doc_id =
+            insert_test_folder_doc(&server, "TestFolder", &[("/Doc.md", SUGG_UUID, "markdown")])
+                .await;
+        insert_test_content_doc(&server, SUGG_UUID, "a {++x++} b {++x++} c").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+
+        let resp = call_apply(
+            &server,
+            &folder_doc_id,
+            &doc_id,
+            "accept",
+            vec![
+                apply_item("{++x++}", "addition", "x"),
+                apply_item("{++x++}", "addition", "x"),
+            ],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["applied"], serde_json::json!([0, 1]));
+        let body = {
+            let awareness = server.docs.get(&doc_id).unwrap().awareness();
+            let guard = awareness.read().unwrap();
+            let txn = guard.doc.transact();
+            txn.get_text("contents").unwrap().get_string(&txn)
+        };
+        assert_eq!(body, "a x b x c");
+    }
+
+    #[tokio::test]
+    async fn fast_scan_updates_suggestions_and_reports_missing_doc() {
+        let server = Server::new_for_test();
+        insert_test_content_doc(&server, SUGG_UUID, "Hi {++there++}").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+
+        assert!(suggestions_fast_scan(
+            &doc_id,
+            &server.docs,
+            &server.suggestions_index
+        ));
+        assert_eq!(server.suggestions_index.get(SUGG_UUID).unwrap().len(), 1);
+
+        let missing_id = format!(
+            "{}-{}",
+            TEST_RELAY_ID, "00000000-0000-4000-8000-00000000dead"
+        );
+        assert!(!suggestions_fast_scan(
+            &missing_id,
+            &server.docs,
+            &server.suggestions_index
+        ));
     }
 
     #[tokio::test]

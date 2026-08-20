@@ -1,16 +1,21 @@
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestionType {
+    #[default]
     Addition,
     Deletion,
     Substitution,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// One CriticMarkup suggestion. Serialized into the /suggestions response;
+/// also accepted back (with most fields defaulted) as the wire format of
+/// POST /suggestions/apply, so the two ends of the review API share one type.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Suggestion {
     #[serde(rename = "type")]
     pub suggestion_type: SuggestionType,
@@ -139,12 +144,22 @@ fn extract_metadata(raw: &str) -> (Option<String>, Option<u64>, &str) {
 pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
     let mut suggestions = Vec::new();
 
+    // One newline pass up front; per-match line numbers via binary search.
+    // The old per-match `text[..start].matches('\n').count()` was O(N·L) and
+    // dominated scans of heavily-suggested docs.
+    let newline_offsets: Vec<usize> = text
+        .bytes()
+        .enumerate()
+        .filter_map(|(i, b)| (b == b'\n').then_some(i))
+        .collect();
+    let line_of = |offset: usize| newline_offsets.partition_point(|&n| n < offset) + 1;
+
     for m in ADDITION_RE.find_iter(text) {
         let raw_markup = m.as_str().to_string();
         let raw = &text[m.start() + 3..m.end() - 3]; // strip {++ and ++}
         let (author, timestamp, content) = extract_metadata(raw);
         let (ctx_before, ctx_after) = extract_context(text, m.start(), m.end());
-        let line = text[..m.start()].matches('\n').count() + 1;
+        let line = line_of(m.start());
         suggestions.push(Suggestion {
             suggestion_type: SuggestionType::Addition,
             content: content.to_string(),
@@ -166,7 +181,7 @@ pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
         let raw = &text[m.start() + 3..m.end() - 3]; // strip {-- and --}
         let (author, timestamp, content) = extract_metadata(raw);
         let (ctx_before, ctx_after) = extract_context(text, m.start(), m.end());
-        let line = text[..m.start()].matches('\n').count() + 1;
+        let line = line_of(m.start());
         suggestions.push(Suggestion {
             suggestion_type: SuggestionType::Deletion,
             content: content.to_string(),
@@ -190,7 +205,7 @@ pub fn scan_suggestions(text: &str) -> Vec<Suggestion> {
         let new_content = caps.get(2).unwrap().as_str();
         let (author, timestamp, old_content) = extract_metadata(raw_old);
         let (ctx_before, ctx_after) = extract_context(text, m.start(), m.end());
-        let line = text[..m.start()].matches('\n').count() + 1;
+        let line = line_of(m.start());
         suggestions.push(Suggestion {
             suggestion_type: SuggestionType::Substitution,
             content: format!("{}>{}", old_content, new_content),
