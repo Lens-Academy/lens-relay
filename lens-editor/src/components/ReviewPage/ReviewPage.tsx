@@ -5,10 +5,12 @@ import type { BatchResult } from '../../lib/suggestion-actions';
 import { SUGGESTION_NOT_FOUND } from '../../lib/suggestion-actions';
 import { runWithConcurrency } from '../../lib/concurrency';
 
-/** How many documents to apply bulk actions to at once. Each file is a
- *  server-side apply request that loads and edits the doc on the relay;
- *  keep this modest. */
-const BULK_FILE_CONCURRENCY = 3;
+/** How many documents to apply bulk actions to at once. Each file is one
+ *  small server-side apply request, IO-bound on the relay (doc load +
+ *  persist), so parallelism is cheap — 12 balances bulk-run speed against
+ *  relay headroom. The old value of 3 dated from the client-side websocket
+ *  era, when every file meant a full Y.Doc sync in the browser. */
+const BULK_FILE_CONCURRENCY = 12;
 
 /** Identity of a suggestion for optimistic removal after a bulk action. */
 function suggestionKey(docId: string, s: SuggestionItem): string {
