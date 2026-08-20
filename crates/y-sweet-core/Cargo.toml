@@ -52,7 +52,7 @@ dashmap = "6.0.1"
 tantivy = "0.25"
 
 [dev-dependencies]
-tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.29.1", features = ["macros", "rt-multi-thread", "test-util"] }
 dashmap = "6.0.1"
 
 [patch.crates-io]

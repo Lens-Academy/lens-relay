@@ -613,11 +613,14 @@ async fn gc_remove_not_blocked_by_index_document_holding_dashmap_guard() {
 // held shard guard across the awareness lock) makes this test fail.
 // ============================================================================
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn gc_compaction_does_not_block_shard_writers() {
+async fn gc_declines_removal_and_never_blocks_shard_writers() {
     use relay::server::Server;
 
     let done = Arc::new(AtomicBool::new(false));
-    watchdog(done.clone(), "gc_compaction_does_not_block_shard_writers");
+    watchdog(
+        done.clone(),
+        "gc_declines_removal_and_never_blocks_shard_writers",
+    );
 
     let docs: Arc<DashMap<String, DocWithSyncKv>> = Arc::new(DashMap::new());
     let folder_id = "folder-doc-0".to_string();
@@ -645,14 +648,16 @@ async fn gc_compaction_does_not_block_shard_writers() {
         Duration::from_millis(contention_ms),
     );
 
-    // T2 (GC): the real production GC step. It must drop its shard guard
-    // before blocking on awareness.write() inside compaction.
+    // T2 (GC): the real production GC step. Since the remove-first change,
+    // it must decline removal instantly (the reader's awareness Arc is an
+    // external ref) — never touching the awareness lock, let alone holding
+    // a shard guard across it.
     let gc = std::thread::spawn(move || {
         // Wait for reader to hold awareness.read()
         wait_for_state(&state_g, 1);
-        // Signal state=2: GC step starting (it will block on awareness.write)
+        // Signal state=2: GC step starting
         set_state(&state_g, 2);
-        Server::gc_compact_and_remove(&docs_gc, &fid_g);
+        Server::gc_compact_and_remove(&docs_gc, &fid_g)
     });
 
     // T3 (shard writer): a doc load/unload on the same shard. With the buggy
@@ -660,8 +665,7 @@ async fn gc_compaction_does_not_block_shard_writers() {
     // in microseconds.
     let writer = std::thread::spawn(move || {
         wait_for_state(&state_w, 2);
-        // Small delay to ensure GC is inside compaction, blocked on
-        // awareness.write()
+        // Small delay so the GC step has run against the held awareness
         std::thread::sleep(Duration::from_millis(5));
 
         let start = std::time::Instant::now();
@@ -672,8 +676,17 @@ async fn gc_compaction_does_not_block_shard_writers() {
     });
 
     reader.join().expect("reader panicked");
-    gc.join().expect("gc panicked");
+    let gc_removed = gc.join().expect("gc panicked");
     let write_duration = writer.join().expect("writer panicked");
+
+    assert!(
+        !gc_removed,
+        "GC must decline removal while another thread holds the awareness Arc"
+    );
+    assert!(
+        docs.contains_key(&folder_id),
+        "declined GC must leave the doc in the map"
+    );
 
     let threshold_ms = 20;
     assert!(

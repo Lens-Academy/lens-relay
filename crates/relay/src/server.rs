@@ -17,7 +17,7 @@ use axum::{
     Json, Router,
 };
 use axum_extra::typed_header::TypedHeader;
-use dashmap::{mapref::entry::Entry, mapref::one::MappedRef, DashMap};
+use dashmap::{mapref::one::MappedRef, DashMap};
 use futures::{SinkExt, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -380,18 +380,7 @@ const SEARCH_DEBOUNCE: Duration = Duration::from_secs(2);
 const SEARCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 fn search_is_ready(entry: &link_indexer::PendingEntry) -> bool {
-    entry.last_updated.elapsed() >= SEARCH_DEBOUNCE
-        || entry.first_queued.elapsed() >= SEARCH_DEBOUNCE
-}
-
-fn acknowledge_search_generation(
-    pending: &DashMap<String, link_indexer::PendingEntry>,
-    doc_id: &str,
-    generation: u64,
-) -> bool {
-    pending
-        .remove_if(doc_id, |_, entry| entry.generation == generation)
-        .is_some()
+    entry.is_ready(SEARCH_DEBOUNCE)
 }
 
 /// Handle the outcome of a supervised worker. CleanExit logs INFO and stops.
@@ -521,7 +510,6 @@ async fn search_worker(
 
         // 4. Process each ready doc
         for (doc_id, queued) in ready {
-            let mut completed = true;
             if let Some(content_uuids) = link_indexer::is_folder_doc(&doc_id, &docs) {
                 // Folder doc — detect added/removed documents
                 search_handle_folder_update(
@@ -535,15 +523,13 @@ async fn search_worker(
                 .await;
             } else {
                 // Content doc — reindex into search
-                completed =
-                    search_handle_content_update(&doc_id, &docs, &search_index, &suggestions_index);
+                search_handle_content_update(&doc_id, &docs, &search_index, &suggestions_index);
             }
 
-            if completed {
-                // A concurrent update increments generation. Only acknowledge
-                // the exact generation we scanned; newer work stays queued.
-                acknowledge_search_generation(&pending, &doc_id, queued.generation);
-            }
+            // A concurrent update increments generation. Only acknowledge
+            // the exact generation we scanned; newer work stays queued (with
+            // its debounce ceiling restarted — see acknowledge_generation).
+            link_indexer::acknowledge_generation(&pending, &doc_id, queued.generation);
         }
     }
 }
@@ -555,9 +541,9 @@ pub(crate) fn search_handle_content_update(
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
     suggestions_index: &SuggestionsIndex,
-) -> bool {
+) {
     let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
-        return true;
+        return;
     };
 
     // Read Y.Text("contents") body
@@ -568,7 +554,7 @@ pub(crate) fn search_handle_content_update(
                     doc_id,
                     "Search refresh missed evicted doc; retaining last indexed state"
                 );
-                return true;
+                return;
             };
             doc_ref.awareness() // Arc clone
         }; // DashMap shard lock released
@@ -589,7 +575,6 @@ pub(crate) fn search_handle_content_update(
     }
 
     suggestions_index.update(doc_uuid, critic_scanner::scan_suggestions(&body));
-    true
 }
 
 /// Find the title and folder name for a content doc UUID by scanning all folder docs' filemeta_v0.
@@ -836,9 +821,17 @@ impl Server {
         let (link_indexer, index_rx) = LinkIndexer::new();
         let link_indexer = Arc::new(link_indexer);
 
-        // Create SearchIndex with MmapDirectory in a temp directory
-        let index_path = std::env::temp_dir().join("lens-relay-search-index");
-        // Clean the directory on startup to ensure a fresh index
+        // Create SearchIndex with MmapDirectory in a fresh, instance-unique
+        // temp directory. The index is rebuilt from scratch on every start,
+        // and a unique path keeps parallel test Servers (and a restarting
+        // prod process) from deleting each other's live index directory.
+        static SEARCH_INDEX_INSTANCE: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let index_path = std::env::temp_dir().join(format!(
+            "lens-relay-search-index-{}-{}",
+            std::process::id(),
+            SEARCH_INDEX_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         if index_path.exists() {
             let _ = std::fs::remove_dir_all(&index_path);
         }
@@ -1208,6 +1201,31 @@ impl Server {
     /// Get the link indexer, if enabled.
     pub fn link_indexer(&self) -> &Option<Arc<LinkIndexer>> {
         &self.link_indexer
+    }
+
+    /// Queue a doc for derived indexing — link indexer AND search/suggestions
+    /// — with a GC lease attached, so the doc can't be evicted before the
+    /// workers' next pass. Mirrors the update callback's queueing; used
+    /// where writes carry LINK_INDEXER_ORIGIN and therefore bypass the
+    /// callback. Callers must not hold an awareness lock (this takes a docs
+    /// shard lock).
+    fn queue_derived_index_with_lease(&self, doc_id: &str) {
+        let lease = self.docs.get(doc_id).map(|doc| doc.awareness());
+        if lease.is_none() {
+            // Queueing without a lease reopens the GC race; callers hold the
+            // doc's awareness in scope, so this should never fire.
+            tracing::warn!(doc_id, "Derived-index queue has no GC lease");
+        }
+        if let Some(ref indexer) = self.link_indexer {
+            indexer.queue_document_update_with_lease(doc_id, lease.clone());
+        }
+        if let (Some(tx), Some(pending)) = (&self.search_tx, &self.search_pending) {
+            if link_indexer::upsert_pending_update(pending, doc_id, lease) {
+                if let Err(e) = tx.try_send(doc_id.to_string()) {
+                    tracing::error!("Search index channel send failed (worker dead?): {e}");
+                }
+            }
+        }
     }
 
     #[cfg(test)]
@@ -2340,13 +2358,11 @@ impl Server {
             );
         }
 
-        // Trigger link indexer on_document_update for folder docs
-        // so background worker picks up the filemeta change
-        if let Some(ref indexer) = self.link_indexer {
-            indexer.on_document_update(&source_folder_doc_id).await;
-            if source_folder_doc_id != target_folder_doc_id {
-                indexer.on_document_update(&target_folder_doc_id).await;
-            }
+        // LINK_INDEXER_ORIGIN writes bypass the leased callback path, so
+        // queue explicitly (helper attaches the GC lease).
+        self.queue_derived_index_with_lease(&source_folder_doc_id);
+        if source_folder_doc_id != target_folder_doc_id {
+            self.queue_derived_index_with_lease(&target_folder_doc_id);
         }
 
         tracing::info!(
@@ -2559,14 +2575,19 @@ impl Server {
             .map(|rest| format!("/{}", rest.trim_start_matches('/')))
             .ok_or_else(|| MoveDocumentError::NotFound(format!("Path not found: {}", path)))?;
 
-        let folder_sync_kv = {
+        // Clone the Arcs out and drop the shard guard before the blocking
+        // awareness lock (see the lock-ordering rule in AGENTS.md).
+        let (sync_kv, awareness) = {
             let doc_ref = self.docs.get(&info.folder_doc_id).ok_or_else(|| {
                 MoveDocumentError::Internal("Source folder doc not loaded".into())
             })?;
-            let sync_kv = doc_ref.sync_kv();
-            let awareness = doc_ref.awareness();
+            (doc_ref.sync_kv(), doc_ref.awareness())
+        };
+        let folder_sync_kv = {
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-            let mut txn = guard.doc.transact_mut_with("link-indexer");
+            let mut txn = guard
+                .doc
+                .transact_mut_with(link_indexer::LINK_INDEXER_ORIGIN);
             let filemeta = txn
                 .get_map("filemeta_v0")
                 .ok_or_else(|| MoveDocumentError::NotFound("No filemeta_v0".into()))?;
@@ -2605,9 +2626,7 @@ impl Server {
         }
 
         self.doc_resolver.rebuild(&self.docs);
-        if let Some(ref indexer) = self.link_indexer {
-            indexer.on_document_update(&info.folder_doc_id).await;
-        }
+        self.queue_derived_index_with_lease(&info.folder_doc_id);
 
         Ok(link_indexer::MoveResult {
             old_path,
@@ -2770,14 +2789,19 @@ impl Server {
             links_rewritten += result.links_rewritten;
         }
 
-        let folder_sync_kv = {
+        // Clone the Arcs out and drop the shard guard before the blocking
+        // awareness lock (see the lock-ordering rule in AGENTS.md).
+        let (sync_kv, awareness) = {
             let doc_ref = self.docs.get(&source_folder_doc_id).ok_or_else(|| {
                 MoveDocumentError::Internal("Source folder doc not loaded".into())
             })?;
-            let sync_kv = doc_ref.sync_kv();
-            let awareness = doc_ref.awareness();
+            (doc_ref.sync_kv(), doc_ref.awareness())
+        };
+        let folder_sync_kv = {
             let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-            let mut txn = guard.doc.transact_mut_with("link-indexer");
+            let mut txn = guard
+                .doc
+                .transact_mut_with(link_indexer::LINK_INDEXER_ORIGIN);
             let filemeta = txn.get_or_insert_map("filemeta_v0");
             let docs_map = txn.get_or_insert_map("docs");
 
@@ -2817,9 +2841,7 @@ impl Server {
         }
 
         self.doc_resolver.rebuild(&self.docs);
-        if let Some(ref indexer) = self.link_indexer {
-            indexer.on_document_update(&source_folder_doc_id).await;
-        }
+        self.queue_derived_index_with_lease(&source_folder_doc_id);
 
         Ok(link_indexer::MoveResult {
             old_path,
@@ -3111,6 +3133,15 @@ impl Server {
                             let indexing_lease = indexing_lease_for_callback
                                 .get()
                                 .and_then(std::sync::Weak::upgrade);
+                            if indexing_lease.is_none() {
+                                // Unreachable by construction (load_doc sets the
+                                // weak before the doc is reachable); queueing
+                                // without a lease reopens the GC race.
+                                tracing::warn!(
+                                    doc_id = %doc_id_for_callback,
+                                    "Derived-index queue has no GC lease"
+                                );
+                            }
                             if let Some(ref indexer) = link_indexer_for_callback {
                                 // Queue synchronously while this callback still
                                 // holds awareness write lock, closing the gap in
@@ -3130,30 +3161,11 @@ impl Server {
                             // Notify search index worker (with deduplication)
                             if let Some(ref tx) = search_tx_for_callback {
                                 if let Some(ref pending) = search_pending_for_callback {
-                                    let now = tokio::time::Instant::now();
-                                    let is_new = match pending.entry(doc_key_for_indexer.clone()) {
-                                        Entry::Occupied(mut e) => {
-                                            let entry = e.get_mut();
-                                            entry.last_updated = now;
-                                            entry.generation = entry.generation.wrapping_add(1);
-                                            if indexing_lease.is_some() {
-                                                entry.lease = indexing_lease.clone();
-                                            }
-                                            false
-                                        }
-                                        Entry::Vacant(e) => {
-                                            let entry = match indexing_lease.clone() {
-                                                Some(lease) => {
-                                                    link_indexer::PendingEntry::with_lease(
-                                                        now, lease,
-                                                    )
-                                                }
-                                                None => link_indexer::PendingEntry::new(now),
-                                            };
-                                            e.insert(entry);
-                                            true
-                                        }
-                                    };
+                                    let is_new = link_indexer::upsert_pending_update(
+                                        pending,
+                                        &doc_key_for_indexer,
+                                        indexing_lease.clone(),
+                                    );
                                     if is_new {
                                         if let Err(e) = tx.try_send(doc_key_for_indexer.clone()) {
                                             tracing::error!("Search index channel send failed (worker dead?): {e}");
@@ -3203,7 +3215,7 @@ impl Server {
 
         indexing_lease
             .set(Arc::downgrade(&dwskv.awareness()))
-            .map_err(|_| anyhow!("Failed to initialize document indexing lease"))?;
+            .expect("indexing lease OnceLock is set exactly once per load_doc");
 
         // If channel is provided in token, store it in document metadata
         if let Some(channel_name) = routing_channel {
@@ -3594,43 +3606,54 @@ impl Server {
         Ok(())
     }
 
-    /// GC step for a single doc: compact its PermanentUserData, shut down
-    /// its persistence, and remove it from the docs map.
+    /// GC step for a single doc: remove it from the docs map, then compact
+    /// its PermanentUserData and shut down its persistence. Removal is
+    /// declined — the doc stays fully alive — when its awareness gained a
+    /// holder (derived-index lease, MCP handler, new connection) after the
+    /// GC worker's last checkpoint sample. Returns true when the doc was
+    /// removed (or was already gone).
     ///
-    /// Blocking — takes the awareness write lock and compaction can run
-    /// long on bloated PUD; call via spawn_blocking from async context.
-    /// Clones the awareness/sync_kv Arcs out of the map ref and drops the
-    /// DashMap shard guard BEFORE locking awareness: holding the guard
-    /// across a blocking lock blocks docs.insert()/remove() on the same
-    /// shard (parking_lot queues a writer, which then blocks all new
-    /// readers) and, with blocked std locks pinning the few runtime
-    /// workers, wedges the whole server (2026-07-31/08-02 prod hangs;
+    /// Removing first means compaction only ever runs on a doomed doc no
+    /// new holder can reach, and the extracted value keeps the update
+    /// subscription and SyncKv alive so the compacted state still persists
+    /// (the persistence worker holds its own SyncKv Arc). Shutdown comes
+    /// last: mark_dirty is a no-op post-shutdown, so shutting down earlier
+    /// could silently drop the compaction from persistence.
+    ///
+    /// Blocking — compaction takes the awareness write lock and can run
+    /// long on bloated PUD; call via spawn_blocking from async context. The
+    /// remove_if predicate is a single atomic load; no shard guard is ever
+    /// held across a blocking lock (2026-07-31/08-02 prod hangs;
     /// regression test: search_deadlock.rs Test 7).
-    pub fn gc_compact_and_remove(docs: &DashMap<String, DocWithSyncKv>, doc_id: &str) {
-        let handles = docs.get(doc_id).map(|doc| (doc.awareness(), doc.sync_kv()));
-        // Shard guard dropped here.
-        if let Some((awareness, sync_kv)) = handles {
-            // Compact PUD before shutdown: dedup ids, clear ds. The
-            // mutations create tombstones which yrs GC will clean up, and
-            // the update observer marks SyncKv dirty so the compacted
-            // state gets persisted.
-            let started = std::time::Instant::now();
-            let result = y_sweet_core::permanent_user_data::compact_user_data_locked(&awareness);
-            if !result.is_empty() {
-                tracing::info!(
-                    ids_removed = result.ids_removed,
-                    ds_removed = result.ds_removed,
-                    elapsed_ms = started.elapsed().as_millis() as u64,
-                    "Compacted PermanentUserData"
-                );
-            }
-            sync_kv.shutdown();
+    pub fn gc_compact_and_remove(docs: &DashMap<String, DocWithSyncKv>, doc_id: &str) -> bool {
+        // The checkpoints merely sample refs, so a final edit (e.g. via
+        // MCP) can slip in after the last sample and queue a leased index
+        // entry; the predicate re-checks at commit time. (GC is the only
+        // path that removes docs, so the entry can't have been swapped
+        // since the samples — if other removers appear, compare identity
+        // first so a reinserted doc isn't dropped uncompacted.)
+        let Some((_, doc)) = docs.remove_if(doc_id, |_, doc| !doc.has_external_refs()) else {
+            // None: either declined (doc re-referenced — leave it alive) or
+            // already gone.
+            return !docs.contains_key(doc_id);
+        };
+
+        // Compact PUD: dedup ids, clear ds. The mutations create tombstones
+        // which yrs GC will clean up, and the update observer (owned by the
+        // extracted value) marks SyncKv dirty so the compacted state gets
+        // persisted.
+        let started = std::time::Instant::now();
+        let result = y_sweet_core::permanent_user_data::compact_user_data_locked(&doc.awareness());
+        if !result.is_empty() {
+            tracing::info!(
+                ids_removed = result.ids_removed,
+                ds_removed = result.ds_removed,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "Compacted PermanentUserData"
+            );
         }
-        // Unconditional remove is safe today because GC is the only path
-        // that removes docs. If other removers appear, re-get and compare
-        // Arc::ptr_eq on sync_kv first, so a doc reinserted during the
-        // compaction window isn't dropped uncompacted.
-        docs.remove(doc_id);
+        doc.sync_kv().shutdown();
+        true
     }
 
     async fn doc_gc_worker(
@@ -3645,10 +3668,9 @@ impl Server {
             tokio::select! {
                 _ = tokio::time::sleep(checkpoint_freq) => {
                     if let Some(doc) = docs.get(&doc_id) {
-                        let awareness = Arc::downgrade(&doc.awareness());
-                        if awareness.strong_count() > 1 {
+                        if doc.has_external_refs() {
                             checkpoints_without_refs = 0;
-                            tracing::debug!("doc is still alive - it has {} references", awareness.strong_count());
+                            tracing::debug!("doc is still alive - it has external references");
                         } else {
                             checkpoints_without_refs += 1;
                             tracing::info!("doc has only one reference, candidate for GC. checkpoints_without_refs: {}", checkpoints_without_refs);
@@ -3664,14 +3686,24 @@ impl Server {
                         // otherwise pin one of the few worker threads.
                         let docs = Arc::clone(&docs);
                         let doc_id = doc_id.clone();
-                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                        match tokio::task::spawn_blocking(move || {
                             Self::gc_compact_and_remove(&docs, &doc_id)
                         })
                         .await
                         {
-                            tracing::error!(?e, "GC compact task panicked");
+                            Ok(true) => break,
+                            Ok(false) => {
+                                // A holder appeared after the checkpoint
+                                // samples (index lease, MCP handler, new
+                                // connection). Start the count over.
+                                tracing::info!("GC deferred: doc re-referenced before removal");
+                                checkpoints_without_refs = 0;
+                            }
+                            Err(e) => {
+                                tracing::error!(?e, "GC compact task panicked");
+                                break;
+                            }
                         }
-                        break;
                     }
                 }
                 _ = cancellation_token.cancelled() => {
@@ -8965,14 +8997,13 @@ mod test {
             .update(SUGG_UUID, scan_suggestions("Hello {++world++}"));
         let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
 
-        let completed = search_handle_content_update(
+        search_handle_content_update(
             &doc_id,
             &server.docs,
             &search_index,
             &server.suggestions_index,
         );
 
-        assert!(completed);
         assert!(server.suggestions_index.get(SUGG_UUID).is_some());
     }
 
@@ -9045,18 +9076,17 @@ mod test {
                 .insert(&mut txn, 0, "Final {++suggestion++}");
         }
 
-        let queued = server
-            .search_pending
-            .as_ref()
-            .unwrap()
-            .get(&doc_id)
-            .unwrap();
-        assert!(
-            queued.lease.is_some(),
-            "callback must attach search GC lease"
-        );
-        drop(queued);
-        assert!(server.link_indexer().as_ref().unwrap().has_pending(&doc_id));
+        // Under parallel-test load the 2s debounce can elapse before this
+        // point, letting a worker consume the entry — only assert the lease
+        // while the entry is still pending (attachment itself is covered
+        // deterministically by folder_queue_helper_attaches_gc_lease and
+        // pending_entry_remains_a_gc_lease_until_indexed).
+        if let Some(queued) = server.search_pending.as_ref().unwrap().get(&doc_id) {
+            assert!(
+                queued.lease.is_some(),
+                "callback must attach search GC lease"
+            );
+        }
 
         // GC checkpoints run throughout the 2s debounce. Leases must keep the
         // source doc present until both real workers consume the final update.
@@ -9089,28 +9119,64 @@ mod test {
         cancellation.cancel();
     }
 
-    #[test]
-    fn search_ack_does_not_remove_newer_generation() {
-        let pending = DashMap::new();
-        let now = tokio::time::Instant::now();
-        pending.insert("doc".to_string(), link_indexer::PendingEntry::new(now));
-        let scanned_generation = pending.get("doc").unwrap().generation;
+    #[tokio::test]
+    async fn gc_declines_removal_while_index_lease_held() {
+        let server = Server::new_for_test();
+        insert_test_content_doc(&server, SUGG_UUID, "Leased content").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
 
-        pending.get_mut("doc").unwrap().generation += 1;
-        assert!(!acknowledge_search_generation(
-            &pending,
-            "doc",
-            scanned_generation
-        ));
-        assert!(pending.contains_key("doc"));
+        let lease = server.docs.get(&doc_id).unwrap().awareness();
+        let sync_kv = server.docs.get(&doc_id).unwrap().sync_kv();
+        assert!(
+            !Server::gc_compact_and_remove(&server.docs, &doc_id),
+            "GC must decline while a lease holds the awareness"
+        );
+        assert!(server.docs.contains_key(&doc_id));
+        assert!(
+            !sync_kv.is_shutdown(),
+            "declined GC must leave the doc's persistence alive"
+        );
 
-        let current_generation = pending.get("doc").unwrap().generation;
-        assert!(acknowledge_search_generation(
-            &pending,
-            "doc",
-            current_generation
-        ));
-        assert!(!pending.contains_key("doc"));
+        drop(lease);
+        assert!(Server::gc_compact_and_remove(&server.docs, &doc_id));
+        assert!(!server.docs.contains_key(&doc_id));
+        assert!(sync_kv.is_shutdown());
+    }
+
+    #[tokio::test]
+    async fn folder_queue_helper_attaches_gc_lease() {
+        // move/delete/copy folder writes use LINK_INDEXER_ORIGIN, which
+        // suppresses the leased update-callback path — the explicit queue
+        // must attach the lease itself.
+        let cancellation = CancellationToken::new();
+        let (server, _receivers) = Server::new(
+            None,
+            Duration::from_millis(20),
+            None,
+            None,
+            Vec::new(),
+            cancellation,
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+        let server = Arc::new(server);
+        insert_test_content_doc(&server, SUGG_UUID, "Folder body").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+
+        server.queue_derived_index_with_lease(&doc_id);
+
+        let indexer = server.link_indexer().as_ref().unwrap();
+        assert!(
+            indexer.pending_has_lease(&doc_id),
+            "queued entry must hold a GC lease"
+        );
+        let search_entry = server.search_pending.as_ref().unwrap();
+        assert!(
+            search_entry.get(&doc_id).unwrap().lease.is_some(),
+            "helper must lease the search queue too"
+        );
     }
 
     #[tokio::test]

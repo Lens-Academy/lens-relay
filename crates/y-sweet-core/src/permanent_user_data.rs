@@ -1,6 +1,11 @@
 use std::collections::HashSet;
 use yrs::{Array, ArrayRef, Doc, Map, Out, Transact};
 
+/// Transaction origin for GC-time PermanentUserData compaction. The doc_sync
+/// update observer matches on this to persist the change without dispatching
+/// webhooks or queueing derived-index work (see `DocWithSyncKv`).
+pub const GC_COMPACTION_ORIGIN: &str = "gc-compaction";
+
 /// Compact a doc's PermanentUserData under its awareness lock.
 ///
 /// EXCLUSIVE: [`compact_user_data`] does internal `transact_mut` on the doc;
@@ -113,7 +118,7 @@ pub fn compact_user_data(doc: &Doc) -> CompactionResult {
     // PUD metadata cannot affect content-derived indexes. Mark this internal
     // maintenance transaction so observers persist it without queuing link,
     // search, or suggestion scans during GC.
-    let mut txn = doc.transact_mut_with("gc-compaction");
+    let mut txn = doc.transact_mut_with(GC_COMPACTION_ORIGIN);
 
     for iw in ids_work {
         result.ids_removed += (iw.original_len - iw.unique_ids.len() as u32) as usize;
