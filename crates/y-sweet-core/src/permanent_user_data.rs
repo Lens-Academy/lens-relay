@@ -110,7 +110,10 @@ pub fn compact_user_data(doc: &Doc) -> CompactionResult {
     }
 
     // Phase 2: apply mutations.
-    let mut txn = doc.transact_mut();
+    // PUD metadata cannot affect content-derived indexes. Mark this internal
+    // maintenance transaction so observers persist it without queuing link,
+    // search, or suggestion scans during GC.
+    let mut txn = doc.transact_mut_with("gc-compaction");
 
     for iw in ids_work {
         result.ids_removed += (iw.original_len - iw.unique_ids.len() as u32) as usize;
@@ -145,7 +148,30 @@ impl CompactionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
     use yrs::{Array, Doc, Map, Out, Transact};
+
+    #[test]
+    fn compaction_marks_update_as_internal_maintenance() {
+        let doc = make_doc_with_users(&[("user", &[7, 7], 1)]);
+        let observed_origin = Arc::new(Mutex::new(None));
+        let captured = observed_origin.clone();
+        let _subscription = doc
+            .observe_update_v1(move |txn, _| {
+                *captured.lock().unwrap() = txn
+                    .origin()
+                    .map(|origin| String::from_utf8_lossy(origin.as_ref()).into_owned());
+            })
+            .unwrap();
+
+        let result = compact_user_data(&doc);
+
+        assert!(!result.is_empty());
+        assert_eq!(
+            observed_origin.lock().unwrap().as_deref(),
+            Some("gc-compaction")
+        );
+    }
 
     /// Helper: build a doc with a "users" map containing the given user entries.
     /// Each user gets an `ids` array (from the provided list) and a `ds` array

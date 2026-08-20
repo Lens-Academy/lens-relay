@@ -6,7 +6,7 @@ use crate::link_parser::{
 };
 use dashmap::DashMap;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 use yrs::{Any, Doc, GetString, Map, MapRef, Out, ReadTxn, Text, Transact, WriteTxn};
@@ -1148,10 +1148,14 @@ pub(crate) struct RenameEvent {
     pub old_path: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct PendingEntry {
     pub first_queued: Instant,
     pub last_updated: Instant,
+    pub generation: u64,
+    // Strong lease keeps the source Y.Doc alive until this generation is
+    // indexed. GC already treats awareness strong refs as active use.
+    pub lease: Option<Arc<RwLock<crate::sync::awareness::Awareness>>>,
 }
 
 impl PendingEntry {
@@ -1159,6 +1163,15 @@ impl PendingEntry {
         Self {
             first_queued: now,
             last_updated: now,
+            generation: 1,
+            lease: None,
+        }
+    }
+
+    pub fn with_lease(now: Instant, lease: Arc<RwLock<crate::sync::awareness::Awareness>>) -> Self {
+        Self {
+            lease: Some(lease),
+            ..Self::new(now)
         }
     }
 }
@@ -1187,17 +1200,40 @@ impl LinkIndexer {
     }
 
     pub async fn on_document_update(&self, doc_id: &str) {
+        self.queue_document_update(doc_id);
+    }
+
+    /// Queue work synchronously. Update callbacks use this form so the pending
+    /// lease exists before they release the document's awareness write lock.
+    pub fn queue_document_update(&self, doc_id: &str) {
+        self.queue_document_update_with_lease(doc_id, None);
+    }
+
+    pub fn queue_document_update_with_lease(
+        &self,
+        doc_id: &str,
+        lease: Option<Arc<RwLock<crate::sync::awareness::Awareness>>>,
+    ) {
         use dashmap::mapref::entry::Entry;
         let now = Instant::now();
         // Atomically check-and-insert to avoid TOCTOU race where two concurrent
         // calls both see "not pending" and double-send to the channel.
         let is_new = match self.pending.entry(doc_id.to_string()) {
             Entry::Occupied(mut e) => {
-                e.get_mut().last_updated = now;
+                let entry = e.get_mut();
+                entry.last_updated = now;
+                entry.generation = entry.generation.wrapping_add(1);
+                if lease.is_some() {
+                    entry.lease = lease;
+                }
                 false
             }
             Entry::Vacant(e) => {
-                e.insert(PendingEntry::new(now));
+                let entry = match lease {
+                    Some(lease) => PendingEntry::with_lease(now, lease),
+                    None => PendingEntry::new(now),
+                };
+                e.insert(entry);
                 true
             }
         };
@@ -1231,6 +1267,7 @@ impl LinkIndexer {
         }
     }
 
+    #[cfg(test)]
     fn is_ready(&self, doc_id: &str) -> bool {
         if let Some(entry) = self.pending.get(doc_id) {
             entry.last_updated.elapsed() >= DEBOUNCE_DURATION // user paused
@@ -1240,8 +1277,13 @@ impl LinkIndexer {
         }
     }
 
-    fn mark_indexed(&self, doc_id: &str) {
-        self.pending.remove(doc_id);
+    fn mark_indexed(&self, doc_id: &str, generation: u64) {
+        self.pending
+            .remove_if(doc_id, |_, entry| entry.generation == generation);
+    }
+
+    pub fn has_pending(&self, doc_id: &str) -> bool {
+        self.pending.contains_key(doc_id)
     }
 
     /// Clear all pending entries. Called after startup_reindex to discard stale
@@ -1507,21 +1549,27 @@ impl LinkIndexer {
             // ⚠️ LOCK ORDERING: DashMap shard locks < awareness RwLock
             // Same fix as search_worker — see server.rs comment for full explanation.
 
-            // 3a. Snapshot pending keys (only DashMap shard locks, no external locks)
-            let snapshot: Vec<String> = self.pending.iter().map(|e| e.key().clone()).collect();
+            // 3a. Snapshot pending entries (only DashMap shard locks, no external locks)
+            let snapshot: Vec<(String, PendingEntry)> = self
+                .pending
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect();
             // Iterator dropped — all shard locks released.
 
             // 3b. Filter to ready (safe to acquire awareness locks now)
-            let ready: Vec<String> = snapshot
+            let ready: Vec<(String, PendingEntry)> = snapshot
                 .into_iter()
-                .filter(|key| {
+                .filter(|(key, entry)| {
                     let is_folder = is_folder_doc(key, &docs).is_some();
-                    is_folder || self.is_ready(key)
+                    is_folder
+                        || entry.last_updated.elapsed() >= DEBOUNCE_DURATION
+                        || entry.first_queued.elapsed() >= DEBOUNCE_DURATION
                 })
                 .collect();
 
             // 4. Process each ready doc (sequentially, but NO sleeping between them)
-            for doc_id in ready {
+            for (doc_id, queued) in ready {
                 // Re-check folder status (need fresh content UUIDs).
                 if let Some(content_uuids) = is_folder_doc(&doc_id, &docs) {
                     // Folder doc — process immediately (no debounce)
@@ -1548,9 +1596,9 @@ impl LinkIndexer {
                             .unwrap_or(&doc_id[..36.min(doc_id.len())]);
                         for uuid in content_uuids {
                             let content_id = format!("{}-{}", relay_id, uuid);
-                            if docs.contains_key(&content_id) {
+                            if let Some(lease) = docs.get(&content_id).map(|doc| doc.awareness()) {
                                 tracing::info!("Re-queuing content doc: {}", content_id);
-                                self.on_document_update(&content_id).await;
+                                self.queue_document_update_with_lease(&content_id, Some(lease));
                             }
                         }
                     } else {
@@ -1571,7 +1619,9 @@ impl LinkIndexer {
                         Err(e) => tracing::error!("Failed to index {}: {:?}", doc_id, e),
                     }
                 }
-                self.mark_indexed(&doc_id);
+                // A concurrent update increments the generation. In that case
+                // keep the entry queued so the newer state gets another pass.
+                self.mark_indexed(&doc_id, queued.generation);
                 // Yield to tokio scheduler between batch items to prevent
                 // monopolizing a worker thread during large batches.
                 tokio::task::yield_now().await;
@@ -1814,6 +1864,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_entry_remains_a_gc_lease_until_indexed() {
+        let (indexer, _rx) = LinkIndexer::new();
+        let lease = Arc::new(RwLock::new(crate::sync::awareness::Awareness::new(
+            Doc::new(),
+        )));
+        indexer.queue_document_update_with_lease("doc-lease", Some(lease.clone()));
+        assert_eq!(Arc::strong_count(&lease), 2);
+
+        let generation = indexer.pending.get("doc-lease").unwrap().generation;
+        indexer.mark_indexed("doc-lease", generation);
+        assert_eq!(Arc::strong_count(&lease), 1);
+    }
+
+    #[tokio::test]
+    async fn indexing_ack_does_not_remove_concurrent_update() {
+        let (indexer, _rx) = LinkIndexer::new();
+        indexer.on_document_update("doc-race").await;
+        let scanned_generation = indexer.pending.get("doc-race").unwrap().generation;
+
+        indexer.on_document_update("doc-race").await;
+        indexer.mark_indexed("doc-race", scanned_generation);
+
+        assert!(indexer.pending.contains_key("doc-race"));
+        assert!(indexer.pending.get("doc-race").unwrap().generation > scanned_generation);
+    }
+
+    #[tokio::test]
     async fn debounce_completes_after_updates_settle() {
         let (indexer, _rx) = LinkIndexer::new();
 
@@ -1851,7 +1928,8 @@ mod tests {
         assert!(rx.try_recv().is_ok());
 
         // Simulate indexing complete
-        indexer.mark_indexed("doc-1");
+        let generation = indexer.pending.get("doc-1").unwrap().generation;
+        indexer.mark_indexed("doc-1", generation);
 
         // New update should send a new channel message (not suppressed)
         indexer.on_document_update("doc-1").await;

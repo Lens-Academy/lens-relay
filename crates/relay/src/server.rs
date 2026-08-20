@@ -384,6 +384,16 @@ fn search_is_ready(entry: &link_indexer::PendingEntry) -> bool {
         || entry.first_queued.elapsed() >= SEARCH_DEBOUNCE
 }
 
+fn acknowledge_search_generation(
+    pending: &DashMap<String, link_indexer::PendingEntry>,
+    doc_id: &str,
+    generation: u64,
+) -> bool {
+    pending
+        .remove_if(doc_id, |_, entry| entry.generation == generation)
+        .is_some()
+}
+
 /// Handle the outcome of a supervised worker. CleanExit logs INFO and stops.
 /// BudgetExceeded logs CRITICAL with the panic context and exits the process
 /// so Docker `restart: unless-stopped` cycles the container.
@@ -501,19 +511,17 @@ async fn search_worker(
         // Iterator dropped — all shard locks released.
 
         // 3b. Filter to ready (safe to acquire awareness locks now)
-        let ready: Vec<String> = snapshot
+        let ready: Vec<(String, link_indexer::PendingEntry)> = snapshot
             .into_iter()
             .filter(|(key, entry)| {
                 let is_folder = link_indexer::is_folder_doc(key, &docs).is_some();
                 is_folder || search_is_ready(entry)
             })
-            .map(|(key, _)| key)
             .collect();
 
         // 4. Process each ready doc
-        for doc_id in ready {
-            pending.remove(&doc_id);
-
+        for (doc_id, queued) in ready {
+            let mut completed = true;
             if let Some(content_uuids) = link_indexer::is_folder_doc(&doc_id, &docs) {
                 // Folder doc — detect added/removed documents
                 search_handle_folder_update(
@@ -527,7 +535,14 @@ async fn search_worker(
                 .await;
             } else {
                 // Content doc — reindex into search
-                search_handle_content_update(&doc_id, &docs, &search_index, &suggestions_index);
+                completed =
+                    search_handle_content_update(&doc_id, &docs, &search_index, &suggestions_index);
+            }
+
+            if completed {
+                // A concurrent update increments generation. Only acknowledge
+                // the exact generation we scanned; newer work stays queued.
+                acknowledge_search_generation(&pending, &doc_id, queued.generation);
             }
         }
     }
@@ -540,16 +555,20 @@ pub(crate) fn search_handle_content_update(
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
     suggestions_index: &SuggestionsIndex,
-) {
+) -> bool {
     let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
-        return;
+        return true;
     };
 
     // Read Y.Text("contents") body
     let body = {
         let awareness = {
             let Some(doc_ref) = docs.get(doc_id) else {
-                return;
+                tracing::warn!(
+                    doc_id,
+                    "Search refresh missed evicted doc; retaining last indexed state"
+                );
+                return true;
             };
             doc_ref.awareness() // Arc clone
         }; // DashMap shard lock released
@@ -570,6 +589,7 @@ pub(crate) fn search_handle_content_update(
     }
 
     suggestions_index.update(doc_uuid, critic_scanner::scan_suggestions(&body));
+    true
 }
 
 /// Find the title and folder name for a content doc UUID by scanning all folder docs' filemeta_v0.
@@ -1188,6 +1208,16 @@ impl Server {
     /// Get the link indexer, if enabled.
     pub fn link_indexer(&self) -> &Option<Arc<LinkIndexer>> {
         &self.link_indexer
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_pending_index_work_for_test(&self) {
+        if let Some(pending) = &self.search_pending {
+            pending.clear();
+        }
+        if let Some(indexer) = &self.link_indexer {
+            indexer.clear_pending();
+        }
     }
 
     /// Create a new document with content at the specified path within a folder.
@@ -2994,6 +3024,7 @@ impl Server {
     ) -> Result<()> {
         Self::validate_doc_id(doc_id)?;
         let (send, recv) = channel(1024);
+        let indexing_lease = Arc::new(std::sync::OnceLock::new());
 
         // Determine routing channel: use provided channel or fallback to doc_id
         let routing_channel_name = routing_channel
@@ -3023,14 +3054,14 @@ impl Server {
             let search_pending_for_callback = self.search_pending.clone();
             let doc_key_for_indexer = doc_id.to_string();
             let docs = self.docs.clone();
+            let indexing_lease_for_callback = indexing_lease.clone();
             let doc_id_for_callback = doc_id.to_string();
-            let metrics_for_callback = self.metrics.clone();
             // Capture parent awareness to keep it alive (prevents GC while subdoc exists)
             let _parent_awareness = parent_awareness_guard;
 
             if let Some(dispatcher) = event_dispatcher {
-                Some(
-                    Arc::new(move |mut event: DocumentUpdatedEvent, is_indexer: bool| {
+                Some(Arc::new(
+                    move |mut event: DocumentUpdatedEvent, suppress_derived_index: bool| {
                         // Keep parent awareness alive by referencing it in the closure
                         let _ = &_parent_awareness;
 
@@ -3072,30 +3103,22 @@ impl Server {
                         dispatcher.send_event(envelope);
 
                         // Notify link indexer (if this update is not from the indexer itself)
-                        if !is_indexer {
+                        if !suppress_derived_index {
+                            // Upgrade the prewired weak self-reference. Never
+                            // access `docs` here: callback holds awareness WRITE,
+                            // while readers may hold a docs shard then wait for
+                            // awareness READ (AB/BA deadlock).
+                            let indexing_lease = indexing_lease_for_callback
+                                .get()
+                                .and_then(std::sync::Weak::upgrade);
                             if let Some(ref indexer) = link_indexer_for_callback {
-                                let indexer = indexer.clone();
-                                let doc_key = doc_key_for_indexer.clone();
-                                let metrics = metrics_for_callback.clone();
-                                tokio::spawn(async move {
-                                    let doc_key_for_log = doc_key.clone();
-                                    if let Some(msg) = crate::supervisor::run_with_panic_recovery(
-                                        "on_document_update",
-                                        &metrics,
-                                        async move {
-                                            indexer.on_document_update(&doc_key).await;
-                                        },
-                                    )
-                                    .await
-                                    {
-                                        tracing::error!(
-                                            worker = "on_document_update",
-                                            doc = %doc_key_for_log,
-                                            panic_msg = %msg,
-                                            "fire-and-forget task panicked; one update lost"
-                                        );
-                                    }
-                                });
+                                // Queue synchronously while this callback still
+                                // holds awareness write lock, closing the gap in
+                                // which GC could observe no external reference.
+                                indexer.queue_document_update_with_lease(
+                                    &doc_key_for_indexer,
+                                    indexing_lease.clone(),
+                                );
                             }
 
                             // ⚠️ This runs synchronously inside an awareness write lock.
@@ -3110,11 +3133,24 @@ impl Server {
                                     let now = tokio::time::Instant::now();
                                     let is_new = match pending.entry(doc_key_for_indexer.clone()) {
                                         Entry::Occupied(mut e) => {
-                                            e.get_mut().last_updated = now;
+                                            let entry = e.get_mut();
+                                            entry.last_updated = now;
+                                            entry.generation = entry.generation.wrapping_add(1);
+                                            if indexing_lease.is_some() {
+                                                entry.lease = indexing_lease.clone();
+                                            }
                                             false
                                         }
                                         Entry::Vacant(e) => {
-                                            e.insert(link_indexer::PendingEntry::new(now));
+                                            let entry = match indexing_lease.clone() {
+                                                Some(lease) => {
+                                                    link_indexer::PendingEntry::with_lease(
+                                                        now, lease,
+                                                    )
+                                                }
+                                                None => link_indexer::PendingEntry::new(now),
+                                            };
+                                            e.insert(entry);
                                             true
                                         }
                                     };
@@ -3126,8 +3162,8 @@ impl Server {
                                 }
                             }
                         }
-                    }) as y_sweet_core::webhook::WebhookCallback,
-                )
+                    },
+                ) as y_sweet_core::webhook::WebhookCallback)
             } else {
                 // Server::new always constructs an event_dispatcher (with
                 // webhooks if configured, otherwise sync-protocol-only). The
@@ -3164,6 +3200,10 @@ impl Server {
             event_callback,
         )
         .await?;
+
+        indexing_lease
+            .set(Arc::downgrade(&dwskv.awareness()))
+            .map_err(|_| anyhow!("Failed to initialize document indexing lease"))?;
 
         // If channel is provided in token, store it in document metadata
         if let Some(channel_name) = routing_channel {
@@ -8912,6 +8952,165 @@ mod test {
             &server.suggestions_index,
         );
         assert!(server.suggestions_index.get(SUGG_UUID).is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_content_doc_retains_last_known_index_without_hot_retry() {
+        // Absence from the in-memory map says nothing about persisted content.
+        // Never turn an unknown state into a false "zero suggestions" result.
+        let search_index = Arc::new(SearchIndex::new_in_memory().expect("in-memory search index"));
+        let server = Server::new_for_test_with_search(search_index.clone());
+        server
+            .suggestions_index
+            .update(SUGG_UUID, scan_suggestions("Hello {++world++}"));
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+
+        let completed = search_handle_content_update(
+            &doc_id,
+            &server.docs,
+            &search_index,
+            &server.suggestions_index,
+        );
+
+        assert!(completed);
+        assert!(server.suggestions_index.get(SUGG_UUID).is_some());
+    }
+
+    #[tokio::test]
+    async fn pending_search_lease_keeps_doc_alive_until_refresh() {
+        // Regression for the production sequence: final edit queued a
+        // debounced suggestion refresh, then GC evicted the doc one second
+        // before that refresh ran.
+        let server = Server::new_for_test();
+        insert_test_content_doc(&server, SUGG_UUID, "Resolved content").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+        let pending = Arc::new(DashMap::new());
+        let now = tokio::time::Instant::now();
+        let lease = server.docs.get(&doc_id).unwrap().awareness();
+        pending.insert(
+            doc_id.clone(),
+            link_indexer::PendingEntry::with_lease(now, lease),
+        );
+        let cancel = CancellationToken::new();
+        let checkpoint = Duration::from_millis(20);
+
+        let worker = tokio::spawn(Server::doc_gc_worker(
+            server.docs.clone(),
+            doc_id.clone(),
+            checkpoint,
+            cancel.clone(),
+        ));
+
+        tokio::time::sleep(checkpoint * 4).await;
+        assert!(server.docs.contains_key(&doc_id));
+
+        pending.remove(&doc_id);
+        tokio::time::timeout(checkpoint * 6, async {
+            while server.docs.contains_key(&doc_id) {
+                tokio::time::sleep(checkpoint).await;
+            }
+        })
+        .await
+        .expect("doc should become GC-eligible after indexing lease clears");
+
+        cancel.cancel();
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_callback_leases_doc_until_real_workers_refresh_suggestions() {
+        let cancellation = CancellationToken::new();
+        let (server, receivers) = Server::new(
+            None,
+            Duration::from_millis(20),
+            None,
+            None,
+            Vec::new(),
+            cancellation.clone(),
+            true,
+            None,
+        )
+        .await
+        .unwrap();
+        let server = Arc::new(server);
+        server.spawn_workers(receivers);
+
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+        server.load_doc(&doc_id, None).await.unwrap();
+        {
+            let awareness = server.docs.get(&doc_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            txn.get_or_insert_text("contents")
+                .insert(&mut txn, 0, "Final {++suggestion++}");
+        }
+
+        let queued = server
+            .search_pending
+            .as_ref()
+            .unwrap()
+            .get(&doc_id)
+            .unwrap();
+        assert!(
+            queued.lease.is_some(),
+            "callback must attach search GC lease"
+        );
+        drop(queued);
+        assert!(server.link_indexer().as_ref().unwrap().has_pending(&doc_id));
+
+        // GC checkpoints run throughout the 2s debounce. Leases must keep the
+        // source doc present until both real workers consume the final update.
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                if server.suggestions_index.get(SUGG_UUID).is_some()
+                    && !server
+                        .search_pending
+                        .as_ref()
+                        .unwrap()
+                        .contains_key(&doc_id)
+                    && !server.link_indexer().as_ref().unwrap().has_pending(&doc_id)
+                {
+                    break;
+                }
+                assert!(server.docs.contains_key(&doc_id));
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("workers should refresh suggestions and release both leases");
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while server.docs.contains_key(&doc_id) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("doc should become GC-eligible only after index refresh");
+        cancellation.cancel();
+    }
+
+    #[test]
+    fn search_ack_does_not_remove_newer_generation() {
+        let pending = DashMap::new();
+        let now = tokio::time::Instant::now();
+        pending.insert("doc".to_string(), link_indexer::PendingEntry::new(now));
+        let scanned_generation = pending.get("doc").unwrap().generation;
+
+        pending.get_mut("doc").unwrap().generation += 1;
+        assert!(!acknowledge_search_generation(
+            &pending,
+            "doc",
+            scanned_generation
+        ));
+        assert!(pending.contains_key("doc"));
+
+        let current_generation = pending.get("doc").unwrap().generation;
+        assert!(acknowledge_search_generation(
+            &pending,
+            "doc",
+            current_generation
+        ));
+        assert!(!pending.contains_key("doc"));
     }
 
     #[tokio::test]
