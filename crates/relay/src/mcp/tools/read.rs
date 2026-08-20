@@ -418,6 +418,21 @@ mod tests {
         let sync_kv = server.docs().get(&content_doc_id).unwrap().sync_kv();
         sync_kv.persist().await.expect("persist should succeed");
 
+        // This test does not start the derived-index workers. In production they
+        // drain these queues before releasing their GC leases; emulate that
+        // completion here so this test can focus on reload-after-eviction.
+        server.clear_pending_index_work_for_test();
+        let lease_count = server
+            .docs()
+            .get(&content_doc_id)
+            .map(|doc| Arc::strong_count(&doc.awareness()))
+            .unwrap();
+        assert_eq!(
+            lease_count, 2,
+            "unexpected awareness lease after queue drain"
+        );
+        tokio::task::yield_now().await;
+
         // Advance paused time past 2 GC checkpoints so the GC worker evicts the doc.
         // With no WebSocket connections, awareness strong_count == 1, so GC proceeds.
         for _ in 0..10 {

@@ -74,7 +74,20 @@ impl DocWithSyncKv {
 
                 // Trigger webhook if callback is configured
                 if let Some(ref callback) = webhook_callback {
-                    let is_indexer = txn
+                    // GC maintenance changes only PermanentUserData. Persistence
+                    // above must run, but external dispatch and parent/index map
+                    // access are both needless and unsafe under awareness WRITE.
+                    if txn
+                        .origin()
+                        .map(|o| o.as_ref() == b"gc-compaction")
+                        .unwrap_or(false)
+                    {
+                        return;
+                    }
+
+                    // Link-indexer rewrites are externally visible but must not
+                    // recursively enqueue derived-index work.
+                    let suppress_derived_index = txn
                         .origin()
                         .map(|o| o.as_ref() == b"link-indexer")
                         .unwrap_or(false);
@@ -88,7 +101,7 @@ impl DocWithSyncKv {
                         .with_state_vector(sv);
 
                     // Callback handles envelope creation and dispatch
-                    callback(event, is_indexer);
+                    callback(event, suppress_derived_index);
                 }
             })
             .map_err(|_| anyhow!("Failed to subscribe to updates"))?
@@ -286,6 +299,40 @@ mod tests {
     use crate::store::Store;
     use async_trait::async_trait;
     use dashmap::DashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use yrs::{Text, Transact, WriteTxn};
+
+    #[tokio::test]
+    async fn gc_compaction_persists_without_external_callback() {
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let observed = callback_count.clone();
+        let callback = Arc::new(
+            move |_event: crate::event::DocumentUpdatedEvent, _internal: bool| {
+                observed.fetch_add(1, Ordering::SeqCst);
+            },
+        ) as crate::webhook::WebhookCallback;
+        let store = MemoryStore::default();
+        let dwskv = DocWithSyncKv::new(
+            "maintenance_doc",
+            Some(Arc::new(Box::new(store.clone()))),
+            || (),
+            Some(callback),
+        )
+        .await
+        .unwrap();
+
+        {
+            let awareness = dwskv.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut_with("gc-compaction");
+            txn.get_or_insert_text("maintenance_probe")
+                .insert(&mut txn, 0, "persist me");
+        }
+
+        assert_eq!(callback_count.load(Ordering::SeqCst), 0);
+        dwskv.sync_kv().persist().await.unwrap();
+        assert!(!store.data.is_empty());
+    }
 
     #[derive(Default, Clone)]
     struct MemoryStore {
