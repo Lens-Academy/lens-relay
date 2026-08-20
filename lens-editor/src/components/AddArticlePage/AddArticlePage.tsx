@@ -160,6 +160,13 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
     b.created_at.localeCompare(a.created_at),
   );
 
+  const codeStyle: CSSProperties = {
+    background: "#0f0f23",
+    padding: "2px 6px",
+    borderRadius: 4,
+    fontSize: 13,
+  };
+
   const smallButtonStyle: CSSProperties = {
     background: "transparent",
     color: "#9aa4c7",
@@ -189,29 +196,10 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
           Import web articles and YouTube videos into the Lens library. Paste
           one or more URLs (one per line). The server fetches each page,
           extracts the article, cleans it up, and saves it to{" "}
-          <code
-            style={{
-              background: "#0f0f23",
-              padding: "2px 6px",
-              borderRadius: 4,
-              fontSize: 13,
-            }}
-          >
-            Lens Edu/articles
-          </code>
-          . YouTube links import the video&apos;s transcript (with timestamps)
-          to{" "}
-          <code
-            style={{
-              background: "#0f0f23",
-              padding: "2px 6px",
-              borderRadius: 4,
-              fontSize: 13,
-            }}
-          >
-            Lens Edu/video_transcripts
-          </code>{" "}
-          instead — those take a few minutes.
+          <code style={codeStyle}>Lens Edu/articles</code>. YouTube links
+          import the video&apos;s transcript (with timestamps) to{" "}
+          <code style={codeStyle}>Lens Edu/video_transcripts</code> instead.
+          Those take a few minutes.
         </p>
 
         <textarea

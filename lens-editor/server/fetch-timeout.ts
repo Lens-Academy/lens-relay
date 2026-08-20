@@ -20,6 +20,9 @@ export interface FetchBytesOptions {
   // Uint8Array is listed explicitly: TS 5.7's generic Uint8Array<ArrayBufferLike>
   // no longer satisfies the DOM BodyInit union, but undici accepts it fine.
   body?: BodyInit | Uint8Array;
+  /** undici dispatcher extension -- routes this one request through a proxy
+   *  (Node's global fetch is undici and passes it straight through). */
+  dispatcher?: import("undici").Dispatcher;
   /** Outer signal (e.g. a per-job deadline / cancel) that also aborts this call. */
   signal?: AbortSignal;
   /** Abort as soon as the response body exceeds this many bytes. Without it

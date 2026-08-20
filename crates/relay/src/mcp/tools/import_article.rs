@@ -275,7 +275,7 @@ mod tests {
         }
     }
 
-    // Prevents: regressing YouTube support back to a client-side rejection —
+    // Prevents: regressing YouTube support back to a client-side rejection --
     // the editor imports video transcripts from bare URLs since 2026-08
     #[tokio::test]
     async fn forwards_youtube_urls_to_editor() {

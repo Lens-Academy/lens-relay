@@ -3,7 +3,11 @@ import { cors } from 'hono/cors';
 import type { JobQueue } from './queue';
 import type { VideoPayload } from './types';
 import { verifyShareToken, signShareToken, roleAtLeast } from '../share-token';
-import { checkRelayVideoIds } from './relay-docs';
+import {
+  checkRelayVideoIds,
+  relayTranscriptFolder,
+  editorOpenUrl,
+} from './relay-docs';
 
 const EDU_FOLDER = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
 const ALL_FOLDERS = '00000000-0000-0000-0000-000000000000';
@@ -105,8 +109,7 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
     }
 
     // Check for existing videos on the relay by video ID
-    const editorBase = process.env.EDITOR_BASE_URL || 'https://editor.lensacademy.org';
-    const relayFolder = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
+    const relayFolder = relayTranscriptFolder();
 
     const videoIds = body.videos.map((v) => v.video_id);
     let foundMap: Record<string, string | null> = {};
@@ -133,7 +136,7 @@ export function createAddVideoRoutes(queue: JobQueue): Hono {
           video_id: video.video_id,
           title: video.title,
           status: 'already_exists',
-          relay_url: `${editorBase}/open/${encodeURI(relayFolder.split('/')[0] + existingPath)}`,
+          relay_url: editorOpenUrl(relayFolder.split('/')[0] + existingPath),
         });
       } else {
         const job = queue.add(video, createLens);

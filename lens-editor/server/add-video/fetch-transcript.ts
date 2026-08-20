@@ -1,5 +1,7 @@
-import { ProxyAgent, fetch as proxiedFetch } from "undici";
+import { ProxyAgent } from "undici";
 import type { TranscriptRaw, VideoPayload } from "./types";
+import { fetchBytesWithTimeout, bytesToText } from "../fetch-timeout";
+import type { VideoInput } from "./video-url";
 
 /**
  * Server-side YouTube transcript fetch.
@@ -13,7 +15,7 @@ import type { TranscriptRaw, VideoPayload } from "./types";
  *    client, `fields`-trimmed) needs a clean IP. It is routed through
  *    YT_PROXY_URL (a rotating residential proxy) when set.
  *  - The minted timedtext URL is signed but NOT IP-locked (`ip=0.0.0.0`),
- *    and `fmt` is not part of its signature — so the transcript itself is
+ *    and `fmt` is not part of its signature -- so the transcript itself is
  *    fetched directly (no proxy bandwidth) with `fmt` rewritten to json3.
  *
  * The ANDROID client is used because its caption URLs work without the
@@ -21,7 +23,7 @@ import type { TranscriptRaw, VideoPayload } from "./types";
  */
 
 const PLAYER_URL = "https://www.youtube.com/youtubei/v1/player";
-// Trims the ~130KB player response to the ~4KB we use — this is the only
+// Trims the ~130KB player response to the ~4KB we use -- this is the only
 // payload that crosses the (metered) proxy.
 const PLAYER_FIELDS =
   "playabilityStatus(status,reason)," +
@@ -42,65 +44,11 @@ const ANDROID_UA =
 // identically, so we don't bother.
 const MINT_ATTEMPTS_VIA_PROXY = 3;
 const MINT_TIMEOUT_MS = 30_000;
+const MINT_MAX_BYTES = 2 * 1024 * 1024;
 const CAPTION_TIMEOUT_MS = 60_000;
-
-export interface VideoInput {
-  video_id: string;
-  url: string;
-}
-
-function fullYouTubeUrl(videoId: string, isShort: boolean): string {
-  return isShort
-    ? `https://www.youtube.com/shorts/${videoId}`
-    : `https://www.youtube.com/watch?v=${videoId}`;
-}
-
-const YOUTUBE_HOSTS = /^(?:www\.|m\.|music\.)?(?:youtube\.com|youtube-nocookie\.com)$/;
-
-/** Whether this URL belongs to YouTube at all (regardless of URL shape). */
-export function isYouTubeUrl(raw: string): boolean {
-  try {
-    const host = new URL(raw.trim()).hostname.toLowerCase();
-    return host === "youtu.be" || YOUTUBE_HOSTS.test(host);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Extract a video id from the common YouTube URL shapes (watch, shorts,
- * embed, youtu.be, live). Returns null for YouTube URLs that don't identify
- * a single video (channel pages, playlists, search).
- */
-export function extractVideoInput(raw: string): VideoInput | null {
-  if (!isYouTubeUrl(raw)) return null;
-  let u: URL;
-  try {
-    u = new URL(raw.trim());
-  } catch {
-    return null;
-  }
-
-  const v = u.searchParams.get("v");
-  if (v && /^[\w-]{11}$/.test(v)) {
-    return { video_id: v, url: fullYouTubeUrl(v, false) };
-  }
-
-  if (u.hostname.toLowerCase() === "youtu.be") {
-    const m = u.pathname.match(/^\/([\w-]{11})(?:\/|$)/);
-    if (m) return { video_id: m[1], url: fullYouTubeUrl(m[1], false) };
-    return null;
-  }
-
-  const path = u.pathname.match(/^\/(shorts|embed|live)\/([\w-]{11})(?:\/|$)/);
-  if (path) {
-    return {
-      video_id: path[2],
-      url: fullYouTubeUrl(path[2], path[1] === "shorts"),
-    };
-  }
-  return null;
-}
+// json3 for a multi-hour word-level track is a few MB; anything past this is
+// not a transcript.
+const CAPTION_MAX_BYTES = 40 * 1024 * 1024;
 
 interface PlayerResponse {
   playabilityStatus?: { status?: string; reason?: string };
@@ -122,19 +70,14 @@ function proxyAgent(): ProxyAgent | undefined {
   const url = process.env.YT_PROXY_URL?.trim();
   if (!url) return undefined;
   if (cachedProxy?.url !== url) {
+    void cachedProxy?.agent.close();
     cachedProxy = { url, agent: new ProxyAgent(url) };
   }
   return cachedProxy.agent;
 }
 
-/** Errors the user can act on (vs transient/unknown ones). */
-export class VideoUnavailableError extends Error {}
-
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const signals = [AbortSignal.timeout(ms)];
-  if (signal) signals.push(signal);
-  return AbortSignal.any(signals);
-}
+/** Non-retryable: the video itself can't be imported (private, no captions…). */
+class VideoUnavailableError extends Error {}
 
 async function mintPlayerResponse(
   videoId: string,
@@ -142,17 +85,19 @@ async function mintPlayerResponse(
 ): Promise<PlayerResponse> {
   const agent = proxyAgent();
   const attempts = agent ? MINT_ATTEMPTS_VIA_PROXY : 1;
-  let lastErr: Error = new Error("unreachable");
+  let lastErr: Error | undefined;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     signal?.throwIfAborted();
     try {
-      const resp = await proxiedFetch(
+      const resp = await fetchBytesWithTimeout(
         `${PLAYER_URL}?prettyPrint=false&fields=${encodeURIComponent(PLAYER_FIELDS)}`,
         {
           method: "POST",
+          timeoutMs: MINT_TIMEOUT_MS,
+          maxBytes: MINT_MAX_BYTES,
+          signal,
           dispatcher: agent,
-          signal: withTimeout(signal, MINT_TIMEOUT_MS),
           headers: {
             "Content-Type": "application/json",
             "User-Agent": ANDROID_UA,
@@ -163,10 +108,10 @@ async function mintPlayerResponse(
       if (!resp.ok) {
         throw new Error(`YouTube player API returned ${resp.status}`);
       }
-      const data = (await resp.json()) as PlayerResponse;
+      const data = JSON.parse(bytesToText(resp.bytes)) as PlayerResponse;
       const status = data.playabilityStatus?.status;
       if (status === "LOGIN_REQUIRED") {
-        // Bot-flagged exit IP — retryable only through a rotating proxy.
+        // Bot-flagged exit IP -- retryable only through a rotating proxy.
         throw new Error(
           `YouTube bot-check rejected the request (exit IP flagged${agent ? "" : "; YT_PROXY_URL is not set"})`,
         );
@@ -187,7 +132,7 @@ async function mintPlayerResponse(
       );
     }
   }
-  throw lastErr;
+  throw lastErr ?? new Error("YouTube player request failed");
 }
 
 /** Rewrite the minted track URL to return json3 (fmt is not signature-protected). */
@@ -222,25 +167,26 @@ export async function fetchYouTubeTranscript(
     player.captions?.playerCaptionsTracklistRenderer?.captionTracks;
   if (!tracks || tracks.length === 0) {
     throw new VideoUnavailableError(
-      "This video has no captions on YouTube — nothing to import.",
+      "This video has no captions on YouTube, so there is nothing to import.",
     );
   }
   const track = pickCaptionTrack(tracks);
 
-  const resp = await fetch(toJson3Url(track.baseUrl), {
-    signal: withTimeout(signal, CAPTION_TIMEOUT_MS),
+  const resp = await fetchBytesWithTimeout(toJson3Url(track.baseUrl), {
+    timeoutMs: CAPTION_TIMEOUT_MS,
+    maxBytes: CAPTION_MAX_BYTES,
+    signal,
     headers: { "User-Agent": ANDROID_UA },
   });
   if (!resp.ok) {
     throw new Error(`Transcript fetch returned ${resp.status}`);
   }
-  const text = await resp.text();
+  const text = bytesToText(resp.bytes);
   if (!text) {
     throw new Error("Transcript response was empty");
   }
   const raw = JSON.parse(text) as TranscriptRaw;
-  const events = (raw.events || []).filter((e) => e.segs);
-  if (events.length === 0) {
+  if (!raw.events?.some((e) => e.segs)) {
     throw new Error("Transcript returned no word data");
   }
 

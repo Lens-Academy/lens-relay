@@ -52,9 +52,16 @@ export function buildClaudeArgs(workDir: string): string[] {
 export async function spawnClaude(
   workDir: string,
   timeoutMs: number,
-  argsOverride?: string[]
+  argsOverride?: string[],
+  signal?: AbortSignal
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   await claudeSessionPool.acquire();
+  if (signal?.aborted) {
+    claudeSessionPool.release();
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error(String(signal.reason ?? 'Job aborted'));
+  }
   return new Promise((resolve, reject) => {
     const args = argsOverride ?? buildClaudeArgs(workDir);
     const spawnClaudeProc = () =>
@@ -82,9 +89,24 @@ export async function spawnClaude(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       claudeSessionPool.release();
       fn();
     };
+
+    // A cancelled job must actually kill its Claude process -- otherwise the
+    // pool slot stays occupied for up to the full timeout.
+    const onAbort = () => {
+      proc.kill('SIGTERM');
+      finish(() =>
+        reject(
+          signal!.reason instanceof Error
+            ? signal!.reason
+            : new Error(String(signal!.reason ?? 'Job aborted'))
+        )
+      );
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     proc.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -140,14 +162,15 @@ export function splitIntoChunks(text: string): string[] {
  */
 export async function runClaude(
   workDir: string,
-  timeoutMs: number = 900_000
+  timeoutMs: number = 900_000,
+  signal?: AbortSignal
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const rawText = await fs.readFile(path.join(workDir, 'raw.txt'), 'utf-8');
   const wordCount = rawText.split(/\s+/).length;
 
   if (wordCount <= CHUNK_WORD_THRESHOLD) {
     // Short transcript: single Claude call
-    return spawnClaude(workDir, timeoutMs);
+    return spawnClaude(workDir, timeoutMs, undefined, signal);
   }
 
   // Long transcript: split into chunks, process in parallel
@@ -165,7 +188,7 @@ export async function runClaude(
   // Process all chunks concurrently — the global session pool (max 3)
   // limits how many Claude processes run at once. FIFO ordering.
   const results = await Promise.all(
-    chunkDirs.map((dir) => spawnClaude(dir, timeoutMs))
+    chunkDirs.map((dir) => spawnClaude(dir, timeoutMs, undefined, signal))
   );
 
   const failed = results.find((r) => r.exitCode !== 0);

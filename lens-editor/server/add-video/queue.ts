@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Job, VideoPayload } from "./types";
 import { generateFilenameBase } from "./export";
+import { relayTranscriptFolder, editorOpenUrl } from "./relay-docs";
 import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 
 interface QueueOptions {
@@ -21,12 +22,8 @@ export class JobQueue {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
-    const editorBase =
-      process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
-    const relayFolder =
-      process.env.RELAY_TRANSCRIPT_FOLDER || "Lens Edu/video_transcripts";
     const filenameBase = generateFilenameBase(payload.channel, payload.title);
-    const mdPath = `${relayFolder}/${filenameBase}.md`;
+    const mdPath = `${relayTranscriptFolder()}/${filenameBase}.md`;
 
     const job: Job & { payload: VideoPayload } = {
       id,
@@ -37,7 +34,7 @@ export class JobQueue {
       transcript_type: payload.transcript_type,
       status: "queued",
       createLens,
-      relay_url: `${editorBase}/open/${encodeURI(mdPath)}`,
+      relay_url: editorOpenUrl(mdPath),
       created_at: now,
       updated_at: now,
       payload,

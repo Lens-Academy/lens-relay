@@ -9,13 +9,20 @@ import {
   generateFilenameBase,
 } from "./export";
 import { runClaude } from "./claude";
-import { createRelayDoc, updateRelayDoc } from "./relay-docs";
+import {
+  createRelayDoc,
+  updateRelayDoc,
+  relayTranscriptFolder,
+  editorOpenUrl,
+} from "./relay-docs";
 import { maybeCreateLens } from "../lens-doc";
 
 const WORK_BASE = "/tmp/transcripts";
-const RELAY_FOLDER =
-  process.env.RELAY_TRANSCRIPT_FOLDER || "Lens Edu/video_transcripts";
 const TIMEOUT_MS = 1_200_000; // 20 minutes
+// Deadline for a whole video-import job (article queue): Claude's own 20-min
+// ceiling above, plus the 8-min Claude-pool acquire timeout, plus margin for
+// fetch + relay writes. Derived here so a TIMEOUT_MS change moves it too.
+export const VIDEO_JOB_TIMEOUT_MS = TIMEOUT_MS + 15 * 60_000;
 
 /**
  * Estimate processing time in minutes based on word count.
@@ -43,13 +50,10 @@ export interface VideoImportOptions {
   signal?: AbortSignal;
   /** Stage reporting for status UIs (article-queue jobs show job.stage). */
   onStage?: (stage: string) => void;
-}
-
-/** Editor URL a transcript at this relay path opens under. */
-export function transcriptRelayUrl(mdPath: string): string {
-  const editorBase =
-    process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
-  return `${editorBase}/open/${encodeURI(mdPath)}`;
+  /** Fired as soon as the transcript's relay path is derived, before any
+   *  writes -- the single source of the filename convention, so callers can
+   *  surface a link without re-deriving the path. */
+  onRelayUrl?: (relayUrl: string, mdPath: string) => void;
 }
 
 /**
@@ -62,28 +66,25 @@ export async function importVideo(
   payload: VideoPayload,
   createdAt: string,
   opts: VideoImportOptions = {},
-): Promise<{ mdPath: string; relayUrl: string }> {
+): Promise<void> {
   const { createLens = true, signal, onStage } = opts;
   const setStage = (stage: string) => {
     signal?.throwIfAborted();
     onStage?.(stage);
   };
   const workDir = path.join(WORK_BASE, jobId);
+  const relayFolder = relayTranscriptFolder();
   const filenameBase = generateFilenameBase(payload.channel, payload.title);
-  const mdPath = `${RELAY_FOLDER}/${filenameBase}.md`;
-  const jsonPath = `${RELAY_FOLDER}/${filenameBase}.timestamps.json`;
-  const relayUrl = transcriptRelayUrl(mdPath);
+  const mdPath = `${relayFolder}/${filenameBase}.md`;
+  const jsonPath = `${relayFolder}/${filenameBase}.timestamps.json`;
+  opts.onRelayUrl?.(editorOpenUrl(mdPath), mdPath);
   let placeholderWritten = false;
 
   try {
     console.log(`[add-video] Processing "${payload.title}" (${payload.video_id})`);
-    // 1. Create work directory and write raw files
+    // 1. Create work directory and write the plain-text transcript
     setStage("preparing");
     await fs.mkdir(workDir, { recursive: true });
-    await fs.writeFile(
-      path.join(workDir, "raw.json"),
-      JSON.stringify(payload.transcript_raw, null, 2),
-    );
     const plainText = toPlainText(payload.transcript_raw);
     await fs.writeFile(path.join(workDir, "raw.txt"), plainText);
 
@@ -111,7 +112,7 @@ export async function importVideo(
     // 3. Run Claude for formatting
     setStage("formatting");
     console.log(`[add-video] Running Claude on ${wordCount} words...`);
-    const result = await runClaude(workDir, TIMEOUT_MS);
+    const result = await runClaude(workDir, TIMEOUT_MS, signal);
     if (result.exitCode !== 0) {
       throw new Error(
         `Claude exited with code ${result.exitCode}: ${result.stderr.slice(0, 500)}`,
@@ -143,12 +144,13 @@ export async function importVideo(
     });
     const timestamps = generateTimestampsJson(aligned);
 
-    // 7. Update placeholder with final markdown
+    // 7. Replace the placeholder with the final markdown and create the
+    //    timestamps JSON -- independent paths, written concurrently
     setStage("writing");
-    await updateRelayDoc(mdPath, placeholderContent, finalMd);
-
-    // 8. Create timestamps JSON in Relay
-    await createRelayDoc(jsonPath, JSON.stringify(timestamps, null, 2), signal);
+    await Promise.all([
+      updateRelayDoc(mdPath, placeholderContent, finalMd),
+      createRelayDoc(jsonPath, JSON.stringify(timestamps, null, 2), signal),
+    ]);
 
     // 9. Auto-create a lens wrapping the transcript (Asana 1215689584721257).
     //    Opt out with createLens=false; a lens failure must not fail the import.
@@ -171,9 +173,8 @@ export async function importVideo(
         );
       }
     }
-    return { mdPath, relayUrl };
   } catch (err) {
-    // Update placeholder to show failure — but never leave a failure doc for
+    // Update placeholder to show failure -- but never leave a failure doc for
     // a job that wrote nothing (a pre-placeholder failure has no reader).
     if (placeholderWritten) {
       const failedContent = generateMarkdown({
@@ -194,10 +195,11 @@ export async function importVideo(
 export async function processVideo(
   job: Job & { payload: VideoPayload },
 ): Promise<void> {
-  // Set relay_url up front so the queue can report it while processing.
-  const filenameBase = generateFilenameBase(job.channel, job.title);
-  job.relay_url = transcriptRelayUrl(`${RELAY_FOLDER}/${filenameBase}.md`);
   await importVideo(job.id, job.payload, job.created_at, {
     createLens: job.createLens !== false,
+    // Fires before any processing, so the queue reports the link immediately.
+    onRelayUrl: (relayUrl) => {
+      job.relay_url = relayUrl;
+    },
   });
 }

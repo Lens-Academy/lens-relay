@@ -27,13 +27,11 @@ import {
   checkRelayArticleUrls,
   createRelayAttachment,
   checkRelayVideoIds,
+  relayTranscriptFolder,
+  editorOpenUrl,
 } from "../add-video/relay-docs";
-import {
-  extractVideoInput,
-  fetchYouTubeTranscript,
-  isYouTubeUrl,
-  type VideoInput,
-} from "../add-video/fetch-transcript";
+import { extractVideoInput, type VideoInput } from "../add-video/video-url";
+import { fetchYouTubeTranscript } from "../add-video/fetch-transcript";
 import { importVideo } from "../add-video/pipeline";
 import { maybeCreateLens } from "../lens-doc";
 
@@ -103,34 +101,23 @@ async function processYouTubeVideo(
   setStage: (stage: string) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (behavior.stubOnly) {
-    throw new Error(
-      "YouTube videos can't be imported as stubs — use importMode \"article\" (imports the transcript) or \"article-and-lens\".",
-    );
-  }
-
-  // Duplicate check by video id — the same relay check the bookmarklet
+  // Duplicate check by video id -- the same relay check the bookmarklet
   // endpoint uses. Degrades gracefully: a failed check must not block import.
   setStage("checking-duplicates");
-  const relayFolder =
-    process.env.RELAY_TRANSCRIPT_FOLDER || "Lens Edu/video_transcripts";
-  const topFolder = relayFolder.split("/")[0];
+  let existingPath: string | null | undefined;
   try {
-    const found = await checkRelayVideoIds([video.video_id]);
-    const existingPath = found[video.video_id];
-    if (existingPath) {
-      throw new Error(
-        `This video was already imported: ${topFolder}${existingPath}`,
-      );
-    }
+    existingPath = (await checkRelayVideoIds([video.video_id], signal))[
+      video.video_id
+    ];
   } catch (err) {
-    if (
-      err instanceof Error &&
-      err.message.startsWith("This video was already imported")
-    ) {
-      throw err;
-    }
+    signal?.throwIfAborted();
     console.warn(`[add-article] video dedup check failed, proceeding: ${err}`);
+  }
+  if (existingPath) {
+    const topFolder = relayTranscriptFolder().split("/")[0];
+    throw new Error(
+      `This video was already imported: ${topFolder}${existingPath}`,
+    );
   }
 
   setStage("fetching-transcript");
@@ -138,13 +125,17 @@ async function processYouTubeVideo(
   job.title = payload.title;
   job.updated_at = new Date().toISOString();
 
-  const { relayUrl } = await importVideo(job.id, payload, job.created_at, {
+  await importVideo(job.id, payload, job.created_at, {
     createLens: behavior.createLens,
     signal,
     onStage: setStage,
+    // Surface the link as soon as the path is known -- the placeholder doc
+    // exists during processing, and a later failure doc stays reachable.
+    onRelayUrl: (relayUrl) => {
+      job.relay_url = relayUrl;
+      job.updated_at = new Date().toISOString();
+    },
   });
-  job.relay_url = relayUrl;
-  job.updated_at = new Date().toISOString();
   console.log(
     `[add-article] Imported video transcript for ${job.url} ("${payload.title}")`,
   );
@@ -249,15 +240,11 @@ export async function processArticle(
   };
 
   // YouTube URLs import the video's transcript through the video pipeline
-  // instead of scraping the watch page as an "article".
+  // instead of scraping the watch page as an "article". Non-video YouTube
+  // URLs and stub mode were already rejected at submit time (routes.ts).
   const video = extractVideoInput(job.url);
   if (video) {
     return processYouTubeVideo(job, video, behavior, setStage, signal);
-  }
-  if (isYouTubeUrl(job.url)) {
-    throw new Error(
-      "This YouTube URL doesn't point to a single video — submit a watch/shorts/youtu.be link.",
-    );
   }
 
   // Reject the common duplicate case before downloading and parsing the page.
@@ -580,9 +567,7 @@ export async function processArticle(
     await createRelayDoc(chosen, markdown, signal);
     return chosen;
   });
-  const editorBase =
-    process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
-  job.relay_url = `${editorBase}/open/${encodeURI(mdPath)}`;
+  job.relay_url = editorOpenUrl(mdPath);
   job.updated_at = new Date().toISOString();
   console.log(
     `[add-article] Wrote ${mdPath} (via ${ex.via}, ${body.length} chars)`,

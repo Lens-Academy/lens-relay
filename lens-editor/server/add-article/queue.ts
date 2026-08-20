@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ArticleImportMode, ArticleJob } from "./types";
+import { extractVideoInput } from "../add-video/video-url";
+import { VIDEO_JOB_TIMEOUT_MS } from "../add-video/pipeline";
 import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 
 // Hard ceiling on a single import job. Individual stages carry their own
@@ -9,7 +11,10 @@ import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 // settles the job even if the underlying promise never does.
 const DEFAULT_JOB_TIMEOUT_MS = 12 * 60_000;
 
-function jobTimeoutMs(): number {
+function jobTimeoutMs(job: ArticleJob): number {
+  // YouTube-video jobs run Claude over a whole transcript and legitimately
+  // outlive the article deadline -- derived from the URL, not stored state.
+  if (extractVideoInput(job.url)) return VIDEO_JOB_TIMEOUT_MS;
   const v = Number(process.env.ARTICLE_JOB_TIMEOUT_MS);
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_JOB_TIMEOUT_MS;
 }
@@ -34,11 +39,7 @@ export class ArticleJobQueue {
     this.processJob = options.processJob;
   }
 
-  add(
-    url: string,
-    importMode: ArticleImportMode,
-    opts?: { timeoutMs?: number },
-  ): ArticleJob {
+  add(url: string, importMode: ArticleImportMode): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
@@ -47,7 +48,6 @@ export class ArticleJobQueue {
       url,
       status: "queued",
       importMode,
-      timeout_ms: opts?.timeoutMs,
       created_at: now,
       updated_at: now,
     };
@@ -127,7 +127,7 @@ export class ArticleJobQueue {
   private async runJob(job: ArticleJob): Promise<void> {
     const ctrl = new AbortController();
     this.controllers.set(job.id, ctrl);
-    const timeoutMs = job.timeout_ms ?? jobTimeoutMs();
+    const timeoutMs = jobTimeoutMs(job);
     const timer = setTimeout(
       () =>
         ctrl.abort(

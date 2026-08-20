@@ -59,18 +59,20 @@ describe('processVideo', () => {
     mockClaude.runClaude.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
     mockRelayDocs.createRelayDoc.mockResolvedValue(undefined);
     mockRelayDocs.updateRelayDoc.mockResolvedValue(undefined);
+    mockRelayDocs.relayTranscriptFolder.mockReturnValue(
+      'Lens Edu/video_transcripts'
+    );
+    mockRelayDocs.editorOpenUrl.mockImplementation(
+      (p: string) => `https://editor.lensacademy.org/open/${encodeURI(p)}`
+    );
   });
 
-  it('creates work directory and writes raw files', async () => {
+  it('creates work directory and writes the plain-text transcript', async () => {
     await processVideo(makeJobWithPayload());
 
     expect(mockFs.mkdir).toHaveBeenCalledWith(
       expect.stringContaining('test-job'),
       { recursive: true }
-    );
-    expect(mockFs.writeFile).toHaveBeenCalledWith(
-      expect.stringContaining('raw.json'),
-      expect.any(String)
     );
     expect(mockFs.writeFile).toHaveBeenCalledWith(
       expect.stringContaining('raw.txt'),
@@ -93,7 +95,8 @@ describe('processVideo', () => {
 
     expect(mockClaude.runClaude).toHaveBeenCalledWith(
       expect.stringContaining('test-job'),
-      expect.any(Number)
+      expect.any(Number),
+      undefined
     );
   });
 

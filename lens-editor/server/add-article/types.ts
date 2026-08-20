@@ -25,9 +25,6 @@ export interface ArticleJob {
   relay_url?: string;
   /** What the importer should write. */
   importMode: ArticleImportMode;
-  /** Per-job deadline override — video-transcript jobs (Claude formatting of a
-   *  long transcript) legitimately outlive the article default. */
-  timeout_ms?: number;
   created_at: string;
   updated_at: string;
 }
