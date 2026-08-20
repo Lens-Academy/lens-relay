@@ -32,8 +32,7 @@ import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
 import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { PromotionRoute } from './components/Promotion/PromotionRoute';
 import { MultiDocSectionEditor } from './components/SectionEditor';
-import { useDocConnection, waitForProviderSynced } from './hooks/useDocConnection';
-import { applySuggestionAction, applySuggestionActions } from './lib/suggestion-actions';
+import { applySuggestionActionsViaServer, SUGGESTION_NOT_FOUND } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
 import { BlobDocumentView } from './components/BlobViewer';
@@ -393,34 +392,22 @@ export function App() {
 }
 
 function ReviewPageWithActions({ folderIds, folders, relayId }: { folderIds: string[]; folders: { id: string; name: string }[]; relayId: string }) {
-  const { getOrConnect, disconnect, disconnectAll } = useDocConnection();
   const { displayName } = useDisplayName();
 
-  useEffect(() => disconnectAll, [disconnectAll]);
-
-  const handleAction = async (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => {
-    const { doc, provider } = await getOrConnect(docId);
-    applySuggestionAction(doc, suggestion, action);
-    await waitForProviderSynced(provider);
-  };
-
-  // Whole-file batches: one transaction and one sync round-trip per document
-  // instead of one per suggestion, so bulk accepts finish in seconds. The doc
-  // is disconnected right after syncing — a bulk run over many files must not
-  // accumulate one open websocket + doc copy per file.
-  const handleFileAction = async (docId: string, suggestions: SuggestionItem[], action: 'accept' | 'reject') => {
-    if (suggestions.length === 0) return { applied: [], failed: [] };
-    const { doc, provider } = await getOrConnect(docId);
-    try {
-      const result = applySuggestionActions(doc, suggestions, action);
-      if (result.applied.length > 0) {
-        await waitForProviderSynced(provider);
-      }
-      return result;
-    } finally {
-      disconnect(docId);
+  // Both handlers apply suggestions server-side (POST /api/relay/suggestions/apply)
+  // instead of opening a Y.Doc websocket per file in the browser — at the
+  // 5000-suggestion/200-file scale the per-file doc sync crashed weak machines.
+  const handleAction = async (docId: string, folderId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => {
+    // Transport/server errors propagate as-is and leave the row pending;
+    // only a genuine per-suggestion failure marks it "no longer found".
+    const result = await applySuggestionActionsViaServer(docId, folderId, [suggestion], action);
+    if (result.failed.length > 0 || result.applied.length === 0) {
+      throw new Error(SUGGESTION_NOT_FOUND);
     }
   };
+
+  const handleFileAction = (docId: string, folderId: string, suggestions: SuggestionItem[], action: 'accept' | 'reject') =>
+    applySuggestionActionsViaServer(docId, folderId, suggestions, action);
 
   return (
     <ReviewPage

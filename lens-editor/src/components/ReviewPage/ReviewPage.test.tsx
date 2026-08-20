@@ -275,15 +275,15 @@ describe('ReviewPage bulk actions', () => {
     // (minutes-long "Accept all filtered" with ~100 suggestions, 2026-07-02).
     // Also prevents: confirm-button double-click starting a second concurrent
     // run that re-submits every file.
-    const calls: Array<[string, number, string]> = [];
-    await renderWithFileAction(async (docId, suggestions, action) => {
-      calls.push([docId, suggestions.length, action]);
+    const calls: Array<[string, string, number, string]> = [];
+    await renderWithFileAction(async (docId, folderId, suggestions, action) => {
+      calls.push([docId, folderId, suggestions.length, action]);
       return { applied: suggestions, failed: [] };
     });
     clickBulkAccept();
     await waitFor(() => expect(calls.length).toBe(2));
-    expect(calls).toContainEqual(['relay-doc-1', 2, 'accept']);
-    expect(calls).toContainEqual(['relay-doc-2', 2, 'accept']);
+    expect(calls).toContainEqual(['relay-doc-1', 'f1', 2, 'accept']);
+    expect(calls).toContainEqual(['relay-doc-2', 'f1', 2, 'accept']);
     // Give a potential second (buggy) run a chance to fire, then re-assert
     await new Promise(r => setTimeout(r, 10));
     expect(calls.length).toBe(2);
@@ -292,7 +292,7 @@ describe('ReviewPage bulk actions', () => {
   it('marks the correct row as not-found when a later suggestion fails in a per-file batch', async () => {
     // Prevents: index-keyed resolved statuses landing on the wrong row after
     // applied suggestions are removed from the list (badge shift)
-    await renderWithFileAction(async (_docId, suggestions) =>
+    await renderWithFileAction(async (_docId, _folderId, suggestions) =>
       // First suggestion applies, second fails
       ({ applied: suggestions.slice(0, 1), failed: suggestions.slice(1) }),
     );
@@ -309,7 +309,7 @@ describe('ReviewPage bulk actions', () => {
     // the first is still applying (button gave no feedback at all)
     let release: () => void = () => {};
     const gate = new Promise<void>(resolve => { release = resolve; });
-    await renderWithFileAction(async (_docId, suggestions) => {
+    await renderWithFileAction(async (_docId, _folderId, suggestions) => {
       await gate;
       return { applied: suggestions, failed: [] };
     });
@@ -323,7 +323,7 @@ describe('ReviewPage bulk actions', () => {
   it('removes applied suggestions without refetching and keeps failed ones visible', async () => {
     // Prevents: end-of-run refresh() re-showing accepted suggestions from the
     // lagging server-side suggestions index ("reacts weirdly to reloads")
-    await renderWithFileAction(async (docId, suggestions) => {
+    await renderWithFileAction(async (docId, _folderId, suggestions) => {
       if (docId === 'relay-doc-1') return { applied: suggestions, failed: [] };
       return { applied: suggestions.slice(1), failed: suggestions.slice(0, 1) };
     });

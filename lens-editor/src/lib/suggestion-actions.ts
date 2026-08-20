@@ -1,106 +1,73 @@
-import * as Y from 'yjs';
 import type { SuggestionItem } from '../hooks/useSuggestions';
-import { surgicalDeletions } from './criticmarkup-surgical';
+import { relayHeaders } from './relay-api';
 
-/**
- * Apply accept/reject to a suggestion in a Y.Doc.
- * Uses `raw_markup` from the server to find the exact string (avoids reconstruction fragility).
- * Searches near `suggestion.from` first, then falls back to searching the entire doc.
- */
-export function applySuggestionAction(
-  doc: Y.Doc,
-  suggestion: SuggestionItem,
-  action: 'accept' | 'reject',
-) {
-  const text = doc.getText('contents');
-  const content = text.toString();
-
-  const markup = suggestion.raw_markup;
-  // Search near the expected position first (within 200 chars), then fall back to full search
-  let idx = content.indexOf(markup, Math.max(0, suggestion.from - 200));
-  if (idx === -1) {
-    idx = content.indexOf(markup);
-  }
-  if (idx === -1) {
-    throw new Error('Suggestion no longer found in document');
-  }
-
-  // Surgical path: delete only markers/metadata/discarded content so the kept
-  // payload keeps its original authorship (clientID). Falls back to the legacy
-  // whole-span rewrite when the markup structure can't be verified.
-  const deletions = surgicalDeletions({
-    markup,
-    start: idx,
-    type: suggestion.type,
-    action,
-    content: suggestion.content,
-    oldContent: suggestion.old_content,
-    newContent: suggestion.new_content,
-  });
-
-  doc.transact(() => {
-    if (deletions) {
-      for (const d of [...deletions].sort((a, b) => b.from - a.from)) {
-        text.delete(d.from, d.to - d.from);
-      }
-    } else {
-      const replacement = action === 'accept'
-        ? getAcceptText(suggestion)
-        : getRejectText(suggestion);
-      text.delete(idx, markup.length);
-      if (replacement) {
-        text.insert(idx, replacement);
-      }
-    }
-  });
-}
+/** Sentinel error message: the suggestion itself failed to apply (vs a
+ * transport/server error, which should leave the row pending/retryable). */
+export const SUGGESTION_NOT_FOUND = 'suggestion-not-found';
 
 export interface BatchResult {
   applied: SuggestionItem[];
   failed: SuggestionItem[];
 }
 
+interface ApplyResponse {
+  applied: number[];
+  failed: { index: number; reason: string }[];
+  remaining_suggestions: number;
+}
+
 /**
- * Apply accept/reject to many suggestions of one Y.Doc in a single transaction,
- * so the provider syncs the whole batch in one round-trip instead of one per
- * suggestion. Applies in descending `from` order so earlier applies don't shift
- * the positions of later ones. A suggestion whose markup is no longer present
- * is reported in `failed` without aborting the rest.
+ * Apply accept/reject to many suggestions of one document server-side via
+ * POST /api/relay/suggestions/apply, so the review page never has to open a
+ * Y.Doc websocket per file (which crashed weak machines at the
+ * 5000-suggestion/200-file scale). The response references suggestions by
+ * index into the request array; this maps them back to SuggestionItems so
+ * callers get a BatchResult of the items themselves.
+ *
+ * `folderId` is the compound folder doc id the suggestions were fetched for
+ * (same value the GET /suggestions query uses), passed as a query param; the
+ * proxy checks it against folder-scoped share tokens and the relay verifies
+ * the doc belongs to it.
  */
-export function applySuggestionActions(
-  doc: Y.Doc,
+export async function applySuggestionActionsViaServer(
+  docId: string,
+  folderId: string,
   suggestions: SuggestionItem[],
   action: 'accept' | 'reject',
-): BatchResult {
-  const applied: SuggestionItem[] = [];
-  const failed: SuggestionItem[] = [];
+): Promise<BatchResult> {
+  if (suggestions.length === 0) return { applied: [], failed: [] };
 
-  doc.transact(() => {
-    for (const s of [...suggestions].sort((a, b) => b.from - a.from)) {
-      try {
-        applySuggestionAction(doc, s, action);
-        applied.push(s);
-      } catch {
-        failed.push(s);
-      }
-    }
+  const res = await fetch(`/api/relay/suggestions/apply?folder_id=${encodeURIComponent(folderId)}`, {
+    method: 'POST',
+    headers: relayHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      doc_id: docId,
+      action,
+      suggestions: suggestions.map(s => ({
+        raw_markup: s.raw_markup,
+        type: s.type,
+        content: s.content,
+        old_content: s.old_content,
+        new_content: s.new_content,
+      })),
+    }),
+    // Bound the wait: a hung relay must surface as an error, not a stuck
+    // "Applying…" state. Generous because a batch may span many suggestions.
+    signal: AbortSignal.timeout(60_000),
   });
+  if (!res.ok) {
+    throw new Error(`Failed to apply suggestions: ${res.status}`);
+  }
 
+  const json = await res.json() as ApplyResponse;
+  const inRange = (i: number) => Number.isInteger(i) && i >= 0 && i < suggestions.length;
+  const applied = json.applied.filter(inRange).map(i => suggestions[i]);
+  const failed = json.failed.filter(f => inRange(f.index)).map(f => suggestions[f.index]);
+  if (json.failed.length > 0) {
+    console.warn(
+      `[suggestions/apply] ${json.failed.length} suggestion(s) failed for doc ${docId}:`,
+      json.failed.map(f => f.reason),
+    );
+  }
   return { applied, failed };
-}
-
-export function getAcceptText(s: SuggestionItem): string {
-  switch (s.type) {
-    case 'addition': return s.content;
-    case 'deletion': return '';
-    case 'substitution': return s.new_content ?? '';
-  }
-}
-
-export function getRejectText(s: SuggestionItem): string {
-  switch (s.type) {
-    case 'addition': return '';
-    case 'deletion': return s.content;
-    case 'substitution': return s.old_content ?? '';
-  }
 }
