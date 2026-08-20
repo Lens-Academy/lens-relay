@@ -2,10 +2,12 @@ import { useState, useEffect, useRef, useMemo, useCallback, memo, type ReactNode
 import { useNavigate } from 'react-router-dom';
 import { useSuggestions, type FileSuggestions, type SuggestionItem } from '../../hooks/useSuggestions';
 import type { BatchResult } from '../../lib/suggestion-actions';
+import { SUGGESTION_NOT_FOUND } from '../../lib/suggestion-actions';
 import { runWithConcurrency } from '../../lib/concurrency';
 
-/** How many documents to apply bulk actions to at once. Each open doc is a
- *  websocket + full doc sync on the relay; keep this modest. */
+/** How many documents to apply bulk actions to at once. Each file is a
+ *  server-side apply request that loads and edits the doc on the relay;
+ *  keep this modest. */
 const BULK_FILE_CONCURRENCY = 3;
 
 /** Identity of a suggestion for optimistic removal after a bulk action. */
@@ -82,8 +84,9 @@ interface FolderInfo {
   name: string;
 }
 
-/** Apply a whole file's suggestions in one doc transaction + one sync. */
-export type FileActionHandler = (docId: string, suggestions: SuggestionItem[], action: 'accept' | 'reject') => Promise<BatchResult>;
+/** Apply a whole file's suggestions in one server-side batch. `folderId` is
+ *  the compound folder id the file's suggestions were fetched for. */
+export type FileActionHandler = (docId: string, folderId: string, suggestions: SuggestionItem[], action: 'accept' | 'reject') => Promise<BatchResult>;
 
 interface ReviewPageProps {
   folderIds: string[];
@@ -91,7 +94,7 @@ interface ReviewPageProps {
   relayId?: string;
   /** Lens Editor session display name used to seed the initial author filter. */
   currentUserName?: string | null;
-  onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
+  onAction?: (docId: string, folderId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
   onFileAction?: FileActionHandler;
 }
 
@@ -610,7 +613,7 @@ export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFi
   // suggestions vanish from the list immediately, failures stay visible.
   const runBulk = async (action: 'accept' | 'reject') => {
     // Ref guard, not state: two clicks in the same tick would both pass a
-    // state check and start concurrent runs (double websocket load, every
+    // state check and start concurrent runs (double apply load, every
     // second-run suggestion spuriously counted as failed).
     if (!onFileAction || bulkRunningRef.current) return;
     bulkRunningRef.current = true;
@@ -621,7 +624,7 @@ export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFi
     let failedTotal = 0;
     await runWithConcurrency(files, BULK_FILE_CONCURRENCY, async file => {
       try {
-        const result = await onFileAction(file.doc_id, file.suggestions, action);
+        const result = await onFileAction(file.doc_id, file.folder_id, file.suggestions, action);
         failedTotal += result.failed.length;
         markApplied(file.doc_id, result.applied);
       } catch {
@@ -797,12 +800,12 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
   folderName?: string;
   expanded: boolean;
   onToggle: (docId: string) => void;
-  onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
+  onAction?: (docId: string, folderId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
   onFileAction?: FileActionHandler;
   /** Report batch-applied suggestions to the page so they leave the list. */
   onApplied?: (docId: string, applied: SuggestionItem[]) => void;
-  /** True while a page-level bulk run is in flight — both paths share doc
-   *  connections, so concurrent per-file actions would race the disconnect. */
+  /** True while a page-level bulk run is in flight — a concurrent per-file
+   *  action would re-apply suggestions the bulk run is already applying. */
   bulkDisabled?: boolean;
   onNavigate: (docId: string, from: number, e?: React.MouseEvent) => void;
 }) {
@@ -825,12 +828,12 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
     const pending = file.suggestions.filter(s => !resolvedMap[suggestionKey(file.doc_id, s)]);
     setBusy(true);
     try {
-      const result = await onFileAction(file.doc_id, pending, action);
+      const result = await onFileAction(file.doc_id, file.folder_id, pending, action);
       for (const s of result.failed) setResolved(s, 'not-found');
       onApplied?.(file.doc_id, result.applied);
     } catch { /* connection failure — leave rows pending for retry */ }
     setBusy(false);
-  }, [onFileAction, onApplied, busy, file.doc_id, file.suggestions, resolvedMap, setResolved]);
+  }, [onFileAction, onApplied, busy, file.doc_id, file.folder_id, file.suggestions, resolvedMap, setResolved]);
 
   const handleAcceptAll = useCallback(() => handleAll('accept'), [handleAll]);
   const handleRejectAll = useCallback(() => handleAll('reject'), [handleAll]);
@@ -880,6 +883,7 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
             <SuggestionRow
               key={suggestionKey(file.doc_id, s)}
               docId={file.doc_id}
+              folderId={file.folder_id}
               suggestion={s}
               resolved={resolvedMap[suggestionKey(file.doc_id, s)] ?? null}
               onAction={onAction}
@@ -893,23 +897,38 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
   );
 });
 
-const SuggestionRow = memo(function SuggestionRow({ docId, suggestion, resolved, onAction, onResolved, onNavigate }: {
+/** A thrown SUGGESTION_NOT_FOUND marks the row stale; any other error
+ * (transport, server) leaves it pending so the user can retry. */
+function resolveRowError(
+  err: unknown,
+  suggestion: SuggestionItem,
+  onResolved: (s: SuggestionItem, status: 'accepted' | 'rejected' | 'not-found') => void,
+) {
+  if (err instanceof Error && err.message === SUGGESTION_NOT_FOUND) {
+    onResolved(suggestion, 'not-found');
+  } else {
+    console.error('Suggestion action failed; row left pending', err);
+  }
+}
+
+const SuggestionRow = memo(function SuggestionRow({ docId, folderId, suggestion, resolved, onAction, onResolved, onNavigate }: {
   docId: string;
+  folderId: string;
   suggestion: SuggestionItem;
   resolved: 'accepted' | 'rejected' | 'not-found' | null;
-  onAction?: (docId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
+  onAction?: (docId: string, folderId: string, suggestion: SuggestionItem, action: 'accept' | 'reject') => Promise<void>;
   onResolved: (s: SuggestionItem, status: 'accepted' | 'rejected' | 'not-found') => void;
   onNavigate: (docId: string, from: number, e?: React.MouseEvent) => void;
 }) {
   const handleAccept = useCallback(async () => {
     if (!onAction) return;
-    try { await onAction(docId, suggestion, 'accept'); onResolved(suggestion, 'accepted'); } catch { onResolved(suggestion, 'not-found'); }
-  }, [onAction, docId, suggestion, onResolved]);
+    try { await onAction(docId, folderId, suggestion, 'accept'); onResolved(suggestion, 'accepted'); } catch (err) { resolveRowError(err, suggestion, onResolved); }
+  }, [onAction, docId, folderId, suggestion, onResolved]);
 
   const handleReject = useCallback(async () => {
     if (!onAction) return;
-    try { await onAction(docId, suggestion, 'reject'); onResolved(suggestion, 'rejected'); } catch { onResolved(suggestion, 'not-found'); }
-  }, [onAction, docId, suggestion, onResolved]);
+    try { await onAction(docId, folderId, suggestion, 'reject'); onResolved(suggestion, 'rejected'); } catch (err) { resolveRowError(err, suggestion, onResolved); }
+  }, [onAction, docId, folderId, suggestion, onResolved]);
 
   const handleNavigate = useCallback((e: React.MouseEvent) => {
     onNavigate(docId, suggestion.from, e);

@@ -463,6 +463,19 @@ pub fn apply_backlink_diff(folder_doc: &Doc, source_uuid: &str, new_targets: &Ha
 // Folder doc scanning helpers
 // ---------------------------------------------------------------------------
 
+/// Derive a display title from a filemeta_v0 path: strip the leading "/",
+/// the trailing ".md", and any directory components.
+pub fn title_from_filemeta_path(path: &str) -> String {
+    path.strip_prefix('/')
+        .unwrap_or(path)
+        .strip_suffix(".md")
+        .unwrap_or(path)
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_string()
+}
+
 /// Find all loaded folder docs (docs with non-empty filemeta_v0).
 /// Returns doc_ids of all folder docs.
 pub fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String> {
@@ -1145,6 +1158,15 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// A rename event detected by diffing filemeta snapshots.
 ///
 /// Emitted when the same UUID maps to a different basename across two snapshots.
+#[derive(Default)]
+pub(crate) struct FolderChanges {
+    pub renames: Vec<RenameEvent>,
+    /// Files added, removed, or moved (path changed). Metadata-only folder
+    /// writes (hash/mtime) leave this false.
+    pub membership_changed: bool,
+}
+
+#[derive(Clone)]
 pub(crate) struct RenameEvent {
     pub uuid: String,
     pub old_name: String,
@@ -1158,6 +1180,11 @@ pub struct PendingEntry {
     pub first_queued: Instant,
     pub last_updated: Instant,
     pub generation: u64,
+    /// Highest generation whose suggestions scan already ran (fast lane).
+    /// The heavy lane (tantivy, titles) acknowledges via `generation`; this
+    /// watermark lets the cheap suggestions rescan run ahead of a deep
+    /// heavy-lane backlog without redundant rescans.
+    pub suggestions_scanned_generation: u64,
     // Strong lease keeps the source Y.Doc alive until this generation is
     // indexed. GC already treats awareness strong refs as active use.
     pub lease: Option<Arc<RwLock<crate::sync::awareness::Awareness>>>,
@@ -1169,6 +1196,7 @@ impl PendingEntry {
             first_queued: now,
             last_updated: now,
             generation: 1,
+            suggestions_scanned_generation: 0,
             lease: None,
         }
     }
@@ -1218,6 +1246,18 @@ pub fn upsert_pending_update(
             e.insert(entry);
             true
         }
+    }
+}
+
+/// Record that the suggestions fast lane scanned `generation` for `doc_id`.
+/// Monotonic; a no-op when the entry is gone or already further along.
+pub fn acknowledge_suggestions_generation(
+    pending: &DashMap<String, PendingEntry>,
+    doc_id: &str,
+    generation: u64,
+) {
+    if let Some(mut entry) = pending.get_mut(doc_id) {
+        entry.suggestions_scanned_generation = entry.suggestions_scanned_generation.max(generation);
     }
 }
 
@@ -1325,6 +1365,11 @@ impl LinkIndexer {
         self.pending.contains_key(doc_id)
     }
 
+    /// Number of queued docs (diagnostics).
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
     /// Whether the pending entry for a doc holds a GC lease.
     pub fn pending_has_lease(&self, doc_id: &str) -> bool {
         self.pending.get(doc_id).is_some_and(|e| e.lease.is_some())
@@ -1339,27 +1384,23 @@ impl LinkIndexer {
     /// Diff current filemeta_v0 state against cache, emit RenameEvent for UUIDs
     /// whose basename has changed. Updates the cache after diffing.
     /// First call (no cache entry) seeds the cache and returns empty.
+    #[cfg(test)]
     pub(crate) fn detect_renames(&self, folder_doc_id: &str, folder_doc: &Doc) -> Vec<RenameEvent> {
+        self.detect_changes(folder_doc_id, folder_doc).renames
+    }
+
+    pub(crate) fn detect_changes(&self, folder_doc_id: &str, folder_doc: &Doc) -> FolderChanges {
         // 1. Read filemeta_v0 and build uuid -> (basename, path) map
         let current: HashMap<String, (String, String)> = {
             let txn = folder_doc.transact();
             let Some(filemeta) = txn.get_map("filemeta_v0") else {
-                return Vec::new();
+                return FolderChanges::default();
             };
 
             let mut map = HashMap::new();
             for (path, value) in filemeta.iter(&txn) {
                 if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
-                    // Extract basename: strip leading "/", strip trailing ".md", take last component
-                    let basename = path
-                        .strip_prefix('/')
-                        .unwrap_or(&path)
-                        .strip_suffix(".md")
-                        .unwrap_or(&path)
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&path)
-                        .to_string();
+                    let basename = title_from_filemeta_path(&path);
                     map.insert(uuid, (basename, path.to_string()));
                 }
             }
@@ -1375,7 +1416,7 @@ impl LinkIndexer {
 
         // 4. If no old snapshot, this is the seed call — return empty
         let Some(old) = old_opt else {
-            return Vec::new();
+            return FolderChanges::default();
         };
 
         // 5. Compare: for each uuid in BOTH old and new, if basename changed, emit RenameEvent
@@ -1395,10 +1436,27 @@ impl LinkIndexer {
         }
         // UUIDs in old but not in current = deleted, skip (we only iterate current)
 
-        renames
+        // Membership/path diff: adds, removes, or any path change mean link
+        // resolution may have shifted for other docs. Metadata-only folder
+        // churn (hash/mtime writes) leaves this false, so it no longer
+        // re-queues every loaded content doc — the cascade that starved the
+        // pipeline at 2k+ docs per folder.
+        let membership_changed = old.len() != current.len()
+            || current.iter().any(|(uuid, (_b, path))| {
+                old.get(uuid)
+                    .map(|(_ob, opath)| opath != path)
+                    .unwrap_or(true)
+            });
+
+        FolderChanges {
+            renames,
+            membership_changed,
+        }
     }
 
     /// Detect renames in a folder doc and update wikilinks in all backlinkers.
+    ///
+    /// (See `FolderApplyOutcome` for what the caller does with the result.)
     ///
     /// This is the server-level glue that:
     /// 1. Calls `detect_renames()` to diff filemeta against the cache
@@ -1411,30 +1469,31 @@ impl LinkIndexer {
         &self,
         folder_doc_id: &str,
         docs: &DashMap<String, DocWithSyncKv>,
-    ) -> bool {
-        // 1. Get the folder doc, detect renames, read folder name
-        let (renames, folder_name) = {
+    ) -> FolderChanges {
+        // 1. Get the folder doc, detect changes, read folder name
+        let (changes, folder_name) = {
             // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
             let awareness = {
                 let Some(doc_ref) = docs.get(folder_doc_id) else {
-                    return false;
+                    return FolderChanges::default();
                 };
                 doc_ref.awareness()
             };
             // Shard lock released; safe to acquire awareness lock.
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            let renames = self.detect_renames(folder_doc_id, &guard.doc);
+            let changes = self.detect_changes(folder_doc_id, &guard.doc);
             let folder_name = read_folder_name(&guard.doc, "");
-            (renames, folder_name)
+            (changes, folder_name)
         };
 
-        if renames.is_empty() {
-            return false;
+        if changes.renames.is_empty() {
+            return changes;
         }
+        let renames = changes.renames.clone();
 
         let Some((relay_id, _)) = parse_doc_id(folder_doc_id) else {
             tracing::error!("Invalid folder_doc_id format: {}", folder_doc_id);
-            return false;
+            return changes;
         };
 
         tracing::info!(
@@ -1560,7 +1619,7 @@ impl LinkIndexer {
                 }
             }
         }
-        true
+        changes
     }
 
     /// Background worker that processes the indexing queue.
@@ -1611,23 +1670,33 @@ impl LinkIndexer {
                 .collect();
 
             // 4. Process each ready doc (sequentially, but NO sleeping between them)
+            // One all-folders listing per batch; the content branch below
+            // needed one per doc, which multiplied under backlog.
+            let folder_doc_ids = find_all_folder_docs(&docs);
             for (doc_id, queued) in ready {
                 // Re-check folder status (need fresh content UUIDs).
                 if let Some(content_uuids) = is_folder_doc(&doc_id, &docs) {
                     // Folder doc — process immediately (no debounce)
 
                     // 1. Detect renames BEFORE re-queuing content docs
-                    let had_renames = self.apply_rename_updates(&doc_id, &docs);
+                    let changes = self.apply_rename_updates(&doc_id, &docs);
 
-                    // 2. Re-queue loaded content docs — but SKIP when renames were
-                    //    processed.  The rename system already updated wikilinks in
-                    //    backlinker content docs.  Re-queuing them for re-indexing
-                    //    would race with the next rename: the debounced re-indexer
-                    //    would try to resolve the OLD name against the NEW metadata,
-                    //    fail, and clear the backlinks.  The next non-rename folder
-                    //    doc update (add/delete/backlinks write-back) will still
-                    //    trigger re-queuing normally.
-                    if !had_renames {
+                    // 2. Re-queue loaded content docs — but ONLY when folder
+                    //    membership actually changed (add/remove/move), and
+                    //    SKIP when renames were processed. The rename system
+                    //    already updated wikilinks in backlinker content docs;
+                    //    re-queuing them would race the next rename (resolve
+                    //    the OLD name against NEW metadata, fail, clear
+                    //    backlinks). Metadata-only folder writes (hash/mtime)
+                    //    re-queue nothing — the blanket re-queue used to put
+                    //    every loaded content doc (2k+) back on the queue on
+                    //    each folder touch and starved the whole pipeline.
+                    if !changes.renames.is_empty() {
+                        tracing::info!(
+                            "Folder doc {}: skipping content re-queue after rename (avoids stale backlink race)",
+                            doc_id
+                        );
+                    } else if changes.membership_changed {
                         tracing::info!(
                             "Folder doc {} has {} content docs, re-queuing loaded ones",
                             doc_id,
@@ -1644,8 +1713,8 @@ impl LinkIndexer {
                             }
                         }
                     } else {
-                        tracing::info!(
-                            "Folder doc {}: skipping content re-queue after rename (avoids stale backlink race)",
+                        tracing::debug!(
+                            "Folder doc {}: metadata-only update, no content re-queue",
                             doc_id
                         );
                     }
@@ -1655,7 +1724,6 @@ impl LinkIndexer {
                 } else {
                     // Content doc — index it
                     tracing::info!("Indexing content doc: {}", doc_id);
-                    let folder_doc_ids = find_all_folder_docs(&docs);
                     match self.index_document(&doc_id, &docs, &folder_doc_ids) {
                         Ok(()) => tracing::info!("Successfully indexed: {}", doc_id),
                         Err(e) => tracing::error!("Failed to index {}: {:?}", doc_id, e),
@@ -1833,7 +1901,7 @@ impl LinkIndexer {
             };
             // Shard lock released; safe to acquire awareness lock.
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            self.detect_renames(folder_doc_id, &guard.doc);
+            self.detect_changes(folder_doc_id, &guard.doc);
         }
         tracing::info!(
             "Seeded filemeta cache for {} folder docs",
@@ -2556,6 +2624,61 @@ mod tests {
         assert!(
             renames.is_empty(),
             "first call should seed cache and return empty"
+        );
+    }
+
+    #[test]
+    fn metadata_only_update_is_not_membership_change() {
+        // The cascade fix: folder writes that don't add/remove/move files
+        // (hash/mtime churn) must not re-queue every loaded content doc.
+        let (indexer, _rx) = LinkIndexer::new();
+        let folder_v1 = create_folder_doc(&[("/Foo.md", "uuid-1"), ("/Bar.md", "uuid-2")]);
+        indexer.detect_changes("folder-1", &folder_v1);
+
+        // Same membership, same paths — a fresh doc simulates a
+        // metadata-only rewrite of filemeta_v0.
+        let folder_v2 = create_folder_doc(&[("/Foo.md", "uuid-1"), ("/Bar.md", "uuid-2")]);
+        let changes = indexer.detect_changes("folder-1", &folder_v2);
+        assert!(changes.renames.is_empty());
+        assert!(!changes.membership_changed);
+    }
+
+    #[test]
+    fn added_file_is_membership_change() {
+        let (indexer, _rx) = LinkIndexer::new();
+        let folder_v1 = create_folder_doc(&[("/Foo.md", "uuid-1")]);
+        indexer.detect_changes("folder-1", &folder_v1);
+
+        let folder_v2 = create_folder_doc(&[("/Foo.md", "uuid-1"), ("/New.md", "uuid-2")]);
+        let changes = indexer.detect_changes("folder-1", &folder_v2);
+        assert!(changes.renames.is_empty());
+        assert!(changes.membership_changed);
+    }
+
+    #[test]
+    fn removed_file_is_membership_change() {
+        let (indexer, _rx) = LinkIndexer::new();
+        let folder_v1 = create_folder_doc(&[("/Foo.md", "uuid-1"), ("/Bar.md", "uuid-2")]);
+        indexer.detect_changes("folder-1", &folder_v1);
+
+        let folder_v2 = create_folder_doc(&[("/Foo.md", "uuid-1")]);
+        let changes = indexer.detect_changes("folder-1", &folder_v2);
+        assert!(changes.renames.is_empty());
+        assert!(changes.membership_changed);
+    }
+
+    #[test]
+    fn folder_move_same_basename_is_membership_change_not_rename() {
+        let (indexer, _rx) = LinkIndexer::new();
+        let folder_v1 = create_folder_doc(&[("/Notes/Foo.md", "uuid-1")]);
+        indexer.detect_changes("folder-1", &folder_v1);
+
+        let folder_v2 = create_folder_doc(&[("/Archive/Foo.md", "uuid-1")]);
+        let changes = indexer.detect_changes("folder-1", &folder_v2);
+        assert!(changes.renames.is_empty());
+        assert!(
+            changes.membership_changed,
+            "path change must re-queue for link re-resolution"
         );
     }
 

@@ -138,4 +138,30 @@ describe('checkProxyAccess', () => {
   it('folder-scoped token blocks unknown endpoints', () => {
     expect(checkProxyAccess('DELETE', '/doc/abc/something', '', scopedAuth).allowed).toBe(false);
   });
+
+  it('all-folders edit token allows POST /suggestions/apply', () => {
+    expect(checkProxyAccess('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_B}`, allFoldersAuth).allowed).toBe(true);
+  });
+
+  it('folder-scoped edit token allows POST /suggestions/apply for its own folder', () => {
+    expect(checkProxyAccess('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_A}`, scopedAuth).allowed).toBe(true);
+  });
+
+  it('folder-scoped token blocks POST /suggestions/apply for another folder', () => {
+    expect(checkProxyAccess('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_B}`, scopedAuth).allowed).toBe(false);
+  });
+
+  it('folder-scoped token blocks POST /suggestions/apply without folder_id', () => {
+    expect(checkProxyAccess('POST', '/suggestions/apply', '', scopedAuth).allowed).toBe(false);
+  });
+
+  it('view tokens block POST /suggestions/apply', () => {
+    expect(checkProxyAccess('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_A}`, makeAuth(ALL_FOLDERS, 'view')).allowed).toBe(false);
+    expect(checkProxyAccess('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_A}`, makeAuth(FOLDER_A, 'view')).allowed).toBe(false);
+  });
+
+  it('checkProxyAccessWithBody delegates POST /suggestions/apply to the query check', () => {
+    expect(checkProxyAccessWithBody('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_A}`, scopedAuth).allowed).toBe(true);
+    expect(checkProxyAccessWithBody('POST', '/suggestions/apply', `folder_id=${RELAY_ID}-${FOLDER_B}`, scopedAuth).allowed).toBe(false);
+  });
 });
