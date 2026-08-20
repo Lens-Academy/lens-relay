@@ -199,7 +199,16 @@ export async function runClaude(
     results = await Promise.all(
       chunkDirs.map((dir) =>
         spawnClaude(dir, timeoutMs, undefined, chunkAbort.signal).then((r) => {
-          if (r.exitCode !== 0) chunkAbort.abort(new Error('sibling chunk failed'));
+          // Carry the real failure into the abort reason, so a sibling's
+          // rejection (which is what Promise.all surfaces) still names the
+          // actual Claude error rather than a generic "aborted".
+          if (r.exitCode !== 0) {
+            chunkAbort.abort(
+              new Error(
+                `Transcript chunk failed (exit ${r.exitCode}): ${r.stderr.slice(0, 300)}`
+              )
+            );
+          }
           return r;
         })
       )
