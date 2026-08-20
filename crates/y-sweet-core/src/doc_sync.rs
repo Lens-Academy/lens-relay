@@ -26,6 +26,14 @@ impl DocWithSyncKv {
         self.sync_kv.clone()
     }
 
+    /// True when anything beyond this struct's own handle holds the doc's
+    /// awareness — connections, MCP handlers, derived-index GC leases. The
+    /// GC worker uses this both for checkpoint sampling and for the
+    /// commit-time remove_if predicate.
+    pub fn has_external_refs(&self) -> bool {
+        Arc::strong_count(&self.awareness) > 1
+    }
+
     pub async fn new<F>(
         key: &str,
         store: Option<Arc<Box<dyn Store>>>,
@@ -79,7 +87,10 @@ impl DocWithSyncKv {
                     // access are both needless and unsafe under awareness WRITE.
                     if txn
                         .origin()
-                        .map(|o| o.as_ref() == b"gc-compaction")
+                        .map(|o| {
+                            o.as_ref()
+                                == crate::permanent_user_data::GC_COMPACTION_ORIGIN.as_bytes()
+                        })
                         .unwrap_or(false)
                     {
                         return;
@@ -89,7 +100,7 @@ impl DocWithSyncKv {
                     // recursively enqueue derived-index work.
                     let suppress_derived_index = txn
                         .origin()
-                        .map(|o| o.as_ref() == b"link-indexer")
+                        .map(|o| o.as_ref() == crate::link_indexer::LINK_INDEXER_ORIGIN.as_bytes())
                         .unwrap_or(false);
                     // Extract state vector from the transaction (post-update)
                     let sv = txn.state_vector().encode_v1();

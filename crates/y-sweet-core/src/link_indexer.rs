@@ -11,6 +11,11 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 use yrs::{Any, Doc, GetString, Map, MapRef, Out, ReadTxn, Text, Transact, WriteTxn};
 
+/// Transaction origin for link-indexer rewrites. The doc_sync update observer
+/// matches on this to skip re-queueing derived-index work for the indexer's
+/// own writes (see `DocWithSyncKv`).
+pub const LINK_INDEXER_ORIGIN: &str = "link-indexer";
+
 // ---------------------------------------------------------------------------
 // parse_doc_id
 // ---------------------------------------------------------------------------
@@ -421,7 +426,7 @@ pub fn compute_backlink_targets(
 /// Adds source_uuid to targets that don't have it, removes from targets that
 /// are no longer linked. Preserves other sources' backlinks.
 pub fn apply_backlink_diff(folder_doc: &Doc, source_uuid: &str, new_targets: &HashSet<String>) {
-    let mut txn = folder_doc.transact_mut_with("link-indexer");
+    let mut txn = folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
     let backlinks = txn.get_or_insert_map("backlinks_v0");
 
     // Add source to new targets
@@ -605,7 +610,7 @@ fn index_content_into_folders_from_text(
     // Diff-update backlinks_v0 on each folder doc
     for (fi, folder_doc) in folder_docs.iter().enumerate() {
         let new_targets = &targets_per_folder[fi];
-        let mut txn = folder_doc.transact_mut_with("link-indexer");
+        let mut txn = folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
         let backlinks = txn.get_or_insert_map("backlinks_v0");
 
         for target_uuid in new_targets {
@@ -652,7 +657,7 @@ pub fn remove_doc_from_backlinks(source_uuid: &str, folder_docs: &[&Doc]) -> any
     let mut modified_count = 0;
 
     for folder_doc in folder_docs {
-        let mut txn = folder_doc.transact_mut_with("link-indexer");
+        let mut txn = folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
         let backlinks = txn.get_or_insert_map("backlinks_v0");
 
         let all_keys: Vec<String> = backlinks.keys(&txn).map(|k| k.to_string()).collect();
@@ -747,14 +752,14 @@ pub fn move_document(
     if is_cross_folder {
         // Cross-folder: remove from source, add to target
         {
-            let mut txn = source_folder_doc.transact_mut_with("link-indexer");
+            let mut txn = source_folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
             let filemeta = txn.get_or_insert_map("filemeta_v0");
             filemeta.remove(&mut txn, &old_path);
             let docs_map = txn.get_or_insert_map("docs");
             docs_map.remove(&mut txn, &old_path);
         }
         {
-            let mut txn = target_folder_doc.transact_mut_with("link-indexer");
+            let mut txn = target_folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
             let filemeta = txn.get_or_insert_map("filemeta_v0");
             let docs_map = txn.get_or_insert_map("docs");
             ensure_ancestor_folders(&filemeta, &docs_map, &mut txn, new_path);
@@ -763,7 +768,7 @@ pub fn move_document(
         }
     } else {
         // Within-folder: remove old, insert new in one transaction
-        let mut txn = source_folder_doc.transact_mut_with("link-indexer");
+        let mut txn = source_folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
         let filemeta = txn.get_or_insert_map("filemeta_v0");
         let docs_map = txn.get_or_insert_map("docs");
         ensure_ancestor_folders(&filemeta, &docs_map, &mut txn, new_path);
@@ -889,7 +894,7 @@ pub fn move_document(
     if is_cross_folder {
         // Read + remove in one transaction to avoid TOCTOU window
         let backlinker_uuids = {
-            let mut txn = source_folder_doc.transact_mut_with("link-indexer");
+            let mut txn = source_folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
             let backlinks = txn.get_or_insert_map("backlinks_v0");
             let uuids = read_backlinks_array(&backlinks, &txn, uuid);
             backlinks.remove(&mut txn, uuid);
@@ -898,7 +903,7 @@ pub fn move_document(
 
         // Add to target folder (merge with any existing entries)
         if !backlinker_uuids.is_empty() {
-            let mut txn = target_folder_doc.transact_mut_with("link-indexer");
+            let mut txn = target_folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
             let backlinks = txn.get_or_insert_map("backlinks_v0");
             let existing: Vec<String> = read_backlinks_array(&backlinks, &txn, uuid);
             let mut merged = existing;
@@ -960,7 +965,7 @@ pub fn extract_filemeta_fields(value: &Out, txn: &impl ReadTxn) -> HashMap<Strin
 /// 1. Reads the plain text from Y.Text("contents")
 /// 2. Calls `compute_wikilink_rename_edits()` to find matching wikilinks
 /// 3. Applies edits in reverse order using `remove_range` / `insert`
-///    (uses `transact_mut_with("link-indexer")` so the observer can identify
+///    (uses `transact_mut_with(LINK_INDEXER_ORIGIN)` so the observer can identify
 ///    indexer-originated writes via the transaction origin)
 /// 4. Returns the number of edits applied
 ///
@@ -1015,7 +1020,7 @@ pub fn update_wikilinks_in_doc_resolved(
         return Ok(0);
     }
 
-    let mut txn = content_doc.transact_mut_with("link-indexer");
+    let mut txn = content_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
     let text = txn.get_or_insert_text("contents");
 
     for edit in &edits {
@@ -1063,7 +1068,7 @@ fn rewrite_wikilinks_for_move(
         return Ok(0);
     }
 
-    let mut txn = content_doc.transact_mut_with("link-indexer");
+    let mut txn = content_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
     let text = txn.get_or_insert_text("contents");
 
     for edit in &edits {
@@ -1119,7 +1124,7 @@ fn rewrite_outgoing_links_for_move(
         return Ok(0);
     }
 
-    let mut txn = content_doc.transact_mut_with("link-indexer");
+    let mut txn = content_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
     let text = txn.get_or_insert_text("contents");
 
     for edit in &edits {
@@ -1174,6 +1179,71 @@ impl PendingEntry {
             ..Self::new(now)
         }
     }
+
+    /// Ready when the user paused (last_updated) or the ceiling expired
+    /// (first_queued), so sustained editing can't starve indexing forever.
+    pub fn is_ready(&self, debounce: Duration) -> bool {
+        self.last_updated.elapsed() >= debounce || self.first_queued.elapsed() >= debounce
+    }
+}
+
+/// Upsert a pending entry for `doc_id`, bumping its generation and attaching
+/// the lease when one is given. Returns true when the entry is new (the
+/// caller should signal its worker channel). Shared by the link indexer and
+/// the search worker so the generation/lease protocol lives in one place.
+pub fn upsert_pending_update(
+    pending: &DashMap<String, PendingEntry>,
+    doc_id: &str,
+    lease: Option<Arc<RwLock<crate::sync::awareness::Awareness>>>,
+) -> bool {
+    use dashmap::mapref::entry::Entry;
+    let now = Instant::now();
+    // Atomically check-and-insert to avoid TOCTOU race where two concurrent
+    // calls both see "not pending" and double-send to the channel.
+    match pending.entry(doc_id.to_string()) {
+        Entry::Occupied(mut e) => {
+            let entry = e.get_mut();
+            entry.last_updated = now;
+            entry.generation = entry.generation.wrapping_add(1);
+            if lease.is_some() {
+                entry.lease = lease;
+            }
+            false
+        }
+        Entry::Vacant(e) => {
+            let entry = match lease {
+                Some(lease) => PendingEntry::with_lease(now, lease),
+                None => PendingEntry::new(now),
+            };
+            e.insert(entry);
+            true
+        }
+    }
+}
+
+/// Acknowledge one worker pass over `doc_id`: remove the entry when its
+/// generation still matches the scanned one. Otherwise a concurrent update
+/// superseded the scan — keep the entry queued for another pass, but restart
+/// the debounce ceiling so the doc doesn't stay permanently ready and
+/// reindex on every poll tick during sustained editing. Returns true when
+/// the entry was removed (or was already gone).
+pub fn acknowledge_generation(
+    pending: &DashMap<String, PendingEntry>,
+    doc_id: &str,
+    generation: u64,
+) -> bool {
+    use dashmap::mapref::entry::Entry;
+    match pending.entry(doc_id.to_string()) {
+        Entry::Occupied(e) if e.get().generation == generation => {
+            e.remove();
+            true
+        }
+        Entry::Occupied(mut e) => {
+            e.get_mut().first_queued = Instant::now();
+            false
+        }
+        Entry::Vacant(_) => true,
+    }
 }
 
 pub struct LinkIndexer {
@@ -1199,44 +1269,17 @@ impl LinkIndexer {
         )
     }
 
-    pub async fn on_document_update(&self, doc_id: &str) {
-        self.queue_document_update(doc_id);
-    }
-
-    /// Queue work synchronously. Update callbacks use this form so the pending
-    /// lease exists before they release the document's awareness write lock.
-    pub fn queue_document_update(&self, doc_id: &str) {
-        self.queue_document_update_with_lease(doc_id, None);
-    }
-
+    /// Queue work synchronously, attaching a GC lease when the caller has
+    /// one. Update callbacks use this form so the pending lease exists
+    /// before they release the document's awareness write lock. This is the
+    /// only entry point: queueing without a lease leaves the doc evictable
+    /// before the worker's pass, so pass one whenever the doc is loaded.
     pub fn queue_document_update_with_lease(
         &self,
         doc_id: &str,
         lease: Option<Arc<RwLock<crate::sync::awareness::Awareness>>>,
     ) {
-        use dashmap::mapref::entry::Entry;
-        let now = Instant::now();
-        // Atomically check-and-insert to avoid TOCTOU race where two concurrent
-        // calls both see "not pending" and double-send to the channel.
-        let is_new = match self.pending.entry(doc_id.to_string()) {
-            Entry::Occupied(mut e) => {
-                let entry = e.get_mut();
-                entry.last_updated = now;
-                entry.generation = entry.generation.wrapping_add(1);
-                if lease.is_some() {
-                    entry.lease = lease;
-                }
-                false
-            }
-            Entry::Vacant(e) => {
-                let entry = match lease {
-                    Some(lease) => PendingEntry::with_lease(now, lease),
-                    None => PendingEntry::new(now),
-                };
-                e.insert(entry);
-                true
-            }
-        };
+        let is_new = upsert_pending_update(&self.pending, doc_id, lease);
         // Only send to channel on the first update — subsequent updates just
         // reset the timestamp for debouncing without flooding the channel.
         //
@@ -1269,21 +1312,22 @@ impl LinkIndexer {
 
     #[cfg(test)]
     fn is_ready(&self, doc_id: &str) -> bool {
-        if let Some(entry) = self.pending.get(doc_id) {
-            entry.last_updated.elapsed() >= DEBOUNCE_DURATION // user paused
-                || entry.first_queued.elapsed() >= DEBOUNCE_DURATION // ceiling: continuous editing
-        } else {
-            false
-        }
+        self.pending
+            .get(doc_id)
+            .is_some_and(|entry| entry.is_ready(DEBOUNCE_DURATION))
     }
 
     fn mark_indexed(&self, doc_id: &str, generation: u64) {
-        self.pending
-            .remove_if(doc_id, |_, entry| entry.generation == generation);
+        acknowledge_generation(&self.pending, doc_id, generation);
     }
 
     pub fn has_pending(&self, doc_id: &str) -> bool {
         self.pending.contains_key(doc_id)
+    }
+
+    /// Whether the pending entry for a doc holds a GC lease.
+    pub fn pending_has_lease(&self, doc_id: &str) -> bool {
+        self.pending.get(doc_id).is_some_and(|e| e.lease.is_some())
     }
 
     /// Clear all pending entries. Called after startup_reindex to discard stale
@@ -1562,9 +1606,7 @@ impl LinkIndexer {
                 .into_iter()
                 .filter(|(key, entry)| {
                     let is_folder = is_folder_doc(key, &docs).is_some();
-                    is_folder
-                        || entry.last_updated.elapsed() >= DEBOUNCE_DURATION
-                        || entry.first_queued.elapsed() >= DEBOUNCE_DURATION
+                    is_folder || entry.is_ready(DEBOUNCE_DURATION)
                 })
                 .collect();
 
@@ -1819,9 +1861,9 @@ mod tests {
         let (indexer, mut rx) = LinkIndexer::new();
 
         // Simulate rapid updates (like typing in editor)
-        indexer.on_document_update("doc-1").await;
-        indexer.on_document_update("doc-1").await;
-        indexer.on_document_update("doc-1").await;
+        indexer.queue_document_update_with_lease("doc-1", None);
+        indexer.queue_document_update_with_lease("doc-1", None);
+        indexer.queue_document_update_with_lease("doc-1", None);
 
         // Should have exactly one message in channel (not three)
         assert!(rx.try_recv().is_ok(), "should have one message");
@@ -1835,12 +1877,12 @@ mod tests {
     // 2026-06-09: worker died mid-batch on a 1045-doc folder; every file
     // created afterwards was unrenamable ("Move failed: 400") until restart.
     #[tokio::test]
-    async fn on_document_update_does_not_block_when_channel_is_full() {
+    async fn queue_document_update_does_not_block_when_channel_is_full() {
         let (indexer, _rx) = LinkIndexer::new();
 
         // Fill the channel to capacity (receiver never drains).
         for i in 0..1000 {
-            indexer.on_document_update(&format!("doc-{i}")).await;
+            indexer.queue_document_update_with_lease(&format!("doc-{i}"), None);
         }
         assert_eq!(
             indexer.index_tx.capacity(),
@@ -1848,13 +1890,9 @@ mod tests {
             "test setup: channel must be full to exercise the Full branch"
         );
 
-        // The next update must return promptly, not block on the full channel.
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            indexer.on_document_update("doc-overflow"),
-        )
-        .await
-        .expect("on_document_update must not block when the channel is full");
+        // The next update must return promptly, not block on the full channel
+        // (try_send drops the signal; the worker's poll covers the gap).
+        indexer.queue_document_update_with_lease("doc-overflow", None);
 
         // The doc is still tracked in pending, so the worker's poll picks it up.
         assert!(
@@ -1880,10 +1918,10 @@ mod tests {
     #[tokio::test]
     async fn indexing_ack_does_not_remove_concurrent_update() {
         let (indexer, _rx) = LinkIndexer::new();
-        indexer.on_document_update("doc-race").await;
+        indexer.queue_document_update_with_lease("doc-race", None);
         let scanned_generation = indexer.pending.get("doc-race").unwrap().generation;
 
-        indexer.on_document_update("doc-race").await;
+        indexer.queue_document_update_with_lease("doc-race", None);
         indexer.mark_indexed("doc-race", scanned_generation);
 
         assert!(indexer.pending.contains_key("doc-race"));
@@ -1895,12 +1933,12 @@ mod tests {
         let (indexer, _rx) = LinkIndexer::new();
 
         // First update
-        indexer.on_document_update("doc-1").await;
+        indexer.queue_document_update_with_lease("doc-1", None);
 
         // Simulate rapid updates over 500ms
         for _ in 0..5 {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            indexer.on_document_update("doc-1").await;
+            indexer.queue_document_update_with_lease("doc-1", None);
         }
 
         // Not ready yet (last update was just now)
@@ -1924,7 +1962,7 @@ mod tests {
         let (indexer, mut rx) = LinkIndexer::new();
 
         // First update cycle
-        indexer.on_document_update("doc-1").await;
+        indexer.queue_document_update_with_lease("doc-1", None);
         assert!(rx.try_recv().is_ok());
 
         // Simulate indexing complete
@@ -1932,10 +1970,31 @@ mod tests {
         indexer.mark_indexed("doc-1", generation);
 
         // New update should send a new channel message (not suppressed)
-        indexer.on_document_update("doc-1").await;
+        indexer.queue_document_update_with_lease("doc-1", None);
         assert!(
             rx.try_recv().is_ok(),
             "should queue new message after mark_indexed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_ack_restarts_debounce_ceiling() {
+        // Without the reset, a surviving entry keeps its original
+        // first_queued and stays permanently ready, reindexing on every
+        // poll tick during sustained editing.
+        let (indexer, _rx) = LinkIndexer::new();
+        indexer.queue_document_update_with_lease("doc-1", None);
+        tokio::time::advance(DEBOUNCE_DURATION + Duration::from_millis(10)).await;
+        assert!(indexer.is_ready("doc-1"));
+
+        let scanned = indexer.pending.get("doc-1").unwrap().generation;
+        indexer.queue_document_update_with_lease("doc-1", None); // concurrent edit
+        indexer.mark_indexed("doc-1", scanned); // ack fails: generation moved
+
+        assert!(indexer.pending.contains_key("doc-1"));
+        assert!(
+            !indexer.is_ready("doc-1"),
+            "failed ack must restart the debounce ceiling"
         );
     }
 
@@ -1944,13 +2003,13 @@ mod tests {
         let (indexer, _rx) = LinkIndexer::new();
 
         // First update
-        indexer.on_document_update("doc-1").await;
+        indexer.queue_document_update_with_lease("doc-1", None);
 
         // Simulate continuous typing: update every 500ms for 3 seconds.
         // Each update resets last_updated, but first_queued stays at the original time.
         for _ in 0..6 {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            indexer.on_document_update("doc-1").await;
+            indexer.queue_document_update_with_lease("doc-1", None);
         }
 
         // At this point ~3s have elapsed since first_queued.
@@ -3817,7 +3876,7 @@ mod tests {
 
         // Manually populate backlinks_v0
         {
-            let mut txn = folder_doc.transact_mut_with("link-indexer");
+            let mut txn = folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
             let backlinks = txn.get_or_insert_map("backlinks_v0");
             let arr = vec![
                 Any::String("uuid-source-x".into()),
@@ -3851,7 +3910,7 @@ mod tests {
             ("/SourceX.md", "uuid-source-x"),
         ]);
         {
-            let mut txn = folder_doc.transact_mut_with("link-indexer");
+            let mut txn = folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
             let backlinks = txn.get_or_insert_map("backlinks_v0");
             let arr = vec![Any::String("uuid-source-x".into())];
             backlinks.insert(&mut txn, "uuid-target-b", arr);
@@ -3879,7 +3938,7 @@ mod tests {
     fn remove_doc_from_backlinks_idempotent() {
         let folder_doc = create_folder_doc(&[("/TargetA.md", "uuid-target-a")]);
         {
-            let mut txn = folder_doc.transact_mut_with("link-indexer");
+            let mut txn = folder_doc.transact_mut_with(LINK_INDEXER_ORIGIN);
             let backlinks = txn.get_or_insert_map("backlinks_v0");
             let arr = vec![Any::String("uuid-other".into())];
             backlinks.insert(&mut txn, "uuid-target-a", arr);
@@ -3910,7 +3969,7 @@ mod tests {
 
         // Populate backlinks in both folders
         {
-            let mut txn = folder_a.transact_mut_with("link-indexer");
+            let mut txn = folder_a.transact_mut_with(LINK_INDEXER_ORIGIN);
             let backlinks = txn.get_or_insert_map("backlinks_v0");
             backlinks.insert(
                 &mut txn,
@@ -3919,7 +3978,7 @@ mod tests {
             );
         }
         {
-            let mut txn = folder_b.transact_mut_with("link-indexer");
+            let mut txn = folder_b.transact_mut_with(LINK_INDEXER_ORIGIN);
             let backlinks = txn.get_or_insert_map("backlinks_v0");
             backlinks.insert(
                 &mut txn,
