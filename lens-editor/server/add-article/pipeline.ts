@@ -26,7 +26,15 @@ import {
   checkRelayDocsExist,
   checkRelayArticleUrls,
   createRelayAttachment,
+  checkRelayVideoIds,
 } from "../add-video/relay-docs";
+import {
+  extractVideoInput,
+  fetchYouTubeTranscript,
+  isYouTubeUrl,
+  type VideoInput,
+} from "../add-video/fetch-transcript";
+import { importVideo } from "../add-video/pipeline";
 import { maybeCreateLens } from "../lens-doc";
 
 const WORK_BASE = "/tmp/articles";
@@ -79,6 +87,67 @@ export function articleImportBehavior(
       throw new Error(`Unhandled article import mode: ${exhaustive}`);
     }
   }
+}
+
+/**
+ * Import a YouTube video's transcript: mint + fetch the transcript
+ * server-side, then reuse the add-video pipeline (Claude formatting,
+ * timestamp alignment, relay write, optional lens). importMode maps as
+ * "article" → transcript only, "article-and-lens" → + lens; stubs don't
+ * exist for videos.
+ */
+async function processYouTubeVideo(
+  job: ArticleJob,
+  video: VideoInput,
+  behavior: ArticleImportBehavior,
+  setStage: (stage: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (behavior.stubOnly) {
+    throw new Error(
+      "YouTube videos can't be imported as stubs — use importMode \"article\" (imports the transcript) or \"article-and-lens\".",
+    );
+  }
+
+  // Duplicate check by video id — the same relay check the bookmarklet
+  // endpoint uses. Degrades gracefully: a failed check must not block import.
+  setStage("checking-duplicates");
+  const relayFolder =
+    process.env.RELAY_TRANSCRIPT_FOLDER || "Lens Edu/video_transcripts";
+  const topFolder = relayFolder.split("/")[0];
+  try {
+    const found = await checkRelayVideoIds([video.video_id]);
+    const existingPath = found[video.video_id];
+    if (existingPath) {
+      throw new Error(
+        `This video was already imported: ${topFolder}${existingPath}`,
+      );
+    }
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      err.message.startsWith("This video was already imported")
+    ) {
+      throw err;
+    }
+    console.warn(`[add-article] video dedup check failed, proceeding: ${err}`);
+  }
+
+  setStage("fetching-transcript");
+  const payload = await fetchYouTubeTranscript(video, signal);
+  job.title = payload.title;
+  job.updated_at = new Date().toISOString();
+
+  const { relayUrl } = await importVideo(job.id, payload, job.created_at, {
+    createLens: behavior.createLens,
+    signal,
+    onStage: setStage,
+  });
+  job.relay_url = relayUrl;
+  job.updated_at = new Date().toISOString();
+  console.log(
+    `[add-article] Imported video transcript for ${job.url} ("${payload.title}")`,
+  );
 }
 
 async function findExistingArticle(
@@ -178,6 +247,18 @@ export async function processArticle(
     job.stage = stage;
     job.updated_at = new Date().toISOString();
   };
+
+  // YouTube URLs import the video's transcript through the video pipeline
+  // instead of scraping the watch page as an "article".
+  const video = extractVideoInput(job.url);
+  if (video) {
+    return processYouTubeVideo(job, video, behavior, setStage, signal);
+  }
+  if (isYouTubeUrl(job.url)) {
+    throw new Error(
+      "This YouTube URL doesn't point to a single video — submit a watch/shorts/youtu.be link.",
+    );
+  }
 
   // Reject the common duplicate case before downloading and parsing the page.
   // A matched stub is retained for a later full import to promote in place.

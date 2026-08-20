@@ -34,7 +34,11 @@ export class ArticleJobQueue {
     this.processJob = options.processJob;
   }
 
-  add(url: string, importMode: ArticleImportMode): ArticleJob {
+  add(
+    url: string,
+    importMode: ArticleImportMode,
+    opts?: { timeoutMs?: number },
+  ): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
@@ -43,6 +47,7 @@ export class ArticleJobQueue {
       url,
       status: "queued",
       importMode,
+      timeout_ms: opts?.timeoutMs,
       created_at: now,
       updated_at: now,
     };
@@ -122,7 +127,7 @@ export class ArticleJobQueue {
   private async runJob(job: ArticleJob): Promise<void> {
     const ctrl = new AbortController();
     this.controllers.set(job.id, ctrl);
-    const timeoutMs = jobTimeoutMs();
+    const timeoutMs = job.timeout_ms ?? jobTimeoutMs();
     const timer = setTimeout(
       () =>
         ctrl.abort(

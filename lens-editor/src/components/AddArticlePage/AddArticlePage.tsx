@@ -186,9 +186,9 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "60px 20px" }}>
         <h1 style={{ color: "#fff" }}>Add Article to Lens</h1>
         <p>
-          Import web articles into the Lens library. Paste one or more article
-          URLs (one per line). The server fetches each page, extracts the
-          article, cleans it up, and saves it to{" "}
+          Import web articles and YouTube videos into the Lens library. Paste
+          one or more URLs (one per line). The server fetches each page,
+          extracts the article, cleans it up, and saves it to{" "}
           <code
             style={{
               background: "#0f0f23",
@@ -199,7 +199,19 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
           >
             Lens Edu/articles
           </code>
-          .
+          . YouTube links import the video&apos;s transcript (with timestamps)
+          to{" "}
+          <code
+            style={{
+              background: "#0f0f23",
+              padding: "2px 6px",
+              borderRadius: 4,
+              fontSize: 13,
+            }}
+          >
+            Lens Edu/video_transcripts
+          </code>{" "}
+          instead — those take a few minutes.
         </p>
 
         <textarea

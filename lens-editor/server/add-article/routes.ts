@@ -6,10 +6,15 @@ import {
 } from "../../shared/article-import-contract";
 import { verifyShareToken, roleAtLeast } from "../share-token";
 import { normalizeUrlForDedup } from "./url-normalize";
+import { extractVideoInput } from "../add-video/fetch-transcript";
 
 export const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
 const ALL_FOLDERS = "00000000-0000-0000-0000-000000000000";
 const MAX_URLS_PER_REQUEST = 20;
+// Video jobs run Claude over a whole transcript (20-min ceiling of its own,
+// plus up to 8 min waiting for a Claude slot) — the 12-min article deadline
+// would kill every long video.
+const VIDEO_JOB_TIMEOUT_MS = 35 * 60_000;
 function validateUrl(raw: string): string | null {
   let parsed: URL;
   try {
@@ -122,7 +127,19 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         results.push({ url, status: "already_queued", id: active.id });
         continue;
       }
-      const job = queue.add(url, importMode);
+      const video = extractVideoInput(url);
+      if (video && importMode === "stub") {
+        results.push({
+          url,
+          status: "invalid",
+          error:
+            'YouTube videos can\'t be imported as stubs — use "article" (imports the transcript) or "article-and-lens"',
+        });
+        continue;
+      }
+      const job = video
+        ? queue.add(url, importMode, { timeoutMs: VIDEO_JOB_TIMEOUT_MS })
+        : queue.add(url, importMode);
       results.push({ url, status: "queued", id: job.id });
     }
 
@@ -155,7 +172,9 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
     if (active) {
       return c.json({ error: "URL is already queued", id: active.id }, 409);
     }
-    const retried = queue.add(job.url, job.importMode);
+    const retried = job.timeout_ms
+      ? queue.add(job.url, job.importMode, { timeoutMs: job.timeout_ms })
+      : queue.add(job.url, job.importMode);
     return c.json({ id: retried.id, status: "queued" });
   });
 

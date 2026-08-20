@@ -164,6 +164,33 @@ describe("POST /api/add-article", () => {
     expect(mockQueue.add).not.toHaveBeenCalled();
   });
 
+  it("queues youtube video urls with a longer job deadline", async () => {
+    const resp = await post({
+      urls: ["https://www.youtube.com/watch?v=Nl7-bRFSZBs"],
+      importMode: "article-and-lens",
+    });
+    expect(resp.status).toBe(200);
+    const data = await resp.json();
+    expect(data.results[0].status).toBe("queued");
+    expect(mockQueue.add).toHaveBeenCalledWith(
+      "https://www.youtube.com/watch?v=Nl7-bRFSZBs",
+      "article-and-lens",
+      { timeoutMs: 35 * 60_000 },
+    );
+  });
+
+  it("marks youtube stub imports invalid without queueing them", async () => {
+    const resp = await post({
+      urls: ["https://youtu.be/Nl7-bRFSZBs"],
+      importMode: "stub",
+    });
+    expect(resp.status).toBe(200);
+    const data = await resp.json();
+    expect(data.results[0].status).toBe("invalid");
+    expect(data.results[0].error).toContain("stub");
+    expect(mockQueue.add).not.toHaveBeenCalled();
+  });
+
   it("dedupes urls within one request", async () => {
     const resp = await post({
       urls: ["https://example.com/a", "https://example.com/a"],
