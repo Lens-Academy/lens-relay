@@ -30,7 +30,7 @@ import {
   relayTranscriptFolder,
   editorOpenUrl,
 } from "../add-video/relay-docs";
-import { extractVideoInput, type VideoInput } from "../add-video/video-url";
+import type { VideoInput } from "../add-video/video-url";
 import { fetchYouTubeTranscript } from "../add-video/fetch-transcript";
 import { importVideo } from "../add-video/pipeline";
 import { maybeCreateLens } from "../lens-doc";
@@ -242,10 +242,10 @@ export async function processArticle(
 
   // YouTube URLs import the video's transcript through the video pipeline
   // instead of scraping the watch page as an "article". Non-video YouTube
-  // URLs and stub mode were already rejected at submit time (routes.ts).
-  const video = extractVideoInput(job.url);
-  if (video) {
-    return processYouTubeVideo(job, video, behavior, setStage, signal);
+  // URLs and stub mode were already rejected at submit time (routes.ts); the
+  // classification was stored on the job at enqueue.
+  if (job.video) {
+    return processYouTubeVideo(job, job.video, behavior, setStage, signal);
   }
 
   // Reject the common duplicate case before downloading and parsing the page.

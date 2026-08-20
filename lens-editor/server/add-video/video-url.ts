@@ -17,17 +17,28 @@ function fullYouTubeUrl(videoId: string, isShort: boolean): string {
     : `https://www.youtube.com/watch?v=${videoId}`;
 }
 
-const YOUTUBE_HOSTS =
-  /^(?:www\.|m\.|music\.)?(?:youtube\.com|youtube-nocookie\.com)$/;
+/** Parse and return the URL plus its normalized host when it belongs to
+ *  YouTube (any subdomain, trailing-dot hosts included); null otherwise. */
+function parseYouTubeUrl(raw: string): { url: URL; host: string } | null {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    return null;
+  }
+  const host = u.hostname.toLowerCase().replace(/\.$/, "");
+  const isYt =
+    host === "youtu.be" ||
+    host === "youtube.com" ||
+    host.endsWith(".youtube.com") ||
+    host === "youtube-nocookie.com" ||
+    host.endsWith(".youtube-nocookie.com");
+  return isYt ? { url: u, host } : null;
+}
 
 /** Whether this URL belongs to YouTube at all (regardless of URL shape). */
 export function isYouTubeUrl(raw: string): boolean {
-  try {
-    const host = new URL(raw.trim()).hostname.toLowerCase();
-    return host === "youtu.be" || YOUTUBE_HOSTS.test(host);
-  } catch {
-    return false;
-  }
+  return parseYouTubeUrl(raw) !== null;
 }
 
 /**
@@ -36,20 +47,16 @@ export function isYouTubeUrl(raw: string): boolean {
  * a single video (channel pages, playlists, search).
  */
 export function extractVideoInput(raw: string): VideoInput | null {
-  if (!isYouTubeUrl(raw)) return null;
-  let u: URL;
-  try {
-    u = new URL(raw.trim());
-  } catch {
-    return null;
-  }
+  const parsed = parseYouTubeUrl(raw);
+  if (!parsed) return null;
+  const { url: u, host } = parsed;
 
   const v = u.searchParams.get("v");
   if (v && /^[\w-]{11}$/.test(v)) {
     return { video_id: v, url: fullYouTubeUrl(v, false) };
   }
 
-  if (u.hostname.toLowerCase() === "youtu.be") {
+  if (host === "youtu.be") {
     const m = u.pathname.match(/^\/([\w-]{11})(?:\/|$)/);
     if (m) return { video_id: m[1], url: fullYouTubeUrl(m[1], false) };
     return null;

@@ -11,6 +11,20 @@ describe("isYouTubeUrl", () => {
     expect(isYouTubeUrl("https://www.youtube.com/@somechannel")).toBe(true);
   });
 
+  // Prevents: regressing to a fixed-subdomain list narrower than the deleted
+  // Rust MCP guard, which let odd-but-real YouTube hosts fall through to the
+  // article scraper.
+  it("covers arbitrary subdomains and trailing-dot hosts", () => {
+    expect(isYouTubeUrl("https://gaming.youtube.com/watch?v=Nl7-bRFSZBs")).toBe(true);
+    expect(isYouTubeUrl("https://www.youtube.com./watch?v=Nl7-bRFSZBs")).toBe(true);
+    expect(
+      extractVideoInput("https://gaming.youtube.com/watch?v=Nl7-bRFSZBs")?.video_id,
+    ).toBe("Nl7-bRFSZBs");
+    expect(
+      extractVideoInput("https://youtu.be./Nl7-bRFSZBs")?.video_id,
+    ).toBe("Nl7-bRFSZBs");
+  });
+
   it("rejects lookalikes and non-URLs", () => {
     expect(isYouTubeUrl("https://notyoutube.com/watch?v=Nl7-bRFSZBs")).toBe(false);
     expect(isYouTubeUrl("https://example.com/youtube.com-article")).toBe(false);

@@ -50,10 +50,10 @@ export interface VideoImportOptions {
   signal?: AbortSignal;
   /** Stage reporting for status UIs (article-queue jobs show job.stage). */
   onStage?: (stage: string) => void;
-  /** Fired as soon as the transcript's relay path is derived, before any
+  /** Fired as soon as the transcript's editor URL is derived, before any
    *  writes -- the single source of the filename convention, so callers can
    *  surface a link without re-deriving the path. */
-  onRelayUrl?: (relayUrl: string, mdPath: string) => void;
+  onRelayUrl?: (relayUrl: string) => void;
 }
 
 /**
@@ -67,7 +67,7 @@ export async function importVideo(
   createdAt: string,
   opts: VideoImportOptions = {},
 ): Promise<void> {
-  const { createLens = true, signal, onStage } = opts;
+  const { createLens = true, signal, onStage, onRelayUrl } = opts;
   const setStage = (stage: string) => {
     signal?.throwIfAborted();
     onStage?.(stage);
@@ -77,8 +77,9 @@ export async function importVideo(
   const filenameBase = generateFilenameBase(payload.channel, payload.title);
   const mdPath = `${relayFolder}/${filenameBase}.md`;
   const jsonPath = `${relayFolder}/${filenameBase}.timestamps.json`;
-  opts.onRelayUrl?.(editorOpenUrl(mdPath), mdPath);
+  onRelayUrl?.(editorOpenUrl(mdPath));
   let placeholderWritten = false;
+  let finalWritten = false;
 
   try {
     console.log(`[add-video] Processing "${payload.title}" (${payload.video_id})`);
@@ -148,14 +149,17 @@ export async function importVideo(
     //    timestamps JSON -- independent paths, written concurrently
     setStage("writing");
     await Promise.all([
-      updateRelayDoc(mdPath, placeholderContent, finalMd),
+      updateRelayDoc(mdPath, placeholderContent, finalMd, signal),
       createRelayDoc(jsonPath, JSON.stringify(timestamps, null, 2), signal),
     ]);
+    finalWritten = true;
 
     // 9. Auto-create a lens wrapping the transcript (Asana 1215689584721257).
     //    Opt out with createLens=false; a lens failure must not fail the import.
+    //    Deliberately NOT an abort point: the transcript is complete, and a
+    //    cancel arriving here must not route into the failure path.
     if (createLens) {
-      setStage("creating-lens");
+      onStage?.("creating-lens");
       try {
         const lensPath = await maybeCreateLens({
           docPath: mdPath,
@@ -175,8 +179,10 @@ export async function importVideo(
     }
   } catch (err) {
     // Update placeholder to show failure -- but never leave a failure doc for
-    // a job that wrote nothing (a pre-placeholder failure has no reader).
-    if (placeholderWritten) {
+    // a job that wrote nothing (a pre-placeholder failure has no reader), and
+    // NEVER overwrite a fully written transcript (e.g. a cancel that lands
+    // during lens creation).
+    if (placeholderWritten && !finalWritten) {
       const failedContent = generateMarkdown({
         title: payload.title,
         channel: payload.channel,

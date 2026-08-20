@@ -74,9 +74,10 @@ export async function createRelayDoc(
 export async function updateRelayDoc(
   filePath: string,
   _oldContent: string,
-  newContent: string
+  newContent: string,
+  signal?: AbortSignal
 ): Promise<void> {
-  await upsertRelayDoc(filePath, newContent);
+  await upsertRelayDoc(filePath, newContent, signal);
 }
 
 /**

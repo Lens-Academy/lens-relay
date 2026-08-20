@@ -55,13 +55,9 @@ export async function spawnClaude(
   argsOverride?: string[],
   signal?: AbortSignal
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  await claudeSessionPool.acquire();
-  if (signal?.aborted) {
-    claudeSessionPool.release();
-    throw signal.reason instanceof Error
-      ? signal.reason
-      : new Error(String(signal.reason ?? 'Job aborted'));
-  }
+  // acquire is abort-aware: a cancelled/deadlined job leaves the wait queue
+  // immediately instead of holding its slot-position until the backstop.
+  await claudeSessionPool.acquire(undefined, signal);
   return new Promise((resolve, reject) => {
     const args = argsOverride ?? buildClaudeArgs(workDir);
     const spawnClaudeProc = () =>
@@ -187,9 +183,30 @@ export async function runClaude(
 
   // Process all chunks concurrently — the global session pool (max 3)
   // limits how many Claude processes run at once. FIFO ordering.
-  const results = await Promise.all(
-    chunkDirs.map((dir) => spawnClaude(dir, timeoutMs, undefined, signal))
-  );
+  //
+  // Chunks past the first pool wave sit in the acquire queue. If an early
+  // chunk fails (or the job is cancelled), abort the rest so still-queued
+  // waiters leave immediately and running siblings are SIGTERM'd, instead of
+  // holding pool slots for up to timeoutMs while their result is already moot.
+  const chunkAbort = new AbortController();
+  const onOuterAbort = () => chunkAbort.abort(signal!.reason);
+  if (signal) {
+    if (signal.aborted) chunkAbort.abort(signal.reason);
+    else signal.addEventListener('abort', onOuterAbort, { once: true });
+  }
+  let results: Array<{ exitCode: number; stdout: string; stderr: string }>;
+  try {
+    results = await Promise.all(
+      chunkDirs.map((dir) =>
+        spawnClaude(dir, timeoutMs, undefined, chunkAbort.signal).then((r) => {
+          if (r.exitCode !== 0) chunkAbort.abort(new Error('sibling chunk failed'));
+          return r;
+        })
+      )
+    );
+  } finally {
+    signal?.removeEventListener('abort', onOuterAbort);
+  }
 
   const failed = results.find((r) => r.exitCode !== 0);
   if (failed) return failed;

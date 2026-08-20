@@ -1,4 +1,5 @@
 import type { ArticleImportMode } from "../../shared/article-import-contract";
+import type { VideoInput } from "../add-video/video-url";
 
 export type { ArticleImportMode };
 export type ArticleJobStatus = "queued" | "processing" | "done" | "failed";
@@ -27,6 +28,10 @@ export interface ArticleJob {
   relay_url?: string;
   /** What the importer should write. */
   importMode: ArticleImportMode;
+  /** Set when the URL is a single YouTube video — classified once at enqueue so
+   *  the queue's deadline choice and the pipeline's dispatch never re-parse and
+   *  drift apart. Absent for article URLs. */
+  video?: VideoInput;
   created_at: string;
   updated_at: string;
 }

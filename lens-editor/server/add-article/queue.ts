@@ -13,8 +13,8 @@ const DEFAULT_JOB_TIMEOUT_MS = 12 * 60_000;
 
 function jobTimeoutMs(job: ArticleJob): number {
   // YouTube-video jobs run Claude over a whole transcript and legitimately
-  // outlive the article deadline -- derived from the URL, not stored state.
-  if (extractVideoInput(job.url)) return VIDEO_JOB_TIMEOUT_MS;
+  // outlive the article deadline. Uses the classification stored at enqueue.
+  if (job.video) return VIDEO_JOB_TIMEOUT_MS;
   const v = Number(process.env.ARTICLE_JOB_TIMEOUT_MS);
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_JOB_TIMEOUT_MS;
 }
@@ -48,6 +48,9 @@ export class ArticleJobQueue {
       url,
       status: "queued",
       importMode,
+      // Classify once here — every later consumer (deadline choice, pipeline
+      // dispatch) reads job.video instead of re-parsing the URL.
+      video: extractVideoInput(url) ?? undefined,
       created_at: now,
       updated_at: now,
     };
