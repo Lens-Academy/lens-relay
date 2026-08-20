@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Job, VideoPayload } from "./types";
 import { generateFilenameBase } from "./export";
+import { relayTranscriptFolder, editorOpenUrl } from "./relay-docs";
 import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 
 interface QueueOptions {
@@ -21,12 +22,8 @@ export class JobQueue {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
-    const editorBase =
-      process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
-    const relayFolder =
-      process.env.RELAY_TRANSCRIPT_FOLDER || "Lens Edu/video_transcripts";
     const filenameBase = generateFilenameBase(payload.channel, payload.title);
-    const mdPath = `${relayFolder}/${filenameBase}.md`;
+    const mdPath = `${relayTranscriptFolder()}/${filenameBase}.md`;
 
     const job: Job & { payload: VideoPayload } = {
       id,
@@ -37,7 +34,7 @@ export class JobQueue {
       transcript_type: payload.transcript_type,
       status: "queued",
       createLens,
-      relay_url: `${editorBase}/open/${encodeURI(mdPath)}`,
+      relay_url: editorOpenUrl(mdPath),
       created_at: now,
       updated_at: now,
       payload,
@@ -116,15 +113,18 @@ export class JobQueue {
  * concurrent video processing (across multiple videos).
  * Each claude process uses ~300MB RAM.
  */
-// A pool wait longer than this means slots are leaked or saturated — fail
-// loudly instead of queueing forever (a leaked slot once wedged all QC jobs).
-// Must stay BELOW the add-article job deadline (12 min default): a job that
-// can't get a slot should fail fast inside its own lifetime, not deadline
-// while queued and then wake up as a zombie.
-const POOL_ACQUIRE_TIMEOUT_MS = 8 * 60_000;
+// Leaked-slot backstop: a wait longer than this means a slot never got
+// released and we fail loudly rather than queue forever. It must EXCEED one
+// slot-holder's max lifetime (a single Claude call runs up to the 20-min
+// video TIMEOUT_MS), or legitimate contention — e.g. a long transcript split
+// into more chunks than there are slots, whose later waves wait behind
+// earlier ones — would spuriously fail. The real per-job deadline is enforced
+// by the caller's AbortSignal (article 12 min / video 35 min), passed into
+// acquire(), so this only catches genuinely stuck slots.
+const POOL_ACQUIRE_TIMEOUT_MS = 30 * 60_000;
 const POOL_WAIT_LOG_MS = 30_000;
 
-class ClaudeSessionPool {
+export class ClaudeSessionPool {
   private maxConcurrent: number;
   private active = 0;
   private waiters: Array<{ grant: () => void; cancel: () => void }> = [];
@@ -146,7 +146,11 @@ class ClaudeSessionPool {
     };
   }
 
-  async acquire(timeoutMs: number = POOL_ACQUIRE_TIMEOUT_MS): Promise<void> {
+  async acquire(
+    timeoutMs: number = POOL_ACQUIRE_TIMEOUT_MS,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted();
     if (this.active < this.maxConcurrent) {
       this.active++;
       return;
@@ -157,26 +161,48 @@ class ClaudeSessionPool {
     );
     return new Promise<void>((resolve, reject) => {
       const startedAt = Date.now();
-      const waiter = {
-        grant: () => {
-          clearTimeout(deadline);
-          clearInterval(waitLogger);
-          this.active++;
-          resolve();
-        },
-        cancel: () => {
-          clearInterval(waitLogger);
-          reject(
-            new Error(
-              `Timed out waiting ${Math.round(timeoutMs / 60_000)} min for a Claude session slot ` +
-                `(active=${this.active}/${this.maxConcurrent}, waiting=${this.waiters.length}) — possible leaked slot`,
-            ),
-          );
-        },
-      };
-      const deadline = setTimeout(() => {
+      const removeWaiter = () => {
         const idx = this.waiters.indexOf(waiter);
         if (idx !== -1) this.waiters.splice(idx, 1);
+      };
+      const settle = (fn: () => void) => {
+        clearTimeout(deadline);
+        clearInterval(waitLogger);
+        signal?.removeEventListener("abort", onAbort);
+        fn();
+      };
+      const waiter = {
+        grant: () =>
+          settle(() => {
+            this.active++;
+            resolve();
+          }),
+        cancel: () =>
+          settle(() =>
+            reject(
+              new Error(
+                `Timed out waiting ${Math.round(timeoutMs / 60_000)} min for a Claude session slot ` +
+                  `(active=${this.active}/${this.maxConcurrent}, waiting=${this.waiters.length}) — possible leaked slot`,
+              ),
+            ),
+          ),
+      };
+      // A cancelled/deadlined job must leave the queue immediately — a dead
+      // waiter left in place holds its FIFO position and blocks the jobs
+      // behind it until its own backstop fires.
+      const onAbort = () => {
+        removeWaiter();
+        settle(() =>
+          reject(
+            signal!.reason instanceof Error
+              ? signal!.reason
+              : new Error(String(signal!.reason ?? "Job aborted")),
+          ),
+        );
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const deadline = setTimeout(() => {
+        removeWaiter();
         waiter.cancel();
       }, timeoutMs);
       const waitLogger = setInterval(() => {

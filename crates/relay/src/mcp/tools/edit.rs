@@ -287,7 +287,11 @@ pub async fn execute(
             &ai_actor,
             timestamp,
             |txn, text| {
-                text.remove_range(txn, final_merge.raw_offset as u32, final_merge.raw_len as u32);
+                text.remove_range(
+                    txn,
+                    final_merge.raw_offset as u32,
+                    final_merge.raw_len as u32,
+                );
                 text.insert(txn, final_merge.raw_offset as u32, &final_merge.replacement);
             },
         )
@@ -352,12 +356,10 @@ async fn edit_raw_ytext_file(
                     ))
                 }
                 1 => matches[0],
-                n => {
-                    return Err(format!(
-                        "Error: old_string is not unique in {} ({} occurrences). Include more context.",
-                        file_path, n
-                    ))
-                }
+                n => return Err(format!(
+                    "Error: old_string is not unique in {} ({} occurrences). Include more context.",
+                    file_path, n
+                )),
             };
 
             (

@@ -12,6 +12,18 @@ function getRelayConfig() {
   return { url, token };
 }
 
+/** Relay folder video transcripts live in, e.g. "Lens Edu/video_transcripts". */
+export function relayTranscriptFolder(): string {
+  return process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
+}
+
+/** Editor URL a relay document at this path opens under. */
+export function editorOpenUrl(docPath: string): string {
+  const editorBase =
+    process.env.EDITOR_BASE_URL || 'https://editor.lensacademy.org';
+  return `${editorBase}/open/${encodeURI(docPath)}`;
+}
+
 /**
  * Create or update a document in Relay via the internal HTTP API.
  * Uses POST /doc/upsert — creates if new, replaces content if exists.
@@ -62,9 +74,10 @@ export async function createRelayDoc(
 export async function updateRelayDoc(
   filePath: string,
   _oldContent: string,
-  newContent: string
+  newContent: string,
+  signal?: AbortSignal
 ): Promise<void> {
-  await upsertRelayDoc(filePath, newContent);
+  await upsertRelayDoc(filePath, newContent, signal);
 }
 
 /**
@@ -123,13 +136,14 @@ export async function checkRelayDocsExist(
  * Returns a map of video_id → matched relative path (or null if not found).
  */
 export async function checkRelayVideoIds(
-  videoIds: string[]
+  videoIds: string[],
+  signal?: AbortSignal
 ): Promise<Record<string, string | null>> {
   if (videoIds.length === 0) return {};
 
   const { url, token } = getRelayConfig();
 
-  const relayFolder = process.env.RELAY_TRANSCRIPT_FOLDER || 'Lens Edu/video_transcripts';
+  const relayFolder = relayTranscriptFolder();
   const slashIdx = relayFolder.indexOf('/');
   const folder = slashIdx !== -1 ? relayFolder.slice(0, slashIdx) : relayFolder;
   const subfolder = slashIdx !== -1 ? relayFolder.slice(slashIdx + 1) : undefined;
@@ -142,6 +156,7 @@ export async function checkRelayVideoIds(
     },
     body: JSON.stringify({ folder, subfolder, video_ids: videoIds }),
     timeoutMs: RELAY_CHECK_TIMEOUT_MS,
+    signal,
   });
 
   if (!resp.ok) {

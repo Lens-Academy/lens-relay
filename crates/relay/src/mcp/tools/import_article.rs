@@ -27,24 +27,6 @@ pub fn editor_url_from_env() -> String {
         .unwrap_or_else(|| DEFAULT_EDITOR_URL.to_string())
 }
 
-fn is_youtube_url(url: &str) -> bool {
-    let lower = url.to_lowercase();
-    let host = lower
-        .split("//")
-        .nth(1)
-        .unwrap_or(&lower)
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or("")
-        .rsplit('@') // drop userinfo
-        .next()
-        .unwrap_or("")
-        .split(':') // drop port
-        .next()
-        .unwrap_or("");
-    host == "youtu.be" || host == "youtube.com" || host.ends_with(".youtube.com")
-}
-
 /// Get the request's forwardable share token, or a user-facing error.
 /// Uses the credential this call was made with (not one stored on the
 /// session) so a leaked session id never upgrades a weaker token.
@@ -83,13 +65,6 @@ pub async fn execute_with_editor_url(
     if urls.len() > MAX_URLS {
         return Err(format!("At most {} URLs per call", MAX_URLS));
     }
-    if let Some(yt) = urls.iter().find(|u| is_youtube_url(u)) {
-        return Err(format!(
-            "Error: {} is a YouTube URL. Videos can't be imported from a bare URL — the transcript must be captured from the YouTube page via the video-import bookmarklet in the web editor. Import it there, or ask a human curator.",
-            yt
-        ));
-    }
-
     let import_mode = arguments
         .get("import_mode")
         .and_then(|v| v.as_str())
@@ -300,20 +275,24 @@ mod tests {
         }
     }
 
-    // Prevents: YouTube URLs silently producing garbage article imports
+    // Prevents: regressing YouTube support back to a client-side rejection --
+    // the editor imports video transcripts from bare URLs since 2026-08
     #[tokio::test]
-    async fn rejects_youtube_urls_with_bookmarklet_pointer() {
-        let err = execute_with_editor_url(
-            &access_with_token("tok"),
+    async fn forwards_youtube_urls_to_editor() {
+        let (editor_url, mut rx) = mock_editor().await;
+
+        execute_with_editor_url(
+            &access_with_token("tok-yt"),
             &json!({
-                "urls": ["https://www.youtube.com/watch?v=abc123"],
+                "urls": ["https://www.youtube.com/watch?v=abc123def45"],
                 "import_mode": "article"
             }),
-            "http://127.0.0.1:1", // must not be contacted
+            &editor_url,
         )
         .await
-        .expect_err("youtube must be rejected");
-        assert!(err.contains("bookmarklet"), "got: {err}");
+        .expect("youtube urls must be forwarded, not rejected");
+        let (_, body) = rx.recv().await.unwrap();
+        assert!(body.contains("youtube.com"), "got: {body}");
     }
 
     // Prevents: legacy API-key sessions failing with an opaque editor 401
@@ -344,18 +323,6 @@ mod tests {
         assert!(out.contains("jobs"));
         let (auth, _) = rx.recv().await.unwrap();
         assert_eq!(auth, "Bearer tok-9");
-    }
-
-    // Prevents: youtu.be short links and subdomains slipping past the guard
-    #[test]
-    fn youtube_detection_covers_variants() {
-        assert!(is_youtube_url("https://youtu.be/abc"));
-        assert!(is_youtube_url("https://m.youtube.com/watch?v=x"));
-        assert!(is_youtube_url("http://www.youtube.com/shorts/x"));
-        assert!(is_youtube_url("https://youtube.com:443/watch?v=x"));
-        assert!(is_youtube_url("https://user@youtube.com/watch?v=x"));
-        assert!(!is_youtube_url("https://example.com/youtube.com-article"));
-        assert!(!is_youtube_url("https://notyoutube.com/watch"));
     }
 
     #[test]

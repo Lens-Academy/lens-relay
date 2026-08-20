@@ -26,7 +26,13 @@ import {
   checkRelayDocsExist,
   checkRelayArticleUrls,
   createRelayAttachment,
+  checkRelayVideoIds,
+  relayTranscriptFolder,
+  editorOpenUrl,
 } from "../add-video/relay-docs";
+import type { VideoInput } from "../add-video/video-url";
+import { fetchYouTubeTranscript } from "../add-video/fetch-transcript";
+import { importVideo } from "../add-video/pipeline";
 import { maybeCreateLens } from "../lens-doc";
 
 const WORK_BASE = "/tmp/articles";
@@ -79,6 +85,61 @@ export function articleImportBehavior(
       throw new Error(`Unhandled article import mode: ${exhaustive}`);
     }
   }
+}
+
+/**
+ * Import a YouTube video's transcript: mint + fetch the transcript
+ * server-side, then reuse the add-video pipeline (Claude formatting,
+ * timestamp alignment, relay write, optional lens). importMode maps as
+ * "article" → transcript only, "article-and-lens" → + lens; stubs don't
+ * exist for videos.
+ */
+async function processYouTubeVideo(
+  job: ArticleJob,
+  video: VideoInput,
+  behavior: ArticleImportBehavior,
+  setStage: (stage: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  // Duplicate check by video id -- the same relay check the bookmarklet
+  // endpoint uses. Degrades gracefully: a failed check must not block import.
+  setStage("checking-duplicates");
+  let existingPath: string | null | undefined;
+  try {
+    existingPath = (await checkRelayVideoIds([video.video_id], signal))[
+      video.video_id
+    ];
+  } catch (err) {
+    signal?.throwIfAborted();
+    console.warn(`[add-article] video dedup check failed, proceeding: ${err}`);
+  }
+  if (existingPath) {
+    const topFolder = relayTranscriptFolder().split("/")[0];
+    job.relay_url = editorOpenUrl(topFolder + existingPath);
+    throw new Error(
+      `This video was already imported: ${topFolder}${existingPath}`,
+    );
+  }
+
+  setStage("fetching-transcript");
+  const payload = await fetchYouTubeTranscript(video, signal);
+  job.title = payload.title;
+  job.updated_at = new Date().toISOString();
+
+  await importVideo(job.id, payload, job.created_at, {
+    createLens: behavior.createLens,
+    signal,
+    onStage: setStage,
+    // Surface the link as soon as the path is known -- the placeholder doc
+    // exists during processing, and a later failure doc stays reachable.
+    onRelayUrl: (relayUrl) => {
+      job.relay_url = relayUrl;
+      job.updated_at = new Date().toISOString();
+    },
+  });
+  console.log(
+    `[add-article] Imported video transcript for ${job.url} ("${payload.title}")`,
+  );
 }
 
 async function findExistingArticle(
@@ -178,6 +239,14 @@ export async function processArticle(
     job.stage = stage;
     job.updated_at = new Date().toISOString();
   };
+
+  // YouTube URLs import the video's transcript through the video pipeline
+  // instead of scraping the watch page as an "article". Non-video YouTube
+  // URLs and stub mode were already rejected at submit time (routes.ts); the
+  // classification was stored on the job at enqueue.
+  if (job.video) {
+    return processYouTubeVideo(job, job.video, behavior, setStage, signal);
+  }
 
   // Reject the common duplicate case before downloading and parsing the page.
   // A matched stub is retained for a later full import to promote in place.
@@ -499,9 +568,7 @@ export async function processArticle(
     await createRelayDoc(chosen, markdown, signal);
     return chosen;
   });
-  const editorBase =
-    process.env.EDITOR_BASE_URL || "https://editor.lensacademy.org";
-  job.relay_url = `${editorBase}/open/${encodeURI(mdPath)}`;
+  job.relay_url = editorOpenUrl(mdPath);
   job.updated_at = new Date().toISOString();
   console.log(
     `[add-article] Wrote ${mdPath} (via ${ex.via}, ${body.length} chars)`,

@@ -237,7 +237,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
     if writable {
         tools.push(json!({
             "name": "import_article",
-            "description": "Import external articles/webpages into the knowledge base via the article importer. Choose whether to create only an article stub, a full article, or a full article plus lens. Jobs run in the background — poll import_status until each is done/failed. YouTube URLs are rejected (video imports need the browser bookmarklet). Prefer this over hand-writing article files.",
+            "description": "Import external articles/webpages into the knowledge base via the article importer. Choose whether to create only an article stub, a full article, or a full article plus lens. YouTube video URLs import the video's transcript (with word timestamps) instead of an article; video jobs take several minutes and don't support stub mode. Jobs run in the background; poll import_status until each is done/failed. Prefer this over hand-writing article files.",
             "inputSchema": {
                 "type": "object",
                 "required": ["urls", "import_mode", "session_id"],

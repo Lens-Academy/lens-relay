@@ -59,18 +59,20 @@ describe('processVideo', () => {
     mockClaude.runClaude.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
     mockRelayDocs.createRelayDoc.mockResolvedValue(undefined);
     mockRelayDocs.updateRelayDoc.mockResolvedValue(undefined);
+    mockRelayDocs.relayTranscriptFolder.mockReturnValue(
+      'Lens Edu/video_transcripts'
+    );
+    mockRelayDocs.editorOpenUrl.mockImplementation(
+      (p: string) => `https://editor.lensacademy.org/open/${encodeURI(p)}`
+    );
   });
 
-  it('creates work directory and writes raw files', async () => {
+  it('creates work directory and writes the plain-text transcript', async () => {
     await processVideo(makeJobWithPayload());
 
     expect(mockFs.mkdir).toHaveBeenCalledWith(
       expect.stringContaining('test-job'),
       { recursive: true }
-    );
-    expect(mockFs.writeFile).toHaveBeenCalledWith(
-      expect.stringContaining('raw.json'),
-      expect.any(String)
     );
     expect(mockFs.writeFile).toHaveBeenCalledWith(
       expect.stringContaining('raw.txt'),
@@ -83,7 +85,8 @@ describe('processVideo', () => {
 
     expect(mockRelayDocs.createRelayDoc).toHaveBeenCalledWith(
       expect.stringContaining('Lens Edu/video_transcripts/'),
-      expect.stringContaining('processed')
+      expect.stringContaining('processed'),
+      undefined
     );
   });
 
@@ -92,7 +95,8 @@ describe('processVideo', () => {
 
     expect(mockClaude.runClaude).toHaveBeenCalledWith(
       expect.stringContaining('test-job'),
-      expect.any(Number)
+      expect.any(Number),
+      undefined
     );
   });
 
@@ -116,5 +120,22 @@ describe('processVideo', () => {
     mockClaude.runClaude.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'failed' });
 
     await expect(processVideo(makeJobWithPayload())).rejects.toThrow();
+  });
+
+  // Prevents: a failure doc matching the relay's video-id dedup scan
+  // ("watch?v=<id>" / "/shorts/<id>"), which would block every resubmission
+  // of the failed video until someone deleted the doc.
+  it('writes the failure doc url in a form the dedup scan ignores', async () => {
+    mockClaude.runClaude.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'failed' });
+
+    await expect(processVideo(makeJobWithPayload())).rejects.toThrow();
+
+    const failureCall = mockRelayDocs.updateRelayDoc.mock.calls.find(([, , content]) =>
+      content.includes('Transcript processing failed')
+    );
+    expect(failureCall).toBeDefined();
+    expect(failureCall![2]).toContain('https://youtu.be/abc123');
+    expect(failureCall![2]).not.toContain('watch?v=');
+    expect(failureCall![2]).not.toContain('/shorts/');
   });
 });

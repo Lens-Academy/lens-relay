@@ -12,6 +12,10 @@ const relayMocks = vi.hoisted(() => ({
   checkRelayDocsExist: vi.fn(),
   createRelayDoc: vi.fn(),
   createRelayAttachment: vi.fn(),
+  checkRelayVideoIds: vi.fn(),
+  relayTranscriptFolder: () => "Lens Edu/video_transcripts",
+  editorOpenUrl: (p: string) =>
+    `https://editor.lensacademy.org/open/${encodeURI(p)}`,
 }));
 const extractionMocks = vi.hoisted(() => ({
   extractArticle: vi.fn(),
