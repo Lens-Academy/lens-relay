@@ -70,7 +70,12 @@ services:
       - RELAY_SERVER_TOKEN=${RELAY_SERVER_TOKEN}
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
       - SHARE_TOKEN_SECRET=${SHARE_TOKEN_SECRET}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # Claude Code auth for the transcript/QC formatter (add-video, add-article).
+      # Prefer a subscription OAuth token (no per-transcript cost) via
+      # CLAUDE_CODE_OAUTH_TOKEN; a non-empty ANTHROPIC_API_KEY would shadow it,
+      # so leave the key empty unless you deliberately want metered API billing.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - JINA_API_KEY=${JINA_API_KEY:-}
       - YT_PROXY_URL=${YT_PROXY_URL:-}
       - DATALAB_API_KEY=${DATALAB_API_KEY:-}
