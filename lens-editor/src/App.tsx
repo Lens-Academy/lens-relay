@@ -11,12 +11,12 @@ import { NavigationContext, useNavigation } from './contexts/NavigationContext';
 import { DisplayNameProvider, useDisplayName } from './contexts/DisplayNameContext';
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 
-// The display name feeds collaborative-editing presence. The import tool pages
-// (/add-article, /add-video) don't edit documents, and the blocking modal made
-// them unusable for fresh sessions and automation — skip it there.
+// The display name feeds collaborative-editing presence. The import tool page
+// (/add-article) doesn't edit documents, and the blocking modal made it
+// unusable for fresh sessions and automation — skip it there.
 function DisplayNamePromptGate() {
   const { pathname } = useLocation();
-  if (pathname === '/add-article' || pathname === '/add-video') return null;
+  if (pathname === '/add-article') return null;
   return <DisplayNamePrompt />;
 }
 import { SidebarContext } from './contexts/SidebarContext';
@@ -28,7 +28,6 @@ import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTo
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
-import { AddVideoPage } from './components/AddVideoPage/AddVideoPage';
 import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { PromotionRoute } from './components/Promotion/PromotionRoute';
 import { MultiDocSectionEditor } from './components/SectionEditor';
@@ -605,11 +604,6 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   <Route path="/review" element={
                     canEdit
                       ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
-                      : <DefaultLanding />
-                  } />
-                  <Route path="/add-video" element={
-                    canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
-                      ? <AddVideoPage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
                   <Route path="/add-article" element={

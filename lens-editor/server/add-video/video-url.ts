@@ -1,9 +1,6 @@
 /**
  * Pure YouTube URL classification — no I/O, importable from routers and
  * queues without dragging in the transcript fetcher's proxy stack.
- *
- * The browser bookmarklet (public/add-video-bookmarklet.js) carries its own
- * ES5 copy of this parsing; if URL shapes change, update both.
  */
 
 export interface VideoInput {

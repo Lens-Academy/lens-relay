@@ -4,9 +4,6 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { readFile } from 'node:fs/promises';
 import { createAuthHandler, AuthError } from './auth-middleware.ts';
 import { discordRoutes } from './discord/routes.ts';
-import { createAddVideoRoutes } from './add-video/routes.ts';
-import { JobQueue } from './add-video/queue.ts';
-import { processVideo } from './add-video/pipeline.ts';
 import { createAddArticleRoutes } from './add-article/routes.ts';
 import { ArticleJobQueue } from './add-article/queue.ts';
 import { processArticle } from './add-article/pipeline.ts';
@@ -70,7 +67,7 @@ export function createPromotionRouteService(
 }
 
 /**
- * Build the production Hono app: auth, discord, add-video, add-article, blob
+ * Build the production Hono app: auth, discord, add-article, blob
  * proxies, and static files. Extracted from prod-server.ts so integration
  * tests can exercise the real production route composition without starting
  * the HTTP server / relay proxy.
@@ -99,11 +96,9 @@ export function createApp(config: AppConfig): Hono {
   // Mount discord routes under /api/discord
   app.route('/api/discord', discordRoutes);
 
-  // Add video transcript pipeline
-  const addVideoQueue = new JobQueue({ processJob: processVideo });
-  app.route('/api/add-video', createAddVideoRoutes(addVideoQueue));
-
-  // Add article import pipeline
+  // Article + YouTube-video import pipeline. YouTube URLs sent here import the
+  // video's transcript (server-side fetch + Claude formatting); article URLs
+  // import the page. Both are also reachable via the relay MCP import_article.
   const addArticleQueue = new ArticleJobQueue({ processJob: processArticle });
   app.route('/api/add-article', createAddArticleRoutes(addArticleQueue));
 

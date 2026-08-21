@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { Job, VideoPayload } from "./types";
+import type { VideoPayload } from "./types";
 import { extractWords, toPlainText, flattenToWords } from "./transcript";
 import { alignWords } from "./alignment";
 import {
@@ -58,8 +58,8 @@ export interface VideoImportOptions {
 
 /**
  * Core video import: raw transcript payload → formatted transcript +
- * timestamps + (optionally) a lens in the relay. Used by both the bookmarklet
- * queue (processVideo below) and YouTube-URL jobs from the article importer.
+ * timestamps + (optionally) a lens in the relay. Driven by the article
+ * importer's YouTube-URL jobs (add-article/pipeline).
  */
 export async function importVideo(
   jobId: string,
@@ -201,16 +201,4 @@ export async function importVideo(
     // Clean up work directory
     await fs.rm(workDir, { recursive: true }).catch(() => {});
   }
-}
-
-export async function processVideo(
-  job: Job & { payload: VideoPayload },
-): Promise<void> {
-  await importVideo(job.id, job.payload, job.created_at, {
-    createLens: job.createLens !== false,
-    // Fires before any processing, so the queue reports the link immediately.
-    onRelayUrl: (relayUrl) => {
-      job.relay_url = relayUrl;
-    },
-  });
 }

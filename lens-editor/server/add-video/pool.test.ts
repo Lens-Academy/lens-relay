@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ClaudeSessionPool } from "./queue";
+import { ClaudeSessionPool } from "./claude-pool";
 
 describe("ClaudeSessionPool abort handling", () => {
   it("grants up to maxConcurrent without waiting", async () => {
