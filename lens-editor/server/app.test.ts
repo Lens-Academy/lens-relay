@@ -18,15 +18,6 @@ function shareToken() {
   });
 }
 
-function addVideoToken() {
-  return signShareToken({
-    purpose: "add-video",
-    role: "edit",
-    folder: EDU_FOLDER,
-    expiry: Math.floor(Date.now() / 1000) + 3600,
-  });
-}
-
 describe("production app (createApp)", () => {
   let app: Hono;
   const originalPromotionEnabled = process.env.PROMOTION_ENABLED;
@@ -66,21 +57,13 @@ describe("production app (createApp)", () => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${shareToken()}`,
       },
-      body: JSON.stringify({ urls: ["not-a-url"] }),
+      body: JSON.stringify({ urls: ["not-a-url"], importMode: "article" }),
     });
     expect(resp.status).toBe(200);
     const data = await resp.json();
     expect(data.results).toEqual([
       { url: "not-a-url", status: "invalid", error: "Not a valid http(s) URL" },
     ]);
-  });
-
-  it("mounts /api/add-video/status behind add-video-token auth", async () => {
-    const resp = await app.request("/api/add-video/status", {
-      headers: { Authorization: `Bearer ${addVideoToken()}` },
-    });
-    expect(resp.status).toBe(200);
-    expect(await resp.json()).toEqual({ jobs: [] });
   });
 
   it("serves the auth token endpoint", async () => {

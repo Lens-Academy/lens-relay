@@ -34,7 +34,7 @@ export default defineConfig(() => {
   // Server token for minting relay doc tokens (optional for local relay)
   const relayServerToken = process.env.RELAY_SERVER_TOKEN;
 
-  // The add-video / add-article pipelines run in-process in the dev plugins and
+  // The add-article pipeline (articles + YouTube videos) runs in-process in the dev plugin and
   // read RELAY_URL / EDITOR_BASE_URL from the environment. Their defaults point
   // at the production docker network, so in local mode we redirect them at the
   // local relay and dev server — otherwise imports would never reach the relay.
@@ -213,21 +213,7 @@ export default defineConfig(() => {
     };
   }
 
-  /** Dev /api/add-video endpoints for transcript processing. */
-  function addVideoPlugin(): Plugin {
-    return honoDevPlugin({
-      name: 'add-video-api',
-      path: '/api/add-video',
-      loadApp: async () => {
-        const { createAddVideoRoutes } = await import('./server/add-video/routes.ts');
-        const { JobQueue } = await import('./server/add-video/queue.ts');
-        const { processVideo } = await import('./server/add-video/pipeline.ts');
-        return createAddVideoRoutes(new JobQueue({ processJob: processVideo }));
-      },
-    });
-  }
-
-  /** Dev /api/add-article endpoints for article importing. */
+  /** Dev /api/add-article endpoints for article + YouTube-video importing. */
   function addArticlePlugin(): Plugin {
     return honoDevPlugin({
       name: 'add-article-api',
@@ -392,7 +378,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addVideoPlugin(), addArticlePlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { claudeSessionPool } from './queue';
+import { claudeSessionPool } from './claude-pool';
 
 // Transcripts longer than this are split into chunks and processed in parallel
 const CHUNK_WORD_THRESHOLD = 6_000;

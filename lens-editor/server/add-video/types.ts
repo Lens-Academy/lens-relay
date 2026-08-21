@@ -40,21 +40,3 @@ export interface FormattedTimestamp {
   text: string;
   start: string;
 }
-
-export type JobStatus = 'queued' | 'processing' | 'done' | 'failed';
-
-export interface Job {
-  id: string;
-  video_id: string;
-  title: string;
-  channel: string;
-  url: string;
-  transcript_type: 'word_level' | 'sentence_level';
-  status: JobStatus;
-  error?: string;
-  relay_url?: string;
-  /** Also auto-create a lens wrapping the imported transcript (default true). */
-  createLens?: boolean;
-  created_at: string;
-  updated_at: string;
-}
