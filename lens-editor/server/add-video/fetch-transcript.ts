@@ -39,10 +39,16 @@ const ANDROID_CONTEXT = {
 };
 const ANDROID_UA =
   "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip";
-// A rotating proxy exits from a different IP each request, so a bot-flagged
-// exit is retried; without a proxy a retry would leave the same IP and fail
-// identically, so we don't bother.
-const MINT_ATTEMPTS_VIA_PROXY = 3;
+// YouTube flags a small fraction (~4%, measured) of residential exit IPs as
+// bots, so a mint through a flagged exit returns LOGIN_REQUIRED. A rotating
+// proxy hands out a fresh exit IP per *new connection*, so each attempt builds
+// its OWN ProxyAgent (see mintPlayerResponse): a reused agent keep-alives its
+// pooled connection and would resample the same one or two pinned exit IPs,
+// which silently defeats the retry. With a genuinely independent IP per
+// attempt, 5 tries drive the ~4% single-shot failure to ~1e-7. Without a proxy
+// a retry would reuse the same (datacenter) IP and fail identically, so we
+// only attempt once.
+const MINT_ATTEMPTS_VIA_PROXY = 5;
 const MINT_TIMEOUT_MS = 30_000;
 const MINT_MAX_BYTES = 2 * 1024 * 1024;
 const CAPTION_TIMEOUT_MS = 60_000;
@@ -64,16 +70,8 @@ interface PlayerResponse {
   };
 }
 
-let cachedProxy: { url: string; agent: ProxyAgent } | null = null;
-
-function proxyAgent(): ProxyAgent | undefined {
-  const url = process.env.YT_PROXY_URL?.trim();
-  if (!url) return undefined;
-  if (cachedProxy?.url !== url) {
-    void cachedProxy?.agent.close();
-    cachedProxy = { url, agent: new ProxyAgent(url) };
-  }
-  return cachedProxy.agent;
+function proxyUrl(): string | undefined {
+  return process.env.YT_PROXY_URL?.trim() || undefined;
 }
 
 /** Non-retryable: the video itself can't be imported (private, no captions…). */
@@ -83,12 +81,15 @@ async function mintPlayerResponse(
   videoId: string,
   signal?: AbortSignal,
 ): Promise<PlayerResponse> {
-  const agent = proxyAgent();
-  const attempts = agent ? MINT_ATTEMPTS_VIA_PROXY : 1;
+  const url = proxyUrl();
+  const attempts = url ? MINT_ATTEMPTS_VIA_PROXY : 1;
   let lastErr: Error | undefined;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
     signal?.throwIfAborted();
+    // Fresh agent per attempt -> fresh connection -> fresh exit IP (see note
+    // above); this is what makes each retry an independent draw.
+    const agent = url ? new ProxyAgent(url) : undefined;
     try {
       const resp = await fetchBytesWithTimeout(
         `${PLAYER_URL}?prettyPrint=false&fields=${encodeURIComponent(PLAYER_FIELDS)}`,
@@ -111,9 +112,10 @@ async function mintPlayerResponse(
       const data = JSON.parse(bytesToText(resp.bytes)) as PlayerResponse;
       const status = data.playabilityStatus?.status;
       if (status === "LOGIN_REQUIRED") {
-        // Bot-flagged exit IP -- retryable only through a rotating proxy.
+        // Bot-flagged exit IP -- the next attempt draws a fresh IP (or, without
+        // a proxy, there is no fresh IP to draw, so we surface the block).
         throw new Error(
-          `YouTube bot-check rejected the request (exit IP flagged${agent ? "" : "; YT_PROXY_URL is not set"})`,
+          `YouTube bot-check rejected the request (exit IP flagged${url ? "" : "; YT_PROXY_URL is not set"})`,
         );
       }
       if (status && status !== "OK") {
@@ -130,6 +132,10 @@ async function mintPlayerResponse(
       console.warn(
         `[fetch-transcript] mint attempt ${attempt}/${attempts} for ${videoId} failed: ${lastErr.message}`,
       );
+    } finally {
+      // Discard the connection (and its exit IP). close() returns a promise;
+      // swallow a rejection so cleanup can't crash the process.
+      agent?.close().catch(() => {});
     }
   }
   throw lastErr ?? new Error("YouTube player request failed");
