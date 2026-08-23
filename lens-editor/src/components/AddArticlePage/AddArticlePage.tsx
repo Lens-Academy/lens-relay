@@ -10,7 +10,7 @@ interface ArticleJob {
   id: string;
   url: string;
   title?: string;
-  status: "queued" | "processing" | "done" | "failed";
+  status: "queued" | "processing" | "done" | "skipped" | "failed";
   /** Pipeline stage while processing (fetching / rendering / quality-check /
    *  uploading-images / writing / creating-lens). */
   stage?: string;
@@ -34,6 +34,8 @@ const STATUS_COLORS: Record<ArticleJob["status"], string> = {
   queued: "#f0ad4e",
   processing: "#4361ee",
   done: "#4ec96e",
+  // Already in the library: a no-op, not an error. Deliberately not red.
+  skipped: "#8d97b5",
   failed: "#e04e4e",
 };
 
@@ -487,8 +489,32 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                   {job.url}
                 </div>
                 {job.error && (
-                  <div style={{ fontSize: 12, color: "#e04e4e" }}>
-                    {job.error}
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: job.status === "skipped" ? "#9aa3bf" : "#e04e4e",
+                    }}
+                  >
+                    {job.status === "skipped" ? (
+                      <>
+                        Already in the library
+                        {job.relay_url && (
+                          <>
+                            {" — "}
+                            <a
+                              href={job.relay_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ color: "#7ea2ff" }}
+                            >
+                              open the existing document
+                            </a>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      job.error
+                    )}
                   </div>
                 )}
               </div>

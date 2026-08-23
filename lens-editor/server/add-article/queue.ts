@@ -3,6 +3,8 @@ import type { ArticleImportMode, ArticleJob } from "./types";
 import { extractVideoInput } from "../add-video/video-url";
 import { VIDEO_JOB_TIMEOUT_MS } from "../add-video/pipeline";
 import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
+import { DuplicateDocumentError } from "./duplicate";
+import { editorOpenUrl } from "../add-video/relay-docs";
 
 // Hard ceiling on a single import job. Individual stages carry their own
 // timeouts (fetch 30s, render 60s, Claude QC 7min, relay calls 30–60s), but a
@@ -155,10 +157,19 @@ export class ArticleJobQueue {
       job.status = "done";
       console.log(`[add-article] Job ${job.id} done: ${job.url}`);
     } catch (err) {
-      job.status = "failed";
-      job.error = err instanceof Error ? err.message : String(err);
-      console.error(`[add-article] Job ${job.id} failed: ${job.url}`);
-      console.error(`[add-article]   Error: ${job.error}`);
+      if (err instanceof DuplicateDocumentError) {
+        // The content is already in the library: nothing failed and there is
+        // nothing to retry, so this must not read as an error.
+        job.status = "skipped";
+        job.error = err.message;
+        job.relay_url ??= editorOpenUrl(err.docPath);
+        console.log(`[add-article] Job ${job.id} skipped: ${err.message}`);
+      } else {
+        job.status = "failed";
+        job.error = err instanceof Error ? err.message : String(err);
+        console.error(`[add-article] Job ${job.id} failed: ${job.url}`);
+        console.error(`[add-article]   Error: ${job.error}`);
+      }
     } finally {
       clearTimeout(timer);
       this.controllers.delete(job.id);

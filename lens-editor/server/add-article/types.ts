@@ -2,7 +2,13 @@ import type { ArticleImportMode } from "../../shared/article-import-contract";
 import type { VideoInput } from "../add-video/video-url";
 
 export type { ArticleImportMode };
-export type ArticleJobStatus = "queued" | "processing" | "done" | "failed";
+export type ArticleJobStatus =
+  | "queued"
+  | "processing"
+  | "done"
+  /** Resolved to a document that already exists -- not an error, nothing to retry. */
+  | "skipped"
+  | "failed";
 
 /** Metadata for an article, accumulated from Jina, HTML meta tags, and Claude */
 export interface ArticleMeta {

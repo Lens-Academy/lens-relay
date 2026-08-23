@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DuplicateDocumentError } from "./duplicate";
 
 const fetchMocks = vi.hoisted(() => ({
   fetchFirstHtml: vi.fn(),
@@ -62,6 +63,35 @@ describe("processArticle duplicate detection", () => {
     expect(fetchMocks.fetchRawBytes).not.toHaveBeenCalled();
     expect(fetchMocks.fetchFirstHtml).not.toHaveBeenCalled();
     expect(fetchMocks.fetchRenderedHtml).not.toHaveBeenCalled();
+  });
+
+  // An already-imported URL is a no-op, not an error: the queue marks it
+  // "skipped" and links to the existing document instead of showing FAILED
+  // with a Retry button.
+  it("reports an existing document as a duplicate carrying its path", async () => {
+    relayMocks.checkRelayArticleUrls.mockImplementation(
+      async (urls: string[]) => ({
+        found: Object.fromEntries(
+          urls.map((url) => [url, "/articles/existing.md"]),
+        ),
+        stubs: {},
+      }),
+    );
+    const now = new Date().toISOString();
+    const job = {
+      id: "duplicate-typed",
+      url: "https://example.com/existing",
+      status: "processing" as const,
+      importMode: "article-and-lens" as const,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const err = await processArticle(job).catch((e) => e);
+    expect(err).toBeInstanceOf(DuplicateDocumentError);
+    expect((err as DuplicateDocumentError).docPath).toBe(
+      "Lens Edu/articles/existing.md",
+    );
   });
 
   it("promotes an article-stub in place while preserving its discussion", async () => {

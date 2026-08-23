@@ -34,6 +34,7 @@ import type { VideoInput } from "../add-video/video-url";
 import { fetchYouTubeTranscript } from "../add-video/fetch-transcript";
 import { importVideo } from "../add-video/pipeline";
 import { maybeCreateLens } from "../lens-doc";
+import { DuplicateDocumentError } from "./duplicate";
 
 const WORK_BASE = "/tmp/articles";
 // Below this the extraction almost certainly failed (empty/wrong container)
@@ -116,8 +117,9 @@ async function processYouTubeVideo(
   if (existingPath) {
     const topFolder = relayTranscriptFolder().split("/")[0];
     job.relay_url = editorOpenUrl(topFolder + existingPath);
-    throw new Error(
+    throw new DuplicateDocumentError(
       `This video was already imported: ${topFolder}${existingPath}`,
+      topFolder + existingPath,
     );
   }
 
@@ -256,23 +258,21 @@ export async function processArticle(
     const existing = await findExistingArticle([job.url], signal);
     if (existing) {
       if (!existing.stubContent) {
-        throw new Error(
+        throw new DuplicateDocumentError(
           `This URL was already imported: ${topFolder}${existing.path}`,
+          topFolder + existing.path,
         );
       }
       if (isStubOnly) {
-        throw new Error(
+        throw new DuplicateDocumentError(
           `An article stub already exists for this URL: ${topFolder}${existing.path}`,
+          topFolder + existing.path,
         );
       }
       existingStub = existing;
     }
   } catch (err) {
-    if (
-      err instanceof Error &&
-      (err.message.startsWith("This URL was already imported:") ||
-        err.message.startsWith("An article stub already exists"))
-    ) {
+    if (err instanceof DuplicateDocumentError) {
       throw err;
     }
     console.warn(`[add-article] early source_url dedup check failed, proceeding: ${err}`);
@@ -462,13 +462,15 @@ export async function processArticle(
     );
     if (existing) {
       if (!existing.stubContent) {
-        throw new Error(
+        throw new DuplicateDocumentError(
           `This URL was already imported: ${topFolder}${existing.path}`,
+          topFolder + existing.path,
         );
       }
       if (isStubOnly) {
-        throw new Error(
+        throw new DuplicateDocumentError(
           `An article stub already exists for this URL: ${topFolder}${existing.path}`,
+          topFolder + existing.path,
         );
       }
       if (existingStub && existingStub.path !== existing.path) {
