@@ -198,14 +198,24 @@ export async function importVideo(
       // Readers can open and edit the transcript while the cleanup runs, and
       // a relay write replaces the whole document -- so only apply the cleanup
       // if the document is still exactly what we published.
-      const current = await readRelayDocText(publishedDocId, signal).catch(
-        (readErr) => {
+      // One retry: a transient relay hiccup must not quietly downgrade this
+      // guard into "overwrite and hope".
+      let current: string | null = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          current = await readRelayDocText(publishedDocId, signal);
+          break;
+        } catch (readErr) {
+          signal?.throwIfAborted();
           console.warn(
-            `[add-video] Could not re-read "${payload.title}" before applying cleanup: ${readErr}`,
+            `[add-video] Re-read attempt ${attempt}/2 for "${payload.title}" failed: ${readErr}`,
           );
-          return null;
-        },
-      );
+        }
+      }
+      // Note: this is a check, not a compare-and-swap -- the relay upsert
+      // replaces the whole document, so an edit landing between this read and
+      // the write below is still lost. That window is seconds rather than the
+      // minutes the cleanup itself takes.
       if (current !== null && current.trim() !== publishedContent.trim()) {
         console.warn(
           `[add-video] "${payload.title}" was edited while the cleanup ran — keeping the edited document`,

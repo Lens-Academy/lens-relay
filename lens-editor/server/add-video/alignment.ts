@@ -1,12 +1,12 @@
-import type { TimestampedWord } from './types';
+import type { TimestampedWord } from "./types";
 
 /** Normalize a word for comparison: lowercase, strip non-alphanumeric */
 export function normalize(word: string): string {
-  return word.replace(/[^\w]/g, '').toLowerCase();
+  return word.replace(/[^\w]/g, "").toLowerCase();
 }
 
 interface DiffOp {
-  op: 'equal' | 'replace' | 'insert' | 'delete';
+  op: "equal" | "replace" | "insert" | "delete";
   origStart: number;
   origEnd: number;
   corrStart: number;
@@ -23,7 +23,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
 
   // Build LCS table
   const dp: number[][] = Array.from({ length: m + 1 }, () =>
-    new Array(n + 1).fill(0)
+    new Array(n + 1).fill(0),
   );
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
@@ -60,7 +60,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
     if (ai < mi || bj < mj) {
       if (ai < mi && bj < mj) {
         ops.push({
-          op: 'replace',
+          op: "replace",
           origStart: ai,
           origEnd: mi,
           corrStart: bj,
@@ -68,7 +68,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
         });
       } else if (ai < mi) {
         ops.push({
-          op: 'delete',
+          op: "delete",
           origStart: ai,
           origEnd: mi,
           corrStart: bj,
@@ -76,7 +76,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
         });
       } else {
         ops.push({
-          op: 'insert',
+          op: "insert",
           origStart: ai,
           origEnd: ai,
           corrStart: bj,
@@ -85,7 +85,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
       }
     }
     ops.push({
-      op: 'equal',
+      op: "equal",
       origStart: mi,
       origEnd: mi + 1,
       corrStart: mj,
@@ -99,7 +99,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
   if (ai < m || bj < n) {
     if (ai < m && bj < n) {
       ops.push({
-        op: 'replace',
+        op: "replace",
         origStart: ai,
         origEnd: m,
         corrStart: bj,
@@ -107,7 +107,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
       });
     } else if (ai < m) {
       ops.push({
-        op: 'delete',
+        op: "delete",
         origStart: ai,
         origEnd: m,
         corrStart: bj,
@@ -115,7 +115,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
       });
     } else {
       ops.push({
-        op: 'insert',
+        op: "insert",
         origStart: ai,
         origEnd: ai,
         corrStart: bj,
@@ -141,7 +141,7 @@ const MAX_LCS_WORDS = 5000;
 
 export function alignWords(
   original: TimestampedWord[],
-  corrected: string[]
+  corrected: string[],
 ): TimestampedWord[] {
   // Too long for the LCS table -- align by streaming instead. Still real
   // timings; see alignStreaming.
@@ -158,7 +158,7 @@ export function alignWords(
   let lastOrigIdx = -1;
 
   for (const op of ops) {
-    if (op.op === 'equal') {
+    if (op.op === "equal") {
       for (let k = 0; k < op.origEnd - op.origStart; k++) {
         result.push({
           text: corrected[op.corrStart + k],
@@ -166,7 +166,7 @@ export function alignWords(
         });
         lastOrigIdx = op.origStart + k;
       }
-    } else if (op.op === 'replace') {
+    } else if (op.op === "replace") {
       const origCount = op.origEnd - op.origStart;
       const corrCount = op.corrEnd - op.corrStart;
       const pairCount = Math.min(origCount, corrCount);
@@ -181,8 +181,7 @@ export function alignWords(
 
       // Extra corrected words (insertions within replace)
       if (corrCount > origCount) {
-        const prevTime =
-          lastOrigIdx >= 0 ? original[lastOrigIdx].start : 0;
+        const prevTime = lastOrigIdx >= 0 ? original[lastOrigIdx].start : 0;
         const nextTime =
           op.origEnd < original.length
             ? original[op.origEnd].start
@@ -202,9 +201,8 @@ export function alignWords(
       if (origCount > corrCount) {
         lastOrigIdx = op.origEnd - 1;
       }
-    } else if (op.op === 'insert') {
-      const prevTime =
-        lastOrigIdx >= 0 ? original[lastOrigIdx].start : 0;
+    } else if (op.op === "insert") {
+      const prevTime = lastOrigIdx >= 0 ? original[lastOrigIdx].start : 0;
       const nextTime =
         op.origStart < original.length
           ? original[op.origStart].start
@@ -218,7 +216,7 @@ export function alignWords(
           start: prevTime + frac * (nextTime - prevTime),
         });
       }
-    } else if (op.op === 'delete') {
+    } else if (op.op === "delete") {
       lastOrigIdx = op.origEnd - 1;
     }
   }
@@ -230,8 +228,9 @@ export function alignWords(
 const STREAM_LOOKAHEAD = 40;
 /** Consecutive misses that mean the cursor has lost the thread entirely. */
 const STREAM_RESYNC_AFTER = 8;
-/** Wider net cast to find the thread again once it is lost. */
-const STREAM_RESYNC_LOOKAHEAD = 2000;
+// Once the cursor is lost, search the rest of the transcript rather than a
+// fixed window: a capped resync leaves the same cliff it exists to remove, and
+// resync fires rarely enough that the wider scan costs nothing amortised.
 
 /**
  * Alignment for transcripts too long for the LCS table.
@@ -251,7 +250,7 @@ const STREAM_RESYNC_LOOKAHEAD = 2000;
  */
 export function alignStreaming(
   original: TimestampedWord[],
-  corrected: string[]
+  corrected: string[],
 ): TimestampedWord[] {
   if (original.length === 0 || corrected.length === 0) return [];
 
@@ -268,11 +267,10 @@ export function alignStreaming(
     // search it would never match again and every remaining word would be
     // interpolated across the rest of the video, reintroducing exactly the
     // fabricated uniform timings this function exists to avoid.
-    const span =
+    const limit =
       misses >= STREAM_RESYNC_AFTER
-        ? STREAM_RESYNC_LOOKAHEAD
-        : STREAM_LOOKAHEAD;
-    const limit = Math.min(origNorm.length, oi + span);
+        ? origNorm.length
+        : Math.min(origNorm.length, oi + STREAM_LOOKAHEAD);
     let found = false;
     for (let k = oi; k < limit; k++) {
       if (origNorm[k] === c) {
