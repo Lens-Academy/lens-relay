@@ -9,6 +9,7 @@ import {
   generateFilenameBase,
 } from "./export";
 import { runClaude } from "./claude";
+import { verifyCorrection } from "./verify";
 import {
   createRelayDoc,
   updateRelayDoc,
@@ -23,25 +24,6 @@ const TIMEOUT_MS = 1_200_000; // 20 minutes
 // ceiling above, plus the 8-min Claude-pool acquire timeout, plus margin for
 // fetch + relay writes. Derived here so a TIMEOUT_MS change moves it too.
 export const VIDEO_JOB_TIMEOUT_MS = TIMEOUT_MS + 15 * 60_000;
-
-/**
- * Estimate processing time in minutes based on word count.
- * Based on real-world data: 7K words ≈ 10 min with Sonnet.
- * Chunked transcripts (>10K words) process in parallel (max 3 concurrent).
- */
-function estimateProcessingTime(wordCount: number): number {
-  const WORDS_PER_MINUTE = 700; // ~7K words in 10 min
-  const CHUNK_SIZE = 5_000;
-  const MAX_CONCURRENT = 3;
-
-  if (wordCount <= 10_000) {
-    return Math.max(1, Math.ceil(wordCount / WORDS_PER_MINUTE));
-  }
-  const numChunks = Math.ceil(wordCount / CHUNK_SIZE);
-  const numBatches = Math.ceil(numChunks / MAX_CONCURRENT);
-  const timePerChunk = Math.ceil(CHUNK_SIZE / WORDS_PER_MINUTE);
-  return numBatches * timePerChunk;
-}
 
 export interface VideoImportOptions {
   /** Also auto-create a lens wrapping the transcript (default true). */
@@ -78,8 +60,7 @@ export async function importVideo(
   const mdPath = `${relayFolder}/${filenameBase}.md`;
   const jsonPath = `${relayFolder}/${filenameBase}.timestamps.json`;
   onRelayUrl?.(editorOpenUrl(mdPath));
-  let placeholderWritten = false;
-  let finalWritten = false;
+  let docWritten = false;
 
   try {
     console.log(`[add-video] Processing "${payload.title}" (${payload.video_id})`);
@@ -89,72 +70,37 @@ export async function importVideo(
     const plainText = toPlainText(payload.transcript_raw);
     await fs.writeFile(path.join(workDir, "raw.txt"), plainText);
 
-    // 2. Create placeholder doc in Relay with time estimate
+    // Flatten multi-word entries (sentence-level) into individual words: these
+    // carry the real caption timings and back both the phase-1 sidecar and the
+    // phase-2 alignment.
+    const originalWords = flattenToWords(extractWords(payload.transcript_raw));
     const wordCount = plainText.split(/\s+/).length;
-    const estimateMin = estimateProcessingTime(wordCount);
-    const placeholderBody = [
-      `*This transcript is being processed.*`,
-      ``,
-      `**${wordCount.toLocaleString()} words** — estimated processing time: **~${estimateMin} minutes**.`,
-      ``,
-      `If you submitted multiple videos, they share a pool of 3 concurrent sessions and will be processed as capacity allows.`,
-      ``,
-      `Queued at: ${new Date(createdAt).toLocaleString()}`,
-    ].join("\n");
-    const placeholderContent = generateMarkdown({
+
+    // 2. PHASE 1 -- publish the transcript immediately.
+    //    The text YouTube returns is already the real transcript, so there is
+    //    no reason to make readers wait behind an LLM pass: the doc, its
+    //    timestamps and its lens all land now, and the cleanup pass (if any)
+    //    edits them in place afterwards.
+    setStage("publishing");
+    const publishedContent = generateMarkdown({
       title: payload.title,
       channel: payload.channel,
       url: payload.url,
-      body: placeholderBody,
+      body: plainText.trim(),
     });
-    await createRelayDoc(mdPath, placeholderContent, signal);
-    placeholderWritten = true;
-
-    // 3. Run Claude for formatting
-    setStage("formatting");
-    console.log(`[add-video] Running Claude on ${wordCount} words...`);
-    const result = await runClaude(workDir, TIMEOUT_MS, signal);
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `Claude exited with code ${result.exitCode}: ${result.stderr.slice(0, 500)}`,
-      );
-    }
-
-    console.log(`[add-video] Claude finished (exit ${result.exitCode})`);
-    // 4. Read corrected text
-    setStage("aligning");
-    const correctedText = await fs.readFile(
-      path.join(workDir, "corrected.txt"),
-      "utf-8",
-    );
-
-    // 5. Align timestamps
-    // Flatten multi-word entries (sentence-level) into individual words for alignment
-    const originalWords = flattenToWords(
-      extractWords(payload.transcript_raw),
-    );
-    const correctedWords = correctedText.trim().split(/\s+/);
-    const aligned = alignWords(originalWords, correctedWords);
-
-    // 6. Generate final content
-    const finalMd = generateMarkdown({
-      title: payload.title,
-      channel: payload.channel,
-      url: payload.url,
-      body: correctedText.trim(),
-    });
-    const timestamps = generateTimestampsJson(aligned);
-
-    // 7. Replace the placeholder with the final markdown and create the
-    //    timestamps JSON -- independent paths, written concurrently
-    setStage("writing");
     await Promise.all([
-      updateRelayDoc(mdPath, placeholderContent, finalMd, signal),
-      createRelayDoc(jsonPath, JSON.stringify(timestamps, null, 2), signal),
+      createRelayDoc(mdPath, publishedContent, signal),
+      createRelayDoc(
+        jsonPath,
+        JSON.stringify(generateTimestampsJson(originalWords), null, 2),
+        signal,
+      ),
     ]);
-    finalWritten = true;
+    // The transcript on disk is now complete and faithful; nothing after this
+    // point may replace it with a failure doc.
+    docWritten = true;
 
-    // 9. Auto-create a lens wrapping the transcript (Asana 1215689584721257).
+    // 3. Auto-create a lens wrapping the transcript (Asana 1215689584721257).
     //    Opt out with createLens=false; a lens failure must not fail the import.
     //    Deliberately NOT an abort point: the transcript is complete, and a
     //    cancel arriving here must not route into the failure path.
@@ -177,26 +123,80 @@ export async function importVideo(
         );
       }
     }
-  } catch (err) {
-    // Update placeholder to show failure -- but never leave a failure doc for
-    // a job that wrote nothing (a pre-placeholder failure has no reader), and
-    // NEVER overwrite a fully written transcript (e.g. a cancel that lands
-    // during lens creation).
-    if (placeholderWritten && !finalWritten) {
-      const failedContent = generateMarkdown({
+
+    // 4. Human-written caption tracks already carry punctuation, casing and
+    //    correct spelling, so the cleanup pass has nothing to fix -- measured
+    //    on real videos it returned the input essentially unchanged. Skip it:
+    //    the import is done, at a fraction of the latency and cost.
+    if (payload.transcript_type === "sentence_level") {
+      console.log(
+        `[add-video] Human captions for "${payload.title}" — published as-is, skipping cleanup`,
+      );
+      return;
+    }
+
+    // 5. PHASE 2 -- clean up the auto-generated transcript in the background.
+    //    Everything from here is best-effort: the reader already has a
+    //    faithful transcript, so a failed or untrustworthy cleanup leaves the
+    //    published one alone instead of failing the import.
+    setStage("polishing");
+    console.log(`[add-video] Running Claude on ${wordCount} words...`);
+    try {
+      const result = await runClaude(workDir, TIMEOUT_MS, signal);
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `Claude exited with code ${result.exitCode}: ${result.stderr.slice(0, 500)}`,
+        );
+      }
+      console.log(`[add-video] Claude finished (exit ${result.exitCode})`);
+
+      const correctedText = await fs.readFile(
+        path.join(workDir, "corrected.txt"),
+        "utf-8",
+      );
+      const correctedWords = correctedText.trim().split(/\s+/);
+
+      // Enforce what the prompt only asks for. A cleanup that paraphrases,
+      // hallucinates or silently loses a chunk is worse than no cleanup.
+      const verdict = verifyCorrection(plainText.trim().split(/\s+/), correctedWords);
+      if (!verdict.ok) {
+        console.warn(
+          `[add-video] Cleanup rejected for "${payload.title}": ${verdict.reason} — keeping the published transcript`,
+        );
+        onStage?.("polish-rejected");
+        return;
+      }
+
+      setStage("aligning");
+      const aligned = alignWords(originalWords, correctedWords);
+      const finalMd = generateMarkdown({
         title: payload.title,
         channel: payload.channel,
-        // youtu.be form on purpose: the relay's video-id dedup scan matches
-        // "watch?v=<id>" / "/shorts/<id>" in doc heads, and a failure doc
-        // that matched would block every resubmission of this video until a
-        // human deleted the doc. youtu.be links stay clickable but invisible
-        // to that scan, so retrying just overwrites the failure doc.
-        url: `https://youtu.be/${payload.video_id}`,
-        body: `*Transcript processing failed.* You can resubmit this video.\n\nFailed at: ${new Date().toISOString()}`,
+        url: payload.url,
+        body: correctedText.trim(),
       });
-      await updateRelayDoc(mdPath, "", failedContent).catch(() => {});
+
+      setStage("writing");
+      await Promise.all([
+        updateRelayDoc(mdPath, publishedContent, finalMd, signal),
+        updateRelayDoc(
+          jsonPath,
+          "",
+          JSON.stringify(generateTimestampsJson(aligned), null, 2),
+          signal,
+        ),
+      ]);
+    } catch (polishErr) {
+      // A cancelled job must still count as cancelled.
+      if (signal?.aborted) throw polishErr;
+      console.warn(
+        `[add-video] Cleanup failed for "${payload.title}" (transcript published): ${polishErr}`,
+      );
+      onStage?.("polish-failed");
     }
-    throw err;
+    // No catch: either the transcript was published (and must be left intact)
+    // or no doc was ever written, in which case the old "processing failed"
+    // placeholder would only be junk blocking a clean resubmit.
   } finally {
     // Clean up work directory
     await fs.rm(workDir, { recursive: true }).catch(() => {});

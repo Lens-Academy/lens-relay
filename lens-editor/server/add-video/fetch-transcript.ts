@@ -148,14 +148,30 @@ export function toJson3Url(baseUrl: string): string {
   return u.href;
 }
 
-/** Prefer English (exact, then regional variant), else the first track. */
-export function pickCaptionTrack<T extends { languageCode?: string }>(
-  tracks: T[],
-): T {
-  return (
-    tracks.find((t) => t.languageCode === "en") ??
-    tracks.find((t) => t.languageCode?.startsWith("en")) ??
-    tracks[0]
+/**
+ * Prefer human-written captions, then English (exact, then regional variant),
+ * else the first track.
+ *
+ * Human ("manual") tracks already carry punctuation, casing and correct
+ * spelling of names, so they are both better source text AND let the import
+ * skip the LLM cleanup pass entirely. Auto-generated ("asr") tracks are an
+ * unpunctuated lowercase wall that genuinely needs cleanup. Many channels
+ * publish both -- e.g. an `en` asr track alongside a human `en-GB` one -- so
+ * matching on language first would deliberately pick the worse transcript.
+ */
+export function pickCaptionTrack<
+  T extends { languageCode?: string; kind?: string },
+>(tracks: T[]): T {
+  const rank = (t: T): number => {
+    const auto = t.kind === "asr" ? 4 : 0;
+    const lang =
+      t.languageCode === "en" ? 0 : t.languageCode?.startsWith("en") ? 1 : 2;
+    return auto + lang;
+  };
+  // reduce keeps the earliest track on ties, preserving "else the first track".
+  return tracks.reduce(
+    (best, t) => (rank(t) < rank(best) ? t : best),
+    tracks[0],
   );
 }
 

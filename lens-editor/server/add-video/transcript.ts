@@ -36,9 +36,45 @@ export function isWordLevel(words: TimestampedWord[]): boolean {
 }
 
 /**
+ * Group already-punctuated text into paragraphs at sentence boundaries.
+ *
+ * Human-written caption tracks arrive as one continuous run of cues. They read
+ * fine as prose but are a wall on screen, and (unlike auto-generated tracks)
+ * they carry no pauses we can split on, so we break on sentence ends once a
+ * paragraph reaches a readable length. Text with no sentence punctuation, or
+ * shorter than one paragraph, comes back unchanged.
+ */
+export function paragraphizeSentences(
+  text: string,
+  targetWords: number = 110
+): string {
+  const sentences = text.match(/[^.!?]+(?:[.!?]+["')\]]*|$)/g);
+  if (!sentences || sentences.length < 2) return text.trim();
+
+  const paragraphs: string[] = [];
+  let current: string[] = [];
+  let words = 0;
+
+  for (const sentence of sentences) {
+    const s = sentence.trim();
+    if (!s) continue;
+    current.push(s);
+    words += s.split(/\s+/).length;
+    if (words >= targetWords) {
+      paragraphs.push(current.join(' '));
+      current = [];
+      words = 0;
+    }
+  }
+  if (current.length > 0) paragraphs.push(current.join(' '));
+
+  return paragraphs.join('\n\n');
+}
+
+/**
  * Convert raw transcript to plain text with paragraph breaks.
  * Word-level: split on 2+ second timing gaps.
- * Sentence-level: join all entries with spaces.
+ * Sentence-level: join entries, then split at sentence boundaries.
  */
 export function toPlainText(
   raw: TranscriptRaw,
@@ -48,7 +84,7 @@ export function toPlainText(
   if (words.length === 0) return '';
 
   if (!isWordLevel(words)) {
-    return words.map((w) => w.text).join(' ');
+    return paragraphizeSentences(words.map((w) => w.text).join(' '));
   }
 
   const paragraphs: string[] = [];

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { alignWords, normalize } from './alignment';
+import { alignWords, alignStreaming, normalize } from './alignment';
 import type { TimestampedWord } from './types';
 
 describe('normalize', () => {
@@ -86,5 +86,63 @@ describe('alignWords', () => {
     expect(result[0].text).toBe('deep');
     expect(result[1].text).toBe('learning');
     expect(result[2].text).toBe('is');
+  });
+});
+
+describe('alignStreaming', () => {
+  const original = Array.from({ length: 20 }, (_, i) => ({
+    text: `word${i}`,
+    // Deliberately uneven: real speech is not equidistant, and the old
+    // proportional fallback flattened exactly this into a metronome.
+    start: i < 10 ? i * 0.3 : 3 + (i - 10) * 1.7,
+  }));
+
+  it('keeps each word its real timestamp when only punctuation changed', () => {
+    const corrected = original.map((w, i) =>
+      i === 0 ? `Word0,` : i === 19 ? `word19.` : w.text
+    );
+    const aligned = alignStreaming(original, corrected);
+
+    expect(aligned).toHaveLength(20);
+    expect(aligned[5].start).toBe(original[5].start);
+    expect(aligned[19].start).toBe(original[19].start);
+  });
+
+  it('preserves the uneven timing rather than spreading words evenly', () => {
+    const aligned = alignStreaming(
+      original,
+      original.map((w) => w.text)
+    );
+    const gaps = aligned
+      .slice(1)
+      .map((w, i) => Number((w.start - aligned[i].start).toFixed(4)));
+
+    expect(new Set(gaps).size).toBeGreaterThan(1);
+  });
+
+  it('interpolates inserted words between their neighbours and stays ordered', () => {
+    const corrected = [...original.map((w) => w.text)];
+    corrected.splice(5, 0, 'inserted');
+    const aligned = alignStreaming(original, corrected);
+
+    expect(aligned).toHaveLength(21);
+    for (let i = 1; i < aligned.length; i++) {
+      expect(aligned[i].start).toBeGreaterThanOrEqual(aligned[i - 1].start);
+    }
+  });
+
+  it('handles deletions by skipping ahead', () => {
+    const corrected = original
+      .map((w) => w.text)
+      .filter((_, i) => i !== 7 && i !== 8);
+    const aligned = alignStreaming(original, corrected);
+
+    expect(aligned).toHaveLength(18);
+    expect(aligned[aligned.length - 1].start).toBe(original[19].start);
+  });
+
+  it('returns empty for empty input', () => {
+    expect(alignStreaming([], ['a'])).toEqual([]);
+    expect(alignStreaming(original, [])).toEqual([]);
   });
 });

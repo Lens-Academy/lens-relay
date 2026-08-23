@@ -37,12 +37,12 @@ export function buildClaudeArgs(workDir: string): string[] {
     buildPrompt(workDir),
     '--allowedTools',
     'Read,Write',
-    '--max-turns',
-    '30',
-    '--max-budget-usd',
-    '2.00',
+    // No --max-turns / --max-budget-usd: a cleanup pass that stops halfway
+    // through a long transcript is worse than one that costs more. The
+    // runaway guard is the wall-clock timeout in spawnClaude, which bounds
+    // the process regardless of turns or spend.
     '--model',
-    'sonnet',
+    'opus',
     '--output-format',
     'json',
   ];

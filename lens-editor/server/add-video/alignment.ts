@@ -135,7 +135,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
  * - Inserted words: interpolate timestamps between surrounding words
  * - Deleted words: skip
  */
-// Max words before falling back to proportional timestamp assignment.
+// Max words before falling back to streaming alignment.
 // LCS DP table is O(m*n) memory; 5000*5000 = 200MB which is acceptable.
 const MAX_LCS_WORDS = 5000;
 
@@ -143,9 +143,10 @@ export function alignWords(
   original: TimestampedWord[],
   corrected: string[]
 ): TimestampedWord[] {
-  // For very long transcripts, skip LCS and assign timestamps proportionally
+  // Too long for the LCS table -- align by streaming instead. Still real
+  // timings; see alignStreaming.
   if (original.length > MAX_LCS_WORDS || corrected.length > MAX_LCS_WORDS) {
-    return assignProportionalTimestamps(original, corrected);
+    return alignStreaming(original, corrected);
   }
 
   const origNorm = original.map((w) => normalize(w.text));
@@ -225,22 +226,76 @@ export function alignWords(
   return result;
 }
 
+/** How far ahead to search for a word's match before giving up on it. */
+const STREAM_LOOKAHEAD = 40;
+
 /**
- * Fallback for long transcripts: assign timestamps proportionally
- * based on position in the corrected text relative to the original timeline.
+ * Alignment for transcripts too long for the LCS table.
+ *
+ * Walks both sequences with a single forward cursor, matching each corrected
+ * word to the next occurrence of it in the original within a small lookahead
+ * window. A cleanup pass only punctuates, recases and fixes the odd word, so
+ * the two sequences stay in lockstep and nearly every word matches exactly --
+ * which means real caption timings, not invented ones. Words with no match
+ * (model insertions) are interpolated between their neighbours, exactly as the
+ * LCS path does.
+ *
+ * This replaces an earlier fallback that spread words evenly across the video
+ * duration. That produced plausible-looking but fabricated timestamps -- every
+ * word equidistant -- on precisely the long videos where seeking to a moment
+ * matters most.
  */
-function assignProportionalTimestamps(
+export function alignStreaming(
   original: TimestampedWord[],
   corrected: string[]
 ): TimestampedWord[] {
   if (original.length === 0 || corrected.length === 0) return [];
 
-  const startTime = original[0].start;
-  const endTime = original[original.length - 1].start;
-  const duration = endTime - startTime || 1;
+  const origNorm = original.map((w) => normalize(w.text));
+  const times: Array<number | null> = new Array(corrected.length).fill(null);
 
-  return corrected.map((text, i) => ({
-    text,
-    start: startTime + (i / corrected.length) * duration,
-  }));
+  let oi = 0;
+  for (let ci = 0; ci < corrected.length; ci++) {
+    const c = normalize(corrected[ci]);
+    if (!c) continue;
+    const limit = Math.min(origNorm.length, oi + STREAM_LOOKAHEAD);
+    for (let k = oi; k < limit; k++) {
+      if (origNorm[k] === c) {
+        times[ci] = original[k].start;
+        oi = k + 1;
+        break;
+      }
+    }
+  }
+
+  // Interpolate unmatched runs between the anchors that surround them, so the
+  // output stays monotonically non-decreasing and covers the full timeline.
+  const firstTime = original[0].start;
+  const lastTime = original[original.length - 1].start;
+  const result: TimestampedWord[] = new Array(corrected.length);
+  let i = 0;
+  let prevTime = firstTime;
+
+  while (i < corrected.length) {
+    if (times[i] !== null) {
+      prevTime = times[i]!;
+      result[i] = { text: corrected[i], start: prevTime };
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < corrected.length && times[j] === null) j++;
+    const nextTime = j < corrected.length ? times[j]! : lastTime;
+    const span = Math.max(0, nextTime - prevTime);
+    const gaps = j - i + 1;
+    for (let k = i; k < j; k++) {
+      result[k] = {
+        text: corrected[k],
+        start: prevTime + ((k - i + 1) / gaps) * span,
+      };
+    }
+    i = j;
+  }
+
+  return result;
 }

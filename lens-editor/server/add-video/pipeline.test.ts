@@ -71,12 +71,48 @@ describe('importVideo', () => {
     );
   });
 
-  it('creates placeholder doc in relay before processing', async () => {
+  // The reader gets a usable transcript immediately; the cleanup pass edits it
+  // afterwards. Publishing must not wait behind the LLM.
+  it('publishes the real transcript before running cleanup', async () => {
+    const callOrder: string[] = [];
+    mockRelayDocs.createRelayDoc.mockImplementation(async (p: string) => {
+      callOrder.push(`create:${p.endsWith('.json') ? 'timestamps' : 'md'}`);
+    });
+    mockClaude.runClaude.mockImplementation(async () => {
+      callOrder.push('claude');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+
     await runImport();
 
     expect(mockRelayDocs.createRelayDoc).toHaveBeenCalledWith(
       expect.stringContaining('Lens Edu/video_transcripts/'),
-      expect.stringContaining('processed'),
+      expect.stringContaining('hello world'),
+      undefined
+    );
+    // Both the doc and its timestamps land before Claude is ever invoked.
+    expect(callOrder.indexOf('claude')).toBeGreaterThan(
+      callOrder.indexOf('create:timestamps')
+    );
+    expect(callOrder.indexOf('create:md')).toBeLessThan(
+      callOrder.indexOf('claude')
+    );
+  });
+
+  // Human-written captions already have punctuation and casing, so the cleanup
+  // pass costs latency and money to change essentially nothing.
+  it('skips the cleanup pass entirely for human-written captions', async () => {
+    await importVideo(
+      'test-job',
+      { ...makePayload(), transcript_type: 'sentence_level' },
+      new Date().toISOString(),
+      { createLens: false }
+    );
+
+    expect(mockClaude.runClaude).not.toHaveBeenCalled();
+    expect(mockRelayDocs.createRelayDoc).toHaveBeenCalledWith(
+      expect.stringContaining('.md'),
+      expect.stringContaining('hello world'),
       undefined
     );
   });
@@ -107,26 +143,33 @@ describe('importVideo', () => {
     );
   });
 
-  it('updates relay doc with failure on claude error', async () => {
+  // A failed cleanup is not a failed import: the published transcript is
+  // already faithful, so the job succeeds and the doc is left untouched.
+  it('keeps the published transcript when cleanup fails', async () => {
     mockClaude.runClaude.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'failed' });
 
-    await expect(runImport()).rejects.toThrow();
+    await expect(runImport()).resolves.toBeUndefined();
+
+    expect(mockRelayDocs.createRelayDoc).toHaveBeenCalledWith(
+      expect.stringContaining('.md'),
+      expect.stringContaining('hello world'),
+      undefined
+    );
+    expect(mockRelayDocs.updateRelayDoc).not.toHaveBeenCalled();
   });
 
-  // Prevents: a failure doc matching the relay's video-id dedup scan
-  // ("watch?v=<id>" / "/shorts/<id>"), which would block every resubmission
-  // of the failed video until someone deleted the doc.
-  it('writes the failure doc url in a form the dedup scan ignores', async () => {
-    mockClaude.runClaude.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'failed' });
+  // Prevents a regression to the old "Transcript processing failed" doc, which
+  // both destroyed a usable transcript and (when it carried a watch?v= url)
+  // tripped the relay's video-id dedup scan, blocking every resubmission.
+  it('never replaces the transcript with a failure doc', async () => {
+    mockClaude.runClaude.mockRejectedValue(new Error('claude exploded'));
 
-    await expect(runImport()).rejects.toThrow();
+    await expect(runImport()).resolves.toBeUndefined();
 
-    const failureCall = mockRelayDocs.updateRelayDoc.mock.calls.find(([, , content]) =>
-      content.includes('Transcript processing failed')
-    );
-    expect(failureCall).toBeDefined();
-    expect(failureCall![2]).toContain('https://youtu.be/abc123');
-    expect(failureCall![2]).not.toContain('watch?v=');
-    expect(failureCall![2]).not.toContain('/shorts/');
+    const wrote = [
+      ...mockRelayDocs.createRelayDoc.mock.calls,
+      ...mockRelayDocs.updateRelayDoc.mock.calls,
+    ].map((c) => String(c[c.length - 2]));
+    expect(wrote.some((c) => c.includes('processing failed'))).toBe(false);
   });
 });
