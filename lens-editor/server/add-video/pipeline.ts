@@ -13,6 +13,8 @@ import { verifyCorrection } from "./verify";
 import {
   createRelayDoc,
   updateRelayDoc,
+  upsertRelayDocReturningId,
+  readRelayDocText,
   relayTranscriptFolder,
   editorOpenUrl,
 } from "./relay-docs";
@@ -62,7 +64,9 @@ export async function importVideo(
   onRelayUrl?.(editorOpenUrl(mdPath));
 
   try {
-    console.log(`[add-video] Processing "${payload.title}" (${payload.video_id})`);
+    console.log(
+      `[add-video] Processing "${payload.title}" (${payload.video_id})`,
+    );
     // 1. Create work directory and write the plain-text transcript
     setStage("preparing");
     await fs.mkdir(workDir, { recursive: true });
@@ -81,19 +85,30 @@ export async function importVideo(
     //    timestamps and its lens all land now, and the cleanup pass (if any)
     //    edits them in place afterwards.
     setStage("publishing");
+    // A video without captions still gets its document and lens: those are
+    // what let it be referenced from course content, and neither depends on
+    // having a transcript. Only the timestamps sidecar is genuinely empty, so
+    // it is skipped rather than written as an empty array.
+    const hasTranscript = originalWords.length > 0;
     const publishedContent = generateMarkdown({
       title: payload.title,
       channel: payload.channel,
       url: payload.url,
-      body: plainText.trim(),
+      body: hasTranscript
+        ? plainText.trim()
+        : "*This video has no captions on YouTube, so no transcript could be imported.*",
     });
-    await Promise.all([
-      createRelayDoc(mdPath, publishedContent, signal),
-      createRelayDoc(
-        jsonPath,
-        JSON.stringify(generateTimestampsJson(originalWords), null, 2),
-        signal,
-      ),
+    const [publishedDocId] = await Promise.all([
+      upsertRelayDocReturningId(mdPath, publishedContent, signal),
+      ...(hasTranscript
+        ? [
+            createRelayDoc(
+              jsonPath,
+              JSON.stringify(generateTimestampsJson(originalWords), null, 2),
+              signal,
+            ),
+          ]
+        : []),
     ]);
     // The transcript in the relay is now complete and faithful. Everything
     // below is refinement: no later step may replace or invalidate it.
@@ -125,10 +140,13 @@ export async function importVideo(
     // 4. Human-written caption tracks already carry punctuation, casing and
     //    correct spelling, so the cleanup pass has nothing to fix -- measured
     //    on real videos it returned the input essentially unchanged. Skip it:
-    //    the import is done, at a fraction of the latency and cost.
-    if (payload.transcript_type === "sentence_level") {
+    //    the import is done, at a fraction of the latency and cost. A video
+    //    with no captions has nothing to clean up either.
+    if (!hasTranscript || payload.transcript_type === "sentence_level") {
       console.log(
-        `[add-video] Human captions for "${payload.title}" — published as-is, skipping cleanup`,
+        `[add-video] "${payload.title}": ${
+          hasTranscript ? "human captions" : "no captions"
+        } — published as-is, skipping cleanup`,
       );
       return;
     }
@@ -139,7 +157,9 @@ export async function importVideo(
     //    so a failed or untrustworthy cleanup leaves the published transcript
     //    alone instead of failing the import.
     setStage("polishing");
-    console.log(`[add-video] Running Claude on ${publishedWords.length} words...`);
+    console.log(
+      `[add-video] Running Claude on ${publishedWords.length} words...`,
+    );
     try {
       const result = await runClaude(workDir, TIMEOUT_MS, signal);
       if (result.exitCode !== 0) {
@@ -174,6 +194,25 @@ export async function importVideo(
         url: payload.url,
         body: correctedText.trim(),
       });
+
+      // Readers can open and edit the transcript while the cleanup runs, and
+      // a relay write replaces the whole document -- so only apply the cleanup
+      // if the document is still exactly what we published.
+      const current = await readRelayDocText(publishedDocId, signal).catch(
+        (readErr) => {
+          console.warn(
+            `[add-video] Could not re-read "${payload.title}" before applying cleanup: ${readErr}`,
+          );
+          return null;
+        },
+      );
+      if (current !== null && current.trim() !== publishedContent.trim()) {
+        console.warn(
+          `[add-video] "${payload.title}" was edited while the cleanup ran — keeping the edited document`,
+        );
+        onStage?.("polish-skipped-doc-edited");
+        return;
+      }
 
       setStage("writing");
       await Promise.all([

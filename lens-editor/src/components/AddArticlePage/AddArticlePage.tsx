@@ -4,13 +4,14 @@ import {
   ARTICLE_IMPORT_MODE_DEFINITIONS,
   ARTICLE_IMPORT_MODES,
   type ArticleImportMode,
+  type ArticleJobStatus,
 } from "../../../shared/article-import-contract";
 
 interface ArticleJob {
   id: string;
   url: string;
   title?: string;
-  status: "queued" | "processing" | "done" | "skipped" | "failed";
+  status: ArticleJobStatus;
   /** Pipeline stage while processing (fetching / rendering / quality-check /
    *  uploading-images / writing / creating-lens). */
   stage?: string;

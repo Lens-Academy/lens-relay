@@ -50,6 +50,16 @@ describe('importVideo', () => {
     mockClaude.runClaude.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
     mockRelayDocs.createRelayDoc.mockResolvedValue(undefined);
     mockRelayDocs.updateRelayDoc.mockResolvedValue(undefined);
+    // Model the real round-trip: what we publish is what reads back, so the
+    // cleanup's "was this edited?" guard sees an untouched document.
+    let published = '';
+    mockRelayDocs.upsertRelayDocReturningId.mockImplementation(
+      async (_path: string, content: string) => {
+        published = content;
+        return 'doc-1';
+      }
+    );
+    mockRelayDocs.readRelayDocText.mockImplementation(async () => published);
     mockRelayDocs.relayTranscriptFolder.mockReturnValue(
       'Lens Edu/video_transcripts'
     );
@@ -78,6 +88,10 @@ describe('importVideo', () => {
     mockRelayDocs.createRelayDoc.mockImplementation(async (p: string) => {
       callOrder.push(`create:${p.endsWith('.json') ? 'timestamps' : 'md'}`);
     });
+    mockRelayDocs.upsertRelayDocReturningId.mockImplementation(async () => {
+      callOrder.push('create:md');
+      return 'doc-1';
+    });
     mockClaude.runClaude.mockImplementation(async () => {
       callOrder.push('claude');
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -85,7 +99,7 @@ describe('importVideo', () => {
 
     await runImport();
 
-    expect(mockRelayDocs.createRelayDoc).toHaveBeenCalledWith(
+    expect(mockRelayDocs.upsertRelayDocReturningId).toHaveBeenCalledWith(
       expect.stringContaining('Lens Edu/video_transcripts/'),
       expect.stringContaining('hello world'),
       undefined
@@ -110,7 +124,7 @@ describe('importVideo', () => {
     );
 
     expect(mockClaude.runClaude).not.toHaveBeenCalled();
-    expect(mockRelayDocs.createRelayDoc).toHaveBeenCalledWith(
+    expect(mockRelayDocs.upsertRelayDocReturningId).toHaveBeenCalledWith(
       expect.stringContaining('.md'),
       expect.stringContaining('hello world'),
       undefined
@@ -150,12 +164,34 @@ describe('importVideo', () => {
 
     await expect(runImport()).resolves.toBeUndefined();
 
-    expect(mockRelayDocs.createRelayDoc).toHaveBeenCalledWith(
+    expect(mockRelayDocs.upsertRelayDocReturningId).toHaveBeenCalledWith(
       expect.stringContaining('.md'),
       expect.stringContaining('hello world'),
       undefined
     );
     expect(mockRelayDocs.updateRelayDoc).not.toHaveBeenCalled();
+  });
+
+  // Readers can edit the transcript while the cleanup is still running, and a
+  // relay write replaces the whole document -- so the cleanup must yield.
+  it('does not overwrite a transcript that was edited while cleanup ran', async () => {
+    mockRelayDocs.readRelayDocText.mockResolvedValue(
+      '# Someone edited this by hand'
+    );
+
+    await expect(runImport()).resolves.toBeUndefined();
+
+    expect(mockRelayDocs.updateRelayDoc).not.toHaveBeenCalled();
+  });
+
+  // A failed read must not block the cleanup: the common case is an untouched
+  // document, and losing the polish over a transient relay hiccup is worse.
+  it('still applies the cleanup when the document cannot be re-read', async () => {
+    mockRelayDocs.readRelayDocText.mockRejectedValue(new Error('relay down'));
+
+    await expect(runImport()).resolves.toBeUndefined();
+
+    expect(mockRelayDocs.updateRelayDoc).toHaveBeenCalled();
   });
 
   // Prevents a regression to the old "Transcript processing failed" doc, which
@@ -168,8 +204,63 @@ describe('importVideo', () => {
 
     const wrote = [
       ...mockRelayDocs.createRelayDoc.mock.calls,
+      ...mockRelayDocs.upsertRelayDocReturningId.mock.calls,
       ...mockRelayDocs.updateRelayDoc.mock.calls,
     ].map((c) => String(c[c.length - 2]));
     expect(wrote.some((c) => c.includes('processing failed'))).toBe(false);
+  });
+});
+
+describe('importVideo without captions', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockFs.mkdir.mockResolvedValue(undefined);
+    mockFs.writeFile.mockResolvedValue(undefined);
+    mockFs.rm.mockResolvedValue(undefined);
+    mockRelayDocs.createRelayDoc.mockResolvedValue(undefined);
+    mockRelayDocs.updateRelayDoc.mockResolvedValue(undefined);
+    // Model the real round-trip: what we publish is what reads back, so the
+    // cleanup's "was this edited?" guard sees an untouched document.
+    let published = '';
+    mockRelayDocs.upsertRelayDocReturningId.mockImplementation(
+      async (_path: string, content: string) => {
+        published = content;
+        return 'doc-1';
+      }
+    );
+    mockRelayDocs.readRelayDocText.mockImplementation(async () => published);
+    mockRelayDocs.relayTranscriptFolder.mockReturnValue(
+      'Lens Edu/video_transcripts'
+    );
+    mockRelayDocs.editorOpenUrl.mockImplementation((p: string) => `url:${p}`);
+  });
+
+  // A caption-less video used to fail outright and write nothing. The document
+  // and lens are what let a video be referenced from course content, so they
+  // must exist even with no transcript.
+  it('still creates the document and lens, and skips the empty timestamps file', async () => {
+    const payload = {
+      video_id: 'nocaps',
+      title: 'Silent Video',
+      channel: 'TestChannel',
+      url: 'https://www.youtube.com/watch?v=nocaps',
+      transcript_type: 'sentence_level' as const,
+      transcript_raw: { events: [] },
+    };
+
+    await expect(
+      importVideo('nocaps-job', payload, new Date().toISOString(), {
+        createLens: false,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(mockRelayDocs.upsertRelayDocReturningId).toHaveBeenCalledWith(
+      expect.stringContaining('.md'),
+      expect.any(String),
+      undefined
+    );
+    const paths = mockRelayDocs.createRelayDoc.mock.calls.map(([p]) => p);
+    expect(paths.some((p) => p.endsWith('.timestamps.json'))).toBe(false);
+    expect(mockClaude.runClaude).not.toHaveBeenCalled();
   });
 });

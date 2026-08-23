@@ -191,9 +191,18 @@ export async function fetchYouTubeTranscript(
   const tracks =
     player.captions?.playerCaptionsTracklistRenderer?.captionTracks;
   if (!tracks || tracks.length === 0) {
-    throw new VideoUnavailableError(
-      "This video has no captions on YouTube, so there is nothing to import.",
-    );
+    // A video with no captions still imports, just with an empty transcript:
+    // the document and its lens are what let the video be referenced from
+    // course content, and those do not depend on having a transcript.
+    return {
+      video_id: input.video_id,
+      title: player.videoDetails?.title || "Unknown",
+      channel: player.videoDetails?.author || "Unknown",
+      url: input.url,
+      // Nothing to clean up, so this must not route through the LLM pass.
+      transcript_type: "sentence_level",
+      transcript_raw: { events: [] },
+    };
   }
   const track = pickCaptionTrack(tracks);
 
