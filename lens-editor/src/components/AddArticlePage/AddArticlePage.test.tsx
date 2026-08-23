@@ -94,13 +94,13 @@ describe("AddArticlePage status polling", () => {
     await advance(0);
 
     expect(
-      screen.getByRole("radio", { name: "Full article + lens" }),
+      screen.getByRole("radio", { name: "Full text + lens" }),
     ).toHaveAttribute("aria-checked", "true");
     fireEvent.click(screen.getByRole("radio", { name: "Stub only" }));
     fireEvent.change(screen.getByRole("textbox"), {
       target: { value: "https://example.com/article" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Import Articles" }));
+    fireEvent.click(screen.getByRole("button", { name: "Import Sources" }));
     await advance(0);
 
     const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");

@@ -228,6 +228,10 @@ export function alignWords(
 
 /** How far ahead to search for a word's match before giving up on it. */
 const STREAM_LOOKAHEAD = 40;
+/** Consecutive misses that mean the cursor has lost the thread entirely. */
+const STREAM_RESYNC_AFTER = 8;
+/** Wider net cast to find the thread again once it is lost. */
+const STREAM_RESYNC_LOOKAHEAD = 2000;
 
 /**
  * Alignment for transcripts too long for the LCS table.
@@ -255,17 +259,30 @@ export function alignStreaming(
   const times: Array<number | null> = new Array(corrected.length).fill(null);
 
   let oi = 0;
+  let misses = 0;
   for (let ci = 0; ci < corrected.length; ci++) {
     const c = normalize(corrected[ci]);
     if (!c) continue;
-    const limit = Math.min(origNorm.length, oi + STREAM_LOOKAHEAD);
+    // Once enough words in a row have failed to match, the cursor is no longer
+    // tracking the transcript -- a long dropped run, say. Without a wider
+    // search it would never match again and every remaining word would be
+    // interpolated across the rest of the video, reintroducing exactly the
+    // fabricated uniform timings this function exists to avoid.
+    const span =
+      misses >= STREAM_RESYNC_AFTER
+        ? STREAM_RESYNC_LOOKAHEAD
+        : STREAM_LOOKAHEAD;
+    const limit = Math.min(origNorm.length, oi + span);
+    let found = false;
     for (let k = oi; k < limit; k++) {
       if (origNorm[k] === c) {
         times[ci] = original[k].start;
         oi = k + 1;
+        found = true;
         break;
       }
     }
+    misses = found ? 0 : misses + 1;
   }
 
   // Interpolate unmatched runs between the anchors that surround them, so the

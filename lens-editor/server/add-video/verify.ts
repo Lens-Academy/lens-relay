@@ -14,21 +14,16 @@ import { normalize } from "./alignment";
  * most likely and least visible.
  */
 
-/** Words the prompt explicitly permits the model to drop. */
-const FILLER = new Set([
-  "uh",
-  "um",
-  "uhh",
-  "erm",
-  "er",
-  "ah",
-  "mm",
-  "hmm",
-  "like",
-  "you",
-  "know",
-  "yeah",
-]);
+/**
+ * Words the prompt explicitly permits the model to drop.
+ *
+ * Deliberately excludes the unigrams of "you know" and "like": those are
+ * ordinary content words, and exempting them would let a model quietly delete
+ * every "you" or "like" in a transcript without registering as content loss.
+ * Dropping genuine "you know" filler instead spends a little of the
+ * non-filler budget below, which real transcripts stay well inside.
+ */
+const FILLER = new Set(["uh", "um", "uhh", "erm", "er", "ah", "mm", "hmm"]);
 
 /** A cleanup pass should barely change the word inventory. */
 const MAX_INSERTED_RATIO = 0.03;

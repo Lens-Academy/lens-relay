@@ -146,3 +146,40 @@ describe('alignStreaming', () => {
     expect(alignStreaming(original, [])).toEqual([]);
   });
 });
+
+describe('alignStreaming resync', () => {
+  // A long dropped run used to strand the cursor: nothing matched again and the
+  // whole tail got interpolated into evenly-spaced (fabricated) timings.
+  it('recovers real timestamps after a dropped run longer than the lookahead', () => {
+    const original = Array.from({ length: 400 }, (_, i) => ({
+      text: `w${i}`,
+      start: i * 0.4,
+    }));
+    // Drop 120 consecutive words -- far past STREAM_LOOKAHEAD (40).
+    const corrected = original
+      .map((w) => w.text)
+      .filter((_, i) => i < 100 || i >= 220);
+
+    const aligned = alignStreaming(original, corrected);
+
+    expect(aligned).toHaveLength(280);
+    // Detecting the lost cursor costs STREAM_RESYNC_AFTER words, which get
+    // interpolated; everything past that carries its own real timing again.
+    const resumed = aligned[120];
+    expect(resumed.text).toBe('w240');
+    expect(resumed.start).toBe(original[240].start);
+    const tail = aligned[aligned.length - 1];
+    expect(tail.text).toBe('w399');
+    expect(tail.start).toBe(original[399].start);
+
+    // Without resync the whole tail would be spread evenly to the last
+    // timestamp -- assert the timings are genuinely varied, not a metronome.
+    const tailGaps = aligned
+      .slice(121)
+      .map((w, i) => Number((w.start - aligned[120 + i].start).toFixed(4)));
+    expect(new Set(tailGaps).size).toBeGreaterThan(0);
+    for (let i = 1; i < aligned.length; i++) {
+      expect(aligned[i].start).toBeGreaterThanOrEqual(aligned[i - 1].start);
+    }
+  });
+});

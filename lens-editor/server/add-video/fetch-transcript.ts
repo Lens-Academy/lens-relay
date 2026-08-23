@@ -164,8 +164,11 @@ export function pickCaptionTrack<
 >(tracks: T[]): T {
   const rank = (t: T): number => {
     const auto = t.kind === "asr" ? 4 : 0;
+    // The language penalty must dominate the asr penalty: channels often
+    // upload human translations, and an English-language video with human
+    // French subs must still import the English (asr) track, not the French.
     const lang =
-      t.languageCode === "en" ? 0 : t.languageCode?.startsWith("en") ? 1 : 2;
+      t.languageCode === "en" ? 0 : t.languageCode?.startsWith("en") ? 1 : 8;
     return auto + lang;
   };
   // reduce keeps the earliest track on ties, preserving "else the first track".

@@ -36,8 +36,9 @@ describe('WorkflowMenu', () => {
 
     expect(screen.queryByText('Workflows')).not.toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /review suggestions/i })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /add video/i })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /add article/i })).toBeInTheDocument();
+    // One importer for articles and videos; the Add Video page is gone.
+    expect(screen.queryByRole('menuitem', { name: /add video/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /add source/i })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /promote to production/i })).toBeInTheDocument();
   });
 
@@ -46,7 +47,7 @@ describe('WorkflowMenu', () => {
     renderMenu();
 
     await user.click(screen.getByRole('button', { name: /open workflows menu/i }));
-    await user.click(screen.getByRole('menuitem', { name: /add article/i }));
+    await user.click(screen.getByRole('menuitem', { name: /add source/i }));
 
     expect(screen.getByTestId('location')).toHaveTextContent('/add-article');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();

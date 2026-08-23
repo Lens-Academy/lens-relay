@@ -60,7 +60,6 @@ export async function importVideo(
   const mdPath = `${relayFolder}/${filenameBase}.md`;
   const jsonPath = `${relayFolder}/${filenameBase}.timestamps.json`;
   onRelayUrl?.(editorOpenUrl(mdPath));
-  let docWritten = false;
 
   try {
     console.log(`[add-video] Processing "${payload.title}" (${payload.video_id})`);
@@ -74,7 +73,7 @@ export async function importVideo(
     // carry the real caption timings and back both the phase-1 sidecar and the
     // phase-2 alignment.
     const originalWords = flattenToWords(extractWords(payload.transcript_raw));
-    const wordCount = plainText.split(/\s+/).length;
+    const publishedWords = plainText.trim().split(/\s+/);
 
     // 2. PHASE 1 -- publish the transcript immediately.
     //    The text YouTube returns is already the real transcript, so there is
@@ -96,9 +95,8 @@ export async function importVideo(
         signal,
       ),
     ]);
-    // The transcript on disk is now complete and faithful; nothing after this
-    // point may replace it with a failure doc.
-    docWritten = true;
+    // The transcript in the relay is now complete and faithful. Everything
+    // below is refinement: no later step may replace or invalidate it.
 
     // 3. Auto-create a lens wrapping the transcript (Asana 1215689584721257).
     //    Opt out with createLens=false; a lens failure must not fail the import.
@@ -135,12 +133,13 @@ export async function importVideo(
       return;
     }
 
-    // 5. PHASE 2 -- clean up the auto-generated transcript in the background.
-    //    Everything from here is best-effort: the reader already has a
-    //    faithful transcript, so a failed or untrustworthy cleanup leaves the
-    //    published one alone instead of failing the import.
+    // 5. PHASE 2 -- clean up the auto-generated transcript. The job stays
+    //    alive for this (it still holds its queue slot), but readers do not:
+    //    the doc above is already usable. Everything from here is best-effort,
+    //    so a failed or untrustworthy cleanup leaves the published transcript
+    //    alone instead of failing the import.
     setStage("polishing");
-    console.log(`[add-video] Running Claude on ${wordCount} words...`);
+    console.log(`[add-video] Running Claude on ${publishedWords.length} words...`);
     try {
       const result = await runClaude(workDir, TIMEOUT_MS, signal);
       if (result.exitCode !== 0) {
@@ -158,7 +157,7 @@ export async function importVideo(
 
       // Enforce what the prompt only asks for. A cleanup that paraphrases,
       // hallucinates or silently loses a chunk is worse than no cleanup.
-      const verdict = verifyCorrection(plainText.trim().split(/\s+/), correctedWords);
+      const verdict = verifyCorrection(publishedWords, correctedWords);
       if (!verdict.ok) {
         console.warn(
           `[add-video] Cleanup rejected for "${payload.title}": ${verdict.reason} — keeping the published transcript`,

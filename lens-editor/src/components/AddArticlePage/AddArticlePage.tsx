@@ -85,8 +85,13 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
     return () => window.clearTimeout(timer);
   }, [fetchStatus]);
 
+  // Videos have no article body, so the server rejects stub-mode YouTube
+  // URLs; say so before the user submits rather than after.
+  const stubWithVideo =
+    importMode === "stub" && /(?:youtube\.com|youtu\.be)\//i.test(input);
+
   useEffect(() => {
-    document.title = "Add Article to Lens";
+    document.title = "Add Source to Lens";
     return () => {
       document.title = "Editor";
     };
@@ -191,13 +196,13 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
       }}
     >
       <div style={{ maxWidth: 700, margin: "0 auto", padding: "60px 20px" }}>
-        <h1 style={{ color: "#fff" }}>Add Article to Lens</h1>
+        <h1 style={{ color: "#fff" }}>Add Source to Lens</h1>
         <p>
           Import web articles and YouTube videos into the Lens library. Paste
           one or more URLs (one per line). The server fetches each page,
           extracts the article, cleans it up, and saves it to{" "}
-          <code style={codeStyle}>Lens Edu/articles</code>. YouTube links
-          import the video&apos;s transcript (with timestamps) to{" "}
+          <code style={codeStyle}>Lens Edu/articles</code>. YouTube links import
+          the video&apos;s transcript (with timestamps) to{" "}
           <code style={codeStyle}>Lens Edu/video_transcripts</code> instead.
           Those take a few minutes.
         </p>
@@ -206,7 +211,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={
-            "https://example.com/article-one\nhttps://example.com/article-two"
+            "https://example.com/an-article\nhttps://www.youtube.com/watch?v=..."
           }
           rows={5}
           spellCheck={false}
@@ -232,7 +237,9 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
           }}
         >
           <div style={{ marginBottom: 8 }}>
-            <span style={{ color: "#c9cee2", fontWeight: 600 }}>Import mode</span>
+            <span style={{ color: "#c9cee2", fontWeight: 600 }}>
+              Import mode
+            </span>
           </div>
           <div
             role="radiogroup"
@@ -264,12 +271,17 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                     style={{
                       width: "100%",
                       height: "100%",
-                      border: selected ? "1px solid #6578d8" : "1px solid transparent",
+                      border: selected
+                        ? "1px solid #6578d8"
+                        : "1px solid transparent",
                       borderRadius: 6,
-                      padding: value === "stub" ? "8px 32px 8px 9px" : "8px 9px",
+                      padding:
+                        value === "stub" ? "8px 32px 8px 9px" : "8px 9px",
                       background: selected ? "#293466" : "transparent",
                       color: selected ? "#fff" : "#9fa8c9",
-                      boxShadow: selected ? "0 2px 8px rgba(0,0,0,.22)" : "none",
+                      boxShadow: selected
+                        ? "0 2px 8px rgba(0,0,0,.22)"
+                        : "none",
                       fontSize: 13,
                       fontWeight: selected ? 650 : 500,
                       cursor: "pointer",
@@ -295,7 +307,9 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                           width: 18,
                           height: 18,
                           borderRadius: "50%",
-                          border: selected ? "1px solid #9ba9ed" : "1px solid #58628a",
+                          border: selected
+                            ? "1px solid #9ba9ed"
+                            : "1px solid #58628a",
                           background: selected ? "#35437f" : "#171b33",
                           color: selected ? "#fff" : "#aeb8dc",
                           fontSize: 11,
@@ -335,6 +349,20 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
               );
             })}
           </div>
+          {stubWithVideo && (
+            <div
+              style={{
+                marginTop: 8,
+                color: "#f0b866",
+                fontSize: 12.5,
+                lineHeight: 1.45,
+              }}
+            >
+              Stub only doesn&apos;t apply to YouTube links — a video has no
+              article body to leave out. Those URLs will be rejected; choose
+              Full text to import the transcript.
+            </div>
+          )}
         </div>
 
         <button
@@ -351,7 +379,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
             cursor: submitting ? "wait" : "pointer",
           }}
         >
-          {submitting ? "Submitting…" : "Import Articles"}
+          {submitting ? "Submitting…" : "Import Sources"}
         </button>
 
         {submitError && (
@@ -496,10 +524,12 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
             fontSize: 13,
           }}
         >
-          Each article takes seconds to a few minutes depending on whether a
-          quality-check pass is needed; the finished document is written only
-          when processing completes (nothing is written on failure). The job
-          list resets when the server restarts — the imported documents
+          Articles take seconds to a few minutes depending on whether a
+          quality-check pass is needed, and are written only once processing
+          completes (nothing is written on failure). Video transcripts appear as
+          soon as YouTube returns them; if the captions are auto-generated, a
+          cleanup pass then tidies punctuation in the document you already have.
+          The job list resets when the server restarts — the imported documents
           themselves are safe in the relay.
         </div>
       </div>
