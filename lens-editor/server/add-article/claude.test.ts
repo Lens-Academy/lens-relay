@@ -51,6 +51,8 @@ describe("structured source review", () => {
   it("allows only local Read/Write tools and treats source as untrusted", () => {
     const args = buildVerifyArgs("/tmp/review");
     expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Write");
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
+    expect(args).not.toContain("--dangerously-skip-permissions");
     expect(buildVerifyPrompt("/tmp/review")).toContain("UNTRUSTED ARTICLE CONTENT");
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Never remove it, edit its labels or emphasis, or change either URL",
