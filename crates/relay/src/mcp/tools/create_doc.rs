@@ -4,6 +4,23 @@ use std::sync::Arc;
 
 use super::blob;
 
+pub const ARTICLE_CREATE_BLOCK_MESSAGE: &str = "New files in Lens Edu/articles cannot be created with the generic MCP create or move tools. Use the Lens Editor Add Article feature or MCP import_article, then poll import_status. That workflow performs source-aware extraction, normalization, deterministic validation, mandatory LLM source-fidelity review, evidence retention, and review provenance; bypassing it tends to create substantial downstream cleanup work for Lens staff, including Elias and Luc. If an exceptional manual article is truly necessary, first explain this intended workflow and its consequences to the user and obtain explicit permission. The user must then create the file in the articles folder themselves; MCP may edit that existing file afterward.";
+
+pub fn is_lens_edu_articles_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let mut components: Vec<&str> = Vec::new();
+    for component in normalized.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                components.pop();
+            }
+            value => components.push(value),
+        }
+    }
+    components.first() == Some(&"Lens Edu") && components.get(1) == Some(&"articles")
+}
+
 /// Execute the `create` tool: create a new document or file at the specified path.
 pub async fn execute(
     server: &Arc<Server>,
@@ -19,6 +36,10 @@ pub async fn execute(
         .get("content")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+
+    if is_lens_edu_articles_path(file_path) {
+        return Err(ARTICLE_CREATE_BLOCK_MESSAGE.to_string());
+    }
 
     // Session identity for provenance attribution + comment author labels.
     let (author, attribution) = {
@@ -213,6 +234,29 @@ mod tests {
             "MD create should succeed: {:?}",
             result.err()
         );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_new_lens_edu_articles_with_workflow_guidance() {
+        let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
+        for path in [
+            "Lens Edu/articles/manual.md",
+            "Lens Edu//articles/manual.md",
+            "Lens Edu/drafts/../articles/manual.md",
+            "Lens Edu\\articles\\manual.md",
+        ] {
+            let error = execute(
+                &server,
+                &sid,
+                &json!({ "file_path": path, "content": "Manual article" }),
+            )
+            .await
+            .expect_err("generic article creation must be blocked");
+            assert!(error.contains("import_article"));
+            assert!(error.contains("explicit permission"));
+            assert!(error.contains("Elias and Luc"));
+        }
     }
 
     #[tokio::test]

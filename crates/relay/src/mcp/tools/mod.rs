@@ -319,7 +319,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "create",
-            "description": "Create a new document or file at the specified path. Supports .md (markdown — wrapped in CriticMarkup), .html (raw HTML stored as-is, rendered by the HtmlEditor), and .json (raw content stored as-is). To import an existing local file, don't retype its content as tokens — POST it to this MCP URL directly: jq -Rs --arg sid <session_id> '{jsonrpc:\"2.0\",id:1,method:\"tools/call\",params:{name:\"create\",arguments:{session_id:$sid,file_path:\"<path>\",content:.}}}' <local-file> | curl -sS -X POST <mcp-url> -H 'Content-Type: application/json' -d @- (the MCP URL is in your MCP client config, e.g. ~/.claude.json).",
+            "description": "Create a new document or file at the specified path. New files under Lens Edu/articles are blocked: use import_article (or the Lens Editor Add Article UI) so extraction, validation, mandatory LLM review, evidence, and provenance run. Existing article files remain editable. Supports .md (markdown — wrapped in CriticMarkup), .html (raw HTML stored as-is, rendered by the HtmlEditor), and .json (raw content stored as-is). To import an existing local file outside the articles folder, don't retype its content as tokens — POST it to this MCP URL directly: jq -Rs --arg sid <session_id> '{jsonrpc:\"2.0\",id:1,method:\"tools/call\",params:{name:\"create\",arguments:{session_id:$sid,file_path:\"<path>\",content:.}}}' <local-file> | curl -sS -X POST <mcp-url> -H 'Content-Type: application/json' -d @- (the MCP URL is in your MCP client config, e.g. ~/.claude.json).",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -342,7 +342,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "move",
-            "description": "Move or rename a file or folder. Automatically rewrites wikilinks in other documents that reference moved files. Use for file renames, file moves, and folder renames.",
+            "description": "Move or rename a file or folder. Automatically rewrites wikilinks in other documents that reference moved files. Moving a non-article into Lens Edu/articles is blocked; use import_article instead. Existing articles may be renamed within the articles folder.",
             "inputSchema": {
                 "type": "object",
                 "required": ["new_path", "session_id"],
