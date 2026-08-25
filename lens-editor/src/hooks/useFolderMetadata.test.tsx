@@ -50,6 +50,7 @@ const { MockYSweetProvider, mockProviderInstances, resetMockProviders } = vi.hoi
       this.listeners.get('synced')?.forEach((h) => h());
     }
 
+    disconnect() {}
     destroy() {
       this.listeners.clear();
     }

@@ -33,6 +33,7 @@ vi.mock('@y-sweet/client', () => ({
         setTimeout(callback, 0);
       }
     }
+    disconnect() {}
     destroy() {}
   },
 }));

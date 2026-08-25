@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
+import { teardownProvider } from './useDocConnection';
 import { getClientToken } from '../lib/auth';
 import { setupFilemetaDebugObserver } from '../lib/relay-api';
 import { RELAY_ID } from '../App';
@@ -108,7 +109,7 @@ export function useFolderMetadata(folderId: string) {
         debugObserverCleanupRef.current = null;
       }
       if (providerRef.current) {
-        providerRef.current.destroy();
+        teardownProvider(providerRef.current);
         providerRef.current = null;
       }
       if (docRef.current) {
