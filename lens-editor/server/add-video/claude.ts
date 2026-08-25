@@ -53,17 +53,21 @@ export async function spawnClaude(
   workDir: string,
   timeoutMs: number,
   argsOverride?: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  // acquire is abort-aware: a cancelled/deadlined job leaves the wait queue
-  // immediately instead of holding its slot-position until the backstop.
   await claudeSessionPool.acquire(undefined, signal);
+  // Cancellation while queued is final: do not turn a newly available slot
+  // into a Claude process after the owning job has already failed.
+  signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const args = argsOverride ?? buildClaudeArgs(workDir);
     const spawnClaudeProc = () =>
       spawn('claude', args, {
         cwd: workDir,
         stdio: ['ignore', 'pipe', 'pipe'],
+        // A Claude CLI turn may spawn helpers. Give it a process group so a
+        // cancelled article job cannot leave descendants running.
+        detached: process.platform !== 'win32',
       });
     let proc: ReturnType<typeof spawnClaudeProc>;
     try {
@@ -90,20 +94,21 @@ export async function spawnClaude(
       fn();
     };
 
-    // A cancelled job must actually kill its Claude process -- otherwise the
-    // pool slot stays occupied for up to the full timeout.
-    const onAbort = () => {
-      proc.kill('SIGTERM');
-      finish(() =>
-        reject(
-          signal!.reason instanceof Error
-            ? signal!.reason
-            : new Error(String(signal!.reason ?? 'Job aborted'))
-        )
-      );
+    const terminateGroup = () => {
+      if (process.platform !== 'win32' && proc.pid) {
+        try { process.kill(-proc.pid, 'SIGTERM'); } catch { proc.kill('SIGTERM'); }
+        setTimeout(() => {
+          try { process.kill(-proc.pid!, 'SIGKILL'); } catch { /* already exited */ }
+        }, 5_000).unref();
+      } else {
+        proc.kill('SIGTERM');
+      }
     };
-    signal?.addEventListener('abort', onAbort, { once: true });
 
+    const onAbort = () => {
+      terminateGroup();
+      finish(() => reject(signal?.reason ?? new Error('Claude review aborted')));
+    };
     proc.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
     });
@@ -112,9 +117,11 @@ export async function spawnClaude(
     });
 
     const timer = setTimeout(() => {
-      proc.kill('SIGTERM');
+      terminateGroup();
       finish(() => reject(new Error(`Claude timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
 
     proc.on('close', (code) => {
       finish(() => resolve({ exitCode: code ?? 1, stdout, stderr }));

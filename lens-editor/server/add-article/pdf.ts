@@ -726,6 +726,8 @@ export async function embedPdfImages(
   images: PdfPageImage[],
   slugBase: string,
   upload: (inFolderPath: string, png: Buffer, mimetype: string) => Promise<void>,
+  publicUrl: (inFolderPath: string) => string = (inFolderPath) =>
+    `https://raw.githubusercontent.com/Lens-Academy/lens-edu-staging/staging${inFolderPath}`,
 ): Promise<string> {
   let out = body;
   for (let i = 0; i < images.length; i += 1) {
@@ -744,9 +746,9 @@ export async function embedPdfImages(
     const inFolderPath = `/attachments/${slugBase}-fig${i + 1}-${h8}.${ext}`;
     try {
       await upload(inFolderPath, images[i].png, mime);
-      out = out.split(placeholder).join(`![[${inFolderPath}]]`);
-    } catch {
-      out = out.split(placeholder).join(""); // drop the figure, keep the text
+      out = out.split(placeholder).join(`![Figure ${i + 1}](${publicUrl(inFolderPath)})`);
+    } catch (error) {
+      throw new Error(`Failed to host required PDF figure ${i + 1}: ${error}`);
     }
   }
   // Strip any unreplaced placeholders and tidy resulting blank-line runs.

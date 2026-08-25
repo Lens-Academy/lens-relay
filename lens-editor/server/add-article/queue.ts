@@ -5,13 +5,18 @@ import { VIDEO_JOB_TIMEOUT_MS } from "../add-video/pipeline";
 import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
 import { DuplicateDocumentError } from "./duplicate";
 import { editorOpenUrl } from "../add-video/relay-docs";
+import {
+  createArticleReviewReporter,
+  createMemoryArticleReviewReporter,
+  type ArticleReviewReporter,
+} from "./review-report";
 
 // Hard ceiling on a single import job. Individual stages carry their own
 // timeouts (fetch 30s, render 60s, Claude QC 7min, relay calls 30–60s), but a
 // stage that misbehaves — or a gap between stages — must never strand a job in
 // "processing" forever (three did, for 2h+, in production). The race below
 // settles the job even if the underlying promise never does.
-const DEFAULT_JOB_TIMEOUT_MS = 12 * 60_000;
+const DEFAULT_JOB_TIMEOUT_MS = 25 * 60_000;
 
 function jobTimeoutMs(job: ArticleJob): number {
   // YouTube-video jobs run Claude over a whole transcript and legitimately
@@ -22,7 +27,8 @@ function jobTimeoutMs(job: ArticleJob): number {
 }
 
 interface QueueOptions {
-  processJob: (job: ArticleJob, signal: AbortSignal) => Promise<void>;
+  processJob: (job: ArticleJob, signal: AbortSignal, reporter: ArticleReviewReporter) => Promise<void>;
+  reporterFactory?: (job: ArticleJob) => Promise<ArticleReviewReporter>;
 }
 
 /**
@@ -36,12 +42,16 @@ export class ArticleJobQueue {
   private pending: string[] = [];
   private controllers: Map<string, AbortController> = new Map();
   private processJob: QueueOptions["processJob"];
+  private reporterFactory: NonNullable<QueueOptions["reporterFactory"]>;
 
   constructor(options: QueueOptions) {
     this.processJob = options.processJob;
+    this.reporterFactory = options.reporterFactory ?? (process.env.NODE_ENV === "test"
+      ? async (job) => createMemoryArticleReviewReporter(job)
+      : createArticleReviewReporter);
   }
 
-  add(url: string, importMode: ArticleImportMode): ArticleJob {
+  add(url: string, importMode: ArticleImportMode, retryOf?: string): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
@@ -53,6 +63,8 @@ export class ArticleJobQueue {
       // Classify once here — every later consumer (deadline choice, pipeline
       // dispatch) reads job.video instead of re-parsing the URL.
       video: extractVideoInput(url) ?? undefined,
+      report_persistence: "pending",
+      retry_of: retryOf,
       created_at: now,
       updated_at: now,
     };
@@ -109,6 +121,15 @@ export class ArticleJobQueue {
       job.error = "Cancelled by user";
       job.stage = undefined;
       job.updated_at = new Date().toISOString();
+      void this.reporterFactory(job).then(async (reporter) => {
+        job.report_id = reporter.id;
+        await reporter.finish("failed", { error: job.error });
+        job.report_summary = reporter.summary();
+        job.report_persistence = reporter.persistent ? "persisted" : "pending";
+      }).catch((error) => {
+        job.report_persistence = "failed";
+        job.error = `${job.error}; report persistence failed: ${error}`;
+      });
     }
     return true;
   }
@@ -152,10 +173,17 @@ export class ArticleJobQueue {
         { once: true },
       );
     });
+    let reporter: ArticleReviewReporter | undefined;
     try {
-      await Promise.race([this.processJob(job, ctrl.signal), aborted]);
+      reporter = await this.reporterFactory(job);
+      job.report_id = reporter.id;
+      job.report_persistence = reporter.persistent ? "persisted" : "pending";
+      await Promise.race([this.processJob(job, ctrl.signal, reporter), aborted]);
+      await reporter.finish("done", { finalPath: job.relay_path });
       job.status = "done";
-      console.log(`[add-article] Job ${job.id} done: ${job.url}`);
+      job.report_summary = reporter.summary();
+      job.report_persistence = reporter.persistent ? "persisted" : "pending";
+      console.log(`[add-article] job=${job.id} report=${reporter.id} outcome=done path=${job.relay_path ?? ""} counts=${JSON.stringify(job.report_summary)}`);
     } catch (err) {
       if (err instanceof DuplicateDocumentError) {
         // The content is already in the library: nothing failed and there is
@@ -163,12 +191,39 @@ export class ArticleJobQueue {
         job.status = "skipped";
         job.error = err.message;
         job.relay_url ??= editorOpenUrl(err.docPath);
+        // No import ran, but a report was opened -- close it out pointing at
+        // the document that already holds this content, rather than leaving a
+        // report stuck in "processing" forever.
+        if (reporter) {
+          try {
+            await reporter.finish("done", { finalPath: err.docPath });
+            job.report_summary = reporter.summary();
+            job.report_persistence = reporter.persistent ? "persisted" : "pending";
+          } catch (reportError) {
+            job.report_persistence = "failed";
+            console.warn(`[add-article] Job ${job.id} skipped, report persistence failed: ${reportError}`);
+          }
+        }
         console.log(`[add-article] Job ${job.id} skipped: ${err.message}`);
       } else {
         job.status = "failed";
         job.error = err instanceof Error ? err.message : String(err);
+        if (reporter) {
+          try {
+            await reporter.finish("failed", { error: job.error, finalPath: job.relay_path });
+            job.report_summary = reporter.summary();
+            job.report_persistence = reporter.persistent ? "persisted" : "pending";
+          } catch (reportError) {
+            job.report_persistence = "failed";
+            job.error = `${job.error}; report persistence failed: ${reportError}`;
+          }
+        } else {
+          job.report_persistence = "failed";
+          job.error = `Report persistence failed before import started: ${job.error}`;
+        }
         console.error(`[add-article] Job ${job.id} failed: ${job.url}`);
         console.error(`[add-article]   Error: ${job.error}`);
+        console.error(`[add-article] job=${job.id} report=${job.report_id ?? "unavailable"} outcome=failed path=${job.relay_path ?? ""} counts=${JSON.stringify(job.report_summary ?? {})}`);
       }
     } finally {
       clearTimeout(timer);

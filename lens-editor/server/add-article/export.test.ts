@@ -127,6 +127,42 @@ Body text.
     );
     expect(md).toContain('author:\n  - "Alice Smith"\n  - "Bob Jones"');
   });
+
+  it("writes LLM review provenance as nested YAML", () => {
+    const md = generateArticleMarkdown(
+      {
+        title: "T",
+        author: ["A"],
+        source_url: "https://example.com",
+        published: "2026-01-01",
+        description: "D",
+      },
+      "Body.",
+      "2026-08-24",
+      {
+        review: {
+          reviewed: "2026-08-24",
+          version: "article-qc-v1",
+          model: "sonnet",
+          digest: "sha256:article",
+          sourceDigest: "sha256:source",
+          sourceFetched: "2026-08-24",
+          sourceKind: "live",
+        },
+      },
+    );
+
+    expect(md).toContain(`llm-review:
+  content-sha: "sha256:article"
+  date: 2026-08-24
+  model: "sonnet"
+  version: "article-qc-v1"
+  source:
+    content-sha: "sha256:source"
+    fetched: 2026-08-24
+    kind: "live"`);
+    expect(md).not.toContain("llm_review_digest:");
+  });
 });
 
 describe("generateArticleFilenameBase", () => {

@@ -4,6 +4,16 @@ import type { ArticleMeta } from "./types";
 export const ARTICLE_DISCUSSION_PROMPT =
   "%%\nAdd discussion note here:\n\n...\n\n%%";
 
+export interface ArticleReviewProvenance {
+  reviewed: string;
+  version: string;
+  model: string;
+  digest: string;
+  sourceDigest: string;
+  sourceFetched: string;
+  sourceKind: "live" | "archive" | "fixture";
+}
+
 function yamlQuote(s: string): string {
   // Collapse control whitespace too — a raw newline inside a double-quoted YAML
   // scalar (e.g. a title with an embedded line break) breaks frontmatter parsing.
@@ -31,6 +41,7 @@ export function generateArticleMarkdown(
   options: {
     discussionBlocks?: string;
     extraTags?: string[];
+    review?: ArticleReviewProvenance;
   } = {},
 ): string {
   const lines = ["---", `title: ${yamlQuote(meta.title)}`];
@@ -48,6 +59,17 @@ export function generateArticleMarkdown(
   lines.push(meta.published ? `published: ${meta.published}` : "published:");
   lines.push(`created: ${createdDate}`);
   lines.push(`accessed: ${createdDate}`);
+  if (options.review) {
+    lines.push("llm-review:");
+    lines.push(`  content-sha: ${yamlQuote(options.review.digest)}`);
+    lines.push(`  date: ${options.review.reviewed}`);
+    lines.push(`  model: ${yamlQuote(options.review.model)}`);
+    lines.push(`  version: ${yamlQuote(options.review.version)}`);
+    lines.push("  source:");
+    lines.push(`    content-sha: ${yamlQuote(options.review.sourceDigest)}`);
+    lines.push(`    fetched: ${options.review.sourceFetched}`);
+    lines.push(`    kind: ${yamlQuote(options.review.sourceKind)}`);
+  }
   lines.push(
     meta.description
       ? `description: ${yamlQuote(meta.description)}`

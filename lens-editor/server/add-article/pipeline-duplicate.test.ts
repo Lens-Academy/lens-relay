@@ -22,6 +22,12 @@ const extractionMocks = vi.hoisted(() => ({
   extractArticle: vi.fn(),
   normalizeMetaWithLlm: vi.fn(),
 }));
+const reviewMocks = vi.hoisted(() => ({
+  buildSourceEvidence: vi.fn(),
+  writeSourceEvidence: vi.fn(),
+  validateArticleDraft: vi.fn(),
+  reviewArticle: vi.fn(),
+}));
 
 vi.mock("./fetch", () => fetchMocks);
 vi.mock("../add-video/relay-docs", () => relayMocks);
@@ -29,8 +35,41 @@ vi.mock("./extract", () => ({ extractArticle: extractionMocks.extractArticle }))
 vi.mock("./meta-normalize", () => ({
   normalizeMetaWithLlm: extractionMocks.normalizeMetaWithLlm,
 }));
+vi.mock("./source-evidence", () => ({
+  buildSourceEvidence: reviewMocks.buildSourceEvidence,
+  writeSourceEvidence: reviewMocks.writeSourceEvidence,
+}));
+vi.mock("./platform-validation", () => ({
+  validateArticleDraft: reviewMocks.validateArticleDraft,
+  assertArticleValid: (result: { valid: boolean }) => { if (!result.valid) throw new Error("invalid"); },
+}));
+vi.mock("./claude", () => ({
+  REVIEW_MODEL: "sonnet",
+  REVIEW_VERSION: "article-qc-v1",
+  reviewArticle: reviewMocks.reviewArticle,
+}));
 
-import { processArticle } from "./pipeline";
+import { assertRequiredBodyPrefix, processArticle } from "./pipeline";
+
+describe("assertRequiredBodyPrefix", () => {
+  const prefix =
+    "*Chapter files: [View Markdown](https://ai-safety-atlas.com/chapters/v1/risks.md) · [Download PDF](https://atlas.foreviewusercontent.com/pdf/chapter.pdf)*";
+
+  it("accepts exactly one unchanged prefix at the start of the body", () => {
+    expect(() => assertRequiredBodyPrefix(`${prefix}\n\nArticle body`, prefix)).not.toThrow();
+  });
+
+  it("rejects removal, mutation, movement, or duplication", () => {
+    for (const body of [
+      "Article body",
+      `${prefix.replace("Markdown", "MD")}\n\nArticle body`,
+      `Article body\n\n${prefix}`,
+      `${prefix}\n\n${prefix}\n\nArticle body`,
+    ]) {
+      expect(() => assertRequiredBodyPrefix(body, prefix)).toThrow(/mandatory source download links/i);
+    }
+  });
+});
 
 describe("processArticle duplicate detection", () => {
   beforeEach(() => {
@@ -146,6 +185,22 @@ This might be useful.
       via: "readability",
       images: [],
     });
+    reviewMocks.buildSourceEvidence.mockResolvedValue({
+      extraction: await extractionMocks.extractArticle(),
+      manifest: {
+        source_digest: "sha256:source",
+        fetched_at: "2026-08-19T00:00:00.000Z",
+        source_kind: "live",
+      },
+    });
+    reviewMocks.validateArticleDraft.mockResolvedValue({
+      valid: true, issues: [], truncated: false, counts: { errors: 0, warnings: 0 },
+    });
+    reviewMocks.reviewArticle.mockImplementation(async (_dir, markdown, reviewMeta) => ({
+      review: { decision: "pass", source_status: "complete", findings: [], patches: [], note: "ok" },
+      markdown,
+      meta: reviewMeta,
+    }));
     extractionMocks.normalizeMetaWithLlm.mockResolvedValue(meta);
 
     const now = new Date().toISOString();
@@ -168,6 +223,14 @@ This might be useful.
     expect(markdown).toContain("%%\nLuc:\nThis might be useful.\n%%");
     expect(markdown).toContain("Full imported article body.");
     expect(markdown).toContain('  - "article-importer"');
+    expect(markdown).toContain('  version: "article-qc-v1"');
+    expect(markdown).toContain('  content-sha: "sha256:');
     expect(markdown).not.toContain("article-stub");
+    expect(reviewMocks.reviewArticle).toHaveBeenCalledOnce();
+    expect(reviewMocks.validateArticleDraft).toHaveBeenCalledTimes(3);
+    expect(reviewMocks.validateArticleDraft.mock.invocationCallOrder[0])
+      .toBeLessThan(reviewMocks.reviewArticle.mock.invocationCallOrder[0]);
+    expect(reviewMocks.reviewArticle.mock.invocationCallOrder[0])
+      .toBeLessThan(relayMocks.createRelayDoc.mock.invocationCallOrder[0]);
   });
 });

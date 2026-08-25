@@ -93,6 +93,9 @@ agent / Claude Code session — they starve the relay's async runtime and cause 
 intermittent slowness / `/review` failures we've hit before. Access prod over SSH from
 your own machine and keep builds off the box.
 
+**Maintain ample free disk space on production before, throughout, and after every
+deployment; remove unused build cache as needed, since low disk space causes failures.**
+
 ```bash
 # 1. Build the x86_64-linux release binary on your machine.
 #    On an x86_64 Linux host, a plain release build works:

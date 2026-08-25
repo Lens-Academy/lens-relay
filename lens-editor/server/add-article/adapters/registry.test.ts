@@ -56,6 +56,18 @@ describe("adapter registry — resolveFetchUrls", () => {
     ]);
   });
 
+  it("normalizes a section-level Atlas .md submission to its companion HTML page", () => {
+    expect(fetchUrls("https://ai-safety-atlas.com/chapters/v1/evaluations/benchmarks.md")).toEqual([
+      "https://ai-safety-atlas.com/chapters/v1/evaluations/benchmarks/",
+    ]);
+  });
+
+  it("rejects a whole-chapter Atlas Markdown download as an article", () => {
+    expect(() =>
+      fetchUrls("https://ai-safety-atlas.com/chapters/v1/evaluations.md"),
+    ).toThrow(/specific.*section/i);
+  });
+
   it("does not redirect an already-ar5iv URL or a non-arXiv URL", () => {
     expect(fetchUrls("https://ar5iv.labs.arxiv.org/html/1805.00899")).toEqual([
       "https://ar5iv.labs.arxiv.org/html/1805.00899",

@@ -162,6 +162,10 @@ describe("extractArticle — AI Safety Atlas adapter", () => {
   </head><body>
     <!-- AI Safety Atlas — the open textbook for AI Safety. This page: Chapter 4 — Compute Governance
          Authors: Markov Grey, Charbel-Raphaël Segerie  Version: v1 -->
+    <div class="download-menu">
+      <a href="/chapters/v1/governance.md">Download chapter as markdown</a>
+      <a href="https://atlas.foreviewusercontent.com/pdf/atlas-chapter4-testhash.pdf">Download chapter PDF</a>
+    </div>
     <main id="reader-content">
       <header><h1 class="mt-2 text-4xl font-display">Compute Governance</h1></header>
       <article class="prose prose-a:text-brand-600">
@@ -178,6 +182,15 @@ describe("extractArticle — AI Safety Atlas adapter", () => {
           <figcaption><strong>Figure 4.6</strong> - An NVIDIA accelerator</figcaption></figure>
         <figure><iframe src="https://www.youtube-nocookie.com/embed/kK3NmQT241w" allowfullscreen></iframe>
           <figcaption><strong>Video 1.2</strong> - A short talk</figcaption></figure>
+        <div class="notebox-wrapper">
+          <a class="notebox-trigger"><span class="font-bold">Optional hardware detail</span><span>Optional • 1 min read</span></a>
+          <div class="notebox-content" data-notebox-title="Optional hardware detail" data-notebox-time="1 min">
+            <p>Specialized accelerators are an optional example.</p>
+            <figure><img src="/_astro/optional.webp" alt="optional diagram" />
+              <figcaption><strong>Figure 4.7</strong> - An optional accelerator diagram</figcaption></figure>
+          </div>
+        </div>
+        <h2 id="export-controls">Export controls</h2>
         <h3 id="acknowledgements">Acknowledgements</h3>
         <p>We thank Jane Doe and John Roe for their valuable feedback and contributions.</p>
         ${
@@ -212,6 +225,10 @@ describe("extractArticle — AI Safety Atlas adapter", () => {
     expect(ex.meta.author).toEqual(["Markov Grey", "Charbel-Raphaël Segerie"]);
     expect(ex.siteName).toBe("AI Safety Atlas");
     expect(ex.body).toContain("Compute governance is the practice");
+    expect(ex.body).toMatch(
+      /^\*Chapter files: \[View Markdown\]\(https:\/\/ai-safety-atlas\.com\/chapters\/v1\/governance\.md\) · \[Download PDF\]\(https:\/\/atlas\.foreviewusercontent\.com\/pdf\/atlas-chapter4-testhash\.pdf\)\*\n\n/,
+    );
+    expect(ex.requiredBodyPrefixMarkdown).toBe(ex.body.split("\n\n", 1)[0]);
   });
 
   it("strips feedback widget, chapter nav, heading self-links and dead links, and converts GFM footnotes", async () => {
@@ -365,6 +382,34 @@ ${"Compute governance steers AI development through hardware controls. ".repeat(
     );
   });
 
+  it("restores Atlas optional noteboxes as closed Lens callouts", async () => {
+    const md = `# Compute Governance
+
+${"Compute governance steers AI development through hardware controls. ".repeat(8)}
+
+**Optional hardware detail**
+
+Specialized accelerators are an optional example.
+
+*Figure 4.7: An optional accelerator diagram*
+
+## Export controls
+
+Export controls are a central policy lever.`;
+    const ex = await extractArticle(
+      ATLAS(false),
+      "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+      { fetchText: async () => md },
+    );
+    expect(ex.body).toContain(
+      ':::callout {title="Optional hardware detail — Optional · 1 min read" tone="neutral" collapse="closed"}',
+    );
+    expect(ex.body).toMatch(
+      /:::callout[^\n]*\nSpecialized accelerators[\s\S]*!\[Figure 4\.7\]\(https:\/\/ai-safety-atlas\.com\/_astro\/optional\.webp\)[\s\S]*\n:::\n\n## Export controls/,
+    );
+    expect(ex.body).not.toContain("**Optional hardware detail**");
+  });
+
   it("appends the page's Acknowledgements to the .md body (the .md export drops it)", async () => {
     const md = `# Compute Governance
 
@@ -434,6 +479,42 @@ This point is ***very important*** to note.`;
     expect(ex.body).toContain("allowfullscreen");
     // Same Acknowledgements heading level as the .md-primary path (### , not ##).
     expect(ex.body).toContain("### Acknowledgements");
+  });
+
+  it("fails closed when an official chapter download is missing", async () => {
+    await expect(
+      extractArticle(
+        ATLAS(false).replace(
+          '<a href="/chapters/v1/governance.md">Download chapter as markdown</a>',
+          "",
+        ),
+        "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+        offline,
+      ),
+    ).rejects.toThrow(/missing.*Markdown or PDF/i);
+  });
+
+  it("rejects mismatched or unsafe official download targets", async () => {
+    await expect(
+      extractArticle(
+        ATLAS(false).replace(
+          "/chapters/v1/governance.md",
+          "/chapters/v1/risks.md",
+        ),
+        "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+        offline,
+      ),
+    ).rejects.toThrow(/mismatched.*Markdown/i);
+    await expect(
+      extractArticle(
+        ATLAS(false).replace(
+          "https://atlas.foreviewusercontent.com/pdf/atlas-chapter4-testhash.pdf",
+          "https://atlas.foreviewusercontent.com.evil.example/pdf/chapter.pdf",
+        ),
+        "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
+        offline,
+      ),
+    ).rejects.toThrow(/Unsafe.*PDF/i);
   });
 });
 

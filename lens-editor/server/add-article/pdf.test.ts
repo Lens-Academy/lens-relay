@@ -257,8 +257,8 @@ describe("embedPdfImages", () => {
     const out = await embedPdfImages(body, [img(0), img(1)], "grey-x", async (p, png) => {
       uploads.push({ path: p, bytes: png });
     });
-    expect(out).toContain("![[/attachments/grey-x-fig1-26eb0004.png]]");
-    expect(out).toContain("![[/attachments/grey-x-fig2-686b585e.png]]");
+    expect(out).toContain("![Figure 1](https://raw.githubusercontent.com/Lens-Academy/lens-edu-staging/staging/attachments/grey-x-fig1-26eb0004.png)");
+    expect(out).toContain("![Figure 2](https://raw.githubusercontent.com/Lens-Academy/lens-edu-staging/staging/attachments/grey-x-fig2-686b585e.png)");
     expect(out).not.toMatch(/__pdfimg_/);
     expect(uploads.map((u) => u.path)).toEqual([
       "/attachments/grey-x-fig1-26eb0004.png",
@@ -267,14 +267,11 @@ describe("embedPdfImages", () => {
     expect(uploads[0].bytes.toString()).toBe("png-0");
   });
 
-  it("drops a figure whose upload fails, keeping the surrounding text", async () => {
+  it("blocks when a required PDF figure cannot be hosted", async () => {
     const body = "Before.\n\n![[__pdfimg_0__]]\n\nAfter.";
-    const out = await embedPdfImages(body, [img(0)], "x", async () => {
+    await expect(embedPdfImages(body, [img(0)], "x", async () => {
       throw new Error("upload failed");
-    });
-    expect(out).not.toMatch(/__pdfimg_|attachments/);
-    expect(out).toContain("Before.");
-    expect(out).toContain("After.");
+    })).rejects.toThrow("Failed to host required PDF figure 1");
   });
 });
 

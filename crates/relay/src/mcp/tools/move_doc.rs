@@ -17,6 +17,23 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
 
     let target_folder = arguments.get("target_folder").and_then(|v| v.as_str());
 
+    let source_folder = path.split(['/', '\\']).next().unwrap_or("");
+    let destination_folder = target_folder.unwrap_or(source_folder);
+    let destination = if new_path.starts_with("Lens Edu/") || new_path.starts_with("Lens Edu\\") {
+        new_path.to_string()
+    } else {
+        format!(
+            "{}/{}",
+            destination_folder,
+            new_path.trim_start_matches(['/', '\\'])
+        )
+    };
+    if super::create_doc::is_lens_edu_articles_path(&destination)
+        && !super::create_doc::is_lens_edu_articles_path(path)
+    {
+        return Err(super::create_doc::ARTICLE_CREATE_BLOCK_MESSAGE.to_string());
+    }
+
     let result = server
         .move_path(path, new_path, target_folder)
         .await
@@ -156,5 +173,42 @@ mod tests {
         .unwrap();
 
         assert!(output.contains("Moved Lens/Old -> Lens/New"));
+    }
+
+    #[tokio::test]
+    async fn move_rejects_creating_an_article_path_but_allows_article_renames() {
+        let server = build_move_server(&[
+            (
+                "/Draft.md",
+                "11111111-1111-4111-8111-111111111111",
+                "markdown",
+            ),
+            (
+                "/articles/Existing.md",
+                "22222222-2222-4222-8222-222222222222",
+                "markdown",
+            ),
+        ])
+        .await;
+
+        let error = execute(
+            &server,
+            &json!({
+                "path": "Lens/Draft.md",
+                "target_folder": "Lens Edu",
+                "new_path": "/articles/Manual.md",
+            }),
+        )
+        .await
+        .expect_err("moving a non-article into articles must be blocked");
+        assert!(error.contains("import_article"));
+
+        // An article that already exists may still be renamed within its folder.
+        assert!(!crate::mcp::tools::create_doc::is_lens_edu_articles_path(
+            "Lens/articles/Existing.md"
+        ));
+        assert!(crate::mcp::tools::create_doc::is_lens_edu_articles_path(
+            "Lens Edu/articles/Existing.md"
+        ));
     }
 }
