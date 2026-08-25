@@ -2,7 +2,7 @@
  * Integration tests for the file-editor "add comment" flow.
  *
  * Real EditorArea + real CodeMirror Editor + real CommentsLayer wired against
- * a real Y.Doc. Only `@y-sweet/react` is stubbed (it would otherwise open a
+ * a real Y.Doc. Only `lib/ydoc-provider` is stubbed (it would otherwise open a
  * websocket) and the Harper linter (worker can't run under happy-dom).
  *
  * Coverage:
@@ -30,12 +30,12 @@ import { AuthProvider } from '../../contexts/AuthContext';
 import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
 import { NavigationContext } from '../../contexts/NavigationContext';
 
-// Shared Y.Doc + Awareness across the @y-sweet/react mock and the test body so
+// Shared Y.Doc + Awareness across the lib/ydoc-provider (our YDocProvider) mock and the test body so
 // the test can both drive the editor and inspect the resulting Y.Text directly.
 const ydoc = new Y.Doc();
 const awareness = new Awareness(ydoc);
 
-vi.mock('@y-sweet/react', () => {
+vi.mock('../../lib/ydoc-provider', () => {
   const provider = {
     awareness,
     synced: true,
@@ -91,7 +91,7 @@ function NavigationStub({ children }: { children: ReactNode }) {
   return <NavigationContext.Provider value={value}>{children}</NavigationContext.Provider>;
 }
 
-// Lazy import so the @y-sweet/react mock above is in place before EditorArea's
+// Lazy import so the lib/ydoc-provider (our YDocProvider) mock above is in place before EditorArea's
 // module graph loads.
 async function renderRealEditorArea() {
   const { EditorArea } = await import('./EditorArea');

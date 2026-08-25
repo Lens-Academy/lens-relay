@@ -1,4 +1,4 @@
-import { YDocProvider } from '@y-sweet/react';
+import { YDocProvider } from '../lib/ydoc-provider';
 import { getClientToken } from '../lib/auth';
 import type { ReactNode } from 'react';
 

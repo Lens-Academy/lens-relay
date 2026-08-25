@@ -27,7 +27,7 @@ import { markdownFormattingKeymap } from './extensions/markdownFormatting';
 import { indentMore, indentLess } from '@codemirror/commands';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
-import { useYDoc, useYjsProvider } from '@y-sweet/react'
+import { useYDoc, useYjsProvider } from '../../lib/ydoc-provider'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment, updateImageEmbedContext } from './extensions/livePreview';
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
 import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';

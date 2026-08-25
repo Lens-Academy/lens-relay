@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
+import { teardownProvider } from './useDocConnection';
 import { getClientToken } from '../lib/auth';
 import type { FileMetadata, FolderMetadata } from './useFolderMetadata';
 import { mergeMetadata, type FolderInput } from '../lib/multi-folder-utils';
@@ -127,7 +128,7 @@ export function useMultiFolderMetadata(folders: FolderConfig[]): UseMultiFolderM
 
     return () => {
       connections.forEach((conn) => {
-        conn.provider.destroy();
+        teardownProvider(conn.provider);
         conn.doc.destroy();
       });
     };

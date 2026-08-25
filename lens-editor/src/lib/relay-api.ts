@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
+import { teardownProvider } from '../hooks/useDocConnection';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 import { getClientToken } from './auth';
 import { RELAY_ID } from './constants';
@@ -148,8 +149,8 @@ async function initializeContentDocument(fullDocId: string): Promise<void> {
 
     debug('initializeContentDocument', 'done');
   } finally {
-    // Clean up the connection
-    provider.destroy();
+    // Clean up the connection (full teardown: destroy() alone reconnects)
+    teardownProvider(provider);
   }
 }
 

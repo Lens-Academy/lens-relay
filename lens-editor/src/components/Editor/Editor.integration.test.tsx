@@ -19,7 +19,7 @@ import { render, waitFor, cleanup } from '@testing-library/react';
 import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
 import { Editor } from './Editor';
-import { YDocProvider } from '@y-sweet/react';
+import { YDocProvider } from '../../lib/ydoc-provider';
 import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
 import path from 'path';
 
@@ -213,7 +213,7 @@ describe('Editor Loading State Integration', () => {
  * Helper component that tracks sync state and Y.Text content together.
  * This lets us observe what the content was when synced became true.
  */
-import { useYDoc, useYjsProvider } from '@y-sweet/react';
+import { useYDoc, useYjsProvider } from '../../lib/ydoc-provider';
 import { useEffect, useRef } from 'react';
 
 interface SyncStateTrackerProps {

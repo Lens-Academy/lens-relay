@@ -1,4 +1,4 @@
-import { useConnectionStatus } from '@y-sweet/react';
+import { useConnectionStatus } from '../../lib/ydoc-provider';
 
 const statusConfig: Record<string, { color: string; label: string }> = {
   connected: { color: 'bg-green-500', label: 'Connected' },

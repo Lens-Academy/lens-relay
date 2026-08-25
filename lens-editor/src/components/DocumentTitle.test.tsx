@@ -31,7 +31,7 @@ vi.mock('../App', () => ({
   RELAY_ID,
 }));
 
-vi.mock('@y-sweet/react', () => ({
+vi.mock('../lib/ydoc-provider', () => ({
   useYDoc: () => mockYDoc,
 }));
 

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, type RefObject } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
-import { useYDoc, useYjsProvider } from '@y-sweet/react';
+import { useYDoc, useYjsProvider } from './lib/ydoc-provider';
 import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';

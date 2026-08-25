@@ -26,8 +26,8 @@ function createMockProvider(initialSynced = false) {
   };
 }
 
-// Mock y-sweet/react module
-vi.mock('@y-sweet/react', () => ({
+// Mock lib/ydoc-provider module
+vi.mock('../lib/ydoc-provider', () => ({
   useYjsProvider: vi.fn(),
   usePresence: vi.fn(() => new Map()),
 }));
@@ -39,7 +39,7 @@ describe('useSynced cleanup', () => {
     mockProvider = createMockProvider();
 
     // Update the mock before importing the hook
-    const ySweetReact = await import('@y-sweet/react');
+    const ySweetReact = await import('../lib/ydoc-provider');
     vi.mocked(ySweetReact.useYjsProvider).mockReturnValue(mockProvider as any);
   });
 
@@ -120,7 +120,7 @@ describe('useCollaborators cleanup', () => {
       getLocalState: vi.fn(() => ({ user: { name: 'Test', color: '#000' } })),
     };
 
-    const ySweetReact = await import('@y-sweet/react');
+    const ySweetReact = await import('../lib/ydoc-provider');
     vi.mocked(ySweetReact.useYjsProvider).mockReturnValue({
       awareness: mockAwareness,
     } as any);

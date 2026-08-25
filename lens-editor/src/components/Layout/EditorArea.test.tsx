@@ -30,8 +30,8 @@ const renderWithProviders = (ui: React.ReactElement) =>
     </MemoryRouter>
   );
 
-// Mock @y-sweet/react to avoid needing a YDocProvider
-vi.mock('@y-sweet/react', () => {
+// Mock lib/ydoc-provider (our YDocProvider) to avoid needing a YDocProvider
+vi.mock('../../lib/ydoc-provider', () => {
   const Y = require('yjs');
   const ydoc = new Y.Doc();
   return { useYDoc: () => ydoc };

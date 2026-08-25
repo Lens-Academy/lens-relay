@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useYjsProvider } from '@y-sweet/react';
+import { useYjsProvider } from '../lib/ydoc-provider';
 
 /**
  * Hook to track whether the Y.Doc has synced with the server.
