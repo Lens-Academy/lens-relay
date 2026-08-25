@@ -31,10 +31,10 @@ function createMockProvider(initialSynced = false): MockProvider {
   return provider;
 }
 
-// Mock @y-sweet/react
+// Mock lib/ydoc-provider (our YDocProvider)
 let mockProvider: MockProvider;
 
-vi.mock('@y-sweet/react', () => ({
+vi.mock('../lib/ydoc-provider', () => ({
   useYjsProvider: () => mockProvider,
 }));
 

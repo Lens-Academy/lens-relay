@@ -26,7 +26,7 @@ import { NavigationContext } from '../../contexts/NavigationContext';
 const ydoc = new Y.Doc();
 const awareness = new Awareness(ydoc);
 
-vi.mock('@y-sweet/react', () => {
+vi.mock('../../lib/ydoc-provider', () => {
   const provider = {
     awareness,
     synced: true,

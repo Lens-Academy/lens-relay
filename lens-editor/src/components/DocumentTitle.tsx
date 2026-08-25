@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useYDoc } from '@y-sweet/react';
+import { useYDoc } from '../lib/ydoc-provider';
 import { useNavigation } from '../contexts/NavigationContext';
 import { findPathByUuid } from '../lib/uuid-to-path';
 import { getOriginalPath, getFolderNameFromPath } from '../lib/multi-folder-utils';

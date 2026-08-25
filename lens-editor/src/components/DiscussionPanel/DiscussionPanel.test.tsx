@@ -103,7 +103,7 @@ function createTestDoc(markdownContent: string): Y.Doc {
 }
 
 // We pass Y.Doc directly into DiscussionPanel as a prop rather than mocking
-// @y-sweet/react, since the component will accept an optional `doc` prop for
+// lib/ydoc-provider (our YDocProvider), since the component will accept an optional `doc` prop for
 // testability (falling back to useYDoc() in production).
 
 // ---- Fixture helpers ----

@@ -1,4 +1,4 @@
-import { usePresence, useYjsProvider } from '@y-sweet/react';
+import { usePresence, useYjsProvider } from '../lib/ydoc-provider';
 
 export interface UserPresence {
   user?: {

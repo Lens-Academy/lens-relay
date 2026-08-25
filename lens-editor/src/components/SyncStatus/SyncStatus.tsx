@@ -1,4 +1,4 @@
-import { useConnectionStatus } from '@y-sweet/react';
+import { useConnectionStatus } from '../../lib/ydoc-provider';
 
 type SyncState = 'synced' | 'syncing' | 'offline';
 

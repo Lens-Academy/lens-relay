@@ -1,4 +1,4 @@
-import { useYjsProvider, useYDoc } from '@y-sweet/react';
+import { useYjsProvider, useYDoc } from '../../lib/ydoc-provider';
 import { useEffect, useRef } from 'react';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';

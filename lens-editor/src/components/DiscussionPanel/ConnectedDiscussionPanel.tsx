@@ -1,4 +1,4 @@
-import { useYDoc } from '@y-sweet/react';
+import { useYDoc } from '../../lib/ydoc-provider';
 import { DiscussionPanel } from './DiscussionPanel';
 
 /**

@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useCollaborators } from './useCollaborators';
 
-// Mock @y-sweet/react at module level
-vi.mock('@y-sweet/react', () => ({
+// Mock lib/ydoc-provider (our YDocProvider) at module level
+vi.mock('../lib/ydoc-provider', () => ({
   useYjsProvider: vi.fn(),
   usePresence: vi.fn(),
 }));
 
-import { useYjsProvider, usePresence } from '@y-sweet/react';
+import { useYjsProvider, usePresence } from '../lib/ydoc-provider';
 
 // Type the mocks
 const mockUseYjsProvider = useYjsProvider as ReturnType<typeof vi.fn>;

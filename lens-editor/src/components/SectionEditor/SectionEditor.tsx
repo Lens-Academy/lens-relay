@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useYDoc, useYjsProvider } from '@y-sweet/react';
+import { useYDoc, useYjsProvider } from '../../lib/ydoc-provider';
 import { parseSections, type Section } from './parseSections';
 import { SectionCard } from './SectionCard';
 import { useSectionEditor } from '../../hooks/useSectionEditor';
