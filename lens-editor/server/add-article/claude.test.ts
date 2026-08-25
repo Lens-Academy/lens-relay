@@ -44,6 +44,10 @@ describe("direct source review", () => {
 
   it("accepts exact PASS and a reasoned REJECT from Claude CLI JSON", () => {
     expect(parseReviewStatus(JSON.stringify({ result: "PASS" }))).toEqual({ decision: "pass", reason: "" });
+    expect(parseReviewStatus(JSON.stringify({ result: "Review complete.\n\nPASS" }))).toEqual({
+      decision: "pass",
+      reason: "",
+    });
     expect(parseReviewStatus(JSON.stringify({ result: "REJECT: source is truncated" }))).toEqual({
       decision: "reject",
       reason: "source is truncated",
@@ -53,7 +57,7 @@ describe("direct source review", () => {
   it.each([
     "not json",
     JSON.stringify({}),
-    JSON.stringify({ result: "PASS with commentary" }),
+    JSON.stringify({ result: "PASS with trailing commentary" }),
     JSON.stringify({ result: "REJECT:" }),
   ])("fails closed on malformed final status", (stdout) => {
     expect(() => parseReviewStatus(stdout)).toThrow();

@@ -103,8 +103,9 @@ export function parseReviewStatus(cliStdout: string): DirectArticleReview {
   }
   if (typeof result !== "string") throw new Error("Claude review returned no final status");
   const status = result.trim();
-  if (status === "PASS") return { decision: "pass", reason: "" };
-  const rejected = status.match(/^REJECT:\s*(\S[\s\S]*)$/);
+  const finalLine = status.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1) ?? "";
+  if (finalLine === "PASS") return { decision: "pass", reason: "" };
+  const rejected = finalLine.match(/^REJECT:\s*(\S.*)$/);
   if (rejected) return { decision: "reject", reason: rejected[1].trim() };
   throw new Error("Claude review must end with exactly PASS or REJECT: reason");
 }
