@@ -19,7 +19,7 @@ vi.mock("./pdf", () => ({
   extractPdfSmart: mocks.extractPdfSmart,
 }));
 
-import { buildSourceEvidence, writeSourceEvidence } from "./source-evidence";
+import { buildSourceEvidence, formatHtmlForReview, writeSourceEvidence } from "./source-evidence";
 import { sourceReviewDigest } from "./review-digest";
 
 const tempDirs: string[] = [];
@@ -68,5 +68,48 @@ describe("PDF source evidence retention", () => {
     const retained = await fs.readFile(path.join(workDir, "evidence/source.pdf"));
     expect(retained.byteLength).toBeGreaterThan(0);
     expect(retained.equals(Buffer.from(mocks.bytes))).toBe(true);
+  });
+});
+
+describe("HTML source evidence retention", () => {
+  it("keeps byte-exact provenance and writes line-bounded review HTML", async () => {
+    const rawHtml = `<html><body><article>${"source evidence ".repeat(2_000)}</article></body></html>`;
+    const formatted = formatHtmlForReview(rawHtml);
+
+    expect(Math.max(...formatted.split("\n").map((line) => line.length))).toBeLessThanOrEqual(8_000);
+    expect(formatted.replace(/\n/g, "")).toBe(rawHtml);
+
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "html-evidence-"));
+    tempDirs.push(workDir);
+    await writeSourceEvidence(workDir, {
+      extraction: {
+        body: "source evidence",
+        meta: { title: "HTML", author: ["Author"], source_url: "https://example.org/article", published: "2020-01-01", description: "" },
+        siteName: "",
+        via: "html",
+        linkedOut: false,
+        assessment: { score: 1, flags: [] },
+        images: [],
+      },
+      manifest: {
+        source_url: "https://example.org/article",
+        fetched_url: "https://example.org/article",
+        fetched_at: "2020-01-01T00:00:00.000Z",
+        source_kind: "fixture",
+        media_type: "html",
+        extraction_via: "html",
+        source_digest: sourceReviewDigest(Buffer.from(rawHtml)),
+        source_text_chars: 15,
+        candidate_chars: 15,
+        alignment: { candidate_token_coverage: 1 },
+      },
+      sourceText: "source evidence",
+      rawHtml,
+    });
+
+    expect(await fs.readFile(path.join(workDir, "evidence/source-original.html"), "utf8")).toBe(rawHtml);
+    const reviewHtml = await fs.readFile(path.join(workDir, "evidence/source.html"), "utf8");
+    expect(Math.max(...reviewHtml.split("\n").map((line) => line.length))).toBeLessThanOrEqual(8_000);
+    expect(reviewHtml.replace(/\n/g, "")).toBe(rawHtml);
   });
 });

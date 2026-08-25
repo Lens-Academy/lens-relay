@@ -14,6 +14,7 @@ import { extractPdfSmart } from "./pdf";
 import { sourceReviewDigest } from "./review-digest";
 
 const RENDER_ESCALATE_CHARS = 1000;
+const REVIEW_HTML_MAX_LINE_CHARS = 8_000;
 
 export interface SourceEvidenceManifest {
   source_url: string;
@@ -47,6 +48,26 @@ export function conservativeHtmlText(html: string): string {
     .replace(/\s*\n\s*/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * Claude's Read tool paginates by line and cannot inspect a minified HTML line
+ * that exceeds its token limit. Keep the original bytes separately for
+ * provenance, and give the reviewer a losslessly line-bounded derivative.
+ */
+export function formatHtmlForReview(html: string): string {
+  const tagSeparated = html.replace(/></g, ">\n<");
+  const lines: string[] = [];
+  for (const sourceLine of tagSeparated.split("\n")) {
+    if (!sourceLine.length) {
+      lines.push("");
+      continue;
+    }
+    for (let offset = 0; offset < sourceLine.length; offset += REVIEW_HTML_MAX_LINE_CHARS) {
+      lines.push(sourceLine.slice(offset, offset + REVIEW_HTML_MAX_LINE_CHARS));
+    }
+  }
+  return lines.join("\n");
 }
 
 function tokenCoverage(candidate: string, source: string): number {
@@ -161,8 +182,10 @@ export async function writeSourceEvidence(workDir: string, evidence: SourceEvide
   await Promise.all([
     fs.writeFile(path.join(dir, "manifest.json"), JSON.stringify(evidence.manifest, null, 2)),
     fs.writeFile(path.join(dir, "source.txt"), evidence.sourceText),
-    evidence.rawHtml ? fs.writeFile(path.join(dir, "source.html"), evidence.rawHtml) : Promise.resolve(),
-    evidence.renderedHtml ? fs.writeFile(path.join(dir, "source-rendered.html"), evidence.renderedHtml) : Promise.resolve(),
+    evidence.rawHtml ? fs.writeFile(path.join(dir, "source.html"), formatHtmlForReview(evidence.rawHtml)) : Promise.resolve(),
+    evidence.rawHtml ? fs.writeFile(path.join(dir, "source-original.html"), evidence.rawHtml) : Promise.resolve(),
+    evidence.renderedHtml ? fs.writeFile(path.join(dir, "source-rendered.html"), formatHtmlForReview(evidence.renderedHtml)) : Promise.resolve(),
+    evidence.renderedHtml ? fs.writeFile(path.join(dir, "source-rendered-original.html"), evidence.renderedHtml) : Promise.resolve(),
     evidence.nativeMarkdown ? fs.writeFile(path.join(dir, "source-native.md"), evidence.nativeMarkdown) : Promise.resolve(),
     evidence.pdf ? fs.writeFile(path.join(dir, "source.pdf"), evidence.pdf) : Promise.resolve(),
   ]);
