@@ -3,6 +3,8 @@ import type { ArticleImportMode, ArticleJob } from "./types";
 import { extractVideoInput } from "../add-video/video-url";
 import { VIDEO_JOB_TIMEOUT_MS } from "../add-video/pipeline";
 import { evictFinishedJobs, FINISHED_JOB_TTL_MS } from "../queue-utils";
+import { DuplicateDocumentError } from "./duplicate";
+import { editorOpenUrl } from "../add-video/relay-docs";
 import {
   createArticleReviewReporter,
   createMemoryArticleReviewReporter,
@@ -183,24 +185,46 @@ export class ArticleJobQueue {
       job.report_persistence = reporter.persistent ? "persisted" : "pending";
       console.log(`[add-article] job=${job.id} report=${reporter.id} outcome=done path=${job.relay_path ?? ""} counts=${JSON.stringify(job.report_summary)}`);
     } catch (err) {
-      job.status = "failed";
-      job.error = err instanceof Error ? err.message : String(err);
-      if (reporter) {
-        try {
-          await reporter.finish("failed", { error: job.error, finalPath: job.relay_path });
-          job.report_summary = reporter.summary();
-          job.report_persistence = reporter.persistent ? "persisted" : "pending";
-        } catch (reportError) {
-          job.report_persistence = "failed";
-          job.error = `${job.error}; report persistence failed: ${reportError}`;
+      if (err instanceof DuplicateDocumentError) {
+        // The content is already in the library: nothing failed and there is
+        // nothing to retry, so this must not read as an error.
+        job.status = "skipped";
+        job.error = err.message;
+        job.relay_url ??= editorOpenUrl(err.docPath);
+        // No import ran, but a report was opened -- close it out pointing at
+        // the document that already holds this content, rather than leaving a
+        // report stuck in "processing" forever.
+        if (reporter) {
+          try {
+            await reporter.finish("done", { finalPath: err.docPath });
+            job.report_summary = reporter.summary();
+            job.report_persistence = reporter.persistent ? "persisted" : "pending";
+          } catch (reportError) {
+            job.report_persistence = "failed";
+            console.warn(`[add-article] Job ${job.id} skipped, report persistence failed: ${reportError}`);
+          }
         }
+        console.log(`[add-article] Job ${job.id} skipped: ${err.message}`);
       } else {
-        job.report_persistence = "failed";
-        job.error = `Report persistence failed before import started: ${job.error}`;
+        job.status = "failed";
+        job.error = err instanceof Error ? err.message : String(err);
+        if (reporter) {
+          try {
+            await reporter.finish("failed", { error: job.error, finalPath: job.relay_path });
+            job.report_summary = reporter.summary();
+            job.report_persistence = reporter.persistent ? "persisted" : "pending";
+          } catch (reportError) {
+            job.report_persistence = "failed";
+            job.error = `${job.error}; report persistence failed: ${reportError}`;
+          }
+        } else {
+          job.report_persistence = "failed";
+          job.error = `Report persistence failed before import started: ${job.error}`;
+        }
+        console.error(`[add-article] Job ${job.id} failed: ${job.url}`);
+        console.error(`[add-article]   Error: ${job.error}`);
+        console.error(`[add-article] job=${job.id} report=${job.report_id ?? "unavailable"} outcome=failed path=${job.relay_path ?? ""} counts=${JSON.stringify(job.report_summary ?? {})}`);
       }
-      console.error(`[add-article] Job ${job.id} failed: ${job.url}`);
-      console.error(`[add-article]   Error: ${job.error}`);
-      console.error(`[add-article] job=${job.id} report=${job.report_id ?? "unavailable"} outcome=failed path=${job.relay_path ?? ""} counts=${JSON.stringify(job.report_summary ?? {})}`);
     } finally {
       clearTimeout(timer);
       this.controllers.delete(job.id);

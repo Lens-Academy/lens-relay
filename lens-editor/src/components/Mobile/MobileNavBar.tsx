@@ -8,7 +8,7 @@ interface MobileNavBarProps {
   onOpenQuickSwitcher: () => void;
 }
 
-const NON_DOC_ROUTES = /^\/(review|promote|add-video|add-article|edu\/|section-editor\/)/;
+const NON_DOC_ROUTES = /^\/(review|promote|add-article|edu\/|section-editor\/)/;
 
 function isDocRoute(pathname: string): boolean {
   return pathname !== '/' && !NON_DOC_ROUTES.test(pathname);
@@ -57,8 +57,7 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
     ...(canEdit ? [{ label: 'Review suggestions', action: () => navigate('/review') }] : []),
     ...(canUseEdu ? [
       { label: 'Promote to production', action: () => navigate('/promote') },
-      { label: 'Add video', action: () => navigate('/add-video') },
-      { label: 'Add article', action: () => navigate('/add-article') },
+      { label: 'Add source', action: () => navigate('/add-article') },
     ] : []),
   ];
 

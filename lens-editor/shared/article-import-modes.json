@@ -1,14 +1,14 @@
 {
   "stub": {
     "label": "Stub only",
-    "description": "Only create an article stub without the article body. This is useful for discussing articles without storing full text that is not yet being used."
+    "description": "Only create an article stub without the article body. This is useful for discussing articles without storing full text that is not yet being used. Not available for YouTube videos."
   },
   "article": {
-    "label": "Full article",
-    "description": "Import the full article without creating a lens."
+    "label": "Full text",
+    "description": "Import the full article, or for a YouTube URL the video's transcript, without creating a lens."
   },
   "article-and-lens": {
-    "label": "Full article + lens",
-    "description": "Import the full article and create a lens for it."
+    "label": "Full text + lens",
+    "description": "Import the full article (or for a YouTube URL the video's transcript) and create a lens for it."
   }
 }

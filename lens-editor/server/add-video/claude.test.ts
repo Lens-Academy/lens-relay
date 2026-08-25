@@ -19,9 +19,14 @@ describe('buildClaudeArgs', () => {
     expect(args).toContain('--allowedTools');
     expect(args.join(' ')).toContain('Read');
     expect(args.join(' ')).toContain('Write');
-    expect(args.join(' ')).toContain('--max-turns');
     expect(args.join(' ')).toContain('--model');
-    expect(args).toContain('sonnet');
+    expect(args).toContain('opus');
+  });
+
+  it('leaves the run uncapped, bounding it by wall-clock timeout instead', () => {
+    const args = buildClaudeArgs('/tmp/transcripts/abc123');
+    expect(args.join(' ')).not.toContain('--max-turns');
+    expect(args.join(' ')).not.toContain('--max-budget-usd');
   });
 });
 

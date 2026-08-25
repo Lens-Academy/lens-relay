@@ -40,3 +40,39 @@ describe("pickCaptionTrack", () => {
     ).toBe("tr");
   });
 });
+
+describe("pickCaptionTrack track kind", () => {
+  it("prefers a human track over an auto-generated one in the same language", () => {
+    // Rob Miles' channel publishes exactly this pair; matching on language
+    // alone picked the asr track and then paid an LLM to repair it.
+    expect(
+      pickCaptionTrack([
+        { languageCode: "en", kind: "asr" },
+        { languageCode: "en-GB" },
+      ]).languageCode,
+    ).toBe("en-GB");
+  });
+
+  it("keeps English asr over a human translation into another language", () => {
+    expect(
+      pickCaptionTrack([
+        { languageCode: "fr" },
+        { languageCode: "en", kind: "asr" },
+      ]).languageCode,
+    ).toBe("en");
+    expect(
+      pickCaptionTrack([
+        { languageCode: "es" },
+        { languageCode: "de" },
+        { languageCode: "en-GB", kind: "asr" },
+      ]).languageCode,
+    ).toBe("en-GB");
+  });
+
+  it("still prefers exact en over en-GB when both are human", () => {
+    expect(
+      pickCaptionTrack([{ languageCode: "en-GB" }, { languageCode: "en" }])
+        .languageCode,
+    ).toBe("en");
+  });
+});

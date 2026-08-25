@@ -1,12 +1,12 @@
-import type { TimestampedWord } from './types';
+import type { TimestampedWord } from "./types";
 
 /** Normalize a word for comparison: lowercase, strip non-alphanumeric */
 export function normalize(word: string): string {
-  return word.replace(/[^\w]/g, '').toLowerCase();
+  return word.replace(/[^\w]/g, "").toLowerCase();
 }
 
 interface DiffOp {
-  op: 'equal' | 'replace' | 'insert' | 'delete';
+  op: "equal" | "replace" | "insert" | "delete";
   origStart: number;
   origEnd: number;
   corrStart: number;
@@ -23,7 +23,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
 
   // Build LCS table
   const dp: number[][] = Array.from({ length: m + 1 }, () =>
-    new Array(n + 1).fill(0)
+    new Array(n + 1).fill(0),
   );
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
@@ -60,7 +60,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
     if (ai < mi || bj < mj) {
       if (ai < mi && bj < mj) {
         ops.push({
-          op: 'replace',
+          op: "replace",
           origStart: ai,
           origEnd: mi,
           corrStart: bj,
@@ -68,7 +68,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
         });
       } else if (ai < mi) {
         ops.push({
-          op: 'delete',
+          op: "delete",
           origStart: ai,
           origEnd: mi,
           corrStart: bj,
@@ -76,7 +76,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
         });
       } else {
         ops.push({
-          op: 'insert',
+          op: "insert",
           origStart: ai,
           origEnd: ai,
           corrStart: bj,
@@ -85,7 +85,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
       }
     }
     ops.push({
-      op: 'equal',
+      op: "equal",
       origStart: mi,
       origEnd: mi + 1,
       corrStart: mj,
@@ -99,7 +99,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
   if (ai < m || bj < n) {
     if (ai < m && bj < n) {
       ops.push({
-        op: 'replace',
+        op: "replace",
         origStart: ai,
         origEnd: m,
         corrStart: bj,
@@ -107,7 +107,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
       });
     } else if (ai < m) {
       ops.push({
-        op: 'delete',
+        op: "delete",
         origStart: ai,
         origEnd: m,
         corrStart: bj,
@@ -115,7 +115,7 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
       });
     } else {
       ops.push({
-        op: 'insert',
+        op: "insert",
         origStart: ai,
         origEnd: ai,
         corrStart: bj,
@@ -135,17 +135,18 @@ function getOpcodes(a: string[], b: string[]): DiffOp[] {
  * - Inserted words: interpolate timestamps between surrounding words
  * - Deleted words: skip
  */
-// Max words before falling back to proportional timestamp assignment.
+// Max words before falling back to streaming alignment.
 // LCS DP table is O(m*n) memory; 5000*5000 = 200MB which is acceptable.
 const MAX_LCS_WORDS = 5000;
 
 export function alignWords(
   original: TimestampedWord[],
-  corrected: string[]
+  corrected: string[],
 ): TimestampedWord[] {
-  // For very long transcripts, skip LCS and assign timestamps proportionally
+  // Too long for the LCS table -- align by streaming instead. Still real
+  // timings; see alignStreaming.
   if (original.length > MAX_LCS_WORDS || corrected.length > MAX_LCS_WORDS) {
-    return assignProportionalTimestamps(original, corrected);
+    return alignStreaming(original, corrected);
   }
 
   const origNorm = original.map((w) => normalize(w.text));
@@ -157,7 +158,7 @@ export function alignWords(
   let lastOrigIdx = -1;
 
   for (const op of ops) {
-    if (op.op === 'equal') {
+    if (op.op === "equal") {
       for (let k = 0; k < op.origEnd - op.origStart; k++) {
         result.push({
           text: corrected[op.corrStart + k],
@@ -165,7 +166,7 @@ export function alignWords(
         });
         lastOrigIdx = op.origStart + k;
       }
-    } else if (op.op === 'replace') {
+    } else if (op.op === "replace") {
       const origCount = op.origEnd - op.origStart;
       const corrCount = op.corrEnd - op.corrStart;
       const pairCount = Math.min(origCount, corrCount);
@@ -180,8 +181,7 @@ export function alignWords(
 
       // Extra corrected words (insertions within replace)
       if (corrCount > origCount) {
-        const prevTime =
-          lastOrigIdx >= 0 ? original[lastOrigIdx].start : 0;
+        const prevTime = lastOrigIdx >= 0 ? original[lastOrigIdx].start : 0;
         const nextTime =
           op.origEnd < original.length
             ? original[op.origEnd].start
@@ -201,9 +201,8 @@ export function alignWords(
       if (origCount > corrCount) {
         lastOrigIdx = op.origEnd - 1;
       }
-    } else if (op.op === 'insert') {
-      const prevTime =
-        lastOrigIdx >= 0 ? original[lastOrigIdx].start : 0;
+    } else if (op.op === "insert") {
+      const prevTime = lastOrigIdx >= 0 ? original[lastOrigIdx].start : 0;
       const nextTime =
         op.origStart < original.length
           ? original[op.origStart].start
@@ -217,7 +216,7 @@ export function alignWords(
           start: prevTime + frac * (nextTime - prevTime),
         });
       }
-    } else if (op.op === 'delete') {
+    } else if (op.op === "delete") {
       lastOrigIdx = op.origEnd - 1;
     }
   }
@@ -225,22 +224,93 @@ export function alignWords(
   return result;
 }
 
+/** How far ahead to search for a word's match before giving up on it. */
+const STREAM_LOOKAHEAD = 40;
+/** Consecutive misses that mean the cursor has lost the thread entirely. */
+const STREAM_RESYNC_AFTER = 8;
+// Once the cursor is lost, search the rest of the transcript rather than a
+// fixed window: a capped resync leaves the same cliff it exists to remove, and
+// resync fires rarely enough that the wider scan costs nothing amortised.
+
 /**
- * Fallback for long transcripts: assign timestamps proportionally
- * based on position in the corrected text relative to the original timeline.
+ * Alignment for transcripts too long for the LCS table.
+ *
+ * Walks both sequences with a single forward cursor, matching each corrected
+ * word to the next occurrence of it in the original within a small lookahead
+ * window. A cleanup pass only punctuates, recases and fixes the odd word, so
+ * the two sequences stay in lockstep and nearly every word matches exactly --
+ * which means real caption timings, not invented ones. Words with no match
+ * (model insertions) are interpolated between their neighbours, exactly as the
+ * LCS path does.
+ *
+ * This replaces an earlier fallback that spread words evenly across the video
+ * duration. That produced plausible-looking but fabricated timestamps -- every
+ * word equidistant -- on precisely the long videos where seeking to a moment
+ * matters most.
  */
-function assignProportionalTimestamps(
+export function alignStreaming(
   original: TimestampedWord[],
-  corrected: string[]
+  corrected: string[],
 ): TimestampedWord[] {
   if (original.length === 0 || corrected.length === 0) return [];
 
-  const startTime = original[0].start;
-  const endTime = original[original.length - 1].start;
-  const duration = endTime - startTime || 1;
+  const origNorm = original.map((w) => normalize(w.text));
+  const times: Array<number | null> = new Array(corrected.length).fill(null);
 
-  return corrected.map((text, i) => ({
-    text,
-    start: startTime + (i / corrected.length) * duration,
-  }));
+  let oi = 0;
+  let misses = 0;
+  for (let ci = 0; ci < corrected.length; ci++) {
+    const c = normalize(corrected[ci]);
+    if (!c) continue;
+    // Once enough words in a row have failed to match, the cursor is no longer
+    // tracking the transcript -- a long dropped run, say. Without a wider
+    // search it would never match again and every remaining word would be
+    // interpolated across the rest of the video, reintroducing exactly the
+    // fabricated uniform timings this function exists to avoid.
+    const limit =
+      misses >= STREAM_RESYNC_AFTER
+        ? origNorm.length
+        : Math.min(origNorm.length, oi + STREAM_LOOKAHEAD);
+    let found = false;
+    for (let k = oi; k < limit; k++) {
+      if (origNorm[k] === c) {
+        times[ci] = original[k].start;
+        oi = k + 1;
+        found = true;
+        break;
+      }
+    }
+    misses = found ? 0 : misses + 1;
+  }
+
+  // Interpolate unmatched runs between the anchors that surround them, so the
+  // output stays monotonically non-decreasing and covers the full timeline.
+  const firstTime = original[0].start;
+  const lastTime = original[original.length - 1].start;
+  const result: TimestampedWord[] = new Array(corrected.length);
+  let i = 0;
+  let prevTime = firstTime;
+
+  while (i < corrected.length) {
+    if (times[i] !== null) {
+      prevTime = times[i]!;
+      result[i] = { text: corrected[i], start: prevTime };
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < corrected.length && times[j] === null) j++;
+    const nextTime = j < corrected.length ? times[j]! : lastTime;
+    const span = Math.max(0, nextTime - prevTime);
+    const gaps = j - i + 1;
+    for (let k = i; k < j; k++) {
+      result[k] = {
+        text: corrected[k],
+        start: prevTime + ((k - i + 1) / gaps) * span,
+      };
+    }
+    i = j;
+  }
+
+  return result;
 }
