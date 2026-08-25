@@ -1,6 +1,7 @@
 import { bytesToText, fetchBytesWithTimeout } from "../fetch-timeout";
 
 const MCP_TIMEOUT_MS = 30_000;
+const MCP_VALIDATION_TIMEOUT_MS = 120_000;
 const MCP_MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 
 interface McpTextContent {
@@ -37,6 +38,7 @@ async function callMcp(
   method: string,
   params: Record<string, unknown>,
   signal?: AbortSignal,
+  timeoutMs = MCP_TIMEOUT_MS,
 ): Promise<McpResponse> {
   const response = await fetchBytesWithTimeout(endpoint, {
     method: "POST",
@@ -45,7 +47,7 @@ async function callMcp(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-    timeoutMs: MCP_TIMEOUT_MS,
+    timeoutMs,
     maxBytes: MCP_MAX_RESPONSE_BYTES,
     signal,
   });
@@ -116,11 +118,11 @@ export async function createRelayReviewClient(
   if (!options.token) throw new Error("Relay MCP token is required");
   const endpoint = `${options.relayUrl.replace(/\/+$/, "")}/mcp`;
   let nextId = 1;
-  const invoke = async (tool: string, args: Record<string, unknown>) => {
+  const invoke = async (tool: string, args: Record<string, unknown>, timeoutMs = MCP_TIMEOUT_MS) => {
     const response = await callMcp(endpoint, options.token, nextId++, "tools/call", {
       name: tool,
       arguments: args,
-    }, options.signal);
+    }, options.signal, timeoutMs);
     return toolText(response, tool);
   };
   const sessionId = (await invoke("create_session", { name, model: "article-qc" }))
@@ -142,7 +144,11 @@ export async function createRelayReviewClient(
       });
     },
     async validateContent(acceptDrafts = true) {
-      return invoke("validate_content", { session_id: sessionId, accept_drafts: acceptDrafts });
+      return invoke(
+        "validate_content",
+        { session_id: sessionId, accept_drafts: acceptDrafts },
+        MCP_VALIDATION_TIMEOUT_MS,
+      );
     },
     async getUrl(filePath: string) {
       return invoke("get_url", { session_id: sessionId, file_path: filePath });
