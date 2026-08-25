@@ -482,6 +482,7 @@ export async function processArticle(
       { signal },
     );
     await reporter.validation("initial", validation, Date.now() - validationStarted);
+    await reporter.originalDocument(draft);
 
     await setStage("source-review");
     let reviewStarted = Date.now();
@@ -495,6 +496,8 @@ export async function processArticle(
         validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
         metaBeforeReview,
         outcome.meta,
+        draft,
+        outcome.markdown,
         Date.now() - reviewStarted,
       );
     } catch (error) {
@@ -502,7 +505,7 @@ export async function processArticle(
       if (error instanceof ArticleReviewRejectedError) {
         await reporter.llmRejected(
           0,
-          error.review,
+          { decision: "reject", reason: error.reason },
           validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
           metaBeforeReview,
           Date.now() - reviewStarted,
@@ -526,6 +529,7 @@ export async function processArticle(
       await setStage("repair-review");
       reviewStarted = Date.now();
       const metaBeforeRepair = meta;
+      const draftBeforeRepair = draft;
       try {
         outcome = await reviewArticle(workDir, draft, meta, validation.issues, 1, signal);
         await reporter.llm(
@@ -534,6 +538,8 @@ export async function processArticle(
           validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
           metaBeforeRepair,
           outcome.meta,
+          draftBeforeRepair,
+          outcome.markdown,
           Date.now() - reviewStarted,
         );
       } catch (error) {
@@ -541,7 +547,7 @@ export async function processArticle(
         if (error instanceof ArticleReviewRejectedError) {
           await reporter.llmRejected(
             1,
-            error.review,
+            { decision: "reject", reason: error.reason },
             validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
             metaBeforeRepair,
             Date.now() - reviewStarted,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decodeRelayReadOutput, readAcceptedRelayMarkdown } from "./relay-review-read";
+import { createRelayReviewClient, decodeRelayReadOutput, readAcceptedRelayMarkdown } from "./relay-review-read";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -62,5 +62,34 @@ describe("readAcceptedRelayMarkdown", () => {
       relayUrl: "https://relay.example",
       token: "secret",
     })).rejects.toThrow("denied");
+  });
+});
+
+describe("RelayReviewClient", () => {
+  it("publishes edits in one attributed session and exposes validation and review URL", async () => {
+    const response = (text: string) => new Response(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text }] },
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response("session-1\norientation"))
+      .mockResolvedValueOnce(response("     1\tOld text"))
+      .mockResolvedValueOnce(response("edited"))
+      .mockResolvedValueOnce(response("0 errors, 0 warnings"))
+      .mockResolvedValueOnce(response("https://editor.example/review"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = await createRelayReviewClient({ relayUrl: "https://relay.example", token: "secret" }, "Luc");
+    await expect(client.read("Lens Edu/articles/a.md")).resolves.toBe("Old text\n");
+    await client.edit("Lens Edu/articles/a.md", "Old", "New");
+    await expect(client.validateContent(true)).resolves.toBe("0 errors, 0 warnings");
+    await expect(client.getUrl("Lens Edu/articles/a.md")).resolves.toBe("https://editor.example/review");
+
+    const requests = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body));
+    expect(requests.map((request) => request.params.name)).toEqual([
+      "create_session", "read", "edit", "validate_content", "get_url",
+    ]);
+    expect(requests[2].params.arguments).toMatchObject({ session_id: "session-1", old_string: "Old", new_string: "New" });
   });
 });

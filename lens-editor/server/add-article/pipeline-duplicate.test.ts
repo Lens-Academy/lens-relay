@@ -197,7 +197,7 @@ This might be useful.
       valid: true, issues: [], truncated: false, counts: { errors: 0, warnings: 0 },
     });
     reviewMocks.reviewArticle.mockImplementation(async (_dir, markdown, reviewMeta) => ({
-      review: { decision: "pass", source_status: "complete", findings: [], patches: [], note: "ok" },
+      review: { decision: "pass", reason: "" },
       markdown,
       meta: reviewMeta,
     }));

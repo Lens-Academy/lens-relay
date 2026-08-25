@@ -84,20 +84,10 @@ describe("article review reports", () => {
       issues: [issue("article.fixed", 2), issue("article.remaining", 3)],
     }, 10);
     const meta = { title: "Title", author: ["Author"], source_url: "https://example.com", published: "", description: "" };
-    await reporter.llm(0, {
-      decision: "repair",
-      source_status: "complete",
-      findings: [
-        { code: "article.fixed", severity: "warning", evidence: "bad", confidence: 1 },
-        { code: "semantic.fixed", severity: "warning", evidence: "also bad", confidence: 0.9 },
-        { code: "semantic.unrepaired", severity: "warning", evidence: "still bad", confidence: 0.8 },
-      ],
-      patches: [
-        { finding_code: "article.fixed", old: "bad", new: "good", reason: "fix validator issue" },
-        { finding_code: "semantic.fixed", old: "also bad", new: "better", reason: "source fidelity" },
-      ],
-      note: "reviewed",
-    }, ["article.fixed", "article.remaining"], meta, meta, 20);
+    const original = "---\ntitle: Title\n---\n\nBad original body.\n";
+    const reviewed = "---\ntitle: Title\n---\n\nCorrect reviewed body.\n";
+    await reporter.originalDocument(original);
+    await reporter.llm(0, { decision: "pass", reason: "" }, ["article.fixed", "article.remaining"], meta, meta, original, reviewed, 20);
     await reporter.validation("final", {
       valid: true,
       truncated: false,
@@ -110,29 +100,25 @@ describe("article review reports", () => {
 
     const day = (await fs.readdir(reportRoot))[0];
     const runPath = path.join(reportRoot, day, (await fs.readdir(path.join(reportRoot, day)))[0]);
+    expect(await fs.readFile(path.join(runPath, "original.md"), "utf-8")).toBe(original);
     expect(await fs.readFile(path.join(runPath, "final.md"), "utf-8")).toBe(markdown);
     const report = JSON.parse(await fs.readFile(path.join(runPath, "report.json"), "utf-8"));
     expect(report.schema_version).toBe(2);
+    expect(report.original_document).toMatchObject({ file: "original.md", bytes: Buffer.byteLength(original) });
     expect(report.final_document).toMatchObject({ file: "final.md", bytes: Buffer.byteLength(markdown) });
     expect(report.lifecycle.validator_fixed.map((value: { code: string }) => value.code)).toEqual(["article.fixed"]);
     expect(report.lifecycle.validator_fixed_by_llm.map((value: { code: string }) => value.code)).toEqual(["article.fixed"]);
     expect(report.lifecycle.validator_remaining.map((value: { code: string }) => value.code)).toEqual(["article.remaining"]);
     expect(report.lifecycle.validator_introduced.map((value: { code: string }) => value.code)).toEqual(["article.introduced"]);
-    expect(report.lifecycle.llm_fixed_independently[0].finding_code).toBe("semantic.fixed");
-    expect(report.lifecycle.llm_findings_unrepaired[0].code).toBe("semantic.unrepaired");
+    expect(report.lifecycle.llm_fixed_independently[0].finding_code).toBe("content.direct-edit");
+    expect(report.lifecycle.llm_findings_unrepaired).toEqual([]);
   });
 
-  it("retains structured findings when the LLM rejects the article", async () => {
+  it("retains the reason when the LLM rejects the article", async () => {
     const reportRoot = await root();
     const reporter = await createArticleReviewReporter(job("rejected"));
     const meta = { title: "Title", author: ["Author"], source_url: "https://example.com", published: "", description: "" };
-    await reporter.llmRejected(0, {
-      decision: "reject",
-      source_status: "truncated",
-      findings: [{ code: "source.missing-ending", severity: "error", evidence: "abrupt end", confidence: 0.95 }],
-      patches: [],
-      note: "The source evidence is incomplete.",
-    }, [], meta, 25);
+    await reporter.llmRejected(0, { decision: "reject", reason: "The source evidence is incomplete." }, [], meta, 25);
     await reporter.finish("failed", { error: "source review rejected the article" });
     const day = (await fs.readdir(reportRoot))[0];
     const runPath = path.join(reportRoot, day, (await fs.readdir(path.join(reportRoot, day)))[0]);
@@ -140,9 +126,9 @@ describe("article review reports", () => {
     expect(report.events.find((event: { kind: string }) => event.kind === "llm-review")).toMatchObject({
       applied: false,
       decision: "reject",
-      source_status: "truncated",
+      note: "The source evidence is incomplete.",
     });
-    expect(report.lifecycle.llm_findings_unrepaired[0].code).toBe("source.missing-ending");
+    expect(report.lifecycle.llm_findings_unrepaired).toEqual([]);
   });
 
   it("matches duplicate validator issues independently of provisional filenames", async () => {
@@ -199,14 +185,7 @@ describe("article review reports", () => {
     });
     const before = { title: "Wrong", author: ["Author"], source_url: "https://example.com", published: "", description: "" };
     const after = { ...before, title: "Correct" };
-    await reporter.llm(0, {
-      decision: "repair",
-      source_status: "complete",
-      findings: [{ code: "metadata.title", severity: "warning", evidence: "source title", confidence: 1 }],
-      patches: [],
-      title: "Correct",
-      note: "metadata fixed",
-    }, ["metadata.title"], before, after, 2);
+    await reporter.llm(0, { decision: "pass", reason: "" }, ["metadata.title"], before, after, "title: Wrong", "title: Correct", 2);
     await reporter.finish("done");
     const day = (await fs.readdir(reportRoot))[0];
     const runPath = path.join(reportRoot, day, (await fs.readdir(path.join(reportRoot, day)))[0]);
@@ -238,29 +217,17 @@ describe("article review reports", () => {
     await expect(fs.stat(path.join(runPath, "final.md"))).rejects.toThrow();
   });
 
-  it("reports final unresolved LLM findings rather than stale earlier rounds", async () => {
+  it("records each direct-edit review round without unresolved structured findings", async () => {
     const reportRoot = await root();
     const reporter = await createArticleReviewReporter(job("final-findings"));
     const meta = { title: "Title", author: ["Author"], source_url: "https://example.com", published: "", description: "" };
-    const finding = { code: "body.issue", severity: "warning" as const, evidence: "bad", confidence: 1 };
-    await reporter.llm(0, {
-      decision: "pass",
-      source_status: "complete",
-      findings: [finding],
-      patches: [],
-      note: "deferred",
-    }, [], meta, meta, 1);
-    await reporter.llm(1, {
-      decision: "repair",
-      source_status: "complete",
-      findings: [finding],
-      patches: [{ finding_code: "body.issue", old: "bad", new: "good", reason: "fixed" }],
-      note: "fixed",
-    }, [], meta, meta, 1);
+    await reporter.llm(0, { decision: "pass", reason: "" }, [], meta, meta, "bad", "better", 1);
+    await reporter.llm(1, { decision: "pass", reason: "" }, [], meta, meta, "better", "good", 1);
     await reporter.finish("done");
     const day = (await fs.readdir(reportRoot))[0];
     const runPath = path.join(reportRoot, day, (await fs.readdir(path.join(reportRoot, day)))[0]);
     const report = JSON.parse(await fs.readFile(path.join(runPath, "report.json"), "utf-8"));
+    expect(report.events.filter((event: { kind: string }) => event.kind === "llm-review")).toHaveLength(2);
     expect(report.lifecycle.llm_findings_unrepaired).toEqual([]);
   });
 

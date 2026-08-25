@@ -22,6 +22,14 @@ export interface RelayReviewReadOptions {
   signal?: AbortSignal;
 }
 
+export interface RelayReviewClient extends RelayReviewReadOptions {
+  sessionId: string;
+  read(filePath: string): Promise<string>;
+  edit(filePath: string, oldString: string, newString: string): Promise<void>;
+  validateContent(acceptDrafts?: boolean): Promise<string>;
+  getUrl(filePath: string): Promise<string>;
+}
+
 async function callMcp(
   endpoint: string,
   token: string,
@@ -99,4 +107,45 @@ export async function readAcceptedRelayMarkdown(
     arguments: { file_path: filePath, session_id: sessionId },
   }, options.signal);
   return decodeRelayReadOutput(toolText(readResponse, "read"));
+}
+
+export async function createRelayReviewClient(
+  options: RelayReviewReadOptions,
+  name = "Article review CLI",
+): Promise<RelayReviewClient> {
+  if (!options.token) throw new Error("Relay MCP token is required");
+  const endpoint = `${options.relayUrl.replace(/\/+$/, "")}/mcp`;
+  let nextId = 1;
+  const invoke = async (tool: string, args: Record<string, unknown>) => {
+    const response = await callMcp(endpoint, options.token, nextId++, "tools/call", {
+      name: tool,
+      arguments: args,
+    }, options.signal);
+    return toolText(response, tool);
+  };
+  const sessionId = (await invoke("create_session", { name, model: "article-qc" }))
+    .split("\n", 1)[0]
+    .trim();
+  if (!sessionId) throw new Error("Relay MCP create_session returned an empty session id");
+  return {
+    ...options,
+    sessionId,
+    async read(filePath: string) {
+      return decodeRelayReadOutput(await invoke("read", { file_path: filePath, session_id: sessionId }));
+    },
+    async edit(filePath: string, oldString: string, newString: string) {
+      await invoke("edit", {
+        file_path: filePath,
+        old_string: oldString,
+        new_string: newString,
+        session_id: sessionId,
+      });
+    },
+    async validateContent(acceptDrafts = true) {
+      return invoke("validate_content", { session_id: sessionId, accept_drafts: acceptDrafts });
+    },
+    async getUrl(filePath: string) {
+      return invoke("get_url", { session_id: sessionId, file_path: filePath });
+    },
+  };
 }

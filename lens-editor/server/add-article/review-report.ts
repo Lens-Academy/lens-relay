@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import type { ArticleReview } from "./claude";
+import type { DirectArticleReview } from "./claude";
 import type { ArticleValidationIssue, ArticleValidationResult } from "./platform-validation";
 import type { ArticleJob, ArticleMeta } from "./types";
 
@@ -68,6 +68,7 @@ interface ReviewReport {
   outcome: "processing" | "done" | "failed";
   final_path?: string;
   error?: string;
+  original_document?: { file: "original.md"; bytes: number; sha256: string };
   final_document?: { file: "final.md"; bytes: number; sha256: string };
   lifecycle?: IssueLifecycle;
   evidence_expired_at?: string;
@@ -89,9 +90,10 @@ export interface ArticleReviewReporter {
     detail?: Record<string, unknown>;
   }): Promise<void>;
   validation(round: string, result: ArticleValidationResult, durationMs: number): Promise<void>;
-  llm(round: number, review: ArticleReview, validatorCodes: string[], before: ArticleMeta, after: ArticleMeta, durationMs: number): Promise<void>;
-  llmRejected(round: number, review: ArticleReview, validatorCodes: string[], before: ArticleMeta, durationMs: number): Promise<void>;
+  llm(round: number, review: DirectArticleReview, validatorCodes: string[], before: ArticleMeta, after: ArticleMeta, beforeMarkdown: string, afterMarkdown: string, durationMs: number): Promise<void>;
+  llmRejected(round: number, review: DirectArticleReview, validatorCodes: string[], before: ArticleMeta, durationMs: number): Promise<void>;
   llmFailure(round: number, error: unknown, durationMs: number): Promise<void>;
+  originalDocument(markdown: string): Promise<void>;
   finalDocument(markdown: string): Promise<void>;
   finish(outcome: "done" | "failed", data?: { finalPath?: string; error?: string }): Promise<void>;
 }
@@ -371,35 +373,32 @@ class Reporter implements ArticleReviewReporter {
 
   private async recordLlm(
     round: number,
-    review: ArticleReview,
+    review: DirectArticleReview,
     validatorCodes: string[],
     before: ArticleMeta,
     after: ArticleMeta,
+    beforeMarkdown: string | undefined,
+    afterMarkdown: string | undefined,
     durationMs: number,
     applied: boolean,
   ): Promise<void> {
     if (this.sealed) return;
     const validatorSet = new Set(validatorCodes);
-    const repairs = review.patches.map((patch) => {
-      const classification: RepairClassification = validatorSet.has(patch.finding_code)
-        ? "validator-detected-llm-fixed"
-        : "llm-detected-llm-fixed";
-      if (applied) {
-        if (classification === "validator-detected-llm-fixed") {
-          this.report.summary.validator_detected_llm_fixes += 1;
-        } else {
-          this.report.summary.llm_detected_llm_fixes += 1;
-        }
-      }
-      return {
-        classification,
-        finding_code: patch.finding_code,
-        reason: patch.reason,
-        old: bounded(patch.old),
-        new: bounded(patch.new),
-      };
-    });
-    const metadataChanges = (["title", "author", "published"] as const)
+    const body = (markdown: string) => markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+    const bodyChanged = applied && beforeMarkdown !== undefined && afterMarkdown !== undefined && body(beforeMarkdown) !== body(afterMarkdown);
+    const repairs: Array<Record<string, unknown>> = [];
+    if (bodyChanged) {
+      const excerpts = changedExcerpts(beforeMarkdown, afterMarkdown);
+      repairs.push({
+        classification: "llm-detected-llm-fixed",
+        finding_code: "content.direct-edit",
+        reason: "source-fidelity reviewer edited the candidate directly",
+        old: excerpts.before,
+        new: excerpts.after,
+      });
+      this.report.summary.llm_detected_llm_fixes += 1;
+    }
+    const metadataChanges = (["title", "author", "published", "description"] as const)
       .filter((field) => JSON.stringify(before[field]) !== JSON.stringify(after[field]))
       .map((field) => {
         const code = `metadata.${field}`;
@@ -411,7 +410,7 @@ class Reporter implements ArticleReviewReporter {
     repairs.push(...metadataChanges.map((change) => ({
       classification: change.classification,
       finding_code: change.code,
-      reason: review.findings.find((finding) => finding.code === change.code)?.evidence ?? "metadata corrected from source evidence",
+      reason: "metadata corrected from source evidence",
       old: bounded(JSON.stringify(change.before)),
       new: bounded(JSON.stringify(change.after)),
       metadata_field: change.field,
@@ -425,7 +424,6 @@ class Reporter implements ArticleReviewReporter {
         }
       }
     }
-    this.report.summary.llm_findings += review.findings.length;
     await this.append({
       at: new Date().toISOString(),
       kind: "llm-review",
@@ -433,41 +431,36 @@ class Reporter implements ArticleReviewReporter {
       applied,
       duration_ms: durationMs,
       decision: review.decision,
-      source_status: review.source_status,
-      findings: review.findings.map((finding) => ({
-        code: finding.code,
-        severity: finding.severity,
-        confidence: finding.confidence,
-        evidence: bounded(finding.evidence),
-        source_evidence: bounded(finding.source_evidence),
-      })),
+      findings: [],
       repairs,
       metadata_changes: metadataChanges,
       metadata_before: before,
       metadata_after: after,
-      note: review.note,
+      note: review.reason,
     });
   }
 
   llm(
     round: number,
-    review: ArticleReview,
+    review: DirectArticleReview,
     validatorCodes: string[],
     before: ArticleMeta,
     after: ArticleMeta,
+    beforeMarkdown: string,
+    afterMarkdown: string,
     durationMs: number,
   ): Promise<void> {
-    return this.recordLlm(round, review, validatorCodes, before, after, durationMs, true);
+    return this.recordLlm(round, review, validatorCodes, before, after, beforeMarkdown, afterMarkdown, durationMs, true);
   }
 
   llmRejected(
     round: number,
-    review: ArticleReview,
+    review: DirectArticleReview,
     validatorCodes: string[],
     before: ArticleMeta,
     durationMs: number,
   ): Promise<void> {
-    return this.recordLlm(round, review, validatorCodes, before, before, durationMs, false);
+    return this.recordLlm(round, review, validatorCodes, before, before, undefined, undefined, durationMs, false);
   }
 
   llmFailure(round: number, error: unknown, durationMs: number): Promise<void> {
@@ -478,6 +471,22 @@ class Reporter implements ArticleReviewReporter {
       duration_ms: durationMs,
       error: safeError(error),
     });
+  }
+
+  async originalDocument(markdown: string): Promise<void> {
+    if (this.sealed || this.report.original_document) return;
+    const descriptor = {
+      file: "original.md" as const,
+      bytes: Buffer.byteLength(markdown, "utf-8"),
+      sha256: createHash("sha256").update(markdown).digest("hex"),
+    };
+    if (this.runDir) {
+      const temporary = path.join(this.runDir, `.original.${randomUUID()}.tmp`);
+      await fs.writeFile(temporary, markdown, { flag: "wx" });
+      await fs.rename(temporary, path.join(this.runDir, descriptor.file));
+    }
+    this.report.original_document = descriptor;
+    await this.append({ at: new Date().toISOString(), kind: "original-document", ...descriptor });
   }
 
   async finalDocument(markdown: string): Promise<void> {
