@@ -1,8 +1,11 @@
-import type { ArticleImportMode } from "../../shared/article-import-contract";
+import type {
+  ArticleImportMode,
+  ArticleJobStatus,
+} from "../../shared/article-import-contract";
 import type { VideoInput } from "../add-video/video-url";
 
 export type { ArticleImportMode };
-export type { ArticleJobStatus } from "../../shared/article-import-contract";
+export type { ArticleJobStatus };
 
 /** Metadata for an article, accumulated from Jina, HTML meta tags, and Claude */
 export interface ArticleMeta {
