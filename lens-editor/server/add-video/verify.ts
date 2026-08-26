@@ -28,6 +28,10 @@ const FILLER = new Set(["uh", "um", "uhh", "erm", "er", "ah", "mm", "hmm"]);
 /**
  * Multi-word discourse markers the cleanup is expected to remove.
  *
+ * This list and the removals rule 7 of the cleanup prompt permits (claude.ts)
+ * describe the same set on purpose: anything the prompt invites the model to
+ * drop but the gate does not excuse becomes a silent, expensive rejection.
+ *
  * These cost nothing in a lecture and dominate in a conversation, which is why
  * a blanket threshold cannot serve both: an interview transcript spends its
  * entire non-filler budget on "you know" and "kind of" and is rejected for

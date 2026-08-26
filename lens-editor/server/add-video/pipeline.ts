@@ -248,8 +248,10 @@ export async function importVideo(
           // timings now rather than stranding that document without any. The
           // signal is deliberately not passed: it is already aborted.
           await writeTimestamps(originalWords).catch((err) =>
-            console.warn(
-              `[add-video] Could not write timestamps for cancelled "${payload.title}": ${err}`,
+            // Nothing left to retry with: the document exists, so a resubmit
+            // is deduped away, and this was the sidecar's only chance.
+            console.error(
+              `[add-video] "${payload.title}" was cancelled and its timestamps could not be written; the document has no word timings: ${err}`,
             ),
           );
           throw polishErr;
