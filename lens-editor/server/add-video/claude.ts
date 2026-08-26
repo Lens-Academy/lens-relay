@@ -26,7 +26,7 @@ export function buildPrompt(workDir: string): string {
 4. Write the result to ${workDir}/corrected.txt
 5. The output must be PLAIN TEXT only — no markdown formatting, no headers, no bullet points, no bold/italic markers.
 6. Do NOT add any content that wasn't in the original transcript.
-7. Do NOT remove content unless it's a filler word (uh, um, like, you know).
+7. Do NOT remove content unless it is one of: a filler sound (uh, um, er, ah, mm, hmm), a discourse marker ("you know", "sort of", "kind of", "I mean"), a speaker-change marker (>>), or an immediately repeated word ("the the" -> "the"). Keep every other word, including "like".
 8. Preserve the meaning exactly.`;
 }
 

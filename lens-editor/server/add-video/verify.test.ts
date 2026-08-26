@@ -63,4 +63,48 @@ describe("verifyCorrection", () => {
   it("rejects an empty result", () => {
     expect(verifyCorrection(words("hello world"), []).ok).toBe(false);
   });
+
+  // A four-person interview spends its entire non-filler budget on discourse
+  // markers, and was rejected in production for removing exactly what the
+  // prompt asked it to remove.
+  it("accepts discourse-marker removal from a conversational transcript", () => {
+    // Marker density kept realistic: a transcript that is two-thirds filler
+    // would (rightly) trip the truncation rule instead.
+    const body = Array(700).fill("alignment").join(" ");
+    const chatter = Array(10)
+      .fill(">> you know the model is sort of kind of aligned i mean really")
+      .join(" ");
+    const original = words(`${chatter} ${body}`);
+    const corrected = words(
+      `${Array(10).fill("The model is aligned, really.").join(" ")} ${body}`,
+    );
+
+    const result = verifyCorrection(original, corrected);
+    expect(result.ok).toBe(true);
+    expect(result.stats.droppedNonFiller).toBe(0);
+  });
+
+  it("counts a stutter's repeat as droppable but not the word itself", () => {
+    const padding = Array(60).fill("padding").join(" ");
+    const original = words(`the the model is is aligned ${padding}`);
+    const corrected = words(`The model is aligned. ${padding}`);
+
+    expect(verifyCorrection(original, corrected).stats.droppedNonFiller).toBe(0);
+  });
+
+  // The allowance is per occurrence, so it must not become a licence to delete
+  // every "know" or "of" in a transcript.
+  it("still counts standalone content words beyond the marker allowance", () => {
+    const original = words(
+      "you know we know the answer and we know the reason " +
+        Array(20).fill("padding").join(" "),
+    );
+    // "you know" excuses one "know"; the other two are content loss.
+    const corrected = words(
+      "we the answer and we the reason " + Array(20).fill("padding").join(" "),
+    );
+
+    const result = verifyCorrection(original, corrected);
+    expect(result.stats.droppedNonFiller).toBe(2);
+  });
 });
