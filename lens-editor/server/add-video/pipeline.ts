@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { VideoPayload } from "./types";
+import type { TimestampedWord, VideoPayload } from "./types";
 import { extractWords, toPlainText, flattenToWords } from "./transcript";
 import { alignWords } from "./alignment";
 import {
@@ -81,14 +81,13 @@ export async function importVideo(
 
     // 2. PHASE 1 -- publish the transcript immediately.
     //    The text YouTube returns is already the real transcript, so there is
-    //    no reason to make readers wait behind an LLM pass: the doc, its
-    //    timestamps and its lens all land now, and the cleanup pass (if any)
-    //    edits them in place afterwards.
+    //    no reason to make readers wait behind an LLM pass: the document and
+    //    its lens land now, and the cleanup pass (if any) edits them
+    //    afterwards.
     setStage("publishing");
     // A video without captions still gets its document and lens: those are
     // what let it be referenced from course content, and neither depends on
-    // having a transcript. Only the timestamps sidecar is genuinely empty, so
-    // it is skipped rather than written as an empty array.
+    // having a transcript.
     const hasTranscript = originalWords.length > 0;
     const publishedContent = generateMarkdown({
       title: payload.title,
@@ -98,20 +97,31 @@ export async function importVideo(
         ? plainText.trim()
         : "*This video has no captions on YouTube, so no transcript could be imported.*",
     });
-    const [publishedDocId] = await Promise.all([
-      upsertRelayDocReturningId(mdPath, publishedContent, signal),
-      ...(hasTranscript
-        ? [
-            createRelayDoc(
-              jsonPath,
-              JSON.stringify(generateTimestampsJson(originalWords), null, 2),
-              signal,
-            ),
-          ]
-        : []),
-    ]);
+    const publishedDocId = await upsertRelayDocReturningId(
+      mdPath,
+      publishedContent,
+      signal,
+    );
     // The transcript in the relay is now complete and faithful. Everything
     // below is refinement: no later step may replace or invalidate it.
+
+    // The timestamps sidecar is written exactly ONCE, at the very end, with
+    // whatever wording the document finally holds. The relay stores .json
+    // paths as blobs and blobs cannot be replaced -- a second POST /doc/upsert
+    // answers 409 -- so writing it here as well as after the cleanup left the
+    // sidecar describing the pre-cleanup wording while the document held the
+    // cleaned text. That is exactly the desync the alignment step exists to
+    // prevent, and it reached production before this was caught.
+    const writeTimestamps = async (
+      words: TimestampedWord[],
+      sig?: AbortSignal,
+    ): Promise<void> => {
+      await createRelayDoc(
+        jsonPath,
+        JSON.stringify(generateTimestampsJson(words), null, 2),
+        sig,
+      );
+    };
 
     // 3. Auto-create a lens wrapping the transcript (Asana 1215689584721257).
     //    Opt out with createLens=false; a lens failure must not fail the import.
@@ -137,30 +147,21 @@ export async function importVideo(
       }
     }
 
-    // 4. Human-written caption tracks already carry punctuation, casing and
-    //    correct spelling, so the cleanup pass has nothing to fix -- measured
-    //    on real videos it returned the input essentially unchanged. Skip it:
-    //    the import is done, at a fraction of the latency and cost. A video
-    //    with no captions has nothing to clean up either.
-    if (!hasTranscript || payload.transcript_type === "sentence_level") {
-      console.log(
-        `[add-video] "${payload.title}": ${
-          hasTranscript ? "human captions" : "no captions"
-        } — published as-is, skipping cleanup`,
-      );
-      return;
-    }
-
-    // 5. PHASE 2 -- clean up the auto-generated transcript. The job stays
+    // 4. PHASE 2 -- clean up the auto-generated transcript. The job stays
     //    alive for this (it still holds its queue slot), but readers do not:
-    //    the doc above is already usable. Everything from here is best-effort,
+    //    the document above is already usable. Everything here is best-effort,
     //    so a failed or untrustworthy cleanup leaves the published transcript
     //    alone instead of failing the import.
-    setStage("polishing");
-    console.log(
-      `[add-video] Running Claude on ${publishedWords.length} words...`,
-    );
-    try {
+    //
+    //    Resolves to the re-aligned words when the cleanup actually replaced
+    //    the document, and to null whenever the published transcript stands --
+    //    which is what keeps the sidecar and the document describing the same
+    //    text.
+    const polish = async (): Promise<TimestampedWord[] | null> => {
+      setStage("polishing");
+      console.log(
+        `[add-video] Running Claude on ${publishedWords.length} words...`,
+      );
       const result = await runClaude(workDir, TIMEOUT_MS, signal);
       if (result.exitCode !== 0) {
         throw new Error(
@@ -183,7 +184,7 @@ export async function importVideo(
           `[add-video] Cleanup rejected for "${payload.title}": ${verdict.reason} — keeping the published transcript`,
         );
         onStage?.("polish-rejected");
-        return;
+        return null;
       }
 
       setStage("aligning");
@@ -221,26 +222,55 @@ export async function importVideo(
           `[add-video] "${payload.title}" was edited while the cleanup ran — keeping the edited document`,
         );
         onStage?.("polish-skipped-doc-edited");
-        return;
+        return null;
       }
 
       setStage("writing");
-      await Promise.all([
-        updateRelayDoc(mdPath, publishedContent, finalMd, signal),
-        updateRelayDoc(
-          jsonPath,
-          "",
-          JSON.stringify(generateTimestampsJson(aligned), null, 2),
-          signal,
-        ),
-      ]);
-    } catch (polishErr) {
-      // A cancelled job must still count as cancelled.
-      if (signal?.aborted) throw polishErr;
-      console.warn(
-        `[add-video] Cleanup failed for "${payload.title}" (transcript published): ${polishErr}`,
+      await updateRelayDoc(mdPath, publishedContent, finalMd, signal);
+      // Only past this point do the aligned timings describe what the
+      // document actually says.
+      return aligned;
+    };
+
+    let timestampWords = originalWords;
+    // 5. Human-written caption tracks already carry punctuation, casing and
+    //    correct spelling, so the cleanup pass has nothing to fix -- measured
+    //    on real videos it returned the input essentially unchanged. Skip it:
+    //    the import is done, at a fraction of the latency and cost. A video
+    //    with no captions has nothing to clean up either.
+    if (hasTranscript && payload.transcript_type === "word_level") {
+      try {
+        timestampWords = (await polish()) ?? originalWords;
+      } catch (polishErr) {
+        if (signal?.aborted) {
+          // A cancelled job still leaves the published document behind, and
+          // the sidecar can only ever be written once -- so write the original
+          // timings now rather than stranding that document without any. The
+          // signal is deliberately not passed: it is already aborted.
+          await writeTimestamps(originalWords).catch((err) =>
+            console.warn(
+              `[add-video] Could not write timestamps for cancelled "${payload.title}": ${err}`,
+            ),
+          );
+          throw polishErr;
+        }
+        console.warn(
+          `[add-video] Cleanup failed for "${payload.title}" (transcript published): ${polishErr}`,
+        );
+        onStage?.("polish-failed");
+      }
+    } else {
+      console.log(
+        `[add-video] "${payload.title}": ${
+          hasTranscript ? "human captions" : "no captions"
+        } — published as-is, skipping cleanup`,
       );
-      onStage?.("polish-failed");
+    }
+
+    // 6. The single sidecar write. Skipped entirely when there are no captions,
+    //    rather than writing an empty array.
+    if (hasTranscript) {
+      await writeTimestamps(timestampWords, signal);
     }
     // No catch: either the transcript was published (and must be left intact)
     // or no doc was ever written, in which case the old "processing failed"

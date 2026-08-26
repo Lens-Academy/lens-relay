@@ -104,12 +104,69 @@ describe('importVideo', () => {
       expect.stringContaining('hello world'),
       undefined
     );
-    // Both the doc and its timestamps land before Claude is ever invoked.
-    expect(callOrder.indexOf('claude')).toBeGreaterThan(
-      callOrder.indexOf('create:timestamps')
-    );
+    // The document lands before Claude is ever invoked. The sidecar cannot:
+    // it has to describe whichever wording the document ends up with, and the
+    // relay only lets it be written once.
     expect(callOrder.indexOf('create:md')).toBeLessThan(
       callOrder.indexOf('claude')
+    );
+    expect(callOrder.indexOf('create:timestamps')).toBeGreaterThan(
+      callOrder.indexOf('claude')
+    );
+  });
+
+  // The relay stores .json paths as blobs, and blobs cannot be replaced -- a
+  // second upsert answers 409. Writing the sidecar twice therefore left the
+  // document cleaned and its timings describing the pre-cleanup wording.
+  const timestampWrites = () =>
+    mockRelayDocs.createRelayDoc.mock.calls.filter(([p]) =>
+      String(p).endsWith('.timestamps.json')
+    );
+
+  it('writes the timestamps sidecar exactly once', async () => {
+    await runImport();
+
+    expect(timestampWrites()).toHaveLength(1);
+    expect(
+      mockRelayDocs.updateRelayDoc.mock.calls.filter(([p]) =>
+        String(p).endsWith('.timestamps.json')
+      )
+    ).toHaveLength(0);
+  });
+
+  // The whole point of aligning: the sidecar must describe the words the
+  // document actually contains.
+  it('writes the aligned words when the cleanup is applied', async () => {
+    await runImport();
+
+    const [, json] = timestampWrites()[0];
+    expect(JSON.parse(String(json))).toEqual([
+      { text: 'Hello', start: expect.any(String) },
+      { text: 'world.', start: expect.any(String) },
+    ]);
+  });
+
+  it('writes the original words when the cleanup is rejected', async () => {
+    // Half the transcript missing: truncation, not a cleanup.
+    mockFs.readFile.mockResolvedValue('Hello');
+
+    await runImport();
+
+    expect(mockRelayDocs.updateRelayDoc).not.toHaveBeenCalled();
+    const [, json] = timestampWrites()[0];
+    expect(JSON.parse(String(json)).map((w: { text: string }) => w.text)).toEqual(
+      ['hello', 'world']
+    );
+  });
+
+  it('writes the original words when the cleanup fails outright', async () => {
+    mockClaude.runClaude.mockRejectedValue(new Error('claude exploded'));
+
+    await runImport();
+
+    const [, json] = timestampWrites()[0];
+    expect(JSON.parse(String(json)).map((w: { text: string }) => w.text)).toEqual(
+      ['hello', 'world']
     );
   });
 
