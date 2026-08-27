@@ -62,7 +62,7 @@ No model-authored content change. Only provenance and deterministic spacing.
 
 ### 4. Longtermism and Animal Advocacy
 
-[Open review](https://editor.lensacademy.org/2128996e/Lens-Edu/articles/baumann-longtermism-and-animal-advocacy.md)
+[Open review](https://editor.lensacademy.org/2128996e/Lens-Edu/articles/baumann-longtermism-and-animal-advocacy-before-clean-reimport.md)
 
 This is the largest substantive recovery in the batch. It restores omitted
 phrases and sentences throughout the article, including these exact changes:
