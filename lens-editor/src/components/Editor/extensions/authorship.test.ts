@@ -102,7 +102,7 @@ describe('AuthorshipPlugin decorations on Y/CM length mismatch', () => {
     }
   });
 
-  it('recent overlay tints surviving text from an event and ghosts removed text, on any mode', () => {
+  it('recent overlay tints surviving text from an event and ghosts removed text, on any mode', async () => {
     const ydoc = new Y.Doc();
     const ytext = ydoc.getText('contents');
     ytext.insert(0, 'Human start. ');
@@ -166,6 +166,26 @@ describe('AuthorshipPlugin decorations on Y/CM length mismatch', () => {
       });
       expect(recentMarks).toBe(1);
       expect(lineDecos).toBeGreaterThanOrEqual(2); // authorship strip + recent strip
+
+      // The activity map is parsed once and cached: viewport-only and
+      // mode updates reuse it, and a document change maps the ghost
+      // position instead of re-resolving anchors.
+      const instance = view.plugin(plugin)! as unknown as { recentParses: number };
+      expect(instance.recentParses).toBe(1);
+      view.dispatch({ effects: setAuthorshipMode.of('hidden') });
+      view.dispatch({ changes: { from: 0, insert: 'XX ' } });
+      expect(instance.recentParses).toBe(1);
+      let ghostAt = -1;
+      view.plugin(plugin)!.decorations.between(0, view.state.doc.length, (from, _to, value) => {
+        if ((value.spec as { widget?: unknown }).widget) ghostAt = from;
+      });
+      expect(ghostAt).toBe(13 + 3);
+
+      // A change to the map invalidates the cache.
+      ai.getMap(ACTIVITY_MAP).delete('e0');
+      Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(ai));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(instance.recentParses).toBe(2);
     } finally {
       view.destroy();
     }

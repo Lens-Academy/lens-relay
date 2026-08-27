@@ -1,13 +1,15 @@
 import { SLIDER_MAX, sliderToMs, msToSlider, formatAgo, isFullRange } from './timeFilter';
 
-export function DualRangeSlider({ fromAgo, toAgo, onChange }: {
+export function DualRangeSlider({ fromAgo, toAgo, onChange, maxAgoMs }: {
   fromAgo: number;
   toAgo: number;
   onChange: (fromAgo: number, toAgo: number) => void;
+  /** Span of the track (default 30 days). */
+  maxAgoMs?: number;
 }) {
   // Invert: slider 0 = max ago (left = past), slider MAX = 0ms ago (right = now)
-  const fromPos = SLIDER_MAX - msToSlider(fromAgo);
-  const toPos = SLIDER_MAX - msToSlider(toAgo);
+  const fromPos = SLIDER_MAX - msToSlider(fromAgo, maxAgoMs);
+  const toPos = SLIDER_MAX - msToSlider(toAgo, maxAgoMs);
 
   const leftPct = (Math.min(fromPos, toPos) / SLIDER_MAX) * 100;
   const rightPct = 100 - (Math.max(fromPos, toPos) / SLIDER_MAX) * 100;
@@ -43,7 +45,7 @@ export function DualRangeSlider({ fromAgo, toAgo, onChange }: {
           value={fromPos}
           onChange={e => {
             const pos = Number(e.target.value);
-            const newFrom = sliderToMs(SLIDER_MAX - pos);
+            const newFrom = sliderToMs(SLIDER_MAX - pos, maxAgoMs);
             onChange(Math.max(newFrom, toAgo), toAgo);
           }}
           className={thumbClass}
@@ -57,7 +59,7 @@ export function DualRangeSlider({ fromAgo, toAgo, onChange }: {
           value={toPos}
           onChange={e => {
             const pos = Number(e.target.value);
-            const newTo = sliderToMs(SLIDER_MAX - pos);
+            const newTo = sliderToMs(SLIDER_MAX - pos, maxAgoMs);
             onChange(fromAgo, Math.min(newTo, fromAgo));
           }}
           className={thumbClass}

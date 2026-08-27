@@ -11,16 +11,21 @@ export const SLIDER_MAX = 1000;
 export const MAX_AGO_MS = 30 * 86400_000; // 30 days
 const SLIDER_POWER = 3;
 
-export function sliderToMs(pos: number): number {
+// Position SLIDER_MAX is reserved for the "all time" sentinel (rendered at the
+// slider's left edge, since the UI plots SLIDER_MAX - pos), so the finite range
+// spans 0..SLIDER_MAX-1 and the two functions are exact inverses over it.
+const SLIDER_FINITE_MAX = SLIDER_MAX - 1;
+
+export function sliderToMs(pos: number, maxAgoMs = MAX_AGO_MS): number {
   if (pos <= 0) return 0;
-  if (pos >= SLIDER_MAX) return Infinity; // leftmost position = all time
-  return Math.round(MAX_AGO_MS * Math.pow(pos / SLIDER_MAX, SLIDER_POWER));
+  if (pos >= SLIDER_MAX) return Infinity; // sentinel: all time
+  return Math.round(maxAgoMs * Math.pow(pos / SLIDER_FINITE_MAX, SLIDER_POWER));
 }
 
-export function msToSlider(ms: number): number {
+export function msToSlider(ms: number, maxAgoMs = MAX_AGO_MS): number {
   if (ms <= 0) return 0;
-  if (!isFinite(ms)) return SLIDER_MAX; // all time = leftmost
-  return Math.round((SLIDER_MAX - 1) * Math.pow(Math.min(ms, MAX_AGO_MS) / MAX_AGO_MS, 1 / SLIDER_POWER));
+  if (!isFinite(ms)) return SLIDER_MAX; // sentinel: all time
+  return Math.round(SLIDER_FINITE_MAX * Math.pow(Math.min(ms, maxAgoMs) / maxAgoMs, 1 / SLIDER_POWER));
 }
 
 export function formatAgo(ms: number): string {

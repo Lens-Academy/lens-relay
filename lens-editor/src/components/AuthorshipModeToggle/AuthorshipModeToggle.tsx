@@ -216,12 +216,12 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
               </span>
             </button>
             {recentEnabled && (
-              <div className="flex gap-1 px-3 pb-1.5 pt-0.5" role="radiogroup" aria-label="Recent changes window">
+              <div className="flex gap-1 px-3 pb-1.5 pt-0.5" role="group" aria-label="Recent changes window">
                 {RECENT_WINDOW_PRESETS.map((p) => (
                   <button
                     key={p.label}
                     type="button"
-                    role="radio"
+                    role="menuitemradio"
                     aria-checked={p.ms === windowMs}
                     onClick={() => selectWindow(p.ms)}
                     className={`px-2 py-0.5 rounded-full text-xs transition-colors ${

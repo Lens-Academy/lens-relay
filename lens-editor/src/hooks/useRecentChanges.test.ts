@@ -31,12 +31,36 @@ describe('useRecentChanges', () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/relay/recent-changes?folder_id=folder-1&since_ms=500',
-      expect.objectContaining({ headers: expect.any(Object) }),
+      expect.objectContaining({ headers: expect.any(Object), signal: expect.any(AbortSignal) }),
     );
     expect(result.current.data).toHaveLength(2);
     expect(result.current.data[0].folder_id).toBe('folder-1');
     expect(result.current.data[0].events[0].new).toBe('x');
     expect(result.current.error).toBeNull();
+  });
+
+  it('aborts a superseded request so its late response cannot overwrite newer data', async () => {
+    let releaseFirst: (() => void) | null = null;
+    mockFetch.mockImplementationOnce((_url: string, init: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        releaseFirst = () => resolve({ ok: true, json: async () => ({ files: [{ path: '/Old.md', doc_id: 'old', events: [event] }], since_ms: 0 }) } as Response);
+      }),
+    );
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ files: [{ path: '/New.md', doc_id: 'new', events: [event] }], since_ms: 0 }),
+    } as Response);
+
+    const { result } = renderHook(() => useRecentChanges(['f1']));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await result.current.refresh();
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.data[0].path).toBe('/New.md');
+    releaseFirst!();
+    await new Promise(r => setTimeout(r, 0));
+    expect(result.current.data[0].path).toBe('/New.md');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it('reports an error only when every folder failed', async () => {

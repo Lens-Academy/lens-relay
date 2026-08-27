@@ -469,6 +469,10 @@ async fn handle_worker_outcome(
     }
 }
 
+/// How often the search worker sweeps expired entries out of the
+/// recent-changes index.
+const RECENT_SWEEP_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
 async fn search_worker(
     rx: &mut tokio::sync::mpsc::Receiver<String>,
     search_index: Arc<SearchIndex>,
@@ -481,6 +485,9 @@ async fn search_worker(
 
     // Cache of folder doc -> { uuid -> (path, title) } for detecting adds/removes
     let filemeta_cache: DashMap<String, std::collections::HashMap<String, String>> = DashMap::new();
+    // Retention sweep of the recent-changes index: entries for docs that are
+    // idle (or evicted from memory) only expire here.
+    let mut last_recent_sweep = std::time::Instant::now();
 
     loop {
         // 1. Wait for work: either a new channel message or poll timeout
@@ -492,6 +499,18 @@ async fn search_worker(
                 }
             }
             _ = tokio::time::sleep(SEARCH_POLL_INTERVAL) => {}
+        }
+
+        if last_recent_sweep.elapsed() >= RECENT_SWEEP_INTERVAL {
+            last_recent_sweep = std::time::Instant::now();
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let removed = recent_changes_index.sweep(now_ms);
+            if removed > 0 {
+                tracing::info!(removed, "Recent-changes index sweep");
+            }
         }
 
         // 2. Drain remaining channel messages (non-blocking)
@@ -615,7 +634,17 @@ fn activity_snapshot<T: yrs::ReadTxn>(
     if events.is_empty() {
         return (events, Vec::new());
     }
-    let runs = crate::mcp::provenance::visible_runs_copy(txn);
+    // Runs (a full state encode + apply) are only needed to place surviving
+    // inserted text; pure deletions resolve through anchors.
+    let runs = if events.iter().any(|e| e.clock_to > e.clock_from) {
+        let runs = crate::mcp::provenance::visible_runs_copy(txn);
+        if runs.is_none() {
+            tracing::debug!("provenance runs unavailable; excerpts omit inserted text");
+        }
+        runs
+    } else {
+        None
+    };
     let excerpts = crate::recent_excerpts::build_excerpts(txn, body, runs.as_deref(), &events);
     (events, excerpts)
 }
@@ -4971,10 +5000,14 @@ async fn handle_suggestions(
 
     // Get path mapping from filemeta_v0
     let path_map = {
-        let doc_ref = server_state.docs.get(folder_id).ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder doc not loaded"))
-        })?;
-        let awareness = doc_ref.awareness();
+        // Arc out, shard ref dropped, before the blocking awareness lock.
+        let awareness = server_state
+            .docs
+            .get(folder_id)
+            .map(|doc_ref| doc_ref.awareness())
+            .ok_or_else(|| {
+                AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder doc not loaded"))
+            })?;
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         let filemeta = txn
@@ -5028,6 +5061,58 @@ struct RecentChangesQuery {
     /// Epoch ms; events older than this are omitted. Defaults to the
     /// retention window.
     since_ms: Option<u64>,
+    /// Max events in the response (newest first across the folder). Default
+    /// [`RECENT_CHANGES_DEFAULT_LIMIT`], capped at
+    /// [`RECENT_CHANGES_MAX_LIMIT`]; `truncated: true` when hit.
+    limit: Option<usize>,
+    /// Chars of `old`/`new` text kept per event (`0` = full text). Default
+    /// [`RECENT_CHANGES_DEFAULT_PREVIEW`]; the editor reads full text from
+    /// the doc's own `activity_v0` map when it needs it.
+    preview: Option<usize>,
+}
+
+const RECENT_CHANGES_DEFAULT_LIMIT: usize = 1000;
+const RECENT_CHANGES_MAX_LIMIT: usize = 5000;
+const RECENT_CHANGES_DEFAULT_PREVIEW: usize = 200;
+
+/// Cut `text` to `preview` chars (0 = keep). Returns the text and whether it
+/// was cut (OR-ed with the stored truncation flag by the caller).
+fn preview_text(text: &str, preview: usize) -> (String, bool) {
+    if preview == 0 {
+        return (text.to_string(), false);
+    }
+    match text.char_indices().nth(preview) {
+        Some((i, _)) => (text[..i].to_string(), true),
+        None => (text.to_string(), false),
+    }
+}
+
+/// Restrict excerpts to the selected events: inserts of unselected events
+/// become plain text, their removals are dropped, and excerpts left without
+/// any change are removed — so `excerpts` never reference ids absent from
+/// `events`.
+fn filter_excerpts(
+    excerpts: Vec<y_sweet_core::activity::Excerpt>,
+    selected: &std::collections::HashSet<&str>,
+) -> Vec<y_sweet_core::activity::Excerpt> {
+    excerpts
+        .into_iter()
+        .filter_map(|mut x| {
+            x.segments.retain(|seg| {
+                seg.kind != "delete"
+                    || seg.event_id.as_deref().is_some_and(|id| selected.contains(id))
+            });
+            for seg in &mut x.segments {
+                if seg.kind == "insert"
+                    && !seg.event_id.as_deref().is_some_and(|id| selected.contains(id))
+                {
+                    seg.kind = "text".into();
+                    seg.event_id = None;
+                }
+            }
+            x.segments.iter().any(|seg| seg.kind != "text").then_some(x)
+        })
+        .collect()
 }
 
 /// GET /recent-changes?folder_id=...&since_ms=...
@@ -5036,6 +5121,38 @@ struct RecentChangesQuery {
 /// from the in-memory `RecentChangesIndex`. Same shape and constraints as
 /// `handle_suggestions`: loads only the folder doc, scopes through the
 /// folder's current `filemeta_v0`, never loads content docs on demand.
+/// Keep exactly the `limit` newest events across a folder's per-doc buckets,
+/// dropping empty buckets. Selecting by a timestamp cutoff would over-return
+/// whenever events share the cutoff millisecond (common for bursty edits), so
+/// events are ranked newest-first with ties broken on (doc, position) — which
+/// also makes the cut deterministic.
+fn keep_newest_events(
+    per_doc: &mut Vec<(String, Vec<y_sweet_core::activity::ActivityEvent>)>,
+    limit: usize,
+) {
+    let mut ranked: Vec<(u64, usize, usize)> = per_doc
+        .iter()
+        .enumerate()
+        .flat_map(|(d, (_, events))| events.iter().enumerate().map(move |(i, e)| (e.ts, d, i)))
+        .collect();
+    ranked.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    ranked.truncate(limit);
+    let mut kept: Vec<std::collections::HashSet<usize>> = vec![Default::default(); per_doc.len()];
+    for (_, d, i) in ranked {
+        kept[d].insert(i);
+    }
+    for (d, (_, events)) in per_doc.iter_mut().enumerate() {
+        let keep = &kept[d];
+        let mut i = 0;
+        events.retain(|_| {
+            let k = keep.contains(&i);
+            i += 1;
+            k
+        });
+    }
+    per_doc.retain(|(_, e)| !e.is_empty());
+}
+
 async fn handle_recent_changes(
     auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
     State(server_state): State<Arc<Server>>,
@@ -5045,6 +5162,11 @@ async fn handle_recent_changes(
     require_index_ready(&server_state.recent_changes_ready, "Recent changes index")?;
 
     let folder_id = &params.folder_id;
+    // Validate before any loading; `relay_id` slices bytes.
+    let relay_id = folder_id
+        .get(..36)
+        .filter(|_| folder_id.is_ascii())
+        .ok_or_else(|| AppError::new(StatusCode::BAD_REQUEST, anyhow!("Invalid folder_id")))?;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -5052,6 +5174,11 @@ async fn handle_recent_changes(
     let since_ms = params
         .since_ms
         .unwrap_or_else(|| now_ms.saturating_sub(y_sweet_core::activity::RETENTION_MS));
+    let limit = params
+        .limit
+        .unwrap_or(RECENT_CHANGES_DEFAULT_LIMIT)
+        .clamp(1, RECENT_CHANGES_MAX_LIMIT);
+    let preview = params.preview.unwrap_or(RECENT_CHANGES_DEFAULT_PREVIEW);
 
     server_state
         .ensure_doc_loaded(folder_id)
@@ -5062,10 +5189,14 @@ async fn handle_recent_changes(
         .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, anyhow!("Not a folder document")))?;
 
     let path_map = {
-        let doc_ref = server_state.docs.get(folder_id).ok_or_else(|| {
-            AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder doc not loaded"))
-        })?;
-        let awareness = doc_ref.awareness();
+        // Arc out, shard ref dropped, before the blocking awareness lock.
+        let awareness = server_state
+            .docs
+            .get(folder_id)
+            .map(|doc_ref| doc_ref.awareness())
+            .ok_or_else(|| {
+                AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder doc not loaded"))
+            })?;
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         let filemeta = txn
@@ -5080,31 +5211,47 @@ async fn handle_recent_changes(
         map
     };
 
-    if folder_id.len() < 36 {
-        return Err(AppError::new(
-            StatusCode::BAD_REQUEST,
-            anyhow!("Invalid folder_id"),
-        ));
+    // Collect per-doc events, then apply the folder-wide newest-first limit
+    // so a few very active docs can't crowd out the rest entirely (events
+    // are dropped oldest-first across the folder).
+    let mut per_doc: Vec<(String, Vec<y_sweet_core::activity::ActivityEvent>)> = content_uuids
+        .iter()
+        .filter_map(|uuid| {
+            server_state
+                .recent_changes_index
+                .get_since(uuid, since_ms)
+                .map(|events| (uuid.clone(), events))
+        })
+        .collect();
+    let total: usize = per_doc.iter().map(|(_, e)| e.len()).sum();
+    let truncated = total > limit;
+    if truncated {
+        keep_newest_events(&mut per_doc, limit);
     }
-    let relay_id = &folder_id[..36];
 
-    let mut files = Vec::new();
-    for content_uuid in &content_uuids {
-        let Some(events) = server_state
-            .recent_changes_index
-            .get_since(content_uuid, since_ms)
-        else {
-            continue;
-        };
+    let mut files = Vec::with_capacity(per_doc.len());
+    for (content_uuid, mut events) in per_doc {
+        let selected: std::collections::HashSet<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        let excerpts = filter_excerpts(
+            server_state
+                .recent_changes_index
+                .excerpts(&content_uuid)
+                .unwrap_or_default(),
+            &selected,
+        );
+        for ev in &mut events {
+            let (old, cut) = preview_text(&ev.old, preview);
+            ev.old = old;
+            ev.old_truncated |= cut;
+            let (new, cut) = preview_text(&ev.new, preview);
+            ev.new = new;
+            ev.new_truncated |= cut;
+        }
         let doc_id = format!("{}-{}", relay_id, content_uuid);
         let path = path_map
-            .get(content_uuid)
+            .get(&content_uuid)
             .cloned()
             .unwrap_or_else(|| content_uuid.clone());
-        let excerpts = server_state
-            .recent_changes_index
-            .excerpts(content_uuid)
-            .unwrap_or_default();
         files.push(serde_json::json!({
             "path": path,
             "doc_id": doc_id,
@@ -5113,9 +5260,11 @@ async fn handle_recent_changes(
         }));
     }
 
-    Ok(Json(
-        serde_json::json!({ "files": files, "since_ms": since_ms }),
-    ))
+    Ok(Json(serde_json::json!({
+        "files": files,
+        "since_ms": since_ms,
+        "truncated": truncated,
+    })))
 }
 
 #[derive(serde::Deserialize)]
@@ -9464,10 +9613,15 @@ mod test {
         folder_id: &str,
         since_ms: Option<u64>,
     ) -> (StatusCode, JsonValue) {
-        let uri = match since_ms {
-            Some(since) => format!("/recent-changes?folder_id={}&since_ms={}", folder_id, since),
-            None => format!("/recent-changes?folder_id={}", folder_id),
+        let query = match since_ms {
+            Some(since) => format!("folder_id={}&since_ms={}", folder_id, since),
+            None => format!("folder_id={}", folder_id),
         };
+        get_recent_changes_raw(server, &query).await
+    }
+
+    async fn get_recent_changes_raw(server: &Arc<Server>, query: &str) -> (StatusCode, JsonValue) {
+        let uri = format!("/recent-changes?{}", query);
         let response = server
             .routes()
             .oneshot(
@@ -9545,6 +9699,104 @@ mod test {
 
         let (_, body) = get_recent_changes(&server, &folder_doc_id, Some(now)).await;
         assert_eq!(body["files"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn recent_changes_endpoint_limits_previews_and_filters_excerpts() {
+        use y_sweet_core::activity::{Excerpt, ExcerptSegment};
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let mut old_ev = activity_event(now - 5_000);
+        old_ev.new = "x".repeat(300);
+        let new_ev = activity_event(now - 1_000);
+        let seg = |kind: &str, text: &str, id: Option<&str>| ExcerptSegment {
+            kind: kind.into(),
+            text: text.into(),
+            event_id: id.map(String::from),
+            truncated: false,
+        };
+        let excerpts = vec![
+            Excerpt {
+                pos: 0,
+                line: 1,
+                skipped_before: 0,
+                skipped_after: 0,
+                segments: vec![
+                    seg("text", "a ", None),
+                    seg("insert", "old-ins", Some(&old_ev.id)),
+                    seg("delete", "old-del", Some(&old_ev.id)),
+                    seg("insert", "new-ins", Some(&new_ev.id)),
+                ],
+            },
+            Excerpt {
+                pos: 50,
+                line: 3,
+                skipped_before: 30,
+                skipped_after: 0,
+                segments: vec![seg("delete", "only-old", Some(&old_ev.id))],
+            },
+        ];
+        server
+            .recent_changes_index
+            .update(SUGG_UUID, vec![old_ev.clone(), new_ev.clone()], excerpts);
+
+        // Default preview cuts long text and flags it; full text on preview=0.
+        let (_, body) = get_recent_changes(&server, &folder_doc_id, None).await;
+        let ev = &body["files"][0]["events"][0];
+        assert_eq!(ev["new"].as_str().unwrap().len(), RECENT_CHANGES_DEFAULT_PREVIEW);
+        assert_eq!(ev["new_truncated"], true);
+        assert_eq!(body["truncated"], false);
+        let (_, body) =
+            get_recent_changes_raw(&server, &format!("folder_id={}&preview=0", folder_doc_id)).await;
+        assert_eq!(body["files"][0]["events"][0]["new"].as_str().unwrap().len(), 300);
+        assert_eq!(body["files"][0]["excerpts"].as_array().unwrap().len(), 2);
+
+        // limit=1 keeps the newest event; excerpts drop the older event's
+        // removal, turn its insert into plain text, and lose the excerpt that
+        // had nothing else.
+        let (_, body) =
+            get_recent_changes_raw(&server, &format!("folder_id={}&limit=1", folder_doc_id)).await;
+        assert_eq!(body["truncated"], true);
+        let events = body["files"][0]["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["id"], new_ev.id);
+        let excerpts = body["files"][0]["excerpts"].as_array().unwrap();
+        assert_eq!(excerpts.len(), 1);
+        let kinds: Vec<&str> = excerpts[0]["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["text", "text", "insert"]);
+        assert!(excerpts[0]["segments"][1].get("event_id").is_none());
+
+        // since_ms filtering applies the same excerpt rule.
+        let (_, body) = get_recent_changes(&server, &folder_doc_id, Some(now - 2_000)).await;
+        assert_eq!(body["files"][0]["excerpts"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn recent_changes_endpoint_rejects_bad_folder_id_without_panicking() {
+        let server = Server::new_for_test();
+        let (status, _) = get_recent_changes_raw(&server, "folder_id=short").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // A multibyte char straddling byte 36 used to panic the slice.
+        let (status, _) = get_recent_changes_raw(
+            &server,
+            "folder_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa%C3%A9bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -10056,6 +10308,61 @@ mod test {
             .suggestions_ready
             .load(std::sync::atomic::Ordering::Acquire));
     }
+
+    fn ev(id: &str, ts: u64) -> y_sweet_core::activity::ActivityEvent {
+        y_sweet_core::activity::ActivityEvent {
+            id: id.to_string(),
+            ts,
+            actor: "ai:test".into(),
+            author: "Test AI".into(),
+            mode: "direct".into(),
+            kind: "insert".into(),
+            old: String::new(),
+            new: String::new(),
+            old_truncated: false,
+            new_truncated: false,
+            ctx_before: String::new(),
+            ctx_after: String::new(),
+            pos: 0,
+            client: 1,
+            clock_from: 0,
+            clock_to: 0,
+            anchor: None,
+        }
+    }
+
+    #[test]
+    fn keep_newest_events_enforces_limit_when_timestamps_tie() {
+        // All five events share one millisecond — a timestamp cutoff would
+        // return every tie and blow past the limit.
+        let mut per_doc = vec![
+            ("a".to_string(), vec![ev("a1", 100), ev("a2", 100), ev("a3", 100)]),
+            ("b".to_string(), vec![ev("b1", 100), ev("b2", 100)]),
+        ];
+        keep_newest_events(&mut per_doc, 2);
+        let total: usize = per_doc.iter().map(|(_, e)| e.len()).sum();
+        assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn keep_newest_events_keeps_the_newest_and_drops_empty_docs() {
+        let mut per_doc = vec![
+            ("a".to_string(), vec![ev("a_old", 10), ev("a_new", 90)]),
+            ("b".to_string(), vec![ev("b_mid", 50)]),
+        ];
+        keep_newest_events(&mut per_doc, 2);
+        let kept: Vec<&str> = per_doc
+            .iter()
+            .flat_map(|(_, e)| e.iter().map(|x| x.id.as_str()))
+            .collect();
+        assert_eq!(kept, vec!["a_new", "b_mid"]);
+        // Docs whose events were all cut disappear from the response.
+        let mut only_old = vec![("a".to_string(), vec![ev("a_old", 10)]), ("b".to_string(), vec![ev("b_new", 90)])];
+        keep_newest_events(&mut only_old, 1);
+        assert_eq!(only_old.len(), 1);
+        assert_eq!(only_old[0].0, "b");
+    }
+
 }
 
 async fn handle_file_upload(

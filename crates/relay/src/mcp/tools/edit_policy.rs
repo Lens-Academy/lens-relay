@@ -31,7 +31,7 @@
 
 use super::critic_markup::{compute_raw_positions, spans_covering_accepted_range, Span};
 use crate::mcp::provenance::{clients_in_range, Run};
-use similar::{capture_diff_slices, Algorithm, DiffOp};
+use similar::{capture_diff_slices, capture_diff_slices_deadline, Algorithm, DiffOp};
 use std::collections::HashMap;
 
 /// One minimal-diff hunk. Offsets are UTF-8 bytes into the matched old
@@ -73,32 +73,87 @@ fn byte_prefix(chars: &[char]) -> Vec<usize> {
 /// Minimal char-level diff from `old` to `new` as byte-offset hunks, with
 /// touching hunks merged. Empty when the strings are (quote-)equal.
 pub fn minimal_hunks(old: &str, new: &str) -> Vec<Hunk> {
-    minimal_hunks_with(old, new, true)
+    minimal_hunks_with(old, new, true, &[], true)
 }
 
 /// Like [`minimal_hunks`] but with exact char equality (no quote
 /// normalisation). Used to apply a suggestion-path replacement so that
 /// applying the hunks yields exactly `new`.
 pub fn minimal_hunks_exact(old: &str, new: &str) -> Vec<Hunk> {
-    minimal_hunks_with(old, new, false)
+    minimal_hunks_with(old, new, false, &[], false)
 }
 
-fn minimal_hunks_with(old: &str, new: &str, normalize_quotes: bool) -> Vec<Hunk> {
+/// [`minimal_hunks_exact`] where chars of `new` inside `unmatchable` byte
+/// ranges can never be aligned with chars of `old` — used when applying a
+/// CriticMarkup suggestion so the human's old text is only ever matched
+/// against verbatim copies of old text, never against freshly generated
+/// delimiters, metadata or AI-written payload.
+pub fn minimal_hunks_exact_masked(
+    old: &str,
+    new: &str,
+    unmatchable: &[(usize, usize)],
+) -> Vec<Hunk> {
+    minimal_hunks_with(old, new, false, unmatchable, false)
+}
+
+/// Policy diffs (deciding direct vs. suggestion) may be coarse: a
+/// non-minimal diff only makes more text look changed, which errs towards a
+/// suggestion. Beyond this many chars the Myers search is skipped entirely
+/// and the whole span becomes one hunk.
+const POLICY_DIFF_MAX_CHARS: usize = 200_000;
+const POLICY_DIFF_DEADLINE: std::time::Duration = std::time::Duration::from_millis(150);
+
+fn minimal_hunks_with(
+    old: &str,
+    new: &str,
+    normalize_quotes: bool,
+    unmatchable: &[(usize, usize)],
+    bounded: bool,
+) -> Vec<Hunk> {
     let old_chars: Vec<char> = old.chars().collect();
     let new_chars: Vec<char> = new.chars().collect();
-    let norm = |c: &char| {
-        if normalize_quotes {
-            normalize_quote(*c)
-        } else {
-            *c
-        }
-    };
-    let old_norm: Vec<char> = old_chars.iter().map(norm).collect();
-    let new_norm: Vec<char> = new_chars.iter().map(norm).collect();
     let old_bytes = byte_prefix(&old_chars);
     let new_bytes = byte_prefix(&new_chars);
+    let norm = |c: char| -> u32 {
+        if normalize_quotes {
+            normalize_quote(c) as u32
+        } else {
+            c as u32
+        }
+    };
+    let old_keys: Vec<u32> = old_chars.iter().map(|&c| norm(c)).collect();
+    // Unmatchable chars get a key no char can equal (above the Unicode
+    // range, unique per position so they don't even match each other).
+    let new_keys: Vec<u32> = new_chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| {
+            let b = new_bytes[i];
+            if unmatchable.iter().any(|&(f, t)| b >= f && b < t) {
+                0x2000_0000 | i as u32
+            } else {
+                norm(c)
+            }
+        })
+        .collect();
 
-    let ops = capture_diff_slices(Algorithm::Myers, &old_norm, &new_norm);
+    let ops = if bounded && old_keys.len() + new_keys.len() > POLICY_DIFF_MAX_CHARS {
+        vec![DiffOp::Replace {
+            old_index: 0,
+            old_len: old_keys.len(),
+            new_index: 0,
+            new_len: new_keys.len(),
+        }]
+    } else if bounded {
+        capture_diff_slices_deadline(
+            Algorithm::Myers,
+            &old_keys,
+            &new_keys,
+            Some(std::time::Instant::now() + POLICY_DIFF_DEADLINE),
+        )
+    } else {
+        capture_diff_slices(Algorithm::Myers, &old_keys, &new_keys)
+    };
     let mut hunks: Vec<Hunk> = Vec::new();
     for op in ops {
         let (oi, ol, ni, nl) = match op {
@@ -207,7 +262,30 @@ fn non_whitespace_ranges(text: &str, from: usize, to: usize) -> Vec<(usize, usiz
 }
 
 fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
+    c.is_alphanumeric()
+        || matches!(c, '_' | '\'' | '\u{2019}' | '-')
+        || is_combining_mark(c)
+}
+
+/// Combining diacritics (the common blocks); a base letter plus mark is one
+/// word character for our purposes.
+fn is_combining_mark(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F
+    )
+}
+
+/// Chars around a whitespace-only deletion `[from, to)` when removing it
+/// would join two words, or (when the deletion holds a newline) two
+/// non-blank lines.
+fn joining_neighbours(text: &str, from: usize, to: usize, deleted: &str) -> Option<(char, char)> {
+    let before = text[..from].chars().next_back()?;
+    let after = text[to..].chars().next()?;
+    let joins_words = is_word_char(before) && is_word_char(after);
+    let joins_lines =
+        deleted.contains('\n') && !before.is_whitespace() && !after.is_whitespace();
+    (joins_words || joins_lines).then_some((before, after))
 }
 
 /// Chars immediately before and after `at` in `text` when both are word
@@ -333,6 +411,24 @@ pub fn map_hunks(input: &PolicyInput) -> Result<Vec<RawHunk>, SuggestReason> {
                 // point, so they map onto the raw doc contiguously.
                 guard.push((raw_from - before.len_utf8(), raw_from));
                 guard.push((raw_from, raw_from + after.len_utf8()));
+            }
+        } else if guard.is_empty() {
+            // Rule 6: deleted whitespace is never protected by itself — but
+            // removing the only separator between two words ("human wrote"
+            // → "humanwrote"/"humanXwrote"), or a newline between two
+            // non-blank lines (breaking a heading or list), rewrites human
+            // structure. Guard both neighbours in those cases; they must be
+            // plain text too (a neighbour inside a suggestion → merge path).
+            let deleted = &input.accepted[from..to];
+            if let Some((before, after)) = joining_neighbours(input.accepted, from, to, deleted) {
+                let (b_from, b_len) =
+                    accepted_range_to_raw(input.spans, &raw_positions, from - before.len_utf8(), from)
+                        .ok_or(SuggestReason::OverlapsMarkup)?;
+                let (a_from, a_len) =
+                    accepted_range_to_raw(input.spans, &raw_positions, to, to + after.len_utf8())
+                        .ok_or(SuggestReason::OverlapsMarkup)?;
+                guard.push((b_from, b_from + b_len));
+                guard.push((a_from, a_from + a_len));
             }
         }
         out.push(RawHunk {

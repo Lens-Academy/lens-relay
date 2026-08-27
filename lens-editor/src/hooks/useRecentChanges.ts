@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 /** One direct AI edit, as recorded in the doc's `activity_v0` map and served
  *  by `GET /recent-changes` (crates/y-sweet-core/src/activity.rs). */
@@ -28,6 +28,8 @@ export interface ExcerptSegment {
   kind: 'text' | 'insert' | 'delete';
   text: string;
   event_id?: string;
+  /** `text` was cut by the server (very long insert/removal). */
+  truncated?: boolean;
 }
 
 /** A window of the current document text around a cluster of nearby
@@ -52,7 +54,11 @@ export interface FileActivity {
 export interface RecentChangesResponse {
   files: Omit<FileActivity, 'folder_id'>[];
   since_ms: number;
+  /** The server's event limit was hit; oldest events were dropped. */
+  truncated?: boolean;
 }
+
+const FETCH_TIMEOUT_MS = 30_000;
 
 /** Fetch recent direct AI edits for the given folders (one request per
  *  folder, in parallel), like `useSuggestions`. */
@@ -62,35 +68,56 @@ export function useRecentChanges(folderIds: string[], sinceMs?: number) {
   const [fetchedAt, setFetchedAt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Some folder hit the server's event limit. */
+  const [truncated, setTruncated] = useState(false);
+  // In-flight request; a newer refresh (or unmount) aborts it so a slow
+  // older response can't overwrite newer data.
+  const inflight = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
+    inflight.current?.abort();
+    const controller = new AbortController();
+    inflight.current = controller;
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     setLoading(true);
     setError(null);
     const headers: Record<string, string> = {};
-    const token = localStorage.getItem('lens-share-token');
+    let token: string | null = null;
+    try {
+      token = localStorage.getItem('lens-share-token');
+    } catch {
+      // storage unavailable (private mode / blocked): unauthenticated fetch
+    }
     if (token) headers['X-Share-Token'] = token;
 
     const results = await Promise.all(
-      folderIds.map(async (folderId): Promise<FileActivity[] | null> => {
+      folderIds.map(async (folderId): Promise<{ files: FileActivity[]; truncated: boolean } | null> => {
         try {
           const params = new URLSearchParams({ folder_id: folderId });
           if (sinceMs !== undefined) params.set('since_ms', String(Math.max(0, Math.floor(sinceMs))));
           const res = await fetch(`/api/relay/recent-changes?${params.toString()}`, {
             headers,
-            signal: AbortSignal.timeout(30_000),
+            signal: controller.signal,
           });
           if (!res.ok) return null;
           const json: RecentChangesResponse = await res.json();
-          return json.files.map(f => ({ ...f, excerpts: f.excerpts ?? [], folder_id: folderId }));
+          return {
+            files: json.files.map(f => ({ ...f, excerpts: f.excerpts ?? [], folder_id: folderId })),
+            truncated: json.truncated === true,
+          };
         } catch {
           return null;
         }
       }),
     );
+    clearTimeout(timeout);
+    if (controller.signal.aborted) return;
 
-    const allFiles = results.filter((r): r is FileActivity[] => r !== null).flat();
-    const failed = results.filter(r => r === null).length;
+    const ok = results.filter((r): r is NonNullable<typeof r> => r !== null);
+    const allFiles = ok.flatMap(r => r.files);
+    const failed = results.length - ok.length;
     setData(allFiles);
+    setTruncated(ok.some(r => r.truncated));
     setFetchedAt(Date.now());
     setError(
       failed > 0 && allFiles.length === 0
@@ -103,7 +130,8 @@ export function useRecentChanges(folderIds: string[], sinceMs?: number) {
 
   useEffect(() => {
     refresh();
+    return () => inflight.current?.abort();
   }, [refresh]);
 
-  return { data, fetchedAt, loading, error, refresh };
+  return { data, fetchedAt, loading, error, truncated, refresh };
 }

@@ -21,6 +21,12 @@ pub const ACTIVITY_MAP: &str = "activity_v0";
 pub const RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 /// Cap on stored old/new text per event (bytes, cut at a char boundary).
 pub const TEXT_CAP: usize = 4096;
+/// Cap on retained events per document (oldest dropped first), enforced both
+/// in the doc's `activity_v0` map and in the in-memory index.
+pub const MAX_EVENTS_PER_DOC: usize = 500;
+/// Cap on the text carried by one excerpt segment (chars); longer inserted or
+/// removed text is cut and flagged `truncated`.
+pub const SEGMENT_TEXT_CAP: usize = 2000;
 const SCHEMA_VERSION: f64 = 1.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -176,6 +182,9 @@ pub struct ExcerptSegment {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_id: Option<String>,
+    /// `text` was cut at [`SEGMENT_TEXT_CAP`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 /// A window of the current accepted-view text around one cluster of
@@ -248,14 +257,7 @@ fn prune_map(txn: &mut TransactionMut, map: &MapRef, now_ms: u64) -> usize {
     let expired: Vec<String> = map
         .iter(txn)
         .filter_map(|(key, value)| {
-            let ts = match value {
-                yrs::Out::Any(Any::Map(m)) => match m.get("ts") {
-                    Some(Any::Number(ts)) => *ts as u64,
-                    Some(Any::BigInt(ts)) => *ts as u64,
-                    _ => 0,
-                },
-                _ => 0, // malformed → prune
-            };
+            let ts = event_ts(&value); // malformed → 0 → pruned
             if ts < cutoff {
                 Some(key.to_string())
             } else {
@@ -271,11 +273,43 @@ fn prune_map(txn: &mut TransactionMut, map: &MapRef, now_ms: u64) -> usize {
 
 /// Append an event to the doc's `activity_v0` map, pruning expired events in
 /// the same transaction. Must be called inside the transaction that carries
-/// the corresponding text change.
-pub fn append_event(txn: &mut TransactionMut, event: &ActivityEvent, now_ms: u64) {
+/// the corresponding text change. Keeps at most [`MAX_EVENTS_PER_DOC`]
+/// events (oldest dropped) and makes the id unique within the doc (two
+/// pure deletions in the same millisecond mint no items, so their
+/// `ts-client-clock` ids would otherwise collide). Returns the id used.
+pub fn append_event(txn: &mut TransactionMut, event: &ActivityEvent, now_ms: u64) -> String {
     let map: MapRef = txn.get_or_insert_map(ACTIVITY_MAP);
     prune_map(txn, &map, now_ms);
-    map.insert(txn, event.id.clone(), event.to_any());
+    let mut id = event.id.clone();
+    let mut n = 1;
+    while map.contains_key(txn, &id) {
+        n += 1;
+        id = format!("{}-{}", event.id, n);
+    }
+    if map.len(txn) as usize >= MAX_EVENTS_PER_DOC {
+        let mut ts_keys: Vec<(u64, String)> = map
+            .iter(txn)
+            .map(|(key, value)| (event_ts(&value), key.to_string()))
+            .collect();
+        ts_keys.sort();
+        let excess = ts_keys.len() + 1 - MAX_EVENTS_PER_DOC;
+        for (_, key) in ts_keys.into_iter().take(excess) {
+            map.remove(txn, &key);
+        }
+    }
+    map.insert(txn, id.clone(), event.to_any());
+    id
+}
+
+fn event_ts(value: &yrs::Out) -> u64 {
+    match value {
+        yrs::Out::Any(Any::Map(m)) => match m.get("ts") {
+            Some(Any::Number(ts)) => *ts as u64,
+            Some(Any::BigInt(ts)) => *ts as u64,
+            _ => 0,
+        },
+        _ => 0,
+    }
 }
 
 #[cfg(test)]
@@ -334,6 +368,27 @@ mod tests {
         let txn = doc.transact();
         let ids: Vec<String> = read_events(&txn).into_iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![recent.id.clone()]);
+    }
+
+    #[test]
+    fn append_makes_ids_unique_and_caps_per_doc() {
+        let doc = Doc::new();
+        let mut txn = doc.transact_mut();
+        let ev = sample(1_000, 5);
+        assert_eq!(append_event(&mut txn, &ev, 1_000), ev.id);
+        assert_eq!(append_event(&mut txn, &ev, 1_000), format!("{}-2", ev.id));
+        assert_eq!(append_event(&mut txn, &ev, 1_000), format!("{}-3", ev.id));
+        let ids: Vec<String> = read_events(&txn).into_iter().map(|e| e.id).collect();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.iter().all(|i| i.starts_with(&ev.id)));
+
+        for i in 0..MAX_EVENTS_PER_DOC as u64 + 10 {
+            append_event(&mut txn, &sample(2_000 + i, 100 + i as u32), 2_000 + i);
+        }
+        let events = read_events(&txn);
+        assert_eq!(events.len(), MAX_EVENTS_PER_DOC);
+        // 513 appended, 13 dropped: the three 1_000 events and 2_000..2_009.
+        assert_eq!(events[0].ts, 2_000 + 10);
     }
 
     #[test]

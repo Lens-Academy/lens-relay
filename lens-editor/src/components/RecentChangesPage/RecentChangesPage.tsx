@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, useDeferredValue, memo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useRecentChanges, type FileActivity, type ActivityEvent, type Excerpt } from '../../hooks/useRecentChanges';
 import { TIME_QUICK_PRESETS, isFullRange, timeBounds, type TimeRange } from '../ReviewPage/timeFilter';
 import { DualRangeSlider } from '../ReviewPage/DualRangeSlider';
 import { formatEventAge } from '../../lib/activity';
+import { fileSectionRenders } from './renderCounts';
 
 interface RecentChangesPageProps {
   folderIds: string[];
@@ -11,6 +12,11 @@ interface RecentChangesPageProps {
 }
 
 const DEFAULT_RANGE: TimeRange = { mode: 'range', fromAgo: 86400_000, toAgo: 0, customFrom: '', customTo: '' };
+/** Server retention; also the slider's span. */
+const RETENTION_MS = 7 * 86400_000;
+/** Rows rendered per expanded file before a "Show more" button. */
+const EXCERPTS_PER_FILE = 25;
+const EVENTS_PER_FILE = 50;
 // The server only keeps a week, so "All" here means the full retention window.
 const PRESETS = TIME_QUICK_PRESETS.map(p => (p.mode === 'all' ? { ...p, label: '7d (all)' } : p)).filter(p => p.label !== '7d');
 
@@ -46,13 +52,22 @@ export function RecentChangesPage({ folderIds, folders }: RecentChangesPageProps
   // The server defaults `since_ms` to its retention window (seven days).
   // `fetchedAt` is the "now" for the time filter (sampled when data arrives,
   // so filtering stays pure).
-  const { data, fetchedAt: now, loading, error, refresh } = useRecentChanges(folderIds);
+  // Ask for the whole retention window explicitly (the server default);
+  // time presets filter client-side so the slider never refetches.
+  const [sinceMs] = useState(() => Date.now() - RETENTION_MS);
+  const { data, fetchedAt: now, loading, error, truncated, refresh } = useRecentChanges(folderIds, sinceMs);
 
   const [timeRange, setTimeRange] = useState<TimeRange>(DEFAULT_RANGE);
   const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
   const [folderFilter, setFolderFilter] = useState<Set<string>>(new Set());
   // null = untouched: the first file is expanded by default.
   const [expandedOverride, setExpandedFiles] = useState<Set<string> | null>(null);
+
+  // Filtering thousands of events per slider pixel would jank the thumb:
+  // let the controls update immediately and the list follow.
+  const deferredTimeRange = useDeferredValue(timeRange);
+  const deferredAuthorFilter = useDeferredValue(authorFilter);
+  const deferredFolderFilter = useDeferredValue(folderFilter);
 
   const folderName = useMemo(() => new Map(folders.map(f => [f.id, f.name])), [folders]);
 
@@ -62,40 +77,36 @@ export function RecentChangesPage({ folderIds, folders }: RecentChangesPageProps
     return [...set].sort();
   }, [data]);
 
+  // The list only decides which events of each file are visible (a cheap
+  // id string per file) and the order; each FileSection derives its own
+  // rows from the stable `file` object, so sections whose visible set is
+  // unchanged don't re-render when a filter moves.
   const filtered = useMemo(() => {
-    const [from, to] = timeBounds(timeRange, now);
+    const [from, to] = timeBounds(deferredTimeRange, now);
     return data
-      .filter(f => folderFilter.size === 0 || folderFilter.has(f.folder_id))
+      .filter(f => deferredFolderFilter.size === 0 || deferredFolderFilter.has(f.folder_id))
       .map(f => {
-        const events = f.events
+        const visible = f.events
           .filter(e => e.ts >= from && e.ts <= to)
-          .filter(e => authorFilter.size === 0 || authorFilter.has(displayActor(e)))
-          .slice()
-          .sort((a, b) => b.ts - a.ts);
-        const visible = new Set(events.map(e => e.id));
-        // Excerpts are precomputed over all retained events; keep those that
-        // still contain a visible change, with filtered-out inserts rendered
-        // as plain text and filtered-out removals dropped.
-        const excerpts = f.excerpts
-          .map(x => ({
-            ...x,
-            segments: x.segments
-              .map(seg => (seg.event_id && !visible.has(seg.event_id) ? (seg.kind === 'delete' ? null : { ...seg, kind: 'text' as const }) : seg))
-              .filter((seg): seg is NonNullable<typeof seg> => seg !== null),
-          }))
-          .filter(x => x.segments.some(seg => seg.kind !== 'text'));
-        return { ...f, events, excerpts };
+          .filter(e => deferredAuthorFilter.size === 0 || deferredAuthorFilter.has(displayActor(e)));
+        const newestTs = visible.reduce((m, e) => Math.max(m, e.ts), 0);
+        return { file: f, visibleKey: visible.map(e => e.id).join('\n'), count: visible.length, newestTs };
       })
-      .filter(f => f.events.length > 0)
-      .sort((a, b) => b.events[0].ts - a.events[0].ts);
-  }, [data, timeRange, authorFilter, folderFilter, now]);
+      .filter(f => f.count > 0)
+      .sort((a, b) => b.newestTs - a.newestTs);
+  }, [data, deferredTimeRange, deferredAuthorFilter, deferredFolderFilter, now]);
 
-  const expandedFiles = useMemo(
-    () => expandedOverride ?? new Set(filtered.length > 0 ? [filtered[0].doc_id] : []),
-    [expandedOverride, filtered],
+  const defaultExpanded = useMemo(
+    () => new Set(filtered.length > 0 ? [filtered[0].file.doc_id] : []),
+    [filtered],
   );
+  const defaultExpandedRef = useRef(defaultExpanded);
+  useEffect(() => {
+    defaultExpandedRef.current = defaultExpanded;
+  }, [defaultExpanded]);
+  const expandedFiles = expandedOverride ?? defaultExpanded;
 
-  const totalEvents = filtered.reduce((n, f) => n + f.events.length, 0);
+  const totalEvents = filtered.reduce((n, f) => n + f.count, 0);
   const isActive = authorFilter.size > 0 || folderFilter.size > 0 || timeRange.mode !== 'all';
 
   const toggleSet = (set: Set<string>, key: string) => {
@@ -104,9 +115,11 @@ export function RecentChangesPage({ folderIds, folders }: RecentChangesPageProps
     return next;
   };
 
+  // Stable identity (functional update) so memoised sections don't
+  // re-render when another file is toggled.
   const toggleFile = useCallback((docId: string) => {
-    setExpandedFiles(toggleSet(expandedFiles, docId));
-  }, [expandedFiles]);
+    setExpandedFiles(prev => toggleSet(prev ?? defaultExpandedRef.current, docId));
+  }, []);
 
   const navigateTo = useCallback((docId: string, pos: number, e?: React.MouseEvent) => {
     const shortUuid = docId.slice(-36).slice(0, 8);
@@ -186,18 +199,24 @@ export function RecentChangesPage({ folderIds, folders }: RecentChangesPageProps
             <DualRangeSlider
               fromAgo={timeRange.fromAgo}
               toAgo={timeRange.toAgo}
+              maxAgoMs={RETENTION_MS}
               onChange={(fromAgo, toAgo) => setTimeRange({ ...timeRange, mode: isFullRange(fromAgo, toAgo) ? 'all' : 'range', fromAgo, toAgo })}
             />
           </div>
         </div>
 
         {error && <div className="text-sm text-red-600 mb-3">{error}</div>}
+        {truncated && (
+          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-3">
+            Too many changes to show them all — the oldest ones were left out.
+          </div>
+        )}
 
         <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
           <span>{totalEvents} change{totalEvents !== 1 ? 's' : ''} in {filtered.length} file{filtered.length !== 1 ? 's' : ''}</span>
           {filtered.length > 1 && (
             <span className="flex gap-2">
-              <button onClick={() => setExpandedFiles(new Set(filtered.map(f => f.doc_id)))} className="hover:text-gray-700">Expand all</button>
+              <button onClick={() => setExpandedFiles(new Set(filtered.map(f => f.file.doc_id)))} className="hover:text-gray-700">Expand all</button>
               <button onClick={() => setExpandedFiles(new Set())} className="hover:text-gray-700">Collapse all</button>
             </span>
           )}
@@ -208,10 +227,11 @@ export function RecentChangesPage({ folderIds, folders }: RecentChangesPageProps
         )}
 
         <div className="flex flex-col gap-3">
-          {filtered.map(file => (
+          {filtered.map(({ file, visibleKey }) => (
             <FileSection
               key={file.doc_id}
               file={file}
+              visibleKey={visibleKey}
               folderName={folderName.get(file.folder_id)}
               expanded={expandedFiles.has(file.doc_id)}
               onToggle={toggleFile}
@@ -224,14 +244,44 @@ export function RecentChangesPage({ folderIds, folders }: RecentChangesPageProps
   );
 }
 
-const FileSection = memo(function FileSection({ file, folderName, expanded, onToggle, onNavigate }: {
+/** Visible events (newest first) and excerpts restricted to them: inserts
+ *  of filtered-out events render as plain text, their removals are dropped,
+ *  excerpts left without any change are hidden. */
+function visibleRows(file: FileActivity, visibleKey: string) {
+  const visible = new Set(visibleKey.split('\n'));
+  const events = file.events.filter(e => visible.has(e.id)).sort((a, b) => b.ts - a.ts);
+  const excerpts = file.excerpts
+    .map(x => ({
+      ...x,
+      segments: x.segments
+        .map(seg => (seg.event_id && !visible.has(seg.event_id) ? (seg.kind === 'delete' ? null : { ...seg, kind: 'text' as const }) : seg))
+        .filter((seg): seg is NonNullable<typeof seg> => seg !== null),
+    }))
+    .filter(x => x.segments.some(seg => seg.kind !== 'text'));
+  return { events, excerpts };
+}
+
+const FileSection = memo(function FileSection({ file, visibleKey, folderName, expanded, onToggle, onNavigate }: {
   file: FileActivity;
+  /** Ids of the events passing the page filters, newline-joined. */
+  visibleKey: string;
   folderName?: string;
   expanded: boolean;
   onToggle: (docId: string) => void;
   onNavigate: (docId: string, pos: number, e?: React.MouseEvent) => void;
 }) {
   const { filename, parentPath } = fileLabel(folderName, file.path);
+  if (import.meta.env.MODE === 'test') {
+    fileSectionRenders.set(file.doc_id, (fileSectionRenders.get(file.doc_id) ?? 0) + 1);
+  }
+  const rows = useMemo(() => visibleRows(file, visibleKey), [file, visibleKey]);
+  const byId = useMemo(() => new Map(rows.events.map(e => [e.id, e])), [rows.events]);
+  const [showAll, setShowAll] = useState(false);
+  const excerpts = showAll ? rows.excerpts : rows.excerpts.slice(0, EXCERPTS_PER_FILE);
+  const events = showAll ? rows.events : rows.events.slice(0, EVENTS_PER_FILE);
+  const hidden = rows.excerpts.length > 0 ? rows.excerpts.length - excerpts.length : rows.events.length - events.length;
+  // Excerpt positions are current; event positions are as of the edit.
+  const openPos = rows.excerpts[0]?.pos ?? rows.events[0].pos;
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
       <div className="flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors">
@@ -241,19 +291,24 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
             {parentPath && <span className="text-gray-400 font-normal">{parentPath}/</span>}
             <span className="text-gray-800">{filename}</span>
           </span>
-          <span className="text-xs text-gray-400 shrink-0">{file.events.length} change{file.events.length !== 1 ? 's' : ''} · {formatEventAge(file.events[0].ts)}</span>
+          <span className="text-xs text-gray-400 shrink-0">{rows.events.length} change{rows.events.length !== 1 ? 's' : ''} · {formatEventAge(rows.events[0].ts)}</span>
         </button>
-        <button onClick={e => onNavigate(file.doc_id, file.events[0].pos, e)} className="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded border border-gray-200 shrink-0">Open</button>
+        <button onClick={e => onNavigate(file.doc_id, openPos, e)} className="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded border border-gray-200 shrink-0">Open</button>
       </div>
       {expanded && (
         <div className="divide-y divide-gray-100">
-          {file.excerpts.length > 0
-            ? file.excerpts.map((x, i) => (
-                <ExcerptBlock key={`${x.pos}-${i}`} docId={file.doc_id} excerpt={x} events={file.events} onNavigate={onNavigate} />
+          {rows.excerpts.length > 0
+            ? excerpts.map((x, i) => (
+                <ExcerptBlock key={`${x.pos}-${i}`} docId={file.doc_id} excerpt={x} byId={byId} onNavigate={onNavigate} />
               ))
-            : file.events.map(ev => (
+            : events.map(ev => (
                 <EventRow key={ev.id} docId={file.doc_id} event={ev} onNavigate={onNavigate} />
               ))}
+          {hidden > 0 && (
+            <button onClick={() => setShowAll(true)} className="w-full px-4 py-2 text-xs text-blue-600 hover:bg-gray-50 text-left">
+              Show {hidden} more
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -266,13 +321,12 @@ function formatSkipped(chars: number): string {
 }
 
 /** One excerpt of the current text with its changes marked in place. */
-const ExcerptBlock = memo(function ExcerptBlock({ docId, excerpt, events, onNavigate }: {
+const ExcerptBlock = memo(function ExcerptBlock({ docId, excerpt, byId, onNavigate }: {
   docId: string;
   excerpt: Excerpt;
-  events: ActivityEvent[];
+  byId: Map<string, ActivityEvent>;
   onNavigate: (docId: string, pos: number, e?: React.MouseEvent) => void;
 }) {
-  const byId = useMemo(() => new Map(events.map(e => [e.id, e])), [events]);
   const changed = excerpt.segments.filter(s => s.event_id).map(s => byId.get(s.event_id!)).filter((e): e is ActivityEvent => !!e);
   const newest = changed.reduce<ActivityEvent | null>((a, e) => (!a || e.ts > a.ts ? e : a), null);
   const actors = [...new Set(changed.map(displayActor))];
@@ -299,9 +353,9 @@ const ExcerptBlock = memo(function ExcerptBlock({ docId, excerpt, events, onNavi
         <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
           {excerpt.segments.map((seg, i) =>
             seg.kind === 'insert' ? (
-              <span key={i} className="bg-purple-100 text-purple-900 rounded-sm" title={title(seg)}>{seg.text}</span>
+              <span key={i} className="bg-purple-100 text-purple-900 rounded-sm" title={title(seg)}>{seg.text}{seg.truncated ? ' […]' : ''}</span>
             ) : seg.kind === 'delete' ? (
-              <span key={i} className="bg-purple-50 text-purple-700 line-through decoration-purple-400 rounded-sm" title={title(seg)}>{seg.text}</span>
+              <span key={i} className="bg-purple-50 text-purple-700 line-through decoration-purple-400 rounded-sm" title={title(seg)}>{seg.text}{seg.truncated ? ' […]' : ''}</span>
             ) : (
               <span key={i} className="text-gray-600">{seg.text}</span>
             )

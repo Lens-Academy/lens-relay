@@ -199,10 +199,13 @@ See [docs/relay-auth-customizations.md](docs/relay-auth-customizations.md) for f
   text attributed (via the doc's `users` provenance map) to an `ai:` actor; edits that would
   delete/replace human-written or unattributed text, or touch pending suggestions/comments,
   become CriticMarkup suggestions instead (`crates/relay/src/mcp/tools/edit_policy.rs`).
-- Direct edits are logged in the content doc's `activity_v0` map (7-day retention,
-  `crates/y-sweet-core/src/activity.rs`), indexed in memory (`RecentChangesIndex`, rebuilt at
-  boot like the suggestions index) and served by `GET /recent-changes?folder_id=` for the
-  editor's `/recent` page and its in-file "Recent" authorship mode.
+- Direct edits are logged in the content doc's `activity_v0` map (7-day retention, ≤500
+  events per doc, `crates/y-sweet-core/src/activity.rs`), indexed in memory
+  (`RecentChangesIndex`, rebuilt at boot like the suggestions index, swept every 10 min) and
+  served by `GET /recent-changes?folder_id=&since_ms=&limit=&preview=` (newest-first event
+  limit, `old`/`new` cut to `preview` chars, `truncated` flag) for the editor's `/recent` page
+  and its in-file "Highlight recent changes" overlay. Page excerpts are built server-side
+  (`crates/relay/src/recent_excerpts.rs`) on every index refresh.
 
 ## Git Sync
 

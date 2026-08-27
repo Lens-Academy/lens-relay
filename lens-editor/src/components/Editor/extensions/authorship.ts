@@ -47,6 +47,9 @@ export type AuthorshipMode = 'hidden' | 'gutter' | 'expanded' | 'inline';
 
 export const setAuthorshipMode = StateEffect.define<AuthorshipMode>();
 const refreshAuthorship = StateEffect.define<null>();
+/** Recent-overlay-only refresh (window expiry tick): recomputes but never
+ *  pins scroll, since it changes at most a few marks. */
+const refreshRecent = StateEffect.define<null>();
 
 export const authorshipModeField = StateField.define<AuthorshipMode>({
   create: () => 'gutter',
@@ -131,8 +134,11 @@ export const recentWindowField = StateField.define<number>({
 
 /** Struck-through ghost of text an AI removed (recent-changes overlay). */
 class GhostWidget extends WidgetType {
+  /** Minute bucket of the event's age, so the "N min ago" title refreshes. */
+  private readonly ageBucket: number;
   constructor(private readonly ev: DocActivityEvent) {
     super();
+    this.ageBucket = Math.floor((Date.now() - ev.ts) / 60_000);
   }
   toDOM(): HTMLElement {
     const el = document.createElement('span');
@@ -143,7 +149,7 @@ class GhostWidget extends WidgetType {
     return el;
   }
   eq(other: GhostWidget): boolean {
-    return other.ev.id === this.ev.id;
+    return other.ev.id === this.ev.id && other.ageBucket === this.ageBucket;
   }
   ignoreEvent(): boolean {
     return true;
@@ -268,7 +274,25 @@ class AuthorshipPlugin {
   private recentRanges: Array<{ from: number; to: number; event: DocActivityEvent }> = [];
   private readonly activity: Y.Map<unknown>;
   private readonly activityObserver: () => void;
-  private recentTimer: ReturnType<typeof setInterval> | null = null;
+  /** One-shot timer for the next event to leave the window. */
+  private recentTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Parsed `activity_v0` plus each removal's resolved position (CM offset),
+   * kept across updates: parsing and anchor resolution are O(events × items)
+   * and would otherwise run on every keystroke and scroll. Invalidated when
+   * the map changes; positions are mapped through document changes.
+   */
+  private recentCache: {
+    events: DocActivityEvent[];
+    ghostPos: Map<string, number | null>;
+  } | null = null;
+  /** Decorations of the last recent pass, reused on viewport-only updates. */
+  private recentDecos: Range<Decoration>[] = [];
+  /** Set when a pass bailed out mid-sync, so the next one rebuilds. */
+  private recentStale = false;
+  /** Test hook: how many times the activity map was parsed. */
+  recentParses = 0;
+  private tooltipFrame: number | null = null;
   private labelBlocks: Array<{ from: number; label: string; category: LineCategory }> = [];
   private overlay: HTMLElement | null = null;
   private readonly onMouseMove: (e: MouseEvent) => void;
@@ -297,12 +321,10 @@ class AuthorshipPlugin {
     // to "now", so also re-evaluate periodically while the overlay is on.
     this.activity = doc.getMap(ACTIVITY_MAP);
     this.activityObserver = () => {
+      this.recentCache = null;
       if (view.state.field(recentEnabledField)) this.scheduleRefresh();
     };
     this.activity.observeDeep(this.activityObserver);
-    this.recentTimer = setInterval(() => {
-      if (view.state.field(recentEnabledField)) this.scheduleRefresh();
-    }, 30_000);
 
     // Gutter hover: hovering the strip band previews Expanded mode — the
     // blame-style margin labels appear for the whole viewport and disappear
@@ -380,8 +402,15 @@ class AuthorshipPlugin {
     const refreshed = update.transactions.some((tr) =>
       tr.effects.some((e) => e.is(refreshAuthorship))
     );
-    if (update.docChanged || update.viewportChanged || modeChanged || refreshed) {
-      this.recompute(update);
+    const recentTick = update.transactions.some((tr) =>
+      tr.effects.some((e) => e.is(refreshRecent))
+    );
+    if (update.docChanged || update.viewportChanged || modeChanged || refreshed || recentTick) {
+      // Recent ranges are doc-absolute: a viewport-only update can reuse
+      // the last pass (the authorship labels are viewport-bound and do
+      // recompute).
+      const recentDirty = update.docChanged || modeChanged || refreshed || recentTick;
+      this.recompute(update, recentDirty);
     }
 
     // Our effect-only updates (mode switch, hover preview, users-map refresh)
@@ -411,10 +440,8 @@ class AuthorshipPlugin {
 
   /** Recent-overlay hit test: the event that inserted the text at `pos`. */
   recentAt(pos: number): DocActivityEvent | null {
-    for (const r of this.recentRanges) {
-      if (pos >= r.from && pos < r.to) return r.event;
-    }
-    return null;
+    const r = rangeAt(this.recentRanges, pos);
+    return r ? r.event : null;
   }
 
   /**
@@ -425,6 +452,16 @@ class AuthorshipPlugin {
    * caret position ourselves (exact) and map it with `posAtDOM`.
    */
   private handleTooltipHover(e: MouseEvent) {
+    // At most one hit test per animation frame (mousemove fires far more
+    // often); the lookups below are then deferred behind the hover delay.
+    if (this.tooltipFrame !== null) return;
+    this.tooltipFrame = requestAnimationFrame(() => {
+      this.tooltipFrame = null;
+      this.tooltipHoverNow(e);
+    });
+  }
+
+  private tooltipHoverNow(e: MouseEvent) {
     const mode = this.view.state.field(authorshipModeField);
     const recentEnabled = this.view.state.field(recentEnabledField);
     if (mode === 'hidden' && !recentEnabled) {
@@ -452,11 +489,6 @@ class AuthorshipPlugin {
       this.hideTooltip();
       return;
     }
-    const info = this.tooltipAt(pos);
-    if (!info) {
-      this.hideTooltip();
-      return;
-    }
     if (this.tipRange && this.tipEl && pos >= this.tipRange.from && pos < this.tipRange.to) {
       return; // still over the same word — keep it
     }
@@ -464,6 +496,11 @@ class AuthorshipPlugin {
     const { x, y } = { x: e.clientX, y: e.clientY };
     this.tipTimer = setTimeout(() => {
       this.tipTimer = null;
+      const info = this.tooltipAt(pos);
+      if (!info) {
+        this.hideTooltip();
+        return;
+      }
       this.showTooltip(info.text, x, y);
       this.tipRange = { from: info.from, to: info.to };
     }, 150);
@@ -538,26 +575,33 @@ class AuthorshipPlugin {
   actorAt(
     pos: number
   ): { actor: string | undefined; client: number; from: number; to: number } | null {
-    for (const run of this.runs) {
-      if (pos >= run.from && pos < run.to) {
-        return {
-          actor: this.actorByClient.get(run.client),
-          client: run.client,
-          from: run.from,
-          to: run.to,
-        };
-      }
-    }
-    return null;
+    const run = rangeAt(this.runs, pos);
+    if (!run) return null;
+    return {
+      actor: this.actorByClient.get(run.client),
+      client: run.client,
+      from: run.from,
+      to: run.to,
+    };
   }
 
-  private recompute(update?: ViewUpdate) {
+  private recompute(update?: ViewUpdate, recentDirty = true) {
     const mode = this.view.state.field(authorshipModeField);
     const recentEnabled = this.view.state.field(recentEnabledField);
     this.labelBlocks = [];
-    this.recentRanges = [];
+    // Removed-text positions follow the document like any decoration would
+    // (right-associated, matching the server's Assoc::After anchors), so
+    // the anchors need re-resolving only when the activity map changes.
+    if (update?.docChanged && this.recentCache) {
+      for (const [id, pos] of this.recentCache.ghostPos) {
+        if (pos !== null) this.recentCache.ghostPos.set(id, update.changes.mapPos(pos, 1));
+      }
+    }
     if (mode === 'hidden' && !recentEnabled) {
       this.runs = [];
+      this.recentRanges = [];
+      this.recentDecos = [];
+      this.clearRecentTimer();
       this.decorations = Decoration.none;
       this.scheduleOverlayRender();
       return;
@@ -578,12 +622,24 @@ class AuthorshipPlugin {
       if (update?.docChanged) {
         this.decorations = this.decorations.map(update.changes);
       }
+      this.recentStale = true;
       return;
     }
+    recentDirty ||= this.recentStale;
+    this.recentStale = false;
 
     const ranges: Range<Decoration>[] = [];
     if (recentEnabled) {
-      this.collectRecent(doc, ranges);
+      if (recentDirty) {
+        this.recentRanges = [];
+        this.recentDecos = [];
+        this.collectRecent(doc, this.recentDecos);
+      }
+      ranges.push(...this.recentDecos);
+    } else {
+      this.recentRanges = [];
+      this.recentDecos = [];
+      this.clearRecentTimer();
     }
     if (mode === 'hidden') {
       this.decorations = Decoration.set(ranges, true);
@@ -673,15 +729,31 @@ class AuthorshipPlugin {
   private collectRecent(doc: Y.Doc, ranges: Range<Decoration>[]): void {
     const windowMs = this.view.state.field(recentWindowField);
     const now = Date.now();
-    const events = readActivityEvents(doc).filter((e) => e.ts >= now - windowMs);
+    if (!this.recentCache) {
+      this.recentCache = { events: readActivityEvents(doc), ghostPos: new Map() };
+      this.recentParses += 1;
+    }
+    const cache = this.recentCache;
+    const events = cache.events.filter((e) => e.ts >= now - windowMs);
+    this.scheduleRecentExpiry(events, windowMs, now);
     if (events.length === 0) return;
 
     const cmDoc = this.view.state.doc;
     const touchedLines = new Set<number>();
 
+    // Runs are matched against the events of their own client only.
+    const byClient = new Map<number, DocActivityEvent[]>();
+    for (const ev of events) {
+      if (ev.clockTo <= ev.clockFrom) continue;
+      const list = byClient.get(ev.client);
+      if (list) list.push(ev);
+      else byClient.set(ev.client, [ev]);
+    }
     for (const run of this.runs) {
+      const candidates = byClient.get(run.client);
+      if (!candidates) continue;
       const length = run.to - run.from;
-      for (const ev of events) {
+      for (const ev of candidates) {
         if (!eventCoversItems(ev, run.client, run.clock, length)) continue;
         // Clip the run to the event's clock range (a run can span two events
         // from the same session when their items are adjacent).
@@ -706,10 +778,18 @@ class AuthorshipPlugin {
       }
     }
 
+    // Removed text: resolve once per event (anchor walk / context search),
+    // then follow the doc through mapped positions.
+    let text: string | null = null;
+    const getText = () => (text ??= this.ytext.toString());
     const unplaced: DocActivityEvent[] = [];
     for (const ev of events) {
       if (!ev.old) continue;
-      const pos = resolveEventPosition(doc, this.ytext, ev);
+      let pos = cache.ghostPos.get(ev.id);
+      if (pos === undefined) {
+        pos = resolveEventPosition(doc, this.ytext, ev, getText);
+        cache.ghostPos.set(ev.id, pos);
+      }
       if (pos === null || pos > cmDoc.length) {
         unplaced.push(ev);
         continue;
@@ -724,6 +804,29 @@ class AuthorshipPlugin {
     }
     for (const n of touchedLines) {
       ranges.push(Decoration.line({ class: 'cm-authline-recent' }).range(cmDoc.line(n).from));
+    }
+  }
+
+  /** Wake up when the oldest visible event leaves the window (or a minute
+   *  from now to refresh the ghosts' age labels), instead of polling. */
+  private scheduleRecentExpiry(events: DocActivityEvent[], windowMs: number, now: number) {
+    this.clearRecentTimer();
+    if (events.length === 0) return;
+    let next = 60_000;
+    for (const ev of events) {
+      next = Math.min(next, ev.ts + windowMs - now);
+    }
+    this.recentTimer = setTimeout(() => {
+      this.recentTimer = null;
+      if (this.destroyed) return;
+      this.view.dispatch({ effects: refreshRecent.of(null) });
+    }, Math.max(1_000, next));
+  }
+
+  private clearRecentTimer() {
+    if (this.recentTimer) {
+      clearTimeout(this.recentTimer);
+      this.recentTimer = null;
     }
   }
 
@@ -794,7 +897,8 @@ class AuthorshipPlugin {
     this.destroyed = true;
     this.users.unobserveDeep(this.usersObserver);
     this.activity.unobserveDeep(this.activityObserver);
-    if (this.recentTimer) clearInterval(this.recentTimer);
+    this.clearRecentTimer();
+    if (this.tooltipFrame !== null) cancelAnimationFrame(this.tooltipFrame);
     this.view.scrollDOM.removeEventListener('mousemove', this.onMouseMove);
     this.view.scrollDOM.removeEventListener('mouseleave', this.onMouseLeave);
     this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
@@ -802,6 +906,19 @@ class AuthorshipPlugin {
     this.overlay = null;
     this.hideTooltip();
   }
+}
+
+/** Binary search over non-overlapping ranges sorted by `from`. */
+function rangeAt<T extends { from: number; to: number }>(ranges: T[], pos: number): T | null {
+  let lo = 0;
+  let hi = ranges.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (ranges[mid].to <= pos) lo = mid + 1;
+    else hi = mid;
+  }
+  const r = ranges[lo];
+  return r && pos >= r.from && pos < r.to ? r : null;
 }
 
 /** Browser caret position under a point (Chromium / Firefox / WebKit). */

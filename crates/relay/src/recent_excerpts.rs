@@ -9,10 +9,12 @@
 //! fallback; unplaceable removals are left out of excerpts but stay in the
 //! event list).
 
-use crate::mcp::provenance::{resolve_anchor, Run};
+use crate::mcp::provenance::{anchor_id, resolve_anchor, Run};
 use crate::mcp::tools::critic_markup::{accepted_view, compute_raw_positions, parse, Span};
-use y_sweet_core::activity::{ActivityEvent, Excerpt, ExcerptSegment};
-use yrs::ReadTxn;
+use std::collections::HashMap;
+use y_sweet_core::activity::{ActivityEvent, Excerpt, ExcerptSegment, SEGMENT_TEXT_CAP};
+use yrs::block::ID;
+use yrs::{Assoc, ReadTxn};
 
 /// Changes closer than this (accepted-view bytes) share an excerpt.
 const CLUSTER_GAP: usize = 240;
@@ -101,8 +103,74 @@ fn snap_to_words(s: &str, from: usize, to: usize) -> (usize, usize) {
     (f, t)
 }
 
+/// Provenance runs grouped by client and sorted by clock, with each run's
+/// UTF-16 length precomputed, so clock-range and anchor lookups are
+/// O(log R) instead of a scan over every run per event.
+struct RunIndex<'a> {
+    by_client: HashMap<u64, Vec<(&'a Run, u32)>>,
+}
+
+impl<'a> RunIndex<'a> {
+    fn new(raw: &str, runs: &'a [Run]) -> Self {
+        let mut by_client: HashMap<u64, Vec<(&'a Run, u32)>> = HashMap::new();
+        for run in runs {
+            let units = raw[run.from..run.to].encode_utf16().count() as u32;
+            by_client.entry(run.client).or_default().push((run, units));
+        }
+        for v in by_client.values_mut() {
+            v.sort_by_key(|(r, _)| r.clock);
+        }
+        Self { by_client }
+    }
+
+    /// Runs of `client` overlapping the clock range `[from, to)`.
+    fn overlapping(&self, client: u64, from: u32, to: u32) -> &[(&'a Run, u32)] {
+        let Some(runs) = self.by_client.get(&client) else {
+            return &[];
+        };
+        let start = runs.partition_point(|(r, units)| r.clock + units <= from);
+        let end = start + runs[start..].partition_point(|(r, _)| r.clock < to);
+        &runs[start..end]
+    }
+
+    /// Byte offset of the character with the given item ID, when it is
+    /// still visible.
+    fn locate(&self, raw: &str, id: &ID) -> Option<usize> {
+        let (run, units) = self.overlapping(id.client, id.clock, id.clock + 1).first()?;
+        if id.clock < run.clock || id.clock >= run.clock + units {
+            return None;
+        }
+        Some(run.from + utf16_to_byte(&raw[run.from..run.to], id.clock - run.clock))
+    }
+}
+
+/// Byte offset of UTF-16 unit `units` within `text` (clamped to its end).
+fn utf16_to_byte(text: &str, units: u32) -> usize {
+    let mut seen = 0u32;
+    for (i, c) in text.char_indices() {
+        if seen >= units {
+            return i;
+        }
+        seen += c.len_utf16() as u32;
+    }
+    text.len()
+}
+
+/// Cut segment text at [`SEGMENT_TEXT_CAP`] chars.
+fn cap_segment(text: &str) -> (String, bool) {
+    match text.char_indices().nth(SEGMENT_TEXT_CAP) {
+        Some((i, _)) => (format!("{}…", &text[..i]), true),
+        None => (text.to_string(), false),
+    }
+}
+
 /// Build excerpts for a doc from its current raw text, provenance runs and
-/// events. `txn` is only used to resolve removal anchors.
+/// events. `txn` is only used to resolve removal anchors whose item is no
+/// longer among the visible runs.
+///
+/// Cost: O(R + E·log R) for the change collection plus O(n) over the
+/// accepted text; the caller's `visible_runs_copy` (full state encode +
+/// apply) dominates for big docs.
 pub fn build_excerpts<T: ReadTxn>(
     txn: &T,
     raw: &str,
@@ -116,39 +184,23 @@ pub fn build_excerpts<T: ReadTxn>(
     let raw_positions = compute_raw_positions(raw, &spans);
     let accepted = accepted_view(&spans);
     let to_acc = |off: usize| raw_to_accepted(raw, &spans, &raw_positions, off);
+    let index = runs.map(|r| RunIndex::new(raw, r));
 
     let mut changes: Vec<Change> = Vec::new();
 
     // Surviving inserted text: runs whose items fall inside an event's
     // minted clock range.
-    if let Some(runs) = runs {
+    if let Some(index) = &index {
         for ev in events {
-            for run in runs {
-                if run.client != ev.client {
-                    continue;
-                }
-                let run_units = raw[run.from..run.to].encode_utf16().count() as u32;
-                if run.clock >= ev.clock_to || run.clock + run_units <= ev.clock_from {
-                    continue;
-                }
-                // Clip to the event's clock range (UTF-16 units → bytes).
-                let skip_units = ev.clock_from.saturating_sub(run.clock) as usize;
-                let take_units = (ev.clock_to.min(run.clock + run_units)
-                    - ev.clock_from.max(run.clock)) as usize;
+            if ev.clock_to <= ev.clock_from {
+                continue;
+            }
+            for (run, units) in index.overlapping(ev.client, ev.clock_from, ev.clock_to) {
                 let text = &raw[run.from..run.to];
-                let mut byte_from = run.from;
-                let mut units = 0usize;
-                let mut byte_to = run.from;
-                for (i, c) in text.char_indices() {
-                    let u = c.len_utf16();
-                    if units < skip_units {
-                        byte_from = run.from + i + c.len_utf8();
-                    }
-                    if units < skip_units + take_units {
-                        byte_to = run.from + i + c.len_utf8();
-                    }
-                    units += u;
-                }
+                let skip = ev.clock_from.saturating_sub(run.clock);
+                let take_to = ev.clock_to.min(run.clock + units) - run.clock;
+                let byte_from = run.from + utf16_to_byte(text, skip);
+                let byte_to = run.from + utf16_to_byte(text, take_to);
                 let (from, to) = (to_acc(byte_from), to_acc(byte_to));
                 if to > from {
                     changes.push(Change {
@@ -163,16 +215,24 @@ pub fn build_excerpts<T: ReadTxn>(
         }
     }
 
-    // Removed text: anchor → context fallback → skip.
+    // Removed text: anchor (via runs, else item walk) → context → skip.
     for ev in events {
         if ev.old.is_empty() {
             continue;
         }
-        let raw_pos = ev
-            .anchor
-            .as_deref()
-            .and_then(|a| resolve_anchor(txn, a))
-            .map(|p| p.min(raw.len()));
+        let raw_pos = ev.anchor.as_deref().and_then(|a| {
+            let by_runs = index.as_ref().and_then(|index| {
+                let (id, assoc) = anchor_id(a)?;
+                let byte = index.locate(raw, &id)?;
+                Some(match assoc {
+                    Assoc::After => byte,
+                    Assoc::Before => byte + raw[byte..].chars().next().map_or(0, char::len_utf8),
+                })
+            });
+            by_runs
+                .or_else(|| resolve_anchor(txn, a))
+                .map(|p| p.min(raw.len()))
+        });
         let pos = match raw_pos {
             Some(p) => Some(to_acc(floor_char(raw, p))),
             None => unique_context_position(&accepted, ev),
@@ -195,16 +255,21 @@ pub fn build_excerpts<T: ReadTxn>(
 
     // Cluster nearby changes.
     let mut clusters: Vec<Vec<Change>> = Vec::new();
+    let mut cluster_end = 0usize;
     for c in changes {
-        match clusters.last_mut() {
-            Some(cluster)
-                if c.from <= cluster.iter().map(|x| x.to).max().unwrap() + CLUSTER_GAP =>
-            {
-                cluster.push(c)
-            }
-            _ => clusters.push(vec![c]),
+        if !clusters.is_empty() && c.from <= cluster_end + CLUSTER_GAP {
+            cluster_end = cluster_end.max(c.to);
+            clusters.last_mut().unwrap().push(c);
+        } else {
+            cluster_end = c.to;
+            clusters.push(vec![c]);
         }
     }
+
+    // Line starts (byte offsets) for O(log n) line numbers.
+    let line_starts: Vec<usize> = std::iter::once(0)
+        .chain(accepted.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
 
     let mut excerpts = Vec::with_capacity(clusters.len());
     let mut prev_end = 0usize;
@@ -220,7 +285,7 @@ pub fn build_excerpts<T: ReadTxn>(
         let segments = segments_for(&accepted, start, end, &cluster);
         excerpts.push(Excerpt {
             pos: start,
-            line: accepted[..start].matches('\n').count() + 1,
+            line: line_starts.partition_point(|&ls| ls <= start),
             skipped_before: accepted[prev_end..start].chars().count(),
             skipped_after: 0,
             segments,
@@ -266,6 +331,7 @@ fn segments_for(
                 kind: "text".into(),
                 text: accepted[from..to].to_string(),
                 event_id: None,
+                truncated: false,
             });
         }
     };
@@ -276,22 +342,38 @@ fn segments_for(
             // Overlapping inserts from different events: keep the first.
             continue;
         }
-        push_text(&mut out, cursor, from);
-        if c.kind == "delete" {
-            out.push(ExcerptSegment {
-                kind: "delete".into(),
-                text: c.old.clone(),
-                event_id: Some(c.event_id.clone()),
-            });
-            cursor = from;
+        let (kind, source) = if c.kind == "delete" {
+            ("delete", c.old.as_str())
         } else {
-            out.push(ExcerptSegment {
-                kind: "insert".into(),
-                text: accepted[from..to].to_string(),
-                event_id: Some(c.event_id.clone()),
-            });
-            cursor = to;
+            ("insert", &accepted[from..to])
+        };
+        // A minimal char diff can leave one edit as several inserts around
+        // kept characters ("e" in added→rewritten). Like the editor overlay,
+        // bridge gaps of ≤2 chars so the edit reads as one change.
+        if kind == "insert" && accepted[cursor..from].chars().count() <= 2 {
+            if let Some(last) = out.last_mut() {
+                if last.kind == "insert"
+                    && last.event_id.as_deref() == Some(c.event_id.as_str())
+                    && !last.truncated
+                {
+                    let (text, truncated) =
+                        cap_segment(&format!("{}{}{}", last.text, &accepted[cursor..from], source));
+                    last.text = text;
+                    last.truncated = truncated;
+                    cursor = to;
+                    continue;
+                }
+            }
         }
+        push_text(&mut out, cursor, from);
+        let (text, truncated) = cap_segment(source);
+        out.push(ExcerptSegment {
+            kind: kind.into(),
+            text,
+            event_id: Some(c.event_id.clone()),
+            truncated,
+        });
+        cursor = if c.kind == "delete" { from } else { to };
     }
     push_text(&mut out, cursor, end);
     out
@@ -300,6 +382,90 @@ fn segments_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Seeded LCG so the property test is reproducible without a dev-dep.
+    fn lcg(seed: &mut u64) -> u64 {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *seed >> 33
+    }
+
+    #[test]
+    fn adjacent_inserts_of_one_event_merge_into_one_segment() {
+        let accepted = "ab cd";
+        let cluster = vec![
+            Change { from: 0, to: 1, kind: "insert", event_id: "e".into(), old: String::new() },
+            Change { from: 1, to: 2, kind: "insert", event_id: "e".into(), old: String::new() },
+            Change { from: 3, to: 4, kind: "insert", event_id: "e".into(), old: String::new() },
+        ];
+        let segs = segments_for(accepted, 0, accepted.len(), &cluster);
+        let flat: Vec<(&str, &str)> = segs.iter().map(|s| (s.kind.as_str(), s.text.as_str())).collect();
+        // The one-char gap " " is bridged, like the editor overlay does.
+        assert_eq!(flat, vec![("insert", "ab c"), ("text", "d")]);
+    }
+
+    #[test]
+    fn delete_followed_by_adjacent_inserts_merges_the_inserts() {
+        let accepted = "x, rewritten.";
+        let ch = |from, to, kind: &'static str| Change { from, to, kind, event_id: "b".into(), old: "old".into() };
+        let cluster = vec![ch(1, 1, "delete"), ch(1, 2, "insert"), ch(2, 5, "insert"), ch(5, 6, "insert")];
+        let segs = segments_for(accepted, 0, accepted.len(), &cluster);
+        let flat: Vec<(&str, &str)> = segs.iter().map(|s| (s.kind.as_str(), s.text.as_str())).collect();
+        assert_eq!(flat, vec![("text", "x"), ("delete", "old"), ("insert", ", rew"), ("text", "ritten.")]);
+    }
+
+    #[test]
+    fn run_index_matches_brute_force_overlap_and_locate() {
+        let mut seed = 42u64;
+        for _round in 0..50 {
+            // Random ASCII/multibyte text split into runs over a few clients.
+            let mut raw = String::new();
+            let mut runs: Vec<Run> = Vec::new();
+            let mut clocks: HashMap<u64, u32> = HashMap::new();
+            for _ in 0..(1 + lcg(&mut seed) % 40) {
+                let client = 1 + lcg(&mut seed) % 3;
+                let len = 1 + lcg(&mut seed) % 6;
+                let from = raw.len();
+                for _ in 0..len {
+                    raw.push(if lcg(&mut seed) % 4 == 0 { 'é' } else { 'a' });
+                }
+                let clock = clocks.entry(client).or_insert(0);
+                // Occasional gap in the clock (deleted text).
+                *clock += (lcg(&mut seed) % 3) as u32;
+                runs.push(Run { from, to: raw.len(), client, clock: *clock });
+                *clock += raw[from..].encode_utf16().count() as u32;
+            }
+            let index = RunIndex::new(&raw, &runs);
+            for _ in 0..20 {
+                let client = 1 + lcg(&mut seed) % 3;
+                let a = (lcg(&mut seed) % 40) as u32;
+                let b = a + (lcg(&mut seed) % 10) as u32;
+                let expected: Vec<usize> = runs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| {
+                        let units = raw[r.from..r.to].encode_utf16().count() as u32;
+                        r.client == client && r.clock < b && r.clock + units > a
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                let got: Vec<usize> = index
+                    .overlapping(client, a, b)
+                    .iter()
+                    .map(|(r, _)| runs.iter().position(|x| std::ptr::eq(x, *r)).unwrap())
+                    .collect();
+                assert_eq!(got, expected, "overlap {client} [{a},{b}) in {runs:?}");
+
+                // locate: every visible char is found at its own byte offset.
+                let id = ID::new(client, a);
+                let expected = runs.iter().find_map(|r| {
+                    let units = raw[r.from..r.to].encode_utf16().count() as u32;
+                    (r.client == client && r.clock <= a && a < r.clock + units)
+                        .then(|| r.from + utf16_to_byte(&raw[r.from..r.to], a - r.clock))
+                });
+                assert_eq!(index.locate(&raw, &id), expected);
+            }
+        }
+    }
     use crate::mcp::provenance::{apply_attributed_edit, sticky_anchor, visible_runs};
     use yrs::{Doc, GetString, Text, Transact, WriteTxn};
 

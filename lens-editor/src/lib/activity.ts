@@ -92,7 +92,14 @@ export function eventCoversItems(ev: DocActivityEvent, client: number, clock: nu
  *  2. the surrounding context text, if it occurs exactly once,
  *  3. null — the caller should list the event rather than guess.
  */
-export function resolveEventPosition(doc: Y.Doc, ytext: Y.Text, ev: DocActivityEvent): number | null {
+export function resolveEventPosition(
+  doc: Y.Doc,
+  ytext: Y.Text,
+  ev: DocActivityEvent,
+  /** Current text, for the context fallback; callers resolving many events
+   *  pass a memoised getter so `ytext.toString()` runs at most once. */
+  getText: () => string = () => ytext.toString()
+): number | null {
   if (ev.anchor) {
     try {
       const rel = Y.decodeRelativePosition(ev.anchor);
@@ -102,7 +109,8 @@ export function resolveEventPosition(doc: Y.Doc, ytext: Y.Text, ev: DocActivityE
       // fall through to context search
     }
   }
-  const text = ytext.toString();
+  if (!ev.ctxBefore && !ev.ctxAfter) return null;
+  const text = getText();
   const unique = (needle: string): number => {
     if (!needle) return -1;
     const first = text.indexOf(needle);

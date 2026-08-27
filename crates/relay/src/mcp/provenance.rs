@@ -252,6 +252,14 @@ pub fn resolve_anchor<T: ReadTxn>(txn: &T, anchor: &[u8]) -> Option<usize> {
     idx.get_offset(txn).map(|o| o.index as usize)
 }
 
+/// The item ID and association an encoded anchor points at, when it is
+/// relative to an item (anchors into empty text have no ID).
+pub fn anchor_id(anchor: &[u8]) -> Option<(yrs::block::ID, Assoc)> {
+    let idx = StickyIndex::decode_v1(anchor).ok()?;
+    let id = *idx.id()?;
+    Some((id, idx.assoc))
+}
+
 /// Encoded `Y.RelativePosition` (v1, decodable by yjs) pointing at
 /// `byte_offset` in `text`, associated to the character after it, falling
 /// back to the one before at end of text. `None` only for an empty text.
@@ -280,9 +288,12 @@ pub fn client_actor_map<T: ReadTxn>(txn: &T) -> HashMap<u64, String> {
                 Out::Any(Any::BigInt(n)) => n as u64,
                 _ => continue,
             };
-            // Provenance-prefixed actors win over any legacy raw user id.
+            // Deterministic precedence when a client appears under several
+            // actors (map iteration order is arbitrary): a human/other
+            // provenance actor beats an `ai:` one — the safe direction for
+            // the edit policy — and both beat a legacy raw user id.
             let entry = out.entry(id).or_insert_with(|| actor.to_string());
-            if !is_provenance_actor(entry) && is_provenance_actor(actor) {
+            if actor_rank(actor) > actor_rank(entry) {
                 *entry = actor.to_string();
             }
         }
@@ -290,8 +301,14 @@ pub fn client_actor_map<T: ReadTxn>(txn: &T) -> HashMap<u64, String> {
     out
 }
 
-fn is_provenance_actor(actor: &str) -> bool {
-    actor.starts_with("human:") || actor.starts_with("ai:")
+fn actor_rank(actor: &str) -> u8 {
+    if actor.starts_with("ai:") {
+        1
+    } else if actor.starts_with("human:") {
+        2
+    } else {
+        0
+    }
 }
 
 /// Clients responsible for the characters in `[from, to)` (byte offsets).
