@@ -15,6 +15,7 @@ import {
 } from "../server/add-article/claude";
 import { validateArticleDraft } from "../server/add-article/platform-validation";
 import { buildRelayReviewEdits } from "../server/add-article/review-diff";
+import { normalizeReviewScaffolding } from "../server/add-article/review-scaffolding";
 
 interface ReviewItem {
   article_path: string;
@@ -209,12 +210,20 @@ async function execute(): Promise<void> {
       if (createHash("sha256").update(accepted).digest("hex") !== baseSha256) {
         throw new Error("Relay accepted view changed since preparation; prepare a fresh run");
       }
-      const meta = validateEditedArticle(accepted, accepted).meta;
-      let validation = await validateArticleDraft(item.article_path, accepted);
-      let outcome = await reviewArticle(item.bundle, accepted, meta, validation.issues, 0);
+      const reviewBase = normalizeReviewScaffolding(accepted);
+      const meta = validateEditedArticle(reviewBase, reviewBase).meta;
+      let validation = await validateArticleDraft(item.article_path, reviewBase);
+      let outcome = await reviewArticle(item.bundle, reviewBase, meta, validation.issues, 0);
+      if (articleReviewDigest(outcome.markdown) === articleReviewDigest(reviewBase)) {
+        outcome = { ...outcome, markdown: reviewBase };
+      }
       validation = await validateArticleDraft(item.article_path, outcome.markdown);
       if (!validation.valid) {
+        const repairBase = outcome.markdown;
         outcome = await reviewArticle(item.bundle, outcome.markdown, outcome.meta, validation.issues, 1);
+        if (articleReviewDigest(outcome.markdown) === articleReviewDigest(repairBase)) {
+          outcome = { ...outcome, markdown: repairBase };
+        }
         validation = await validateArticleDraft(item.article_path, outcome.markdown);
       }
       if (!validation.valid) throw new Error(`Reviewed article remains invalid (${validation.counts.errors} errors)`);
@@ -230,9 +239,9 @@ async function execute(): Promise<void> {
       if (createHash("sha256").update(fresh).digest("hex") !== baseSha256) {
         throw new Error("Relay accepted view changed before suggestions were published");
       }
-      const edits = buildRelayReviewEdits(fresh, reviewed);
+      const edits = buildRelayReviewEdits(fresh, reviewed, { allowWholeDocumentFallback: false });
       for (const edit of edits) await client.edit(item.relay_path, edit.old, edit.replacement);
-      const proposed = await client.read(item.relay_path);
+      const proposed = await client.read(item.relay_path, true);
       if (proposed !== reviewed) throw new Error("Relay accepted-draft view does not match the reviewed article");
       const validationOutput = await client.validateContent(true);
       const reviewUrl = await client.getUrl(item.relay_path);

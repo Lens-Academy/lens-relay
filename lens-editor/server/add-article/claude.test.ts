@@ -44,6 +44,8 @@ describe("direct source review", () => {
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Remove Creative Commons and other licensing notices from imported articles.",
     );
+    expect(buildVerifyPrompt("/tmp/review")).toContain("Do not copy obvious typos or grammatical errors from the source.");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("Do not make whitespace-only edits");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Never collapse a substantive section, an appendix, footnotes, or prose");
   });
 
@@ -98,6 +100,12 @@ describe("direct source review", () => {
   it("rejects added frontmatter fields and changed authoring comments", () => {
     expect(() => validateEditedArticle(article, article.replace("created:", "extra: value\ncreated:"))).toThrow("added or removed");
     expect(() => validateEditedArticle(article, article.replace("Add discussion note here", "Changed note"))).toThrow("authoring comment");
+  });
+
+  it("rejects changed CriticMarkup comments", () => {
+    const commented = `${article}\n{>>Keep this note<<}\n`;
+    expect(() => validateEditedArticle(commented, commented.replace("Keep this note", "Changed note")))
+      .toThrow("CriticMarkup comment");
   });
 
   it("rejects malformed required metadata and an empty body", () => {

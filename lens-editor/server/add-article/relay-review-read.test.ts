@@ -20,6 +20,22 @@ describe("decodeRelayReadOutput", () => {
 });
 
 describe("readAcceptedRelayMarkdown", () => {
+  it("refuses documents with pending suggestions", async () => {
+    const response = (text: string) => new Response(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text }] },
+    }));
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response("review-session\norientation"))
+      .mockResolvedValueOnce(response("     1\tBody\n\n[Pending suggestions]\n- edit")));
+
+    await expect(readAcceptedRelayMarkdown("Lens Edu/articles/a.md", {
+      relayUrl: "https://relay.example",
+      token: "secret",
+    })).rejects.toThrow("pending suggestions");
+  });
+
   it("uses authenticated read-only MCP calls and returns the accepted document", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -91,5 +107,18 @@ describe("RelayReviewClient", () => {
       "create_session", "read", "edit", "validate_content", "get_url",
     ]);
     expect(requests[2].params.arguments).toMatchObject({ session_id: "session-1", old_string: "Old", new_string: "New" });
+  });
+
+  it("can read its own accepted-draft result after publishing suggestions", async () => {
+    const response = (text: string) => new Response(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text }] },
+    }));
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(response("session-1\norientation"))
+      .mockResolvedValueOnce(response("     1\tReviewed\n\n[Pending suggestions]\n- edit")));
+    const client = await createRelayReviewClient({ relayUrl: "https://relay.example", token: "secret" });
+    await expect(client.read("Lens Edu/articles/a.md", true)).resolves.toBe("Reviewed\n");
   });
 });

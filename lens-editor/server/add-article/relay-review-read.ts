@@ -25,7 +25,7 @@ export interface RelayReviewReadOptions {
 
 export interface RelayReviewClient extends RelayReviewReadOptions {
   sessionId: string;
-  read(filePath: string): Promise<string>;
+  read(filePath: string, allowPendingSuggestions?: boolean): Promise<string>;
   edit(filePath: string, oldString: string, newString: string): Promise<void>;
   validateContent(acceptDrafts?: boolean): Promise<string>;
   getUrl(filePath: string): Promise<string>;
@@ -87,6 +87,12 @@ export function decodeRelayReadOutput(output: string): string {
   return `${lines.join("\n")}\n`;
 }
 
+function assertNoPendingSuggestions(output: string): void {
+  if (/^\[Pending suggestions\]\s*$/m.test(output)) {
+    throw new Error("Relay article has pending suggestions; resolve them before starting another review");
+  }
+}
+
 /** Read a Relay Markdown document without mutating it. Relay's read tool
  * resolves the path against live folder metadata and returns the accepted view
  * of any pending CriticMarkup suggestions. */
@@ -108,7 +114,9 @@ export async function readAcceptedRelayMarkdown(
     name: "read",
     arguments: { file_path: filePath, session_id: sessionId },
   }, options.signal);
-  return decodeRelayReadOutput(toolText(readResponse, "read"));
+  const output = toolText(readResponse, "read");
+  assertNoPendingSuggestions(output);
+  return decodeRelayReadOutput(output);
 }
 
 export async function createRelayReviewClient(
@@ -132,8 +140,10 @@ export async function createRelayReviewClient(
   return {
     ...options,
     sessionId,
-    async read(filePath: string) {
-      return decodeRelayReadOutput(await invoke("read", { file_path: filePath, session_id: sessionId }));
+    async read(filePath: string, allowPendingSuggestions = false) {
+      const output = await invoke("read", { file_path: filePath, session_id: sessionId });
+      if (!allowPendingSuggestions) assertNoPendingSuggestions(output);
+      return decodeRelayReadOutput(output);
     },
     async edit(filePath: string, oldString: string, newString: string) {
       await invoke("edit", {

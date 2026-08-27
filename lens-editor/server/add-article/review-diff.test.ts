@@ -40,4 +40,12 @@ describe("Relay review diff", () => {
     const edits = buildRelayReviewEdits(original, reviewed);
     expect(apply(original, edits)).toBe(reviewed);
   });
+
+  it("can fail closed instead of publishing a whole-document suggestion", () => {
+    expect(() => buildRelayReviewEdits(
+      "same\nsame\nsame\n",
+      "same\nchanged\nsame\n",
+      { allowWholeDocumentFallback: false },
+    )).toThrow("uniquely anchored");
+  });
 });

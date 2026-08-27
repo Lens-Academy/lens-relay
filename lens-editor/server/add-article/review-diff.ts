@@ -99,7 +99,11 @@ function occurrences(haystack: string, needle: string): number {
 }
 
 /** Build bottom-up, uniquely anchored replacements suitable for Relay MCP edit. */
-export function buildRelayReviewEdits(original: string, reviewed: string): ReviewEdit[] {
+export function buildRelayReviewEdits(
+  original: string,
+  reviewed: string,
+  options: { allowWholeDocumentFallback?: boolean } = {},
+): ReviewEdit[] {
   if (original === reviewed) return [];
   const oldLines = lines(original);
   const newLines = lines(reviewed);
@@ -118,7 +122,13 @@ export function buildRelayReviewEdits(original: string, reviewed: string): Revie
       old = oldLines.slice(before, after).join("");
     }
     if (!old || occurrences(original, old) !== 1) {
+      if (options.allowWholeDocumentFallback === false) {
+        throw new Error("Review changes cannot be split into uniquely anchored suggestions");
+      }
       return [{ old: original, replacement: reviewed }];
+    }
+    if (options.allowWholeDocumentFallback === false && old === original) {
+      throw new Error("Review changes cannot be split into uniquely anchored suggestions");
     }
     const prefix = oldLines.slice(before, hunk.oldStart).join("");
     const suffix = oldLines.slice(hunk.oldEnd, after).join("");
