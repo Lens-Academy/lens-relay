@@ -34,12 +34,14 @@ visible because deterministic retroactive repairs still require human approval.
 ```
 
 ```diff
--Out of the box they aren’t agents who are trying to pursue their own goals in the world and their objective functions are quite malleable.
-+Out of the box they aren’t agents who are trying to pursue their own goals in the world their objective functions are quite malleable.
+-Out of the box they aren’t agents who are trying to pursue their own goals in the world and and their objective functions are quite malleable.
++Out of the box they aren’t agents who are trying to pursue their own goals in the world and their objective functions are quite malleable.
 ```
 
-The date repair looks useful. The removed `and` makes the sentence grammatical
-only if the source itself omits it; this deserves human scrutiny.
+The date repair is source-backed. The wording repair removes one duplicated
+`and`; the source and reviewed article both retain the other one. Relay displayed
+the repair as a one-token deletion, which made the overview's first rendering
+look like the reviewer had removed the only `and`.
 
 ### 2. Reward is not the optimization target
 

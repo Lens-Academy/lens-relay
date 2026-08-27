@@ -126,6 +126,7 @@ export async function fetchFirstHtml(
  * target is a public http(s) URL before handing it off.
  */
 let warnedNoJinaKey = false;
+let warnedJinaBalance = false;
 
 export async function fetchRenderedHtml(
   url: string,
@@ -148,13 +149,35 @@ export async function fetchRenderedHtml(
         "Jina's anonymous rate limit and may be throttled or starved. Set it in .env.",
     );
   }
-  const resp = await fetchBytesWithTimeout(
-    `https://r.jina.ai/${encodeURIComponent(url)}`,
-    { headers, timeoutMs: RENDER_TIMEOUT_MS, signal, maxBytes: MAX_HTML_BYTES },
-  );
+  const endpoint = `https://r.jina.ai/${encodeURIComponent(url)}`;
+  let usedAuthenticatedRequest = Boolean(process.env.JINA_API_KEY);
+  let resp = await fetchBytesWithTimeout(endpoint, {
+    headers,
+    timeoutMs: RENDER_TIMEOUT_MS,
+    signal,
+    maxBytes: MAX_HTML_BYTES,
+  });
+  if (resp.status === 402 && usedAuthenticatedRequest) {
+    if (!warnedJinaBalance) {
+      warnedJinaBalance = true;
+      console.warn(
+        "[add-article] Jina API balance is exhausted (402); retrying through " +
+          "the anonymous Jina Reader tier.",
+      );
+    }
+    const anonymousHeaders = { ...headers };
+    delete anonymousHeaders.Authorization;
+    usedAuthenticatedRequest = false;
+    resp = await fetchBytesWithTimeout(endpoint, {
+      headers: anonymousHeaders,
+      timeoutMs: RENDER_TIMEOUT_MS,
+      signal,
+      maxBytes: MAX_HTML_BYTES,
+    });
+  }
   if (resp.status === 429) {
     throw new Error(
-      process.env.JINA_API_KEY
+      usedAuthenticatedRequest
         ? "Render fetch rate-limited by Jina (429) — retry later."
         : "Render fetch rate-limited by Jina (429) — set JINA_API_KEY to raise the limit.",
     );

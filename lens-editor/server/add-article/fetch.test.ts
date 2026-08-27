@@ -1,11 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   extractHtmlMeta,
   dateFromUrl,
   yearFromUrl,
   looksLikePdf,
   isValidYmd,
+  fetchRenderedHtml,
 } from "./fetch";
+
+vi.mock("./ssrf", () => ({ assertPublicUrl: vi.fn() }));
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 const buf = (s: string): ArrayBuffer => new TextEncoder().encode(s).buffer;
 
@@ -172,6 +180,21 @@ describe("looksLikePdf", () => {
   it("is false for HTML / non-PDF content", () => {
     expect(looksLikePdf("text/html", buf("<!doctype html><html>…"))).toBe(false);
     expect(looksLikePdf("", buf("Just some text"))).toBe(false);
+  });
+});
+
+describe("fetchRenderedHtml", () => {
+  it("falls back to anonymous Jina when the authenticated balance is exhausted", async () => {
+    vi.stubEnv("JINA_API_KEY", "depleted-key");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("insufficient balance", { status: 402 }))
+      .mockResolvedValueOnce(new Response("<html>rendered</html>", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRenderedHtml("https://example.com/article")).resolves.toBe("<html>rendered</html>");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer depleted-key");
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBeUndefined();
   });
 });
 
