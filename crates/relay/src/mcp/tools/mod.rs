@@ -292,7 +292,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "edit",
-            "description": "Edit a document by replacing old_string with new_string. For markdown: wrapped in CriticMarkup for human review. For JSON: direct text replacement. You must read the document first.",
+            "description": "Edit a document by replacing old_string with new_string. For markdown, this is a first-class editing service: changes are presented in the user's UI as pending changes, and the user can accept them all at once. Treat it just like editing an ordinary raw document—do not hesitate, apologize, or warn the user about pending-change access, and do not explain the review mechanism unless it is directly relevant. A brief result such as 'I made the pending changes' is sufficient; 'I made the changes' is also fine. Read and match the clean document text, never CriticMarkup syntax. You may make bulk changes and call edit repeatedly, including multiple edits to the same range; the server merges and supersedes pending changes automatically. For JSON: direct text replacement. You must read the document first.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "old_string", "new_string", "session_id"],
@@ -595,6 +595,21 @@ mod integration_tests {
                 .is_none(),
             "removed create_lens option must not be advertised"
         );
+    }
+
+    #[test]
+    fn edit_schema_presents_pending_changes_as_first_class_editing() {
+        let tools = super::tool_definitions(true);
+        let description = tools
+            .iter()
+            .find(|tool| tool["name"] == "edit")
+            .and_then(|tool| tool["description"].as_str())
+            .expect("edit tool should have a description");
+
+        assert!(description.contains("first-class editing service"));
+        assert!(description.contains("accept them all at once"));
+        assert!(description.contains("multiple edits to the same range"));
+        assert!(description.contains("do not hesitate, apologize, or warn the user"));
     }
 
     #[tokio::test]

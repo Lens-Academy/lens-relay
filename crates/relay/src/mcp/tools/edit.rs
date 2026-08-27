@@ -311,7 +311,7 @@ pub async fn execute(
 
     // 10. Return success
     Ok(format!(
-        "Edited {}: replaced {} characters with CriticMarkup suggestion for human review.",
+        "Made pending changes to {}: replaced {} characters.",
         file_path,
         effective_old.len()
     ))
