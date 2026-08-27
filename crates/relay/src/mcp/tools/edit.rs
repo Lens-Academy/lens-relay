@@ -1,10 +1,25 @@
 use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
-use yrs::{GetString, ReadTxn, Text, Transact, WriteTxn};
+use yrs::{GetString, ReadTxn, Text, Transact};
 
 use super::blob;
 use super::critic_markup;
+use super::edit_policy::{self, SuggestReason};
+use y_sweet_core::activity::{self, ActivityEvent};
+
+/// Requested edit mode. `Auto` lets the server decide (direct when safe,
+/// suggestion otherwise); `Suggest` always produces a pending suggestion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditMode {
+    Auto,
+    Suggest,
+}
+
+enum EditOutcome {
+    Direct(Box<ActivityEvent>),
+    Suggested(SuggestReason),
+}
 
 /// Normalize typographic/smart quotes to ASCII equivalents.
 /// Handles: curly double quotes (\u{201C}, \u{201D}) → "
@@ -130,6 +145,17 @@ pub async fn execute(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: new_string".to_string())?;
 
+    let mode = match arguments.get("mode").and_then(|v| v.as_str()) {
+        None | Some("auto") => EditMode::Auto,
+        Some("suggest") => EditMode::Suggest,
+        Some(other) => {
+            return Err(format!(
+                "Error: Invalid mode '{}': expected 'auto' or 'suggest'",
+                other
+            ))
+        }
+    };
+
     // 2. Resolve document path to doc_id
     let doc_info = server
         .doc_resolver()
@@ -227,7 +253,15 @@ pub async fn execute(
     // Comments preserved unchanged from old_string are left byte-identical.
     let new_string = critic_markup::stamp_new_comments(old_string, new_string, &author, timestamp);
 
-    let merge_result = critic_markup::merge_edit(
+    // Minimal diff: what actually changes. Unchanged context never counts.
+    let hunks = edit_policy::minimal_hunks(&effective_old, &new_string);
+    if hunks.is_empty() {
+        return Ok(format!("No changes needed for {}", file_path));
+    }
+
+    // Validate the suggestion path up front so a malformed edit fails before
+    // the lock is taken (the merge is recomputed under the lock).
+    critic_markup::merge_edit(
         &raw_content,
         &effective_old,
         &new_string,
@@ -236,16 +270,14 @@ pub async fn execute(
     )
     .map_err(|e| format!("Error: {}", e))?;
 
-    // No-op check
-    if merge_result.raw_len == 0 && merge_result.replacement.is_empty() {
-        return Ok(format!("No changes needed for {}", file_path));
-    }
-
-    // 8. Apply targeted edit under write lock with TOCTOU re-verify.
-    // The mutation goes through apply_attributed_edit so inserted items are
-    // minted under the session's AI clientID (provenance design doc); holding
-    // the awareness write guard keeps verify + apply atomic.
-    {
+    // 8. Decide direct vs. suggestion and apply under the write lock with
+    // TOCTOU re-verify. The policy check and the mutation run in the same
+    // scratch transaction (apply_attributed_edit), so inserted items are
+    // minted under the session's AI clientID and, for direct edits, the
+    // activity event persists together with the text change.
+    let doc_uuid = y_sweet_core::link_indexer::parse_doc_id(&doc_info.doc_id)
+        .map(|(_, uuid)| uuid.to_string());
+    let outcome = {
         let doc_ref = server
             .docs()
             .get(&doc_info.doc_id)
@@ -254,7 +286,7 @@ pub async fn execute(
         let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
 
         // Re-verify: re-parse under lock, check accepted view still matches
-        let final_merge = {
+        let (current_raw, current_spans, current_accepted) = {
             let txn = guard.doc.transact();
             let text = match txn.get_text("contents") {
                 Some(t) => t,
@@ -269,34 +301,138 @@ pub async fn execute(
                     "Document changed since last read. Please re-read and try again.".to_string(),
                 );
             }
-
-            // Recompute merge against current raw (in case of concurrent changes)
-            critic_markup::merge_edit(
-                &current_raw,
-                &effective_old,
-                &new_string,
-                &author,
-                timestamp,
-            )
-            .map_err(|e| format!("Error: {}", e))?
+            (current_raw, current_spans, current_accepted)
         };
 
-        crate::mcp::provenance::apply_attributed_edit(
+        // Recompute merge against current raw (in case of concurrent changes)
+        let final_merge = critic_markup::merge_edit(
+            &current_raw,
+            &effective_old,
+            &new_string,
+            &author,
+            timestamp,
+        )
+        .map_err(|e| format!("Error: {}", e))?;
+
+        let structural = match mode {
+            EditMode::Suggest => Err(SuggestReason::Requested),
+            EditMode::Auto => edit_policy::map_hunks(&edit_policy::PolicyInput {
+                raw: &current_raw,
+                spans: &current_spans,
+                accepted: &current_accepted,
+                match_start,
+                new_string: &new_string,
+                hunks: &hunks,
+            }),
+        };
+
+        let outcome = crate::mcp::provenance::apply_attributed_edit(
             &guard.doc,
             ai_client_id,
             &ai_actor,
             timestamp,
             |txn, text| {
-                text.remove_range(
-                    txn,
-                    final_merge.raw_offset as u32,
-                    final_merge.raw_len as u32,
-                );
-                text.insert(txn, final_merge.raw_offset as u32, &final_merge.replacement);
+                let decision = structural.and_then(|raw_hunks| {
+                    let runs = crate::mcp::provenance::visible_runs(txn, text);
+                    let actors = crate::mcp::provenance::client_actor_map(txn);
+                    edit_policy::check_provenance(&raw_hunks, runs.as_deref(), &actors)
+                        .map(|_| raw_hunks)
+                });
+                match decision {
+                    Ok(raw_hunks) => {
+                        let clock_from = txn.state_vector().get(&ai_client_id);
+                        // Back to front so earlier raw offsets stay valid.
+                        for h in raw_hunks.iter().rev() {
+                            if h.raw_len > 0 {
+                                text.remove_range(txn, h.raw_from as u32, h.raw_len as u32);
+                            }
+                            if !h.new_text.is_empty() {
+                                text.insert(txn, h.raw_from as u32, &h.new_text);
+                            }
+                        }
+                        let clock_to = txn.state_vector().get(&ai_client_id);
+                        let anchor_at = raw_hunks.first().map(|h| h.raw_from).unwrap_or(0);
+                        let anchor = crate::mcp::provenance::sticky_anchor(txn, text, anchor_at);
+
+                        let summary = edit_policy::coalesce(&hunks)
+                            .ok_or_else(|| "internal: empty hunks".to_string())?;
+                        let old_text = &effective_old[summary.old_from..summary.old_to];
+                        let new_text = &new_string[summary.new_from..summary.new_to];
+                        let pos = match_start + summary.old_from;
+                        let (ctx_before, ctx_after) =
+                            event_context(&current_accepted, pos, match_start + summary.old_to);
+                        let (old, old_truncated) = activity::cap_text(old_text);
+                        let (new, new_truncated) = activity::cap_text(new_text);
+                        let event = ActivityEvent {
+                            id: ActivityEvent::event_id(timestamp, ai_client_id, clock_from),
+                            ts: timestamp,
+                            actor: ai_actor.clone(),
+                            author: author.clone(),
+                            mode: "direct".to_string(),
+                            kind: ActivityEvent::kind_for(old_text, new_text).to_string(),
+                            old,
+                            new,
+                            old_truncated,
+                            new_truncated,
+                            ctx_before,
+                            ctx_after,
+                            pos,
+                            client: ai_client_id,
+                            clock_from,
+                            clock_to,
+                            anchor,
+                        };
+                        activity::append_event(txn, &event, timestamp);
+                        Ok(EditOutcome::Direct(Box::new(event)))
+                    }
+                    Err(reason) => {
+                        // Apply the merged replacement as minimal exact hunks
+                        // rather than replacing the whole matched span:
+                        // unchanged characters (human context, earlier AI
+                        // text) keep their original items and therefore their
+                        // provenance. Re-minting them under the AI client
+                        // would later let the AI edit human text directly.
+                        let span_end = final_merge.raw_offset + final_merge.raw_len;
+                        let old_span = &current_raw[final_merge.raw_offset..span_end];
+                        let hunks =
+                            edit_policy::minimal_hunks_exact(old_span, &final_merge.replacement);
+                        for h in hunks.iter().rev() {
+                            let at = (final_merge.raw_offset + h.old_from) as u32;
+                            if h.old_to > h.old_from {
+                                text.remove_range(txn, at, (h.old_to - h.old_from) as u32);
+                            }
+                            let ins = &final_merge.replacement[h.new_from..h.new_to];
+                            if !ins.is_empty() {
+                                text.insert(txn, at, ins);
+                            }
+                        }
+                        Ok(EditOutcome::Suggested(reason))
+                    }
+                }
             },
         )
         .map_err(|e| format!("Error: {}", e))?;
-    }
+
+        // Write-through under the same write lock as the edit, so the index
+        // can never be overwritten by a worker scan of an older body.
+        if let (EditOutcome::Direct(event), Some(uuid)) = (&outcome, &doc_uuid) {
+            // Excerpts for the recent-changes page, from the post-edit state.
+            let excerpts = {
+                let txn = guard.doc.transact();
+                let raw = txn
+                    .get_text("contents")
+                    .map(|t| t.get_string(&txn))
+                    .unwrap_or_default();
+                let events = activity::read_events(&txn);
+                let runs = crate::mcp::provenance::visible_runs_copy(&txn);
+                crate::recent_excerpts::build_excerpts(&txn, &raw, runs.as_deref(), &events)
+            };
+            server
+                .recent_changes_index()
+                .push(uuid, (**event).clone(), Some(excerpts));
+        }
+        outcome
+    };
 
     // 9. Explicit persist for immediate durability
     {
@@ -310,11 +446,49 @@ pub async fn execute(
     }
 
     // 10. Return success
-    Ok(format!(
-        "Made pending changes to {}: replaced {} characters.",
-        file_path,
-        effective_old.len()
-    ))
+    Ok(match outcome {
+        EditOutcome::Direct(event) => format!(
+            "Made the changes to {} ({} {} characters).",
+            file_path,
+            match event.kind.as_str() {
+                "insert" => "inserted",
+                "delete" => "removed",
+                _ => "replaced",
+            },
+            if event.kind == "insert" {
+                event.new.chars().count()
+            } else {
+                event.old.chars().count()
+            }
+        ),
+        EditOutcome::Suggested(SuggestReason::Requested) => format!(
+            "Made pending changes to {} as requested (replaced {} characters).",
+            file_path,
+            effective_old.chars().count()
+        ),
+        EditOutcome::Suggested(reason) => format!(
+            "Made pending changes to {} because {} (replaced {} characters). The user can accept them in the editor.",
+            file_path,
+            reason.describe(),
+            effective_old.chars().count()
+        ),
+    })
+}
+
+/// Up to `CONTEXT_CHARS` chars of accepted-view text on either side of
+/// `[from, to)`.
+fn event_context(accepted: &str, from: usize, to: usize) -> (String, String) {
+    const CONTEXT_CHARS: usize = 40;
+    let before: String = accepted[..from]
+        .chars()
+        .rev()
+        .take(CONTEXT_CHARS)
+        .collect::<Vec<char>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let after: String = accepted[to..].chars().take(CONTEXT_CHARS).collect();
+    (before, after)
 }
 
 /// Edit a raw Y.Text file (e.g. .html) by direct text replacement — no CriticMarkup wrapping.
@@ -356,10 +530,12 @@ async fn edit_raw_ytext_file(
                     ))
                 }
                 1 => matches[0],
-                n => return Err(format!(
+                n => {
+                    return Err(format!(
                     "Error: old_string is not unique in {} ({} occurrences). Include more context.",
                     file_path, n
-                )),
+                ))
+                }
             };
 
             (
@@ -380,6 +556,7 @@ async fn edit_raw_ytext_file(
             |txn, text| {
                 text.remove_range(txn, start, len);
                 text.insert(txn, start, new_string);
+                Ok(())
             },
         )
         .map_err(|e| format!("Error: {}", e))?;
@@ -705,6 +882,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_preserves_surrounding_content() {
+        // Pure insertion ("modified " added, nothing deleted) → direct.
         let server =
             build_test_server(&[("/Lines.md", "uuid-lines", "line 1\nline 2\nline 3")]).await;
         let doc_id = format!("{}-{}", RELAY_ID, "uuid-lines");
@@ -718,23 +896,8 @@ mod tests {
         .await;
 
         assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
-
         let content = read_doc_content(&server, &doc_id);
-        assert!(
-            content.starts_with("line 1\n{++"),
-            "Should start with line 1 then insertion markup: {}",
-            content
-        );
-        assert!(
-            content.contains("@@modified "),
-            "Insertion should contain 'modified ' after @@: {}",
-            content
-        );
-        assert!(
-            content.ends_with("line 2\nline 3"),
-            "Should preserve surrounding content: {}",
-            content
-        );
+        assert_eq!(content, "line 1\nmodified line 2\nline 3");
     }
 
     #[tokio::test]
@@ -838,11 +1001,518 @@ mod tests {
             "Success message should mention file_path: {}",
             msg
         );
+        // Replacing unattributed text → pending suggestion, and the message
+        // says so (the AI relays this to the user).
         assert!(
-            msg.to_lowercase().contains("criticmarkup") || msg.to_lowercase().contains("critic"),
-            "Success message should mention CriticMarkup: {}",
+            msg.contains("Made pending changes"),
+            "Success message should say pending changes: {}",
             msg
         );
+    }
+
+    // === Direct-edit policy tests ===
+
+    fn read_events(server: &Arc<Server>, doc_id: &str) -> Vec<ActivityEvent> {
+        let doc_ref = server.docs().get(doc_id).expect("doc should exist");
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        activity::read_events(&txn)
+    }
+
+    /// Register the doc's own (test-writer) client under `actor` in `users`.
+    fn register_doc_client(server: &Arc<Server>, doc_id: &str, actor: &str) {
+        use yrs::{Any, Array, ArrayPrelim, Map, MapPrelim, Out, WriteTxn};
+        let doc_ref = server.docs().get(doc_id).expect("doc should exist");
+        let awareness = doc_ref.awareness();
+        let guard = awareness.write().unwrap();
+        let client = guard.doc.client_id();
+        let mut txn = guard.doc.transact_mut();
+        let users = txn.get_or_insert_map("users");
+        let entry = match users.get(&txn, actor) {
+            Some(Out::YMap(m)) => m,
+            _ => users.insert(&mut txn, actor, MapPrelim::default()),
+        };
+        let ids = match entry.get(&txn, "ids") {
+            Some(Out::YArray(a)) => a,
+            _ => entry.insert(&mut txn, "ids", ArrayPrelim::default()),
+        };
+        ids.push_back(&mut txn, Any::Number(client as f64));
+    }
+
+    #[tokio::test]
+    async fn direct_insertion_records_activity_and_index() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-000000000001",
+            "Intro paragraph.\n\nEnd.",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000001");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "Intro paragraph.\n\nEnd.",
+                    "new_string": "Intro paragraph.\n\nNew AI paragraph.\n\nEnd."}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.starts_with("Made the changes to Lens/Doc.md"),
+            "{}",
+            result
+        );
+        assert!(result.contains("inserted"), "{}", result);
+
+        assert_eq!(
+            read_doc_content(&server, &doc_id),
+            "Intro paragraph.\n\nNew AI paragraph.\n\nEnd."
+        );
+
+        let events = read_events(&server, &doc_id);
+        assert_eq!(events.len(), 1);
+        let ev = &events[0];
+        assert_eq!(ev.kind, "insert");
+        assert_eq!(ev.old, "");
+        assert_eq!(ev.new, "New AI paragraph.\n\n");
+        assert_eq!(ev.mode, "direct");
+        assert_eq!(ev.pos, "Intro paragraph.\n\n".len());
+        assert_eq!(ev.ctx_before, "Intro paragraph.\n\n");
+        assert_eq!(ev.ctx_after, "End.");
+        assert!(ev.anchor.is_some());
+        let session = server.mcp_sessions.get_session(&sid).unwrap();
+        assert_eq!(ev.client, session.ai_client_id);
+        assert_eq!(ev.actor, session.ai_actor);
+        // clock range covers exactly the inserted text (UTF-16 units)
+        assert_eq!(
+            (ev.clock_to - ev.clock_from) as usize,
+            "New AI paragraph.\n\n".encode_utf16().count()
+        );
+
+        // write-through to the in-memory index
+        let indexed = server
+            .recent_changes_index()
+            .get("0d1a0000-0000-4000-8000-000000000001")
+            .unwrap();
+        assert_eq!(indexed.len(), 1);
+        assert_eq!(indexed[0].id, ev.id);
+    }
+
+    #[tokio::test]
+    async fn replacing_unattributed_text_becomes_suggestion() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-000000000002",
+            "old human words",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000002");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "human", "new_string": "robot"}),
+        )
+        .await
+        .unwrap();
+        assert!(result.starts_with("Made pending changes"), "{}", result);
+        assert!(
+            result.contains("human-written or unattributed"),
+            "{}",
+            result
+        );
+        let content = read_doc_content(&server, &doc_id);
+        assert!(
+            content.contains("{--") && content.contains("{++"),
+            "{}",
+            content
+        );
+        assert!(read_events(&server, &doc_id).is_empty());
+        assert!(server
+            .recent_changes_index()
+            .get("0d1a0000-0000-4000-8000-000000000002")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn replacing_human_registered_text_becomes_suggestion() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-000000000003",
+            "old human words",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000003");
+        register_doc_client(&server, &doc_id, "human:Luc");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "old human words", "new_string": "old robot words"}),
+        )
+        .await
+        .unwrap();
+        assert!(result.starts_with("Made pending changes"), "{}", result);
+        assert!(read_doc_content(&server, &doc_id).contains("@@human--}"));
+    }
+
+    #[tokio::test]
+    async fn replacing_ai_registered_text_is_direct() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-000000000004",
+            "old robot words",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000004");
+        register_doc_client(&server, &doc_id, "ai:opus-5:luc");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "old robot words", "new_string": "old machine words"}),
+        )
+        .await
+        .unwrap();
+        assert!(result.starts_with("Made the changes"), "{}", result);
+        assert!(result.contains("replaced 5 characters"), "{}", result);
+        assert_eq!(read_doc_content(&server, &doc_id), "old machine words");
+        let events = read_events(&server, &doc_id);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "replace");
+        assert_eq!(events[0].old, "robot");
+        assert_eq!(events[0].new, "machine");
+        assert_eq!(events[0].pos, 4);
+    }
+
+    #[tokio::test]
+    async fn ai_can_rewrite_its_own_direct_text_but_not_surrounding_human_text() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-000000000005",
+            "Human start. Human end.",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000005");
+        register_doc_client(&server, &doc_id, "human:Luc");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        // 1. insert AI text (direct)
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "Human start. ", "new_string": "Human start. AI middle. "}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made the changes"), "{}", r);
+        assert_eq!(
+            read_doc_content(&server, &doc_id),
+            "Human start. AI middle. Human end."
+        );
+
+        // 2. rewrite only the AI text, using human context for uniqueness (direct)
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "start. AI middle. Human", "new_string": "start. AI centre. Human"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made the changes"), "{}", r);
+        assert_eq!(
+            read_doc_content(&server, &doc_id),
+            "Human start. AI centre. Human end."
+        );
+
+        // 3. deleting one human word alongside AI text → suggestion
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "start. AI centre. Human end.", "new_string": "start. AI centre. end."}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made pending changes"), "{}", r);
+        assert!(read_doc_content(&server, &doc_id).contains("{--"));
+
+        // two direct events logged, in order
+        let events = read_events(&server, &doc_id);
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["insert", "replace"]);
+        assert_eq!(
+            server
+                .recent_changes_index()
+                .get("0d1a0000-0000-4000-8000-000000000005")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn suggestion_path_keeps_provenance_of_unchanged_context() {
+        // Prevents: the suggestion path re-minting the unchanged part of
+        // old_string under the AI client, which would let a later edit
+        // replace that human text directly.
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-00000000000a",
+            "Human wrote this sentence.",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-00000000000a");
+        register_doc_client(&server, &doc_id, "human:Luc");
+        let human_client = {
+            let doc_ref = server.docs().get(&doc_id).unwrap();
+            let awareness = doc_ref.awareness();
+            let guard = awareness.read().unwrap();
+            guard.doc.client_id()
+        };
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        // Replace one human word using the whole sentence as context → suggestion.
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "Human wrote this sentence.", "new_string": "Human wrote that sentence."}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made pending changes"), "{}", r);
+
+        // The untouched human words must still be attributed to the human client.
+        let (raw, runs) = {
+            use yrs::WriteTxn;
+            let doc_ref = server.docs().get(&doc_id).unwrap();
+            let awareness = doc_ref.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            let raw = text.get_string(&txn);
+            let runs = crate::mcp::provenance::visible_runs(&mut txn, &text).unwrap();
+            (raw, runs)
+        };
+        let human_start = raw.find("Human wrote ").unwrap();
+        let clients = crate::mcp::provenance::clients_in_range(
+            &runs,
+            human_start,
+            human_start + "Human wrote ".len(),
+        );
+        assert_eq!(clients, vec![human_client], "raw: {}", raw);
+        let tail = raw.rfind(" sentence.").unwrap();
+        assert_eq!(
+            crate::mcp::provenance::clients_in_range(&runs, tail, tail + " sentence.".len()),
+            vec![human_client]
+        );
+
+        // And a follow-up edit replacing that human context is still protected.
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "Human wrote", "new_string": "Robot wrote"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made pending changes"), "{}", r);
+    }
+
+    #[tokio::test]
+    async fn insertion_inside_a_human_word_becomes_suggestion() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-00000000000b",
+            "Luc typed this human sentence.",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-00000000000b");
+        register_doc_client(&server, &doc_id, "human:Luc");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        // Appending a letter still counts as rewriting the word only when it
+        // splits it; "human" → "humane" adds at the word end... which is a
+        // boundary with the following space, so it is a plain insertion.
+        // Inserting *inside* the word is the protected case.
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "human", "new_string": "humxan"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made pending changes"), "{}", r);
+        assert!(r.contains("human-written"), "{}", r);
+
+        // Insertion at a word boundary inside the human sentence stays direct.
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "Luc typed", "new_string": "Luc quickly typed"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made the changes"), "{}", r);
+    }
+
+    #[tokio::test]
+    async fn deleting_ai_paragraph_with_human_separator_is_direct() {
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-00000000000c",
+            "Intro.\n\nHuman end.",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-00000000000c");
+        register_doc_client(&server, &doc_id, "human:Luc");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "Intro.\n", "new_string": "Intro.\n\nAI paragraph.\n"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made the changes"), "{}", r);
+        assert_eq!(
+            read_doc_content(&server, &doc_id),
+            "Intro.\n\nAI paragraph.\n\nHuman end."
+        );
+
+        // Remove the AI paragraph together with one of the human's newlines.
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "\nAI paragraph.\n\nHuman", "new_string": "\nHuman"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made the changes"), "{}", r);
+        assert_eq!(read_doc_content(&server, &doc_id), "Intro.\n\nHuman end.");
+
+        // But taking a human word with it is still protected.
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "Intro.\n\nHuman end.", "new_string": "Intro. end."}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made pending changes"), "{}", r);
+    }
+
+    #[tokio::test]
+    async fn suggest_mode_forces_pending_change_even_for_insertion() {
+        let server =
+            build_test_server(&[("/Doc.md", "0d1a0000-0000-4000-8000-000000000006", "a b")]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000006");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "a b", "new_string": "a x b", "mode": "suggest"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made pending changes"), "{}", r);
+        assert!(r.contains("as requested"), "{}", r);
+        assert!(read_doc_content(&server, &doc_id).contains("{++"));
+        assert!(read_events(&server, &doc_id).is_empty());
+
+        let err = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Doc.md", "old_string": "a", "new_string": "b", "mode": "direct"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("Invalid mode"), "{}", err);
+    }
+
+    #[tokio::test]
+    async fn insertion_touching_pending_or_comment_markup_becomes_suggestion() {
+        // Insert inside an existing pending addition's payload → merge path
+        let server = build_test_server(&[
+            (
+                "/Pend.md",
+                "0d1a0000-0000-4000-8000-000000000007",
+                "before {++NEW++} after",
+            ),
+            (
+                "/Cmt.md",
+                "0d1a0000-0000-4000-8000-000000000008",
+                "text {>>a note<<} more",
+            ),
+        ])
+        .await;
+        let pend_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000007");
+        let cmt_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000008");
+        let sid = setup_session_with_read(&server, &pend_id);
+        if let Some(mut s) = server.mcp_sessions.get_session_mut(&sid) {
+            s.read_docs.insert(cmt_id.clone());
+        }
+
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Pend.md", "old_string": "NEW", "new_string": "NEWER"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made pending changes"), "{}", r);
+        assert!(r.contains("overlaps pending changes"), "{}", r);
+        assert!(read_events(&server, &pend_id).is_empty());
+
+        // Insertion strictly inside a comment → suggestion; before it → direct
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Cmt.md", "old_string": "a note", "new_string": "a longer note"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made pending changes"), "{}", r);
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Cmt.md", "old_string": "text ", "new_string": "text added "}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made the changes"), "{}", r);
+    }
+
+    #[tokio::test]
+    async fn direct_edit_with_smart_quotes_does_not_count_quotes_as_changes() {
+        let server = build_test_server(&[(
+            "/Q.md",
+            "0d1a0000-0000-4000-8000-000000000009",
+            "say \u{201C}hi\u{201D} now",
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-000000000009");
+        register_doc_client(&server, &doc_id, "ai:opus-5:luc");
+        let sid = setup_session_with_read(&server, &doc_id);
+        let r = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Q.md", "old_string": "say \"hi\" now", "new_string": "say \"hi\" later"}),
+        )
+        .await
+        .unwrap();
+        assert!(r.starts_with("Made the changes"), "{}", r);
+        assert_eq!(
+            read_doc_content(&server, &doc_id),
+            "say \u{201C}hi\u{201D} later"
+        );
+        let ev = &read_events(&server, &doc_id)[0];
+        assert_eq!((ev.old.as_str(), ev.new.as_str()), ("now", "later"));
     }
 
     #[tokio::test]

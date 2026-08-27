@@ -28,6 +28,7 @@ import { getShareTokenFromUrl, stripShareTokenFromUrl, decodeRoleFromToken, isTo
 import { setShareToken, setAuthErrorCallback } from './lib/auth';
 import { urlForDoc } from './lib/url-utils';
 import { ReviewPage } from './components/ReviewPage/ReviewPage';
+import { RecentChangesPage } from './components/RecentChangesPage/RecentChangesPage';
 import { AddArticlePage } from './components/AddArticlePage/AddArticlePage';
 import { PromotionRoute } from './components/Promotion/PromotionRoute';
 import { MultiDocSectionEditor } from './components/SectionEditor';
@@ -605,6 +606,9 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     canEdit
                       ? <ReviewPageWithActions folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} relayId={RELAY_ID} />
                       : <DefaultLanding />
+                  } />
+                  <Route path="/recent" element={
+                    <RecentChangesPage folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} />
                   } />
                   <Route path="/add-article" element={
                     canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)

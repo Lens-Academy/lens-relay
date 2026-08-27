@@ -413,7 +413,7 @@ fn span_raw_length(raw: &str, span: &Span, raw_start: usize) -> usize {
 }
 
 /// Compute raw byte start positions for each span.
-fn compute_raw_positions(raw: &str, spans: &[Span]) -> Vec<usize> {
+pub(crate) fn compute_raw_positions(raw: &str, spans: &[Span]) -> Vec<usize> {
     let mut positions = Vec::with_capacity(spans.len());
     let mut pos = 0usize;
     for span in spans {

@@ -194,6 +194,16 @@ See [docs/relay-auth-customizations.md](docs/relay-auth-customizations.md) for f
 - Backlink tracking
 - Folder-content mapping for multi-folder support
 
+**Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
+- The MCP `edit` tool applies Markdown edits directly when they only add text or change
+  text attributed (via the doc's `users` provenance map) to an `ai:` actor; edits that would
+  delete/replace human-written or unattributed text, or touch pending suggestions/comments,
+  become CriticMarkup suggestions instead (`crates/relay/src/mcp/tools/edit_policy.rs`).
+- Direct edits are logged in the content doc's `activity_v0` map (7-day retention,
+  `crates/y-sweet-core/src/activity.rs`), indexed in memory (`RecentChangesIndex`, rebuilt at
+  boot like the suggestions index) and served by `GET /recent-changes?folder_id=` for the
+  editor's `/recent` page and its in-file "Recent" authorship mode.
+
 ## Git Sync
 
 Two shared folders are synced to GitHub:

@@ -3,7 +3,8 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type { DecorationSet, ViewPlugin } from '@codemirror/view';
 import * as Y from 'yjs';
-import { pickLineCategory, actorDisplayName, authorshipExtension, setAuthorshipMode } from './authorship';
+import { pickLineCategory, actorDisplayName, authorshipExtension, setAuthorshipMode, setRecentWindow, setRecentEnabled } from './authorship';
+import { ACTIVITY_MAP } from '../../../lib/activity';
 
 describe('pickLineCategory', () => {
   it('returns null for empty lines', () => {
@@ -96,6 +97,75 @@ describe('AuthorshipPlugin decorations on Y/CM length mismatch', () => {
       expect(maxDecorationEnd(view.plugin(plugin)!.decorations)).toBeLessThanOrEqual(
         view.state.doc.length
       );
+    } finally {
+      view.destroy();
+    }
+  });
+
+  it('recent overlay tints surviving text from an event and ghosts removed text, on any mode', () => {
+    const ydoc = new Y.Doc();
+    const ytext = ydoc.getText('contents');
+    ytext.insert(0, 'Human start. ');
+    const humanClient = ydoc.clientID;
+
+    // An "AI" replica inserts text and records the event like the relay does.
+    const ai = new Y.Doc();
+    Y.applyUpdate(ai, Y.encodeStateAsUpdate(ydoc));
+    const aitext = ai.getText('contents');
+    const clockFrom = Y.getState(ai.store, ai.clientID);
+    aitext.insert('Human start. '.length, 'AI middle. ');
+    const clockTo = Y.getState(ai.store, ai.clientID);
+    const anchor = Y.encodeRelativePosition(
+      Y.createRelativePositionFromTypeIndex(aitext, 'Human start. '.length, 0)
+    );
+    ai.getMap(ACTIVITY_MAP).set('e1', {
+      v: 1, ts: Date.now() - 60_000, actor: 'ai:fable-5:luc', author: "Luc's AI", mode: 'direct',
+      kind: 'replace', old: 'gone', new: 'AI middle. ', old_truncated: false, new_truncated: false,
+      ctx_before: 'Human start. ', ctx_after: '', pos: 13, client: ai.clientID,
+      clock_from: clockFrom, clock_to: clockTo, anchor,
+    });
+    // A stale event outside the window must not render.
+    ai.getMap(ACTIVITY_MAP).set('e0', {
+      v: 1, ts: Date.now() - 10 * 86400_000, actor: 'ai:fable-5:luc', author: "Luc's AI", mode: 'direct',
+      kind: 'insert', old: '', new: 'Human', old_truncated: false, new_truncated: false,
+      ctx_before: '', ctx_after: '', pos: 0, client: humanClient, clock_from: 0, clock_to: 5, anchor: null,
+    });
+    Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(ai));
+    expect(ytext.toString()).toBe('Human start. AI middle. ');
+
+    const extensions = authorshipExtension(ytext);
+    const plugin = (extensions as unknown[])[1] as ViewPlugin<PluginInstance>;
+    const view = new EditorView({
+      state: EditorState.create({ doc: ytext.toString(), extensions }),
+      parent: document.body,
+    });
+    try {
+      view.dispatch({ effects: [setAuthorshipMode.of('hidden'), setRecentEnabled.of(true), setRecentWindow.of(3600_000)] });
+      const decos = view.plugin(plugin)!.decorations;
+      const marks: Array<[number, number]> = [];
+      let ghosts = 0;
+      decos.between(0, view.state.doc.length, (from, to, value) => {
+        const cls = (value.spec as { class?: string }).class;
+        if (cls === 'cm-recent-insert') marks.push([from, to]);
+        if ((value.spec as { widget?: unknown }).widget) ghosts += 1;
+      });
+      expect(marks).toEqual([[13, 24]]);
+      expect(ghosts).toBe(1);
+      expect(view.contentDOM.querySelector('.cm-recent-ghost')?.textContent).toBe('gone');
+      expect(view.contentDOM.querySelector('.cm-recent-tray')).toBeNull();
+
+      // Layered on gutter mode: authorship line strips and recent marks coexist.
+      view.dispatch({ effects: setAuthorshipMode.of('gutter') });
+      const layered = view.plugin(plugin)!.decorations;
+      let recentMarks = 0;
+      let lineDecos = 0;
+      layered.between(0, view.state.doc.length, (_f, _t, value) => {
+        const cls = (value.spec as { class?: string }).class ?? '';
+        if (cls === 'cm-recent-insert') recentMarks += 1;
+        if (cls.startsWith('cm-authline-')) lineDecos += 1;
+      });
+      expect(recentMarks).toBe(1);
+      expect(lineDecos).toBeGreaterThanOrEqual(2); // authorship strip + recent strip
     } finally {
       view.destroy();
     }

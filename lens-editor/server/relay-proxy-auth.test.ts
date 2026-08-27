@@ -135,6 +135,14 @@ describe('checkProxyAccess', () => {
     expect(result.allowed).toBe(false);
   });
 
+  it('folder-scoped token allows /recent-changes for matching folder only', () => {
+    expect(checkProxyAccess('GET', '/recent-changes', `folder_id=${RELAY_ID}-${FOLDER_A}&since_ms=0`, scopedAuth).allowed).toBe(true);
+    expect(checkProxyAccess('GET', '/recent-changes', `folder_id=${RELAY_ID}-${FOLDER_B}`, scopedAuth).allowed).toBe(false);
+    expect(checkProxyAccess('GET', '/recent-changes', '', scopedAuth).allowed).toBe(false);
+    expect(checkProxyAccess('GET', '/recent-changes', `folder_id=${RELAY_ID}-${FOLDER_B}`, allFoldersAuth).allowed).toBe(true);
+    expect(checkProxyAccess('GET', '/recent-changes', `folder_id=${RELAY_ID}-${FOLDER_A}`, makeAuth(FOLDER_A, 'view')).allowed).toBe(true);
+  });
+
   it('folder-scoped token blocks unknown endpoints', () => {
     expect(checkProxyAccess('DELETE', '/doc/abc/something', '', scopedAuth).allowed).toBe(false);
   });

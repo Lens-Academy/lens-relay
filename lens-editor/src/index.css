@@ -427,7 +427,8 @@
 .cm-authline-human,
 .cm-authline-ai,
 .cm-authline-unknown,
-.cm-authline-mixed {
+.cm-authline-mixed,
+.cm-authline-recent {
   position: relative;
 }
 
@@ -567,8 +568,69 @@
 }
 
 .cm-authorship-tooltip {
-  padding: 2px 8px;
+  position: fixed;
+  z-index: 60;
+  padding: 3px 8px;
   font-size: 12px;
+  line-height: 1.5;
+  color: #374151;
+  background-color: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* Recent changes mode (direct AI edits from activity_v0). Purple: distinct
+   from the blue/orange authorship pair and the green/red suggestion layer. */
+.cm-authline-recent::after {
+  content: '';
+  position: absolute;
+  left: -19px; /* a second strip just left of the authorship strip */
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background-color: #a78bfa; /* violet-400 */
+  pointer-events: none;
+}
+
+.cm-recent-insert {
+  background-color: rgba(167, 139, 250, 0.22);
+}
+
+.cm-recent-ghost {
+  /* Removed text is a done change, not a suggestion: violet like the
+     inserts, distinguished only by the strikethrough. */
+  background-color: rgba(167, 139, 250, 0.16);
+  color: #6d28d9; /* violet-700 */
+  text-decoration: line-through;
+  text-decoration-color: rgba(109, 40, 217, 0.75);
+  white-space: pre-wrap;
+  user-select: none;
+}
+
+.cm-recent-tray {
+  margin: 0 0 8px 0;
+  padding: 6px 10px;
+  border: 1px dashed rgba(167, 139, 250, 0.8);
+  border-radius: 6px;
+  background: rgba(245, 243, 255, 0.8);
+  font-size: 12px;
+  color: #4c1d95;
+}
+
+.cm-recent-tray-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.cm-recent-tray-row {
+  margin: 2px 0;
+}
+
+.cm-recent-tray-meta {
+  color: #6b7280;
 }
 
 

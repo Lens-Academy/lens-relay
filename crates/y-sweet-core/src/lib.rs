@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod api_types;
 pub mod auth;
 pub mod config;
@@ -12,6 +13,7 @@ pub mod link_indexer;
 pub mod link_parser;
 pub mod metrics;
 pub mod permanent_user_data;
+pub mod recent_changes_index;
 pub mod search_index;
 pub mod share_token;
 pub mod store;

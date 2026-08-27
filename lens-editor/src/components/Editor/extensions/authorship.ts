@@ -10,6 +10,12 @@
  *  - gutter: per-line edge strip, majority-wins color (default)
  *  - inline: gutter + per-character background tint
  *
+ * Independently of the mode, "Highlight recent changes" overlays direct AI
+ * edits from the doc's `activity_v0` log within a time window — surviving
+ * inserted text tinted, removed text shown as struck-through ghosts at its
+ * anchor (or listed in a tray when the anchor no longer resolves). See
+ * src/lib/activity.ts.
+ *
  * IMPORTANT: this extension must be registered AFTER yCollab in the editor's
  * extension list — its ViewPlugin reads the Y.Text during update(), and plugin
  * update order follows registration order, so this guarantees the local edit
@@ -21,13 +27,21 @@ import {
   Decoration,
   EditorView,
   ViewPlugin,
-  hoverTooltip,
+  WidgetType,
 } from '@codemirror/view';
 import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import type * as Y from 'yjs';
 import { getAuthorshipRuns } from '../../../lib/authorship-runs';
 import type { AuthorshipRun } from '../../../lib/authorship-runs';
 import { getClientActorMap, getRegisteredAt } from '../../../lib/provenance';
+import {
+  ACTIVITY_MAP,
+  eventCoversItems,
+  formatEventAge,
+  readActivityEvents,
+  resolveEventPosition,
+} from '../../../lib/activity';
+import type { DocActivityEvent } from '../../../lib/activity';
 
 export type AuthorshipMode = 'hidden' | 'gutter' | 'expanded' | 'inline';
 
@@ -43,6 +57,137 @@ export const authorshipModeField = StateField.define<AuthorshipMode>({
     return value;
   },
 });
+
+/** Time window (ms) for the recent-changes overlay. */
+export const RECENT_WINDOW_PRESETS: Array<{ label: string; ms: number }> = [
+  { label: '5m', ms: 5 * 60_000 },
+  { label: '1h', ms: 3600_000 },
+  { label: '24h', ms: 86400_000 },
+  { label: '7d', ms: 7 * 86400_000 },
+];
+export const DEFAULT_RECENT_WINDOW_MS = 3600_000;
+const RECENT_WINDOW_STORAGE_KEY = 'lens-recent-window-ms';
+
+export function loadRecentWindow(): number {
+  try {
+    const raw = localStorage.getItem(RECENT_WINDOW_STORAGE_KEY);
+    const ms = raw ? Number(raw) : NaN;
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  } catch {
+    // storage unavailable
+  }
+  return DEFAULT_RECENT_WINDOW_MS;
+}
+
+export function saveRecentWindow(ms: number): void {
+  try {
+    localStorage.setItem(RECENT_WINDOW_STORAGE_KEY, String(ms));
+  } catch {
+    // storage unavailable
+  }
+}
+
+const RECENT_ENABLED_STORAGE_KEY = 'lens-recent-enabled';
+
+export function loadRecentEnabled(): boolean {
+  try {
+    return localStorage.getItem(RECENT_ENABLED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveRecentEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(RECENT_ENABLED_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    // storage unavailable
+  }
+}
+
+export const setRecentEnabled = StateEffect.define<boolean>();
+
+export const recentEnabledField = StateField.define<boolean>({
+  create: () => loadRecentEnabled(),
+  update: (value, tr) => {
+    for (const e of tr.effects) {
+      if (e.is(setRecentEnabled)) return e.value;
+    }
+    return value;
+  },
+});
+
+export const setRecentWindow = StateEffect.define<number>();
+
+export const recentWindowField = StateField.define<number>({
+  create: () => loadRecentWindow(),
+  update: (value, tr) => {
+    for (const e of tr.effects) {
+      if (e.is(setRecentWindow)) return e.value;
+    }
+    return value;
+  },
+});
+
+/** Struck-through ghost of text an AI removed (recent-changes overlay). */
+class GhostWidget extends WidgetType {
+  constructor(private readonly ev: DocActivityEvent) {
+    super();
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('span');
+    el.className = 'cm-recent-ghost';
+    el.textContent = this.ev.old + (this.ev.oldTruncated ? '…' : '');
+    el.title = `Removed by ${actorDisplayName(this.ev.actor)} · ${formatEventAge(this.ev.ts)}`;
+    el.setAttribute('aria-label', `Removed text: ${this.ev.old}`);
+    return el;
+  }
+  eq(other: GhostWidget): boolean {
+    return other.ev.id === this.ev.id;
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/** Block at the top of the doc listing removals whose place could not be
+ *  located safely (anchor gone and context ambiguous). */
+class TrayWidget extends WidgetType {
+  constructor(private readonly events: DocActivityEvent[]) {
+    super();
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'cm-recent-tray';
+    const title = document.createElement('div');
+    title.className = 'cm-recent-tray-title';
+    title.textContent = `Removed text that could not be placed (${this.events.length})`;
+    el.appendChild(title);
+    for (const ev of this.events) {
+      const row = document.createElement('div');
+      row.className = 'cm-recent-tray-row';
+      const meta = document.createElement('span');
+      meta.className = 'cm-recent-tray-meta';
+      meta.textContent = `${actorDisplayName(ev.actor)} · ${formatEventAge(ev.ts)}: `;
+      const ghost = document.createElement('span');
+      ghost.className = 'cm-recent-ghost';
+      ghost.textContent = ev.old + (ev.oldTruncated ? '…' : '');
+      row.appendChild(meta);
+      row.appendChild(ghost);
+      el.appendChild(row);
+    }
+    return el;
+  }
+  eq(other: TrayWidget): boolean {
+    return (
+      other.events.length === this.events.length &&
+      other.events.every((e, i) => e.id === this.events[i].id)
+    );
+  }
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
 
 type Category = 'human' | 'ai' | 'unknown';
 
@@ -119,11 +264,21 @@ class AuthorshipPlugin {
   private readonly users: Y.Map<unknown>;
 
   private hoverExpanded = false;
+  /** Recent overlay: surviving inserted ranges and the event they came from. */
+  private recentRanges: Array<{ from: number; to: number; event: DocActivityEvent }> = [];
+  private readonly activity: Y.Map<unknown>;
+  private readonly activityObserver: () => void;
+  private recentTimer: ReturnType<typeof setInterval> | null = null;
   private labelBlocks: Array<{ from: number; label: string; category: LineCategory }> = [];
   private overlay: HTMLElement | null = null;
   private readonly onMouseMove: (e: MouseEvent) => void;
   private readonly onMouseLeave: () => void;
   private onScroll!: () => void;
+
+  /** Hover tooltip (own implementation, see `handleTooltipHover`). */
+  private tipEl: HTMLElement | null = null;
+  private tipTimer: ReturnType<typeof setTimeout> | null = null;
+  private tipRange: { from: number; to: number } | null = null;
 
   constructor(
     private readonly view: EditorView,
@@ -138,17 +293,35 @@ class AuthorshipPlugin {
     this.usersObserver = () => this.scheduleRefresh();
     this.users.observeDeep(this.usersObserver);
 
+    // Recent overlay: new events arrive through sync; the window is relative
+    // to "now", so also re-evaluate periodically while the overlay is on.
+    this.activity = doc.getMap(ACTIVITY_MAP);
+    this.activityObserver = () => {
+      if (view.state.field(recentEnabledField)) this.scheduleRefresh();
+    };
+    this.activity.observeDeep(this.activityObserver);
+    this.recentTimer = setInterval(() => {
+      if (view.state.field(recentEnabledField)) this.scheduleRefresh();
+    }, 30_000);
+
     // Gutter hover: hovering the strip band previews Expanded mode — the
     // blame-style margin labels appear for the whole viewport and disappear
     // on leave. Pure overlay; never pushes the text.
-    this.onMouseMove = (e) => this.handleGutterHover(e);
-    this.onMouseLeave = () => this.setHoverExpanded(false);
+    this.onMouseMove = (e) => {
+      this.handleGutterHover(e);
+      this.handleTooltipHover(e);
+    };
+    this.onMouseLeave = () => {
+      this.setHoverExpanded(false);
+      this.hideTooltip();
+    };
     view.scrollDOM.addEventListener('mousemove', this.onMouseMove);
     view.scrollDOM.addEventListener('mouseleave', this.onMouseLeave);
     // Keep hover chips glued to their lines while the document scrolls
     // (rAF-deduped; CM only recomputes decorations on larger viewport moves).
     this.onScroll = () => {
       if (this.hoverExpanded) this.scheduleOverlayRender();
+      this.hideTooltip();
     };
     view.scrollDOM.addEventListener('scroll', this.onScroll, { passive: true });
 
@@ -201,7 +374,9 @@ class AuthorshipPlugin {
   update(update: ViewUpdate) {
     const modeChanged =
       update.startState.field(authorshipModeField) !==
-      update.state.field(authorshipModeField);
+        update.state.field(authorshipModeField) ||
+      update.startState.field(recentWindowField) !== update.state.field(recentWindowField) ||
+      update.startState.field(recentEnabledField) !== update.state.field(recentEnabledField);
     const refreshed = update.transactions.some((tr) =>
       tr.effects.some((e) => e.is(refreshAuthorship))
     );
@@ -234,10 +409,143 @@ class AuthorshipPlugin {
     requestAnimationFrame(enforce);
   }
 
-  actorAt(pos: number): { actor: string | undefined; client: number } | null {
+  /** Recent-overlay hit test: the event that inserted the text at `pos`. */
+  recentAt(pos: number): DocActivityEvent | null {
+    for (const r of this.recentRanges) {
+      if (pos >= r.from && pos < r.to) return r.event;
+    }
+    return null;
+  }
+
+  /**
+   * Hover tooltip. CodeMirror's `hoverTooltip` guards on
+   * `coordsAtPos(posAtCoords(mouse))`, and `posAtCoords` snaps to the end of
+   * the zero-width hidden-syntax spans of pending suggestions, so no text
+   * after a `{++…++}` on the same line ever got a tooltip. Resolve the DOM
+   * caret position ourselves (exact) and map it with `posAtDOM`.
+   */
+  private handleTooltipHover(e: MouseEvent) {
+    const mode = this.view.state.field(authorshipModeField);
+    const recentEnabled = this.view.state.field(recentEnabledField);
+    if (mode === 'hidden' && !recentEnabled) {
+      this.hideTooltip();
+      return;
+    }
+    const target = e.target as Node | null;
+    if (!target || !this.view.contentDOM.contains(target)) {
+      this.hideTooltip();
+      return;
+    }
+    if ((target as Element).closest?.('.cm-recent-ghost, .cm-recent-tray')) {
+      this.hideTooltip(); // ghosts carry their own title
+      return;
+    }
+    const caret = caretFromPoint(e.clientX, e.clientY);
+    if (!caret || !this.view.contentDOM.contains(caret.node)) {
+      this.hideTooltip();
+      return;
+    }
+    let pos: number;
+    try {
+      pos = this.view.posAtDOM(caret.node, caret.offset);
+    } catch {
+      this.hideTooltip();
+      return;
+    }
+    const info = this.tooltipAt(pos);
+    if (!info) {
+      this.hideTooltip();
+      return;
+    }
+    if (this.tipRange && this.tipEl && pos >= this.tipRange.from && pos < this.tipRange.to) {
+      return; // still over the same word — keep it
+    }
+    if (this.tipTimer) clearTimeout(this.tipTimer);
+    const { x, y } = { x: e.clientX, y: e.clientY };
+    this.tipTimer = setTimeout(() => {
+      this.tipTimer = null;
+      this.showTooltip(info.text, x, y);
+      this.tipRange = { from: info.from, to: info.to };
+    }, 150);
+  }
+
+  private tooltipAt(pos: number): { text: string; from: number; to: number } | null {
+    const recentEnabled = this.view.state.field(recentEnabledField);
+    const hit = this.actorAt(pos);
+    const ev = recentEnabled ? this.recentAt(pos) : null;
+    if (!hit && !ev) return null;
+    const parts: string[] = [];
+    if (hit) {
+      const doc = this.ytext.doc;
+      const registeredAt = doc ? getRegisteredAt(doc, hit.client) : null;
+      const who = actorDisplayName(hit.actor);
+      // Textual month: we work internationally, so numeric day/month order is ambiguous.
+      const when = registeredAt
+        ? new Date(registeredAt).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          })
+        : null;
+      parts.push(when ? `${who} · ${when}` : who);
+    }
+    if (ev) {
+      const old = ev.old.length > 40 ? ev.old.slice(0, 40) + '…' : ev.old;
+      parts.push(
+        ev.old
+          ? `changed ${formatEventAge(ev.ts)} (replaced "${old}")`
+          : `added ${formatEventAge(ev.ts)}`
+      );
+    }
+    const word = this.view.state.wordAt(pos);
+    let from = word ? word.from : pos;
+    let to = word ? word.to : pos + 1;
+    if (hit) {
+      from = Math.max(from, hit.from);
+      to = Math.min(to, hit.to);
+    }
+    if (to <= from) {
+      from = pos;
+      to = pos + 1;
+    }
+    return { text: parts.join(' · '), from, to };
+  }
+
+  private showTooltip(text: string, x: number, y: number) {
+    if (!this.tipEl) {
+      this.tipEl = document.createElement('div');
+      this.tipEl.className = 'cm-authorship-tooltip';
+      document.body.appendChild(this.tipEl);
+    }
+    this.tipEl.textContent = text;
+    // Above the pointer, kept inside the viewport horizontally.
+    const width = this.tipEl.offsetWidth || 200;
+    const left = Math.max(4, Math.min(x - width / 2, window.innerWidth - width - 4));
+    this.tipEl.style.left = `${left}px`;
+    this.tipEl.style.top = `${Math.max(4, y - 34)}px`;
+  }
+
+  private hideTooltip() {
+    if (this.tipTimer) {
+      clearTimeout(this.tipTimer);
+      this.tipTimer = null;
+    }
+    this.tipRange = null;
+    this.tipEl?.remove();
+    this.tipEl = null;
+  }
+
+  actorAt(
+    pos: number
+  ): { actor: string | undefined; client: number; from: number; to: number } | null {
     for (const run of this.runs) {
       if (pos >= run.from && pos < run.to) {
-        return { actor: this.actorByClient.get(run.client), client: run.client };
+        return {
+          actor: this.actorByClient.get(run.client),
+          client: run.client,
+          from: run.from,
+          to: run.to,
+        };
       }
     }
     return null;
@@ -245,8 +553,10 @@ class AuthorshipPlugin {
 
   private recompute(update?: ViewUpdate) {
     const mode = this.view.state.field(authorshipModeField);
+    const recentEnabled = this.view.state.field(recentEnabledField);
     this.labelBlocks = [];
-    if (mode === 'hidden') {
+    this.recentRanges = [];
+    if (mode === 'hidden' && !recentEnabled) {
       this.runs = [];
       this.decorations = Decoration.none;
       this.scheduleOverlayRender();
@@ -272,6 +582,14 @@ class AuthorshipPlugin {
     }
 
     const ranges: Range<Decoration>[] = [];
+    if (recentEnabled) {
+      this.collectRecent(doc, ranges);
+    }
+    if (mode === 'hidden') {
+      this.decorations = Decoration.set(ranges, true);
+      this.scheduleOverlayRender();
+      return;
+    }
 
     for (const { from, to } of this.view.visibleRanges) {
       const firstLine = this.view.state.doc.lineAt(from).number;
@@ -346,6 +664,69 @@ class AuthorshipPlugin {
     this.scheduleOverlayRender();
   }
 
+  /**
+   * Recent-changes overlay. Inserted text is matched by (client, clock)
+   * against each event's minted range, so only characters that still survive
+   * from that edit are tinted; removed text is drawn as a ghost widget where
+   * it was. Appends to `ranges` so it composes with any authorship mode.
+   */
+  private collectRecent(doc: Y.Doc, ranges: Range<Decoration>[]): void {
+    const windowMs = this.view.state.field(recentWindowField);
+    const now = Date.now();
+    const events = readActivityEvents(doc).filter((e) => e.ts >= now - windowMs);
+    if (events.length === 0) return;
+
+    const cmDoc = this.view.state.doc;
+    const touchedLines = new Set<number>();
+
+    for (const run of this.runs) {
+      const length = run.to - run.from;
+      for (const ev of events) {
+        if (!eventCoversItems(ev, run.client, run.clock, length)) continue;
+        // Clip the run to the event's clock range (a run can span two events
+        // from the same session when their items are adjacent).
+        const from = run.from + Math.max(0, ev.clockFrom - run.clock);
+        const to = run.from + Math.min(length, ev.clockTo - run.clock);
+        if (to <= from) continue;
+        // The server applies a minimal char diff, so a rewrite can keep a
+        // stray shared character ("e" in added→rewritten) that was never
+        // re-minted. Bridge such tiny gaps so the edit reads as one change.
+        const last = this.recentRanges[this.recentRanges.length - 1];
+        if (last && last.event === ev && from - last.to <= 2 && from >= last.to) {
+          last.to = to;
+        } else {
+          this.recentRanges.push({ from, to, event: ev });
+        }
+      }
+    }
+    for (const r of this.recentRanges) {
+      ranges.push(Decoration.mark({ class: 'cm-recent-insert' }).range(r.from, r.to));
+      for (let n = cmDoc.lineAt(r.from).number; n <= cmDoc.lineAt(r.to).number; n++) {
+        touchedLines.add(n);
+      }
+    }
+
+    const unplaced: DocActivityEvent[] = [];
+    for (const ev of events) {
+      if (!ev.old) continue;
+      const pos = resolveEventPosition(doc, this.ytext, ev);
+      if (pos === null || pos > cmDoc.length) {
+        unplaced.push(ev);
+        continue;
+      }
+      ranges.push(Decoration.widget({ widget: new GhostWidget(ev), side: -1 }).range(pos));
+      touchedLines.add(cmDoc.lineAt(pos).number);
+    }
+    if (unplaced.length > 0) {
+      ranges.push(
+        Decoration.widget({ widget: new TrayWidget(unplaced), side: -1, block: true }).range(0)
+      );
+    }
+    for (const n of touchedLines) {
+      ranges.push(Decoration.line({ class: 'cm-authline-recent' }).range(cmDoc.line(n).from));
+    }
+  }
+
   /** Overlay rendering needs coordsAtPos (a layout read), which is illegal
    *  during CM's update/measure cycle — defer to the next animation frame,
    *  when the view is idle again. */
@@ -412,47 +793,37 @@ class AuthorshipPlugin {
   destroy() {
     this.destroyed = true;
     this.users.unobserveDeep(this.usersObserver);
+    this.activity.unobserveDeep(this.activityObserver);
+    if (this.recentTimer) clearInterval(this.recentTimer);
     this.view.scrollDOM.removeEventListener('mousemove', this.onMouseMove);
     this.view.scrollDOM.removeEventListener('mouseleave', this.onMouseLeave);
     this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
     this.overlay?.remove();
     this.overlay = null;
+    this.hideTooltip();
   }
+}
+
+/** Browser caret position under a point (Chromium / Firefox / WebKit). */
+function caretFromPoint(x: number, y: number): { node: Node; offset: number } | null {
+  const d = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => globalThis.Range | null;
+  };
+  if (d.caretPositionFromPoint) {
+    const p = d.caretPositionFromPoint(x, y);
+    return p ? { node: p.offsetNode, offset: p.offset } : null;
+  }
+  if (d.caretRangeFromPoint) {
+    const r = d.caretRangeFromPoint(x, y);
+    return r ? { node: r.startContainer, offset: r.startOffset } : null;
+  }
+  return null;
 }
 
 export function authorshipExtension(ytext: Y.Text): Extension {
   const plugin = ViewPlugin.define((view) => new AuthorshipPlugin(view, ytext), {
     decorations: (v) => v.decorations,
-  });
-
-  const tooltip = hoverTooltip((view, pos) => {
-    const mode = view.state.field(authorshipModeField);
-    if (mode === 'hidden') return null;
-    const instance = view.plugin(plugin);
-    const hit = instance?.actorAt(pos);
-    if (!hit) return null;
-
-    const doc = ytext.doc;
-    const registeredAt = doc ? getRegisteredAt(doc, hit.client) : null;
-    const who = actorDisplayName(hit.actor);
-    // Textual month: we work internationally, so numeric day/month order is ambiguous.
-    const when = registeredAt
-      ? new Date(registeredAt).toLocaleDateString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-        })
-      : null;
-
-    return {
-      pos,
-      create: () => {
-        const dom = document.createElement('div');
-        dom.className = 'cm-authorship-tooltip';
-        dom.textContent = when ? `${who} · ${when}` : who;
-        return { dom };
-      },
-    };
   });
 
   // Expose the mode on the editor root so CSS can reserve horizontal space
@@ -462,5 +833,6 @@ export function authorshipExtension(ytext: Y.Text): Extension {
     (state) => ({ 'data-authorship-mode': state.field(authorshipModeField) })
   );
 
-  return [authorshipModeField, plugin, tooltip, modeAttribute];
+  // The plugin stays at index 1: authorship.test.ts reaches it that way.
+  return [authorshipModeField, plugin, modeAttribute, recentWindowField, recentEnabledField];
 }

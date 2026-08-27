@@ -1,7 +1,8 @@
 # Direct MCP Edits + Recent-Changes Review — Implementation Plan
 
-**Status:** Proposed plan (independent second pass over
-`2026-08-27-direct-mcp-edits-recent-changes-notes.md`)
+**Status:** Implemented 2026-08-27 (change `yummxqkp`); see §8 for what shipped
+and the follow-ups. Originally an independent second pass over
+`2026-08-27-direct-mcp-edits-recent-changes-notes.md`.
 **Date:** 2026-08-27
 **Related:** `2026-07-18-provenance-design.md`, `2026-07-02-suggestions-index.md`,
 `2026-03-08-debounce-deadlock-fix.md`,
@@ -381,3 +382,79 @@ follows the amended versions.
 8. Plumbing: three `Server` constructors, the no-store early return in
    `startup_reindex`, and the single-`folder_id` query shape are mirrored from
    the suggestions index.
+
+## 8. Implementation notes (2026-08-27)
+
+Shipped in one change, all steps 1–7 of §4:
+
+- Rust: `y-sweet-core/src/activity.rs` (events, `activity_v0` read/append/prune),
+  `y-sweet-core/src/recent_changes_index.rs`, `relay/src/mcp/provenance.rs`
+  (`visible_runs`, `client_actor_map`, `sticky_anchor`, generalised
+  `apply_attributed_edit`), `relay/src/mcp/tools/edit_policy.rs` (minimal diff,
+  protected ranges, accepted→raw mapping, provenance check), `edit.rs` (mode
+  param, direct branch, activity event, index write-through), `server.rs`
+  (index plumbing, `GET /recent-changes`, GC-time pruning), tool schema.
+- Editor: `lib/activity.ts`, `hooks/useRecentChanges.ts`, `/recent` page,
+  nav entries, clock-aware `authorship-runs.ts`, `recent` authorship mode with
+  window presets, ghost widgets and tray, proxy allowlist rule.
+
+Two things learned while building that the plan did not anticipate:
+
+1. **`yrs` `find_pivot` is unsafe for `clock == state` lookups on short
+   clients** (total clock length 1 or 2 split over two blocks) — not only the
+   singleton case the review found. `visible_runs` classifies on a throwaway
+   copy with a 3-char dummy appended under each such client (§7.1 superseded).
+2. **The suggestion path re-minted unchanged text.** `merge_edit` replaces the
+   whole matched span, so human context inside `old_string` was re-authored
+   under the AI client on every suggestion — which would have let a later edit
+   replace it directly. The suggestion branch now applies the replacement as
+   minimal exact-char hunks (`suggestion_path_keeps_provenance_of_unchanged_context`).
+
+Two rule refinements from testing against dev R2 with real editor provenance
+(`edit_policy.rs` rules 5–6):
+
+- An insertion that **splits a word** ("human" → "humxan") is treated as
+  editing that word: the characters on both sides must be AI-attributed.
+  Insertions at word boundaries inside human sentences remain direct.
+- Deleted **whitespace** is never protected: the AI removing its own paragraph
+  together with a separator newline the human typed is direct; taking any
+  human non-whitespace character with it is not.
+
+UI revisions after Luc's testing (same day):
+
+- "Recent" is no longer an authorship mode. The dropdown keeps Off / Gutter /
+  Expanded / Inline and gains a **Highlight recent changes** toggle with the
+  5m / 1h / 24h / 7d window; the overlay composes with any mode (a second,
+  violet line strip; tints and ghosts on top of inline tints).
+- Hover tooltips were unreliable: CodeMirror's `hoverTooltip` guards on
+  `coordsAtPos(posAtCoords(mouse))`, and `posAtCoords` snaps to the end of the
+  zero-width hidden-syntax spans of pending suggestions, so nothing after a
+  `{++…++}` on the same line ever got a tooltip; a point anchor also made it
+  vanish on the slightest mouse movement. The authorship plugin now resolves
+  the caret from the DOM (`caretPositionFromPoint` → `posAtDOM`) and renders
+  its own tooltip, anchored to the hovered word, showing authorship plus the
+  recent-change info when the overlay is on. `window.__lensEditorView` is
+  exposed in dev builds for this kind of debugging.
+
+- `/recent` shows **excerpts of the current text** per file instead of one row
+  per event: `crates/relay/src/recent_excerpts.rs` clusters changes within
+  240 bytes, adds ~80 bytes of context (snapped to words), marks surviving
+  inserts and removed text in place (same run/anchor resolution as the editor
+  overlay, on a throwaway doc copy so index workers never mutate the live
+  store), and reports skipped unchanged stretches. Excerpts are built at every
+  index refresh and stored beside the events; the page's author/time filters
+  dim inserts / drop ghosts of filtered-out events rather than re-clustering.
+  Recent deletions render violet + strikethrough everywhere (red/green stays
+  reserved for pending suggestions).
+
+Follow-ups (not in this change):
+
+- `create` still wraps new Markdown docs in `{++…++}`; until accepted, every
+  edit inside is "overlaps pending changes" → suggestion. By the stated rule a
+  new file is pure addition and could be direct (with an activity event).
+- Raw Y.Text (`.html`) edits still replace the whole `old_string` and use
+  char offsets; they are direct by construction, so no protection applies, but
+  they re-mint unchanged text like the old suggestion path did.
+- Reverting a direct edit from `/recent` (must respect the human-text rule).
+- Local dev: `npm run relay:start` does not set `MCP_API_KEY`; export
+  `MCP_API_KEY=test-key-123` first to exercise the MCP path locally.

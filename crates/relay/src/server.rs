@@ -55,6 +55,7 @@ use y_sweet_core::{
     },
     link_indexer::{self, LinkIndexer},
     metrics::RelayMetrics,
+    recent_changes_index::RecentChangesIndex,
     search_index::SearchIndex,
     store::Store,
     suggestions_index::SuggestionsIndex,
@@ -474,6 +475,7 @@ async fn search_worker(
     docs: Arc<DashMap<String, DocWithSyncKv>>,
     pending: Arc<DashMap<String, link_indexer::PendingEntry>>,
     suggestions_index: Arc<SuggestionsIndex>,
+    recent_changes_index: Arc<RecentChangesIndex>,
 ) {
     tracing::info!("Search index worker started");
 
@@ -546,7 +548,7 @@ async fn search_worker(
                 continue;
             }
             fast_budget -= 1;
-            if suggestions_fast_scan(doc_id, &docs, &suggestions_index) {
+            if suggestions_fast_scan(doc_id, &docs, &suggestions_index, &recent_changes_index) {
                 link_indexer::acknowledge_suggestions_generation(
                     &pending,
                     doc_id,
@@ -571,6 +573,7 @@ async fn search_worker(
                 &search_index,
                 &filemeta_cache,
                 &suggestions_index,
+                &recent_changes_index,
             )
             .await;
             // A concurrent update increments generation. Only acknowledge
@@ -589,12 +592,32 @@ async fn search_worker(
                 &docs,
                 &search_index,
                 &suggestions_index,
+                &recent_changes_index,
                 titles.as_ref(),
                 update_suggestions,
             );
             link_indexer::acknowledge_generation(&pending, &doc_id, queued.generation);
         }
     }
+}
+
+/// Events plus page excerpts for a content doc, read under `txn`. Excerpts
+/// need provenance runs, computed on a throwaway copy (no store mutation
+/// under a read guard) and only when the doc has any activity.
+fn activity_snapshot<T: yrs::ReadTxn>(
+    txn: &T,
+    body: &str,
+) -> (
+    Vec<y_sweet_core::activity::ActivityEvent>,
+    Vec<y_sweet_core::activity::Excerpt>,
+) {
+    let events = y_sweet_core::activity::read_events(txn);
+    if events.is_empty() {
+        return (events, Vec::new());
+    }
+    let runs = crate::mcp::provenance::visible_runs_copy(txn);
+    let excerpts = crate::recent_excerpts::build_excerpts(txn, body, runs.as_deref(), &events);
+    (events, excerpts)
 }
 
 /// Fast-lane refresh: read the doc body and rescan CriticMarkup suggestions
@@ -604,6 +627,7 @@ fn suggestions_fast_scan(
     doc_id: &str,
     docs: &DashMap<String, DocWithSyncKv>,
     suggestions_index: &SuggestionsIndex,
+    recent_changes_index: &RecentChangesIndex,
 ) -> bool {
     let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
         return true; // junk id: report scanned so the watermark stops retrying
@@ -617,14 +641,17 @@ fn suggestions_fast_scan(
        // Guard held through the index update — see the ordering note in
        // search_handle_content_update_inner.
     let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-    let body = {
+    let (body, events, excerpts) = {
         let txn = guard.doc.transact();
-        match txn.get_text("contents") {
+        let body = match txn.get_text("contents") {
             Some(text) => text.get_string(&txn),
             None => String::new(),
-        }
+        };
+        let (events, excerpts) = activity_snapshot(&txn, &body);
+        (body, events, excerpts)
     };
     suggestions_index.update(doc_uuid, critic_scanner::scan_suggestions(&body));
+    recent_changes_index.update(doc_uuid, events, excerpts);
     true
 }
 
@@ -672,8 +699,17 @@ pub(crate) fn search_handle_content_update(
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
     suggestions_index: &SuggestionsIndex,
+    recent_changes_index: &RecentChangesIndex,
 ) {
-    search_handle_content_update_inner(doc_id, docs, search_index, suggestions_index, None, true)
+    search_handle_content_update_inner(
+        doc_id,
+        docs,
+        search_index,
+        suggestions_index,
+        recent_changes_index,
+        None,
+        true,
+    )
 }
 
 /// Like [`search_handle_content_update`], but resolves titles through a
@@ -681,11 +717,13 @@ pub(crate) fn search_handle_content_update(
 /// backlog of N content docs costs one all-folders scan instead of N, and
 /// optionally skips the suggestions rescan when the fast lane already
 /// covered this generation.
+#[allow(clippy::too_many_arguments)]
 fn search_handle_content_update_inner(
     doc_id: &str,
     docs: &DashMap<String, DocWithSyncKv>,
     search_index: &SearchIndex,
     suggestions_index: &SuggestionsIndex,
+    recent_changes_index: &RecentChangesIndex,
     titles: Option<&std::collections::HashMap<String, (String, String)>>,
     update_suggestions: bool,
 ) {
@@ -710,15 +748,22 @@ fn search_handle_content_update_inner(
            // ordering through the awareness lock means a scan of an older body
            // can never overwrite a newer index state.
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-        let body = {
+        let (body, events, excerpts) = {
             let txn = guard.doc.transact();
-            match txn.get_text("contents") {
+            let body = match txn.get_text("contents") {
                 Some(text) => text.get_string(&txn),
                 None => String::new(),
-            }
+            };
+            let (events, excerpts) = if update_suggestions {
+                activity_snapshot(&txn, &body)
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            (body, events, excerpts)
         };
         if update_suggestions {
             suggestions_index.update(doc_uuid, critic_scanner::scan_suggestions(&body));
+            recent_changes_index.update(doc_uuid, events, excerpts);
         }
         body
     };
@@ -782,6 +827,7 @@ async fn search_handle_folder_update(
     search_index: &SearchIndex,
     filemeta_cache: &DashMap<String, std::collections::HashMap<String, String>>,
     suggestions_index: &SuggestionsIndex,
+    recent_changes_index: &RecentChangesIndex,
 ) {
     // Build current uuid -> title map from filemeta
     let (current_map, folder_name): (std::collections::HashMap<String, String>, String) = {
@@ -850,6 +896,7 @@ async fn search_handle_folder_update(
                         docs,
                         search_index,
                         suggestions_index,
+                        recent_changes_index,
                         Some(&titles),
                         true,
                     );
@@ -869,6 +916,7 @@ async fn search_handle_folder_update(
                     docs,
                     search_index,
                     suggestions_index,
+                    recent_changes_index,
                     Some(&titles),
                     true,
                 );
@@ -900,6 +948,8 @@ pub struct Server {
     search_pending: Option<Arc<DashMap<String, link_indexer::PendingEntry>>>,
     suggestions_index: Arc<SuggestionsIndex>,
     suggestions_ready: Arc<std::sync::atomic::AtomicBool>,
+    recent_changes_index: Arc<RecentChangesIndex>,
+    recent_changes_ready: Arc<std::sync::atomic::AtomicBool>,
     doc_resolver: Arc<DocumentResolver>,
     pub(crate) mcp_sessions: Arc<crate::mcp::session::SessionManager>,
     pub(crate) mcp_api_key: Option<String>,
@@ -1047,6 +1097,8 @@ impl Server {
             search_pending: search_pending_final,
             suggestions_index: Arc::new(SuggestionsIndex::new()),
             suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            recent_changes_index: Arc::new(RecentChangesIndex::new()),
+            recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             doc_resolver,
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key,
@@ -1136,6 +1188,7 @@ impl Server {
             if let Some(ref si) = self.search_index {
                 let si_for_worker = si.clone();
                 let suggestions_for_worker = self.suggestions_index.clone();
+                let recent_for_worker = self.recent_changes_index.clone();
                 let docs_for_search = self.docs.clone();
                 let metrics_for_search = self.metrics.clone();
                 let metrics_for_hook = self.metrics.clone();
@@ -1153,8 +1206,9 @@ impl Server {
                             let docs = docs_for_search.clone();
                             let pending = search_pending.clone();
                             let suggestions = suggestions_for_worker.clone();
+                            let recent = recent_for_worker.clone();
                             Box::pin(async move {
-                                search_worker(rx, si, docs, pending, suggestions).await
+                                search_worker(rx, si, docs, pending, suggestions, recent).await
                             })
                         },
                         move |worker, msg, _attempt, _budget| {
@@ -1322,6 +1376,10 @@ impl Server {
     }
 
     /// Get the DashMap of all loaded documents.
+    pub(crate) fn recent_changes_index(&self) -> &Arc<RecentChangesIndex> {
+        &self.recent_changes_index
+    }
+
     pub fn docs(&self) -> &Arc<DashMap<String, DocWithSyncKv>> {
         &self.docs
     }
@@ -1499,7 +1557,10 @@ impl Server {
                     attr.client_id,
                     &attr.actor,
                     timestamp,
-                    |txn, text| text.insert(txn, 0, &wrapped),
+                    |txn, text| {
+                        text.insert(txn, 0, &wrapped);
+                        Ok(())
+                    },
                 )
                 .map_err(CreateDocumentError::Internal)?,
                 None => {
@@ -1590,6 +1651,7 @@ impl Server {
                 &self.docs,
                 search_index,
                 &self.suggestions_index,
+                &self.recent_changes_index,
             );
         }
 
@@ -1716,7 +1778,10 @@ impl Server {
                         attr.client_id,
                         &attr.actor,
                         timestamp,
-                        |txn, text| text.insert(txn, 0, content),
+                        |txn, text| {
+                            text.insert(txn, 0, content);
+                            Ok(())
+                        },
                     )
                     .map_err(CreateDocumentError::Internal)?
                 }
@@ -1816,6 +1881,7 @@ impl Server {
                 &self.docs,
                 search_index,
                 &self.suggestions_index,
+                &self.recent_changes_index,
             );
         }
 
@@ -1955,6 +2021,7 @@ impl Server {
                 &self.docs,
                 search_index,
                 &self.suggestions_index,
+                &self.recent_changes_index,
             );
         }
 
@@ -2498,6 +2565,7 @@ impl Server {
                 &self.docs,
                 search_index,
                 &self.suggestions_index,
+                &self.recent_changes_index,
             );
         }
 
@@ -3047,6 +3115,8 @@ impl Server {
             search_pending: None,
             suggestions_index: Arc::new(SuggestionsIndex::new()),
             suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            recent_changes_index: Arc::new(RecentChangesIndex::new()),
+            recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key: None,
@@ -3082,6 +3152,8 @@ impl Server {
             search_pending: None,
             suggestions_index: Arc::new(SuggestionsIndex::new()),
             suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            recent_changes_index: Arc::new(RecentChangesIndex::new()),
+            recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
             mcp_api_key: None,
@@ -3579,6 +3651,7 @@ impl Server {
         // search_worker comment.
         let doc_ids: Vec<String> = self.docs.iter().map(|e| e.key().clone()).collect();
         let mut indexed = 0;
+        let mut with_activity = 0;
         for doc_id in &doc_ids {
             let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
                 continue;
@@ -3589,27 +3662,36 @@ impl Server {
                 };
                 doc_ref.awareness() // Arc clone
             }; // DashMap shard lock released
-            let content = {
+            let (content, events, excerpts) = {
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let txn = guard.doc.transact();
-                match txn.get_text("contents") {
+                let content = match txn.get_text("contents") {
                     Some(text) => text.get_string(&txn),
                     // Folder docs and blobs have no "contents" text
                     None => continue,
-                }
+                };
+                let (events, excerpts) = activity_snapshot(&txn, &content);
+                (content, events, excerpts)
             };
             let suggestions = critic_scanner::scan_suggestions(&content);
             if !suggestions.is_empty() {
                 indexed += 1;
             }
             self.suggestions_index.update(doc_uuid, suggestions);
+            if !events.is_empty() {
+                with_activity += 1;
+            }
+            self.recent_changes_index.update(doc_uuid, events, excerpts);
         }
         self.suggestions_ready
             .store(true, std::sync::atomic::Ordering::Release);
+        self.recent_changes_ready
+            .store(true, std::sync::atomic::Ordering::Release);
         tracing::info!(
-            "Suggestions index built: {} of {} docs have suggestions",
+            "Suggestions index built: {} of {} docs have suggestions; {} have recent activity",
             indexed,
-            doc_ids.len()
+            doc_ids.len(),
+            with_activity
         );
     }
 
@@ -3627,6 +3709,8 @@ impl Server {
             self.search_ready
                 .store(true, std::sync::atomic::Ordering::Release);
             self.suggestions_ready
+                .store(true, std::sync::atomic::Ordering::Release);
+            self.recent_changes_ready
                 .store(true, std::sync::atomic::Ordering::Release);
             return Ok(());
         }
@@ -3787,6 +3871,24 @@ impl Server {
         // persisted.
         let started = std::time::Instant::now();
         let result = y_sweet_core::permanent_user_data::compact_user_data_locked(&doc.awareness());
+        // Same pass: drop activity events past their retention window
+        // (docs that never get edited again would otherwise keep stale
+        // events until they are next loaded and written to).
+        {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let awareness = doc.awareness();
+            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+            let mut txn = guard
+                .doc
+                .transact_mut_with(y_sweet_core::permanent_user_data::GC_COMPACTION_ORIGIN);
+            let pruned = y_sweet_core::activity::prune_expired(&mut txn, now_ms);
+            if pruned > 0 {
+                tracing::info!(pruned, doc_id, "Pruned expired activity events");
+            }
+        }
         if !result.is_empty() {
             tracing::info!(
                 ids_removed = result.ids_removed,
@@ -4081,6 +4183,7 @@ impl Server {
             .route("/open/*path", get(handle_open_by_path))
             .route("/debug/resolve", get(handle_debug_resolve))
             .route("/suggestions", get(handle_suggestions))
+            .route("/recent-changes", get(handle_recent_changes))
             .route("/suggestions/apply", post(handle_apply_suggestions));
 
         // Register /mcp if MCP_API_KEY or SHARE_TOKEN_SECRET is set
@@ -4917,6 +5020,102 @@ async fn handle_suggestions(
     }
 
     Ok(Json(serde_json::json!({ "files": files })))
+}
+
+#[derive(Deserialize)]
+struct RecentChangesQuery {
+    folder_id: String,
+    /// Epoch ms; events older than this are omitted. Defaults to the
+    /// retention window.
+    since_ms: Option<u64>,
+}
+
+/// GET /recent-changes?folder_id=...&since_ms=...
+///
+/// Direct AI edits recorded in each content doc's `activity_v0` map, served
+/// from the in-memory `RecentChangesIndex`. Same shape and constraints as
+/// `handle_suggestions`: loads only the folder doc, scopes through the
+/// folder's current `filemeta_v0`, never loads content docs on demand.
+async fn handle_recent_changes(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Query(params): Query<RecentChangesQuery>,
+) -> Result<Json<Value>, AppError> {
+    server_state.check_auth(auth_header)?;
+    require_index_ready(&server_state.recent_changes_ready, "Recent changes index")?;
+
+    let folder_id = &params.folder_id;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let since_ms = params
+        .since_ms
+        .unwrap_or_else(|| now_ms.saturating_sub(y_sweet_core::activity::RETENTION_MS));
+
+    server_state
+        .ensure_doc_loaded(folder_id)
+        .await
+        .map_err(|e| AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder not found: {}", e)))?;
+
+    let content_uuids = link_indexer::is_folder_doc(folder_id, &server_state.docs)
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, anyhow!("Not a folder document")))?;
+
+    let path_map = {
+        let doc_ref = server_state.docs.get(folder_id).ok_or_else(|| {
+            AppError::new(StatusCode::NOT_FOUND, anyhow!("Folder doc not loaded"))
+        })?;
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let txn = guard.doc.transact();
+        let filemeta = txn
+            .get_map("filemeta_v0")
+            .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, anyhow!("No filemeta_v0")))?;
+        let mut map = std::collections::HashMap::new();
+        for (path, value) in filemeta.iter(&txn) {
+            if let Some(id) = link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
+                map.insert(id, path.to_string());
+            }
+        }
+        map
+    };
+
+    if folder_id.len() < 36 {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            anyhow!("Invalid folder_id"),
+        ));
+    }
+    let relay_id = &folder_id[..36];
+
+    let mut files = Vec::new();
+    for content_uuid in &content_uuids {
+        let Some(events) = server_state
+            .recent_changes_index
+            .get_since(content_uuid, since_ms)
+        else {
+            continue;
+        };
+        let doc_id = format!("{}-{}", relay_id, content_uuid);
+        let path = path_map
+            .get(content_uuid)
+            .cloned()
+            .unwrap_or_else(|| content_uuid.clone());
+        let excerpts = server_state
+            .recent_changes_index
+            .excerpts(content_uuid)
+            .unwrap_or_default();
+        files.push(serde_json::json!({
+            "path": path,
+            "doc_id": doc_id,
+            "events": events,
+            "excerpts": excerpts,
+        }));
+    }
+
+    Ok(Json(
+        serde_json::json!({ "files": files, "since_ms": since_ms }),
+    ))
 }
 
 #[derive(serde::Deserialize)]
@@ -9260,6 +9459,159 @@ mod test {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    async fn get_recent_changes(
+        server: &Arc<Server>,
+        folder_id: &str,
+        since_ms: Option<u64>,
+    ) -> (StatusCode, JsonValue) {
+        let uri = match since_ms {
+            Some(since) => format!("/recent-changes?folder_id={}&since_ms={}", folder_id, since),
+            None => format!("/recent-changes?folder_id={}", folder_id),
+        };
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+        (status, body)
+    }
+
+    fn activity_event(ts: u64) -> y_sweet_core::activity::ActivityEvent {
+        y_sweet_core::activity::ActivityEvent {
+            id: y_sweet_core::activity::ActivityEvent::event_id(ts, 7, 0),
+            ts,
+            actor: "ai:fable-5:luc".into(),
+            author: "Luc's AI".into(),
+            mode: "direct".into(),
+            kind: "insert".into(),
+            old: String::new(),
+            new: "world".into(),
+            old_truncated: false,
+            new_truncated: false,
+            ctx_before: "Hello ".into(),
+            ctx_after: " end".into(),
+            pos: 6,
+            client: 7,
+            clock_from: 0,
+            clock_to: 5,
+            anchor: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_changes_endpoint_returns_indexed_events_with_since_filter() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        server.recent_changes_index.update(
+            SUGG_UUID,
+            vec![activity_event(now - 5_000), activity_event(now - 1_000)],
+            vec![],
+        );
+
+        let (status, body) = get_recent_changes(&server, &folder_doc_id, None).await;
+        assert_eq!(status, StatusCode::OK);
+        let files = body["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], "/Doc.md");
+        assert_eq!(
+            files[0]["doc_id"],
+            format!("{}-{}", TEST_RELAY_ID, SUGG_UUID)
+        );
+        assert_eq!(files[0]["events"].as_array().unwrap().len(), 2);
+        assert_eq!(files[0]["events"][0]["new"], "world");
+        assert_eq!(files[0]["events"][0]["actor"], "ai:fable-5:luc");
+
+        let (status, body) = get_recent_changes(&server, &folder_doc_id, Some(now - 2_000)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["files"][0]["events"].as_array().unwrap().len(), 1);
+
+        let (_, body) = get_recent_changes(&server, &folder_doc_id, Some(now)).await;
+        assert_eq!(body["files"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn recent_changes_endpoint_filters_uuids_not_in_folder() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        server.recent_changes_index.update(
+            "33333333-3333-4333-8333-333333333333",
+            vec![activity_event(now)],
+            vec![],
+        );
+        let (status, body) = get_recent_changes(&server, &folder_doc_id, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["files"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn recent_changes_endpoint_503_before_index_ready() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[("/Doc.md", SUGG_UUID, "markdown")],
+        )
+        .await;
+        server
+            .recent_changes_ready
+            .store(false, std::sync::atomic::Ordering::Release);
+        let (status, _body) = get_recent_changes(&server, &folder_doc_id, None).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn content_update_refreshes_recent_changes_index_from_activity_map() {
+        // Prevents: events written into activity_v0 (by MCP edits or synced
+        // from another replica) never reaching the index via the worker path.
+        let server = Server::new_for_test();
+        insert_test_content_doc(&server, SUGG_UUID, "Hello world").await;
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, SUGG_UUID);
+        {
+            let doc_ref = server.docs.get(&doc_id).unwrap();
+            let awareness = doc_ref.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let ev = activity_event(1_000_000_000_000);
+            y_sweet_core::activity::append_event(&mut txn, &ev, ev.ts);
+        }
+        assert!(suggestions_fast_scan(
+            &doc_id,
+            &server.docs,
+            &server.suggestions_index,
+            &server.recent_changes_index
+        ));
+        let events = server.recent_changes_index.get(SUGG_UUID).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].new, "world");
+    }
+
     #[tokio::test]
     async fn content_update_refreshes_suggestions_index() {
         // Prevents: edits (new/accepted suggestions) never reaching the index
@@ -9280,6 +9632,7 @@ mod test {
             &server.docs,
             &search_index,
             &server.suggestions_index,
+            &server.recent_changes_index,
         );
         assert!(server.suggestions_index.get(SUGG_UUID).is_some());
 
@@ -9299,6 +9652,7 @@ mod test {
             &server.docs,
             &search_index,
             &server.suggestions_index,
+            &server.recent_changes_index,
         );
         assert!(server.suggestions_index.get(SUGG_UUID).is_none());
     }
@@ -9319,6 +9673,7 @@ mod test {
             &server.docs,
             &search_index,
             &server.suggestions_index,
+            &server.recent_changes_index,
         );
 
         assert!(server.suggestions_index.get(SUGG_UUID).is_some());
@@ -9661,7 +10016,8 @@ mod test {
         assert!(suggestions_fast_scan(
             &doc_id,
             &server.docs,
-            &server.suggestions_index
+            &server.suggestions_index,
+            &server.recent_changes_index
         ));
         assert_eq!(server.suggestions_index.get(SUGG_UUID).unwrap().len(), 1);
 
@@ -9672,7 +10028,8 @@ mod test {
         assert!(!suggestions_fast_scan(
             &missing_id,
             &server.docs,
-            &server.suggestions_index
+            &server.suggestions_index,
+            &server.recent_changes_index
         ));
     }
 

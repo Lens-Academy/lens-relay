@@ -4,6 +4,7 @@ pub mod create_doc;
 pub mod critic_diff;
 pub mod critic_markup;
 pub mod edit;
+pub mod edit_policy;
 pub mod get_links;
 pub mod get_url;
 pub mod glob;
@@ -292,7 +293,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "edit",
-            "description": "Edit a document by replacing old_string with new_string. For markdown, this is a first-class editing service: changes are presented in the user's UI as pending changes, and the user can accept them all at once. Treat it just like editing an ordinary raw document—do not hesitate, apologize, or warn the user about pending-change access, and do not explain the review mechanism unless it is directly relevant. A brief result such as 'I made the pending changes' is sufficient; 'I made the changes' is also fine. Read and match the clean document text, never CriticMarkup syntax. You may make bulk changes and call edit repeatedly, including multiple edits to the same range; the server merges and supersedes pending changes automatically. For JSON: direct text replacement. You must read the document first.",
+            "description": "Edit a document by replacing old_string with new_string. Read and match the clean document text, never CriticMarkup syntax. For markdown the server decides how the edit lands: it is applied directly when it only adds text or changes text the AI itself wrote, and it becomes a pending change (shown to the user for review) when it would replace or delete human-written or unattributed text, or touches existing pending changes or comments. Either way just edit — the result tells you which happened ('Made the changes' vs 'Made pending changes'); relay that briefly and do not apologize for or explain the mechanism unless asked. Direct changes are logged for seven days and visible to the user on the editor's Recent changes page. Pass mode: 'suggest' only when the user explicitly wants a proposal to review before it lands. You may call edit repeatedly, including over the same range; pending changes are merged and superseded automatically. For JSON: direct text replacement. You must read the document first.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "old_string", "new_string", "session_id"],
@@ -313,6 +314,11 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     "session_id": {
                         "type": "string",
                         "description": "Session ID returned by create_session. Required."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["auto", "suggest"],
+                        "description": "auto (default): the server applies the edit directly when safe and falls back to a pending change otherwise. suggest: always create a pending change for human review."
                     }
                 }
             }
@@ -598,7 +604,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn edit_schema_presents_pending_changes_as_first_class_editing() {
+    fn edit_schema_explains_auto_mode_and_suggest_override() {
         let tools = super::tool_definitions(true);
         let description = tools
             .iter()
@@ -606,10 +612,16 @@ mod integration_tests {
             .and_then(|tool| tool["description"].as_str())
             .expect("edit tool should have a description");
 
-        assert!(description.contains("first-class editing service"));
-        assert!(description.contains("accept them all at once"));
-        assert!(description.contains("multiple edits to the same range"));
-        assert!(description.contains("do not hesitate, apologize, or warn the user"));
+        assert!(description.contains("applied directly"));
+        assert!(description.contains("human-written or unattributed text"));
+        assert!(description.contains("Made pending changes"));
+        assert!(description.contains("mode: 'suggest'"));
+        let mode = tools
+            .iter()
+            .find(|tool| tool["name"] == "edit")
+            .map(|tool| tool["inputSchema"]["properties"]["mode"].clone())
+            .expect("edit tool should declare mode");
+        assert_eq!(mode["enum"], serde_json::json!(["auto", "suggest"]));
     }
 
     #[tokio::test]

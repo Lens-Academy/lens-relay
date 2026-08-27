@@ -18,19 +18,20 @@ describe('getAuthorshipRuns', () => {
     const ytext = doc.getText('contents');
     ytext.insert(0, 'hello world');
     expect(getAuthorshipRuns(ytext)).toEqual([
-      { from: 0, to: 11, client: doc.clientID },
+      { from: 0, to: 11, client: doc.clientID, clock: 0 },
     ]);
   });
 
-  it('merges adjacent items from the same client', () => {
+  it('merges adjacent items from the same client only when clocks are contiguous', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     // Separate transactions create separate items.
-    ytext.insert(0, 'aaa');
-    ytext.insert(3, 'bbb');
-    ytext.insert(0, 'ccc');
+    ytext.insert(0, 'aaa'); // clocks 0..2
+    ytext.insert(3, 'bbb'); // clocks 3..5, adjacent → merged
+    ytext.insert(0, 'ccc'); // clocks 6..8, sits before → separate run
     expect(getAuthorshipRuns(ytext)).toEqual([
-      { from: 0, to: 9, client: doc.clientID },
+      { from: 0, to: 3, client: doc.clientID, clock: 6 },
+      { from: 3, to: 9, client: doc.clientID, clock: 0 },
     ]);
   });
 
@@ -45,9 +46,9 @@ describe('getAuthorshipRuns', () => {
 
     const runs = getAuthorshipRuns(a.getText('contents'));
     expect(runs).toEqual([
-      { from: 0, to: 2, client: a.clientID },
-      { from: 2, to: 4, client: b.clientID },
-      { from: 4, to: 6, client: a.clientID },
+      { from: 0, to: 2, client: a.clientID, clock: 0 },
+      { from: 2, to: 4, client: b.clientID, clock: 0 },
+      { from: 4, to: 6, client: a.clientID, clock: 2 },
     ]);
     expect(a.getText('contents').toString()).toBe('aaBBaa');
   });
@@ -57,8 +58,10 @@ describe('getAuthorshipRuns', () => {
     const ytext = doc.getText('contents');
     ytext.insert(0, 'abcdef');
     ytext.delete(1, 3); // "aef"
+    // Deleting the middle leaves a clock gap, so "a" and "ef" are separate runs.
     expect(getAuthorshipRuns(ytext)).toEqual([
-      { from: 0, to: 3, client: doc.clientID },
+      { from: 0, to: 1, client: doc.clientID, clock: 0 },
+      { from: 1, to: 3, client: doc.clientID, clock: 4 },
     ]);
     expect(ytext.toString()).toBe('aef');
   });
@@ -71,8 +74,8 @@ describe('getAuthorshipRuns', () => {
     doc.clientID = 424242;
     ytext.insert(3, 'new');
     expect(getAuthorshipRuns(ytext)).toEqual([
-      { from: 0, to: 3, client: oldId },
-      { from: 3, to: 6, client: 424242 },
+      { from: 0, to: 3, client: oldId, clock: 0 },
+      { from: 3, to: 6, client: 424242, clock: 0 },
     ]);
   });
 
@@ -86,8 +89,8 @@ describe('getAuthorshipRuns', () => {
     const fresh = new Y.Doc();
     Y.applyUpdate(fresh, Y.encodeStateAsUpdate(b));
     expect(getAuthorshipRuns(fresh.getText('contents'))).toEqual([
-      { from: 0, to: 4, client: a.clientID },
-      { from: 4, to: 8, client: b.clientID },
+      { from: 0, to: 4, client: a.clientID, clock: 0 },
+      { from: 4, to: 8, client: b.clientID, clock: 0 },
     ]);
   });
 });
