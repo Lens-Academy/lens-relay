@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { buildSourceEvidence, writeSourceEvidence } from "../server/add-article/source-evidence";
-import { splitFrontmatter } from "../server/add-article/eval/edu-repo";
+import { parseFrontmatterAuthor, splitFrontmatter } from "../server/add-article/eval/edu-repo";
 import { articleReviewDigest } from "../server/add-article/review-digest";
 import { createRelayReviewClient, readAcceptedRelayMarkdown } from "../server/add-article/relay-review-read";
 import {
@@ -11,7 +11,6 @@ import {
   REVIEW_MODEL,
   REVIEW_VERSION,
   reviewArticle,
-  validateEditedArticle,
 } from "../server/add-article/claude";
 import { validateArticleDraft } from "../server/add-article/platform-validation";
 import { buildRelayReviewEdits } from "../server/add-article/review-diff";
@@ -183,7 +182,8 @@ function withReviewProvenance(markdown: string, manifest: Record<string, unknown
     `    fetched: ${sourceFetched}`,
     `    kind: "${sourceKind}"`,
   ].join("\n");
-  return `${opening[0]}${frontmatter.trimEnd()}\n${provenance}\n---${markdown.slice(match.index + match[0].length)}`;
+  const reviewed = `${opening[0]}${frontmatter.trimEnd()}\n${provenance}\n---${markdown.slice(match.index + match[0].length)}`;
+  return reviewed.endsWith("\n") ? reviewed : `${reviewed}\n`;
 }
 
 async function execute(): Promise<void> {
@@ -211,7 +211,14 @@ async function execute(): Promise<void> {
         throw new Error("Relay accepted view changed since preparation; prepare a fresh run");
       }
       const reviewBase = normalizeReviewScaffolding(accepted);
-      const meta = validateEditedArticle(reviewBase, reviewBase).meta;
+      const { frontmatter: reviewFrontmatter } = splitFrontmatter(reviewBase.replace(/\r\n?/g, "\n"));
+      const meta = {
+        title: reviewFrontmatter.title ?? "",
+        author: parseFrontmatterAuthor(reviewFrontmatter.author),
+        source_url: reviewFrontmatter.source_url ?? item.source_url,
+        published: reviewFrontmatter.published ?? "",
+        description: reviewFrontmatter.description ?? "",
+      };
       let validation = await validateArticleDraft(item.article_path, reviewBase);
       let outcome = await reviewArticle(item.bundle, reviewBase, meta, validation.issues, 0);
       if (articleReviewDigest(outcome.markdown) === articleReviewDigest(reviewBase)) {
