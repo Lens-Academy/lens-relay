@@ -39,6 +39,11 @@ describe("direct source review", () => {
     expect(buildVerifyPrompt("/tmp/review")).toContain("edit this file directly");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not create any file");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not spawn sub-agents");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("evidence/source-rendered.html");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("evidence/source-unrendered.html");
+    expect(buildVerifyPrompt("/tmp/review")).toContain(
+      "Remove Creative Commons and other licensing notices from imported articles.",
+    );
     expect(buildVerifyPrompt("/tmp/review")).toContain("Never collapse a substantive section, an appendix, footnotes, or prose");
   });
 

@@ -13,7 +13,6 @@ import { adapterContext, resolveFetchUrls } from "./adapters";
 import { extractPdfSmart } from "./pdf";
 import { sourceReviewDigest } from "./review-digest";
 
-const RENDER_ESCALATE_CHARS = 1000;
 const REVIEW_HTML_MAX_LINE_CHARS = 8_000;
 
 export interface SourceEvidenceManifest {
@@ -24,6 +23,8 @@ export interface SourceEvidenceManifest {
   media_type: "html" | "pdf";
   extraction_via: string;
   source_digest: string;
+  unrendered_digest?: string;
+  rendered_digest?: string;
   source_text_chars: number;
   candidate_chars: number;
   alignment: { candidate_token_coverage: number };
@@ -114,35 +115,30 @@ export async function buildSourceEvidence(
         extraction = await extractPdfSmart(extractionBytes, sourceUrl, signal);
       } else {
         rawHtml = new TextDecoder("utf-8").decode(result.bytes);
-        extraction = await extractArticle(rawHtml, fetchedUrl, {
-          sourceUrl,
-          fetchText: fetchAuxiliaryText,
-        });
       }
     } else {
       const result = await fetchFirstHtml(candidates, signal);
       rawHtml = result.html;
       fetchedUrl = result.url;
-      extraction = await extractArticle(rawHtml, fetchedUrl, {
-        sourceUrl,
-        fetchText: fetchAuxiliaryText,
-      });
     }
   } catch (error) {
     rawError = error;
     if (signal?.aborted) throw error;
   }
 
-  if (mediaType !== "pdf" && (!extraction || (!extraction.linkedOut && extraction.body.length < RENDER_ESCALATE_CHARS))) {
+  // Every HTML import uses one consistent, post-JavaScript extraction input.
+  // The direct response is retained only as unrendered evidence; it never wins
+  // extraction merely because a JS shell or block page happens to be long.
+  if (mediaType !== "pdf") {
     try {
-      renderedHtml = await fetchRenderedHtml(sourceUrl, signal);
-      const renderedExtraction = await extractArticle(renderedHtml, sourceUrl, {
+      renderedHtml = await fetchRenderedHtml(rawHtml !== undefined ? fetchedUrl : sourceUrl, signal);
+      extraction = await extractArticle(renderedHtml, fetchedUrl, {
         sourceUrl,
         fetchText: fetchAuxiliaryText,
       });
-      if (!extraction || renderedExtraction.body.length > extraction.body.length) extraction = renderedExtraction;
     } catch (error) {
-      if (!extraction) throw new Error(`Could not fetch article (raw: ${rawError}; render: ${error})`);
+      if (signal?.aborted) throw error;
+      throw new Error(`Could not render article (direct: ${rawError ?? "ok"}; Jina: ${error})`);
     }
   }
   if (!extraction) throw rawError instanceof Error ? rawError : new Error("Extraction failed");
@@ -152,7 +148,7 @@ export async function buildSourceEvidence(
   const sourceText = mediaType === "pdf"
     ? extraction.body
     : nativeMarkdown ?? conservativeHtmlText(renderedHtml ?? rawHtml ?? "");
-  const sourceBytes = pdf ?? Buffer.from(nativeMarkdown ?? renderedHtml ?? rawHtml ?? sourceText);
+  const sourceBytes = pdf ?? Buffer.from(nativeMarkdown ?? renderedHtml ?? sourceText);
   return {
     extraction,
     sourceText,
@@ -168,6 +164,8 @@ export async function buildSourceEvidence(
       media_type: mediaType,
       extraction_via: extraction.via,
       source_digest: sourceReviewDigest(sourceBytes),
+      unrendered_digest: rawHtml ? sourceReviewDigest(Buffer.from(rawHtml)) : undefined,
+      rendered_digest: renderedHtml ? sourceReviewDigest(Buffer.from(renderedHtml)) : undefined,
       source_text_chars: sourceText.length,
       candidate_chars: extraction.body.length,
       alignment: { candidate_token_coverage: tokenCoverage(extraction.body, sourceText) },
@@ -182,10 +180,8 @@ export async function writeSourceEvidence(workDir: string, evidence: SourceEvide
   await Promise.all([
     fs.writeFile(path.join(dir, "manifest.json"), JSON.stringify(evidence.manifest, null, 2)),
     fs.writeFile(path.join(dir, "source.txt"), evidence.sourceText),
-    evidence.rawHtml ? fs.writeFile(path.join(dir, "source.html"), formatHtmlForReview(evidence.rawHtml)) : Promise.resolve(),
-    evidence.rawHtml ? fs.writeFile(path.join(dir, "source-original.html"), evidence.rawHtml) : Promise.resolve(),
+    evidence.rawHtml ? fs.writeFile(path.join(dir, "source-unrendered.html"), evidence.rawHtml) : Promise.resolve(),
     evidence.renderedHtml ? fs.writeFile(path.join(dir, "source-rendered.html"), formatHtmlForReview(evidence.renderedHtml)) : Promise.resolve(),
-    evidence.renderedHtml ? fs.writeFile(path.join(dir, "source-rendered-original.html"), evidence.renderedHtml) : Promise.resolve(),
     evidence.nativeMarkdown ? fs.writeFile(path.join(dir, "source-native.md"), evidence.nativeMarkdown) : Promise.resolve(),
     evidence.pdf ? fs.writeFile(path.join(dir, "source.pdf"), evidence.pdf) : Promise.resolve(),
   ]);

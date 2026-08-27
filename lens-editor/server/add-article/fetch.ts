@@ -119,8 +119,8 @@ export async function fetchFirstHtml(
 
 /**
  * Fetch the *rendered* HTML of a page via the Jina Reader browser engine
- * (X-Return-Format: html). Used as a fallback when the raw fetch is a JS-only
- * SPA skeleton or is bot-blocked: Jina renders the page (from its own network)
+ * (X-Return-Format: html). Used as the canonical input for every HTML import:
+ * Jina renders the page (from its own network)
  * and returns the post-JS DOM, which we then run our deterministic extractor
  * over — "buy the rendering, own the extraction". SSRF: we still validate the
  * target is a public http(s) URL before handing it off.

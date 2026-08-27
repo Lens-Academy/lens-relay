@@ -2,18 +2,24 @@
 
 Full article imports now use one mandatory, fail-closed review pipeline. Stubs are exempt.
 
-1. Fetch the source with the importer's SSRF-safe adapters and retain raw/rendered HTML or PDF plus conservative source text.
+1. Fetch the source with the importer's SSRF-safe adapters. PDFs retain their original bytes; every HTML page is rendered through Jina before extraction, while the direct response remains as unrendered provenance.
 2. Extract Markdown deterministically and prepare hosted images.
 3. Apply syntax-aware, idempotent, source-preserving normalizations. Code,
    comments, CriticMarkup, and math are opaque to these repairs.
 4. Send the complete draft to Lens Platform's `/api/content/validate-article` endpoint.
-5. Run Claude Sonnet against local source evidence, the draft, and Platform findings. Claude has only `Read,Write`; it cannot fetch or run commands. It decides whether clearly terminal Acknowledgements, References, or standalone series navigation should be wrapped in `:::collapse`; substantive sections, appendices, footnotes, and following prose stay open.
-6. Apply unique exact patches, regenerate metadata, and validate again. One additional repair round is allowed.
+5. Run Claude Sonnet against local source evidence, the draft, and Platform findings. Claude has only `Read,Edit`; it edits the candidate directly and cannot fetch, run commands, create files, or delegate. It decides whether clearly terminal Acknowledgements, References, or standalone series navigation should be wrapped in `:::collapse`; substantive sections, appendices, footnotes, and following prose stay open.
+6. Programmatically protect pipeline-owned metadata and authoring comments, regenerate metadata, and validate again. One additional repair round is allowed.
 7. Stamp review provenance and its canonical SHA-256 digest, validate the exact final file, then write it to Relay.
 
 Any missing validator configuration, Platform outage, Claude failure/timeout, inaccessible source, rejected review, unsafe patch, or remaining validation error prevents the article write. Warnings remain review context and do not block a reviewed draft. PDF figure upload failure also blocks; arXiv image-hosting failure retains the original external image.
 
-The lens-editor container needs `LENS_PLATFORM_URL` and `ADHOC_VALIDATION_SECRET`. The latter must match Lens Platform. Article jobs default to 25 minutes and may be overridden with `ARTICLE_JOB_TIMEOUT_MS`.
+The lens-editor container needs `LENS_PLATFORM_URL`, `ADHOC_VALIDATION_SECRET`, and `JINA_API_KEY`. The validation secret must match Lens Platform. Article jobs default to 25 minutes and may be overridden with `ARTICLE_JOB_TIMEOUT_MS`.
+
+For HTML evidence, `source-unrendered.html` is the direct response and
+`source-rendered.html` is the line-bounded Jina result used for extraction and
+review. `source.txt` is derived from that result or authoritative native
+Markdown supplied by an adapter. HTML imports fail
+closed when rendering fails; PDFs do not use Jina.
 
 Before enabling full imports, copy the same `ADHOC_VALIDATION_SECRET` used by
 the Platform endpoint into the production lens-relay `.env`, recreate the
@@ -70,7 +76,7 @@ npm run article-review -- summarize-reports \
 
 ## Retroactive review
 
-The local CLI reuses the same fetchers and evidence format, but does not launch an LLM. It prepares independent bundles for interactive Codex/Claude agents, which read the evidence and propose fixes through Relay MCP:
+The local CLI reuses the same fetchers, evidence format, and direct-edit LLM reviewer. It prepares independent bundles and publishes reviewed differences as Relay CriticMarkup suggestions:
 
 ```bash
 cd lens-editor
@@ -78,6 +84,8 @@ RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
   npm run article-review -- prepare --content-root /path/to/lens-edu --all
 RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
   npm run article-review -- prepare --content-root /path/to/lens-edu --manifest articles.json
+RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
+  npm run article-review -- execute --run .article-review-cache/<run-id> --article articles/example.md
 npm run article-review -- digest --file .article-review-cache/<run-id>/<bundle>/reviewed.md
 npm run article-review -- status --run .article-review-cache/<run-id>
 npm run article-review -- prune --days 30
@@ -88,11 +96,11 @@ Preparation uses the local checkout only to select article paths. It reads each
 the bundle contains the current accepted CriticMarkup view; source fetching and
 extraction still run locally. `MCP_API_KEY` may instead be supplied as
 `ARTICLE_REVIEW_RELAY_TOKEN`. Each run records batches of at most five articles.
-Three parallel agents is the recommended operating point. Agents must confirm
-the Relay accepted view still matches the bundle, keep `reviewed.md` synchronized
-with every proposed replacement, and use `validate_content` with
-`accept_drafts: true` after suggesting edits. Local content files are selection
-inputs only; all content changes go through Relay MCP as reviewable CriticMarkup.
+The executor confirms that Relay's accepted view still matches the bundle,
+runs the same reviewer as a live import, validates the clean result, publishes
+the exact diff through Relay MCP, and validates again with
+`accept_drafts: true`. Local content files are selection inputs only; all content changes go
+through Relay as reviewable CriticMarkup.
 
 Until the deployed Relay exposes `article_review_digest`, the `digest` command
 computes the same canonical accepted-draft digest locally from `reviewed.md`.

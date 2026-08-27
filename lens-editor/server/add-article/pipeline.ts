@@ -328,6 +328,8 @@ export async function processArticle(
     linked_out: ex.linkedOut,
     assessment_flags: ex.assessment.flags,
     source_digest: evidence.manifest.source_digest,
+    unrendered_digest: evidence.manifest.unrendered_digest,
+    rendered_digest: evidence.manifest.rendered_digest,
     source_kind: evidence.manifest.source_kind,
     media_type: evidence.manifest.media_type,
     fetched_url: evidence.manifest.fetched_url,

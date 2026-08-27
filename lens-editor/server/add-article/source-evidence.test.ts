@@ -7,12 +7,21 @@ const mocks = vi.hoisted(() => ({
   bytes: new Uint8Array(),
   via: "pdf" as string,
   fetchRawBytes: vi.fn(),
+  fetchFirstHtml: vi.fn(),
+  fetchRawHtml: vi.fn(),
+  fetchRenderedHtml: vi.fn(),
   extractPdfSmart: vi.fn(),
 }));
 
 vi.mock("./fetch", async () => {
   const actual = await vi.importActual<typeof import("./fetch")>("./fetch");
-  return { ...actual, fetchRawBytes: mocks.fetchRawBytes };
+  return {
+    ...actual,
+    fetchRawBytes: mocks.fetchRawBytes,
+    fetchFirstHtml: mocks.fetchFirstHtml,
+    fetchRawHtml: mocks.fetchRawHtml,
+    fetchRenderedHtml: mocks.fetchRenderedHtml,
+  };
 });
 
 vi.mock("./pdf", () => ({
@@ -61,6 +70,7 @@ describe("PDF source evidence retention", () => {
     expect(evidence.pdf?.equals(Buffer.from(mocks.bytes))).toBe(true);
     expect(evidence.manifest.source_digest).toBe(sourceReviewDigest(Buffer.from(mocks.bytes)));
     expect(evidence.manifest.source_digest).not.toBe(sourceReviewDigest(Buffer.alloc(0)));
+    expect(mocks.fetchRenderedHtml).not.toHaveBeenCalled();
 
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-evidence-"));
     tempDirs.push(workDir);
@@ -72,12 +82,81 @@ describe("PDF source evidence retention", () => {
 });
 
 describe("HTML source evidence retention", () => {
-  it("keeps byte-exact provenance and writes line-bounded review HTML", async () => {
-    const rawHtml = `<html><body><article>${"source evidence ".repeat(2_000)}</article></body></html>`;
-    const formatted = formatHtmlForReview(rawHtml);
+  it("always extracts rendered HTML and records both evidence digests", async () => {
+    const rawHtml = `<html><head><title>Unrendered shell</title></head><body><article>${"unrendered shell ".repeat(2_000)}</article></body></html>`;
+    const renderedHtml = `<html><head><title>Rendered Article</title><meta name="author" content="Real Author"><meta property="article:published_time" content="2024-01-02"></head><body><article><h1>Rendered Article</h1><p>${"rendered source evidence ".repeat(200)}</p></article></body></html>`;
+    mocks.fetchRawBytes.mockResolvedValue({
+      bytes: new TextEncoder().encode(rawHtml).buffer,
+      contentType: "text/html",
+      finalUrl: "https://example.org/final-article",
+    });
+    mocks.fetchRenderedHtml.mockResolvedValue(renderedHtml);
+
+    const evidence = await buildSourceEvidence("https://example.org/article");
+
+    expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith("https://example.org/final-article", undefined);
+    expect(evidence.extraction.body).toContain("rendered source evidence");
+    expect(evidence.extraction.body).not.toContain("unrendered shell");
+    expect(evidence.sourceText).toContain("rendered source evidence");
+    expect(evidence.manifest.source_digest).toBe(sourceReviewDigest(Buffer.from(renderedHtml)));
+    expect(evidence.manifest.rendered_digest).toBe(sourceReviewDigest(Buffer.from(renderedHtml)));
+    expect(evidence.manifest.unrendered_digest).toBe(sourceReviewDigest(Buffer.from(rawHtml)));
+  });
+
+  it("fails closed when Jina cannot render otherwise extractable HTML", async () => {
+    const rawHtml = `<html><head><title>Static Article</title></head><body><article>${"complete static article ".repeat(200)}</article></body></html>`;
+    mocks.fetchRawBytes.mockResolvedValue({
+      bytes: new TextEncoder().encode(rawHtml).buffer,
+      contentType: "text/html",
+      finalUrl: "https://example.org/article",
+    });
+    mocks.fetchRenderedHtml.mockRejectedValue(new Error("render unavailable"));
+
+    await expect(buildSourceEvidence("https://example.org/article")).rejects.toThrow(
+      "Could not render article",
+    );
+  });
+
+  it("preserves cancellation while waiting for Jina", async () => {
+    mocks.fetchRawBytes.mockResolvedValue({
+      bytes: new TextEncoder().encode("<html><body>source</body></html>").buffer,
+      contentType: "text/html",
+      finalUrl: "https://example.org/article",
+    });
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled"));
+    mocks.fetchRenderedHtml.mockRejectedValue(controller.signal.reason);
+
+    await expect(buildSourceEvidence("https://example.org/article", controller.signal)).rejects.toThrow(
+      "cancelled",
+    );
+  });
+
+  it("renders the adapter-selected HTML URL", async () => {
+    const selectedUrl = "https://arxiv.org/html/2401.00001";
+    const renderedHtml = `<html><body><article><h1 class="ltx_title_document">Rendered Paper</h1><div class="ltx_authors">Ada Author</div><div class="ltx_abstract">${"rendered paper body ".repeat(200)}</div></article></body></html>`;
+    mocks.fetchFirstHtml.mockResolvedValue({
+      html: "<html><body>unrendered arXiv response</body></html>",
+      url: selectedUrl,
+    });
+    mocks.fetchRenderedHtml.mockResolvedValue(renderedHtml);
+    mocks.fetchRawHtml.mockResolvedValue(`<html><head><meta property="og:title" content="Rendered Paper"><meta name="citation_author" content="Ada Author"><meta name="citation_date" content="2024-01-02"></head></html>`);
+
+    const evidence = await buildSourceEvidence("https://arxiv.org/abs/2401.00001");
+
+    expect(mocks.fetchFirstHtml).toHaveBeenCalled();
+    expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith(selectedUrl, undefined);
+    expect(evidence.manifest.fetched_url).toBe(selectedUrl);
+    expect(evidence.extraction.body).toContain("rendered paper body");
+  });
+
+  it("writes exact unrendered evidence and line-bounded rendered review HTML", async () => {
+    const rawHtml = `<html><body><article>unrendered source</article></body></html>`;
+    const renderedHtml = `<html><body><article>${"rendered source evidence ".repeat(2_000)}</article></body></html>`;
+    const formatted = formatHtmlForReview(renderedHtml);
 
     expect(Math.max(...formatted.split("\n").map((line) => line.length))).toBeLessThanOrEqual(8_000);
-    expect(formatted.replace(/\n/g, "")).toBe(rawHtml);
+    expect(formatted.replace(/\n/g, "")).toBe(renderedHtml);
 
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "html-evidence-"));
     tempDirs.push(workDir);
@@ -98,18 +177,23 @@ describe("HTML source evidence retention", () => {
         source_kind: "fixture",
         media_type: "html",
         extraction_via: "html",
-        source_digest: sourceReviewDigest(Buffer.from(rawHtml)),
+        source_digest: sourceReviewDigest(Buffer.from(renderedHtml)),
+        unrendered_digest: sourceReviewDigest(Buffer.from(rawHtml)),
+        rendered_digest: sourceReviewDigest(Buffer.from(renderedHtml)),
         source_text_chars: 15,
         candidate_chars: 15,
         alignment: { candidate_token_coverage: 1 },
       },
       sourceText: "source evidence",
       rawHtml,
+      renderedHtml,
     });
 
-    expect(await fs.readFile(path.join(workDir, "evidence/source-original.html"), "utf8")).toBe(rawHtml);
-    const reviewHtml = await fs.readFile(path.join(workDir, "evidence/source.html"), "utf8");
+    expect(await fs.readFile(path.join(workDir, "evidence/source-unrendered.html"), "utf8")).toBe(rawHtml);
+    const reviewHtml = await fs.readFile(path.join(workDir, "evidence/source-rendered.html"), "utf8");
     expect(Math.max(...reviewHtml.split("\n").map((line) => line.length))).toBeLessThanOrEqual(8_000);
-    expect(reviewHtml.replace(/\n/g, "")).toBe(rawHtml);
+    expect(reviewHtml.replace(/\n/g, "")).toBe(renderedHtml);
+    await expect(fs.stat(path.join(workDir, "evidence/source.html"))).rejects.toThrow();
+    await expect(fs.stat(path.join(workDir, "evidence/source-original.html"))).rejects.toThrow();
   });
 });
