@@ -113,6 +113,21 @@ phrases and sentences throughout the article, including these exact changes:
 
 It also removes the terminal Creative Commons license notice.
 
+#### Clean-import comparison
+
+[Open the preserved reviewed version](https://editor.lensacademy.org/2128996e/Lens-Edu/articles/baumann-longtermism-and-animal-advocacy-before-clean-reimport.md) · [Open the clean import](https://editor.lensacademy.org/6297919b/Lens-Edu/articles/baumann-longtermism-and-animal-advocacy.md)
+
+The clean import is materially more complete: 11,584 body characters versus
+6,807; 30 links versus zero; and six source footnotes that were absent from the
+reviewed version. It recovered every URL found in the rendered source, including
+the citations attached to phrases such as `longtermism`, `moral circle
+expansion`, `antispeciesism`, `patient philanthropy`, and `value drift`.
+
+The old text's distinct vocabulary is 99.3% covered by the clean import, while
+only 81.7% of the clean import's distinct vocabulary occurs in the old version.
+This confirms that the retroactive reviewer recovered several visible omissions
+but could not reconstruct the missing link graph and footnotes from that draft.
+
 ### 5. Why AI alignment could be hard with modern deep learning
 
 [Open review](https://editor.lensacademy.org/c17f21ab/Lens-Edu/articles/cotra-why-ai-alignment-could-be-hard-with-modern-deep-learning.md)
