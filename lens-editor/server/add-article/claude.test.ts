@@ -53,6 +53,9 @@ describe("direct source review", () => {
     );
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not copy obvious typos or grammatical errors from the source.");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not make whitespace-only edits");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("There is no edit-size limit");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("delete all imported comments");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("Large or extensive repairs are never a reason to reject");
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Use typed kebab-case footnote IDs: `[^cite-id]` for citations and `[^note-id]` for explanatory notes; rename every reference and definition together.",
     );

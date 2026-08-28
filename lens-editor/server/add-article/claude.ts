@@ -72,7 +72,7 @@ Use typed kebab-case footnote IDs: \`[^cite-id]\` for citations and \`[^note-id]
 
 For JavaScript applications, inspect HTML-escaped article content inside JSON-LD or hydration scripts as primary rendered evidence.
 
-Edit article.md in place to make source-faithful repairs. You may edit body content and the source-derived frontmatter fields title, author, published, and description. Do not change source_url, created, accessed, tags, llm-review provenance, other frontmatter fields, any paired %% authoring comment block, or any existing {>>...<<} CriticMarkup comment. Preserve source wording; do not summarize, modernize, or silently omit text. Do not copy obvious typos or grammatical errors from the source. Do not make whitespace-only edits, reflow paragraphs, or change typography unless source fidelity requires it. Re-read every changed sentence against the source evidence. If evidence is insufficient for a safe repair, reject rather than guessing.
+Edit article.md in place to make source-faithful repairs. You may edit body content and the source-derived frontmatter fields title, author, published, and description. Do not change source_url, created, accessed, tags, llm-review provenance, other frontmatter fields, any paired %% authoring comment block, or any existing {>>...<<} CriticMarkup comment. Preserve source wording; do not summarize, modernize, or silently omit text. Do not copy obvious typos or grammatical errors from the source. Do not make whitespace-only edits, reflow paragraphs, or change typography unless source fidelity requires it. Re-read every changed sentence against the source evidence. There is no edit-size limit: when article boundaries are clear, delete all imported comments, reactions, navigation, widgets, related-content blocks, and other page chrome, even if this removes most of the draft.
 
 Remove Creative Commons and other licensing notices from imported articles.
 
@@ -84,7 +84,7 @@ This is review pass ${repairRound + 1} of ${MAX_REVIEW_ROUNDS}. Use only Read an
 PASS
 REJECT: concise reason
 
-Use PASS only after article.md is complete and source-faithful. Use REJECT for an inaccessible/non-article/incomplete source or any unsafe or uncertain repair.`;
+Use PASS only after article.md is complete and source-faithful. Large or extensive repairs are never a reason to reject. Use REJECT only when the source is inaccessible or not an article, substantive content is unavailable, or article boundaries cannot be determined without guessing.`;
 }
 
 export function buildVerifyArgs(
