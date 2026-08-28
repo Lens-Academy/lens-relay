@@ -1,0 +1,15 @@
+abi <abi/4.0>,
+
+include <tunables/global>
+
+# Codex prefers the system bubblewrap when it is installed.
+/usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
+
+# Codex also ships a fallback bubblewrap binary. Ubuntu 24.04 otherwise
+# transitions these executables into the restrictive fallback profile, which
+# prevents Codex from creating its workspace and network namespaces.
+/home/penguin/.nvm/versions/node/*/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/*/codex-resources/bwrap flags=(unconfined) {
+  userns,
+}

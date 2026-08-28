@@ -7,9 +7,10 @@ import { parseFrontmatterAuthor, splitFrontmatter } from "../server/add-article/
 import { createRelayReviewClient, readAcceptedRelayMarkdown } from "../server/add-article/relay-review-read";
 import {
   ArticleReviewRejectedError,
+  type ArticleReviewProvider,
   MAX_REVIEW_ROUNDS,
-  REVIEW_MODEL,
   REVIEW_VERSION,
+  resolveArticleReviewerConfig,
   reviewArticle,
 } from "../server/add-article/claude";
 import {
@@ -19,24 +20,15 @@ import {
 import type { ArticleMeta } from "../server/add-article/types";
 import { buildRelayReviewEdits } from "../server/add-article/review-diff";
 import { normalizeReviewScaffolding } from "../server/add-article/review-scaffolding";
-
-interface ReviewItem {
-  article_path: string;
-  relay_path: string;
-  source_url: string;
-  bundle: string;
-  state: "prepared" | "suggested" | "reviewed" | "failed";
-  error?: string;
-}
-
-interface ReviewRun {
-  version: 1;
-  run_id: string;
-  created_at: string;
-  content_root: string;
-  items: ReviewItem[];
-  batches: string[][];
-}
+import {
+  claimReviewItem,
+  finishReviewItem,
+  readReviewRun,
+  reviewItemCanBeClaimed,
+  writeReviewRun,
+  type ReviewItem,
+  type ReviewRun,
+} from "./article-review-manifest";
 
 interface ReviewPassMetric {
   pass: number;
@@ -54,6 +46,31 @@ function validationCodes(validation: ArticleValidationResult): string[] {
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+function reviewerConfig() {
+  const rawProvider = arg("--provider") ?? "claude";
+  if (rawProvider !== "claude" && rawProvider !== "codex") {
+    throw new Error("--provider must be claude or codex");
+  }
+  const config = resolveArticleReviewerConfig(rawProvider as ArticleReviewProvider, arg("--model"));
+  const rawBudget = arg("--max-budget-usd");
+  if (rawBudget !== undefined) {
+    const maxBudgetUsd = Number(rawBudget);
+    if (!Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0) {
+      throw new Error("--max-budget-usd must be a positive number");
+    }
+    config.maxBudgetUsd = maxBudgetUsd;
+  }
+  const rawTimeoutMinutes = arg("--timeout-minutes");
+  if (rawTimeoutMinutes !== undefined) {
+    const timeoutMinutes = Number(rawTimeoutMinutes);
+    if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) {
+      throw new Error("--timeout-minutes must be a positive number");
+    }
+    config.timeoutMs = timeoutMinutes * 60_000;
+  }
+  return config;
 }
 
 async function walk(dir: string): Promise<string[]> {
@@ -138,7 +155,7 @@ async function prepare(): Promise<void> {
   const batches = Array.from({ length: Math.ceil(items.length / 5) }, (_, i) =>
     items.slice(i * 5, i * 5 + 5).map((item) => item.article_path));
   const run: ReviewRun = { version: 1, run_id: runId, created_at: new Date().toISOString(), content_root: contentRoot, items, batches };
-  await fs.writeFile(path.join(runDir, "manifest.json"), JSON.stringify(run, null, 2));
+  await writeReviewRun(runDir, run);
   console.log(`\nPrepared ${items.length} articles in ${runDir} (${batches.length} batches of at most five).`);
 }
 
@@ -152,10 +169,11 @@ This bundle is processed by the same direct-edit reviewer used for new imports. 
 async function status(): Promise<void> {
   const runDir = path.resolve(arg("--run") ?? "");
   if (!arg("--run")) throw new Error("status requires --run <run-directory>");
-  const run = JSON.parse(await fs.readFile(path.join(runDir, "manifest.json"), "utf-8")) as ReviewRun;
+  const run = await readReviewRun(runDir);
   const counts: Record<string, number> = {};
   const reviewPassCounts: Record<string, number> = {};
   const extraPassTriggerCodes: Record<string, number> = {};
+  const reviewers: Record<string, number> = {};
   const passDurations: Record<string, { attempts: number; total_duration_ms: number; average_duration_ms: number }> = {};
   const increment = (record: Record<string, number>, key: string) => {
     record[key] = (record[key] ?? 0) + 1;
@@ -164,6 +182,9 @@ async function status(): Promise<void> {
     const result = await fs.readFile(path.join(item.bundle, "result.json"), "utf-8").then(JSON.parse).catch(() => null);
     const state = result?.state ?? item.state;
     counts[state] = (counts[state] ?? 0) + 1;
+    const provider = result?.review_provider ?? item.review_provider;
+    const model = result?.review_model ?? item.review_model;
+    if (provider || model) increment(reviewers, `${provider ?? "unknown"}:${model ?? "unknown"}`);
     const reviewPasses = Number(result?.review_passes);
     increment(reviewPassCounts, Number.isInteger(reviewPasses) ? String(reviewPasses) : "unknown");
     for (const metric of (result?.review_pass_details ?? []) as ReviewPassMetric[]) {
@@ -183,11 +204,12 @@ async function status(): Promise<void> {
       review_pass_counts: reviewPassCounts,
       extra_pass_trigger_codes: extraPassTriggerCodes,
       llm_pass_durations_ms: passDurations,
+      reviewers,
     },
   })}`);
 }
 
-function withReviewProvenance(markdown: string, manifest: Record<string, unknown>): string {
+function withReviewProvenance(markdown: string, manifest: Record<string, unknown>, model: string): string {
   const opening = markdown.match(/^---\r?\n/);
   if (!opening) throw new Error("Reviewed article has no frontmatter");
   const closing = /^---\s*$/gm;
@@ -202,7 +224,7 @@ function withReviewProvenance(markdown: string, manifest: Record<string, unknown
   const provenance = [
     "llm-review:",
     `  date: ${reviewedDate}`,
-    `  model: "${REVIEW_MODEL}"`,
+    `  model: "${model}"`,
     `  version: "${REVIEW_VERSION}"`,
     "  source:",
     `    fetched: ${sourceFetched}`,
@@ -222,11 +244,20 @@ async function execute(): Promise<void> {
   const relayUrl = arg("--relay-url") ?? process.env.RELAY_URL;
   const relayToken = process.env.ARTICLE_REVIEW_RELAY_TOKEN ?? process.env.MCP_API_KEY;
   if (!relayUrl || !relayToken) throw new Error("execute requires Relay URL and token");
-  const run = JSON.parse(await fs.readFile(path.join(runDir, "manifest.json"), "utf-8")) as ReviewRun;
-  const items = run.items.filter((item) => item.state === "prepared" && (!onlyArticle || item.article_path === onlyArticle));
+  const selectedReviewer = reviewerConfig();
+  const run = await readReviewRun(runDir);
+  const items = run.items.filter((item) =>
+    reviewItemCanBeClaimed(item) && (!onlyArticle || item.article_path === onlyArticle));
   if (!items.length) throw new Error("No matching prepared articles");
 
-  for (const item of items) {
+  for (const candidate of items) {
+    const item = await claimReviewItem(
+      runDir,
+      candidate.article_path,
+      selectedReviewer.provider,
+      selectedReviewer.model,
+    );
+    if (!item) continue;
     const resultPath = path.join(item.bundle, "result.json");
     const reviewPassDetails: ReviewPassMetric[] = [];
     try {
@@ -267,6 +298,8 @@ async function execute(): Promise<void> {
             passMeta,
             beforeValidation.issues,
             round,
+            undefined,
+            selectedReviewer,
           );
           metric.outcome = reviewed.review.decision;
           return reviewed;
@@ -295,7 +328,7 @@ async function execute(): Promise<void> {
       }
       if (!validation.valid) throw new Error(`Reviewed article remains invalid (${validation.counts.errors} errors)`);
       const evidenceManifest = JSON.parse(await fs.readFile(path.join(item.bundle, "evidence/manifest.json"), "utf-8"));
-      const reviewed = withReviewProvenance(outcome.markdown, evidenceManifest);
+      const reviewed = withReviewProvenance(outcome.markdown, evidenceManifest, selectedReviewer.model);
       const reviewedValidation = await validateArticleDraft(item.article_path, reviewed);
       if (!reviewedValidation.valid) {
         throw new Error(`Reviewed article provenance is invalid (${reviewedValidation.counts.errors} errors)`);
@@ -318,8 +351,11 @@ async function execute(): Promise<void> {
         review_url: reviewUrl.trim(),
         review_passes: reviewPassDetails.length,
         review_pass_details: reviewPassDetails,
+        review_provider: selectedReviewer.provider,
+        review_model: selectedReviewer.model,
         validation: validationOutput.slice(0, 20_000),
       }, null, 2));
+      await finishReviewItem(runDir, item.article_path, "suggested");
       console.log(`suggested ${item.article_path}\n${reviewUrl.trim()}`);
     } catch (error) {
       const message = error instanceof ArticleReviewRejectedError ? error.reason : String(error);
@@ -328,7 +364,10 @@ async function execute(): Promise<void> {
         error: message,
         review_passes: reviewPassDetails.length,
         review_pass_details: reviewPassDetails,
+        review_provider: selectedReviewer.provider,
+        review_model: selectedReviewer.model,
       }, null, 2));
+      await finishReviewItem(runDir, item.article_path, "failed", message);
       console.error(`failed    ${item.article_path}: ${message}`);
     }
   }
@@ -461,7 +500,11 @@ try {
   else if (command === "status") await status();
   else if (command === "prune") await prune();
   else if (command === "summarize-reports") await summarizeReports();
-  else throw new Error("Usage: article-review <prepare|execute|status|prune|summarize-reports> ...");
+  else throw new Error(
+    "Usage: article-review <prepare|execute|status|prune|summarize-reports> ... " +
+    "[--provider claude|codex] [--model <model>] [--max-budget-usd <amount>] " +
+    "[--timeout-minutes <minutes>]",
+  );
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;

@@ -86,6 +86,8 @@ RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
   npm run article-review -- prepare --content-root /path/to/lens-edu --manifest articles.json
 RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
   npm run article-review -- execute --run .article-review-cache/<run-id> --article articles/example.md
+RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
+  npm run article-review -- execute --run .article-review-cache/<run-id> --all --provider codex
 npm run article-review -- status --run .article-review-cache/<run-id>
 npm run article-review -- prune --days 30
 ```
@@ -101,6 +103,22 @@ the exact diff through Relay MCP, and validates again with
 `accept_drafts: true`. Local content files are selection inputs only; all content changes go
 through Relay as reviewable CriticMarkup.
 
+Retroactive runs default to Claude (`sonnet`). Local operators can select
+`--provider codex`, which defaults to `gpt-5.6-terra`, or override either
+provider's model with `--model`. Codex runs ephemerally in an isolated copy of
+the review bundle with local read/edit access and no network access. The live
+import pipeline remains explicitly Claude-only.
+
+Long retroactive Claude reviews can raise the local per-article guard with
+`--max-budget-usd` or extend the local timeout with `--timeout-minutes`; the
+live-import defaults remain unchanged.
+
+On Ubuntu 24.04, install and load `docs/codex-bwrap.apparmor` as
+`/etc/apparmor.d/codex-bwrap` so Codex's bundled bubblewrap can create the
+user and network namespaces required by its sandbox. This grants namespace
+access only to the system bubblewrap executable and Codex's versioned fallback;
+do not disable Ubuntu's system-wide unprivileged-user-namespace restriction.
+
 Review provenance is written as one nested mapping, following the eval-results
 frontmatter convention:
 
@@ -108,7 +126,7 @@ frontmatter convention:
 llm-review:
   date: 2026-08-19
   model: "sonnet"
-  version: "article-qc-v1"
+  version: "article-qc-v1.1"
   source:
     fetched: 2026-08-19
     kind: "live"

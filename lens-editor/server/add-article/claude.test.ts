@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildVerifyArgs,
   buildVerifyPrompt,
+  parsePlainReviewStatus,
   parseReviewStatus,
+  resolveArticleReviewerConfig,
   validateEditedArticle,
 } from "./claude";
 
@@ -51,7 +53,17 @@ describe("direct source review", () => {
     );
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not copy obvious typos or grammatical errors from the source.");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not make whitespace-only edits");
+    expect(buildVerifyPrompt("/tmp/review")).toContain(
+      "Use typed kebab-case footnote IDs: `[^cite-id]` for citations and `[^note-id]` for explanatory notes; rename every reference and definition together.",
+    );
     expect(buildVerifyPrompt("/tmp/review")).toContain("Never collapse a substantive section, an appendix, footnotes, or prose");
+  });
+
+  it("allows the retro CLI to override Claude's production-default budget", () => {
+    const defaultArgs = buildVerifyArgs("/tmp/review");
+    expect(defaultArgs[defaultArgs.indexOf("--max-budget-usd") + 1]).toBe("1.5");
+    const localArgs = buildVerifyArgs("/tmp/review", 0, "sonnet", 5);
+    expect(localArgs[localArgs.indexOf("--max-budget-usd") + 1]).toBe("5");
   });
 
   it("accepts exact PASS and a reasoned REJECT from Claude CLI JSON", () => {
@@ -63,6 +75,20 @@ describe("direct source review", () => {
     expect(parseReviewStatus(JSON.stringify({ result: "REJECT: source is truncated" }))).toEqual({
       decision: "reject",
       reason: "source is truncated",
+    });
+  });
+
+  it("selects provider defaults and accepts local Codex status output", () => {
+    expect(resolveArticleReviewerConfig()).toEqual({ provider: "claude", model: "sonnet" });
+    expect(resolveArticleReviewerConfig("codex")).toEqual({ provider: "codex", model: "gpt-5.6-terra" });
+    expect(resolveArticleReviewerConfig("codex", "gpt-5.6-sol")).toEqual({
+      provider: "codex",
+      model: "gpt-5.6-sol",
+    });
+    expect(parsePlainReviewStatus("work complete\nPASS\n")).toEqual({ decision: "pass", reason: "" });
+    expect(parsePlainReviewStatus("REJECT: evidence is incomplete")).toEqual({
+      decision: "reject",
+      reason: "evidence is incomplete",
     });
   });
 
