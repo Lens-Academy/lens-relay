@@ -1,6 +1,5 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { JSDOM } from "jsdom";
 import { extractArticle, type ExtractResult } from "./extract";
 import {
   fetchFirstHtml,
@@ -25,30 +24,16 @@ export interface SourceEvidenceManifest {
   source_digest: string;
   unrendered_digest?: string;
   rendered_digest?: string;
-  source_text_chars: number;
   candidate_chars: number;
-  alignment: { candidate_token_coverage: number };
 }
 
 export interface SourceEvidence {
   extraction: ExtractResult;
   manifest: SourceEvidenceManifest;
-  sourceText: string;
   rawHtml?: string;
   renderedHtml?: string;
   nativeMarkdown?: string;
   pdf?: Buffer;
-}
-
-export function conservativeHtmlText(html: string): string {
-  const document = new JSDOM(html).window.document;
-  for (const el of document.querySelectorAll("script,style,noscript,svg")) el.remove();
-  return (document.body?.textContent ?? "")
-    .replace(/\u00ad/g, "")
-    .replace(/[\t \f\v]+/g, " ")
-    .replace(/\s*\n\s*/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
 
 /**
@@ -69,14 +54,6 @@ export function formatHtmlForReview(html: string): string {
     }
   }
   return lines.join("\n");
-}
-
-function tokenCoverage(candidate: string, source: string): number {
-  const words = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [];
-  const sourceWords = new Set(words(source));
-  const candidateWords = words(candidate);
-  if (!candidateWords.length) return 0;
-  return candidateWords.filter((word) => sourceWords.has(word)).length / candidateWords.length;
 }
 
 export async function buildSourceEvidence(
@@ -143,15 +120,9 @@ export async function buildSourceEvidence(
   }
   if (!extraction) throw rawError instanceof Error ? rawError : new Error("Extraction failed");
 
-  // For PDFs, provider/local extracted text is the only conservative textual
-  // representation; the original binary remains available for visual checks.
-  const sourceText = mediaType === "pdf"
-    ? extraction.body
-    : nativeMarkdown ?? conservativeHtmlText(renderedHtml ?? rawHtml ?? "");
-  const sourceBytes = pdf ?? Buffer.from(nativeMarkdown ?? renderedHtml ?? sourceText);
+  const sourceBytes = pdf ?? Buffer.from(nativeMarkdown ?? renderedHtml ?? "");
   return {
     extraction,
-    sourceText,
     rawHtml,
     renderedHtml,
     nativeMarkdown,
@@ -166,9 +137,7 @@ export async function buildSourceEvidence(
       source_digest: sourceReviewDigest(sourceBytes),
       unrendered_digest: rawHtml ? sourceReviewDigest(Buffer.from(rawHtml)) : undefined,
       rendered_digest: renderedHtml ? sourceReviewDigest(Buffer.from(renderedHtml)) : undefined,
-      source_text_chars: sourceText.length,
       candidate_chars: extraction.body.length,
-      alignment: { candidate_token_coverage: tokenCoverage(extraction.body, sourceText) },
     },
   };
 }
@@ -179,7 +148,6 @@ export async function writeSourceEvidence(workDir: string, evidence: SourceEvide
   await fs.mkdir(dir, { recursive: true });
   await Promise.all([
     fs.writeFile(path.join(dir, "manifest.json"), JSON.stringify(evidence.manifest, null, 2)),
-    fs.writeFile(path.join(dir, "source.txt"), evidence.sourceText),
     evidence.rawHtml ? fs.writeFile(path.join(dir, "source-unrendered.html"), evidence.rawHtml) : Promise.resolve(),
     evidence.renderedHtml ? fs.writeFile(path.join(dir, "source-rendered.html"), formatHtmlForReview(evidence.renderedHtml)) : Promise.resolve(),
     evidence.nativeMarkdown ? fs.writeFile(path.join(dir, "source-native.md"), evidence.nativeMarkdown) : Promise.resolve(),

@@ -44,6 +44,7 @@ vi.mock("./platform-validation", () => ({
   assertArticleValid: (result: { valid: boolean }) => { if (!result.valid) throw new Error("invalid"); },
 }));
 vi.mock("./claude", () => ({
+  MAX_REVIEW_ROUNDS: 3,
   REVIEW_MODEL: "sonnet",
   REVIEW_VERSION: "article-qc-v1",
   reviewArticle: reviewMocks.reviewArticle,
@@ -193,9 +194,19 @@ This might be useful.
         source_kind: "live",
       },
     });
-    reviewMocks.validateArticleDraft.mockResolvedValue({
-      valid: true, issues: [], truncated: false, counts: { errors: 0, warnings: 0 },
-    });
+    const valid = { valid: true, issues: [], truncated: false, counts: { errors: 0, warnings: 0 } };
+    const invalid = {
+      valid: false,
+      issues: [{ code: "article.test", severity: "error", path: "articles/test.md", message: "repair me" }],
+      truncated: false,
+      counts: { errors: 1, warnings: 0 },
+    };
+    reviewMocks.validateArticleDraft
+      .mockResolvedValueOnce(valid)
+      .mockResolvedValueOnce(invalid)
+      .mockResolvedValueOnce(invalid)
+      .mockResolvedValueOnce(valid)
+      .mockResolvedValueOnce(valid);
     reviewMocks.reviewArticle.mockImplementation(async (_dir, markdown, reviewMeta) => ({
       review: { decision: "pass", reason: "" },
       markdown,
@@ -226,8 +237,9 @@ This might be useful.
     expect(markdown).toContain('  version: "article-qc-v1"');
     expect(markdown).toContain('  content-sha: "sha256:');
     expect(markdown).not.toContain("article-stub");
-    expect(reviewMocks.reviewArticle).toHaveBeenCalledOnce();
-    expect(reviewMocks.validateArticleDraft).toHaveBeenCalledTimes(3);
+    expect(reviewMocks.reviewArticle).toHaveBeenCalledTimes(3);
+    expect(reviewMocks.reviewArticle.mock.calls.map((call) => call[4])).toEqual([0, 1, 2]);
+    expect(reviewMocks.validateArticleDraft).toHaveBeenCalledTimes(5);
     expect(reviewMocks.validateArticleDraft.mock.invocationCallOrder[0])
       .toBeLessThan(reviewMocks.reviewArticle.mock.invocationCallOrder[0]);
     expect(reviewMocks.reviewArticle.mock.invocationCallOrder[0])

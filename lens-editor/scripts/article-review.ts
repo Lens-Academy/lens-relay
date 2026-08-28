@@ -8,11 +8,16 @@ import { articleReviewDigest } from "../server/add-article/review-digest";
 import { createRelayReviewClient, readAcceptedRelayMarkdown } from "../server/add-article/relay-review-read";
 import {
   ArticleReviewRejectedError,
+  MAX_REVIEW_ROUNDS,
   REVIEW_MODEL,
   REVIEW_VERSION,
   reviewArticle,
 } from "../server/add-article/claude";
-import { validateArticleDraft } from "../server/add-article/platform-validation";
+import {
+  validateArticleDraft,
+  type ArticleValidationResult,
+} from "../server/add-article/platform-validation";
+import type { ArticleMeta } from "../server/add-article/types";
 import { buildRelayReviewEdits } from "../server/add-article/review-diff";
 import { normalizeReviewScaffolding } from "../server/add-article/review-scaffolding";
 
@@ -34,6 +39,19 @@ interface ReviewRun {
   content_root: string;
   items: ReviewItem[];
   batches: string[][];
+}
+
+interface ReviewPassMetric {
+  pass: number;
+  duration_ms: number;
+  outcome: "pass" | "reject" | "failed";
+  trigger_validator_codes: string[];
+  validation_before: ArticleValidationResult["counts"];
+  validation_after?: ArticleValidationResult["counts"];
+}
+
+function validationCodes(validation: ArticleValidationResult): string[] {
+  return [...new Set(validation.issues.map((issue) => issue.code).filter((code): code is string => !!code))];
 }
 
 function arg(name: string): string | undefined {
@@ -94,21 +112,25 @@ async function prepare(): Promise<void> {
     const relayPath = `${relayFolder.replace(/\/+$/, "")}/${normalized}`;
     const markdown = await readAcceptedRelayMarkdown(relayPath, { relayUrl, token: relayToken });
     const { frontmatter } = splitFrontmatter(markdown);
-    if (!frontmatter.source_url || frontmatter.tags?.includes("article-stub")) continue;
+    const preservedSourceUrl = markdown.match(
+      /^Original source URL:\s*(https?:\/\/\S+)\s*$/m,
+    )?.[1];
+    const sourceUrl = frontmatter.source_url ?? preservedSourceUrl;
+    if (!sourceUrl || frontmatter.tags?.includes("article-stub")) continue;
     const bundle = path.join(runDir, safeId(normalized));
     await fs.mkdir(bundle, { recursive: true });
     await fs.writeFile(path.join(bundle, "article.md"), markdown);
     const item: ReviewItem = {
       article_path: normalized,
       relay_path: relayPath,
-      source_url: frontmatter.source_url,
+      source_url: sourceUrl,
       bundle,
       base_digest: articleReviewDigest(markdown),
       base_sha256: createHash("sha256").update(markdown).digest("hex"),
       state: "prepared",
     };
     try {
-      const evidence = await buildSourceEvidence(frontmatter.source_url);
+      const evidence = await buildSourceEvidence(sourceUrl);
       await writeSourceEvidence(bundle, evidence);
       await fs.writeFile(path.join(bundle, "instructions.md"), instructions(item));
     } catch (error) {
@@ -148,13 +170,37 @@ async function status(): Promise<void> {
   if (!arg("--run")) throw new Error("status requires --run <run-directory>");
   const run = JSON.parse(await fs.readFile(path.join(runDir, "manifest.json"), "utf-8")) as ReviewRun;
   const counts: Record<string, number> = {};
+  const reviewPassCounts: Record<string, number> = {};
+  const extraPassTriggerCodes: Record<string, number> = {};
+  const passDurations: Record<string, { attempts: number; total_duration_ms: number; average_duration_ms: number }> = {};
+  const increment = (record: Record<string, number>, key: string) => {
+    record[key] = (record[key] ?? 0) + 1;
+  };
   for (const item of run.items) {
     const result = await fs.readFile(path.join(item.bundle, "result.json"), "utf-8").then(JSON.parse).catch(() => null);
     const state = result?.state ?? item.state;
     counts[state] = (counts[state] ?? 0) + 1;
+    const reviewPasses = Number(result?.review_passes);
+    increment(reviewPassCounts, Number.isInteger(reviewPasses) ? String(reviewPasses) : "unknown");
+    for (const metric of (result?.review_pass_details ?? []) as ReviewPassMetric[]) {
+      for (const code of metric.trigger_validator_codes ?? []) increment(extraPassTriggerCodes, code);
+      const key = String(metric.pass);
+      const duration = passDurations[key] ?? { attempts: 0, total_duration_ms: 0, average_duration_ms: 0 };
+      duration.attempts += 1;
+      duration.total_duration_ms += Number(metric.duration_ms) || 0;
+      duration.average_duration_ms = Math.round(duration.total_duration_ms / duration.attempts);
+      passDurations[key] = duration;
+    }
     console.log(`${state.padEnd(10)} ${item.article_path}`);
   }
-  console.log(`\n${JSON.stringify(counts)}`);
+  console.log(`\n${JSON.stringify({
+    ...counts,
+    _instrumentation: {
+      review_pass_counts: reviewPassCounts,
+      extra_pass_trigger_codes: extraPassTriggerCodes,
+      llm_pass_durations_ms: passDurations,
+    },
+  })}`);
 }
 
 function withReviewProvenance(markdown: string, manifest: Record<string, unknown>): string {
@@ -167,14 +213,14 @@ function withReviewProvenance(markdown: string, manifest: Record<string, unknown
   let frontmatter = markdown.slice(opening[0].length, match.index);
   frontmatter = frontmatter.replace(/^llm-review:\r?\n(?:^[ \t].*(?:\r?\n|$))*/m, "");
   const digest = articleReviewDigest(markdown);
-  const reviewed = new Date().toISOString().slice(0, 10);
+  const reviewedDate = new Date().toISOString().slice(0, 10);
   const sourceDigest = String(manifest.source_digest ?? "");
-  const sourceFetched = String(manifest.fetched_at ?? reviewed).slice(0, 10);
+  const sourceFetched = String(manifest.fetched_at ?? reviewedDate).slice(0, 10);
   const sourceKind = String(manifest.source_kind ?? "live");
   const provenance = [
     "llm-review:",
     `  content-sha: "${digest}"`,
-    `  date: ${reviewed}`,
+    `  date: ${reviewedDate}`,
     `  model: "${REVIEW_MODEL}"`,
     `  version: "${REVIEW_VERSION}"`,
     "  source:",
@@ -202,6 +248,7 @@ async function execute(): Promise<void> {
 
   for (const item of items) {
     const resultPath = path.join(item.bundle, "result.json");
+    const reviewPassDetails: ReviewPassMetric[] = [];
     try {
       const client = await createRelayReviewClient({ relayUrl, token: relayToken }, "Luc");
       const accepted = await client.read(item.relay_path);
@@ -220,18 +267,52 @@ async function execute(): Promise<void> {
         description: reviewFrontmatter.description ?? "",
       };
       let validation = await validateArticleDraft(item.article_path, reviewBase);
-      let outcome = await reviewArticle(item.bundle, reviewBase, meta, validation.issues, 0);
+      const runReviewPass = async (
+        round: number,
+        markdown: string,
+        passMeta: ArticleMeta,
+        beforeValidation: ArticleValidationResult,
+      ) => {
+        const started = Date.now();
+        const metric: ReviewPassMetric = {
+          pass: round + 1,
+          duration_ms: 0,
+          outcome: "failed",
+          trigger_validator_codes: round > 0 ? validationCodes(beforeValidation) : [],
+          validation_before: beforeValidation.counts,
+        };
+        try {
+          const reviewed = await reviewArticle(
+            item.bundle,
+            markdown,
+            passMeta,
+            beforeValidation.issues,
+            round,
+          );
+          metric.outcome = reviewed.review.decision;
+          return reviewed;
+        } catch (error) {
+          metric.outcome = error instanceof ArticleReviewRejectedError ? "reject" : "failed";
+          throw error;
+        } finally {
+          metric.duration_ms = Date.now() - started;
+          reviewPassDetails.push(metric);
+        }
+      };
+      let outcome = await runReviewPass(0, reviewBase, meta, validation);
       if (articleReviewDigest(outcome.markdown) === articleReviewDigest(reviewBase)) {
         outcome = { ...outcome, markdown: reviewBase };
       }
       validation = await validateArticleDraft(item.article_path, outcome.markdown);
-      if (!validation.valid) {
+      reviewPassDetails.at(-1)!.validation_after = validation.counts;
+      for (let repairRound = 1; !validation.valid && repairRound < MAX_REVIEW_ROUNDS; repairRound++) {
         const repairBase = outcome.markdown;
-        outcome = await reviewArticle(item.bundle, outcome.markdown, outcome.meta, validation.issues, 1);
+        outcome = await runReviewPass(repairRound, outcome.markdown, outcome.meta, validation);
         if (articleReviewDigest(outcome.markdown) === articleReviewDigest(repairBase)) {
           outcome = { ...outcome, markdown: repairBase };
         }
         validation = await validateArticleDraft(item.article_path, outcome.markdown);
+        reviewPassDetails.at(-1)!.validation_after = validation.counts;
       }
       if (!validation.valid) throw new Error(`Reviewed article remains invalid (${validation.counts.errors} errors)`);
       const evidenceManifest = JSON.parse(await fs.readFile(path.join(item.bundle, "evidence/manifest.json"), "utf-8"));
@@ -256,12 +337,19 @@ async function execute(): Promise<void> {
         state: "suggested",
         edits: edits.length,
         review_url: reviewUrl.trim(),
+        review_passes: reviewPassDetails.length,
+        review_pass_details: reviewPassDetails,
         validation: validationOutput.slice(0, 20_000),
       }, null, 2));
       console.log(`suggested ${item.article_path}\n${reviewUrl.trim()}`);
     } catch (error) {
       const message = error instanceof ArticleReviewRejectedError ? error.reason : String(error);
-      await fs.writeFile(resultPath, JSON.stringify({ state: "failed", error: message }, null, 2));
+      await fs.writeFile(resultPath, JSON.stringify({
+        state: "failed",
+        error: message,
+        review_passes: reviewPassDetails.length,
+        review_pass_details: reviewPassDetails,
+      }, null, 2));
       console.error(`failed    ${item.article_path}: ${message}`);
     }
   }
@@ -297,6 +385,12 @@ async function summarizeReports(): Promise<void> {
     llm_finding_codes: {} as Record<string, number>,
     llm_unrepaired_codes: {} as Record<string, number>,
     extraction_methods: {} as Record<string, number>,
+    review_pass_counts: {} as Record<string, number>,
+    extra_pass_trigger_codes: {} as Record<string, number>,
+    llm_pass_durations_ms: {} as Record<
+      string,
+      { attempts: number; total_duration_ms: number; average_duration_ms: number }
+    >,
   };
   const increment = (record: Record<string, number>, key: string) => {
     record[key] = (record[key] ?? 0) + 1;
@@ -312,6 +406,14 @@ async function summarizeReports(): Promise<void> {
       if (!report) continue;
       summary.reports += 1;
       increment(summary.outcomes, String(report.outcome ?? "unknown"));
+      const llmEvents = (report.events ?? []).filter(
+        (event: Record<string, unknown>) =>
+          event.kind === "llm-review" || event.kind === "llm-review-failed",
+      );
+      const reportedPasses = Number(report.summary?.llm_review_passes);
+      const reviewPasses = Number.isInteger(reportedPasses) ? reportedPasses : llmEvents.length;
+      increment(summary.review_pass_counts, String(reviewPasses));
+      let lastValidationCodes: string[] = [];
       for (const event of report.events ?? []) {
         if (event.kind === "extraction" && event.via) increment(summary.extraction_methods, String(event.via));
         if (event.kind === "repair" && event.classification) {
@@ -331,8 +433,29 @@ async function summarizeReports(): Promise<void> {
             increment(summary.repair_codes, String(change.code ?? "metadata.unknown"));
           }
         }
+        if (event.kind === "llm-review" || event.kind === "llm-review-failed") {
+          const pass = Number(event.round) + 1;
+          const key = Number.isInteger(pass) ? String(pass) : "unknown";
+          const duration = summary.llm_pass_durations_ms[key] ?? {
+            attempts: 0,
+            total_duration_ms: 0,
+            average_duration_ms: 0,
+          };
+          duration.attempts += 1;
+          duration.total_duration_ms += Number(event.duration_ms) || 0;
+          duration.average_duration_ms = Math.round(duration.total_duration_ms / duration.attempts);
+          summary.llm_pass_durations_ms[key] = duration;
+          const explicitTriggers = Array.isArray(event.trigger_validator_codes)
+            ? event.trigger_validator_codes.map(String)
+            : null;
+          const triggerCodes = explicitTriggers ?? (Number(event.round) > 0 ? lastValidationCodes : []);
+          for (const code of new Set(triggerCodes)) increment(summary.extra_pass_trigger_codes, code);
+        }
         if (event.kind === "validation") {
           for (const issue of event.issues ?? []) increment(summary.validator_codes, String(issue.code ?? "uncoded"));
+          lastValidationCodes = [...new Set(
+            (event.issues ?? []).map((issue: { code?: unknown }) => String(issue.code ?? "uncoded")),
+          )];
         }
       }
       for (const issue of report.lifecycle?.validator_fixed ?? []) {

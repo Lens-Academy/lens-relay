@@ -78,6 +78,7 @@ describe("PDF source evidence retention", () => {
     const retained = await fs.readFile(path.join(workDir, "evidence/source.pdf"));
     expect(retained.byteLength).toBeGreaterThan(0);
     expect(retained.equals(Buffer.from(mocks.bytes))).toBe(true);
+    await expect(fs.stat(path.join(workDir, "evidence/source.txt"))).rejects.toThrow();
   });
 });
 
@@ -97,7 +98,6 @@ describe("HTML source evidence retention", () => {
     expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith("https://example.org/final-article", undefined);
     expect(evidence.extraction.body).toContain("rendered source evidence");
     expect(evidence.extraction.body).not.toContain("unrendered shell");
-    expect(evidence.sourceText).toContain("rendered source evidence");
     expect(evidence.manifest.source_digest).toBe(sourceReviewDigest(Buffer.from(renderedHtml)));
     expect(evidence.manifest.rendered_digest).toBe(sourceReviewDigest(Buffer.from(renderedHtml)));
     expect(evidence.manifest.unrendered_digest).toBe(sourceReviewDigest(Buffer.from(rawHtml)));
@@ -152,7 +152,7 @@ describe("HTML source evidence retention", () => {
 
   it("writes exact unrendered evidence and line-bounded rendered review HTML", async () => {
     const rawHtml = `<html><body><article>unrendered source</article></body></html>`;
-    const renderedHtml = `<html><body><article>${"rendered source evidence ".repeat(2_000)}</article></body></html>`;
+    const renderedHtml = `<html><body><article><a href="https://example.org/reference">reference</a>${"rendered source evidence ".repeat(2_000)}</article></body></html>`;
     const formatted = formatHtmlForReview(renderedHtml);
 
     expect(Math.max(...formatted.split("\n").map((line) => line.length))).toBeLessThanOrEqual(8_000);
@@ -180,11 +180,8 @@ describe("HTML source evidence retention", () => {
         source_digest: sourceReviewDigest(Buffer.from(renderedHtml)),
         unrendered_digest: sourceReviewDigest(Buffer.from(rawHtml)),
         rendered_digest: sourceReviewDigest(Buffer.from(renderedHtml)),
-        source_text_chars: 15,
         candidate_chars: 15,
-        alignment: { candidate_token_coverage: 1 },
       },
-      sourceText: "source evidence",
       rawHtml,
       renderedHtml,
     });
@@ -193,6 +190,8 @@ describe("HTML source evidence retention", () => {
     const reviewHtml = await fs.readFile(path.join(workDir, "evidence/source-rendered.html"), "utf8");
     expect(Math.max(...reviewHtml.split("\n").map((line) => line.length))).toBeLessThanOrEqual(8_000);
     expect(reviewHtml.replace(/\n/g, "")).toBe(renderedHtml);
+    expect(reviewHtml).toContain('<a href="https://example.org/reference">');
+    await expect(fs.stat(path.join(workDir, "evidence/source.txt"))).rejects.toThrow();
     await expect(fs.stat(path.join(workDir, "evidence/source.html"))).rejects.toThrow();
     await expect(fs.stat(path.join(workDir, "evidence/source-original.html"))).rejects.toThrow();
   });

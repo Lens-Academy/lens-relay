@@ -221,13 +221,29 @@ describe("article review reports", () => {
     const reportRoot = await root();
     const reporter = await createArticleReviewReporter(job("final-findings"));
     const meta = { title: "Title", author: ["Author"], source_url: "https://example.com", published: "", description: "" };
-    await reporter.llm(0, { decision: "pass", reason: "" }, [], meta, meta, "bad", "better", 1);
-    await reporter.llm(1, { decision: "pass", reason: "" }, [], meta, meta, "better", "good", 1);
+    await reporter.llm(0, { decision: "pass", reason: "" }, [], meta, meta, "bad", "better", 10);
+    await reporter.llm(
+      1,
+      { decision: "pass", reason: "" },
+      ["article.footnote-id-invalid", "article.footnote-id-invalid"],
+      meta,
+      meta,
+      "better",
+      "good",
+      20,
+    );
     await reporter.finish("done");
     const day = (await fs.readdir(reportRoot))[0];
     const runPath = path.join(reportRoot, day, (await fs.readdir(path.join(reportRoot, day)))[0]);
     const report = JSON.parse(await fs.readFile(path.join(runPath, "report.json"), "utf-8"));
     expect(report.events.filter((event: { kind: string }) => event.kind === "llm-review")).toHaveLength(2);
+    expect(report.summary).toMatchObject({
+      llm_review_passes: 2,
+      llm_review_duration_ms: 30,
+      extra_pass_trigger_codes: { "article.footnote-id-invalid": 1 },
+    });
+    expect(report.events.filter((event: { kind: string }) => event.kind === "llm-review")[1])
+      .toMatchObject({ trigger_validator_codes: ["article.footnote-id-invalid"] });
     expect(report.lifecycle.llm_findings_unrepaired).toEqual([]);
   });
 

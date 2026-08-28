@@ -7,6 +7,7 @@ import { dedupUrlVariants } from "./url-normalize";
 import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
 import {
   ArticleReviewRejectedError,
+  MAX_REVIEW_ROUNDS,
   REVIEW_MODEL,
   REVIEW_VERSION,
   reviewArticle,
@@ -334,8 +335,6 @@ export async function processArticle(
     media_type: evidence.manifest.media_type,
     fetched_url: evidence.manifest.fetched_url,
     candidate_chars: ex.body.length,
-    source_text_chars: evidence.manifest.source_text_chars,
-    alignment: evidence.manifest.alignment,
   });
 
   // 3. Validate.
@@ -455,7 +454,7 @@ export async function processArticle(
 
   // Safe normalization happens before validation. The first validation's
   // warnings and errors are review evidence; hybrid errors are repairable by
-  // Claude, while the second validation is the hard gate.
+  // Claude for up to three review rounds, while final validation is the hard gate.
   let reviewed = false;
   if (!isStubOnly) {
     await setStage("normalizing");
@@ -513,7 +512,12 @@ export async function processArticle(
           Date.now() - reviewStarted,
         );
       } else {
-        await reporter.llmFailure(0, error, Date.now() - reviewStarted);
+        await reporter.llmFailure(
+          0,
+          error,
+          Date.now() - reviewStarted,
+          validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+        );
       }
       throw error;
     }
@@ -527,15 +531,15 @@ export async function processArticle(
     validationStarted = Date.now();
     validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
     await reporter.validation("post-review", validation, Date.now() - validationStarted);
-    if (!validation.valid) {
-      await setStage("repair-review");
+    for (let repairRound = 1; !validation.valid && repairRound < MAX_REVIEW_ROUNDS; repairRound++) {
+      await setStage(repairRound === 1 ? "repair-review" : `repair-review-${repairRound + 1}`);
       reviewStarted = Date.now();
       const metaBeforeRepair = meta;
       const draftBeforeRepair = draft;
       try {
-        outcome = await reviewArticle(workDir, draft, meta, validation.issues, 1, signal);
+        outcome = await reviewArticle(workDir, draft, meta, validation.issues, repairRound, signal);
         await reporter.llm(
-          1,
+          repairRound,
           outcome.review,
           validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
           metaBeforeRepair,
@@ -548,14 +552,19 @@ export async function processArticle(
         if (signal?.aborted) throw error;
         if (error instanceof ArticleReviewRejectedError) {
           await reporter.llmRejected(
-            1,
+            repairRound,
             { decision: "reject", reason: error.reason },
             validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
             metaBeforeRepair,
             Date.now() - reviewStarted,
           );
         } else {
-          await reporter.llmFailure(1, error, Date.now() - reviewStarted);
+          await reporter.llmFailure(
+            repairRound,
+            error,
+            Date.now() - reviewStarted,
+            validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+          );
         }
         throw error;
       }
@@ -566,7 +575,11 @@ export async function processArticle(
       draft = generateArticleMarkdown(meta, body, createdDate);
       validationStarted = Date.now();
       validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
-      await reporter.validation("post-repair-review", validation, Date.now() - validationStarted);
+      await reporter.validation(
+        repairRound === 1 ? "post-repair-review" : `post-repair-review-${repairRound + 1}`,
+        validation,
+        Date.now() - validationStarted,
+      );
     }
     assertArticleValid(validation);
     reviewed = true;

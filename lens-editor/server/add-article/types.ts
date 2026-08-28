@@ -39,6 +39,13 @@ export interface ArticleJob {
     llm_detected_llm_fixes: number;
     validator_errors: number;
     validator_warnings: number;
+    initial_validator_errors: number;
+    initial_validator_warnings: number;
+    final_validator_errors: number;
+    final_validator_warnings: number;
+    llm_review_passes: number;
+    llm_review_duration_ms: number;
+    extra_pass_trigger_codes: Record<string, number>;
     llm_findings: number;
     validator_fixed_by_llm: number;
     validator_remaining: number;

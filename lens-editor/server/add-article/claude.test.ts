@@ -36,11 +36,16 @@ describe("direct source review", () => {
     expect(args[args.indexOf("--tools") + 1]).toBe("Read,Edit");
     expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Agent");
     expect(args).not.toContain("Write");
+    expect(args).not.toContain("--max-turns");
     expect(buildVerifyPrompt("/tmp/review")).toContain("edit this file directly");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not create any file");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not spawn sub-agents");
     expect(buildVerifyPrompt("/tmp/review")).toContain("evidence/source-rendered.html");
     expect(buildVerifyPrompt("/tmp/review")).toContain("evidence/source-unrendered.html");
+    expect(buildVerifyPrompt("/tmp/review")).not.toContain("source.txt");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("Inspect source-rendered.html for every HTML review");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("HTML-escaped article content inside JSON-LD or hydration scripts");
+    expect(buildVerifyPrompt("/tmp/review", 2)).toContain("review pass 3 of 3");
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Remove Creative Commons and other licensing notices from imported articles.",
     );
@@ -111,5 +116,11 @@ describe("direct source review", () => {
   it("rejects malformed required metadata and an empty body", () => {
     expect(() => validateEditedArticle(article, article.replace("published: 2026-06-16", "published: sometime"))).toThrow("invalid date");
     expect(() => validateEditedArticle(article, article.replace("Original body text.\n", ""))).toThrow("body empty");
+  });
+
+  it("preserves an intentionally absent source_url during retroactive review", () => {
+    const withoutSourceUrl = article.replace('source_url: "https://example.com/source"\n', "");
+    const result = validateEditedArticle(withoutSourceUrl, withoutSourceUrl);
+    expect(result.meta.source_url).toBe("");
   });
 });

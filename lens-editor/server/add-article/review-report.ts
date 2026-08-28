@@ -20,6 +20,9 @@ export interface ReportSummary {
   initial_validator_warnings: number;
   final_validator_errors: number;
   final_validator_warnings: number;
+  llm_review_passes: number;
+  llm_review_duration_ms: number;
+  extra_pass_trigger_codes: Record<string, number>;
   llm_findings: number;
   validator_fixed_by_llm: number;
   validator_remaining: number;
@@ -92,7 +95,7 @@ export interface ArticleReviewReporter {
   validation(round: string, result: ArticleValidationResult, durationMs: number): Promise<void>;
   llm(round: number, review: DirectArticleReview, validatorCodes: string[], before: ArticleMeta, after: ArticleMeta, beforeMarkdown: string, afterMarkdown: string, durationMs: number): Promise<void>;
   llmRejected(round: number, review: DirectArticleReview, validatorCodes: string[], before: ArticleMeta, durationMs: number): Promise<void>;
-  llmFailure(round: number, error: unknown, durationMs: number): Promise<void>;
+  llmFailure(round: number, error: unknown, durationMs: number, validatorCodes?: string[]): Promise<void>;
   originalDocument(markdown: string): Promise<void>;
   finalDocument(markdown: string): Promise<void>;
   finish(outcome: "done" | "failed", data?: { finalPath?: string; error?: string }): Promise<void>;
@@ -108,6 +111,9 @@ const EMPTY_SUMMARY = (): ReportSummary => ({
   initial_validator_warnings: 0,
   final_validator_errors: 0,
   final_validator_warnings: 0,
+  llm_review_passes: 0,
+  llm_review_duration_ms: 0,
+  extra_pass_trigger_codes: {},
   llm_findings: 0,
   validator_fixed_by_llm: 0,
   validator_remaining: 0,
@@ -383,6 +389,8 @@ class Reporter implements ArticleReviewReporter {
     applied: boolean,
   ): Promise<void> {
     if (this.sealed) return;
+    const triggerValidatorCodes = [...new Set(validatorCodes.filter(Boolean))];
+    this.recordPassMetrics(round, durationMs, triggerValidatorCodes);
     const validatorSet = new Set(validatorCodes);
     const body = (markdown: string) => markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
     const bodyChanged = applied && beforeMarkdown !== undefined && afterMarkdown !== undefined && body(beforeMarkdown) !== body(afterMarkdown);
@@ -430,6 +438,7 @@ class Reporter implements ArticleReviewReporter {
       round,
       applied,
       duration_ms: durationMs,
+      trigger_validator_codes: round > 0 ? triggerValidatorCodes : [],
       decision: review.decision,
       findings: [],
       repairs,
@@ -463,14 +472,28 @@ class Reporter implements ArticleReviewReporter {
     return this.recordLlm(round, review, validatorCodes, before, before, undefined, undefined, durationMs, false);
   }
 
-  llmFailure(round: number, error: unknown, durationMs: number): Promise<void> {
+  llmFailure(round: number, error: unknown, durationMs: number, validatorCodes: string[] = []): Promise<void> {
+    if (this.sealed) return Promise.resolve();
+    const triggerValidatorCodes = [...new Set(validatorCodes.filter(Boolean))];
+    this.recordPassMetrics(round, durationMs, triggerValidatorCodes);
     return this.append({
       at: new Date().toISOString(),
       kind: "llm-review-failed",
       round,
       duration_ms: durationMs,
+      trigger_validator_codes: round > 0 ? triggerValidatorCodes : [],
       error: safeError(error),
     });
+  }
+
+  private recordPassMetrics(round: number, durationMs: number, validatorCodes: string[]): void {
+    this.report.summary.llm_review_passes += 1;
+    this.report.summary.llm_review_duration_ms += durationMs;
+    if (round === 0) return;
+    for (const code of validatorCodes) {
+      this.report.summary.extra_pass_trigger_codes[code] =
+        (this.report.summary.extra_pass_trigger_codes[code] ?? 0) + 1;
+    }
   }
 
   async originalDocument(markdown: string): Promise<void> {
