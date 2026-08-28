@@ -8,8 +8,6 @@ export interface ArticleReviewProvenance {
   reviewed: string;
   version: string;
   model: string;
-  digest: string;
-  sourceDigest: string;
   sourceFetched: string;
   sourceKind: "live" | "archive" | "fixture";
 }
@@ -61,12 +59,10 @@ export function generateArticleMarkdown(
   lines.push(`accessed: ${createdDate}`);
   if (options.review) {
     lines.push("llm-review:");
-    lines.push(`  content-sha: ${yamlQuote(options.review.digest)}`);
     lines.push(`  date: ${options.review.reviewed}`);
     lines.push(`  model: ${yamlQuote(options.review.model)}`);
     lines.push(`  version: ${yamlQuote(options.review.version)}`);
     lines.push("  source:");
-    lines.push(`    content-sha: ${yamlQuote(options.review.sourceDigest)}`);
     lines.push(`    fetched: ${options.review.sourceFetched}`);
     lines.push(`    kind: ${yamlQuote(options.review.sourceKind)}`);
   }

@@ -39,7 +39,7 @@ export function buildVerifyPrompt(workDir: string, repairRound = 0): string {
 
 Read the candidate, manifest, validation findings, and primary source evidence. Use these LOCAL files only:
 - ${workDir}/article.md: the complete candidate article; edit this file directly
-- ${workDir}/evidence/manifest.json: source identity and hashes
+- ${workDir}/evidence/manifest.json: source identity and fetch metadata
 - ${workDir}/evidence/source-rendered.html: primary evidence for HTML imports
 - ${workDir}/evidence/source.pdf: primary evidence for PDF imports
 - ${workDir}/evidence/source-unrendered.html or source-native.md when present: secondary evidence

@@ -10,7 +10,6 @@ import {
 } from "./fetch";
 import { adapterContext, resolveFetchUrls } from "./adapters";
 import { extractPdfSmart } from "./pdf";
-import { sourceReviewDigest } from "./review-digest";
 
 const REVIEW_HTML_MAX_LINE_CHARS = 8_000;
 
@@ -21,9 +20,6 @@ export interface SourceEvidenceManifest {
   source_kind: "live" | "archive" | "fixture";
   media_type: "html" | "pdf";
   extraction_via: string;
-  source_digest: string;
-  unrendered_digest?: string;
-  rendered_digest?: string;
   candidate_chars: number;
 }
 
@@ -120,7 +116,6 @@ export async function buildSourceEvidence(
   }
   if (!extraction) throw rawError instanceof Error ? rawError : new Error("Extraction failed");
 
-  const sourceBytes = pdf ?? Buffer.from(nativeMarkdown ?? renderedHtml ?? "");
   return {
     extraction,
     rawHtml,
@@ -134,9 +129,6 @@ export async function buildSourceEvidence(
       source_kind: "live",
       media_type: mediaType,
       extraction_via: extraction.via,
-      source_digest: sourceReviewDigest(sourceBytes),
-      unrendered_digest: rawHtml ? sourceReviewDigest(Buffer.from(rawHtml)) : undefined,
-      rendered_digest: renderedHtml ? sourceReviewDigest(Buffer.from(renderedHtml)) : undefined,
       candidate_chars: extraction.body.length,
     },
   };

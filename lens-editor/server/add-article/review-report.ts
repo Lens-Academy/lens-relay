@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { DirectArticleReview } from "./claude";
 import type { ArticleValidationIssue, ArticleValidationResult } from "./platform-validation";
 import type { ArticleJob, ArticleMeta } from "./types";
@@ -71,8 +71,8 @@ interface ReviewReport {
   outcome: "processing" | "done" | "failed";
   final_path?: string;
   error?: string;
-  original_document?: { file: "original.md"; bytes: number; sha256: string };
-  final_document?: { file: "final.md"; bytes: number; sha256: string };
+  original_document?: { file: "original.md"; bytes: number };
+  final_document?: { file: "final.md"; bytes: number };
   lifecycle?: IssueLifecycle;
   evidence_expired_at?: string;
   summary: ReportSummary;
@@ -132,7 +132,6 @@ function bounded(value: string | undefined): Record<string, unknown> | undefined
     text: value.slice(0, max),
     truncated: value.length > max,
     chars: value.length,
-    sha256: createHash("sha256").update(value).digest("hex"),
   };
 }
 
@@ -157,7 +156,6 @@ function changedExcerpts(before?: string, after?: string): {
       truncated: excerpt.length < value.length,
       excerpt_offset: start,
       full_chars: value.length,
-      full_sha256: createHash("sha256").update(value).digest("hex"),
     };
   };
   return {
@@ -501,7 +499,6 @@ class Reporter implements ArticleReviewReporter {
     const descriptor = {
       file: "original.md" as const,
       bytes: Buffer.byteLength(markdown, "utf-8"),
-      sha256: createHash("sha256").update(markdown).digest("hex"),
     };
     if (this.runDir) {
       const temporary = path.join(this.runDir, `.original.${randomUUID()}.tmp`);
@@ -517,7 +514,6 @@ class Reporter implements ArticleReviewReporter {
     const descriptor = {
       file: "final.md" as const,
       bytes: Buffer.byteLength(markdown, "utf-8"),
-      sha256: createHash("sha256").update(markdown).digest("hex"),
     };
     if (this.runDir) {
       const sequence = ++this.sequence;
@@ -606,7 +602,7 @@ function expireBoundedEvidence(value: unknown): void {
     return;
   }
   const record = value as Record<string, unknown>;
-  if (typeof record.text === "string" && typeof record.sha256 === "string") {
+  if (typeof record.text === "string" && typeof record.chars === "number") {
     delete record.text;
     record.expired = true;
   }

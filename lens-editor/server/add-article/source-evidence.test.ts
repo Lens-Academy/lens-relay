@@ -29,7 +29,6 @@ vi.mock("./pdf", () => ({
 }));
 
 import { buildSourceEvidence, formatHtmlForReview, writeSourceEvidence } from "./source-evidence";
-import { sourceReviewDigest } from "./review-digest";
 
 const tempDirs: string[] = [];
 afterEach(async () => {
@@ -68,8 +67,6 @@ describe("PDF source evidence retention", () => {
     const evidence = await buildSourceEvidence("https://example.org/article.pdf");
     expect(evidence.pdf?.byteLength).toBe(mocks.bytes.byteLength);
     expect(evidence.pdf?.equals(Buffer.from(mocks.bytes))).toBe(true);
-    expect(evidence.manifest.source_digest).toBe(sourceReviewDigest(Buffer.from(mocks.bytes)));
-    expect(evidence.manifest.source_digest).not.toBe(sourceReviewDigest(Buffer.alloc(0)));
     expect(mocks.fetchRenderedHtml).not.toHaveBeenCalled();
 
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-evidence-"));
@@ -83,7 +80,7 @@ describe("PDF source evidence retention", () => {
 });
 
 describe("HTML source evidence retention", () => {
-  it("always extracts rendered HTML and records both evidence digests", async () => {
+  it("always extracts rendered HTML and records fetch metadata", async () => {
     const rawHtml = `<html><head><title>Unrendered shell</title></head><body><article>${"unrendered shell ".repeat(2_000)}</article></body></html>`;
     const renderedHtml = `<html><head><title>Rendered Article</title><meta name="author" content="Real Author"><meta property="article:published_time" content="2024-01-02"></head><body><article><h1>Rendered Article</h1><p>${"rendered source evidence ".repeat(200)}</p></article></body></html>`;
     mocks.fetchRawBytes.mockResolvedValue({
@@ -98,9 +95,7 @@ describe("HTML source evidence retention", () => {
     expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith("https://example.org/final-article", undefined);
     expect(evidence.extraction.body).toContain("rendered source evidence");
     expect(evidence.extraction.body).not.toContain("unrendered shell");
-    expect(evidence.manifest.source_digest).toBe(sourceReviewDigest(Buffer.from(renderedHtml)));
-    expect(evidence.manifest.rendered_digest).toBe(sourceReviewDigest(Buffer.from(renderedHtml)));
-    expect(evidence.manifest.unrendered_digest).toBe(sourceReviewDigest(Buffer.from(rawHtml)));
+    expect(evidence.manifest.fetched_url).toBe("https://example.org/final-article");
   });
 
   it("fails closed when Jina cannot render otherwise extractable HTML", async () => {
@@ -177,9 +172,6 @@ describe("HTML source evidence retention", () => {
         source_kind: "fixture",
         media_type: "html",
         extraction_via: "html",
-        source_digest: sourceReviewDigest(Buffer.from(renderedHtml)),
-        unrendered_digest: sourceReviewDigest(Buffer.from(rawHtml)),
-        rendered_digest: sourceReviewDigest(Buffer.from(renderedHtml)),
         candidate_chars: 15,
       },
       rawHtml,

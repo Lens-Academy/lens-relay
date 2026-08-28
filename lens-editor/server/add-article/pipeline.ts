@@ -16,7 +16,6 @@ import {
 import { buildSourceEvidence, writeSourceEvidence } from "./source-evidence";
 import { normalizeArticleBody } from "./normalize-article";
 import { assertArticleValid, validateArticleDraft } from "./platform-validation";
-import { articleReviewDigest } from "./review-digest";
 import {
   createMemoryArticleReviewReporter,
   type ArticleReviewReporter,
@@ -328,9 +327,6 @@ export async function processArticle(
     via: ex.via,
     linked_out: ex.linkedOut,
     assessment_flags: ex.assessment.flags,
-    source_digest: evidence.manifest.source_digest,
-    unrendered_digest: evidence.manifest.unrendered_digest,
-    rendered_digest: evidence.manifest.rendered_digest,
     source_kind: evidence.manifest.source_kind,
     media_type: evidence.manifest.media_type,
     fetched_url: evidence.manifest.fetched_url,
@@ -631,8 +627,6 @@ export async function processArticle(
               reviewed: createdDate,
               version: REVIEW_VERSION,
               model: REVIEW_MODEL,
-              digest: articleReviewDigest(promotedBase),
-              sourceDigest: evidence.manifest.source_digest,
               sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
               sourceKind: evidence.manifest.source_kind,
             },
@@ -661,8 +655,6 @@ export async function processArticle(
             reviewed: createdDate,
             version: REVIEW_VERSION,
             model: REVIEW_MODEL,
-            digest: articleReviewDigest(baseMarkdown),
-            sourceDigest: evidence.manifest.source_digest,
             sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
             sourceKind: evidence.manifest.source_kind,
           },

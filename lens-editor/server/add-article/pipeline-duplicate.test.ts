@@ -189,7 +189,6 @@ This might be useful.
     reviewMocks.buildSourceEvidence.mockResolvedValue({
       extraction: await extractionMocks.extractArticle(),
       manifest: {
-        source_digest: "sha256:source",
         fetched_at: "2026-08-19T00:00:00.000Z",
         source_kind: "live",
       },
@@ -235,7 +234,7 @@ This might be useful.
     expect(markdown).toContain("Full imported article body.");
     expect(markdown).toContain('  - "article-importer"');
     expect(markdown).toContain('  version: "article-qc-v1"');
-    expect(markdown).toContain('  content-sha: "sha256:');
+    expect(markdown).not.toContain("content-sha:");
     expect(markdown).not.toContain("article-stub");
     expect(reviewMocks.reviewArticle).toHaveBeenCalledTimes(3);
     expect(reviewMocks.reviewArticle.mock.calls.map((call) => call[4])).toEqual([0, 1, 2]);

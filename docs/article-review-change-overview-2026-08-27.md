@@ -37,12 +37,10 @@ executor-added provenance block:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:04992e249f41d2784214919d46a89588d7ed9b84d762ded076f942584a65e0aa"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:f9cf7d28f5684116cd11a35f0fbb427666753712d9f96ea8e2ef65da746b8634"
     fetched: 2026-08-27
     kind: "live"
 ```
@@ -58,12 +56,10 @@ executor-added provenance block:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:1e6b6f02fd832e86c7d621d1a2c292fbba83ffa9eaed4e966995530ff119c434"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:ec0c3be320564de0f1a99ed4069d508e7c0364160a3f8ae5bfdbfd19d86705d7"
     fetched: 2026-08-27
     kind: "live"
 ```
@@ -84,12 +80,10 @@ contains the common whitespace change and this provenance block:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:0769b664eeab47dc3120e1e4c3d2359c6429a6b0a86a5485433156f1d38046f9"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:5d62bce3f8ebcbb6c099bfc3c4abe95ec8dda7a773fa52f95c5fa379354cf148"
     fetched: 2026-08-27
     kind: "live"
 ```
@@ -113,12 +107,10 @@ change and this provenance block:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:67306465e4e3deb6b67cb8f5ee0bbd566d280a1e467140f8359d188735936177"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:45bd8724e0f0ccbede0cd9e48590a9a9a9e6b91a66afb587a43e0ad4316e9ba5"
     fetched: 2026-08-27
     kind: "live"
 ```
@@ -144,12 +136,10 @@ editorial changes.
 
 ```yaml
 llm-review:
-  content-sha: "sha256:c5ab7e4e5bed823e0674a59bcc39f8d3eb3284663f6aeef09008471f25949bad"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:f29c7431ac66013ea50ba646037ce8267105f90125fd3c7a0f1c61c15a6b4d74"
     fetched: 2026-08-27
     kind: "live"
 ```
@@ -165,12 +155,10 @@ block:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:c61f5ef1131070293177471dc174273e5606d178fadabd0b56e128fcefac669b"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:263488ca67fe0591a1a885087052ab664eeb302ebda05b2fda9f321e9553a055"
     fetched: 2026-08-27
     kind: "live"
 ```
@@ -192,12 +180,10 @@ provenance block:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:1e86008143bd10a9c8ea014c4b7e86feb54141217e2d274c31c7bba39beb87e2"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:5cec7727973d697dc39cd09a9b8a1e5b96e41a077055f34ab0f8b07026ea218d"
     fetched: 2026-08-27
     kind: "live"
 ```
@@ -223,12 +209,10 @@ common whitespace change and this provenance block:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:d4a3b3d933db289c8cb1b0f98c1de5fa77d1251a588af93acf01edbaebc75864"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:f1dbc7235cd9e7d08522e0f9d1511fd4f9403b96de858ebff2f263d34b878e95"
     fetched: 2026-08-27
     kind: "live"
 ```
@@ -269,12 +253,10 @@ change and this provenance block:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:397b7bdb68af781758e4490a13796fa5ff27e60e3622173e92c11872cf931043"
   date: 2026-08-27
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:f9daada917c82538cb9581aa60963c54030e13fec64959f1c174f107dfd3709f"
     fetched: 2026-08-27
     kind: "live"
 ```

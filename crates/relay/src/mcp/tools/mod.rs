@@ -1,4 +1,3 @@
-pub mod article_review_digest;
 pub mod blob;
 pub mod create_doc;
 pub mod critic_diff;
@@ -231,20 +230,6 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                         "type": "string",
                         "description": "Session ID returned by create_session. Required."
                     }
-                }
-            }
-        }),
-        json!({
-            "name": "article_review_digest",
-            "description": "Return the canonical SHA-256 review digest for an article. Review provenance fields, authoring comments, line endings, and trailing whitespace are excluded. Set accept_drafts=true to hash the document as if all pending Relay suggestions were accepted.",
-            "inputSchema": {
-                "type": "object",
-                "required": ["file_path", "session_id"],
-                "additionalProperties": false,
-                "properties": {
-                    "file_path": { "type": "string", "description": "Article Markdown path" },
-                    "accept_drafts": { "type": "boolean", "description": "Hash accepted-draft view instead of base view" },
-                    "session_id": { "type": "string", "description": "Session ID returned by create_session" }
                 }
             }
         }),
@@ -520,10 +505,6 @@ pub async fn dispatch_tool(
             Err(msg) => tool_error(&msg),
         },
         "validate_content" => match validate_content::execute(server, access, arguments).await {
-            Ok(text) => tool_success(&text),
-            Err(msg) => tool_error(&msg),
-        },
-        "article_review_digest" => match article_review_digest::execute(server, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },

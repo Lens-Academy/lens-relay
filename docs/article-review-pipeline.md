@@ -8,8 +8,8 @@ Full article imports now use one mandatory, fail-closed review pipeline. Stubs a
    comments, CriticMarkup, and math are opaque to these repairs.
 4. Send the complete draft to Lens Platform's `/api/content/validate-article` endpoint.
 5. Run Claude Sonnet against local source evidence, the draft, and Platform findings. Claude has only `Read,Edit`; it edits the candidate directly and cannot fetch, run commands, create files, or delegate. It decides whether clearly terminal Acknowledgements, References, or standalone series navigation should be wrapped in `:::collapse`; substantive sections, appendices, footnotes, and following prose stay open.
-6. Programmatically protect pipeline-owned metadata and authoring comments, regenerate metadata, and validate again. One additional repair round is allowed.
-7. Stamp review provenance and its canonical SHA-256 digest, validate the exact final file, then write it to Relay.
+6. Programmatically protect pipeline-owned metadata and authoring comments, regenerate metadata, and validate again. Up to two additional repair rounds are allowed.
+7. Stamp review provenance, validate the exact final file, then write it to Relay.
 
 Any missing validator configuration, Platform outage, Claude failure/timeout, inaccessible source, rejected review, unsafe patch, or remaining validation error prevents the article write. Warnings remain review context and do not block a reviewed draft. PDF figure upload failure also blocks; arXiv image-hosting failure retains the original external image.
 
@@ -50,8 +50,8 @@ filename, so the three parallel Claude sessions never share a report or temp
 file. Report persistence is a hard gate: a write failure fails the import.
 
 The exact Markdown sent to Relay is stored beside the report as `final.md`,
-with its byte count and SHA-256 digest in `report.json`. This provides the
-original imported baseline even if the Relay document is edited later.
+with its byte count in `report.json`. This provides the original imported
+baseline.
 
 Reports retain stage timings, extraction identity, bounded programmatic
 before/after evidence, all validator rounds, LLM findings and patches, final
@@ -60,9 +60,9 @@ outcome, and the classifications `programmatic-fix`,
 secrets or complete source captures. The lifecycle summary explicitly records
 validator findings fixed by the LLM, remaining or newly introduced findings,
 independent LLM repairs, and LLM findings that were not repaired. Structured
-findings from rejected LLM reviews are retained too. Reports and `final.md` are retained for 90 days;
-bounded evidence excerpts are removed after 30 days while their lengths and
-SHA-256 hashes remain available for trend analysis.
+findings from rejected LLM reviews are retained too. Reports and `final.md`
+are retained for 90 days; bounded evidence excerpts are removed after 30 days
+while their lengths remain available for trend analysis.
 
 Before deploying, create the host directory and make it writable by the
 lens-editor container. Summarize recurring findings with:
@@ -86,7 +86,6 @@ RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
   npm run article-review -- prepare --content-root /path/to/lens-edu --manifest articles.json
 RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
   npm run article-review -- execute --run .article-review-cache/<run-id> --article articles/example.md
-npm run article-review -- digest --file .article-review-cache/<run-id>/<bundle>/reviewed.md
 npm run article-review -- status --run .article-review-cache/<run-id>
 npm run article-review -- prune --days 30
 ```
@@ -102,33 +101,18 @@ the exact diff through Relay MCP, and validates again with
 `accept_drafts: true`. Local content files are selection inputs only; all content changes go
 through Relay as reviewable CriticMarkup.
 
-Until the deployed Relay exposes `article_review_digest`, the `digest` command
-computes the same canonical accepted-draft digest locally from `reviewed.md`.
-It resolves CriticMarkup, removes review fields and `%%` comments, normalizes
-line endings/trailing whitespace, and hashes the complete remaining document.
-If `reviewed.md` is not an exact clean mirror of the full accepted draft, do not
-add provenance.
-
 Review provenance is written as one nested mapping, following the eval-results
 frontmatter convention:
 
 ```yaml
 llm-review:
-  content-sha: "sha256:..."
   date: 2026-08-19
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:..."
     fetched: 2026-08-19
     kind: "live"
 ```
-
-The digest resolves the selected CriticMarkup view, removes this mapping (or the
-legacy flat review fields) and `%%` authoring comments, normalizes line
-endings/trailing whitespace, and hashes the remaining metadata plus rendered
-body. Partial acceptance therefore makes the review stale instead of silently
-preserving a false “reviewed” state.
 
 Lens Platform currently permits legacy articles with no review provenance and
 continues to accept complete legacy flat stamps. Once either representation is

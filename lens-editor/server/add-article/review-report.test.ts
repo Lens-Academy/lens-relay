@@ -53,7 +53,7 @@ describe("article review reports", () => {
     }
   });
 
-  it("bounds excerpts and records stable hashes", async () => {
+  it("bounds excerpts", async () => {
     const reportRoot = await root();
     const reporter = await createArticleReviewReporter(job("bounded"));
     await reporter.programmatic({ code: "normalize.large", count: 1, before: "x".repeat(5_000), after: "y" });
@@ -64,7 +64,7 @@ describe("article review reports", () => {
     const repair = report.events.find((event: { kind: string }) => event.kind === "repair");
     expect(repair.before.text).toHaveLength(4_096);
     expect(repair.before.truncated).toBe(true);
-    expect(repair.before.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(repair.before).not.toHaveProperty("sha256");
   });
 
   it("stores the exact final document and an explicit issue lifecycle", async () => {
@@ -267,7 +267,7 @@ describe("article review reports", () => {
     await fs.mkdir(freshRun, { recursive: true });
     await fs.writeFile(path.join(evidenceExpiredRun, "report.json"), JSON.stringify({
       schema_version: 1,
-      events: [{ kind: "repair", before: { text: "source excerpt", chars: 14, sha256: "abc" } }],
+      events: [{ kind: "repair", before: { text: "source excerpt", chars: 14 } }],
     }));
     await fs.writeFile(path.join(evidenceExpiredRun, "final.md"), "retained final document");
     const now = new Date("2026-08-19T00:00:00Z").getTime();
@@ -279,7 +279,7 @@ describe("article review reports", () => {
     await expect(fs.stat(oldRun)).rejects.toThrow();
     await expect(fs.stat(freshRun)).resolves.toBeDefined();
     const retained = JSON.parse(await fs.readFile(path.join(evidenceExpiredRun, "report.json"), "utf-8"));
-    expect(retained.events[0].before).toEqual({ chars: 14, sha256: "abc", expired: true });
+    expect(retained.events[0].before).toEqual({ chars: 14, expired: true });
     expect(retained.evidence_expired_at).toBe("2026-08-19T00:00:00.000Z");
     expect((await fs.readdir(evidenceExpiredRun)).sort()).toEqual(["final.md", "report.json"]);
     expect(await fs.readFile(path.join(evidenceExpiredRun, "final.md"), "utf-8")).toBe("retained final document");

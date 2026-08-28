@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { buildSourceEvidence, writeSourceEvidence } from "../server/add-article/source-evidence";
 import { parseFrontmatterAuthor, splitFrontmatter } from "../server/add-article/eval/edu-repo";
-import { articleReviewDigest } from "../server/add-article/review-digest";
 import { createRelayReviewClient, readAcceptedRelayMarkdown } from "../server/add-article/relay-review-read";
 import {
   ArticleReviewRejectedError,
@@ -26,8 +25,6 @@ interface ReviewItem {
   relay_path: string;
   source_url: string;
   bundle: string;
-  base_digest: string;
-  base_sha256?: string;
   state: "prepared" | "suggested" | "reviewed" | "failed";
   error?: string;
 }
@@ -70,7 +67,7 @@ async function walk(dir: string): Promise<string[]> {
 }
 
 function safeId(relative: string): string {
-  return `${path.basename(relative, ".md").slice(0, 60).replace(/[^a-zA-Z0-9-]/g, "-")}-${createHash("sha1").update(relative).digest("hex").slice(0, 8)}`;
+  return Buffer.from(relative, "utf8").toString("base64url").slice(-180);
 }
 
 async function selectedPaths(contentRoot: string): Promise<string[]> {
@@ -125,8 +122,6 @@ async function prepare(): Promise<void> {
       relay_path: relayPath,
       source_url: sourceUrl,
       bundle,
-      base_digest: articleReviewDigest(markdown),
-      base_sha256: createHash("sha256").update(markdown).digest("hex"),
       state: "prepared",
     };
     try {
@@ -152,17 +147,6 @@ function instructions(item: ReviewItem): string {
 
 This bundle is processed by the same direct-edit reviewer used for new imports. Run \`article-review execute\` for \`${item.article_path}\`; it will compare \`article.md\` with \`evidence/\`, verify that \`${item.relay_path}\` has not changed, and publish the reviewed diff as CriticMarkup suggestions through Relay. It does not modify the local content checkout or accept its own suggestions.
 `;
-}
-
-async function digest(): Promise<void> {
-  const file = arg("--file");
-  if (!file) throw new Error("digest requires --file <accepted-draft.md>");
-  const markdown = await fs.readFile(path.resolve(file), "utf-8");
-  console.log(JSON.stringify({
-    file: path.resolve(file),
-    view: "accepted-draft",
-    digest: articleReviewDigest(markdown),
-  }, null, 2));
 }
 
 async function status(): Promise<void> {
@@ -212,19 +196,15 @@ function withReviewProvenance(markdown: string, manifest: Record<string, unknown
   if (!match) throw new Error("Reviewed article has unclosed frontmatter");
   let frontmatter = markdown.slice(opening[0].length, match.index);
   frontmatter = frontmatter.replace(/^llm-review:\r?\n(?:^[ \t].*(?:\r?\n|$))*/m, "");
-  const digest = articleReviewDigest(markdown);
   const reviewedDate = new Date().toISOString().slice(0, 10);
-  const sourceDigest = String(manifest.source_digest ?? "");
   const sourceFetched = String(manifest.fetched_at ?? reviewedDate).slice(0, 10);
   const sourceKind = String(manifest.source_kind ?? "live");
   const provenance = [
     "llm-review:",
-    `  content-sha: "${digest}"`,
     `  date: ${reviewedDate}`,
     `  model: "${REVIEW_MODEL}"`,
     `  version: "${REVIEW_VERSION}"`,
     "  source:",
-    `    content-sha: "${sourceDigest}"`,
     `    fetched: ${sourceFetched}`,
     `    kind: "${sourceKind}"`,
   ].join("\n");
@@ -253,8 +233,7 @@ async function execute(): Promise<void> {
       const client = await createRelayReviewClient({ relayUrl, token: relayToken }, "Luc");
       const accepted = await client.read(item.relay_path);
       const prepared = await fs.readFile(path.join(item.bundle, "article.md"), "utf-8");
-      const baseSha256 = item.base_sha256 ?? createHash("sha256").update(prepared).digest("hex");
-      if (createHash("sha256").update(accepted).digest("hex") !== baseSha256) {
+      if (accepted !== prepared) {
         throw new Error("Relay accepted view changed since preparation; prepare a fresh run");
       }
       const reviewBase = normalizeReviewScaffolding(accepted);
@@ -300,7 +279,7 @@ async function execute(): Promise<void> {
         }
       };
       let outcome = await runReviewPass(0, reviewBase, meta, validation);
-      if (articleReviewDigest(outcome.markdown) === articleReviewDigest(reviewBase)) {
+      if (outcome.markdown === reviewBase) {
         outcome = { ...outcome, markdown: reviewBase };
       }
       validation = await validateArticleDraft(item.article_path, outcome.markdown);
@@ -308,7 +287,7 @@ async function execute(): Promise<void> {
       for (let repairRound = 1; !validation.valid && repairRound < MAX_REVIEW_ROUNDS; repairRound++) {
         const repairBase = outcome.markdown;
         outcome = await runReviewPass(repairRound, outcome.markdown, outcome.meta, validation);
-        if (articleReviewDigest(outcome.markdown) === articleReviewDigest(repairBase)) {
+        if (outcome.markdown === repairBase) {
           outcome = { ...outcome, markdown: repairBase };
         }
         validation = await validateArticleDraft(item.article_path, outcome.markdown);
@@ -324,7 +303,7 @@ async function execute(): Promise<void> {
       await fs.writeFile(path.join(item.bundle, "reviewed.md"), reviewed);
 
       const fresh = await client.read(item.relay_path);
-      if (createHash("sha256").update(fresh).digest("hex") !== baseSha256) {
+      if (fresh !== prepared) {
         throw new Error("Relay accepted view changed before suggestions were published");
       }
       const edits = buildRelayReviewEdits(fresh, reviewed, { allowWholeDocumentFallback: false });
@@ -479,11 +458,10 @@ const command = process.argv[2];
 try {
   if (command === "prepare") await prepare();
   else if (command === "execute") await execute();
-  else if (command === "digest") await digest();
   else if (command === "status") await status();
   else if (command === "prune") await prune();
   else if (command === "summarize-reports") await summarizeReports();
-  else throw new Error("Usage: article-review <prepare|execute|digest|status|prune|summarize-reports> ...");
+  else throw new Error("Usage: article-review <prepare|execute|status|prune|summarize-reports> ...");
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;

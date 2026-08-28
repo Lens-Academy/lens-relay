@@ -144,8 +144,6 @@ Body text.
           reviewed: "2026-08-24",
           version: "article-qc-v1",
           model: "sonnet",
-          digest: "sha256:article",
-          sourceDigest: "sha256:source",
           sourceFetched: "2026-08-24",
           sourceKind: "live",
         },
@@ -153,15 +151,13 @@ Body text.
     );
 
     expect(md).toContain(`llm-review:
-  content-sha: "sha256:article"
   date: 2026-08-24
   model: "sonnet"
   version: "article-qc-v1"
   source:
-    content-sha: "sha256:source"
     fetched: 2026-08-24
     kind: "live"`);
-    expect(md).not.toContain("llm_review_digest:");
+    expect(md).not.toContain("content-sha:");
   });
 });
 
