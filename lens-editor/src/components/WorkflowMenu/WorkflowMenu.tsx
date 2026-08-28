@@ -6,7 +6,7 @@ interface WorkflowItem {
   label: string;
   description: string;
   path: string;
-  icon: 'review' | 'video' | 'article' | 'promote';
+  icon: 'review' | 'recent' | 'video' | 'article' | 'promote';
 }
 
 const WORKFLOWS: WorkflowItem[] = [
@@ -15,6 +15,12 @@ const WORKFLOWS: WorkflowItem[] = [
     description: 'Accept or reject proposed edits',
     path: '/review',
     icon: 'review',
+  },
+  {
+    label: 'Recent Changes',
+    description: 'Direct AI edits from the last 7 days',
+    path: '/recent',
+    icon: 'recent',
   },
   // One importer for everything: it detects YouTube URLs and imports the
   // video's transcript instead of an article, so the separate Add Video page
@@ -51,6 +57,15 @@ function WorkflowIcon({ icon }: { icon: WorkflowItem['icon'] }) {
         <path d="M14 2v6h6" />
         <path d="M8 13h8" />
         <path d="M8 17h6" />
+      </svg>
+    );
+  }
+
+  if (icon === 'recent') {
+    return (
+      <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" />
       </svg>
     );
   }

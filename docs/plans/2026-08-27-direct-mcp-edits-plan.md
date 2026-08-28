@@ -1,0 +1,705 @@
+# Direct MCP Edits + Recent-Changes Review — Implementation Plan
+
+**Status:** Implemented 2026-08-27 (change `yummxqkp`); see §8 for what shipped
+and the follow-ups. Originally an independent second pass over
+`2026-08-27-direct-mcp-edits-recent-changes-notes.md`.
+**Date:** 2026-08-27
+**Related:** `2026-07-18-provenance-design.md`, `2026-07-02-suggestions-index.md`,
+`2026-03-08-debounce-deadlock-fix.md`,
+Asana [Add per-file changelog view](https://app.asana.com/0/1215416124171520/1217858508660082)
+
+## 1. What we are actually trying to achieve
+
+From the Discord thread (2026-08-25/26) and Luc's notes:
+
+- **The suggestion round-trip is mostly theatre today.** Luc and Elias both
+  bulk-accept. Elias samples a few changes first and iterates with the AI
+  before accepting. Nobody rejects individual suggestions in practice.
+- **So: write by default, suggest when it matters.** The goal is not to
+  remove review; it is to move review *after* the write, and make it cheap:
+  a "what changed recently" surface instead of an accept queue.
+- **Human prose is the thing worth protecting.** Luc: "It's very rare that we
+  want human text to be replaced by AI text." AI replacing/deleting *human*
+  text should stay behind a suggestion. Adding new text, or rewriting text the
+  AI itself wrote, can go straight in.
+- **Review surface = recent changes, not indefinite history.** A `/review`-like
+  page over the last ~7 days across files, plus in-file highlighting with a
+  time window (5 min while actively iterating, up to days), ideally including
+  what was *removed*, not just what was added.
+- **Lauren's per-file changelog** is the same need seen from one file. The
+  Asana task overstates what Yjs history gives us (see §2); an explicit event
+  log gives us the changelog for AI edits almost for free.
+
+Success looks like: a Claude session edits a course doc → most edits land
+immediately → the human opens the doc, flips on "recent changes: last 1h", sees
+AI insertions tinted and AI removals as struck-through ghosts, and skims. A
+change that would have overwritten their own sentence is still sitting there
+as a pending suggestion. On `/recent` they can see everything the AI did
+across the folder this week.
+
+## 2. Facts that shape the design (verified in code, 2026-08-27)
+
+1. **Provenance today = who created each *surviving* character, at day
+   granularity.** Editor: `lens-editor/src/lib/authorship-runs.ts` walks
+   `ytext._start → item.right`, keeps `{from, to, client}` (drops `clock`,
+   drops tombstones). Actor + date come from the `users` map
+   (`lens-editor/src/lib/provenance.ts`; human client IDs rotate per local
+   day; MCP client ID lives for the session, TTL 7 days —
+   `crates/relay/src/mcp/session.rs:38,149`). No deleted-text content survives:
+   the relay and browser docs run with GC on (`Doc::new()` everywhere), so
+   tombstones lose their string immediately. **Nothing can reconstruct "what
+   changed on Tuesday" from CRDT state. An explicit event log is the only
+   honest source of a changelog.**
+
+2. **The server *can* read `(client, clock)` runs through public `yrs` API.**
+   The earlier note assumed `yrs` lacks a run iterator. It doesn't:
+   `Text::diff_range(&mut txn, Some(&now), Some(&empty), YChange::identity)`
+   (yrs 0.19.2 `types/text.rs:431`) emits one `Diff { insert, ychange: Some(YChange{Added, id}) }`
+   per visible item when `empty = Snapshot::new(StateVector::default(), DeleteSet::default())`
+   (`DiffAssembler::process`, `text.rs:617-631`). The `hi` snapshot is
+   `txn.snapshot()`. It needs a `TransactionMut` because it may split items,
+   which is harmless; we can run it on the scratch doc that
+   `apply_attributed_edit` already builds (`crates/relay/src/mcp/provenance.rs:60`).
+   Y.Text offsets on the server are **UTF-8 byte offsets** (`OffsetKind::Bytes`,
+   see `crates/y-sweet-core/src/critic_surgical.rs:21-29`), same convention as
+   `edit.rs`. So no yrs patch and no private-field walking is needed.
+
+3. **The edit path already has the right shape for a mode decision.**
+   `crates/relay/src/mcp/tools/edit.rs:execute` finds `old_string` in the
+   *accepted* view, then under the awareness write lock re-verifies and calls
+   `merge_edit` → `apply_attributed_edit` → `persist()`. A direct mode is a
+   second branch at the same point, with the same lock, same attribution, same
+   persist.
+
+4. **Indexes are rebuilt at boot from the docs that are loaded anyway, and
+   refreshed via the debounced search worker** (`server.rs:469-585`,
+   `rebuild_suggestions_index` at `server.rs:3573`). `handle_suggestions`
+   never loads content docs on demand (`server.rs:4850`). Any recent-changes
+   index must follow this exactly.
+
+5. **The `/review` frontend already has the UI we want**:
+   `ReviewPage.tsx` groups by file, filters by author/location/**time** (dual
+   slider, presets 1h/24h/7d, default = last hour), and navigates to
+   `/<shortUuid>?pos=<byteOffset>` (`EditorArea.tsx:360-386` converts to
+   UTF-16 and jumps). A recent-changes page is mostly a read-only reuse.
+
+6. **`yrs::StickyIndex` (relative positions) is public and wire-compatible
+   with `Y.RelativePosition`** (`moving.rs:403,553`), so the server can record
+   an anchor the browser can resolve.
+
+## 3. Design
+
+### 3.1 Editing policy: server-decided `auto`, explicit `suggest`
+
+`edit` gains an optional `mode: "auto" | "suggest"` (default `auto`). There is
+no `direct` override; the server decides.
+
+Decision procedure (Markdown docs only; JSON/raw-Y.Text paths are already
+direct and stay as they are):
+
+1. Match `old_string` in the accepted view as today.
+2. Compute the **minimal diff** between `effective_old` and `new_string`
+   (char-level LCS/Myers, e.g. the `similar` crate; ≤ a few KB so cost is
+   irrelevant). Unchanged context the AI included for uniqueness never counts.
+3. If there are **no deleted characters** → direct (pure insertion).
+4. Otherwise map each deleted accepted-range back to raw positions
+   (`compute_raw_positions`, as `merge_edit` does). If any deleted range
+   overlaps a CriticMarkup span → **suggest** (keep the existing
+   supersede-merge behaviour for edits inside pending changes; simple and safe).
+5. Otherwise resolve provenance for the deleted raw ranges (fact 2) and map
+   client IDs through the doc's `users` map:
+   - every deleted char attributed to an `ai:` actor → **direct**
+   - any char `human:`, unmapped, or unresolvable → **suggest**
+6. `mode: "suggest"` skips 3–5.
+
+The check runs **inside the write-lock section**, on the current doc state,
+so it is TOCTOU-safe together with the existing re-verify.
+
+Result strings: `Made the changes to X.` / `Made pending changes to X
+(N characters of human-written text would have been replaced).` The AI does
+not need to know the rule to use the tool; the description explains it in
+two sentences.
+
+Expectation to set with the team: today almost all existing prose is
+**unmapped** (pre-provenance), so initially only insertions and rewrites of
+AI-written text go direct; the direct share grows as content is (re)written
+under provenance. That is the intended safe default, not a bug.
+
+Things I'd explicitly *not* do in v1: whitespace-only or punctuation-only
+carve-outs, "mostly AI" thresholds, or letting the AI claim text. All of these
+erode the one rule people can hold in their head.
+
+### 3.2 Activity events live in the content doc (`activity_v0`), index derived
+
+Each direct edit writes one event into a top-level `Y.Map("activity_v0")` in
+the **same scratch transaction** as the text mutation, so the delta applied to
+the live doc carries edit + event atomically and they persist together. No new
+storage surface, no separate crash-safety protocol, and boot-time rebuild is
+free because all docs are loaded at startup anyway (mirrors `users` and the
+suggestions index).
+
+Event (key = `"{ts_ms}-{ai_client_id}-{clock_start}"`, value = `Any::Map`):
+
+```
+v: 1
+ts: epoch ms
+actor: "ai:<model>:<behalf>"          (users-map key)
+author: "Luc's AI"                    (display label, same as CriticMarkup author)
+mode: "direct"
+kind: "insert" | "delete" | "replace"
+old: deleted text            (capped, e.g. 4 KB, with `old_truncated: true`)
+new: inserted text           (capped likewise)
+ctx_before / ctx_after: ~40 chars each of accepted-view context
+pos: accepted-view byte offset at event time (for ?pos= navigation)
+client: ai_client_id
+clock_from / clock_to: half-open clock range minted by this call
+anchor: StickyIndex (Assoc::After) at the deletion point, encoded v1, base64
+```
+
+`clock_from/to` come from `scratch.transact().state_vector().get(&ai_client_id)`
+before/after the mutation — cheap and exact, no per-call client ID rotation.
+
+Retention: on every append, and in the existing GC/compaction sweep for
+loaded docs, delete keys with `ts < now − 7d`. Tombstoned map entries are
+GC'd (GC is on), so growth is bounded by one week of events. Docs that are
+evicted and never touched again keep stale events until they are next loaded,
+which is harmless (the index filters by time on read).
+
+**Why in-doc rather than an `activity/` store object** (the alternative the
+note leaned to): atomicity with the edit for free; zero new lock ordering;
+rebuild-for-free at boot; and the in-file overlay needs exactly this doc's
+events, which now arrive with normal sync. Cost: events sync to every client
+that opens the doc (bounded: 7 days × capped text; a heavily AI-edited doc
+might carry a few hundred KB for a week), and git-sync / Obsidian must ignore
+the map (they already ignore `users`, `backlinks_v0` etc. — confirm for
+git-sync in step 0). If the sync cost is judged unacceptable, the same event
+struct can be moved to `activity/{folder_uuid}/{day}.cbor` store objects with
+an in-memory index; the rest of the plan is unchanged.
+
+Suggestion-mode edits are **not** recorded in v1: they are already visible on
+`/review`, and once accepted their payload keeps the AI client ID, so the
+authorship view still shows them. (Recording them as `mode: "suggestion"` is a
+one-line addition if the global page should show both.)
+
+### 3.3 `RecentChangesIndex` + endpoint
+
+- `y_sweet_core::recent_changes_index::RecentChangesIndex`:
+  `DashMap<doc_uuid, Vec<ActivityEvent>>`, `update(uuid, events)` (empty =
+  remove), `get(uuid)`, plus `query(uuids, since_ms)`.
+- Boot: populate from `activity_v0` in `rebuild_suggestions_index`'s loop
+  (same doc pass; set `recent_changes_ready`).
+- Incremental: the search worker's fast lane already rescans content docs on
+  debounce; add the `activity_v0` read next to `suggestions_fast_scan`
+  (read lock only, write to index while holding the read guard — same
+  read-your-writes reasoning as suggestions). The MCP edit path also updates
+  the index directly under the write lock so the page is current immediately.
+- `GET /recent-changes?folder_id=&since_ms=` → resolves UUIDs through the
+  folder's `filemeta_v0` (scoping, paths, deleted-doc filtering), returns
+  `{files: [{doc_id, path, events: [...]}]}`. Gated by `require_index_ready`.
+  Never loads content docs.
+- `GET /recent-changes?doc_id=` is not needed: the editor reads the doc's own
+  `activity_v0` map.
+
+### 3.4 Global page `/recent`
+
+Clone the `/review` skeleton (`ReviewPage.tsx`) into a read-only
+`RecentChangesPage`: same folder fetch-in-parallel hook pattern
+(`useSuggestions` → `useRecentChanges`), same file grouping, same
+author/location/time filter bar (time presets 5m/1h/24h/7d; default 24h),
+same `?pos=` navigation. Rows show old (struck) / new (tinted) with context.
+No accept/reject. Link to `/review` for pending suggestions. Factor the filter
+bar + slider out of `ReviewPage.tsx` rather than copy-pasting 1,000 lines.
+
+### 3.5 In-file "recent changes" mode
+
+Add a `recent` mode to the authorship toolbar toggle with a small time-window
+control (presets 5m/1h/24h/7d; remember last choice).
+
+- Extend `getAuthorshipRuns` to carry `clock` (one field; the walker already
+  has `item.id`). Build the set of `(client, [clock_from, clock_to))` from
+  `activity_v0` events within the window; tint surviving runs that fall in it
+  (`Decoration.mark`, reuse the inline-tint machinery).
+- For `delete`/`replace` events, render `old` as a struck-through inline
+  `Decoration.widget` (precedent: `CommentBadgeWidget` in `criticmarkup.ts`)
+  at `Y.createAbsolutePositionFromRelativePosition(anchor)`; if that returns
+  null (item GC'd) fall back to searching `ctx_before + ctx_after` in the
+  current text; if that also fails, list the event in a small per-file
+  activity tray at the top of the editor instead of guessing.
+- Multiple events on the same range: the tint is per surviving item so it is
+  automatically "final state"; ghosts stack in the tray if they collide.
+- Recompute on `activity_v0` `observeDeep` + doc change, viewport-scoped like
+  the existing plugin.
+
+### 3.6 MCP prompt/tool surface
+
+- `edit` description: "Edits are applied directly when they add text or
+  change text the AI wrote; edits that would replace human-written text
+  become pending changes for review. Either way, just edit; the result tells
+  you which happened." Drop the current "first-class pending changes" framing
+  (the uncommitted working-copy change in `mod.rs`/`edit.rs` will be
+  superseded — keep it until this ships, it is an improvement on its own).
+- `mode: "suggest"` documented as "use when the user asked for a proposal
+  they want to review before it lands".
+- `session_intro` mentions `/recent` so the AI can point the user there.
+
+## 4. Implementation steps
+
+Each step is independently shippable and testable.
+
+0. **Prerequisites (½ day).** Confirm relay-git-sync and the Obsidian plugin
+   ignore unknown top-level maps (they must, given `users`); confirm
+   `diff_range` with an empty `lo` snapshot yields `Added` for every item on a
+   doc restored from a persisted snapshot (write the unit test first — this is
+   the load-bearing assumption). Pick the diff crate.
+
+1. **Provenance runs on the server (1 day).** `provenance::visible_runs(txn,
+   text) -> Vec<Run{from,to,client,clock}>` (byte offsets) + `resolve_actor(doc,
+   client) -> Option<String>` reading `users`. Tests: single client, mixed
+   clients, after deletions, non-ASCII, after `apply_attributed_edit`.
+
+2. **Auto routing in `edit.rs` (1–2 days).** Minimal diff → protected-range
+   check → direct branch (`remove_range` + `insert` at raw offsets, mapped via
+   `compute_raw_positions`) or existing `merge_edit` branch; `mode` param;
+   new result strings. Tests: pure insert → direct; replace AI text → direct;
+   replace human text → suggestion; mixed → suggestion; unmapped → suggestion;
+   context-only human text does not force suggestion; deleted range touching
+   a pending span → suggestion; `mode: suggest` forces suggestion; smart-quote
+   path; concurrent-change re-verify still errors.
+
+3. **Activity events (1 day).** Write `activity_v0` entry in the scratch
+   transaction (extend `apply_attributed_edit` to return clock range; add a
+   `record_activity` helper); prune >7d on append; StickyIndex anchor. Tests:
+   event present after direct edit, absent after suggestion edit, clock range
+   matches minted items, pruning, size cap.
+
+4. **Index + endpoint (1 day).** `RecentChangesIndex`, boot rebuild, worker
+   refresh, MCP write-through, `GET /recent-changes`. Tests mirror
+   `tests/suggestions_endpoint_test.rs` (folder scoping, deleted doc filtered,
+   503 before ready, since filter). Add the retention prune to the GC sweep.
+
+5. **`/recent` page (1–2 days).** Factor filter bar out of `ReviewPage.tsx`,
+   `useRecentChanges`, page + route + nav entry. Playwright smoke via the
+   headless recipe in memory.
+
+6. **In-file overlay (2–3 days).** `clock` in runs, `recent` mode + window
+   control, insertion tint, ghost widgets with anchor → context → tray
+   fallback. Tests for the run walker and for anchor resolution after later
+   edits and after GC (this is where the empirical check the note asked for
+   lands).
+
+7. **Prompt + docs (½ day).** Tool descriptions, `AGENTS.md` note on the
+   rule, `docs/relay-auth-customizations.md`/ops doc pointer to `activity_v0`
+   and its retention.
+
+Steps 1–4 are pure Rust and can go out before any UI (the global page is
+already useful as raw JSON for debugging); 5 and 6 are independent of each
+other.
+
+## 5. Risks and how the plan handles them
+
+- **Accidentally overwriting human text.** Protection is enforced server-side
+  on the actual deleted characters, unmapped text counts as protected, and any
+  ambiguity (markup overlap, unresolvable runs) degrades to a suggestion. The
+  only way to lose human text directly is a wrong `users` mapping, which is
+  the existing self-reported trust model.
+- **Doc bloat / sync cost from `activity_v0`.** Bounded by 7 days and text
+  caps; measured in step 3 on a busy dev-R2 doc before committing; fallback
+  storage design is described in §3.2.
+- **Prod hang class of bugs.** No new locks; the endpoint reads only the
+  folder doc + in-memory index; worker refresh reuses the existing
+  snapshot-keys-then-lock discipline; the MCP write-through happens under the
+  lock the edit already holds.
+- **Ghost placement drifting after later rewrites.** Three-tier fallback
+  (anchor → context → tray); never place a ghost on a guess.
+- **Team expectation mismatch.** Because most existing prose is unmapped, the
+  first weeks will still produce many suggestions. Say so when announcing.
+
+## 6. Decisions I made and what I'd like confirmed
+
+Defaults I'd go with unless overruled:
+
+- Default mode `auto`; `suggest` is the only override; no `direct` override.
+- Unmapped text is protected.
+- Events stored in-doc (`activity_v0`), 7-day fixed retention, 4 KB per text
+  field cap.
+- v1 logs **MCP direct edits only**; suggestion edits, moves, creates and
+  human edits are not events (git-sync already gives a coarse per-file history
+  for the synced folders; a human-edit changelog would need the server to
+  diff every incoming update and is a separate project).
+- `/recent` is read-only; pending suggestions stay on `/review`; revert is a
+  later feature (and must itself respect the human-text rule).
+- The in-file deletion ghosts are attempted in v1 (step 6) but are the first
+  thing to cut if the anchor behaviour turns out poor in practice — insertion
+  tinting plus the per-file tray already covers Lauren's changelog ask.
+
+Open question only Luc can answer: is it acceptable that an AI insertion
+*inside* a human sentence (no deletion) goes direct? By the stated rule it
+does; if that feels too aggressive the rule could become "no deletion *and*
+insertion point is not inside a human-authored word/sentence", which is a
+small extension of step 2.
+
+## 7. Amendments after review (2026-08-27)
+
+A code-verifying review of this plan found the following; the implementation
+follows the amended versions.
+
+1. **`diff_range` panics on singleton clients.** `split_by_snapshot(hi)` looks
+   up `ID(client, state)` for every client in `hi.state_map`;
+   `BlockStore::find_pivot` (`yrs/block_store.rs:74`) divides by the last
+   block's `end` clock, which is 0 for a client whose only block is a 1-length
+   item — a realistic shape (a human typing one character under a day-rotated
+   ID). Fix: build `hi` ourselves — the current state vector with any client at
+   state 1 clamped to 0, and an **empty** delete set (also avoids walking the
+   whole delete set per call). Items of clamped clients come back tagged
+   `Removed` instead of `Added`; both are live runs. Any emitted run whose id
+   is in the real delete set, or a byte total that doesn't match the text,
+   means the walk is untrustworthy → treat as unresolvable → suggestion.
+2. **Editor proxy allowlist.** `lens-editor/server/relay-proxy-auth.ts`
+   default-denies unknown paths for folder-scoped tokens; add a
+   `GET /recent-changes` rule mirroring `GET /suggestions`, with tests.
+3. **Anchor.** `StickyIndex::at(_, _, len, Assoc::After)` is `None` at end of
+   text. Take the anchor *after* mutation at the start of the changed region
+   with `Assoc::After`, fall back to `Assoc::Before`; the encoded relative
+   position carries the assoc, so the editor just decodes it.
+4. **Direct application is per-hunk and must not straddle markup.**
+   `spans_covering_accepted_range` ignores zero-contribution `{--x--}` spans,
+   so a deleted accepted range could map to two raw ranges around pending
+   markup. Rule: each deleted hunk must map to exactly one `Span::Plain`
+   coverage; each insertion point must lie within (or at the edge of) a Plain
+   span; hunks are applied back-to-front. `compute_raw_positions` becomes
+   `pub(crate)`.
+5. **Comments/highlights/`{~~ ~~}` are not spans.** They sit verbatim in the
+   accepted view as Plain text. Any hunk that intersects a
+   `{>>…<<}` / `{==…==}` / `{~~…~~}` byte range (or inserts strictly inside
+   one) → suggestion.
+6. **Smart quotes.** The policy diff runs over char sequences with
+   curly/straight quotes normalised for *equality only*; offsets and inserted
+   text use the original chars, so a quote-only mismatch never counts as a
+   deleted human character.
+7. **Clock range** is captured around the text ops only (before
+   `register_actor` and the activity write). Clocks are UTF-16 units; they are
+   only ever compared with item ids, never with byte offsets.
+8. Plumbing: three `Server` constructors, the no-store early return in
+   `startup_reindex`, and the single-`folder_id` query shape are mirrored from
+   the suggestions index.
+
+## 8. Implementation notes (2026-08-27)
+
+Shipped in one change, all steps 1–7 of §4:
+
+- Rust: `y-sweet-core/src/activity.rs` (events, `activity_v0` read/append/prune),
+  `y-sweet-core/src/recent_changes_index.rs`, `relay/src/mcp/provenance.rs`
+  (`visible_runs`, `client_actor_map`, `sticky_anchor`, generalised
+  `apply_attributed_edit`), `relay/src/mcp/tools/edit_policy.rs` (minimal diff,
+  protected ranges, accepted→raw mapping, provenance check), `edit.rs` (mode
+  param, direct branch, activity event, index write-through), `server.rs`
+  (index plumbing, `GET /recent-changes`, GC-time pruning), tool schema.
+- Editor: `lib/activity.ts`, `hooks/useRecentChanges.ts`, `/recent` page,
+  nav entries, clock-aware `authorship-runs.ts`, `recent` authorship mode with
+  window presets, ghost widgets and tray, proxy allowlist rule.
+
+Two things learned while building that the plan did not anticipate:
+
+1. **`yrs` `find_pivot` is unsafe for `clock == state` lookups on short
+   clients** (total clock length 1 or 2 split over two blocks) — not only the
+   singleton case the review found. `visible_runs` classifies on a throwaway
+   copy with a 3-char dummy appended under each such client (§7.1 superseded).
+2. **The suggestion path re-minted unchanged text.** `merge_edit` replaces the
+   whole matched span, so human context inside `old_string` was re-authored
+   under the AI client on every suggestion — which would have let a later edit
+   replace it directly. The suggestion branch now applies the replacement as
+   minimal exact-char hunks (`suggestion_path_keeps_provenance_of_unchanged_context`).
+
+Two rule refinements from testing against dev R2 with real editor provenance
+(`edit_policy.rs` rules 5–6):
+
+- An insertion that **splits a word** ("human" → "humxan") is treated as
+  editing that word: the characters on both sides must be AI-attributed.
+  Insertions at word boundaries inside human sentences remain direct.
+- Deleted **whitespace** is never protected: the AI removing its own paragraph
+  together with a separator newline the human typed is direct; taking any
+  human non-whitespace character with it is not.
+
+UI revisions after Luc's testing (same day):
+
+- "Recent" is no longer an authorship mode. The dropdown keeps Off / Gutter /
+  Expanded / Inline and gains a **Highlight recent changes** toggle with the
+  5m / 1h / 24h / 7d window; the overlay composes with any mode (a second,
+  violet line strip; tints and ghosts on top of inline tints).
+- Hover tooltips were unreliable: CodeMirror's `hoverTooltip` guards on
+  `coordsAtPos(posAtCoords(mouse))`, and `posAtCoords` snaps to the end of the
+  zero-width hidden-syntax spans of pending suggestions, so nothing after a
+  `{++…++}` on the same line ever got a tooltip; a point anchor also made it
+  vanish on the slightest mouse movement. The authorship plugin now resolves
+  the caret from the DOM (`caretPositionFromPoint` → `posAtDOM`) and renders
+  its own tooltip, anchored to the hovered word, showing authorship plus the
+  recent-change info when the overlay is on. `window.__lensEditorView` is
+  exposed in dev builds for this kind of debugging.
+
+- `/recent` shows **excerpts of the current text** per file instead of one row
+  per event: `crates/relay/src/recent_excerpts.rs` clusters changes within
+  240 bytes, adds ~80 bytes of context (snapped to words), marks surviving
+  inserts and removed text in place (same run/anchor resolution as the editor
+  overlay, on a throwaway doc copy so index workers never mutate the live
+  store), and reports skipped unchanged stretches. Excerpts are built at every
+  index refresh and stored beside the events; the page's author/time filters
+  dim inserts / drop ghosts of filtered-out events rather than re-clustering.
+  Recent deletions render violet + strikethrough everywhere (red/green stays
+  reserved for pending suggestions).
+
+Follow-ups (not in this change):
+
+- `create` still wraps new Markdown docs in `{++…++}`; until accepted, every
+  edit inside is "overlaps pending changes" → suggestion. By the stated rule a
+  new file is pure addition and could be direct (with an activity event).
+- Raw Y.Text (`.html`) edits still replace the whole `old_string` and use
+  char offsets; they are direct by construction, so no protection applies, but
+  they re-mint unchanged text like the old suggestion path did.
+- Reverting a direct edit from `/recent` (must respect the human-text rule).
+- Local dev: `npm run relay:start` does not set `MCP_API_KEY`; export
+  `MCP_API_KEY=test-key-123` first to exercise the MCP path locally.
+
+## 9. Post-review hardening plan (2026-08-27, change on top of `yummxqkp`)
+
+Findings from the three-way review (server perf/correctness, editor perf,
+edit-policy safety). Numbered by priority; each item lists the exact change
+and its test.
+
+### 9.1 Safety: suggestion path must not align human chars into markup (HIGH)
+
+Problem: `edit.rs` applies the merge replacement via a free char-level Myers
+diff (`minimal_hunks_exact(old_span, replacement)`). The diff may align the
+human's `m`,`a` of "mat" with letters inside `{"author":"AI","timestamp"…}`,
+so the `{--…--}` payload gets AI-minted chars while human chars sit in the
+metadata. After a surgical reject the word is AI-owned → next edit goes direct.
+
+Change (`critic_markup.rs` + `edit_policy.rs` + `edit.rs`):
+- `MergeResult` gains `unmatchable: Vec<(usize, usize)>` — byte ranges of the
+  replacement that are *freshly generated* by `merge_edit`: the
+  `{--{meta}@@` / `--}` / `{++{meta}@@` / `++}` delimiters and the `{++`
+  payload (`new_text`). Equal regions (verbatim copies of old raw, incl. any
+  pre-existing markup) and `{--` payloads (the old text) stay matchable.
+- `minimal_hunks_exact_masked(old, new, unmatchable)`: same Myers diff, but
+  chars inside `unmatchable` are mapped to unique sentinel values
+  (`u32` with a high bit | position) so they never equal anything.
+  Implement by generalising `minimal_hunks_with` to diff `Vec<u32>` keys.
+- `edit.rs` suggestion branch uses the masked variant.
+- Tests (`edit.rs`): for `"mat"→"rug"`, `"is"→"was"`, `"a"→"b"` on a
+  human-registered doc, assert via `visible_runs` + `client_actor_map` that
+  every char of `old_string` is human-owned and lies inside the `{--…--}`
+  payload, and that no human-owned char lies inside metadata or `{++…++}`.
+  Then simulate a surgical reject (remove `{--{meta}@@`, `--}{++…++}`) and
+  assert a follow-up `edit("mat"→"cat")` is still a suggestion.
+
+### 9.2 Safety: whitespace rule, actor-map determinism, word chars (MED)
+
+- `edit_policy::map_hunks`: when the deleted raw range is whitespace-only
+  (guard empty) and the hunk is a Replace or a Delete, apply the neighbour
+  guard: if the char before `from` and the char after `to` are both word
+  chars, guard both (deleting the space in "human wrote"). Additionally, a
+  deleted range containing `\n` whose neighbours are both non-whitespace
+  guards both neighbours (joining lines).
+  Pure-whitespace deletions between whitespace/punctuation (the "AI paragraph
+  + human newline" case) stay unprotected.
+- `is_word_char`: also `\p{M}` (combining marks), `'`, `’`, `-`.
+- `provenance::client_actor_map`: when a client appears under several actors,
+  non-`ai:` wins deterministically.
+- Tests: `"human wrote"→"humanXwrote"`, `→"humanwrote"`,
+  `"text\n# Heading"→"text# Heading"` → suggestion; `"cafe\u{301}"`
+  insertion inside → suggestion; dual-registered client → always suggestion;
+  existing `deleting_ai_paragraph_with_human_separator_is_direct` still direct.
+
+### 9.3 Server perf: excerpts O(E log R), anchors via runs, off the write lock (HIGH)
+
+`recent_excerpts.rs`:
+- Precompute per-run `units` (UTF-16 length) once; build
+  `HashMap<client, Vec<&Run>>` sorted by clock; for each event binary-search
+  the first run with `clock + units > clock_from` and walk forward while
+  `clock < clock_to`. O(R + E log R).
+- Newline-prefix table (`Vec<usize>` of line starts) built once → `line` and
+  `skipped_*` lookups O(log n) instead of `matches('\n').count()` per excerpt.
+- Anchor resolution: decode the StickyIndex (`yrs::StickyIndex::decode_v1`)
+  to its `(client, clock)` ID and look it up in the same client→runs index
+  (byte offset = run.from + utf16→byte within run); fall back to
+  `resolve_anchor` (item walk) only when the ID is not among visible runs, then
+  to context search. Add `pub fn anchor_id(&[u8]) -> Option<(u64,u32)>` in
+  `provenance.rs`.
+- Cap segment text: `insert`/`delete` segment text > 2000 chars is cut with
+  `…` (new `ExcerptSegment.truncated: bool`).
+
+`edit.rs`: under the write lock only `push(uuid, event, None)` (events). After
+the write guard is dropped, take a read guard and compute runs once
+(`visible_runs_copy`) + excerpts, then `set_excerpts(uuid, excerpts)`.
+Ordering argument: any worker `update` that could interleave holds the read
+guard and therefore snapshots post-edit state, so no stale overwrite.
+Also reuse: the closure already computes pre-edit runs; post-edit runs are
+computed once on the read pass instead of twice.
+
+`server.rs` `activity_snapshot`: unchanged call sites, but skip
+`visible_runs_copy` when no event has a surviving insert range
+(all events are pure deletes) — minor.
+
+Tests: existing 4 excerpt tests + a synthetic benchmark-ish test (200 events,
+100 KB body, 5k runs) asserting completion < 100 ms in debug is too flaky —
+instead a unit test that the run index yields identical `changes` to the
+brute-force loop on a randomised input (property-style, seeded).
+
+### 9.4 Server: `/recent-changes` bounded and consistent (HIGH)
+
+`RecentChangesIndex`:
+- `MAX_EVENTS_PER_DOC = 500`, oldest evicted in `push`/`update`.
+- `set_excerpts(uuid, excerpts)`; `sweep(now)` drops entries whose newest
+  event is older than retention; `remove(uuid)`.
+- `gc_compact_and_remove` calls `remove`-or-prune; search worker calls
+  `sweep` once per heavy-lane tick (cheap: one pass over the map).
+
+`handle_recent_changes`:
+- Validate `folder_id` (`len ≥ 36`, ASCII, `get(..36)`) *before* loading.
+- Clone the folder `Awareness` Arc out of `docs.get()` before taking the read
+  lock (rule from AGENTS.md; same fix applied to `handle_suggestions`).
+- New query params: `limit` (events, default 1000, max 5000, newest-first
+  across the folder; response gets `truncated: true` when hit),
+  `preview` (default 200: `old`/`new` cut to that many chars with
+  `*_truncated=true`; `preview=0` = full text).
+- Excerpts filtered by the selected event set (same rule as the client:
+  inserts of unselected events → `text`, deletes dropped, empty excerpts
+  removed) so `excerpts` never reference ids absent from `events`.
+- Tests: limit/truncated, preview cut, excerpt filtering by since, non-ASCII
+  folder_id → 400 not panic.
+
+`activity.rs`: `event_id` gets a process-wide monotonic counter suffix so two
+same-ms pure deletions never collide.
+
+### 9.5 Server: bounded diff cost (MED)
+
+`edit_policy::minimal_hunks_with`: use `capture_diff_slices_deadline` with a
+150 ms deadline (`similar` ≥ 2.2 supports it — check Cargo.lock version); if
+`old.len() + new.len() > 200_000` chars skip Myers and return one hunk.
+Test: two 50 KB random strings complete quickly and yield a valid hunk set.
+
+### 9.6 Editor overlay: cache + map instead of recompute (HIGH)
+
+`authorship.ts` plugin:
+- `recentCache: { events: DocActivityEvent[]; ghostPos: Map<id, number|null> } | null`,
+  invalidated by the activity observer, the window/enabled effects and the
+  expiry timer. `readActivityEvents` runs only when the cache is null.
+- On `update.docChanged` map cached ghost positions through
+  `update.changes.mapPos(pos, -1)`; re-resolve only when the cache is null.
+- `resolveEventPosition` takes an optional pre-built `text` string; the
+  overlay computes `ytext.toString()` at most once per pass and only if some
+  event lacks a resolvable anchor.
+- `collectRecent` indexes events by client (`Map<client, events[]>`) so the
+  run loop is O(runs + matches).
+- Skip `collectRecent` entirely on updates where nothing relevant changed
+  (`viewportChanged` only, no `docChanged`/mode/refresh): keep the previous
+  `recentRanges` and re-add them.
+- Timer: replace the 30 s interval by a single timeout at the next event
+  expiry (`min(ev.ts + windowMs) - now`, ≥ 1 s), rescheduled on refresh; no
+  `pinScroll` on timer refreshes.
+- `GhostWidget.eq` compares id + age bucket (minute granularity) so titles
+  update.
+- Tooltip: throttle `mousemove` to one evaluation per animation frame; do the
+  cheap `pos` computation up front and defer `actorAt`/`recentAt`/registry
+  lookup into the 150 ms timer; `actorAt`/`recentAt` binary-search the sorted
+  arrays.
+- Tests: existing authorship tests + new: viewport-only update does not
+  re-read the activity map (spy on `readActivityEvents` via a module mock or
+  a counter), ghost position follows an insertion before it without re-read.
+
+### 9.7 `/recent` page: stable objects, caps, deferred filtering (HIGH)
+
+`RecentChangesPage.tsx`:
+- Filter with `useDeferredValue(timeRange)` (+ author/folder) so slider drags
+  stay responsive.
+- Per-file memo: compute visible event ids as a joined string; keep a
+  `Map<doc_id, FilteredFile>` in a ref and reuse the previous object when
+  the id string is unchanged → `FileSection` memo actually hits.
+- `toggleFile`: functional `setExpandedFiles(prev => …)` with the default set
+  in a ref; stable identity.
+- `byId` map built once per `FileSection` and passed to `ExcerptBlock`.
+- Cap: render the first 25 excerpts (or 50 events) per expanded file with a
+  "Show N more" button; `content-visibility: auto` + `contain-intrinsic-size`
+  on file cards.
+- "Open" on the file header uses `excerpts[0]?.pos ?? events[0].pos`.
+- `DualRangeSlider` gets an optional `maxAgoMs` prop (7 d here).
+- A11y: window presets as `menuitemradio` (drop the nested `radiogroup`).
+
+`useRecentChanges.ts`: `AbortController` per refresh (abort previous +
+on unmount, ignore aborted results); `localStorage` in try/catch; page passes
+`since_ms` = now − 7 d explicitly (unchanged semantics, explicit).
+
+Tests: hook abort test; page test that a filter change keeps `FileSection`
+props identical for files whose visible set didn't change (render-count via a
+test-only wrapper) and that the "Show more" cap works.
+
+### 9.8 Out of scope (documented, not done)
+
+Lazy server-side excerpts (build on request): rejected because the page must
+not open unloaded content docs; the O(E log R) rebuild at the existing 2 s
+debounce is cheap enough. Suffix-growth (`cat→cats→catalog`) stays allowed by
+design. Boot-time excerpt build stays serial (a few seconds worst case);
+revisit if startup time becomes a problem.
+
+### 9.9 Plan review amendments (applied during implementation)
+
+- **9.1**: the `{++` payload is not all fresh — it carries absorbed spaces,
+  equal regions inside a touched suggestion and `prefix/suffix_extra` from a
+  superseded suggestion's `inserted` text (possibly human). Masking it
+  wholesale would re-mint that text under the AI. Instead `DiffRegion`
+  tracks `fresh: Vec<(usize, usize)>` sub-ranges of `new_text` that came
+  from `ChangeTag::Insert`; the builder emits `MergeResult.unmatchable`
+  = delimiters + metadata + those fresh ranges only. Residual risk: Myers may
+  shuffle a human char between two matchable copies of old text (both old
+  text, so no AI minting) — accepted. A full piece-list emitter (no diff at
+  all) was considered and rejected as too large a refactor of `merge_edit`.
+  Extra test: superseding a human `{++…++}` keeps its surviving inserted
+  chars human-owned.
+- **9.5**: deadline/size bailout only in the policy diff (`minimal_hunks`);
+  a non-minimal diff there is conservative (more text looks changed → more
+  likely a suggestion). The exact/masked variant in the suggestion path must
+  stay minimal (a coarser diff would re-mint human context) — no deadline.
+- **9.4**: `gc_compact_and_remove` must *not* remove index entries — GC is
+  idle-doc eviction and the index exists precisely to answer for evicted
+  docs. It prunes expired events from the entry instead. `event_id`
+  uniqueness via doc-local collision check in `append_event` (`-n` suffix),
+  not a process counter; `MAX_EVENTS_PER_DOC` enforced in `append_event`
+  (doc map) as well as in the index. The `docs.get()`-ref-across-lock
+  pattern also exists in `edit.rs` (two sites) and `handle_suggestions`;
+  fix all of them.
+- **9.3**: `set_excerpts` must be called while the post-edit read guard is
+  held (same rule as the worker), otherwise two back-to-back edits can land
+  excerpts out of order. The remaining O(doc) cost per rebuild is
+  `visible_runs_copy` (full state encode/apply) — accepted for now.
+  Anchor lookup: binary-search the client's runs for `clock ≤ id.clock <
+  clock + units`; for `Assoc::Before` add the char's UTF-8 length; fall back
+  to `resolve_anchor` when the ID is not in visible runs.
+- **9.6**: map cached ghost positions with `mapPos(pos, 1)` (anchors are
+  `Assoc::After` = right-associated); the mid-sync `decorations.map` branch
+  must map `ghostPos` too. Cache the parsed events, apply the window filter
+  per pass.
+- **9.7**: reset the per-file object cache whenever `data` identity changes
+  (excerpts/paths may differ with identical ids); `AbortSignal.any` isn't
+  universally available — use a manual timeout + controller. Thread
+  `maxAgoMs` through `sliderToMs`/`msToSlider` (default 30 d). Use the
+  "Show N more" cap only (drop `content-visibility`).
+- **Order**: 9.4 index API → 9.3 → 9.1 → 9.2 → 9.5 → 9.6 → 9.7.
+
+### 9.10 Implementation status (2026-08-27)
+
+All of §9.1–9.7 implemented as amended in §9.9, with these deviations:
+
+- Index entries are not touched by GC eviction at all; the search worker's
+  10-minute `sweep` handles retention for idle/evicted docs (the GC worker
+  has no handle to the index and is exercised by tests standalone).
+- `/recent` keeps file objects stable without any render-time cache: the
+  list memo emits `(file, visibleKey)` per file and `FileSection` derives its
+  rows from the stable `file`, so memoisation needs no mutable state (the
+  React Compiler lint rules reject ref/memo mutation during render).
+- The direct-edit result message now reports `inserted N` / `removed N` /
+  `replaced N characters with M` from the actual hunks (the coalesced event
+  range made two insertions read as a "replace").
+- `activity::append_event` returns the id it stored (suffixed `-n` on a
+  same-millisecond collision); the event in the index carries that id.
+
+Tests: relay 422, y-sweet-core 429, editor 2167 (+ the known
+relay-dependent `Sidebar.integration` test).

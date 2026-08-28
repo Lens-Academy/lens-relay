@@ -3,7 +3,16 @@ import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
 import {
   authorshipModeField,
+  recentWindowField,
+  recentEnabledField,
   setAuthorshipMode,
+  setRecentWindow,
+  setRecentEnabled,
+  loadRecentWindow,
+  saveRecentWindow,
+  loadRecentEnabled,
+  saveRecentEnabled,
+  RECENT_WINDOW_PRESETS,
   type AuthorshipMode,
 } from '../Editor/extensions/authorship';
 
@@ -45,6 +54,8 @@ function AuthorshipIcon({ dimmed }: { dimmed: boolean }) {
  */
 export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
   const [mode, setMode] = useState<AuthorshipMode>('gutter');
+  const [windowMs, setWindowMs] = useState<number>(() => loadRecentWindow());
+  const [recentEnabled, setRecentEnabledState] = useState<boolean>(() => loadRecentEnabled());
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -57,7 +68,26 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
     if (view.state.field(authorshipModeField, false) !== mode) {
       view.dispatch({ effects: setAuthorshipMode.of(mode) });
     }
-  }, [view, mode]);
+    if (view.state.field(recentWindowField, false) !== windowMs) {
+      view.dispatch({ effects: setRecentWindow.of(windowMs) });
+    }
+    if (view.state.field(recentEnabledField, false) !== recentEnabled) {
+      view.dispatch({ effects: setRecentEnabled.of(recentEnabled) });
+    }
+  }, [view, mode, windowMs, recentEnabled]);
+
+  const selectWindow = (ms: number) => {
+    setWindowMs(ms);
+    saveRecentWindow(ms);
+    if (view) view.dispatch({ effects: setRecentWindow.of(ms) });
+  };
+
+  const toggleRecent = () => {
+    const next = !recentEnabled;
+    setRecentEnabledState(next);
+    saveRecentEnabled(next);
+    if (view) view.dispatch({ effects: setRecentEnabled.of(next) });
+  };
 
   const updatePosition = useCallback(() => {
     if (!buttonRef.current) return;
@@ -103,6 +133,8 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
   };
 
   const current = MODES.find((m) => m.value === mode) ?? MODES[1];
+  const windowLabel = RECENT_WINDOW_PRESETS.find((p) => p.ms === windowMs)?.label ?? `${Math.round(windowMs / 60_000)}m`;
+  const buttonLabel = recentEnabled ? `${current.label} · Recent ${windowLabel}` : current.label;
 
   return (
     <>
@@ -117,8 +149,8 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
         aria-expanded={open}
         className="flex items-center gap-1.5 px-2 py-1 rounded-md border border-gray-300 bg-white hover:bg-gray-50 text-gray-600 disabled:opacity-40"
       >
-        <AuthorshipIcon dimmed={mode === 'hidden'} />
-        <span className="text-xs">{current.label}</span>
+        <AuthorshipIcon dimmed={mode === 'hidden' && !recentEnabled} />
+        <span className="text-xs">{buttonLabel}</span>
         <svg className="w-3 h-3 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
           <path
             fillRule="evenodd"
@@ -164,6 +196,46 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
               )}
             </button>
           ))}
+          <div className="border-t border-gray-100 mt-1 pt-1">
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={recentEnabled}
+              onClick={toggleRecent}
+              className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm hover:bg-gray-50 text-gray-900"
+            >
+              <span>
+                <span className="block">Highlight recent changes</span>
+                <span className="block text-xs text-gray-400">Direct AI edits within a time window</span>
+              </span>
+              <span
+                aria-hidden="true"
+                className={`relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors ${recentEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}
+              >
+                <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${recentEnabled ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+              </span>
+            </button>
+            {recentEnabled && (
+              <div className="flex gap-1 px-3 pb-1.5 pt-0.5" role="group" aria-label="Recent changes window">
+                {RECENT_WINDOW_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={p.ms === windowMs}
+                    onClick={() => selectWindow(p.ms)}
+                    className={`px-2 py-0.5 rounded-full text-xs transition-colors ${
+                      p.ms === windowMs
+                        ? 'bg-purple-100 text-purple-700'
+                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>,
         document.body
       )}

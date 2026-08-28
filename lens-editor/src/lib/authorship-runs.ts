@@ -16,13 +16,18 @@ export interface AuthorshipRun {
   from: number;
   to: number;
   client: number;
+  /** Start clock of the run's first item. Runs only merge when clocks are
+   *  contiguous, so `[clock, clock + (to - from))` is the exact clock range
+   *  of the characters — what the recent-changes overlay matches activity
+   *  events against. (Y.Text item lengths and CM positions are both UTF-16.) */
+  clock: number;
 }
 
 interface YItemLike {
   deleted: boolean;
   countable: boolean;
   length: number;
-  id: { client: number };
+  id: { client: number; clock: number };
   right: YItemLike | null;
 }
 
@@ -33,12 +38,17 @@ export function getAuthorshipRuns(ytext: Y.Text): AuthorshipRun[] {
 
   while (item) {
     if (!item.deleted && item.countable && item.length > 0) {
-      const client = item.id.client;
+      const { client, clock } = item.id;
       const last = runs[runs.length - 1];
-      if (last && last.to === pos && last.client === client) {
+      if (
+        last &&
+        last.to === pos &&
+        last.client === client &&
+        last.clock + (last.to - last.from) === clock
+      ) {
         last.to = pos + item.length;
       } else {
-        runs.push({ from: pos, to: pos + item.length, client });
+        runs.push({ from: pos, to: pos + item.length, client, clock });
       }
       pos += item.length;
     }

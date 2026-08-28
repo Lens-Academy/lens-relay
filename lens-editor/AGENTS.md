@@ -82,9 +82,14 @@ folderDoc.transact(() => {
 }, origin);
 ```
 
-**Content Document** (`contents` Y.Text):
+**Content Document** root types (all written by the relay or the editor, none of them content):
+
 ```javascript
-doc.getText('contents')  // Y.Text containing markdown
+doc.getText('contents')      // the markdown itself (CriticMarkup inline for pending suggestions)
+doc.getMap('users')          // PermanentUserData: actor key → { ids, ds, meta } (provenance, src/lib/provenance.ts)
+doc.getMap('activity_v0')    // direct AI edits: event id → { ts, actor, kind, old, new, client, clock_from, clock_to, anchor, … }
+                             // written by the relay's MCP edit path, pruned after 7 days; read by src/lib/activity.ts
+                             // for the editor's "Recent" authorship mode and served on /recent via GET /recent-changes
 ```
 
 See `src/test/fixtures/folder-metadata/production-sample.json` for real production data.

@@ -92,18 +92,19 @@ export function checkProxyAccess(
     return { allowed: true };
   }
 
-  // GET /suggestions — allowed only if folder_id matches token folder
-  if (method === 'GET' && path === '/suggestions') {
+  // GET /suggestions and GET /recent-changes — allowed only if folder_id
+  // matches the token folder
+  if (method === 'GET' && (path === '/suggestions' || path === '/recent-changes')) {
     const params = new URLSearchParams(query);
     const requestedFolders = params.getAll('folder_id');
     // Must specify at least one folder, and all must match the token's folder
     // (compound folder_id format: "relay_id-folder_uuid")
     if (requestedFolders.length === 0) {
-      return { allowed: false, reason: 'Suggestions require folder_id parameter' };
+      return { allowed: false, reason: 'This endpoint requires a folder_id parameter' };
     }
     const allMatch = requestedFolders.every(fid => fid.endsWith('-' + folder));
     if (!allMatch) {
-      return { allowed: false, reason: 'Suggestions access denied for this folder' };
+      return { allowed: false, reason: 'Access denied for this folder' };
     }
     return { allowed: true };
   }

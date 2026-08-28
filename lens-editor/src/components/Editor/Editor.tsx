@@ -483,6 +483,11 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
     }
 
     viewRef.current = view;
+    // Dev-only handle for debugging from the browser console / Playwright
+    // (e.g. `__lensEditorView.posAtCoords(...)`).
+    if (import.meta.env.DEV) {
+      (window as unknown as { __lensEditorView?: EditorView }).__lensEditorView = view;
+    }
 
     // Notify parent that editor is ready
     if (onEditorReady) {

@@ -413,7 +413,7 @@ fn span_raw_length(raw: &str, span: &Span, raw_start: usize) -> usize {
 }
 
 /// Compute raw byte start positions for each span.
-fn compute_raw_positions(raw: &str, spans: &[Span]) -> Vec<usize> {
+pub(crate) fn compute_raw_positions(raw: &str, spans: &[Span]) -> Vec<usize> {
     let mut positions = Vec::with_capacity(spans.len());
     let mut pos = 0usize;
     for span in spans {
@@ -428,6 +428,13 @@ pub struct MergeResult {
     pub raw_offset: usize,
     pub raw_len: usize,
     pub replacement: String,
+    /// Byte ranges of `replacement` that are freshly generated (CriticMarkup
+    /// delimiters, metadata and text the AI wrote) rather than verbatim
+    /// copies of the old raw text. When the replacement is applied as a
+    /// minimal diff, chars in these ranges must never be aligned with old
+    /// chars, or the human's characters could end up owning metadata and
+    /// the AI's the human's words (see edit_policy::minimal_hunks_exact_masked).
+    pub unmatchable: Vec<(usize, usize)>,
 }
 
 /// A segment in the covered range, tracking accepted/base/raw text.
@@ -467,6 +474,7 @@ pub fn merge_edit(
             raw_offset: 0,
             raw_len: 0,
             replacement: String::new(),
+            unmatchable: Vec::new(),
         });
     }
 
@@ -583,6 +591,10 @@ pub fn merge_edit(
         old_len: usize,
         new_text: String,
         is_change: bool,
+        /// Byte ranges of `new_text` that came from `ChangeTag::Insert`
+        /// (AI-written); the rest is verbatim old text (absorbed spaces,
+        /// equal regions merged into a touched suggestion).
+        fresh: Vec<(usize, usize)>,
     }
 
     let mut regions: Vec<DiffRegion> = Vec::new();
@@ -613,12 +625,14 @@ pub fn merge_edit(
                 old_len: eq_val.len(),
                 new_text: eq_val.to_string(),
                 is_change: false,
+                fresh: Vec::new(),
             });
             old_cursor += eq_val.len();
             ci += 1;
         } else {
             let mut del_text = String::new();
             let mut ins_text = String::new();
+            let mut fresh: Vec<(usize, usize)> = Vec::new();
 
             loop {
                 if ci >= changes.len() {
@@ -630,7 +644,9 @@ pub fn merge_edit(
                         ci += 1;
                     }
                     ChangeTag::Insert => {
-                        ins_text.push_str(changes[ci].value());
+                        let v = changes[ci].value();
+                        push_fresh(&mut fresh, ins_text.len(), ins_text.len() + v.len());
+                        ins_text.push_str(v);
                         ci += 1;
                     }
                     ChangeTag::Equal => {
@@ -655,6 +671,7 @@ pub fn merge_edit(
                 old_len: del_text.len(),
                 new_text: ins_text,
                 is_change: true,
+                fresh,
             });
             old_cursor += del_text.len();
         }
@@ -719,10 +736,15 @@ pub fn merge_edit(
                         old_len: r.old_len,
                         new_text: r.new_text.clone(),
                         is_change: true,
+                        fresh: r.fresh.clone(),
                     });
                 } else if last.old_start + last.old_len == r_start {
                     // Adjacent to previous change region, merge
                     last.old_len += r.old_len;
+                    let base = last.new_text.len();
+                    for &(f, t) in &r.fresh {
+                        push_fresh(&mut last.fresh, base + f, base + t);
+                    }
                     last.new_text.push_str(&r.new_text);
                 } else {
                     merged_regions.push(DiffRegion {
@@ -730,6 +752,7 @@ pub fn merge_edit(
                         old_len: r.old_len,
                         new_text: r.new_text.clone(),
                         is_change: true,
+                        fresh: r.fresh.clone(),
                     });
                 }
             } else {
@@ -738,6 +761,7 @@ pub fn merge_edit(
                     old_len: r.old_len,
                     new_text: r.new_text.clone(),
                     is_change: true,
+                    fresh: r.fresh.clone(),
                 });
             }
         } else {
@@ -747,12 +771,15 @@ pub fn merge_edit(
                 old_len: r.old_len,
                 new_text: r.new_text.clone(),
                 is_change: false,
+                fresh: Vec::new(),
             });
         }
     }
 
-    // Now walk merged regions and build replacement.
+    // Now walk merged regions and build replacement, recording which bytes
+    // are freshly generated (see MergeResult::unmatchable).
     let mut replacement = String::new();
+    let mut unmatchable: Vec<(usize, usize)> = Vec::new();
     let mut emitted_suggestions: std::collections::HashSet<usize> =
         std::collections::HashSet::new();
 
@@ -770,10 +797,24 @@ pub fn merge_edit(
             // Change region: collect base text, emit CriticMarkup
             let base = collect_base_for_change(&segments, &seg_positions, r.old_start, r.old_len);
             if !base.is_empty() {
-                replacement.push_str(&format!("{{--{}{}--}}", meta, base));
+                let open = format!("{{--{}", meta);
+                push_fresh(&mut unmatchable, replacement.len(), replacement.len() + open.len());
+                replacement.push_str(&open);
+                replacement.push_str(&base);
+                push_fresh(&mut unmatchable, replacement.len(), replacement.len() + 3);
+                replacement.push_str("--}");
             }
             if !r.new_text.is_empty() {
-                replacement.push_str(&format!("{{++{}{}++}}", meta, r.new_text));
+                let open = format!("{{++{}", meta);
+                push_fresh(&mut unmatchable, replacement.len(), replacement.len() + open.len());
+                replacement.push_str(&open);
+                let payload = replacement.len();
+                for &(f, t) in &r.fresh {
+                    push_fresh(&mut unmatchable, payload + f, payload + t);
+                }
+                replacement.push_str(&r.new_text);
+                push_fresh(&mut unmatchable, replacement.len(), replacement.len() + 3);
+                replacement.push_str("++}");
             }
         }
     }
@@ -782,7 +823,19 @@ pub fn merge_edit(
         raw_offset,
         raw_len,
         replacement,
+        unmatchable,
     })
+}
+
+/// Append a byte range, merging with the previous one when contiguous.
+fn push_fresh(ranges: &mut Vec<(usize, usize)>, from: usize, to: usize) {
+    if to <= from {
+        return;
+    }
+    match ranges.last_mut() {
+        Some(last) if last.1 == from => last.1 = to,
+        _ => ranges.push((from, to)),
+    }
 }
 
 /// For an equal diff region, emit the original raw text from segments.
