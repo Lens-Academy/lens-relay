@@ -62,11 +62,15 @@ export async function spawnClaude(
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const args = argsOverride ?? buildClaudeArgs(workDir);
+    const env = { ...process.env, ...envOverride };
+    // The Claude CLI requires SHELL even when the container has a valid
+    // POSIX shell. Docker's non-interactive runtime does not set it.
+    if (process.platform !== 'win32' && !env.SHELL) env.SHELL = '/bin/sh';
     const spawnClaudeProc = () =>
       spawn('claude', args, {
         cwd: workDir,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: envOverride ? { ...process.env, ...envOverride } : process.env,
+        env,
         // A Claude CLI turn may spawn helpers. Give it a process group so a
         // cancelled article job cannot leave descendants running.
         detached: process.platform !== 'win32',
