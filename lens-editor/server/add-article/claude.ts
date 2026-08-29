@@ -10,6 +10,7 @@ export const VERIFY_TIMEOUT_MS = 10 * 60_000;
 export const REVIEW_VERSION = "article-qc-v1.2";
 export const REVIEW_MODEL = "sonnet";
 export const MAX_REVIEW_ROUNDS = 3;
+export const DEFAULT_REVIEW_BUDGET_USD = 10;
 
 export type ArticleReviewProvider = "claude" | "codex";
 
@@ -141,7 +142,7 @@ export function buildVerifyArgs(
   workDir: string,
   repairRound = 0,
   model = REVIEW_MODEL,
-  maxBudgetUsd = 1.5,
+  maxBudgetUsd = DEFAULT_REVIEW_BUDGET_USD,
   requiresBaseSelection = false,
 ): string[] {
   const tools = requiresBaseSelection ? "Read,Edit,Bash" : "Read,Edit";
@@ -179,7 +180,13 @@ export async function runArticleVerify(
   return spawnClaude(
     workDir,
     timeoutMs,
-    buildVerifyArgs(workDir, repairRound, REVIEW_MODEL, 1.5, requiresBaseSelection),
+    buildVerifyArgs(
+      workDir,
+      repairRound,
+      REVIEW_MODEL,
+      DEFAULT_REVIEW_BUDGET_USD,
+      requiresBaseSelection,
+    ),
     signal,
     selectorEnv,
   );
