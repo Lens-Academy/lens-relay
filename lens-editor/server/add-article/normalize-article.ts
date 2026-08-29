@@ -1,3 +1,5 @@
+import { retypeFootnotes } from "./footnote-typing";
+
 export interface NormalizationSample {
   before: string;
   after: string;
@@ -164,5 +166,9 @@ export function normalizeArticleBody(body: string, sourceUrl: string): {
     return out;
   });
 
-  return { body: transformed.join(""), changes: [...changes.values()] };
+  // Footnote id typing runs as a second whole-document pass: renaming a
+  // reference+definition group needs cross-line pairing that the segment
+  // transforms above cannot express.
+  const typed = retypeFootnotes(transformed.join(""));
+  return { body: typed.body, changes: [...changes.values(), ...typed.changes] };
 }

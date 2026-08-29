@@ -219,7 +219,7 @@ describe('importVideo', () => {
   it('keeps the published transcript when cleanup fails', async () => {
     mockClaude.runClaude.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'failed' });
 
-    await expect(runImport()).resolves.toBeUndefined();
+    await expect(runImport()).resolves.toEqual({ mdPath: expect.any(String) });
 
     expect(mockRelayDocs.upsertRelayDocReturningId).toHaveBeenCalledWith(
       expect.stringContaining('.md'),
@@ -236,7 +236,7 @@ describe('importVideo', () => {
       '# Someone edited this by hand'
     );
 
-    await expect(runImport()).resolves.toBeUndefined();
+    await expect(runImport()).resolves.toEqual({ mdPath: expect.any(String) });
 
     expect(mockRelayDocs.updateRelayDoc).not.toHaveBeenCalled();
   });
@@ -246,7 +246,7 @@ describe('importVideo', () => {
   it('still applies the cleanup when the document cannot be re-read', async () => {
     mockRelayDocs.readRelayDocText.mockRejectedValue(new Error('relay down'));
 
-    await expect(runImport()).resolves.toBeUndefined();
+    await expect(runImport()).resolves.toEqual({ mdPath: expect.any(String) });
 
     expect(mockRelayDocs.updateRelayDoc).toHaveBeenCalled();
   });
@@ -257,7 +257,7 @@ describe('importVideo', () => {
   it('never replaces the transcript with a failure doc', async () => {
     mockClaude.runClaude.mockRejectedValue(new Error('claude exploded'));
 
-    await expect(runImport()).resolves.toBeUndefined();
+    await expect(runImport()).resolves.toEqual({ mdPath: expect.any(String) });
 
     const wrote = [
       ...mockRelayDocs.createRelayDoc.mock.calls,
@@ -309,7 +309,7 @@ describe('importVideo without captions', () => {
       importVideo('nocaps-job', payload, new Date().toISOString(), {
         createLens: false,
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ mdPath: expect.any(String) });
 
     expect(mockRelayDocs.upsertRelayDocReturningId).toHaveBeenCalledWith(
       expect.stringContaining('.md'),

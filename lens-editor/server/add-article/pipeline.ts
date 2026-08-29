@@ -44,6 +44,7 @@ import {
 import type { VideoInput } from "../add-video/video-url";
 import { fetchYouTubeTranscript } from "../add-video/fetch-transcript";
 import { importVideo } from "../add-video/pipeline";
+import { resolveVideoEmbeds } from "./video-embeds";
 import { maybeCreateLens } from "../lens-doc";
 import { DuplicateDocumentError } from "./duplicate";
 
@@ -482,6 +483,39 @@ export async function processArticle(
     }
   }
 
+  // 4.7. Resolve video-embed markers into `::video[[…]]` directives, importing
+  //      each video's transcript first when the relay doesn't have it yet.
+  //      Both review candidates share one resolution so a video is imported at
+  //      most once; unresolvable embeds degrade to plain links (recorded), so
+  //      an auxiliary video can never fail the article import.
+  let unrenderedBodyResolved = evidence.htmlCandidates?.unrendered?.body;
+  if (!isStubOnly && [body, unrenderedBodyResolved ?? ""].some((b) => b.includes("__lensvideo:"))) {
+    await setStage("resolving-videos");
+    const beforeVideos = body;
+    const videoBodies = unrenderedBodyResolved !== undefined ? [body, unrenderedBodyResolved] : [body];
+    const videoResult = await resolveVideoEmbeds(videoBodies, {
+      jobId: job.id,
+      createdAt: job.created_at,
+      signal,
+      log: (message) => console.warn(`[add-article] ${message}`),
+    });
+    body = videoResult.bodies[0];
+    if (unrenderedBodyResolved !== undefined) unrenderedBodyResolved = videoResult.bodies[1];
+    await reporter.programmatic({
+      code: "programmatic.video-embeds-resolved",
+      count: videoResult.resolutions.length,
+      before: beforeVideos,
+      after: body,
+      detail: {
+        resolutions: videoResult.resolutions.map(({ url, outcome, transcriptPath }) => ({
+          url,
+          outcome,
+          ...(transcriptPath ? { transcript: transcriptPath } : {}),
+        })),
+      },
+    });
+  }
+
   // Safe normalization happens before validation. The first validation's
   // warnings and errors are review evidence; hybrid errors are repairable by
   // Claude for up to three review rounds, while final validation is the hard gate.
@@ -520,7 +554,7 @@ export async function processArticle(
         unrenderedExtraction.siteName,
         createdDate,
       );
-      let unrenderedBody = unrenderedExtraction.body;
+      let unrenderedBody = unrenderedBodyResolved ?? unrenderedExtraction.body;
       const unrenderedFilenameBase = generateArticleFilenameBase(
         unrenderedMeta.author,
         unrenderedMeta.title,

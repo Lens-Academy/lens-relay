@@ -81,6 +81,21 @@ describe("normalizeArticleBody", () => {
     expect(Math.max(...(links?.samples.map((sample) => sample.after.length) ?? []))).toBeLessThanOrEqual(512);
   });
 
+  it("retypes numeric footnotes as a second pass and reports the changes", () => {
+    const input = [
+      "Claim[^1] and aside[^2].",
+      "",
+      "[^1]: Newhouse, J.P. (1977), Journal of Human Resources 12:115–125.",
+      "[^2]: Additional explanatory context from the author.",
+    ].join("\n");
+    const result = normalizeArticleBody(input, "https://example.com/article");
+    expect(result.body).toContain("Claim[^cite-1] and aside[^note-2].");
+    expect(result.changes.map((change) => change.code).sort()).toEqual([
+      "normalize.footnote-typed-cite",
+      "normalize.footnote-typed-note",
+    ]);
+  });
+
   it("is idempotent with CRLF input and exact residue lines", () => {
     const input = "Before\r\nPosted in: , ,\r\nAfter [link](/path)\r\n";
     const once = normalizeArticleBody(input, "https://example.com/article");

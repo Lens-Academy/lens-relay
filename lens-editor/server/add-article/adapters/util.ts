@@ -69,17 +69,16 @@ export function isVideoEmbedUrl(src: string | null | undefined): boolean {
 }
 
 /**
- * Render a clean, render-safe <iframe> for a video embed so it survives into
- * the imported Markdown. The platform's article renderer runs rehype-raw, so
- * the iframe renders inline exactly where the video was. Emits the normalized
- * absolute URL — only call on a src that passed `isVideoEmbedUrl`.
+ * Emit a private placeholder line for a video embed. Raw <iframe>s are
+ * rejected by the Lens article validator; the canonical form is a
+ * `::video[[../video_transcripts/…]]` directive backed by an imported
+ * transcript document. The transcript path needs network work, so extraction
+ * emits this marker and the pipeline's resolving-videos stage replaces every
+ * marker with the directive (importing the video first when needed) or, when
+ * that is impossible, a plain link — see server/add-article/video-embeds.ts.
+ * Only call on a src that passed `isVideoEmbedUrl`.
  */
-export function videoEmbedIframe(src: string): string {
+export function videoEmbedMarker(src: string): string {
   const u = parseEmbedUrl(src);
-  const s = u ? u.href : "";
-  return (
-    `<iframe src="${s}" width="560" height="315" frameborder="0" ` +
-    `allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" ` +
-    `referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`
-  );
+  return u ? `__lensvideo:${u.href}__` : "";
 }

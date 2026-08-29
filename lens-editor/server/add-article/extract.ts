@@ -14,7 +14,7 @@ import {
   splitAuthors,
   toIsoDate,
   isVideoEmbedUrl,
-  videoEmbedIframe,
+  videoEmbedMarker,
 } from "./adapters/util";
 import type { ArticleMeta } from "./types";
 import type { PdfPageImage } from "./pdf-images";
@@ -108,6 +108,14 @@ function makeTurndown(baseUrl: string): TurndownService {
   });
   td.use(gfm);
   td.remove(["script", "style", "nav", "header", "footer", "aside", "noscript"]);
+
+  // Turndown has no rule for <u>, so it passes the raw tag through and the
+  // Lens validator flags it (article.html-artifact). Underline carries no
+  // meaning Lens renders, so keep the text and drop the tag.
+  td.addRule("unwrapUnderline", {
+    filter: "u",
+    replacement: (content: string) => content,
+  });
 
   // Turndown's default escaping covers Markdown punctuation but never `<` —
   // see escapeTagOpeners. This runs on TEXT nodes only: code spans/blocks
@@ -295,10 +303,11 @@ function makeTurndown(baseUrl: string): TurndownService {
     replacement: () => "",
   });
 
-  // Preserve video embeds (YouTube / Vimeo) as raw <iframe> so the player
-  // renders inline where it was in the article (the platform runs rehype-raw).
-  // Turndown otherwise drops iframes entirely. Non-video iframes are still
-  // dropped — we never pass through arbitrary cross-site frames.
+  // Preserve video embeds (YouTube / Vimeo) as a private marker that the
+  // pipeline's resolving-videos stage replaces with the platform's canonical
+  // `::video[[…]]` directive (importing the video first when needed) — see
+  // video-embeds.ts. Turndown otherwise drops iframes entirely; non-video
+  // iframes are still dropped — we never pass through arbitrary frames.
   td.addRule("videoEmbed", {
     filter: (node: HTMLElement) =>
       node.nodeName === "IFRAME" &&
@@ -308,7 +317,7 @@ function makeTurndown(baseUrl: string): TurndownService {
     replacement: (_content: string, node: TurndownService.Node) => {
       const el = node as HTMLElement;
       const src = el.getAttribute("src") || el.getAttribute("data-src") || "";
-      return `\n\n${videoEmbedIframe(src)}\n\n`;
+      return `\n\n${videoEmbedMarker(src)}\n\n`;
     },
   });
 

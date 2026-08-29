@@ -1,5 +1,5 @@
 import type { AdapterContext, AdapterExtract, SiteAdapter } from "./types";
-import { isVideoEmbedUrl, videoEmbedIframe } from "./util";
+import { isVideoEmbedUrl, videoEmbedMarker } from "./util";
 
 const SITE_NAME = "AI Safety Atlas";
 const ORIGIN = "https://ai-safety-atlas.com";
@@ -279,7 +279,7 @@ function injectMedia(md: string, media: Map<string, MediaEmbed>): string {
       used.add(key);
       const embed =
         item.kind === "video"
-          ? videoEmbedIframe(item.src)
+          ? videoEmbedMarker(item.src)
           : `![${item.alt}](${item.src})`;
       return `${embed}\n\n${line}`;
     })

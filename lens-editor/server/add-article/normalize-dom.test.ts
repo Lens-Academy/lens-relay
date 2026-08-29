@@ -206,3 +206,134 @@ describe("review-hardening: footnote id false positives", () => {
     expect(body.innerHTML).not.toContain('id="fn-1"');
   });
 });
+
+describe("normalizeArticleDom — self-fragment localization", () => {
+  it("rewrites an absolute self-URL fragment to the local Lens heading slug", () => {
+    const body = normalize(`
+      <p><a href="${BASE}#appendix">See the appendix</a></p>
+      <h2 id="appendix">Appendix: Packet-Based Verification!</h2>`);
+    expect(body.querySelector("a")?.getAttribute("href")).toBe(
+      "#appendix-packet-based-verification",
+    );
+  });
+
+  it("rewrites a plain #fragment anchor that targets an imported heading", () => {
+    const body = normalize(`
+      <p><a href="#sec-2">jump</a></p>
+      <h3 id="sec-2">The Assurance Curve</h3>`);
+    expect(body.querySelector("a")?.getAttribute("href")).toBe("#the-assurance-curve");
+  });
+
+  it("resolves a fragment on a heading wrapper via its first heading child", () => {
+    const body = normalize(`
+      <p><a href="#wrap">jump</a></p>
+      <div id="wrap"><h2>Wrapped Heading</h2><p>text</p></div>`);
+    expect(body.querySelector("a")?.getAttribute("href")).toBe("#wrapped-heading");
+  });
+
+  it("leaves fragments whose heading slug is ambiguous untouched", () => {
+    const body = normalize(`
+      <p><a href="#dup-1">jump</a></p>
+      <h2 id="dup-1">Overview</h2>
+      <h2 id="dup-2">Overview</h2>`);
+    expect(body.querySelector("a")?.getAttribute("href")).toBe("#dup-1");
+  });
+
+  it("leaves fragments that do not resolve to a heading untouched", () => {
+    const body = normalize(`
+      <p><a href="#fig-3">figure</a> <a href="#/portal/signup/free">signup ghost</a></p>
+      <figure id="fig-3"><img src="/x.png"></figure>`);
+    const hrefs = [...body.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs).toEqual(["#fig-3", "#/portal/signup/free"]);
+  });
+
+  it("does not localize same-origin links to a DIFFERENT page", () => {
+    const body = normalize(`
+      <p><a href="https://www.lesswrong.com/posts/other/page#appendix">other post</a></p>
+      <h2 id="appendix">Appendix</h2>`);
+    expect(body.querySelector("a")?.getAttribute("href")).toBe(
+      "https://www.lesswrong.com/posts/other/page#appendix",
+    );
+  });
+
+  it("does not treat footnote definitions as heading targets", () => {
+    const body = normalize(`
+      <p>Ref<sup class="footnote-ref"><a data-footnote-ref="1" href="#fn-1">1</a></sup></p>
+      <ol class="footnotes"><li class="footnote-item" id="fn-1">Note text.</li></ol>`);
+    expect(body.querySelector("sup a")?.getAttribute("href")).toBe("#fn-1");
+  });
+});
+
+describe("normalizeArticleDom — anchor-wrapping-sup footnotes (80000hours)", () => {
+  const EIGHTYK = `
+    <p>Claim<a id="fn-ref-1" href="#fn-1" rel="footnote" class="footnote-link"><sup>1</sup></a>
+    and more<a id="fn-ref-2" href="#fn-2" rel="footnote" class="footnote-link"><sup>2</sup></a>.</p>
+    <div class="footnotes"><ol>
+      <li id="fn-1">First note text.<a href="#fn-ref-1" class="no-visited-styling fn-return" aria-label="Back to content">&#8617;</a></li>
+      <li id="fn-2">Second note text.<a href="#fn-ref-2" class="no-visited-styling fn-return" aria-label="Back to content">&#8617;</a></li>
+    </ol></div>`;
+
+  it("collects rel=footnote anchors that wrap their sup", () => {
+    const body = normalize(EIGHTYK);
+    const markers = [...body.querySelectorAll("a[data-footnote-ref]")].map((a) =>
+      a.getAttribute("data-footnote-ref"),
+    );
+    expect(markers).toEqual(["1", "2"]);
+    expect([...body.querySelectorAll("li")].map((li) => li.id)).toEqual(["fn-1", "fn-2"]);
+  });
+
+  it("strips fn-return back-links from definitions without collecting them as refs", () => {
+    const body = normalize(EIGHTYK);
+    expect(body.querySelector(".fn-return")).toBeNull();
+    expect(body.innerHTML).not.toContain("#fn-ref");
+  });
+
+  it("collects an unlabelled inverted anchor only when it targets a real definition", () => {
+    const body = normalize(`
+      <p>Real<a href="#fn-1"><sup>1</sup></a> but plain<a href="#fn-elsewhere"><sup>9</sup></a>.</p>
+      <div class="footnotes"><ol><li id="fn-1">Note.</li></ol></div>`);
+    const markers = [...body.querySelectorAll("a[data-footnote-ref]")].map((a) =>
+      a.getAttribute("data-footnote-ref"),
+    );
+    expect(markers).toEqual(["1"]);
+    expect(body.innerHTML).toContain("#fn-elsewhere");
+  });
+});
+
+describe("normalizeArticleDom — self-fragment slug fallback", () => {
+  it("localizes an absolute self-link whose fragment matches a unique heading slug", () => {
+    const body = normalize(`
+      <p><a href="${BASE}#the-assurance-curve">appendix link</a></p>
+      <h3>The Assurance Curve</h3>`);
+    expect(body.querySelector("a")?.getAttribute("href")).toBe("#the-assurance-curve");
+  });
+
+  it("does not slug-match when two headings share the slug", () => {
+    const href = `${BASE}#overview`;
+    const body = normalize(`
+      <p><a href="${href}">jump</a></p>
+      <h2>Overview</h2><h2>Overview</h2>`);
+    expect(body.querySelector("a")?.getAttribute("href")).toBe(href);
+  });
+});
+
+describe("normalizeArticleDom — parser-mangled inverted footnotes (defuddle re-parse)", () => {
+  // <a><sup><a>…</a></sup></a> is invalid HTML; re-parsing splits it into an
+  // empty sup plus a bare numeric anchor sibling. The bare anchor must still
+  // become a reference marker when it targets a real definition.
+  it("collects a bare numeric #fn anchor that targets a real definition", () => {
+    const body = normalize(`
+      <p>Claim<a href="#fn-1" title="preview"><sup id="fnref:1"><a href="#fn:1">1</a></sup></a>.</p>
+      <ol><li id="fn:1">The note text.</li></ol>`);
+    const markers = [...body.querySelectorAll("a[data-footnote-ref]")].map((a) =>
+      a.getAttribute("data-footnote-ref"),
+    );
+    expect(markers).toEqual(["1"]);
+    expect(body.querySelector("li")?.id).toBe("fn-1");
+  });
+
+  it("does not collect a bare numeric anchor pointing at a non-definition", () => {
+    const body = normalize(`<p>See section<a href="#fn-appendix">1</a>.</p><div id="fn-appendix">text</div>`);
+    expect(body.querySelectorAll("a[data-footnote-ref]").length).toBe(0);
+  });
+});

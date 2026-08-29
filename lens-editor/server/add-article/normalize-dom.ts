@@ -15,7 +15,12 @@
  *     existing numeric footnote turndown rules emit `[^N]` / `[^N]:` correctly,
  *     with definitions collected at the bottom of the body.
  *
- *  2. Link absolutization. Resolve relative `<a href>` against the base URL so
+ *  2. Self-fragment localization. Links that target the article's own page
+ *     (plain `#fragment` anchors and absolute self-URLs with a fragment) are
+ *     rewritten to local `#<lens-slug>` fragments when the target provably
+ *     resolves to an imported heading with an unambiguous Lens slug.
+ *
+ *  3. Link absolutization. Resolve relative `<a href>` against the base URL so
  *     library documents keep working links (images are already resolved by the
  *     turndown `lazyImg` rule). In-document `#` anchors and non-http schemes are
  *     left untouched.
@@ -43,8 +48,9 @@ function refAnchor(ref: Element): Element | null {
 function isBackLink(el: Element): boolean {
   if (el.closest(".footnote-back-link")) return true;
   if (el.matches("a[data-footnote-backref]")) return true;
+  if (el.closest(".fn-return")) return true; // 80000hours "back to content"
   const a = refAnchor(el);
-  return (a?.getAttribute("href") || "").startsWith("#fnref");
+  return /^#fn-?ref/i.test(a?.getAttribute("href") || "");
 }
 
 /** The definition id this reference points at (strip a leading `#`). */
@@ -135,6 +141,25 @@ function collectReferences(root: Element): Element[] {
     const text = (a.textContent || "").replace(/[[\]\s]/g, "");
     const target = (a.getAttribute("href") || "").slice(1);
     if (/^\d+$/.test(text) || defIds.has(target)) set.add(sup);
+  });
+  // The INVERTED convention — an anchor wrapping its sup (80000hours:
+  // `<a rel="footnote" href="#fn-1"><sup>1</sup></a>`) — and its parser-mangled
+  // remnant: nesting `<a><sup><a>` is invalid HTML, so re-parsing (e.g. of
+  // Defuddle output) splits it into an empty sup plus a BARE numeric anchor
+  // sibling. `rel="footnote"` is unambiguous; otherwise require a numeric
+  // label pointing at a real definition, mirroring the unlabelled-<sup>
+  // conditions above.
+  root.querySelectorAll('a[rel~="footnote"], a[href^="#fn"]').forEach((a) => {
+    if (a.closest("sup")) return; // ordinary <sup><a> form, handled above
+    const label = a.querySelector("sup") ?? a;
+    const text = (label.textContent || "").replace(/[[\]\s]/g, "");
+    const target = (a.getAttribute("href") || "").slice(1);
+    if (
+      a.matches('a[rel~="footnote"]') ||
+      (/^\d+$/.test(text) && defIds.has(target))
+    ) {
+      set.add(a);
+    }
   });
 
   let refs = [...set].filter((e) => !isBackLink(e));
@@ -263,7 +288,7 @@ function normalizeFootnotes(root: Element): void {
     def.setAttribute("id", `fn-${n}`);
     def
       .querySelectorAll(
-        ".footnote-back-link, a[data-footnote-backref], a[href^='#fnref']",
+        ".footnote-back-link, a[data-footnote-backref], a[href^='#fnref'], a[href^='#fn-ref'], .fn-return",
       )
       .forEach((b) => b.remove());
     numByDef.set(def, Number(n));
@@ -279,6 +304,101 @@ function normalizeFootnotes(root: Element): void {
       .sort((a, b) => numByDef.get(a)! - numByDef.get(b)!);
     for (const it of items) c.appendChild(it);
   }
+}
+
+/** Lens Platform's rendered heading id (mirrors `renderedHeadingId` in
+ * lens-platform content_processor/src/validator/article-structure.ts). */
+function lensHeadingSlug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 50);
+}
+
+const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
+
+/** The article heading a fragment target corresponds to: the target itself,
+ * an enclosing heading, or a heading wrapper's first element child. */
+function fragmentHeading(target: Element): Element | null {
+  if (target.matches(HEADING_SELECTOR)) return target;
+  const enclosing = target.closest(HEADING_SELECTOR);
+  if (enclosing) return enclosing;
+  const first = target.firstElementChild;
+  return first?.matches(HEADING_SELECTOR) ? first : null;
+}
+
+/**
+ * Rewrite links that target this article's own page — plain `#fragment`
+ * anchors and absolute self-URLs with a fragment (a source page's TOC or
+ * appendix links) — into local `#<lens-slug>` fragments, but only when the
+ * fragment provably resolves to a heading that is being imported and that
+ * heading's Lens slug is unambiguous. Anything unprovable is left untouched
+ * for the validator to flag (`article.external-self-fragment` /
+ * `article.fragment-target-missing`) and the LLM reviewer to judge.
+ */
+function localizeSelfFragments(root: Element, baseUrl: string): void {
+  let base: URL;
+  try {
+    base = new URL(baseUrl);
+  } catch {
+    return;
+  }
+  const normalizedPath = (u: URL) => u.pathname.replace(/\/+$/, "") || "/";
+
+  const slugCounts = new Map<string, number>();
+  for (const h of root.querySelectorAll(HEADING_SELECTOR)) {
+    const slug = lensHeadingSlug(h.textContent || "");
+    if (slug) slugCounts.set(slug, (slugCounts.get(slug) ?? 0) + 1);
+  }
+
+  const byId = new Map<string, Element>();
+  for (const el of root.querySelectorAll("[id]")) {
+    const id = el.getAttribute("id");
+    if (id && !byId.has(id)) byId.set(id, el);
+  }
+
+  root.querySelectorAll("a[href]").forEach((a) => {
+    const href = a.getAttribute("href") || "";
+    let fragment: string | undefined;
+    if (href.startsWith("#")) {
+      fragment = href.slice(1);
+    } else if (/^https?:/i.test(href)) {
+      try {
+        const target = new URL(href);
+        if (
+          target.origin === base.origin &&
+          normalizedPath(target) === normalizedPath(base) &&
+          target.search === base.search &&
+          target.hash
+        ) {
+          fragment = target.hash.slice(1);
+        }
+      } catch {
+        return;
+      }
+    }
+    if (!fragment) return;
+    try {
+      fragment = decodeURIComponent(fragment);
+    } catch {
+      /* use the raw fragment */
+    }
+    const target = byId.get(fragment);
+    const heading = target ? fragmentHeading(target) : null;
+    if (heading) {
+      const slug = lensHeadingSlug(heading.textContent || "");
+      if (slug && slugCounts.get(slug) === 1) a.setAttribute("href", `#${slug}`);
+      return;
+    }
+    if (target) return; // resolves to a non-heading — leave for the reviewer
+    // Extractors (Defuddle) often strip id attributes. Many sites derive their
+    // heading ids the same way Lens does, so when the fragment IS the slug of
+    // exactly one imported heading the correspondence is still provable.
+    const asSlug = fragment.toLowerCase();
+    if (slugCounts.get(asSlug) === 1) a.setAttribute("href", `#${asSlug}`);
+  });
 }
 
 const SKIP_HREF = /^(#|mailto:|tel:|data:|javascript:)/i;
@@ -298,5 +418,6 @@ function absolutizeLinks(root: Element, baseUrl: string): void {
 /** Normalize an article body DOM subtree in place (footnotes + links). */
 export function normalizeArticleDom(root: Element, baseUrl: string): void {
   normalizeFootnotes(root);
+  localizeSelfFragments(root, baseUrl);
   absolutizeLinks(root, baseUrl);
 }

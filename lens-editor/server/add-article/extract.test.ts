@@ -378,7 +378,7 @@ ${"Compute governance steers AI development through hardware controls. ".repeat(
       { fetchText: async () => md },
     );
     expect(ex.body).toMatch(
-      /<iframe src="https:\/\/www\.youtube-nocookie\.com\/embed\/kK3NmQT241w"[^>]*><\/iframe>\n\n\*Video 1\.2:/,
+      /__lensvideo:https:\/\/www\.youtube-nocookie\.com\/embed\/kK3NmQT241w__\n\n\*Video 1\.2:/,
     );
   });
 
@@ -467,16 +467,15 @@ This point is ***very important*** to note.`;
     expect(ex.body).toContain("***very important***");
   });
 
-  it("preserves the YouTube iframe when falling back to HTML conversion", async () => {
+  it("preserves the YouTube embed marker when falling back to HTML conversion", async () => {
     const ex = await extractArticle(
       ATLAS(false),
       "https://ai-safety-atlas.com/chapters/v1/governance/compute-governance",
       offline, // .md fetch fails → HTML conversion path
     );
     expect(ex.body).toContain(
-      '<iframe src="https://www.youtube-nocookie.com/embed/kK3NmQT241w"',
+      "__lensvideo:https://www.youtube-nocookie.com/embed/kK3NmQT241w__",
     );
-    expect(ex.body).toContain("allowfullscreen");
     // Same Acknowledgements heading level as the .md-primary path (### , not ##).
     expect(ex.body).toContain("### Acknowledgements");
   });
@@ -519,7 +518,7 @@ This point is ***very important*** to note.`;
 });
 
 describe("extractArticle — video embeds (generic path)", () => {
-  it("keeps a YouTube iframe and drops a non-video iframe", async () => {
+  it("marks a YouTube embed for resolution and drops a non-video iframe", async () => {
     const html = `<!doctype html><html><head><title>Post</title></head><body><article>
       <h1>Post</h1>
       <p>${"Genuine article prose so the generic extractor keeps the content cleanly. ".repeat(25)}</p>
@@ -528,7 +527,8 @@ describe("extractArticle — video embeds (generic path)", () => {
       <p>${"More prose after the embedded talk to keep the body substantial. ".repeat(15)}</p>
     </article></body></html>`;
     const ex = await extractArticle(html, "https://example.com/post");
-    expect(ex.body).toContain('<iframe src="https://www.youtube.com/embed/abc123XYZ"');
+    expect(ex.body).toContain("__lensvideo:https://www.youtube.com/embed/abc123XYZ__");
+    expect(ex.body).not.toContain("<iframe");
     expect(ex.body).not.toContain("ads.example.net");
   });
 });
@@ -835,5 +835,17 @@ describe("extractArticle — fallback table conversion", () => {
     const ex = await extractArticle(html, "https://example.com/post");
     expect(ex.body).toContain("| A | B |");
     expect(ex.body).toContain("| 1 | 2 |");
+  });
+});
+
+describe("extractArticle — underline tags", () => {
+  it("unwraps <u> to plain text instead of leaking raw HTML", async () => {
+    const html = `<!doctype html><html><head><title>Underlines</title></head><body><article>
+      <p>Some prose with an <u>underlined phrase</u> in the middle. ${"Padding sentence for extractor confidence. ".repeat(20)}</p>
+    </article></body></html>`;
+    const ex = await extractArticle(html, "https://example.com/underline");
+    expect(ex.body).toContain("underlined phrase");
+    expect(ex.body).not.toContain("<u>");
+    expect(ex.body).not.toContain("</u>");
   });
 });

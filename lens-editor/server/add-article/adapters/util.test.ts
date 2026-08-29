@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isVideoEmbedUrl, videoEmbedIframe } from "./util";
+import { isVideoEmbedUrl, videoEmbedMarker } from "./util";
 
 describe("isVideoEmbedUrl — exact hostname allow-list", () => {
   it("accepts real YouTube / Vimeo embeds", () => {
@@ -36,18 +36,20 @@ describe("isVideoEmbedUrl — exact hostname allow-list", () => {
   });
 });
 
-describe("videoEmbedIframe", () => {
-  it("emits a normalized absolute-https iframe for a valid embed", () => {
-    const html = videoEmbedIframe("//www.youtube.com/embed/abc123");
-    expect(html).toContain('src="https://www.youtube.com/embed/abc123"');
-    expect(html).toContain("allowfullscreen");
+describe("videoEmbedMarker", () => {
+  it("emits a marker with the normalized absolute-https URL", () => {
+    expect(videoEmbedMarker("//www.youtube.com/embed/abc123")).toBe(
+      "__lensvideo:https://www.youtube.com/embed/abc123__",
+    );
   });
 
-  it("strips quotes / can't break out of the src attribute", () => {
-    // A would-be breakout src is normalized through URL(); the emitted href
-    // is %-encoded so no raw quote survives to break the attribute.
-    const html = videoEmbedIframe('https://www.youtube.com/embed/x"></iframe><script>1</script>');
-    expect(html).not.toContain('"></iframe><script>');
-    expect(html.match(/<iframe/g)?.length).toBe(1);
+  it("normalizes hostile srcs through URL() so no raw quotes survive", () => {
+    const marker = videoEmbedMarker('https://www.youtube.com/embed/x"><script>1</script>');
+    expect(marker).not.toContain('"');
+    expect(marker).toMatch(/^__lensvideo:https:\/\/www\.youtube\.com\/\S+__$/);
+  });
+
+  it("emits nothing for an unparseable src", () => {
+    expect(videoEmbedMarker("javascript:alert(1)")).toBe("");
   });
 });

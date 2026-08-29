@@ -14,6 +14,7 @@ import {
   reviewArticle,
 } from "../server/add-article/claude";
 import {
+  assertArticleValidationConfigured,
   validateArticleDraft,
   type ArticleValidationResult,
 } from "../server/add-article/platform-validation";
@@ -244,6 +245,7 @@ async function execute(): Promise<void> {
   const relayUrl = arg("--relay-url") ?? process.env.RELAY_URL;
   const relayToken = process.env.ARTICLE_REVIEW_RELAY_TOKEN ?? process.env.MCP_API_KEY;
   if (!relayUrl || !relayToken) throw new Error("execute requires Relay URL and token");
+  assertArticleValidationConfigured();
   const selectedReviewer = reviewerConfig();
   const run = await readReviewRun(runDir);
   const items = run.items.filter((item) =>

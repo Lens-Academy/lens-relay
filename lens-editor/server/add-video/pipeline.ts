@@ -50,7 +50,7 @@ export async function importVideo(
   payload: VideoPayload,
   createdAt: string,
   opts: VideoImportOptions = {},
-): Promise<void> {
+): Promise<{ mdPath: string }> {
   const { createLens = true, signal, onStage, onRelayUrl } = opts;
   const setStage = (stage: string) => {
     signal?.throwIfAborted();
@@ -277,6 +277,7 @@ export async function importVideo(
     // No catch: either the transcript was published (and must be left intact)
     // or no doc was ever written, in which case the old "processing failed"
     // placeholder would only be junk blocking a clean resubmit.
+    return { mdPath };
   } finally {
     // Clean up work directory
     await fs.rm(workDir, { recursive: true }).catch(() => {});

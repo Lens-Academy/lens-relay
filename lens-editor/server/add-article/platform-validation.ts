@@ -29,6 +29,17 @@ function isResult(value: unknown): value is ArticleValidationResult {
   );
 }
 
+/** Throw the same not-configured error as validateArticleDraft, but before any
+ * work is done — batch tools call this up front so a misconfigured environment
+ * fails one run, not every claimed item. */
+export function assertArticleValidationConfigured(): void {
+  if (!process.env.LENS_PLATFORM_URL || !process.env.ADHOC_VALIDATION_SECRET) {
+    throw new Error(
+      "Article validation is not configured (LENS_PLATFORM_URL and ADHOC_VALIDATION_SECRET are required)",
+    );
+  }
+}
+
 export async function validateArticleDraft(
   logicalPath: string,
   content: string,

@@ -68,7 +68,7 @@ describe("direct source review", () => {
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Use typed kebab-case footnote IDs: `[^cite-id]` for citations and `[^note-id]` for explanatory notes; rename every reference and definition together.",
     );
-    expect(buildVerifyPrompt("/tmp/review")).toContain("Never collapse a substantive section, an appendix, footnotes, or prose");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("Never hide a substantive section, an appendix, footnotes, or prose");
   });
 
   it("gives first-pass dual-candidate reviews only the constrained base selector", () => {
