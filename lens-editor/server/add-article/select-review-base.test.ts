@@ -1,11 +1,10 @@
-import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { promisify } from "node:util";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it } from "vitest";
 
-const execFileAsync = promisify(execFile);
 const temporaryPaths: string[] = [];
 const selector = path.resolve("server/add-article/select-review-base.mjs");
 
@@ -33,6 +32,21 @@ async function fixture(): Promise<{ workDir: string; env: NodeJS.ProcessEnv }> {
   };
 }
 
+async function connect(workDir: string, env: NodeJS.ProcessEnv) {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [selector],
+    cwd: workDir,
+    env: Object.fromEntries(
+      Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    ),
+    stderr: "pipe",
+  });
+  const client = new Client({ name: "article-review-selector-test", version: "1.0.0" });
+  await client.connect(transport);
+  return { client, transport };
+}
+
 describe("review base selector", () => {
   it.each(["rendered", "unrendered"] as const)(
     "copies the %s candidate byte-for-byte and records the choice",
@@ -41,7 +55,12 @@ describe("review base selector", () => {
       await expect(fs.stat(path.join(workDir, "validation.json"))).rejects.toThrow();
       await expect(fs.stat(path.join(workDir, "validation-rendered.json"))).rejects.toThrow();
       await expect(fs.stat(path.join(workDir, "validation-unrendered.json"))).rejects.toThrow();
-      await execFileAsync(process.execPath, [selector, base], { cwd: workDir, env });
+      const { client, transport } = await connect(workDir, env);
+      const tools = await client.listTools();
+      expect(tools.tools.map(({ name }) => name)).toEqual(["select_review_base"]);
+      const result = await client.callTool({ name: "select_review_base", arguments: { base } });
+      expect(result.isError).not.toBe(true);
+      await transport.close();
       expect(await fs.readFile(path.join(workDir, "article.md"), "utf-8"))
         .toBe(`${base} candidate\n`);
       expect(JSON.parse(await fs.readFile(path.join(workDir, ".base-selection.json"), "utf-8")))
@@ -57,10 +76,35 @@ describe("review base selector", () => {
 
   it("rejects invalid and repeated selections", async () => {
     const { workDir, env } = await fixture();
-    await expect(execFileAsync(process.execPath, [selector, "other"], { cwd: workDir }))
-      .rejects.toThrow();
-    await execFileAsync(process.execPath, [selector, "rendered"], { cwd: workDir, env });
-    await expect(execFileAsync(process.execPath, [selector, "unrendered"], { cwd: workDir, env }))
-      .rejects.toThrow(/already been selected/);
+    const { client, transport } = await connect(workDir, env);
+    const invalid = await client.callTool({
+      name: "select_review_base",
+      arguments: { base: "other" },
+    });
+    expect(invalid.isError).toBe(true);
+    const selected = await client.callTool({
+      name: "select_review_base",
+      arguments: { base: "rendered" },
+    });
+    expect(selected.isError).not.toBe(true);
+    const repeated = await client.callTool({
+      name: "select_review_base",
+      arguments: { base: "unrendered" },
+    });
+    expect(repeated.isError).toBe(true);
+    expect(JSON.stringify(repeated.content)).toContain("already been selected");
+    await transport.close();
+  });
+
+  it("does not accept paths, commands, or any other selector inputs", async () => {
+    const { workDir, env } = await fixture();
+    const { client, transport } = await connect(workDir, env);
+    const result = await client.callTool({
+      name: "select_review_base",
+      arguments: { base: "rendered", path: "/tmp/elsewhere", command: "touch escaped" },
+    });
+    expect(result.isError).toBe(true);
+    await expect(fs.stat(path.join(workDir, "article.md"))).rejects.toThrow();
+    await transport.close();
   });
 });

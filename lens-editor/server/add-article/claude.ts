@@ -69,6 +69,20 @@ function baseSelectorPath(): string {
   return path.resolve("server/add-article/select-review-base.mjs");
 }
 
+export const BASE_SELECTOR_TOOL = "mcp__article_review__select_review_base";
+
+export function baseSelectorMcpConfig(): string {
+  return JSON.stringify({
+    mcpServers: {
+      article_review: {
+        type: "stdio",
+        command: process.execPath,
+        args: [baseSelectorPath()],
+      },
+    },
+  });
+}
+
 export function buildVerifyPrompt(
   workDir: string,
   repairRound = 0,
@@ -83,9 +97,7 @@ You have access to an source-unrendered.html and the source-rendered.html varian
 Step:
 1) read the two markdown files to form a mental model of the article. Both Markdown files will likely contain mistakes. But across them, an image of the corrected Markdown file should form in your head.
 2) If needed, read 1 or both HTML files.
-3) Decide which markdown file is a better starting point to be edited into the final corrected markdown. And then create the article.md by running this command exactly once:
-node ${baseSelectorPath()} <version>
-with <version> = rendered or <version> = unrendered.
+3) Decide which markdown file is a better starting point to be edited into the final corrected markdown. Then call the select_review_base tool exactly once with base = rendered or base = unrendered. This creates article.md from that candidate.
 4) The new article.md is editable. You should now use the candidate markdown files and the source HTML files to edit this document until it is both complete and correctly formatted. Include only the article itself; remove reader comments, reactions, navigation, related content, widgets, and other page chrome. Together with the creation of article.md, you will gain access to the Lens Academy platforms's syntax validation of the two candidate markdown files. Note that this validator does not catch completeness issues—it just catches formatting. Extensive source-supported repairs are allowed and regularly needed.`
     : isRepairPass
       ? `You're continuing the review of an imported article, making edits until it matches the source and has the correct syntax to be loaded onto the Lens Academy learning platform.
@@ -127,6 +139,8 @@ You may edit body content and the source-derived frontmatter fields title, autho
 
 Remove Creative Commons and other licensing notices from imported articles.
 
+Do not create or run scripts. Make every content change directly in article.md with Edit.
+
 Apply presentation judgment to clearly terminal auxiliary material. Wrap terminal Acknowledgements, terminal References, and standalone previous/next-series navigation in an exact \`:::collapse\` / \`:::\` block. Never collapse a substantive section, an appendix, footnotes, or prose that follows the auxiliary material. Do not add a collapse when terminal status is ambiguous.
 
 An italic adapter-authored line containing \`Chapter files:\` is intentional source-access metadata. Never remove it, edit its labels or emphasis, or change either URL.
@@ -145,19 +159,17 @@ export function buildVerifyArgs(
   maxBudgetUsd = DEFAULT_REVIEW_BUDGET_USD,
   requiresBaseSelection = false,
 ): string[] {
-  const tools = requiresBaseSelection ? "Read,Edit,Bash" : "Read,Edit";
-  const allowedTools = requiresBaseSelection
-    ? `Read,Edit,Bash(node ${baseSelectorPath()} rendered),Bash(node ${baseSelectorPath()} unrendered)`
-    : tools;
-  return [
+  const tools = requiresBaseSelection ? `Read,Edit,${BASE_SELECTOR_TOOL}` : "Read,Edit";
+  const args = [
     "-p",
     buildVerifyPrompt(workDir, repairRound, requiresBaseSelection),
     "--allowedTools",
-    allowedTools,
+    tools,
     "--tools",
     tools,
     "--disallowedTools",
-    "Agent",
+    "Agent,Bash,Write",
+    "--restricted",
     "--permission-mode",
     "acceptEdits",
     "--max-budget-usd",
@@ -167,6 +179,14 @@ export function buildVerifyArgs(
     "--output-format",
     "json",
   ];
+  if (requiresBaseSelection) {
+    args.push(
+      "--mcp-config",
+      baseSelectorMcpConfig(),
+      "--strict-mcp-config",
+    );
+  }
+  return args;
 }
 
 export async function runArticleVerify(

@@ -42,6 +42,21 @@ describe("Codex article reviewer", () => {
     expect(buildCodexVerifyPrompt("/tmp/review")).not.toContain("Do not use the network");
   });
 
+  it("registers the same base-selection MCP tool for dual-candidate reviews", () => {
+    const args = buildCodexArgs(
+      "/tmp/review",
+      "/tmp/review/status",
+      "gpt-5.6-terra",
+      0,
+      true,
+    );
+    expect(args).toContainEqual(expect.stringContaining("mcp_servers.article_review.command="));
+    expect(args).toContainEqual(expect.stringMatching(
+      /mcp_servers\.article_review\.args=.*select-review-base\.mjs/,
+    ));
+    expect(args.at(-1)).toContain("call the select_review_base tool exactly once");
+  });
+
   it("accepts only exact terminal statuses", () => {
     expect(parseCodexReviewStatus("PASS\n")).toBe("PASS");
     expect(parseCodexReviewStatus("done\nREJECT: truncated source\n")).toBe("REJECT: truncated source");

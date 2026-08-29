@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  BASE_SELECTOR_TOOL,
+  baseSelectorMcpConfig,
   buildVerifyArgs,
   buildVerifyPrompt,
   parsePlainReviewStatus,
@@ -36,7 +38,8 @@ describe("direct source review", () => {
     const args = buildVerifyArgs("/tmp/review");
     expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Edit");
     expect(args[args.indexOf("--tools") + 1]).toBe("Read,Edit");
-    expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Agent");
+    expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Agent,Bash,Write");
+    expect(args).toContain("--restricted");
     expect(args).not.toContain("Write");
     expect(args).not.toContain("--max-turns");
     expect(buildVerifyPrompt("/tmp/review")).toContain("edit article.md in place");
@@ -56,6 +59,7 @@ describe("direct source review", () => {
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not copy obvious typos or grammatical errors from the source.");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not make whitespace-only edits");
     expect(buildVerifyPrompt("/tmp/review")).toContain("There is no edit-size limit");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("Do not create or run scripts");
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Include only the article itself; remove reader comments, reactions, navigation, related content, widgets, and other page chrome.",
     );
@@ -69,11 +73,14 @@ describe("direct source review", () => {
 
   it("gives first-pass dual-candidate reviews only the constrained base selector", () => {
     const args = buildVerifyArgs("/tmp/review", 0, "sonnet", 1.5, true);
-    expect(args[args.indexOf("--tools") + 1]).toBe("Read,Edit,Bash");
+    expect(args[args.indexOf("--tools") + 1]).toBe(`Read,Edit,${BASE_SELECTOR_TOOL}`);
     const allowedTools = args[args.indexOf("--allowedTools") + 1];
-    expect(allowedTools).toMatch(
-      /^Read,Edit,Bash\(node .*select-review-base\.mjs rendered\),Bash\(node .*select-review-base\.mjs unrendered\)$/,
-    );
+    expect(allowedTools).toBe(`Read,Edit,${BASE_SELECTOR_TOOL}`);
+    expect(allowedTools).not.toContain("Bash");
+    expect(args).toContain("--strict-mcp-config");
+    const config = JSON.parse(args[args.indexOf("--mcp-config") + 1]);
+    expect(config).toEqual(JSON.parse(baseSelectorMcpConfig()));
+    expect(config.mcpServers.article_review.args[0]).toMatch(/select-review-base\.mjs$/);
     const prompt = buildVerifyPrompt("/tmp/review", 0, true);
     expect(prompt).toContain("candidate-unrendered.md");
     expect(prompt).toContain("candidate-rendered.md");
@@ -84,6 +91,8 @@ describe("direct source review", () => {
     expect(prompt).toContain("validation-rendered.json");
     expect(prompt).toContain("validation-unrendered.json");
     expect(prompt).toContain("available only after selecting the base");
+    expect(prompt).toContain("call the select_review_base tool exactly once");
+    expect(prompt).not.toContain("node ");
     expect(prompt).not.toContain("Compare article.md directly against the source evidence");
     expect(prompt).not.toContain("Edit article.md in place to make source-faithful repairs");
   });

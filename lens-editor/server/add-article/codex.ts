@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildVerifyPrompt } from "./claude";
+import { baseSelectorMcpConfig, buildVerifyPrompt } from "./claude";
 
 export const DEFAULT_CODEX_REVIEW_MODEL = "gpt-5.6-terra";
 
@@ -29,7 +29,7 @@ export function buildCodexArgs(
   repairRound = 0,
   requiresBaseSelection = false,
 ): string[] {
-  return [
+  const args = [
     "exec",
     "--ephemeral",
     "--ignore-user-config",
@@ -45,8 +45,18 @@ export function buildCodexArgs(
     model,
     "--output-last-message",
     statusPath,
-    buildCodexVerifyPrompt(workDir, repairRound, requiresBaseSelection),
   ];
+  if (requiresBaseSelection) {
+    const selector = JSON.parse(baseSelectorMcpConfig()).mcpServers.article_review;
+    args.push(
+      "-c",
+      `mcp_servers.article_review.command=${JSON.stringify(selector.command)}`,
+      "-c",
+      `mcp_servers.article_review.args=${JSON.stringify(selector.args)}`,
+    );
+  }
+  args.push(buildCodexVerifyPrompt(workDir, repairRound, requiresBaseSelection));
+  return args;
 }
 
 export function parseCodexReviewStatus(output: string): "PASS" | `REJECT: ${string}` {
