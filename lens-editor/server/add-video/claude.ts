@@ -63,9 +63,9 @@ export async function spawnClaude(
   return new Promise((resolve, reject) => {
     const args = argsOverride ?? buildClaudeArgs(workDir);
     const env = { ...process.env, ...envOverride };
-    // The Claude CLI requires SHELL even when the container has a valid
-    // POSIX shell. Docker's non-interactive runtime does not set it.
-    if (process.platform !== 'win32' && !env.SHELL) env.SHELL = '/bin/sh';
+    // The Claude CLI requires a supported SHELL. Docker's non-interactive
+    // runtime does not set one, and Alpine's BusyBox shell is insufficient.
+    if (process.platform !== 'win32' && !env.SHELL) env.SHELL = '/bin/bash';
     const spawnClaudeProc = () =>
       spawn('claude', args, {
         cwd: workDir,
