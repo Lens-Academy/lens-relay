@@ -54,6 +54,7 @@ export async function spawnClaude(
   timeoutMs: number,
   argsOverride?: string[],
   signal?: AbortSignal,
+  envOverride?: NodeJS.ProcessEnv,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   await claudeSessionPool.acquire(undefined, signal);
   // Cancellation while queued is final: do not turn a newly available slot
@@ -65,6 +66,7 @@ export async function spawnClaude(
       spawn('claude', args, {
         cwd: workDir,
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: envOverride ? { ...process.env, ...envOverride } : process.env,
         // A Claude CLI turn may spawn helpers. Give it a process group so a
         // cancelled article job cannot leave descendants running.
         detached: process.platform !== 'win32',

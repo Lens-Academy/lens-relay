@@ -38,8 +38,8 @@ describe("Codex article reviewer", () => {
     expect(args).toContain("sandbox_workspace_write.network_access=false");
     expect(args[args.indexOf("--model") + 1]).toBe("gpt-5.6-terra");
     expect(args.at(-1)).toContain("review pass 2 of 3");
-    expect(buildCodexVerifyPrompt("/tmp/review")).toContain("read-only shell commands and apply_patch only");
-    expect(buildCodexVerifyPrompt("/tmp/review")).toContain("Do not use the network");
+    expect(buildCodexVerifyPrompt("/tmp/review")).toContain("edit article.md in place with apply_patch");
+    expect(buildCodexVerifyPrompt("/tmp/review")).not.toContain("Do not use the network");
   });
 
   it("accepts only exact terminal statuses", () => {

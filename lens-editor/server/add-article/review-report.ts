@@ -93,6 +93,7 @@ export interface ArticleReviewReporter {
     detail?: Record<string, unknown>;
   }): Promise<void>;
   validation(round: string, result: ArticleValidationResult, durationMs: number): Promise<void>;
+  baseSelection(base: "rendered" | "unrendered"): Promise<void>;
   llm(round: number, review: DirectArticleReview, validatorCodes: string[], before: ArticleMeta, after: ArticleMeta, beforeMarkdown: string, afterMarkdown: string, durationMs: number): Promise<void>;
   llmRejected(round: number, review: DirectArticleReview, validatorCodes: string[], before: ArticleMeta, durationMs: number): Promise<void>;
   llmFailure(round: number, error: unknown, durationMs: number, validatorCodes?: string[]): Promise<void>;
@@ -507,6 +508,14 @@ class Reporter implements ArticleReviewReporter {
     }
     this.report.original_document = descriptor;
     await this.append({ at: new Date().toISOString(), kind: "original-document", ...descriptor });
+  }
+
+  baseSelection(base: "rendered" | "unrendered"): Promise<void> {
+    return this.append({
+      at: new Date().toISOString(),
+      kind: "base-selection",
+      base,
+    });
   }
 
   async finalDocument(markdown: string): Promise<void> {

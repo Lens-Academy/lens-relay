@@ -6,15 +6,19 @@ import { buildVerifyPrompt } from "./claude";
 
 export const DEFAULT_CODEX_REVIEW_MODEL = "gpt-5.6-terra";
 
-export function buildCodexVerifyPrompt(workDir: string, repairRound = 0): string {
-  return buildVerifyPrompt(workDir, repairRound)
-    .replace(
-      "Do not use WebFetch, shell commands, or the network.",
-      "Do not use the network. Use shell commands only to read the supplied local files; never use them to modify files.",
+export function buildCodexVerifyPrompt(
+  workDir: string,
+  repairRound = 0,
+  requiresBaseSelection = false,
+): string {
+  return buildVerifyPrompt(workDir, repairRound, requiresBaseSelection)
+    .replaceAll(
+      "edit article.md in place",
+      "edit article.md in place with apply_patch",
     )
-    .replace(
-      "Use only Read and Edit. Do not create any file.",
-      "Use local read-only shell commands and apply_patch only. Do not create any file.",
+    .replaceAll(
+      "Edit article.md in place",
+      "Edit article.md in place with apply_patch",
     );
 }
 
@@ -23,6 +27,7 @@ export function buildCodexArgs(
   statusPath: string,
   model = DEFAULT_CODEX_REVIEW_MODEL,
   repairRound = 0,
+  requiresBaseSelection = false,
 ): string[] {
   return [
     "exec",
@@ -40,7 +45,7 @@ export function buildCodexArgs(
     model,
     "--output-last-message",
     statusPath,
-    buildCodexVerifyPrompt(workDir, repairRound),
+    buildCodexVerifyPrompt(workDir, repairRound, requiresBaseSelection),
   ];
 }
 
@@ -56,6 +61,7 @@ function spawnCodex(
   args: string[],
   timeoutMs: number,
   signal?: AbortSignal,
+  envOverride?: NodeJS.ProcessEnv,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
@@ -64,6 +70,7 @@ function spawnCodex(
       cwd: workDir,
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
+      env: envOverride ? { ...process.env, ...envOverride } : process.env,
     });
     let stdout = "";
     let stderr = "";
@@ -114,18 +121,28 @@ export async function runCodexArticleVerify(
   timeoutMs: number,
   model: string,
   signal?: AbortSignal,
+  requiresBaseSelection = false,
+  selectorEnv?: NodeJS.ProcessEnv,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-article-codex-"));
   const statusPath = path.join(workDir, ".review-status.txt");
   try {
-    await fs.copyFile(path.join(sourceWorkDir, "article.md"), path.join(workDir, "article.md"));
-    await fs.copyFile(path.join(sourceWorkDir, "validation.json"), path.join(workDir, "validation.json"));
+    if (requiresBaseSelection) {
+      await Promise.all([
+        fs.copyFile(path.join(sourceWorkDir, "candidate-rendered.md"), path.join(workDir, "candidate-rendered.md")),
+        fs.copyFile(path.join(sourceWorkDir, "candidate-unrendered.md"), path.join(workDir, "candidate-unrendered.md")),
+      ]);
+    } else {
+      await fs.copyFile(path.join(sourceWorkDir, "article.md"), path.join(workDir, "article.md"));
+      await fs.copyFile(path.join(sourceWorkDir, "validation.json"), path.join(workDir, "validation.json"));
+    }
     await fs.cp(path.join(sourceWorkDir, "evidence"), path.join(workDir, "evidence"), { recursive: true });
     const result = await spawnCodex(
       workDir,
-      buildCodexArgs(workDir, statusPath, model, repairRound),
+      buildCodexArgs(workDir, statusPath, model, repairRound, requiresBaseSelection),
       timeoutMs,
       signal,
+      selectorEnv,
     );
     if (result.stderr.includes("sandbox uses bubblewrap and needs access to create user namespaces")) {
       throw new Error(
@@ -136,6 +153,22 @@ export async function runCodexArticleVerify(
     const status = await fs.readFile(statusPath, "utf-8").catch(() => "");
     parseCodexReviewStatus(status);
     await fs.copyFile(path.join(workDir, "article.md"), path.join(sourceWorkDir, "article.md"));
+    if (requiresBaseSelection) {
+      const selection = await fs.readFile(path.join(workDir, ".base-selection.json")).catch(() => null);
+      if (selection) {
+        await fs.writeFile(path.join(sourceWorkDir, ".base-selection.json"), selection);
+      }
+      const validation = await fs.readFile(path.join(workDir, "validation.json")).catch(() => null);
+      if (validation) {
+        await fs.writeFile(path.join(sourceWorkDir, "validation.json"), validation);
+      }
+      for (const filename of ["validation-rendered.json", "validation-unrendered.json"]) {
+        const candidateValidation = await fs.readFile(path.join(workDir, filename)).catch(() => null);
+        if (candidateValidation) {
+          await fs.writeFile(path.join(sourceWorkDir, filename), candidateValidation);
+        }
+      }
+    }
     return { ...result, stdout: status };
   } finally {
     await fs.rm(workDir, { recursive: true, force: true });

@@ -95,10 +95,12 @@ describe("HTML source evidence retention", () => {
     expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith("https://example.org/final-article", undefined);
     expect(evidence.extraction.body).toContain("rendered source evidence");
     expect(evidence.extraction.body).not.toContain("unrendered shell");
+    expect(evidence.htmlCandidates?.rendered?.body).toContain("rendered source evidence");
+    expect(evidence.htmlCandidates?.unrendered?.body).toContain("unrendered shell");
     expect(evidence.manifest.fetched_url).toBe("https://example.org/final-article");
   });
 
-  it("fails closed when Jina cannot render otherwise extractable HTML", async () => {
+  it("falls back to the direct candidate when Jina cannot render", async () => {
     const rawHtml = `<html><head><title>Static Article</title></head><body><article>${"complete static article ".repeat(200)}</article></body></html>`;
     mocks.fetchRawBytes.mockResolvedValue({
       bytes: new TextEncoder().encode(rawHtml).buffer,
@@ -107,9 +109,10 @@ describe("HTML source evidence retention", () => {
     });
     mocks.fetchRenderedHtml.mockRejectedValue(new Error("render unavailable"));
 
-    await expect(buildSourceEvidence("https://example.org/article")).rejects.toThrow(
-      "Could not render article",
-    );
+    const evidence = await buildSourceEvidence("https://example.org/article");
+    expect(evidence.extraction.body).toContain("complete static article");
+    expect(evidence.htmlCandidates?.rendered).toBeUndefined();
+    expect(evidence.htmlCandidates?.unrendered?.body).toContain("complete static article");
   });
 
   it("preserves cancellation while waiting for Jina", async () => {
@@ -145,7 +148,7 @@ describe("HTML source evidence retention", () => {
     expect(evidence.extraction.body).toContain("rendered paper body");
   });
 
-  it("writes exact unrendered evidence and line-bounded rendered review HTML", async () => {
+  it("writes lossless line-bounded unrendered and rendered review HTML", async () => {
     const rawHtml = `<html><body><article>unrendered source</article></body></html>`;
     const renderedHtml = `<html><body><article><a href="https://example.org/reference">reference</a>${"rendered source evidence ".repeat(2_000)}</article></body></html>`;
     const formatted = formatHtmlForReview(renderedHtml);
@@ -178,7 +181,9 @@ describe("HTML source evidence retention", () => {
       renderedHtml,
     });
 
-    expect(await fs.readFile(path.join(workDir, "evidence/source-unrendered.html"), "utf8")).toBe(rawHtml);
+    const unrenderedReviewHtml = await fs.readFile(path.join(workDir, "evidence/source-unrendered.html"), "utf8");
+    expect(Math.max(...unrenderedReviewHtml.split("\n").map((line) => line.length))).toBeLessThanOrEqual(8_000);
+    expect(unrenderedReviewHtml.replace(/\n/g, "")).toBe(rawHtml);
     const reviewHtml = await fs.readFile(path.join(workDir, "evidence/source-rendered.html"), "utf8");
     expect(Math.max(...reviewHtml.split("\n").map((line) => line.length))).toBeLessThanOrEqual(8_000);
     expect(reviewHtml.replace(/\n/g, "")).toBe(renderedHtml);

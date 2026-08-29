@@ -32,34 +32,60 @@ Original body text.
 `;
 
 describe("direct source review", () => {
-  it("exposes only local Read/Edit tools and prohibits delegation", () => {
+  it("enforces local Read/Edit tools without repeating capability restrictions in the prompt", () => {
     const args = buildVerifyArgs("/tmp/review");
     expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Edit");
     expect(args[args.indexOf("--tools") + 1]).toBe("Read,Edit");
     expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Agent");
     expect(args).not.toContain("Write");
     expect(args).not.toContain("--max-turns");
-    expect(buildVerifyPrompt("/tmp/review")).toContain("edit this file directly");
-    expect(buildVerifyPrompt("/tmp/review")).toContain("Do not create any file");
-    expect(buildVerifyPrompt("/tmp/review")).toContain("Do not spawn sub-agents");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("edit article.md in place");
+    expect(buildVerifyPrompt("/tmp/review")).not.toContain("Do not spawn sub-agents");
+    expect(buildVerifyPrompt("/tmp/review")).not.toContain("Do not use WebFetch");
     expect(buildVerifyPrompt("/tmp/review")).toContain("evidence/source-rendered.html");
     expect(buildVerifyPrompt("/tmp/review")).toContain("evidence/source-unrendered.html");
     expect(buildVerifyPrompt("/tmp/review")).not.toContain("source.txt");
-    expect(buildVerifyPrompt("/tmp/review")).toContain("Inspect source-rendered.html for every HTML review");
     expect(buildVerifyPrompt("/tmp/review")).toContain("HTML-escaped article content inside JSON-LD or hydration scripts");
     expect(buildVerifyPrompt("/tmp/review", 2)).toContain("review pass 3 of 3");
+    expect(buildVerifyPrompt("/tmp/review", 2)).toContain("base has already been chosen");
+    expect(buildVerifyPrompt("/tmp/review", 2)).toContain("current article's remaining syntax problems");
+    expect(buildVerifyPrompt("/tmp/review", 2)).toContain("their initial syntax findings, revealed after base selection");
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Remove Creative Commons and other licensing notices from imported articles.",
     );
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not copy obvious typos or grammatical errors from the source.");
     expect(buildVerifyPrompt("/tmp/review")).toContain("Do not make whitespace-only edits");
     expect(buildVerifyPrompt("/tmp/review")).toContain("There is no edit-size limit");
-    expect(buildVerifyPrompt("/tmp/review")).toContain("delete all imported comments");
+    expect(buildVerifyPrompt("/tmp/review")).toContain(
+      "Include only the article itself; remove reader comments, reactions, navigation, related content, widgets, and other page chrome.",
+    );
     expect(buildVerifyPrompt("/tmp/review")).toContain("Large or extensive repairs are never a reason to reject");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("article boundaries cannot be reasonably determined");
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Use typed kebab-case footnote IDs: `[^cite-id]` for citations and `[^note-id]` for explanatory notes; rename every reference and definition together.",
     );
     expect(buildVerifyPrompt("/tmp/review")).toContain("Never collapse a substantive section, an appendix, footnotes, or prose");
+  });
+
+  it("gives first-pass dual-candidate reviews only the constrained base selector", () => {
+    const args = buildVerifyArgs("/tmp/review", 0, "sonnet", 1.5, true);
+    expect(args[args.indexOf("--tools") + 1]).toBe("Read,Edit,Bash");
+    const allowedTools = args[args.indexOf("--allowedTools") + 1];
+    expect(allowedTools).toMatch(
+      /^Read,Edit,Bash\(node .*select-review-base\.mjs rendered\),Bash\(node .*select-review-base\.mjs unrendered\)$/,
+    );
+    const prompt = buildVerifyPrompt("/tmp/review", 0, true);
+    expect(prompt).toContain("candidate-unrendered.md");
+    expect(prompt).toContain("candidate-rendered.md");
+    expect(prompt).toContain("Both Markdown files will likely contain mistakes");
+    expect(prompt).toContain("an image of the corrected Markdown file should form in your head");
+    expect(prompt).toContain("allowed and regularly needed");
+    expect(prompt).toContain("validator does not catch completeness issues");
+    expect(prompt).toContain("validation-rendered.json");
+    expect(prompt).toContain("validation-unrendered.json");
+    expect(prompt).toContain("available only after selecting the base");
+    expect(prompt).not.toContain("Compare article.md directly against the source evidence");
+    expect(prompt).not.toContain("Edit article.md in place to make source-faithful repairs");
   });
 
   it("allows the retro CLI to override Claude's production-default budget", () => {

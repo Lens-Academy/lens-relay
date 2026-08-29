@@ -25,6 +25,10 @@ export interface SourceEvidenceManifest {
 
 export interface SourceEvidence {
   extraction: ExtractResult;
+  htmlCandidates?: {
+    rendered?: ExtractResult;
+    unrendered?: ExtractResult;
+  };
   manifest: SourceEvidenceManifest;
   rawHtml?: string;
   renderedHtml?: string;
@@ -58,6 +62,8 @@ export async function buildSourceEvidence(
 ): Promise<SourceEvidence> {
   let extraction: ExtractResult | null = null;
   let rawError: unknown;
+  let unrenderedError: unknown;
+  let renderedError: unknown;
   let rawHtml: string | undefined;
   let renderedHtml: string | undefined;
   let nativeMarkdown: string | undefined;
@@ -99,25 +105,45 @@ export async function buildSourceEvidence(
     if (signal?.aborted) throw error;
   }
 
-  // Every HTML import uses one consistent, post-JavaScript extraction input.
-  // The direct response is retained only as unrendered evidence; it never wins
-  // extraction merely because a JS shell or block page happens to be long.
+  const htmlCandidates: NonNullable<SourceEvidence["htmlCandidates"]> = {};
+
+  // Preserve both interpretations. The reviewer chooses the editing base after
+  // seeing both Markdown candidates; neither fetch path is globally superior.
   if (mediaType !== "pdf") {
+    if (rawHtml !== undefined) {
+      try {
+        htmlCandidates.unrendered = await extractArticle(rawHtml, fetchedUrl, {
+          sourceUrl,
+          fetchText: fetchAuxiliaryText,
+        });
+      } catch (error) {
+        unrenderedError = error;
+        if (signal?.aborted) throw error;
+      }
+    }
     try {
       renderedHtml = await fetchRenderedHtml(rawHtml !== undefined ? fetchedUrl : sourceUrl, signal);
-      extraction = await extractArticle(renderedHtml, fetchedUrl, {
+      htmlCandidates.rendered = await extractArticle(renderedHtml, fetchedUrl, {
         sourceUrl,
         fetchText: fetchAuxiliaryText,
       });
     } catch (error) {
+      renderedError = error;
       if (signal?.aborted) throw error;
-      throw new Error(`Could not render article (direct: ${rawError ?? "ok"}; Jina: ${error})`);
+    }
+    extraction = htmlCandidates.rendered ?? htmlCandidates.unrendered ?? null;
+    if (!extraction) {
+      throw new Error(
+        `Could not extract article (direct fetch: ${rawError ?? "ok"}; ` +
+        `direct extraction: ${unrenderedError ?? "unavailable"}; Jina: ${renderedError ?? "unavailable"})`,
+      );
     }
   }
   if (!extraction) throw rawError instanceof Error ? rawError : new Error("Extraction failed");
 
   return {
     extraction,
+    htmlCandidates: mediaType === "html" ? htmlCandidates : undefined,
     rawHtml,
     renderedHtml,
     nativeMarkdown,
@@ -140,9 +166,11 @@ export async function writeSourceEvidence(workDir: string, evidence: SourceEvide
   await fs.mkdir(dir, { recursive: true });
   await Promise.all([
     fs.writeFile(path.join(dir, "manifest.json"), JSON.stringify(evidence.manifest, null, 2)),
-    evidence.rawHtml ? fs.writeFile(path.join(dir, "source-unrendered.html"), evidence.rawHtml) : Promise.resolve(),
+    evidence.rawHtml ? fs.writeFile(path.join(dir, "source-unrendered.html"), formatHtmlForReview(evidence.rawHtml)) : Promise.resolve(),
     evidence.renderedHtml ? fs.writeFile(path.join(dir, "source-rendered.html"), formatHtmlForReview(evidence.renderedHtml)) : Promise.resolve(),
     evidence.nativeMarkdown ? fs.writeFile(path.join(dir, "source-native.md"), evidence.nativeMarkdown) : Promise.resolve(),
     evidence.pdf ? fs.writeFile(path.join(dir, "source.pdf"), evidence.pdf) : Promise.resolve(),
   ]);
+  const evidenceFiles = await fs.readdir(dir);
+  await Promise.all(evidenceFiles.map((file) => fs.chmod(path.join(dir, file), 0o400)));
 }

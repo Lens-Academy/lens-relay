@@ -244,4 +244,67 @@ This might be useful.
     expect(reviewMocks.reviewArticle.mock.invocationCallOrder[0])
       .toBeLessThan(relayMocks.createRelayDoc.mock.invocationCallOrder[0]);
   });
+
+  it("lets the first review select the unrendered candidate as the written base", async () => {
+    relayMocks.checkRelayArticleUrls.mockResolvedValue({ found: {}, stubs: {} });
+    relayMocks.checkRelayDocsExist.mockResolvedValue({});
+    relayMocks.createRelayDoc.mockResolvedValue(undefined);
+    const meta = {
+      title: "Dual source article",
+      author: ["A. Writer"],
+      source_url: "https://example.com/dual",
+      published: "2026-01-02",
+      description: "Description.",
+    };
+    const extraction = (body: string) => ({
+      meta,
+      body,
+      siteName: "Example",
+      linkedOut: false,
+      assessment: { flags: [] },
+      via: "readability",
+      images: [],
+    });
+    const rendered = extraction("Rendered candidate body. ".repeat(20));
+    const unrendered = extraction("Unrendered candidate body. ".repeat(20));
+    reviewMocks.buildSourceEvidence.mockResolvedValue({
+      extraction: rendered,
+      htmlCandidates: { rendered, unrendered },
+      manifest: {
+        fetched_at: "2026-08-29T00:00:00.000Z",
+        source_kind: "live",
+        media_type: "html",
+        fetched_url: "https://example.com/dual",
+      },
+    });
+    const valid = { valid: true, issues: [], truncated: false, counts: { errors: 0, warnings: 0 } };
+    reviewMocks.validateArticleDraft.mockResolvedValue(valid);
+    reviewMocks.reviewArticle.mockImplementation(async (...args) => {
+      const candidates = args[7];
+      expect(candidates.rendered).toContain("Rendered candidate body.");
+      expect(candidates.unrendered).toContain("Unrendered candidate body.");
+      return {
+        review: { decision: "pass", reason: "" },
+        markdown: candidates.unrendered,
+        originalMarkdown: candidates.unrendered,
+        selectedBase: "unrendered",
+        meta,
+      };
+    });
+
+    const now = new Date().toISOString();
+    await processArticle({
+      id: "dual-candidate",
+      url: "https://example.com/dual",
+      status: "processing",
+      importMode: "article",
+      created_at: now,
+      updated_at: now,
+    });
+
+    expect(reviewMocks.reviewArticle).toHaveBeenCalledOnce();
+    const written = relayMocks.createRelayDoc.mock.calls[0][1];
+    expect(written).toContain("Unrendered candidate body.");
+    expect(written).not.toContain("Rendered candidate body.");
+  });
 });

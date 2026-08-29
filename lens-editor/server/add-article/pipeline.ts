@@ -11,10 +11,15 @@ import {
   REVIEW_MODEL,
   REVIEW_VERSION,
   reviewArticle,
+  type ArticleReviewBase,
+  type ArticleReviewCandidates,
   type ReviewOutcome,
 } from "./claude";
 import { buildSourceEvidence, writeSourceEvidence } from "./source-evidence";
-import { normalizeArticleBody } from "./normalize-article";
+import {
+  normalizeArticleBody,
+  type NormalizationChange,
+} from "./normalize-article";
 import { assertArticleValid, validateArticleDraft } from "./platform-validation";
 import {
   createMemoryArticleReviewReporter,
@@ -207,6 +212,23 @@ function occurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
 }
 
+async function reportNormalizationChanges(
+  reporter: ArticleReviewReporter,
+  changes: NormalizationChange[],
+): Promise<void> {
+  if (!changes.length) return;
+  console.log(`[add-article] Applied normalizations: ${JSON.stringify(changes)}`);
+  for (const change of changes) {
+    await reporter.programmatic({
+      code: change.code,
+      count: change.count,
+      before: change.samples[0]?.before,
+      after: change.samples[0]?.after,
+      detail: { samples: change.samples },
+    });
+  }
+}
+
 /**
  * Readable publisher from a URL host, e.g. "https://bluedot.org/x" → "Bluedot".
  * Uses the registrable label (the part before the public suffix) rather than the
@@ -322,7 +344,19 @@ export async function processArticle(
   const workDir = path.join(WORK_BASE, job.id);
   const evidence = await buildSourceEvidence(job.url, signal);
   await writeSourceEvidence(workDir, evidence);
-  const ex = evidence.extraction;
+  const availableExtractions = evidence.htmlCandidates
+    ? Object.values(evidence.htmlCandidates).filter((candidate): candidate is typeof evidence.extraction => !!candidate)
+    : [evidence.extraction];
+  let ex = evidence.extraction;
+  if (!ex.meta.title) {
+    const titledCandidate = availableExtractions.find((candidate) => !!candidate.meta.title);
+    if (titledCandidate) {
+      // Keep the preferred extraction's body as its own candidate. Metadata
+      // may be completed from the companion extraction without silently
+      // relabelling that companion body as the rendered candidate.
+      ex = { ...ex, meta: { ...ex.meta, title: titledCandidate.meta.title } };
+    }
+  }
   await reporter.extraction({
     via: ex.via,
     linked_out: ex.linkedOut,
@@ -337,19 +371,19 @@ export async function processArticle(
   if (!ex.meta.title) {
     throw new Error("Could not determine article title from page");
   }
-  if (!isStubOnly && ex.linkedOut) {
+  if (!isStubOnly && availableExtractions.every((candidate) => candidate.linkedOut)) {
     throw new Error(
       "This post is a link-out announcement (the article lives in an external Google Doc/arXiv/PDF). Import the linked source directly instead.",
     );
   }
-  if (!isStubOnly && ex.body.length < MIN_ARTICLE_CHARS) {
+  if (!isStubOnly && Math.max(...availableExtractions.map((candidate) => candidate.body.length)) < MIN_ARTICLE_CHARS) {
     throw new Error(
       `Extracted article suspiciously short (${ex.body.length} chars) — aborting`,
     );
   }
   let meta = ensureRequiredMeta(ex.meta, ex.siteName, createdDate);
   let body = ex.body;
-  const requiredBodyPrefix = ex.requiredBodyPrefixMarkdown;
+  let requiredBodyPrefix = ex.requiredBodyPrefixMarkdown;
   job.title = meta.title;
 
   // 4. Duplicate detection by SOURCE URL. The real duplicate signal is the
@@ -457,18 +491,10 @@ export async function processArticle(
     const normalized = normalizeArticleBody(body, meta.source_url || job.url);
     body = normalized.body;
     assertRequiredBodyPrefix(body, requiredBodyPrefix);
-    if (normalized.changes.length) {
-      console.log(`[add-article] Applied normalizations: ${JSON.stringify(normalized.changes)}`);
-      for (const change of normalized.changes) {
-        await reporter.programmatic({
-          code: change.code,
-          count: change.count,
-          before: change.samples[0]?.before,
-          after: change.samples[0]?.after,
-          detail: { samples: change.samples },
-        });
-      }
-    }
+    const hasDualCandidates = !!(
+      evidence.htmlCandidates?.rendered && evidence.htmlCandidates.unrendered
+    );
+    if (!hasDualCandidates) await reportNormalizationChanges(reporter, normalized.changes);
 
     await setStage("validating-draft");
     let draft = generateArticleMarkdown(meta, body, createdDate);
@@ -478,27 +504,131 @@ export async function processArticle(
       draft,
       { signal },
     );
-    await reporter.validation("initial", validation, Date.now() - validationStarted);
-    await reporter.originalDocument(draft);
+    let initialValidationDuration = Date.now() - validationStarted;
+    let reviewCandidates: ArticleReviewCandidates | undefined;
+    let candidateValidations: Record<ArticleReviewBase, typeof validation> | undefined;
+    let candidateValidationDurations: Record<ArticleReviewBase, number> | undefined;
+    let candidateNormalizationChanges: Record<ArticleReviewBase, NormalizationChange[]> | undefined;
+    let candidateMeta: Record<ArticleReviewBase, ArticleMeta> | undefined;
+    let candidateRequiredPrefix: Record<ArticleReviewBase, string | undefined> | undefined;
+
+    const renderedExtraction = evidence.htmlCandidates?.rendered;
+    const unrenderedExtraction = evidence.htmlCandidates?.unrendered;
+    if (renderedExtraction && unrenderedExtraction) {
+      const unrenderedMeta = ensureRequiredMeta(
+        unrenderedExtraction.meta,
+        unrenderedExtraction.siteName,
+        createdDate,
+      );
+      let unrenderedBody = unrenderedExtraction.body;
+      const unrenderedFilenameBase = generateArticleFilenameBase(
+        unrenderedMeta.author,
+        unrenderedMeta.title,
+      ) || filenameBase;
+      if (unrenderedExtraction.via === "arxiv") {
+        unrenderedBody = await hostRemoteImages(unrenderedBody, unrenderedFilenameBase, {
+          hostPattern: ARXIV_IMAGE_HOSTS,
+          fetchImage: async (url) => {
+            const response = await fetchRawBytes(url, signal);
+            return { bytes: response.bytes, contentType: response.contentType };
+          },
+          upload: (attachmentPath, data, mime) =>
+            createRelayAttachment(topFolder, attachmentPath, data, mime, signal),
+        });
+      }
+      const unrenderedNormalized = normalizeArticleBody(
+        unrenderedBody,
+        unrenderedMeta.source_url || job.url,
+      );
+      unrenderedBody = unrenderedNormalized.body;
+      assertRequiredBodyPrefix(unrenderedBody, unrenderedExtraction.requiredBodyPrefixMarkdown);
+      const unrenderedDraft = generateArticleMarkdown(unrenderedMeta, unrenderedBody, createdDate);
+      const unrenderedValidationStarted = Date.now();
+      const unrenderedValidation = await validateArticleDraft(
+        `articles/${unrenderedFilenameBase}.md`,
+        unrenderedDraft,
+        { signal },
+      );
+      const unrenderedValidationDuration = Date.now() - unrenderedValidationStarted;
+
+      reviewCandidates = {
+        rendered: draft,
+        unrendered: unrenderedDraft,
+        validation: {
+          rendered: validation.issues,
+          unrendered: unrenderedValidation.issues,
+        },
+      };
+      candidateValidations = { rendered: validation, unrendered: unrenderedValidation };
+      candidateValidationDurations = {
+        rendered: initialValidationDuration,
+        unrendered: unrenderedValidationDuration,
+      };
+      candidateNormalizationChanges = {
+        rendered: normalized.changes,
+        unrendered: unrenderedNormalized.changes,
+      };
+      candidateMeta = { rendered: meta, unrendered: unrenderedMeta };
+      candidateRequiredPrefix = {
+        rendered: renderedExtraction.requiredBodyPrefixMarkdown,
+        unrendered: unrenderedExtraction.requiredBodyPrefixMarkdown,
+      };
+    } else {
+      await reporter.validation("initial", validation, initialValidationDuration);
+      await reporter.originalDocument(draft);
+    }
 
     await setStage("source-review");
     let reviewStarted = Date.now();
-    const metaBeforeReview = meta;
+    let metaBeforeReview = meta;
     let outcome: ReviewOutcome;
     try {
-      outcome = await reviewArticle(workDir, draft, meta, validation.issues, 0, signal);
+      outcome = await reviewArticle(
+        workDir,
+        draft,
+        meta,
+        validation.issues,
+        0,
+        signal,
+        undefined,
+        reviewCandidates,
+      );
+      if (
+        outcome.selectedBase &&
+        candidateValidations &&
+        candidateValidationDurations &&
+        candidateNormalizationChanges &&
+        candidateMeta &&
+        candidateRequiredPrefix
+      ) {
+        validation = candidateValidations[outcome.selectedBase];
+        initialValidationDuration = candidateValidationDurations[outcome.selectedBase];
+        metaBeforeReview = candidateMeta[outcome.selectedBase];
+        requiredBodyPrefix = candidateRequiredPrefix[outcome.selectedBase];
+        await reportNormalizationChanges(
+          reporter,
+          candidateNormalizationChanges[outcome.selectedBase],
+        );
+        await reporter.baseSelection(outcome.selectedBase);
+        await reporter.validation("initial", validation, initialValidationDuration);
+        await reporter.originalDocument(outcome.originalMarkdown);
+      }
       await reporter.llm(
         0,
         outcome.review,
         validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
         metaBeforeReview,
         outcome.meta,
-        draft,
+        outcome.originalMarkdown,
         outcome.markdown,
         Date.now() - reviewStarted,
       );
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (reviewCandidates) {
+        await reporter.validation("initial", validation, initialValidationDuration);
+        await reporter.originalDocument(draft);
+      }
       if (error instanceof ArticleReviewRejectedError) {
         await reporter.llmRejected(
           0,
