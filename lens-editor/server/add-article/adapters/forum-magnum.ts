@@ -36,6 +36,41 @@ export function greaterWrongMirrorUrl(url: string): string {
   return "";
 }
 
+/**
+ * Rewrite mirror-host links in a GreaterWrong body to their canonical hosts,
+ * so a mirror-fetched article cites lesswrong.com / forum.effectivealtruism.org
+ * in its BODY as well as its source_url. Paths are identical on both sides.
+ * Also converts GreaterWrong's `#comment-<id>` permalink fragments to the
+ * ForumMagnum `?commentId=<id>` form, which the canonical sites resolve.
+ * `arbital.greaterwrong.com` is left alone — it is the readable mirror of a
+ * defunct site, so it IS the best available destination.
+ */
+export function canonicalizeMirrorLinks(root: Element, baseUrl: string): void {
+  root.querySelectorAll("a[href]").forEach((a) => {
+    const href = a.getAttribute("href") || "";
+    if (!href || href.startsWith("#")) return; // in-page anchors stay
+    let u: URL;
+    try {
+      u = new URL(href, baseUrl);
+    } catch {
+      return;
+    }
+    if (u.protocol !== "https:" && u.protocol !== "http:") return;
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+    // Relative hrefs resolve against the mirror base and are caught here too;
+    // links that resolve to any non-mirror host are left untouched.
+    if (host === "greaterwrong.com") u.hostname = "www.lesswrong.com";
+    else if (host === "ea.greaterwrong.com") u.hostname = "forum.effectivealtruism.org";
+    else return; // arbital.greaterwrong.com, unknown subdomains, non-mirror hosts
+    const comment = u.hash.match(/^#comment-([\w-]+)$/);
+    if (comment) {
+      u.hash = "";
+      u.searchParams.set("commentId", comment[1]);
+    }
+    a.setAttribute("href", u.href);
+  });
+}
+
 /** GreaterWrong branch: mirror pages are server-rendered with their own DOM. */
 function extractGreaterWrong(
   doc: Document,
@@ -43,6 +78,7 @@ function extractGreaterWrong(
 ): AdapterExtract | null {
   const bodyEl = doc.querySelector(".body-text.post-body");
   if (!bodyEl || !bodyEl.innerHTML.trim()) return null;
+  canonicalizeMirrorLinks(bodyEl, ctx.url);
 
   const title = stripSiteSuffix(
     doc.querySelector("h1.post-title")?.textContent ||

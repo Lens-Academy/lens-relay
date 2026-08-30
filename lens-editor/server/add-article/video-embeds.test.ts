@@ -157,3 +157,58 @@ describe("resolveVideoEmbeds", () => {
     for (const body of result.bodies) expect(body).not.toContain("__lensvideo:");
   });
 });
+
+describe("resolveVideoEmbeds — inline/footnote contexts", () => {
+  it("degrades a marker inside a footnote definition to a plain link, without importing", async () => {
+    const result = await resolveVideoEmbeds(
+      [
+        [
+          "Prose[^note-3].",
+          "",
+          "[^note-3]: See the classic intro.",
+          "",
+          "    __lensvideo:https://youtu.be/JJSxe7ytfgY?t=4100__",
+          "[^note-4]: Another note.",
+        ].join("\n"),
+      ],
+      OPTS,
+    );
+    expect(result.bodies[0]).toContain("    <https://www.youtube.com/watch?v=JJSxe7ytfgY&t=4100>");
+    expect(result.bodies[0]).not.toContain("::video");
+    expect(result.resolutions[0]).toMatchObject({ outcome: "inline-link" });
+    expect(mockImport).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the directive for a top-level occurrence while linking an indented one", async () => {
+    mockFetch.mockResolvedValue({ video_id: "abc123XYZ_1" } as never);
+    mockImport.mockResolvedValue({ mdPath: "Lens Edu/video_transcripts/v.md" });
+    const result = await resolveVideoEmbeds(
+      [
+        [
+          "__lensvideo:https://www.youtube.com/watch?v=abc123XYZ_1__",
+          "",
+          "[^note-1]: Cited again here.",
+          "",
+          "    __lensvideo:https://www.youtube.com/watch?v=abc123XYZ_1__",
+        ].join("\n"),
+      ],
+      OPTS,
+    );
+    const lines = result.bodies[0].split("\n");
+    expect(lines[0]).toBe("::video[[../video_transcripts/v]]");
+    expect(lines[4]).toBe("    <https://www.youtube.com/watch?v=abc123XYZ_1>");
+    expect(mockImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("degrades a mid-line marker to a plain link", async () => {
+    const result = await resolveVideoEmbeds(
+      ["Watch __lensvideo:https://www.youtube.com/watch?v=abc123XYZ_1__ inline."],
+      OPTS,
+    );
+    expect(result.bodies[0]).toBe(
+      "Watch <https://www.youtube.com/watch?v=abc123XYZ_1> inline.",
+    );
+    expect(mockImport).not.toHaveBeenCalled();
+  });
+});

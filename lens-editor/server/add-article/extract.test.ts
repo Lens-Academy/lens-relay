@@ -849,3 +849,45 @@ describe("extractArticle — underline tags", () => {
     expect(ex.body).not.toContain("</u>");
   });
 });
+
+describe("extractArticle — GreaterWrong mirror body-link canonicalization", () => {
+  const GW_URL =
+    "https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story";
+  const GW_LINKS_SHELL = `
+<!doctype html><html><head><title>Post</title></head><body><main>
+  <h1 class="post-title">Post</h1>
+  <div class="post-meta top-post-meta">
+    <a class="author" href="/users/x">x</a>
+    <span class="date" data-js-date=1617826352000>7 Apr 2021 20:12 UTC</span>
+  </div>
+  <div class="body-text post-body">
+    <p>${"Mirrored prose to satisfy the length gates of the extractor here. ".repeat(20)}</p>
+    <p>A <a href="/posts/abc123def45/some-other-post">relative mirror link</a>,
+    an <a href="https://www.greaterwrong.com/posts/xyz987aaa11/third-post">absolute mirror link</a>,
+    an <a href="https://ea.greaterwrong.com/posts/eafp0stid99/ea-post">EA mirror link</a>,
+    a <a href="https://www.greaterwrong.com/posts/abc123def45/some-other-post#comment-CmtId123">comment permalink</a>,
+    an <a href="https://arbital.greaterwrong.com/p/consequentialist">arbital mirror link</a>,
+    and an <a href="https://example.org/elsewhere">external link</a>.</p>
+  </div>
+</main></body></html>`;
+
+  it("rewrites mirror links to canonical hosts, keeps arbital and external links", async () => {
+    const ex = await extractArticle(GW_LINKS_SHELL, GW_URL);
+    expect(ex.via).toBe("forum-adapter");
+    expect(ex.body).toContain("https://www.lesswrong.com/posts/abc123def45/some-other-post");
+    expect(ex.body).toContain("https://www.lesswrong.com/posts/xyz987aaa11/third-post");
+    expect(ex.body).toContain("https://forum.effectivealtruism.org/posts/eafp0stid99/ea-post");
+    expect(ex.body).toContain("https://arbital.greaterwrong.com/p/consequentialist");
+    expect(ex.body).toContain("https://example.org/elsewhere");
+    expect(ex.body).not.toContain("www.greaterwrong.com");
+    expect(ex.body).not.toContain("ea.greaterwrong.com");
+  });
+
+  it("converts #comment-<id> permalinks to the canonical ?commentId= form", async () => {
+    const ex = await extractArticle(GW_LINKS_SHELL, GW_URL);
+    expect(ex.body).toContain(
+      "https://www.lesswrong.com/posts/abc123def45/some-other-post?commentId=CmtId123",
+    );
+    expect(ex.body).not.toContain("#comment-CmtId123");
+  });
+});

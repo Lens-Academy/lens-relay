@@ -31,7 +31,7 @@ export const VIDEO_MARKER_RE = /__lensvideo:(\S+)__(?!\S)/g;
 
 export interface VideoEmbedResolution {
   url: string;
-  outcome: "linked-existing" | "imported" | "external-link" | "import-failed";
+  outcome: "linked-existing" | "imported" | "external-link" | "inline-link" | "import-failed";
   /** Full relay transcript path (e.g. "Lens Edu/video_transcripts/x.md") for
    *  linked-existing/imported outcomes. */
   transcriptPath?: string;
@@ -47,10 +47,22 @@ export function transcriptWikilinkTarget(transcriptPath: string): string {
     .replace(/\.md$/, "");
 }
 
-/** Prefer the canonical watch URL over an embed/player URL for plain links. */
+/** Prefer the canonical watch URL over an embed/player URL for plain links,
+ * preserving a timestamp (`t`/`start`) when the source link carried one. */
 function displayUrl(raw: string): string {
   const yt = extractVideoInput(raw);
-  if (yt) return yt.url;
+  if (yt) {
+    try {
+      const u = new URL(raw);
+      const t = u.searchParams.get("t") || u.searchParams.get("start");
+      if (t && /^[\dhms]+$/i.test(t)) {
+        return `${yt.url}${yt.url.includes("?") ? "&" : "?"}t=${t}`;
+      }
+    } catch {
+      /* fall through to the bare canonical URL */
+    }
+    return yt.url;
+  }
   try {
     const u = new URL(raw);
     const vimeo = u.pathname.match(/^\/video\/(\d+)/);
@@ -61,6 +73,19 @@ function displayUrl(raw: string): string {
     /* keep the raw URL */
   }
   return raw;
+}
+
+/** Whether the marker at `offset` stands alone on an unindented line — the
+ * only position where a `::video` directive is valid and renders. Markers
+ * inside footnote definitions, list items, or other indented/inline contexts
+ * must degrade to a plain link: the platform only resolves own-line top-level
+ * imports, and a directive inside a footnote would break its continuation. */
+function isTopLevelMarker(body: string, offset: number, length: number): boolean {
+  const lineStart = body.lastIndexOf("\n", offset - 1) + 1;
+  const prefix = body.slice(lineStart, offset);
+  const lineEnd = body.indexOf("\n", offset + length);
+  const suffix = body.slice(offset + length, lineEnd < 0 ? body.length : lineEnd);
+  return prefix === "" && suffix.trim() === "";
 }
 
 export interface ResolveVideoEmbedsOptions {
@@ -83,9 +108,11 @@ export async function resolveVideoEmbeds(
   const { jobId, createdAt, signal, log = () => {} } = opts;
 
   const urls: string[] = [];
+  const topLevelUrls = new Set<string>();
   for (const body of bodies) {
     for (const m of body.matchAll(VIDEO_MARKER_RE)) {
       if (!urls.includes(m[1])) urls.push(m[1]);
+      if (isTopLevelMarker(body, m.index!, m[0].length)) topLevelUrls.add(m[1]);
     }
   }
   if (urls.length === 0) return { bodies, resolutions: [] };
@@ -117,6 +144,14 @@ export async function resolveVideoEmbeds(
       const video = videoByUrl.get(url) ?? null;
       if (!video) {
         resolutions.push({ url, outcome: "external-link" });
+        replacementByUrl.set(url, `<${displayUrl(url)}>`);
+        return;
+      }
+      // A video that only ever appears in inline/indented context (e.g. a
+      // footnote definition) is a citation, not an article embed: link it,
+      // don't import a transcript for it.
+      if (!topLevelUrls.has(url)) {
+        resolutions.push({ url, outcome: "inline-link" });
         replacementByUrl.set(url, `<${displayUrl(url)}>`);
         return;
       }
@@ -163,7 +198,11 @@ export async function resolveVideoEmbeds(
   );
 
   const resolved = bodies.map((body) =>
-    body.replace(VIDEO_MARKER_RE, (_whole, url: string) => {
+    body.replace(VIDEO_MARKER_RE, (whole, url: string, offset: number) => {
+      // A `::video` directive is only valid alone on an unindented line; any
+      // other occurrence (footnote definition, list item, inline) degrades to
+      // a plain link even when the video was imported for a top-level embed.
+      if (!isTopLevelMarker(body, offset, whole.length)) return `<${displayUrl(url)}>`;
       // Total substitution: an unmapped marker (impossible in normal flow)
       // still degrades to a plain link rather than leaking marker syntax.
       return replacementByUrl.get(url) ?? `<${displayUrl(url)}>`;
