@@ -89,12 +89,26 @@ async fn read_intro(server: &Arc<Server>, folder: &str) -> Option<String> {
     // only reaches sessions once a human accepts it in the editor.
     let spans = critic_markup::parse(&content);
     let base = critic_markup::base_view(&spans);
-    let cleaned = strip_obsidian_comments(&base);
+    let cleaned = strip_frontmatter(&strip_obsidian_comments(&base));
     let trimmed = cleaned.trim();
     if trimmed.is_empty() {
         return None;
     }
     Some(truncate_chars(trimmed, MAX_INTRO_CHARS))
+}
+
+/// Drop a leading YAML frontmatter block (`--- ... ---`). The intro doc
+/// carries frontmatter for the validator (e.g. `tags: [validator-ignore]`)
+/// that agents should never see.
+fn strip_frontmatter(s: &str) -> String {
+    let t = s.trim_start();
+    if let Some(rest) = t.strip_prefix("---\n") {
+        if let Some(end) = rest.find("\n---") {
+            let after = &rest[end + 4..];
+            return after.trim_start_matches(['-']).to_string();
+        }
+    }
+    s.to_string()
 }
 
 /// Remove Obsidian `%% ... %%` comments (inline or multi-line). An unclosed
@@ -196,6 +210,20 @@ mod tests {
         .await;
         let text = response_text(&resp);
         assert!(!text.contains('\n'), "expected bare sid, got: {text}");
+    }
+
+    // Prevents: the intro doc's validator frontmatter leaking into every
+    // session's orientation text
+    #[test]
+    fn strips_leading_frontmatter_only() {
+        assert_eq!(
+            strip_frontmatter("---\ntags:\n  - validator-ignore\n---\nHello"),
+            "\nHello"
+        );
+        assert_eq!(
+            strip_frontmatter("no frontmatter --- here"),
+            "no frontmatter --- here"
+        );
     }
 
     // Prevents: curator notes in %% ... %% leaking into every session's intro
