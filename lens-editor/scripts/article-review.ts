@@ -125,7 +125,15 @@ async function prepare(): Promise<void> {
     if (!full.startsWith(`${contentRoot}${path.sep}`)) throw new Error(`Unsafe article path: ${relative}`);
     await fs.stat(full);
     const relayPath = `${relayFolder.replace(/\/+$/, "")}/${normalized}`;
-    const markdown = await readAcceptedRelayMarkdown(relayPath, { relayUrl, token: relayToken });
+    let markdown: string;
+    try {
+      markdown = await readAcceptedRelayMarkdown(relayPath, { relayUrl, token: relayToken });
+    } catch (error) {
+      // One unreadable article (most commonly: pending suggestions awaiting
+      // human review) must not abort a whole batch — skip it and move on.
+      console.log(`skipped  ${normalized}: ${String(error).slice(0, 120)}`);
+      continue;
+    }
     const { frontmatter } = splitFrontmatter(markdown);
     const preservedSourceUrl = markdown.match(
       /^Original source URL:\s*(https?:\/\/\S+)\s*$/m,
