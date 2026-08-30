@@ -174,6 +174,21 @@ describe("direct source review", () => {
     expect(() => validateEditedArticle(article, `${article}\n%%\nNew block.\n%%\n`)).toThrow("authoring comment");
   });
 
+  it("allows added validator-suppression pragmas but no other new %% blocks", () => {
+    const pragma = "%% validator-ignore-next-line --code article.block-repeated-nearby --reason intentional-repeat %%";
+    const withPragma = article.replace("Original body text.", `${pragma}\nOriginal body text.`);
+    expect(validateEditedArticle(article, withPragma).markdown).toBe(withPragma);
+    // pragma added BEFORE the still-unfilled placeholder must not consume it
+    const pragmaFirst = article.replace("%%\nAdd discussion note here:", `${pragma}\n\n%%\nAdd discussion note here:`);
+    expect(validateEditedArticle(article, pragmaFirst).markdown).toBe(pragmaFirst);
+    // near-pragma text is still rejected
+    const fake = article.replace("Original body text.", "%% validator-ignore-next-line free-form excuse %%\nOriginal body text.");
+    expect(() => validateEditedArticle(article, fake)).toThrow("authoring comment");
+    // deleting the placeholder is rejected
+    const deleted = article.replace("%%\nAdd discussion note here:\n\n...\n\n%%\n", "");
+    expect(() => validateEditedArticle(article, deleted)).toThrow("authoring comment");
+  });
+
   it("allows filling in the importer's discussion-note placeholder", () => {
     const filled = article.replace(
       "%%\nAdd discussion note here:\n\n...\n\n%%",

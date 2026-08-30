@@ -140,7 +140,7 @@ Use typed kebab-case footnote IDs: \`[^cite-id]\` for citations and \`[^note-id]
 
 For JavaScript applications, inspect HTML-escaped article content inside JSON-LD or hydration scripts as primary rendered evidence.
 
-You may edit body content and the source-derived frontmatter fields title, author, published, and description. Do not change source_url, created, accessed, tags, llm-review provenance, other frontmatter fields, any paired %% authoring comment block, or any existing {>>...<<} CriticMarkup comment. Exception: the importer's own \`%%\` block containing "Add discussion note here:" may be filled in — replace its \`...\` line with a concise note for site editors (framing, caveats, or discussion prompts for this article) if you have something genuinely useful to say; otherwise leave the block untouched. Preserve source wording; do not summarize, modernize, or silently omit text. Do not copy obvious typos or grammatical errors from the source. Do not make whitespace-only edits, reflow paragraphs, or change typography unless source fidelity requires it. Re-read every changed sentence against the source evidence. There is no edit-size limit.
+You may edit body content and the source-derived frontmatter fields title, author, published, and description. Do not change source_url, created, accessed, tags, llm-review provenance, other frontmatter fields, any paired %% authoring comment block, or any existing {>>...<<} CriticMarkup comment. Exception: the importer's own \`%%\` block containing "Add discussion note here:" may be filled in — replace its \`...\` line with a concise note for site editors (framing, caveats, or discussion prompts for this article) if you have something genuinely useful to say; otherwise leave the block untouched. Second exception: for a validator error that is a genuine false positive faithful to the source (e.g. an intentionally repeated image), you may add a suppression line \`%% validator-ignore-next-line --code <error-code> --reason <single-hyphenated-token> %%\` directly above the flagged line — never to paper over a problem you could fix. Preserve source wording; do not summarize, modernize, or silently omit text. Do not copy obvious typos or grammatical errors from the source. Do not make whitespace-only edits, reflow paragraphs, or change typography unless source fidelity requires it. Re-read every changed sentence against the source evidence. There is no edit-size limit.
 
 Remove Creative Commons and other licensing notices from imported articles.
 
@@ -302,21 +302,37 @@ export function validateEditedArticle(
     }
   }
   {
-    // The importer's own "Add discussion note here" placeholder is the one
-    // paired block the reviewer is allowed to fill in; all other %% blocks
-    // are protected verbatim.
+    // Paired %% blocks are protected verbatim, with two sanctioned exceptions:
+    // the importer's own "Add discussion note here" placeholder may be filled
+    // in, and single-line validator-ignore-next-line suppression pragmas
+    // (lens-platform validator syntax) may be ADDED. Every pre-existing block
+    // must survive, in order.
+    const isSuppressionPragma = (block: string) =>
+      /^%%\s*validator-ignore-next-line\s+--code\s+[a-z0-9.-]+\s+--reason\s+[A-Za-z0-9'-]+\s*%%$/.test(
+        block.trim(),
+      );
     const originalBlocks = pairedComments(originalMarkdown);
     const editedBlocks = pairedComments(editedMarkdown);
-    const changed =
-      originalBlocks.length !== editedBlocks.length ||
-      originalBlocks.some((block, i) => block !== editedBlocks[i]);
-    const onlyPlaceholderFilled =
-      originalBlocks.length === editedBlocks.length &&
-      originalBlocks.every(
-        (block, i) =>
-          block === editedBlocks[i] || block === ARTICLE_DISCUSSION_PROMPT,
-      );
-    if (changed && !onlyPlaceholderFilled) {
+    let next = 0;
+    let ok = true;
+    for (const block of editedBlocks) {
+      if (next < originalBlocks.length && block === originalBlocks[next]) {
+        next++;
+        continue;
+      }
+      if (isSuppressionPragma(block)) continue;
+      if (
+        next < originalBlocks.length &&
+        originalBlocks[next] === ARTICLE_DISCUSSION_PROMPT
+      ) {
+        next++;
+        continue;
+      }
+      ok = false;
+      break;
+    }
+    if (next !== originalBlocks.length) ok = false;
+    if (!ok) {
       throw new Error("reviewer changed a protected authoring comment block");
     }
   }
