@@ -6,7 +6,11 @@ import { spawnClaude } from "../add-video/claude";
 import type { ArticleValidationIssue } from "./platform-validation";
 import type { ArticleMeta } from "./types";
 
-export const VERIFY_TIMEOUT_MS = 10 * 60_000;
+// One review pass over a very long article (an 80k problem profile, a book
+// chapter) can legitimately run past 10 minutes; the cap exists only to reap
+// hung Claude processes. Overridable for experiments.
+export const VERIFY_TIMEOUT_MS =
+  (Number(process.env.CLAUDE_REVIEW_TIMEOUT_MINUTES) || 20) * 60_000;
 export const REVIEW_VERSION = "article-qc-v1.3";
 export const REVIEW_MODEL = "sonnet";
 export const MAX_REVIEW_ROUNDS = 3;
