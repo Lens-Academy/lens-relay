@@ -174,13 +174,16 @@ describe("direct source review", () => {
     expect(() => validateEditedArticle(article, `${article}\n%%\nNew block.\n%%\n`)).toThrow("authoring comment");
   });
 
-  it("allows added validator-suppression pragmas but no other new %% blocks", () => {
+  it("treats validator-suppression pragmas as reviewer-owned", () => {
     const pragma = "%% validator-ignore-next-line --code article.block-repeated-nearby --reason intentional-repeat %%";
     const withPragma = article.replace("Original body text.", `${pragma}\nOriginal body text.`);
+    // add
     expect(validateEditedArticle(article, withPragma).markdown).toBe(withPragma);
-    // pragma added BEFORE the still-unfilled placeholder must not consume it
-    const pragmaFirst = article.replace("%%\nAdd discussion note here:", `${pragma}\n\n%%\nAdd discussion note here:`);
-    expect(validateEditedArticle(article, pragmaFirst).markdown).toBe(pragmaFirst);
+    // edit an existing pragma (a later review round retargeting the code)
+    const retargeted = withPragma.replace("article.block-repeated-nearby", "article.image-repeated-nearby");
+    expect(validateEditedArticle(withPragma, retargeted).markdown).toBe(retargeted);
+    // remove
+    expect(validateEditedArticle(withPragma, article).markdown).toBe(article);
     // near-pragma text is still rejected
     const fake = article.replace("Original body text.", "%% validator-ignore-next-line free-form excuse %%\nOriginal body text.");
     expect(() => validateEditedArticle(article, fake)).toThrow("authoring comment");
@@ -189,14 +192,22 @@ describe("direct source review", () => {
     expect(() => validateEditedArticle(article, deleted)).toThrow("authoring comment");
   });
 
-  it("allows filling in the importer's discussion-note placeholder", () => {
+  it("allows filling in the importer's discussion-note placeholder, keeping its header", () => {
     const filled = article.replace(
       "%%\nAdd discussion note here:\n\n...\n\n%%",
-      "%%\nDiscussion note:\n\nWhat would change your mind about longtermism?\n%%",
+      "%%\nAdd discussion note here:\n\nWhat would change your mind about longtermism?\n%%",
     );
     expect(validateEditedArticle(article, filled).markdown).toBe(filled);
-    // But only the placeholder — an already-authored note stays protected even
-    // when a placeholder is present elsewhere in the same document.
+    // later rounds may refine the already-filled note
+    const refined = filled.replace("change your mind", "update your view");
+    expect(validateEditedArticle(filled, refined).markdown).toBe(refined);
+    // dropping the recognizable header is rejected
+    const headerless = article.replace(
+      "%%\nAdd discussion note here:\n\n...\n\n%%",
+      "%%\nDiscussion note:\n\nA note.\n%%",
+    );
+    expect(() => validateEditedArticle(article, headerless)).toThrow("authoring comment");
+    // other authored notes stay protected
     const twoBlocks = `${article}\n%%\nEditor-authored note.\n%%\n`;
     expect(() => validateEditedArticle(twoBlocks, twoBlocks.replace("Editor-authored", "Tampered")))
       .toThrow("authoring comment");

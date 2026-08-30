@@ -363,6 +363,30 @@ export function sectionHeadingCount(md: string): number {
   return (md.match(/^#{2,4} /gm) ?? []).length;
 }
 
+/** Footnote definition blocks (`[^id]: …` plus blank/indented continuation
+ *  lines), each returned as one trimmed block. */
+export function footnoteDefinitionBlocks(md: string): string[] {
+  const blocks: string[] = [];
+  let current: string[] | null = null;
+  for (const line of md.split("\n")) {
+    if (/^\[\^[^\]]+\]:/.test(line)) {
+      if (current) blocks.push(current.join("\n").trimEnd());
+      current = [line];
+      continue;
+    }
+    if (current && (line.trim() === "" || /^\s+\S/.test(line))) {
+      current.push(line);
+      continue;
+    }
+    if (current) {
+      blocks.push(current.join("\n").trimEnd());
+      current = null;
+    }
+  }
+  if (current) blocks.push(current.join("\n").trimEnd());
+  return blocks;
+}
+
 function htmlToMarkdown(bodyHtml: string, baseUrl: string): string {
   const dom = new JSDOM(`<body>${bodyHtml}</body>`, { url: baseUrl });
   const body = dom.window.document.body;
@@ -541,6 +565,21 @@ export async function extractArticle(
             : def
           : def || rea!;
       body = pick.md;
+      // Readability strips the id-anchored references markup, so on the pages
+      // where it rescues a gutted body it typically keeps every [^N] reference
+      // but loses all [^N]: definitions — graft those from the Defuddle
+      // candidate (same converter, same source anchors, same ids).
+      if (
+        defuddleGutted &&
+        pick === rea &&
+        def &&
+        footnoteDefinitionBlocks(body).length === 0
+      ) {
+        const defs = footnoteDefinitionBlocks(def.md);
+        if (defs.length > 0) {
+          body = `${body.trimEnd()}\n\n${defs.join("\n\n")}\n`;
+        }
+      }
       chosen = {
         title: pick.c.title,
         author: pick.c.author,
