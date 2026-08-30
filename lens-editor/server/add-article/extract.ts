@@ -357,6 +357,12 @@ function makeTurndown(baseUrl: string): TurndownService {
  * converts with the shared turndown rules. Single choke point so BOTH the adapter
  * and generic (Defuddle/Readability) paths get identical normalization.
  */
+/** Section headings in a markdown body — the structural signal for spotting a
+ *  gutted extraction whose raw length still looks plausible. */
+export function sectionHeadingCount(md: string): number {
+  return (md.match(/^#{2,4} /gm) ?? []).length;
+}
+
 function htmlToMarkdown(bodyHtml: string, baseUrl: string): string {
   const dom = new JSDOM(`<body>${bodyHtml}</body>`, { url: baseUrl });
   const body = dom.window.document.body;
@@ -518,10 +524,19 @@ export async function extractArticle(
       defuddleMd = def?.md;
       readabilityMd = rea?.md;
       // Prefer Defuddle (cleaner); switch to Readability only when it captures
-      // substantially more (a strong signal Defuddle under-extracted).
+      // substantially more (a strong signal Defuddle under-extracted). Raw
+      // length alone can miss a gutted body: on 80k's factory-farming profile
+      // Defuddle dropped every article section yet still measured 293k chars,
+      // because the 162 footnote definitions dominate both candidates. A large
+      // heading deficit catches that shape without penalizing extractions
+      // whose only difference is cleaner footnote structure.
+      const defuddleGutted =
+        def &&
+        rea &&
+        sectionHeadingCount(rea.md) >= sectionHeadingCount(def.md) + 10;
       const pick =
         def && rea
-          ? rea.md.length >= def.md.length * 1.25
+          ? defuddleGutted || rea.md.length >= def.md.length * 1.25
             ? rea
             : def
           : def || rea!;

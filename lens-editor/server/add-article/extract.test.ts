@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractArticle } from "./extract";
+import { extractArticle, sectionHeadingCount } from "./extract";
 
 const FORUM_SHELL = (body: string, authorHref: string, authorText: string) => `
 <!doctype html><html><head>
@@ -889,5 +889,21 @@ describe("extractArticle — GreaterWrong mirror body-link canonicalization", ()
       "https://www.lesswrong.com/posts/abc123def45/some-other-post?commentId=CmtId123",
     );
     expect(ex.body).not.toContain("#comment-CmtId123");
+  });
+});
+
+describe("sectionHeadingCount — gutted-extraction signal", () => {
+  it("counts ## through #### headings, ignoring h1 and footnote bulk", () => {
+    const md = [
+      "# Title",
+      "## Section one",
+      "### Sub",
+      "#### Deep",
+      "##### Too deep",
+      "prose",
+      "[^cite-1]: a definition\n",
+    ].join("\n");
+    expect(sectionHeadingCount(md)).toBe(3);
+    expect(sectionHeadingCount("no headings at all")).toBe(0);
   });
 });
