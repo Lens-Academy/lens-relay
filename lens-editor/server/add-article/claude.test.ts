@@ -168,7 +168,23 @@ describe("direct source review", () => {
 
   it("rejects added frontmatter fields and changed authoring comments", () => {
     expect(() => validateEditedArticle(article, article.replace("created:", "extra: value\ncreated:"))).toThrow("added or removed");
-    expect(() => validateEditedArticle(article, article.replace("Add discussion note here", "Changed note"))).toThrow("authoring comment");
+    const withExtraNote = `${article}\n%%\nEditor-authored note.\n%%\n`;
+    expect(() => validateEditedArticle(withExtraNote, withExtraNote.replace("Editor-authored", "Tampered")))
+      .toThrow("authoring comment");
+    expect(() => validateEditedArticle(article, `${article}\n%%\nNew block.\n%%\n`)).toThrow("authoring comment");
+  });
+
+  it("allows filling in the importer's discussion-note placeholder", () => {
+    const filled = article.replace(
+      "%%\nAdd discussion note here:\n\n...\n\n%%",
+      "%%\nDiscussion note:\n\nWhat would change your mind about longtermism?\n%%",
+    );
+    expect(validateEditedArticle(article, filled).markdown).toBe(filled);
+    // But only the placeholder — an already-authored note stays protected even
+    // when a placeholder is present elsewhere in the same document.
+    const twoBlocks = `${article}\n%%\nEditor-authored note.\n%%\n`;
+    expect(() => validateEditedArticle(twoBlocks, twoBlocks.replace("Editor-authored", "Tampered")))
+      .toThrow("authoring comment");
   });
 
   it("rejects changed CriticMarkup comments", () => {

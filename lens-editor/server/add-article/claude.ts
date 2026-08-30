@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import fm from "front-matter";
 import { spawnClaude } from "../add-video/claude";
+import { ARTICLE_DISCUSSION_PROMPT } from "./export";
 import type { ArticleValidationIssue } from "./platform-validation";
 import type { ArticleMeta } from "./types";
 
@@ -139,7 +140,7 @@ Use typed kebab-case footnote IDs: \`[^cite-id]\` for citations and \`[^note-id]
 
 For JavaScript applications, inspect HTML-escaped article content inside JSON-LD or hydration scripts as primary rendered evidence.
 
-You may edit body content and the source-derived frontmatter fields title, author, published, and description. Do not change source_url, created, accessed, tags, llm-review provenance, other frontmatter fields, any paired %% authoring comment block, or any existing {>>...<<} CriticMarkup comment. Preserve source wording; do not summarize, modernize, or silently omit text. Do not copy obvious typos or grammatical errors from the source. Do not make whitespace-only edits, reflow paragraphs, or change typography unless source fidelity requires it. Re-read every changed sentence against the source evidence. There is no edit-size limit.
+You may edit body content and the source-derived frontmatter fields title, author, published, and description. Do not change source_url, created, accessed, tags, llm-review provenance, other frontmatter fields, any paired %% authoring comment block, or any existing {>>...<<} CriticMarkup comment. Exception: the importer's own \`%%\` block containing "Add discussion note here:" may be filled in — replace its \`...\` line with a concise note for site editors (framing, caveats, or discussion prompts for this article) if you have something genuinely useful to say; otherwise leave the block untouched. Preserve source wording; do not summarize, modernize, or silently omit text. Do not copy obvious typos or grammatical errors from the source. Do not make whitespace-only edits, reflow paragraphs, or change typography unless source fidelity requires it. Re-read every changed sentence against the source evidence. There is no edit-size limit.
 
 Remove Creative Commons and other licensing notices from imported articles.
 
@@ -300,8 +301,24 @@ export function validateEditedArticle(
       throw new Error(`reviewer changed protected frontmatter field ${key}`);
     }
   }
-  if (JSON.stringify(pairedComments(originalMarkdown)) !== JSON.stringify(pairedComments(editedMarkdown))) {
-    throw new Error("reviewer changed a protected authoring comment block");
+  {
+    // The importer's own "Add discussion note here" placeholder is the one
+    // paired block the reviewer is allowed to fill in; all other %% blocks
+    // are protected verbatim.
+    const originalBlocks = pairedComments(originalMarkdown);
+    const editedBlocks = pairedComments(editedMarkdown);
+    const changed =
+      originalBlocks.length !== editedBlocks.length ||
+      originalBlocks.some((block, i) => block !== editedBlocks[i]);
+    const onlyPlaceholderFilled =
+      originalBlocks.length === editedBlocks.length &&
+      originalBlocks.every(
+        (block, i) =>
+          block === editedBlocks[i] || block === ARTICLE_DISCUSSION_PROMPT,
+      );
+    if (changed && !onlyPlaceholderFilled) {
+      throw new Error("reviewer changed a protected authoring comment block");
+    }
   }
   if (JSON.stringify(criticComments(originalMarkdown)) !== JSON.stringify(criticComments(editedMarkdown))) {
     throw new Error("reviewer changed a protected CriticMarkup comment");
