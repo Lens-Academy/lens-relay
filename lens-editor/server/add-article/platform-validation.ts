@@ -59,22 +59,34 @@ export async function validateArticleDraft(
     );
   }
 
-  const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const signal = options.signal
-    ? AbortSignal.any([options.signal, timeout])
-    : timeout;
-  const response = await (options.fetchImpl ?? fetch)(
-    `${platformUrl.replace(/\/$/, "")}/api/content/validate-article`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Validation-Key": secret,
-      },
-      body: JSON.stringify({ path: logicalPath, content }),
-      signal,
-    },
-  );
+  // A validation call is cheap to repeat and a whole import dies with it, so
+  // transient network failures (connect timeout, reset) get two retries.
+  // Non-OK HTTP responses are NOT retried — those are real service answers.
+  let response!: Response;
+  for (let attempt = 0; ; attempt++) {
+    const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeout])
+      : timeout;
+    try {
+      response = await (options.fetchImpl ?? fetch)(
+        `${platformUrl.replace(/\/$/, "")}/api/content/validate-article`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Validation-Key": secret,
+          },
+          body: JSON.stringify({ path: logicalPath, content }),
+          signal,
+        },
+      );
+      break;
+    } catch (error) {
+      if (options.signal?.aborted || attempt >= 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+    }
+  }
   const text = await response.text();
   if (!response.ok) {
     throw new Error(
