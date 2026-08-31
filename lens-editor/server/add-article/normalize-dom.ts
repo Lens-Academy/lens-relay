@@ -394,9 +394,11 @@ function localizeSelfFragments(root: Element, baseUrl: string): void {
     }
     if (target) return; // resolves to a non-heading — leave for the reviewer
     // Extractors (Defuddle) often strip id attributes. Many sites derive their
-    // heading ids the same way Lens does, so when the fragment IS the slug of
-    // exactly one imported heading the correspondence is still provable.
-    const asSlug = fragment.toLowerCase();
+    // heading ids the same way Lens does, so when the fragment slugs to the
+    // slug of exactly one imported heading the correspondence is still
+    // provable. Re-slugging (rather than comparing verbatim) also maps a
+    // site's untruncated slug onto Lens's 50-char-truncated form.
+    const asSlug = lensHeadingSlug(fragment.replace(/-/g, " "));
     if (slugCounts.get(asSlug) === 1) a.setAttribute("href", `#${asSlug}`);
   });
 }

@@ -308,6 +308,16 @@ describe("normalizeArticleDom — self-fragment slug fallback", () => {
     expect(body.querySelector("a")?.getAttribute("href")).toBe("#the-assurance-curve");
   });
 
+  it("maps a site's untruncated slug onto the 50-char-truncated Lens slug", () => {
+    // Lens renderedHeadingId truncates to 50 chars; 80k's own anchors do not.
+    const body = normalize(`
+      <p><a href="${BASE}#there-are-clear-actions-we-can-take-to-reduce-these-risks">later</a></p>
+      <h2>There are clear actions we can take to reduce these risks</h2>`);
+    expect(body.querySelector("a")?.getAttribute("href")).toBe(
+      "#there-are-clear-actions-we-can-take-to-reduce-thes",
+    );
+  });
+
   it("does not slug-match when two headings share the slug", () => {
     const href = `${BASE}#overview`;
     const body = normalize(`
