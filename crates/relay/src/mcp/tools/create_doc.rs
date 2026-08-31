@@ -66,7 +66,9 @@ pub async fn execute(
         return create_html_file(server, file_path, content, &attribution).await;
     }
 
-    // --- Markdown path (existing behavior) ---
+    // --- Markdown path: created directly (a new file is pure addition, so
+    // the auto edit policy would apply it directly anyway); the server
+    // records a direct-edit activity event so it shows up on /recent. ---
     super::critic_markup::reject_if_contains_markup(content, "content")?;
 
     if !file_path.ends_with(".md") {
@@ -289,13 +291,9 @@ mod tests {
             .resolve_path("Lens/Named.md")
             .expect("created path should resolve");
         let raw = read_doc_content(&server, &doc_info.doc_id);
-        assert!(
-            raw.contains(r#""author":"Luc's AI""#),
-            "review author should use the named session: {raw}"
-        );
-        assert!(
-            !raw.contains(r#""author":"AI""#),
-            "review author must not fall back to generic AI: {raw}"
+        assert_eq!(
+            raw, "Hello world",
+            "creation is a direct edit: content stored plain, not wrapped as a pending suggestion"
         );
 
         let content_doc = server
@@ -314,6 +312,19 @@ mod tests {
             matches!(users.get(&txn, &ai_actor), Some(Out::YMap(_))),
             "session actor should be registered in provenance"
         );
+
+        // The creation is logged as a direct-edit activity event so it shows
+        // up on the /recent review page.
+        let events = y_sweet_core::activity::read_events(&txn);
+        assert_eq!(events.len(), 1, "creation should record one activity event");
+        let event = &events[0];
+        assert_eq!(event.author, "Luc's AI");
+        assert_eq!(event.actor, ai_actor);
+        assert_eq!(event.mode, "direct");
+        assert_eq!(event.kind, "insert");
+        assert_eq!(event.new, "Hello world");
+        assert_eq!(event.pos, 0);
+        assert_eq!(event.client, ai_client_id);
     }
 
     #[tokio::test]

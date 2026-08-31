@@ -1557,7 +1557,10 @@ impl Server {
             CreateDocumentError::Internal(format!("Failed to create content doc: {}", e))
         })?;
 
-        // 5. Write initial CriticMarkup-wrapped content to content doc
+        // 5. Write initial content directly, recorded as a direct-edit
+        // activity event: a brand-new file is pure addition, so the auto edit
+        // policy would apply it directly anyway, and the event keeps the
+        // creation reviewable on /recent (step 9 syncs the index from it).
         {
             let awareness = {
                 let doc_ref = docs.get(&full_doc_id).ok_or_else(|| {
@@ -1570,16 +1573,6 @@ impl Server {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64;
-            let suggestion_author = attribution
-                .map(|attr| attr.suggestion_author.as_str())
-                .unwrap_or("AI");
-            let suggestion_author = serde_json::to_string(suggestion_author).map_err(|e| {
-                CreateDocumentError::Internal(format!("Failed to encode suggestion author: {}", e))
-            })?;
-            let wrapped = format!(
-                "{{++{{\"author\":{},\"timestamp\":{}}}@@{}++}}",
-                suggestion_author, timestamp, content
-            );
             match attribution {
                 Some(attr) => crate::mcp::provenance::apply_attributed_edit(
                     &guard.doc,
@@ -1587,7 +1580,32 @@ impl Server {
                     &attr.actor,
                     timestamp,
                     |txn, text| {
-                        text.insert(txn, 0, &wrapped);
+                        use y_sweet_core::activity::{self, ActivityEvent};
+                        let clock_from = txn.state_vector().get(&attr.client_id);
+                        text.insert(txn, 0, content);
+                        let clock_to = txn.state_vector().get(&attr.client_id);
+                        let anchor = crate::mcp::provenance::sticky_anchor(txn, text, 0);
+                        let (new, new_truncated) = activity::cap_text(content);
+                        let event = ActivityEvent {
+                            id: ActivityEvent::event_id(timestamp, attr.client_id, clock_from),
+                            ts: timestamp,
+                            actor: attr.actor.clone(),
+                            author: attr.suggestion_author.clone(),
+                            mode: "direct".to_string(),
+                            kind: ActivityEvent::kind_for("", content).to_string(),
+                            old: String::new(),
+                            new,
+                            old_truncated: false,
+                            new_truncated,
+                            ctx_before: String::new(),
+                            ctx_after: String::new(),
+                            pos: 0,
+                            client: attr.client_id,
+                            clock_from,
+                            clock_to,
+                            anchor,
+                        };
+                        activity::append_event(txn, &event, timestamp);
                         Ok(())
                     },
                 )
@@ -1595,7 +1613,7 @@ impl Server {
                 None => {
                     let mut txn = guard.doc.transact_mut();
                     let text = txn.get_or_insert_text("contents");
-                    text.insert(&mut txn, 0, &wrapped);
+                    text.insert(&mut txn, 0, content);
                 }
             }
         }
