@@ -11,7 +11,7 @@ async function box(locator: Locator): Promise<Box> {
 test.describe('Markdown table responsive layout', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/e2e/fixtures/markdown-table-layout.html');
-    await expect(page.locator('.cm-md-table-wrapper')).toHaveCount(2);
+    await expect(page.locator('.cm-md-table-wrapper')).toHaveCount(4);
   });
 
   test('keeps prose constrained, narrow tables in-column, and gives wide tables extra pane width', async ({ page }) => {
@@ -50,5 +50,49 @@ test.describe('Markdown table responsive layout', () => {
     expect(overflow.overflowX).toBe('auto');
     expect(overflow.scrollWidth).toBeGreaterThan(overflow.clientWidth);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(760);
+  });
+
+  test('wraps long breakable cell text instead of scrolling', async ({ page }) => {
+    await page.setViewportSize({ width: 760, height: 800 });
+
+    const proseWrapper = page.locator('.cm-md-table-wrapper').nth(2);
+    const overflow = await proseWrapper.evaluate(element => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(overflow.scrollWidth).toBe(overflow.clientWidth);
+
+    // The long description cell must have wrapped onto multiple lines
+    // (a single 14px/1.5 line plus padding is ~33px tall).
+    const cell = proseWrapper.locator('td', { hasText: 'Show the importance of x-risk' });
+    const cellBox = await box(cell);
+    expect(cellBox.height).toBeGreaterThan(45);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(760);
+  });
+
+  test('caps column width so one long column cannot stretch the table across the pane', async ({ page }) => {
+    await page.setViewportSize({ width: 1400, height: 800 });
+
+    const content = await box(page.locator('.cm-content'));
+    const capWrapper = page.locator('.cm-md-table-wrapper').nth(3);
+    const cap = await box(capWrapper);
+
+    // Without the per-column max-width the huge prose cell would push this
+    // wrapper well past the reading column (like the 12-column table above);
+    // with the cap it stays at the column width and wraps instead.
+    expect(cap.width).toBeLessThanOrEqual(content.width);
+
+    const proseCell = capWrapper.locator('td', { hasText: 'far far longer than the per-column cap' });
+    expect((await box(proseCell)).height).toBeGreaterThan(45);
+
+    // The unbreakable URL must emergency-break inside its capped column
+    // rather than spill out of the cell or force local scrolling.
+    const urlCell = capWrapper.locator('td', { hasText: 'averylongpathsegment' });
+    expect((await box(urlCell)).height).toBeGreaterThan(45);
+    const overflow = await capWrapper.evaluate(element => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(overflow.scrollWidth).toBe(overflow.clientWidth);
   });
 });

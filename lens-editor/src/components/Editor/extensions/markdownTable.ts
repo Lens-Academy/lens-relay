@@ -174,6 +174,13 @@ class TableWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    // The widget root carries the vertical spacing as padding, not margin:
+    // CM6 measures block widgets with getBoundingClientRect(), which excludes
+    // margins, so a margin here would skew the height map and make mouse
+    // selection drift downward below each table.
+    const outer = document.createElement('div');
+    outer.className = 'cm-md-table-outer';
+
     const wrapper = document.createElement('div');
     wrapper.className = 'cm-md-table-wrapper';
     // Used by addRow() to find this widget's DOM after a transaction
@@ -220,7 +227,8 @@ class TableWidget extends WidgetType {
     });
 
     wrapper.appendChild(table);
-    return wrapper;
+    outer.appendChild(wrapper);
+    return outer;
   }
 
   private attachCellHandlers(el: HTMLElement, view: EditorView) {
@@ -592,33 +600,64 @@ const tableTheme = EditorView.theme({
   '.cm-scroller': {
     containerType: 'inline-size',
   },
+  // Vertical spacing lives on the outer element as padding, never margin —
+  // CM6's height map measures block widgets via getBoundingClientRect(),
+  // which excludes margins, and the resulting drift breaks posAtCoords
+  // (mouse selection lands lines below the pointer under each table).
+  '.cm-md-table-outer': {
+    padding: '6px 0',
+    // Zero out the widget's intrinsic width contribution. Without this, the
+    // wrapper's capped max-content width (pane minus 32px) propagates into
+    // .cm-content's automatic minimum size, and content padding (48px) then
+    // makes .cm-content 16px wider than the scroller — a permanent horizontal
+    // scrollbar. Inline-axis only, so widget height measurement is unaffected.
+    contain: 'inline-size',
+  },
   '.cm-md-table-wrapper': {
     display: 'block',
     position: 'relative',
     left: '50%',
     transform: 'translateX(-50%)',
-    width: 'fit-content',
+    // max-content (not fit-content): the wrapper prefers the table's
+    // unwrapped width so wide tables can use the full pane (up to maxWidth)
+    // before cell text starts wrapping; fit-content would clamp at the
+    // reading column and wrap too early.
+    width: 'max-content',
     minWidth: '100%',
     maxWidth: 'calc(100cqi - 32px)',
     overflowX: 'auto',
-    margin: '6px 0',
     borderRadius: '6px',
     border: '1px solid #e5e7eb',
   },
   '.cm-md-table': {
     borderCollapse: 'collapse',
-    width: 'max-content',
-    minWidth: '100%',
+    width: '100%',
     fontSize: '14px',
     lineHeight: '1.5',
   },
+  // Each column is bounded on both sides:
+  //  - minimum: 8em. The explicit minWidth is the only floor Chrome honors —
+  //    it folds overflowWrap break opportunities into table min-content, so
+  //    word length alone doesn't stop columns from being crushed to slivers.
+  //    When the minimums don't fit the pane, the wrapper scrolls horizontally
+  //    instead of wrapping further.
+  //  - maximum: 30em. Under the wrapper's max-content width Chrome honors
+  //    cell max-width in intrinsic sizing, so one long-prose column wraps at
+  //    the cap instead of stretching the table across the whole pane; a
+  //    longer unbreakable token (URL) breaks at the cap via overflowWrap
+  //    rather than spilling out of the cell.
+  // whiteSpace/overflowWrap are set explicitly because cells inherit
+  // pre-wrap/anywhere from .cm-content and .cm-lineWrapping.
   '.cm-md-table th, .cm-md-table td': {
     padding: '6px 12px',
     borderRight: '1px solid #e5e7eb',
     borderBottom: '1px solid #e5e7eb',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'normal',
+    overflowWrap: 'break-word',
+    verticalAlign: 'top',
     outline: 'none',
-    minWidth: '60px',
+    minWidth: '8em',
+    maxWidth: '30em',
   },
   // Force a line-box of full text height in every cell so empty cells don't
   // collapse below the height of filled rows. The pseudo has zero width and
