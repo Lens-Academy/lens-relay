@@ -352,6 +352,15 @@ class Reporter implements ArticleReviewReporter {
     });
   }
 
+  async protectedReverts(round: number, reverts: { kind: string; detail: string }[]): Promise<void> {
+    await this.append({
+      at: new Date().toISOString(),
+      kind: "protected-edit-reverted",
+      round,
+      reverts: reverts.map(({ kind, detail }) => ({ kind, detail })),
+    });
+  }
+
   async validation(round: string, result: ArticleValidationResult, durationMs: number): Promise<void> {
     if (this.sealed) return;
     this.report.summary.validator_errors += result.counts.errors;

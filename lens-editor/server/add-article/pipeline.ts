@@ -10,6 +10,7 @@ import {
   MAX_REVIEW_ROUNDS,
   REVIEW_MODEL,
   REVIEW_VERSION,
+  buildRevertNotice,
   reviewArticle,
   type ArticleReviewBase,
   type ArticleReviewCandidates,
@@ -657,6 +658,9 @@ export async function processArticle(
         outcome.markdown,
         Date.now() - reviewStarted,
       );
+      if (outcome.reverted.length > 0) {
+        await reporter.protectedReverts(0, outcome.reverted);
+      }
     } catch (error) {
       if (signal?.aborted) throw error;
       if (reviewCandidates) {
@@ -691,13 +695,32 @@ export async function processArticle(
     validationStarted = Date.now();
     validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
     await reporter.validation("post-review", validation, Date.now() - validationStarted);
-    for (let repairRound = 1; !validation.valid && repairRound < MAX_REVIEW_ROUNDS; repairRound++) {
+    // A pass whose protected-content edits were reverted must be followed by a
+    // confirmation pass: an LLM checks that the reverted article is still
+    // coherent (the reviewer may have made compensating edits elsewhere) and
+    // can REJECT if it cannot stand. The notice rides on the repair loop.
+    let pendingRevertNotice = outcome.reverted.length > 0 ? buildRevertNotice(outcome.reverted) : "";
+    for (
+      let repairRound = 1;
+      (!validation.valid || pendingRevertNotice) && repairRound < MAX_REVIEW_ROUNDS;
+      repairRound++
+    ) {
       await setStage(repairRound === 1 ? "repair-review" : `repair-review-${repairRound + 1}`);
       reviewStarted = Date.now();
       const metaBeforeRepair = meta;
       const draftBeforeRepair = draft;
       try {
-        outcome = await reviewArticle(workDir, draft, meta, validation.issues, repairRound, signal);
+        outcome = await reviewArticle(
+          workDir,
+          draft,
+          meta,
+          validation.issues,
+          repairRound,
+          signal,
+          undefined,
+          undefined,
+          pendingRevertNotice,
+        );
         await reporter.llm(
           repairRound,
           outcome.review,
@@ -708,6 +731,12 @@ export async function processArticle(
           outcome.markdown,
           Date.now() - reviewStarted,
         );
+        if (outcome.reverted.length > 0) {
+          await reporter.protectedReverts(repairRound, outcome.reverted);
+          pendingRevertNotice = buildRevertNotice(outcome.reverted);
+        } else {
+          pendingRevertNotice = "";
+        }
       } catch (error) {
         if (signal?.aborted) throw error;
         if (error instanceof ArticleReviewRejectedError) {
@@ -739,6 +768,11 @@ export async function processArticle(
         repairRound === 1 ? "post-repair-review" : `post-repair-review-${repairRound + 1}`,
         validation,
         Date.now() - validationStarted,
+      );
+    }
+    if (pendingRevertNotice) {
+      throw new Error(
+        "protected-content edits were reverted in the final review round and no round remained to confirm the result",
       );
     }
     assertArticleValid(validation);

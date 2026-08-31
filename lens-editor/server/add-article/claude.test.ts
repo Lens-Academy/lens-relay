@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BASE_SELECTOR_TOOL,
   baseSelectorMcpConfig,
+  buildRevertNotice,
   buildVerifyArgs,
   buildVerifyPrompt,
   parsePlainReviewStatus,
@@ -172,6 +173,18 @@ describe("direct source review", () => {
     expect(() => validateEditedArticle(withExtraNote, withExtraNote.replace("Editor-authored", "Tampered")))
       .toThrow("authoring comment");
     expect(() => validateEditedArticle(article, `${article}\n%%\nNew block.\n%%\n`)).toThrow("authoring comment");
+  });
+
+  it("threads a revert notice into the verify prompt and args", () => {
+    const notice = buildRevertNotice([
+      { kind: "comment-block", detail: "restored authoring comment block: Editor: keep X", strictMessage: "m" },
+    ]);
+    const prompt = buildVerifyPrompt("/tmp/w", 1, false, notice);
+    expect(prompt).toContain("automatically REVERTED");
+    expect(prompt).toContain("restored authoring comment block: Editor: keep X");
+    expect(buildVerifyPrompt("/tmp/w", 1, false)).not.toContain("REVERTED");
+    const args = buildVerifyArgs("/tmp/w", 1, "sonnet", 10, false, notice);
+    expect(args[args.indexOf("-p") + 1]).toContain("automatically REVERTED");
   });
 
   it("treats validator-suppression pragmas as reviewer-owned", () => {

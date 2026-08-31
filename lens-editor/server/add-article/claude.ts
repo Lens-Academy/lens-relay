@@ -3,6 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import fm from "front-matter";
 import { spawnClaude } from "../add-video/claude";
+import { revertProtectedEdits } from "./protected-edits";
+import type { ProtectedRevert } from "./protected-edits";
+
+export { revertProtectedEdits, validateEditedArticle } from "./protected-edits";
+export type { ProtectedRevert } from "./protected-edits";
 import type { ArticleValidationIssue } from "./platform-validation";
 import type { ArticleMeta } from "./types";
 
@@ -46,6 +51,8 @@ export interface ReviewOutcome {
   review: DirectArticleReview;
   markdown: string;
   meta: ArticleMeta;
+  /** Protected-content edits from this pass that were surgically undone. */
+  reverted: ProtectedRevert[];
   originalMarkdown: string;
   selectedBase?: ArticleReviewBase;
 }
@@ -57,17 +64,6 @@ export interface ArticleReviewCandidates {
   unrendered: string;
   validation: Record<ArticleReviewBase, ArticleValidationIssue[]>;
 }
-
-interface ReviewFrontmatter {
-  title?: unknown;
-  author?: unknown;
-  source_url?: unknown;
-  published?: unknown;
-  description?: unknown;
-  [key: string]: unknown;
-}
-
-const EDITABLE_FRONTMATTER = new Set(["title", "author", "published", "description"]);
 
 function baseSelectorPath(): string {
   return path.resolve("server/add-article/select-review-base.mjs");
@@ -87,10 +83,19 @@ export function baseSelectorMcpConfig(): string {
   });
 }
 
+/** Prompt paragraph telling a follow-up pass that some of the previous pass's
+ *  edits were reverted for touching protected content, and what its job is. */
+export function buildRevertNotice(reverts: ProtectedRevert[]): string {
+  return `IMPORTANT: some of the previous review pass's edits were automatically REVERTED because they modified protected content that reviewers may never change:
+${reverts.map((r) => `- ${r.detail}`).join("\n")}
+The article.md you see already has the protected content restored; every other edit from the previous pass was kept. The previous pass may have had reasons for touching that content, so verify the restored article is still coherent, complete, and faithful to the source, and repair any inconsistency using allowed edits only. If the article cannot stand with the protected content restored, respond REJECT with the reason.`;
+}
+
 export function buildVerifyPrompt(
   workDir: string,
   repairRound = 0,
   requiresBaseSelection = false,
+  revertNotice = "",
 ): string {
   const isRepairPass = repairRound > 0;
   const opening = requiresBaseSelection
@@ -127,7 +132,7 @@ Read ${workDir}/article.md, the primary source evidence, and ${workDir}/validati
   const articleScopeReminder = requiresBaseSelection
     ? ""
     : "\n\nInclude only the article itself; remove reader comments, reactions, navigation, related content, widgets, and other page chrome.";
-  return `${opening}
+  return `${opening}${revertNotice ? `\n\n${revertNotice}` : ""}
 
 ${reviewFiles}
 
@@ -166,11 +171,12 @@ export function buildVerifyArgs(
   model = REVIEW_MODEL,
   maxBudgetUsd = DEFAULT_REVIEW_BUDGET_USD,
   requiresBaseSelection = false,
+  revertNotice = "",
 ): string[] {
   const tools = requiresBaseSelection ? `Read,Edit,${BASE_SELECTOR_TOOL}` : "Read,Edit";
   const args = [
     "-p",
-    buildVerifyPrompt(workDir, repairRound, requiresBaseSelection),
+    buildVerifyPrompt(workDir, repairRound, requiresBaseSelection, revertNotice),
     "--allowedTools",
     tools,
     "--tools",
@@ -237,126 +243,6 @@ export function parseReviewStatus(cliStdout: string): DirectArticleReview {
   throw new Error("Claude review must end with exactly PASS or REJECT: reason");
 }
 
-function scalar(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (value instanceof Date && Number.isFinite(value.getTime())) {
-    return value.toISOString().slice(0, 10);
-  }
-  return typeof value === "string" ? value.trim() : String(value).trim();
-}
-
-function authors(value: unknown): string[] {
-  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
-  return values
-    .filter((author): author is string => typeof author === "string" && !!author.trim())
-    .map((author) => author.trim());
-}
-
-function comparable(value: unknown): unknown {
-  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString();
-  if (Array.isArray(value)) return value.map(comparable);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, child]) => [key, comparable(child)]),
-    );
-  }
-  return value ?? null;
-}
-
-function parseFrontmatter(markdown: string): { attributes: ReviewFrontmatter; body: string } {
-  if (!fm.test(markdown)) throw new Error("reviewed article has no YAML frontmatter");
-  try {
-    const parsed = fm<ReviewFrontmatter>(markdown);
-    return { attributes: parsed.attributes, body: parsed.body };
-  } catch (error) {
-    throw new Error(`reviewed article has invalid YAML frontmatter: ${error}`);
-  }
-}
-
-function pairedComments(markdown: string): string[] {
-  return markdown.match(/%%[\s\S]*?%%/g) ?? [];
-}
-
-function criticComments(markdown: string): string[] {
-  return markdown.match(/\{>>(?:"(?:\\.|[^"])*"\s*)?[\s\S]*?<<\}/g) ?? [];
-}
-
-export function validateEditedArticle(
-  originalMarkdown: string,
-  editedMarkdown: string,
-): { markdown: string; meta: ArticleMeta } {
-  const original = parseFrontmatter(originalMarkdown);
-  const edited = parseFrontmatter(editedMarkdown);
-  const originalKeys = Object.keys(original.attributes).sort();
-  const editedKeys = Object.keys(edited.attributes).sort();
-  if (JSON.stringify(originalKeys) !== JSON.stringify(editedKeys)) {
-    throw new Error("reviewer added or removed frontmatter fields");
-  }
-  for (const key of originalKeys) {
-    if (EDITABLE_FRONTMATTER.has(key)) continue;
-    if (JSON.stringify(comparable(original.attributes[key])) !== JSON.stringify(comparable(edited.attributes[key]))) {
-      throw new Error(`reviewer changed protected frontmatter field ${key}`);
-    }
-  }
-  {
-    // Paired %% blocks are protected verbatim, with two sanctioned exceptions.
-    // (1) validator-ignore-next-line suppression pragmas (lens-platform
-    // validator syntax) are reviewer-owned: they may be added, edited, or
-    // removed freely — their grammar and next-line match are machine-checked
-    // by the validator itself, so they are excluded from comparison entirely.
-    // (2) The importer's "Add discussion note here" block may be filled in,
-    // and stays editable across review rounds (recognized by its header line);
-    // it must not be deleted. All other blocks must survive verbatim, in order.
-    const isSuppressionPragma = (block: string) =>
-      /^%%\s*validator-ignore-next-line\s+--code\s+[a-z0-9.-]+\s+--reason\s+[A-Za-z0-9'-]+\s*%%$/.test(
-        block.trim(),
-      );
-    const isDiscussionNote = (block: string) =>
-      /^%%\s*\nAdd discussion note here:/.test(block);
-    const originalBlocks = pairedComments(originalMarkdown).filter(
-      (b) => !isSuppressionPragma(b),
-    );
-    const editedBlocks = pairedComments(editedMarkdown).filter(
-      (b) => !isSuppressionPragma(b),
-    );
-    const ok =
-      originalBlocks.length === editedBlocks.length &&
-      originalBlocks.every(
-        (block, i) =>
-          block === editedBlocks[i] ||
-          (isDiscussionNote(block) && isDiscussionNote(editedBlocks[i])),
-      );
-    if (!ok) {
-      throw new Error("reviewer changed a protected authoring comment block");
-    }
-  }
-  if (JSON.stringify(criticComments(originalMarkdown)) !== JSON.stringify(criticComments(editedMarkdown))) {
-    throw new Error("reviewer changed a protected CriticMarkup comment");
-  }
-
-  const meta: ArticleMeta = {
-    title: scalar(edited.attributes.title),
-    author: authors(edited.attributes.author),
-    source_url: scalar(edited.attributes.source_url),
-    published: scalar(edited.attributes.published),
-    description: scalar(edited.attributes.description),
-  };
-  if (!meta.title) throw new Error("reviewer left title empty");
-  if (!meta.author.length) throw new Error("reviewer left author empty");
-  if (scalar(original.attributes.source_url) && !meta.source_url) {
-    throw new Error("reviewer left source_url empty");
-  }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(meta.published)) {
-    throw new Error("reviewer left published as an invalid date");
-  }
-  if (!edited.body.replace(/%%[\s\S]*?%%/g, "").trim()) {
-    throw new Error("reviewer left article body empty");
-  }
-  return { markdown: editedMarkdown, meta };
-}
-
 export class ArticleReviewRejectedError extends Error {
   constructor(public readonly reason: string) {
     super(`Article rejected by source review: ${reason}`);
@@ -388,6 +274,7 @@ export async function reviewArticle(
   signal?: AbortSignal,
   reviewer: ArticleReviewerConfig = resolveArticleReviewerConfig(),
   candidates?: ArticleReviewCandidates,
+  revertNotice = "",
 ): Promise<ReviewOutcome> {
   await fs.mkdir(workDir, { recursive: true });
   const requiresBaseSelection = repairRound === 0 && candidates !== undefined;
@@ -442,6 +329,7 @@ export async function reviewArticle(
           signal,
           requiresBaseSelection,
           selectorEnv,
+          revertNotice,
         ))
       : await spawnClaude(
         workDir,
@@ -452,6 +340,7 @@ export async function reviewArticle(
           reviewer.model,
           reviewer.maxBudgetUsd,
           requiresBaseSelection,
+          revertNotice,
         ),
         signal,
         selectorEnv,
@@ -506,7 +395,7 @@ export async function reviewArticle(
   const edited = await fs.readFile(path.join(workDir, "article.md"), "utf-8");
   return {
     review,
-    ...validateEditedArticle(originalMarkdown, edited),
+    ...revertProtectedEdits(originalMarkdown, edited),
     originalMarkdown,
     selectedBase,
   };

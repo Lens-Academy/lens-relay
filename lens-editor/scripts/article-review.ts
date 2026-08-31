@@ -11,6 +11,7 @@ import {
   MAX_REVIEW_ROUNDS,
   REVIEW_VERSION,
   resolveArticleReviewerConfig,
+  buildRevertNotice,
   reviewArticle,
 } from "../server/add-article/claude";
 import {
@@ -292,6 +293,7 @@ async function execute(): Promise<void> {
         markdown: string,
         passMeta: ArticleMeta,
         beforeValidation: ArticleValidationResult,
+        revertNotice = "",
       ) => {
         const started = Date.now();
         const metric: ReviewPassMetric = {
@@ -310,6 +312,8 @@ async function execute(): Promise<void> {
             round,
             undefined,
             selectedReviewer,
+            undefined,
+            revertNotice,
           );
           metric.outcome = reviewed.review.decision;
           return reviewed;
@@ -327,14 +331,25 @@ async function execute(): Promise<void> {
       }
       validation = await validateArticleDraft(item.article_path, outcome.markdown);
       reviewPassDetails.at(-1)!.validation_after = validation.counts;
-      for (let repairRound = 1; !validation.valid && repairRound < MAX_REVIEW_ROUNDS; repairRound++) {
+      let pendingRevertNotice = outcome.reverted.length > 0 ? buildRevertNotice(outcome.reverted) : "";
+      if (pendingRevertNotice) console.log(`  reverted ${outcome.reverted.length} protected edit(s); scheduling confirmation pass`);
+      for (
+        let repairRound = 1;
+        (!validation.valid || pendingRevertNotice) && repairRound < MAX_REVIEW_ROUNDS;
+        repairRound++
+      ) {
         const repairBase = outcome.markdown;
-        outcome = await runReviewPass(repairRound, outcome.markdown, outcome.meta, validation);
+        outcome = await runReviewPass(repairRound, outcome.markdown, outcome.meta, validation, pendingRevertNotice);
         if (outcome.markdown === repairBase) {
           outcome = { ...outcome, markdown: repairBase };
         }
         validation = await validateArticleDraft(item.article_path, outcome.markdown);
         reviewPassDetails.at(-1)!.validation_after = validation.counts;
+        pendingRevertNotice = outcome.reverted.length > 0 ? buildRevertNotice(outcome.reverted) : "";
+        if (pendingRevertNotice) console.log(`  reverted ${outcome.reverted.length} protected edit(s); scheduling confirmation pass`);
+      }
+      if (pendingRevertNotice) {
+        throw new Error("protected-content edits were reverted in the final review round and no round remained to confirm the result");
       }
       if (!validation.valid) throw new Error(`Reviewed article remains invalid (${validation.counts.errors} errors)`);
       const evidenceManifest = JSON.parse(await fs.readFile(path.join(item.bundle, "evidence/manifest.json"), "utf-8"));

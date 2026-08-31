@@ -48,6 +48,10 @@ vi.mock("./claude", () => ({
   REVIEW_MODEL: "sonnet",
   REVIEW_VERSION: "article-qc-v1",
   reviewArticle: reviewMocks.reviewArticle,
+  buildRevertNotice: (reverts: { detail: string }[]) => reverts.map((r) => r.detail).join("; "),
+  ArticleReviewRejectedError: class ArticleReviewRejectedError extends Error {
+    constructor(public readonly reason: string) { super(reason); }
+  },
 }));
 
 import { assertRequiredBodyPrefix, processArticle } from "./pipeline";
@@ -210,6 +214,7 @@ This might be useful.
       review: { decision: "pass", reason: "" },
       markdown,
       meta: reviewMeta,
+      reverted: [],
     }));
     extractionMocks.normalizeMetaWithLlm.mockResolvedValue(meta);
 
@@ -289,6 +294,7 @@ This might be useful.
         originalMarkdown: candidates.unrendered,
         selectedBase: "unrendered",
         meta,
+        reverted: [],
       };
     });
 
