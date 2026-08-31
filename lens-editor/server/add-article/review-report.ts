@@ -92,6 +92,7 @@ export interface ArticleReviewReporter {
     after?: string;
     detail?: Record<string, unknown>;
   }): Promise<void>;
+  protectedReverts(round: number, reverts: { kind: string; detail: string }[]): Promise<void>;
   validation(round: string, result: ArticleValidationResult, durationMs: number): Promise<void>;
   baseSelection(base: "rendered" | "unrendered"): Promise<void>;
   llm(round: number, review: DirectArticleReview, validatorCodes: string[], before: ArticleMeta, after: ArticleMeta, beforeMarkdown: string, afterMarkdown: string, durationMs: number): Promise<void>;
