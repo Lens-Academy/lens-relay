@@ -14,9 +14,6 @@ interface RecentChangesPageProps {
 const DEFAULT_RANGE: TimeRange = { mode: 'range', fromAgo: 86400_000, toAgo: 0, customFrom: '', customTo: '' };
 /** Server retention; also the slider's span. */
 const RETENTION_MS = 7 * 86400_000;
-/** Rows rendered per expanded file before a "Show more" button. */
-const EXCERPTS_PER_FILE = 25;
-const EVENTS_PER_FILE = 50;
 // The server only keeps a week, so "All" here means the full retention window.
 const PRESETS = TIME_QUICK_PRESETS.map(p => (p.mode === 'all' ? { ...p, label: '7d (all)' } : p)).filter(p => p.label !== '7d');
 
@@ -276,14 +273,13 @@ const FileSection = memo(function FileSection({ file, visibleKey, folderName, ex
   }
   const rows = useMemo(() => visibleRows(file, visibleKey), [file, visibleKey]);
   const byId = useMemo(() => new Map(rows.events.map(e => [e.id, e])), [rows.events]);
-  const [showAll, setShowAll] = useState(false);
-  const excerpts = showAll ? rows.excerpts : rows.excerpts.slice(0, EXCERPTS_PER_FILE);
-  const events = showAll ? rows.events : rows.events.slice(0, EVENTS_PER_FILE);
-  const hidden = rows.excerpts.length > 0 ? rows.excerpts.length - excerpts.length : rows.events.length - events.length;
   // Excerpt positions are current; event positions are as of the edit.
   const openPos = rows.excerpts[0]?.pos ?? rows.events[0].pos;
+  // content-visibility keeps every row in the DOM (find-in-page still works)
+  // while the browser skips layout/paint for off-screen sections; the
+  // intrinsic size reserves an estimated height so the scrollbar stays stable.
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+    <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm [content-visibility:auto] [contain-intrinsic-size:auto_3rem]">
       <div className="flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors">
         <button onClick={() => onToggle(file.doc_id)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
           <svg className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
@@ -298,17 +294,12 @@ const FileSection = memo(function FileSection({ file, visibleKey, folderName, ex
       {expanded && (
         <div className="divide-y divide-gray-100">
           {rows.excerpts.length > 0
-            ? excerpts.map((x, i) => (
+            ? rows.excerpts.map((x, i) => (
                 <ExcerptBlock key={`${x.pos}-${i}`} docId={file.doc_id} excerpt={x} byId={byId} onNavigate={onNavigate} />
               ))
-            : events.map(ev => (
+            : rows.events.map(ev => (
                 <EventRow key={ev.id} docId={file.doc_id} event={ev} onNavigate={onNavigate} />
               ))}
-          {hidden > 0 && (
-            <button onClick={() => setShowAll(true)} className="w-full px-4 py-2 text-xs text-blue-600 hover:bg-gray-50 text-left">
-              Show {hidden} more
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -336,7 +327,7 @@ const ExcerptBlock = memo(function ExcerptBlock({ docId, excerpt, byId, onNaviga
     return ev ? `${displayActor(ev)} · ${formatEventAge(ev.ts)}` : undefined;
   };
   return (
-    <div className="px-4 py-3">
+    <div className="px-4 py-3 [content-visibility:auto] [contain-intrinsic-size:auto_7rem]">
       {excerpt.skipped_before > 0 && (
         <div className="text-[11px] text-gray-400 mb-2">⋯ {formatSkipped(excerpt.skipped_before)} unchanged</div>
       )}
@@ -378,7 +369,7 @@ const EventRow = memo(function EventRow({ docId, event, onNavigate }: {
   const kindLabel = event.kind === 'insert' ? 'Added' : event.kind === 'delete' ? 'Removed' : 'Replaced';
   const kindClass = 'text-purple-700 bg-purple-100';
   return (
-    <div className="px-4 py-3">
+    <div className="px-4 py-3 [content-visibility:auto] [contain-intrinsic-size:auto_7rem]">
       <div className="flex flex-wrap items-center gap-2 mb-2">
         <span className={`text-xs font-medium px-2 py-0.5 rounded ${kindClass}`}>{kindLabel}</span>
         <span className="text-xs px-1.5 py-0.5 rounded text-gray-500 bg-gray-100">{displayActor(event)}</span>

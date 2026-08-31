@@ -28,6 +28,8 @@ export interface SuggestionsResponse {
 
 export function useSuggestions(folderIds: string[]) {
   const [data, setData] = useState<FileSuggestions[]>([]);
+  /** Epoch ms when `data` was fetched — a stable "now" for time filters. */
+  const [fetchedAt, setFetchedAt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,6 +61,7 @@ export function useSuggestions(folderIds: string[]) {
     const allFiles = results.filter((r): r is FileSuggestions[] => r !== null).flat();
     const failed = results.filter(r => r === null).length;
     setData(allFiles);
+    setFetchedAt(Date.now());
     setError(
       failed > 0 && allFiles.length === 0
         ? `Failed to fetch suggestions for ${failed} folder${failed !== 1 ? 's' : ''}`
@@ -72,5 +75,5 @@ export function useSuggestions(folderIds: string[]) {
     refresh();
   }, [refresh]);
 
-  return { data, loading, error, refresh };
+  return { data, fetchedAt, loading, error, refresh };
 }

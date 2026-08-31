@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback, memo, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, useDeferredValue, memo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSuggestions, type FileSuggestions, type SuggestionItem } from '../../hooks/useSuggestions';
 import type { BatchResult } from '../../lib/suggestion-actions';
@@ -253,7 +253,7 @@ function FilterBar({ authors, locations, authorFilter, timeRange, locationFilter
 
 export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFileAction }: ReviewPageProps) {
   usePageTitle();
-  const { data: fetchedData, loading, error, refresh: refetch } = useSuggestions(folderIds);
+  const { data: fetchedData, fetchedAt, loading, error, refresh: refetch } = useSuggestions(folderIds);
 
   // Suggestions applied by a bulk action are removed optimistically instead of
   // refetching: the server-side suggestions index updates asynchronously, so a
@@ -286,14 +286,19 @@ export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFi
       return next;
     });
   }, []);
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
-  const autoExpandedRef = useRef(false);
+  // null = untouched: the first file is expanded by default.
+  const [expandedOverride, setExpandedFiles] = useState<Set<string> | null>(null);
   const navigate = useNavigate();
 
   // Filter state
   const [authorFilter, setAuthorFilter] = useState<Set<string>>(new Set());
   const [timeRange, setTimeRange] = useState<TimeRange>({ mode: 'range', fromAgo: 3600_000, toAgo: 0, customFrom: '', customTo: '' });
   const [locationFilter, setLocationFilter] = useState<Set<string>>(new Set());
+  // Re-filtering thousands of suggestions per slider pixel would jank the
+  // thumb: let the controls update immediately and the list follow.
+  const deferredAuthorFilter = useDeferredValue(authorFilter);
+  const deferredTimeRange = useDeferredValue(timeRange);
+  const deferredLocationFilter = useDeferredValue(locationFilter);
   const filterSeededRef = useRef(false);
   const [confirmAction, setConfirmAction] = useState<'accept' | 'reject' | null>(null);
 
@@ -391,9 +396,14 @@ export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFi
     return entries;
   }, [data, folders]);
 
-  // Filtering pipeline
+  // Filtering pipeline (deferred filter values, see above). `fetchedAt` is
+  // the "now" for relative time bounds — sampled when data arrived, so
+  // filtering stays pure and stable across re-renders.
   const filteredData = useMemo(() => {
-    const now = Date.now();
+    const now = fetchedAt;
+    const timeRange = deferredTimeRange;
+    const authorFilter = deferredAuthorFilter;
+    const locationFilter = deferredLocationFilter;
     const hasTimeFilter = timeRange.mode !== 'all';
 
     let getTimeBounds: () => [number, number];
@@ -440,15 +450,17 @@ export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFi
         return { ...file, suggestions: filtered };
       })
       .filter(file => file.suggestions.length > 0);
-  }, [data, authorFilter, timeRange, locationFilter]);
+  }, [data, fetchedAt, deferredAuthorFilter, deferredTimeRange, deferredLocationFilter]);
 
-  // Auto-expand the first file on initial load
+  const defaultExpanded = useMemo(
+    () => new Set(filteredData.length > 0 ? [filteredData[0].doc_id] : []),
+    [filteredData],
+  );
+  const defaultExpandedRef = useRef(defaultExpanded);
   useEffect(() => {
-    if (!autoExpandedRef.current && filteredData.length > 0) {
-      autoExpandedRef.current = true;
-      setExpandedFiles(new Set([filteredData[0].doc_id]));
-    }
-  }, [filteredData]);
+    defaultExpandedRef.current = defaultExpanded;
+  }, [defaultExpanded]);
+  const expandedFiles = expandedOverride ?? defaultExpanded;
 
   const isFiltered = authorFilter.size > 0 || timeRange.mode !== 'all' || locationFilter.size > 0;
   const totalFiltered = filteredData.reduce((sum, f) => sum + f.suggestions.length, 0);
@@ -462,7 +474,7 @@ export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFi
 
   const toggleFile = useCallback((docId: string) => {
     setExpandedFiles(prev => {
-      const next = new Set(prev);
+      const next = new Set(prev ?? defaultExpandedRef.current);
       if (next.has(docId)) next.delete(docId);
       else next.add(docId);
       return next;
@@ -557,7 +569,7 @@ export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFi
                 {bulkFailedCount} suggestion{bulkFailedCount !== 1 ? 's' : ''} couldn't be applied (changed, already resolved, or connection failed — Refresh to re-check)
               </span>
             )}
-            {handleAcceptAllFiltered && (
+            {onFileAction && (
               <button
                 onClick={() => setConfirmAction('accept')}
                 disabled={!!bulkRun}
@@ -568,7 +580,7 @@ export function ReviewPage({ folderIds, folders, currentUserName, onAction, onFi
                   : isFiltered ? 'Accept Filtered' : 'Accept All'}
               </button>
             )}
-            {handleRejectAllFiltered && (
+            {onFileAction && (
               <button
                 onClick={() => setConfirmAction('reject')}
                 disabled={!!bulkRun}
@@ -719,8 +731,11 @@ const FileSection = memo(function FileSection({ file, folderName, expanded, onTo
   const handleRejectAll = useCallback(() => handleAll('reject'), [handleAll]);
   const fileButtonsDisabled = busy || bulkDisabled;
 
+  // content-visibility keeps every row in the DOM (find-in-page still works)
+  // while the browser skips layout/paint for off-screen sections; the
+  // intrinsic size reserves an estimated height so the scrollbar stays stable.
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+    <div className="border border-gray-200 rounded-lg overflow-hidden shadow-sm [content-visibility:auto] [contain-intrinsic-size:auto_3rem]">
       <div className="flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors">
         <button onClick={handleToggle} className="flex items-center gap-3 flex-1 min-w-0">
           <svg className={`w-3.5 h-3.5 text-gray-400 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
@@ -815,7 +830,7 @@ const SuggestionRow = memo(function SuggestionRow({ docId, folderId, suggestion,
   }, [onNavigate, docId, suggestion.from]);
 
   return (
-    <div className={`px-4 py-3 transition-colors duration-300 ${resolved ? 'bg-gray-50' : ''}`}>
+    <div className={`px-4 py-3 transition-colors duration-300 [content-visibility:auto] [contain-intrinsic-size:auto_7rem] ${resolved ? 'bg-gray-50' : ''}`}>
       <div className="flex flex-wrap items-center gap-2 mb-2">
         <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0 max-md:basis-full">
           {resolved === 'not-found' ? (

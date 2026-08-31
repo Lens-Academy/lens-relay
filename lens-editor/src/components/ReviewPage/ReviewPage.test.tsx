@@ -30,6 +30,7 @@ function mockLoaded() {
           ],
         },
       ],
+      fetchedAt: Date.now(),
       loading: false,
       error: null,
       refresh: mockRefresh,
@@ -41,6 +42,7 @@ function mockLoading() {
   vi.doMock('../../hooks/useSuggestions', () => ({
     useSuggestions: () => ({
       data: [],
+      fetchedAt: 0,
       loading: true,
       error: null,
       refresh: mockRefresh,
@@ -52,6 +54,7 @@ function mockError() {
   vi.doMock('../../hooks/useSuggestions', () => ({
     useSuggestions: () => ({
       data: [],
+      fetchedAt: Date.now(),
       loading: false,
       error: 'Network error',
       refresh: mockRefresh,
@@ -63,6 +66,7 @@ function mockEmpty() {
   vi.doMock('../../hooks/useSuggestions', () => ({
     useSuggestions: () => ({
       data: [],
+      fetchedAt: Date.now(),
       loading: false,
       error: null,
       refresh: mockRefresh,
@@ -95,6 +99,7 @@ function mockSessionAuthors() {
           suggestion("Someone else's AI", 'other suggestion', 50),
         ],
       }],
+      fetchedAt: Date.now(),
       loading: false,
       error: null,
       refresh: mockRefresh,
@@ -207,9 +212,12 @@ describe('ReviewPage session author defaults', () => {
     });
     expect(screen.getByRole('button', { name: "Someone else's AI" }))
       .not.toHaveClass('bg-blue-100');
-    expect(screen.getByText('human suggestion')).toBeTruthy();
-    expect(screen.getByText('session AI suggestion')).toBeTruthy();
-    expect(screen.queryByText('other suggestion')).toBeNull();
+    // The list follows the filter chips after a deferred render.
+    await waitFor(() => {
+      expect(screen.getByText('human suggestion')).toBeTruthy();
+      expect(screen.getByText('session AI suggestion')).toBeTruthy();
+      expect(screen.queryByText('other suggestion')).toBeNull();
+    });
   });
 });
 
@@ -238,6 +246,7 @@ function mockTwoFiles() {
         { path: 'Notes/One.md', doc_id: 'relay-doc-1', folder_id: 'f1', suggestions: [makeSuggestion(10, 'aaa'), makeSuggestion(50, 'bbb')] },
         { path: 'Notes/Two.md', doc_id: 'relay-doc-2', folder_id: 'f1', suggestions: [makeSuggestion(5, 'ccc'), makeSuggestion(90, 'ddd')] },
       ],
+      fetchedAt: Date.now(),
       loading: false,
       error: null,
       refresh: mockRefresh,

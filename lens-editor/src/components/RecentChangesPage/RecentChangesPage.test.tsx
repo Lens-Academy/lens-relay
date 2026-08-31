@@ -49,11 +49,9 @@ function renderPage() {
 }
 
 describe('RecentChangesPage', () => {
-  it('caps rendered excerpts per file with a "Show more" button', () => {
+  it('renders every excerpt of an expanded file (off-screen cost is deferred via content-visibility)', () => {
     state.data = [file('a', [event('a1', now - 1000)], 40)];
     renderPage();
-    expect(screen.getAllByText(/^ins \d+$/)).toHaveLength(25);
-    fireEvent.click(screen.getByText('Show 15 more'));
     expect(screen.getAllByText(/^ins \d+$/)).toHaveLength(40);
   });
 
