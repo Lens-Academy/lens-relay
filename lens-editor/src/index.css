@@ -233,6 +233,26 @@
   color: #6b7280;
 }
 
+/* List hanging indent — wrapped rows of a list item start under the item's
+   text, not under the bullet. --list-hang is the measured pixel width of the
+   line's prefix (indent + marker), set per line by listHangingIndent.ts.
+   6px / 12px mirror CM's default .cm-line left padding and .cm-blockquote's. */
+.cm-content .cm-line.cm-list-line {
+  padding-left: calc(6px + var(--list-hang));
+  text-indent: calc(-1 * var(--list-hang));
+}
+.cm-content .cm-line.cm-blockquote.cm-list-line {
+  padding-left: calc(12px + var(--list-hang)) !important;
+}
+/* Leading tabs of a list line. inline-block + text-indent: 0 gives the tabs
+   their own tab stops, so their width no longer depends on the line's
+   negative text-indent (which would otherwise make the measurement unstable). */
+.cm-list-indent {
+  display: inline-block;
+  text-indent: 0;
+  white-space: pre;
+}
+
 /* Checklist checkbox */
 .cm-checkbox {
   appearance: none;

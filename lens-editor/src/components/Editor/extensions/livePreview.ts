@@ -27,6 +27,7 @@ import {
 import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin } from './criticmarkup';
 import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
 import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
+import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateEffect, StateField } from '@codemirror/state';
@@ -1053,6 +1054,7 @@ export function livePreview(context?: WikilinkContext) {
     drawSelection(), // Required for proper cursor with hidden content
     frontmatterField, // StateField outside compartment (survives source mode toggle)
     obsidianCommentRangesField,
+    listHangingIndent, // wrapped list rows align with the item text in both modes
     livePreviewCompartment.of([livePreviewPlugin, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];
 }
