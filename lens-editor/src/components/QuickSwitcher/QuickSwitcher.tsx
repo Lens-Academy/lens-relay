@@ -205,7 +205,8 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
 
   const isRecentMode = results === null;
   const hasItems = displayItems.length > 0;
-  const isStale = query !== deferredQuery;
+  // No "stale" dimming while the deferred query catches up: the search
+  // settles within a frame or two, so any visual cue only shows as a flicker.
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -231,11 +232,7 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
               autoFocus
             />
           </div>
-          <div
-            ref={listRef}
-            className={`max-h-[400px] max-md:max-h-[55dvh] overflow-y-auto ${isStale ? 'opacity-70' : ''}`}
-            role="listbox"
-          >
+          <div ref={listRef} className="max-h-[400px] max-md:max-h-[55dvh] overflow-y-auto" role="listbox">
             {isRecentMode && hasItems && (
               <div className="px-3 py-1.5 text-xs text-gray-500 font-medium uppercase tracking-wide">
                 Recent
