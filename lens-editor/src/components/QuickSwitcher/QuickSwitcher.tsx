@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, useDeferredValue } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useNavigation } from '../../contexts/NavigationContext';
-import { fuzzyMatch } from '../../lib/fuzzy-match';
+import { fuzzySearch, prepareFuzzyTarget, type FuzzyTarget } from '../../lib/fuzzy-match';
 import { pathToDisplayString } from '../../lib/path-display';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab } from '../../lib/url-utils';
@@ -18,7 +18,16 @@ interface FileEntry {
   name: string;
   displayPath: string;
   id: string;
+  /** Pre-processed search target, built once per metadata change. */
+  target: FuzzyTarget;
 }
+
+/**
+ * Cap on rendered search results. The best matches are unaffected; this only
+ * trims the long tail so large folders don't produce thousands of rows per
+ * keystroke.
+ */
+const MAX_RESULTS = 100;
 
 /**
  * Render a file name with fuzzy match highlights.
@@ -65,6 +74,10 @@ function extractFileName(path: string): string {
 export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: QuickSwitcherProps) {
   const { metadata } = useNavigation();
   const [query, setQuery] = useState('');
+  // Search runs against a deferred copy of the query so each keystroke paints
+  // immediately; React fills in the (more expensive) results afterwards and
+  // abandons stale work if another key arrives first.
+  const deferredQuery = useDeferredValue(query);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -76,7 +89,7 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
       if (meta.type === 'folder') continue;
       const name = extractFileName(path);
       const displayPath = pathToDisplayString(path);
-      entries.push({ path, name, displayPath, id: meta.id });
+      entries.push({ path, name, displayPath, id: meta.id, target: prepareFuzzyTarget(displayPath) });
     }
     return entries;
   }, [metadata]);
@@ -90,24 +103,14 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
     return map;
   }, [fileEntries]);
 
-  // Compute results based on query
+  // Compute results based on the deferred query (best-first, capped)
   const results = useMemo(() => {
-    if (query.trim() === '') {
+    if (deferredQuery.trim() === '') {
       return null; // null signals "show recent files" mode
     }
 
-    const scored: { entry: FileEntry; score: number; ranges: [number, number][] }[] = [];
-    for (const entry of fileEntries) {
-      const result = fuzzyMatch(query, entry.displayPath);
-      if (result.match) {
-        scored.push({ entry, score: result.score, ranges: result.ranges });
-      }
-    }
-
-    // Sort by score descending
-    scored.sort((a, b) => b.score - a.score);
-    return scored;
-  }, [query, fileEntries]);
+    return fuzzySearch(deferredQuery, fileEntries, entry => entry.target, { limit: MAX_RESULTS });
+  }, [deferredQuery, fileEntries]);
 
   // Resolve recent files to entries (filter out nonexistent)
   const recentEntries = useMemo(() => {
@@ -126,7 +129,7 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
   const displayItems = useMemo(() => {
     if (results !== null) {
       return results.map(r => ({
-        entry: r.entry,
+        entry: r.item,
         ranges: r.ranges,
       }));
     }
@@ -202,6 +205,7 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
 
   const isRecentMode = results === null;
   const hasItems = displayItems.length > 0;
+  const isStale = query !== deferredQuery;
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -227,7 +231,11 @@ export function QuickSwitcher({ open, onOpenChange, recentFiles, onSelect }: Qui
               autoFocus
             />
           </div>
-          <div ref={listRef} className="max-h-[400px] max-md:max-h-[55dvh] overflow-y-auto" role="listbox">
+          <div
+            ref={listRef}
+            className={`max-h-[400px] max-md:max-h-[55dvh] overflow-y-auto ${isStale ? 'opacity-70' : ''}`}
+            role="listbox"
+          >
             {isRecentMode && hasItems && (
               <div className="px-3 py-1.5 text-xs text-gray-500 font-medium uppercase tracking-wide">
                 Recent

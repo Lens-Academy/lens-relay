@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fuzzyMatch } from './fuzzy-match';
+import { fuzzyMatch, fuzzySearch, prepareFuzzyTarget } from './fuzzy-match';
 
 describe('fuzzyMatch', () => {
   it('returns no match when query chars are not in target in order', () => {
@@ -31,6 +31,18 @@ describe('fuzzyMatch', () => {
     const contiguous = fuzzyMatch('hell', 'hello');
     const scattered = fuzzyMatch('helo', 'help docs');
     expect(contiguous.score).toBeGreaterThan(scattered.score);
+  });
+
+  it('treats a slash in the query like a space', () => {
+    const withSlash = fuzzyMatch('Lens/Browser', 'Lens/Browser Screenshot Editing');
+    const withSpace = fuzzyMatch('Lens Browser', 'Lens/Browser Screenshot Editing');
+    expect(withSlash.match).toBe(true);
+    expect(withSlash.ranges).toEqual(withSpace.ranges);
+    expect(withSlash.score).toBe(withSpace.score);
+  });
+
+  it('matches a query ending in a slash', () => {
+    expect(fuzzyMatch('Lens/', 'Lens/Browser Screenshot Editing').match).toBe(true);
   });
 
   it('scores word-boundary matches higher', () => {
@@ -91,5 +103,56 @@ describe('fuzzyMatch', () => {
     const substringMatch = fuzzyMatch('demo', 'Detailed Demo Notes.md');
     const scatteredMatch = fuzzyMatch('demo', 'Docs/Early/Methods/Outline.md');
     expect(substringMatch.score).toBeGreaterThan(scatteredMatch.score);
+  });
+});
+
+describe('fuzzySearch', () => {
+  const items = [
+    { id: 'a', path: 'Lens/Introduction' },
+    { id: 'b', path: 'Lens/Getting Started' },
+    { id: 'c', path: 'Lens Edu/Course Notes' },
+    { id: 'd', path: 'Lens/Projects/Alpha' },
+  ].map(item => ({ ...item, target: prepareFuzzyTarget(item.path) }));
+
+  it('returns nothing for an empty query', () => {
+    expect(fuzzySearch('', items, i => i.target)).toEqual([]);
+  });
+
+  it('returns only matching items, best-first, with highlight ranges', () => {
+    const results = fuzzySearch('intro', items, i => i.target);
+    expect(results.map(r => r.item.id)).toEqual(['a']);
+    expect(results[0].ranges).toEqual([[5, 10]]);
+    expect(results[0].score).toBeGreaterThan(0);
+  });
+
+  it('matches across path boundaries like fuzzyMatch', () => {
+    const batch = fuzzySearch('lens alpha', items, i => i.target);
+    expect(batch.map(r => r.item.id)).toEqual(['d']);
+    const single = fuzzyMatch('lens alpha', 'Lens/Projects/Alpha');
+    expect(batch[0].ranges).toEqual(single.ranges);
+  });
+
+  it('agrees with fuzzyMatch on ordering', () => {
+    const batch = fuzzySearch('lens', items, i => i.target);
+    const expected = items
+      .map(i => ({ id: i.id, score: fuzzyMatch('lens', i.path).score }))
+      .sort((x, y) => y.score - x.score)
+      .map(x => x.id);
+    expect(batch.map(r => r.item.id)).toEqual(expected);
+  });
+
+  it('accepts slashes in the query as separators', () => {
+    const slash = fuzzySearch('lens/alpha', items, i => i.target);
+    const space = fuzzySearch('lens alpha', items, i => i.target);
+    expect(slash.map(r => r.item.id)).toEqual(['d']);
+    expect(slash[0].ranges).toEqual(space[0].ranges);
+    expect(fuzzySearch('lens/', items, i => i.target).length).toBe(items.length);
+  });
+
+  it('caps results at limit while keeping the best matches', () => {
+    const all = fuzzySearch('lens', items, i => i.target);
+    expect(all.length).toBeGreaterThan(2);
+    const limited = fuzzySearch('lens', items, i => i.target, { limit: 2 });
+    expect(limited.map(r => r.item.id)).toEqual(all.slice(0, 2).map(r => r.item.id));
   });
 });
