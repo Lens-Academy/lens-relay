@@ -70,6 +70,9 @@ function plainText(markdown: string): string {
 function candidateId(headingText: string): string {
   const words = plainText(headingText)
     .toLowerCase()
+    // Apostrophes are dropped rather than treated as word breaks: splitting
+    // "It's" into "it" + "s" spends two of the ID's words on one.
+    .replace(/['’‘`]/g, "")
     .replace(/[^a-z0-9\s-]/g, " ")
     .split(/\s+/)
     .filter(Boolean);

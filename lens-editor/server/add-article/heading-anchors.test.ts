@@ -39,6 +39,11 @@ describe("applyHeadingAnchors — block IDs", () => {
     expect(body).toBe("## The **hard** part of [alignment](https://x.test) ^the-hard-part-of\n");
   });
 
+  it("drops apostrophes instead of breaking the word around them", () => {
+    const { body } = applyHeadingAnchors("## It’s Just Adding One Word at a Time\n");
+    expect(body).toBe("## It’s Just Adding One Word at a Time ^its-just-adding-one\n");
+  });
+
   it("falls back to a generic ID when the heading has no usable words", () => {
     const { body } = applyHeadingAnchors("## ***\n\n## ???\n");
     expect(body).toBe("## *** ^section\n\n## ??? ^section-2\n");
