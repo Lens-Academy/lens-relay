@@ -102,7 +102,7 @@ export function classifyFootnote(definition: string): FootnoteClass {
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
 
 /** Line index → whether the line is inside a fenced code block. */
-function fencedLineMask(lines: string[]): boolean[] {
+export function fencedLineMask(lines: string[]): boolean[] {
   const mask = new Array<boolean>(lines.length).fill(false);
   let fence: string | null = null;
   for (let i = 0; i < lines.length; i++) {

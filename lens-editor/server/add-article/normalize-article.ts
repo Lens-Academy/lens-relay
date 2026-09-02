@@ -1,4 +1,5 @@
 import { retypeFootnotes } from "./footnote-typing";
+import { applyHeadingAnchors } from "./heading-anchors";
 
 export interface NormalizationSample {
   before: string;
@@ -170,5 +171,12 @@ export function normalizeArticleBody(body: string, sourceUrl: string): {
   // reference+definition group needs cross-line pairing that the segment
   // transforms above cannot express.
   const typed = retypeFootnotes(transformed.join(""));
-  return { body: typed.body, changes: [...changes.values(), ...typed.changes] };
+  // Heading block IDs are a third whole-document pass for the same reason: a
+  // link is rewritten against headings that may be defined anywhere in the
+  // document, so every heading must be seen before any link is resolved.
+  const anchored = applyHeadingAnchors(typed.body);
+  return {
+    body: anchored.body,
+    changes: [...changes.values(), ...typed.changes, ...anchored.changes],
+  };
 }

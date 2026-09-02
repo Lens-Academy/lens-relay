@@ -50,6 +50,9 @@ describe("direct source review", () => {
     expect(buildVerifyPrompt("/tmp/review")).toContain("evidence/source-unrendered.html");
     expect(buildVerifyPrompt("/tmp/review")).not.toContain("source.txt");
     expect(buildVerifyPrompt("/tmp/review")).toContain("HTML-escaped article content inside JSON-LD or hydration scripts");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("Link to headings inside the article by block ID, never by heading text");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("[[#^stable-id|Custom label]]");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("never \"fix\" an ID to match its heading");
     expect(buildVerifyPrompt("/tmp/review", 2)).toContain("review pass 3 of 3");
     expect(buildVerifyPrompt("/tmp/review", 2)).toContain("base has already been chosen");
     expect(buildVerifyPrompt("/tmp/review", 2)).toContain("current article's remaining syntax problems");

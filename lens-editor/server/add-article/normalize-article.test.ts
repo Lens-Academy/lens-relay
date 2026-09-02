@@ -96,6 +96,16 @@ describe("normalizeArticleBody", () => {
     ]);
   });
 
+  it("anchors headings and rewrites their fragment links before review", () => {
+    const input = "See [the risks](#the-risks).\n\n## The risks\n";
+    const { body, changes } = normalizeArticleBody(input, "https://example.com/article");
+    expect(body).toBe("See [[#^the-risks|the risks]].\n\n## The risks ^the-risks\n");
+    expect(changes.map((c) => c.code)).toEqual(
+      expect.arrayContaining(["normalize.heading-block-id", "normalize.heading-fragment-link"]),
+    );
+    expect(normalizeArticleBody(body, "https://example.com/article").body).toBe(body);
+  });
+
   it("is idempotent with CRLF input and exact residue lines", () => {
     const input = "Before\r\nPosted in: , ,\r\nAfter [link](/path)\r\n";
     const once = normalizeArticleBody(input, "https://example.com/article");
