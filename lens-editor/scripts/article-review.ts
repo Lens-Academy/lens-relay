@@ -117,10 +117,15 @@ async function prepare(): Promise<void> {
   const relayFolder = arg("--relay-folder") ?? "Lens Edu";
   if (!relayUrl) throw new Error("prepare requires --relay-url <url> or RELAY_URL");
   if (!relayToken) throw new Error("prepare requires ARTICLE_REVIEW_RELAY_TOKEN or MCP_API_KEY");
+  // Optional gap between source fetches: mirrors such as greaterwrong.com
+  // answer 429 to a burst of requests but are fine with a steady trickle.
+  const paceMs = Number(arg("--pace-ms") ?? 0);
+  if (!Number.isFinite(paceMs) || paceMs < 0) throw new Error("--pace-ms must be a non-negative number");
   await fs.mkdir(runDir, { recursive: true });
   const items: ReviewItem[] = [];
 
   for (const relative of await selectedPaths(contentRoot)) {
+    if (paceMs > 0 && items.length > 0) await new Promise((resolve) => setTimeout(resolve, paceMs));
     const normalized = relative.replace(/\\/g, "/").replace(/^\/+/, "");
     const full = path.resolve(contentRoot, normalized);
     if (!full.startsWith(`${contentRoot}${path.sep}`)) throw new Error(`Unsafe article path: ${relative}`);
@@ -365,7 +370,22 @@ async function execute(): Promise<void> {
         throw new Error("Relay accepted view changed before suggestions were published");
       }
       const edits = buildRelayReviewEdits(fresh, reviewed, { allowWholeDocumentFallback: false });
-      for (const edit of edits) await client.edit(item.relay_path, edit.old, edit.replacement);
+      for (const edit of edits) {
+        try {
+          await client.edit(item.relay_path, edit.old, edit.replacement);
+        } catch (error) {
+          // Relay's read tool cannot convey whether the document ends with a
+          // newline (the decoded view always does), so an edit that reaches the
+          // end of the document may carry a trailing "\n" the document lacks.
+          // Retry that one case without it; anything else is a real failure.
+          const eofNewlineMismatch =
+            /old_string not found/.test(String(error)) &&
+            edit.old.endsWith("\n") &&
+            fresh.endsWith(edit.old);
+          if (!eofNewlineMismatch) throw error;
+          await client.edit(item.relay_path, edit.old.slice(0, -1), edit.replacement.replace(/\n$/, ""));
+        }
+      }
       const proposed = await client.read(item.relay_path, true);
       if (proposed !== reviewed) throw new Error("Relay accepted-draft view does not match the reviewed article");
       const validationOutput = await client.validateContent(true);
@@ -528,7 +548,7 @@ try {
   else throw new Error(
     "Usage: article-review <prepare|execute|status|prune|summarize-reports> ... " +
     "[--provider claude|codex] [--model <model>] [--max-budget-usd <amount>] " +
-    "[--timeout-minutes <minutes>]",
+    "[--timeout-minutes <minutes>] [--pace-ms <ms>]",
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
