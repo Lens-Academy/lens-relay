@@ -117,3 +117,18 @@ export async function finishReviewItem(
     await atomicWriteRun(runDir, run);
   });
 }
+
+/** Put a claimed item back to "prepared" (e.g. the executor stopped before any
+ * review ran because a shared service was down). Only valid while the bundle
+ * is still exactly as prepared. */
+export async function releaseReviewItem(runDir: string, articlePath: string): Promise<void> {
+  await withManifestLock(runDir, async () => {
+    const run = await readReviewRun(runDir);
+    const item = run.items.find((candidate) => candidate.article_path === articlePath);
+    if (!item) throw new Error(`Article is missing from review manifest: ${articlePath}`);
+    item.state = "prepared";
+    delete item.error;
+    delete item.started_at;
+    await atomicWriteRun(runDir, run);
+  });
+}

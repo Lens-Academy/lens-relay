@@ -6,6 +6,7 @@ import {
   claimReviewItem,
   finishReviewItem,
   readReviewRun,
+  releaseReviewItem,
   writeReviewRun,
   type ReviewRun,
 } from "../../scripts/article-review-manifest";
@@ -84,5 +85,17 @@ describe("article review manifest", () => {
       state: "running",
       review_provider: "codex",
     });
+  });
+
+  it("releases a claimed item back to prepared so another executor can claim it", async () => {
+    const root = await makeRun();
+    const claimed = await claimReviewItem(root, "one.md", "claude", "sonnet");
+    expect(claimed?.state).toBe("running");
+    expect(await claimReviewItem(root, "one.md", "claude", "sonnet")).toBeNull();
+    await releaseReviewItem(root, "one.md");
+    const run = await readReviewRun(root);
+    expect(run.items[0]).toMatchObject({ state: "prepared" });
+    expect(run.items[0].started_at).toBeUndefined();
+    expect(await claimReviewItem(root, "one.md", "claude", "sonnet")).toMatchObject({ state: "running" });
   });
 });

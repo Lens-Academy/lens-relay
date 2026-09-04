@@ -16,6 +16,7 @@ import {
 } from "../server/add-article/claude";
 import {
   assertArticleValidationConfigured,
+  isArticleValidationOutage,
   validateArticleDraft,
   type ArticleValidationResult,
 } from "../server/add-article/platform-validation";
@@ -26,6 +27,7 @@ import {
   claimReviewItem,
   finishReviewItem,
   readReviewRun,
+  releaseReviewItem,
   reviewItemCanBeClaimed,
   writeReviewRun,
   type ReviewItem,
@@ -158,6 +160,16 @@ async function prepare(): Promise<void> {
     };
     try {
       const evidence = await buildSourceEvidence(sourceUrl);
+      // A bot-check interstitial (Vercel "Security Checkpoint", Cloudflare
+      // "Just a moment") extracts to a few dozen characters; recording it as
+      // evidence would only make the reviewer reject the article later, at a
+      // model call's cost. Fail the item now so it can be re-prepared.
+      if (evidence.extraction.body.trim().length < 400) {
+        throw new Error(
+          `source evidence is only ${evidence.extraction.body.trim().length} characters ` +
+          `(fetched ${evidence.manifest.fetched_url}); likely a bot-check page — re-prepare later`,
+        );
+      }
       await writeSourceEvidence(bundle, evidence);
       await fs.writeFile(path.join(bundle, "instructions.md"), instructions(item));
     } catch (error) {
@@ -249,6 +261,32 @@ function withReviewProvenance(markdown: string, manifest: Record<string, unknown
   return reviewed.endsWith("\n") ? reviewed : `${reviewed}\n`;
 }
 
+/** Poll the validation service with a trivial draft until it answers again
+ * (any real answer counts, including a verdict that the probe is invalid). */
+async function waitForArticleValidation(maxWaitMs = 3 * 60 * 60_000): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    try {
+      await validateArticleDraft("articles/validator-probe.md", "---\ntitle: probe\n---\n\nprobe\n");
+      return;
+    } catch (error) {
+      if (!isArticleValidationOutage(error)) return;
+      if (Date.now() - started > maxWaitMs) {
+        throw new Error("Article validation service stayed unavailable for hours; giving up");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 60_000));
+    }
+  }
+}
+
+/** A reviewer failure caused by the provider refusing work (rate limit or the
+ * subscription's session window), rather than by this article. */
+function isReviewerUnavailable(error: unknown): boolean {
+  const text = String(error);
+  return /Mandatory article LLM review failed/.test(text) &&
+    /"api_error_status":\s*(?:429|5\d\d)\b|session limit|rate.?limit|overloaded/i.test(text);
+}
+
 async function execute(): Promise<void> {
   const runDir = path.resolve(arg("--run") ?? "");
   if (!arg("--run")) throw new Error("execute requires --run <run-directory>");
@@ -260,13 +298,21 @@ async function execute(): Promise<void> {
   const relayToken = process.env.ARTICLE_REVIEW_RELAY_TOKEN ?? process.env.MCP_API_KEY;
   if (!relayUrl || !relayToken) throw new Error("execute requires Relay URL and token");
   assertArticleValidationConfigured();
+  // The post-publish folder validation report is informational, and the relay
+  // produces it by calling the platform validator while holding the request —
+  // when that validator is flaky, every executor's MCP calls stall behind it.
+  const skipValidationReport = process.argv.includes("--skip-validation-report");
   const selectedReviewer = reviewerConfig();
-  const run = await readReviewRun(runDir);
-  const items = run.items.filter((item) =>
-    reviewItemCanBeClaimed(item) && (!onlyArticle || item.article_path === onlyArticle));
-  if (!items.length) throw new Error("No matching prepared articles");
+  // Re-read the manifest before every claim: other executors share the run,
+  // and an item released after a service outage must be picked up again.
+  const nextClaimable = async () => {
+    const run = await readReviewRun(runDir);
+    return run.items.find((item) =>
+      reviewItemCanBeClaimed(item) && (!onlyArticle || item.article_path === onlyArticle));
+  };
+  if (!(await nextClaimable())) throw new Error("No matching prepared articles");
 
-  for (const candidate of items) {
+  for (let candidate = await nextClaimable(); candidate; candidate = await nextClaimable()) {
     const item = await claimReviewItem(
       runDir,
       candidate.article_path,
@@ -276,10 +322,11 @@ async function execute(): Promise<void> {
     if (!item) continue;
     const resultPath = path.join(item.bundle, "result.json");
     const reviewPassDetails: ReviewPassMetric[] = [];
+    let prepared: string | undefined;
     try {
       const client = await createRelayReviewClient({ relayUrl, token: relayToken }, "Luc");
       const accepted = await client.read(item.relay_path);
-      const prepared = await fs.readFile(path.join(item.bundle, "article.md"), "utf-8");
+      prepared = await fs.readFile(path.join(item.bundle, "article.md"), "utf-8");
       if (accepted !== prepared) {
         throw new Error("Relay accepted view changed since preparation; prepare a fresh run");
       }
@@ -388,7 +435,16 @@ async function execute(): Promise<void> {
       }
       const proposed = await client.read(item.relay_path, true);
       if (proposed !== reviewed) throw new Error("Relay accepted-draft view does not match the reviewed article");
-      const validationOutput = await client.validateContent(true);
+      // The suggestions are published at this point; the folder validation
+      // report is informational, so a validator outage must not turn a
+      // published review into a "failed" item.
+      let validationOutput: string;
+      try {
+        validationOutput = skipValidationReport ? "skipped (--skip-validation-report)" : await client.validateContent(true);
+      } catch (error) {
+        validationOutput = `unavailable: ${String(error).slice(0, 500)}`;
+        console.error(`  validation report unavailable for ${item.article_path}: ${String(error).slice(0, 160)}`);
+      }
       const reviewUrl = await client.getUrl(item.relay_path);
       await fs.writeFile(resultPath, JSON.stringify({
         state: "suggested",
@@ -404,6 +460,33 @@ async function execute(): Promise<void> {
       console.log(`suggested ${item.article_path}\n${reviewUrl.trim()}`);
     } catch (error) {
       const message = error instanceof ArticleReviewRejectedError ? error.reason : String(error);
+      if (isArticleValidationOutage(error)) {
+        // The validation service is down, not this article. Failing every
+        // remaining claim would just burn through the run, so wait for the
+        // service instead; an item whose bundle the reviewer never touched
+        // goes back to "prepared" and is claimed again once it recovers.
+        if (reviewPassDetails.length === 0) {
+          await releaseReviewItem(runDir, item.article_path);
+          console.error(`released  ${item.article_path}: ${message.slice(0, 200)}`);
+        } else {
+          await fs.writeFile(resultPath, JSON.stringify({ state: "failed", error: message, review_passes: reviewPassDetails.length, review_pass_details: reviewPassDetails, review_provider: selectedReviewer.provider, review_model: selectedReviewer.model }, null, 2));
+          await finishReviewItem(runDir, item.article_path, "failed", message);
+          console.error(`failed    ${item.article_path}: ${message.slice(0, 200)}`);
+        }
+        console.error("Article validation service is unavailable; waiting for it to recover");
+        await waitForArticleValidation();
+        continue;
+      }
+      if (isReviewerUnavailable(error) && prepared !== undefined) {
+        // The reviewer itself is rate-limited (per-minute 429, or the
+        // subscription's session window). The reviewer replaces the bundle's
+        // article.md with its own working copy, so put the prepared copy back
+        // and release the item; then stop rather than burn the rest of the run.
+        await fs.writeFile(path.join(item.bundle, "article.md"), prepared);
+        await releaseReviewItem(runDir, item.article_path);
+        console.error(`released  ${item.article_path}: ${message.slice(0, 200)}`);
+        throw new Error("Reviewer is rate-limited; stopping this executor");
+      }
       await fs.writeFile(resultPath, JSON.stringify({
         state: "failed",
         error: message,
@@ -548,7 +631,7 @@ try {
   else throw new Error(
     "Usage: article-review <prepare|execute|status|prune|summarize-reports> ... " +
     "[--provider claude|codex] [--model <model>] [--max-budget-usd <amount>] " +
-    "[--timeout-minutes <minutes>] [--pace-ms <ms>]",
+    "[--timeout-minutes <minutes>] [--pace-ms <ms>] [--skip-validation-report]",
   );
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

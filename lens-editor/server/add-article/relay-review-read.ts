@@ -1,6 +1,6 @@
 import { bytesToText, fetchBytesWithTimeout } from "../fetch-timeout";
 
-const MCP_TIMEOUT_MS = 30_000;
+const MCP_TIMEOUT_MS = 90_000;
 const MCP_VALIDATION_TIMEOUT_MS = 120_000;
 const MCP_MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
 
