@@ -1222,6 +1222,42 @@ mod tests {
         assert_eq!(events[0].pos, 4);
     }
 
+    /// Regression: a direct (AI-attributed) replacement garbled the text in
+    /// production on 2026-09-04 (`...|4on").` edited to `...|4.2]].` came
+    /// back as `...|4.n").`). The Myers diff for this shape reports an
+    /// insert offset inside the preceding delete; hunks must be positioned
+    /// from the op sequence, not from those indices (see edit_policy).
+    #[tokio::test]
+    async fn direct_edit_with_interleaved_diff_ops_keeps_text_intact() {
+        let original = "We discuss this in Section\u{a0}[[#^evaluation-design|4on\").\n\nNext paragraph.\n";
+        let server = build_test_server(&[(
+            "/Doc.md",
+            "0d1a0000-0000-4000-8000-0000000000a0",
+            original,
+        )])
+        .await;
+        let doc_id = format!("{}-{}", RELAY_ID, "0d1a0000-0000-4000-8000-0000000000a0");
+        register_doc_client(&server, &doc_id, "ai:sonnet:luc");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": "in Section\u{a0}[[#^evaluation-design|4on\").",
+                "new_string": "in Section\u{a0}[[#^evaluation-design|4.2]].",
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(result.starts_with("Made the changes"), "{}", result);
+        assert_eq!(
+            read_doc_content(&server, &doc_id),
+            "We discuss this in Section\u{a0}[[#^evaluation-design|4.2]].\n\nNext paragraph.\n"
+        );
+    }
+
     #[tokio::test]
     async fn ai_can_rewrite_its_own_direct_text_but_not_surrounding_human_text() {
         let server = build_test_server(&[(

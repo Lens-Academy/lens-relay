@@ -155,25 +155,25 @@ fn minimal_hunks_with(
         capture_diff_slices(Algorithm::Myers, &old_keys, &new_keys)
     };
     let mut hunks: Vec<Hunk> = Vec::new();
+    // Positions come from walking the op sequence, never from the indices
+    // the ops carry. `similar` 2.7's Myers output can report an `Insert`
+    // whose `old_index` lies inside the preceding `Delete` (e.g. `4on").` →
+    // `4.2]].` yields Delete(1..5) then Insert at old 2 instead of 6); the op
+    // *order* is still a valid script, and applying the reported offsets
+    // interleaves the insertion with the deletion and garbles the text.
+    let (mut oi, mut ni) = (0usize, 0usize);
     for op in ops {
-        let (oi, ol, ni, nl) = match op {
-            DiffOp::Equal { .. } => continue,
-            DiffOp::Delete {
-                old_index,
-                old_len,
-                new_index,
-            } => (old_index, old_len, new_index, 0),
-            DiffOp::Insert {
-                old_index,
-                new_index,
-                new_len,
-            } => (old_index, 0, new_index, new_len),
+        let (ol, nl) = match op {
+            DiffOp::Equal { len, .. } => {
+                oi += len;
+                ni += len;
+                continue;
+            }
+            DiffOp::Delete { old_len, .. } => (old_len, 0),
+            DiffOp::Insert { new_len, .. } => (0, new_len),
             DiffOp::Replace {
-                old_index,
-                old_len,
-                new_index,
-                new_len,
-            } => (old_index, old_len, new_index, new_len),
+                old_len, new_len, ..
+            } => (old_len, new_len),
         };
         let hunk = Hunk {
             old_from: old_bytes[oi],
@@ -181,6 +181,8 @@ fn minimal_hunks_with(
             new_from: new_bytes[ni],
             new_to: new_bytes[ni + nl],
         };
+        oi += ol;
+        ni += nl;
         match hunks.last_mut() {
             Some(last) if last.old_to == hunk.old_from && last.new_to == hunk.new_from => {
                 last.old_to = hunk.old_to;
@@ -812,5 +814,39 @@ mod tests {
         let hunks = vec![h(2, 4, 2, 5), h(8, 9, 9, 9)];
         assert_eq!(coalesce(&hunks), Some(h(2, 9, 2, 9)));
         assert_eq!(coalesce(&[]), None);
+    }
+
+    /// Apply hunks to `old` the way the edit tool does (back to front) and
+    /// return the result.
+    fn apply_hunks(old: &str, new: &str, hunks: &[Hunk]) -> String {
+        let mut out = old.to_string();
+        for h in hunks.iter().rev() {
+            out.replace_range(h.old_from..h.old_to, &new[h.new_from..h.new_to]);
+        }
+        out
+    }
+
+    /// Regression for the 2026-09-04 corruption: `similar`'s Myers output
+    /// carried an `Insert` whose `old_index` fell inside the preceding
+    /// `Delete`, so the hunks interleaved and `4on").` became `4.n").`.
+    #[test]
+    fn hunks_from_op_sequence_apply_cleanly_when_reported_indices_lie() {
+        let cases = [
+            ("in Section\u{a0}[[#^evaluation-design|4on\").", "in Section\u{a0}[[#^evaluation-design|4.2]]."),
+            ("in Section [[#^evaluation-design|4on\").", "in Section [[#^evaluation-design|4.2]]."),
+            ("If you're running an AI lab, you need a concrete plan.", "If you're running an AI lab, you need a  concrete plan."),
+            ("abc.def", "ab.xyz.def"),
+            ("4on\").", "4.2]]."),
+        ];
+        for (old, new) in cases {
+            let hunks = minimal_hunks(old, new);
+            for w in hunks.windows(2) {
+                assert!(w[0].old_to <= w[1].old_from, "hunks must not overlap: {:?}", hunks);
+                assert!(w[0].new_to <= w[1].new_from, "hunks must not overlap: {:?}", hunks);
+            }
+            assert_eq!(apply_hunks(old, new, &hunks), new, "old={old:?} hunks={hunks:?}");
+            let exact = minimal_hunks_exact(old, new);
+            assert_eq!(apply_hunks(old, new, &exact), new, "exact old={old:?} hunks={exact:?}");
+        }
     }
 }
