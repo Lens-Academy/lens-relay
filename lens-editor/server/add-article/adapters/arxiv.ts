@@ -112,7 +112,17 @@ export const arxivAdapter: SiteAdapter = {
     return [
       `https://arxiv.org/html/${id}`,
       `https://ar5iv.labs.arxiv.org/html/${id}`,
+      // Last resort for papers with no HTML rendering anywhere: the PDF, which
+      // the pipeline extracts through its normal PDF path.
+      `https://arxiv.org/pdf/${id}`,
     ];
+  },
+
+  acceptsFetchedUrl(finalUrl: string): boolean {
+    // ar5iv (and occasionally arxiv.org/html) redirect papers they cannot
+    // render to the abstract landing page, which is exactly the abstract-only
+    // shell this adapter exists to avoid.
+    return !/^https?:\/\/(?:www\.)?arxiv\.org\/abs\//i.test(finalUrl);
   },
 
   extract(doc: Document, ctx: AdapterContext): AdapterExtract | null {

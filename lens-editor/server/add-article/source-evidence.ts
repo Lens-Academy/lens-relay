@@ -2,13 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { extractArticle, type ExtractResult } from "./extract";
 import {
-  fetchFirstHtml,
   fetchRawBytes,
   fetchRawHtml,
   fetchRenderedHtml,
   looksLikePdf,
 } from "./fetch";
-import { adapterContext, resolveFetchUrls } from "./adapters";
+import { acceptsFetchedUrl, adapterContext, resolveFetchUrls } from "./adapters";
 import { extractPdfSmart } from "./pdf";
 
 const REVIEW_HTML_MAX_LINE_CHARS = 8_000;
@@ -70,7 +69,8 @@ export async function buildSourceEvidence(
   let pdf: Buffer | undefined;
   let fetchedUrl = sourceUrl;
   let mediaType: "html" | "pdf" = "html";
-  const candidates = resolveFetchUrls(adapterContext(sourceUrl, ""));
+  const fetchContext = adapterContext(sourceUrl, "");
+  const candidates = resolveFetchUrls(fetchContext);
   const fetchAuxiliaryText = async (url: string) => {
     const text = await fetchRawHtml(url, signal);
     if (/\.md(?:\?|$)/i.test(url) || /^\s*---\s*$/m.test(text.slice(0, 500))) {
@@ -79,9 +79,16 @@ export async function buildSourceEvidence(
     return text;
   };
 
-  try {
-    if (candidates.length === 1) {
-      const result = await fetchRawBytes(candidates[0], signal);
+  // Try the adapter's candidates in order (or just the source URL). A
+  // candidate counts as failed when it errors, or when it redirects to a page
+  // the adapter vetoes (e.g. ar5iv falling back to the arXiv abstract).
+  for (const candidate of candidates) {
+    try {
+      const result = await fetchRawBytes(candidate, signal);
+      if (!acceptsFetchedUrl(fetchContext, result.finalUrl)) {
+        rawError = new Error(`${candidate} redirected to ${result.finalUrl}`);
+        continue;
+      }
       fetchedUrl = result.finalUrl;
       if (looksLikePdf(result.contentType, result.bytes)) {
         mediaType = "pdf";
@@ -95,14 +102,12 @@ export async function buildSourceEvidence(
       } else {
         rawHtml = new TextDecoder("utf-8").decode(result.bytes);
       }
-    } else {
-      const result = await fetchFirstHtml(candidates, signal);
-      rawHtml = result.html;
-      fetchedUrl = result.url;
+      rawError = undefined;
+      break;
+    } catch (error) {
+      rawError = error;
+      if (signal?.aborted) throw error;
     }
-  } catch (error) {
-    rawError = error;
-    if (signal?.aborted) throw error;
   }
 
   const htmlCandidates: NonNullable<SourceEvidence["htmlCandidates"]> = {};

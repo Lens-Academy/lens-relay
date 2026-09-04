@@ -77,6 +77,14 @@ export interface SiteAdapter {
    */
   resolveFetchUrls?(ctx: AdapterContext): string[];
   /**
+   * Optional: veto the page a fetch candidate actually landed on after
+   * redirects. Some mirrors answer 200 with a useless page instead of failing
+   * (ar5iv redirects papers it has no HTML for back to the arXiv abstract), so
+   * returning `false` makes the pipeline move on to the next candidate as if
+   * the fetch had failed. Pure & synchronous — no network.
+   */
+  acceptsFetchedUrl?(finalUrl: string, ctx: AdapterContext): boolean;
+  /**
    * Isolate and clean the article inside `doc`. The `doc` is a throwaway JSDOM
    * document, so adapters may mutate it freely (e.g. remove chrome nodes).
    * Return `null` to defer to the generic extractors.

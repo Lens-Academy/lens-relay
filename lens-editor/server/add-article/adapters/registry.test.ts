@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findAdapter, adapterContext, resolveFetchUrls } from "./index";
+import { acceptsFetchedUrl, findAdapter, adapterContext, resolveFetchUrls } from "./index";
 
 const route = (url: string, html = "") =>
   findAdapter(adapterContext(url, html))?.id ?? null;
@@ -39,15 +39,25 @@ describe("adapter registry — findAdapter routing", () => {
 });
 
 describe("adapter registry — resolveFetchUrls", () => {
-  it("redirects arXiv abstract/pdf URLs to full-text HTML (arxiv.org/html, then ar5iv)", () => {
+  it("redirects arXiv abstract/pdf URLs to full-text HTML (arxiv.org/html, then ar5iv), then the PDF", () => {
     expect(fetchUrls("https://arxiv.org/abs/1805.00899v2")).toEqual([
       "https://arxiv.org/html/1805.00899",
       "https://ar5iv.labs.arxiv.org/html/1805.00899",
+      "https://arxiv.org/pdf/1805.00899",
     ]);
     expect(fetchUrls("https://arxiv.org/pdf/0706.3639.pdf")).toEqual([
       "https://arxiv.org/html/0706.3639",
       "https://ar5iv.labs.arxiv.org/html/0706.3639",
+      "https://arxiv.org/pdf/0706.3639",
     ]);
+  });
+
+  it("vetoes an arXiv HTML candidate that redirected to the abstract landing page", () => {
+    const ctx = adapterContext("https://arxiv.org/abs/1805.00899", "");
+    expect(acceptsFetchedUrl(ctx, "https://arxiv.org/abs/1805.00899v2")).toBe(false);
+    expect(acceptsFetchedUrl(ctx, "https://ar5iv.labs.arxiv.org/html/1805.00899")).toBe(true);
+    expect(acceptsFetchedUrl(ctx, "https://arxiv.org/pdf/1805.00899v2")).toBe(true);
+    expect(acceptsFetchedUrl(adapterContext("https://example.org/post", ""), "https://example.org/final")).toBe(true);
   });
 
   it("does not redirect AI Safety Atlas chapters (the .md body is fetched during extraction, not here)", () => {

@@ -48,3 +48,8 @@ export function resolveFetchUrls(ctx: AdapterContext): string[] {
   const alt = findAdapter(ctx)?.resolveFetchUrls?.(ctx);
   return alt && alt.length > 0 ? alt : [ctx.url];
 }
+
+/** Whether the adapter for `ctx` accepts the page a candidate fetch landed on. */
+export function acceptsFetchedUrl(ctx: AdapterContext, finalUrl: string): boolean {
+  return findAdapter(ctx)?.acceptsFetchedUrl?.(finalUrl, ctx) ?? true;
+}

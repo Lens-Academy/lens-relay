@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   bytes: new Uint8Array(),
   via: "pdf" as string,
   fetchRawBytes: vi.fn(),
-  fetchFirstHtml: vi.fn(),
   fetchRawHtml: vi.fn(),
   fetchRenderedHtml: vi.fn(),
   extractPdfSmart: vi.fn(),
@@ -18,7 +17,6 @@ vi.mock("./fetch", async () => {
   return {
     ...actual,
     fetchRawBytes: mocks.fetchRawBytes,
-    fetchFirstHtml: mocks.fetchFirstHtml,
     fetchRawHtml: mocks.fetchRawHtml,
     fetchRenderedHtml: mocks.fetchRenderedHtml,
   };
@@ -133,19 +131,64 @@ describe("HTML source evidence retention", () => {
   it("renders the adapter-selected HTML URL", async () => {
     const selectedUrl = "https://arxiv.org/html/2401.00001";
     const renderedHtml = `<html><body><article><h1 class="ltx_title_document">Rendered Paper</h1><div class="ltx_authors">Ada Author</div><div class="ltx_abstract">${"rendered paper body ".repeat(200)}</div></article></body></html>`;
-    mocks.fetchFirstHtml.mockResolvedValue({
-      html: "<html><body>unrendered arXiv response</body></html>",
-      url: selectedUrl,
+    mocks.fetchRawBytes.mockResolvedValue({
+      bytes: new TextEncoder().encode("<html><body>unrendered arXiv response</body></html>").buffer,
+      contentType: "text/html",
+      finalUrl: selectedUrl,
     });
     mocks.fetchRenderedHtml.mockResolvedValue(renderedHtml);
     mocks.fetchRawHtml.mockResolvedValue(`<html><head><meta property="og:title" content="Rendered Paper"><meta name="citation_author" content="Ada Author"><meta name="citation_date" content="2024-01-02"></head></html>`);
 
     const evidence = await buildSourceEvidence("https://arxiv.org/abs/2401.00001");
 
-    expect(mocks.fetchFirstHtml).toHaveBeenCalled();
+    expect(mocks.fetchRawBytes).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchRawBytes).toHaveBeenCalledWith(selectedUrl, undefined);
     expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith(selectedUrl, undefined);
     expect(evidence.manifest.fetched_url).toBe(selectedUrl);
     expect(evidence.extraction.body).toContain("rendered paper body");
+  });
+
+  it("falls through to the arXiv PDF when every HTML mirror lands on the abstract page", async () => {
+    const abstractPage = "https://arxiv.org/abs/2401.00002";
+    mocks.fetchRawBytes.mockImplementation(async (url: string) => {
+      if (url.endsWith("/pdf/2401.00002")) {
+        return {
+          bytes: new TextEncoder().encode("%PDF-1.4 paper bytes").buffer,
+          contentType: "application/pdf",
+          finalUrl: "https://arxiv.org/pdf/2401.00002v1",
+        };
+      }
+      // arxiv.org/html 404s for the paper; ar5iv answers 200 with a redirect to
+      // the abstract landing page instead of failing.
+      if (url.startsWith("https://arxiv.org/html/")) throw new Error("Fetch failed: 404 Not Found");
+      return {
+        bytes: new TextEncoder().encode("<html><body>abstract only</body></html>").buffer,
+        contentType: "text/html",
+        finalUrl: abstractPage,
+      };
+    });
+    mocks.extractPdfSmart.mockResolvedValue({
+      body: "Full paper text recovered from the PDF for review.",
+      meta: { title: "PDF Paper", author: ["Ada Author"], source_url: abstractPage, published: "2024-01-01", description: "" },
+      siteName: "arXiv",
+      via: "pdf",
+      linkedOut: false,
+      assessment: { score: 1, flags: [] },
+      images: [],
+    });
+
+    const evidence = await buildSourceEvidence(abstractPage);
+
+    expect(mocks.fetchRawBytes.mock.calls.map(([url]) => url)).toEqual([
+      "https://arxiv.org/html/2401.00002",
+      "https://ar5iv.labs.arxiv.org/html/2401.00002",
+      "https://arxiv.org/pdf/2401.00002",
+    ]);
+    expect(mocks.fetchRenderedHtml).not.toHaveBeenCalled();
+    expect(evidence.manifest.media_type).toBe("pdf");
+    expect(evidence.manifest.fetched_url).toBe("https://arxiv.org/pdf/2401.00002v1");
+    expect(evidence.extraction.body).toContain("recovered from the PDF");
+    expect(evidence.pdf?.toString("latin1")).toContain("%PDF-");
   });
 
   it("writes lossless line-bounded unrendered and rendered review HTML", async () => {
