@@ -15,10 +15,6 @@
 //! - `accept_drafts: true` — as if every pending suggestion were accepted:
 //!   the only way to validate AI drafts *before* a human accepts them.
 //!
-//! The request body is gzipped: the map is tens of megabytes of markdown and
-//! JSON. The platform accepts both encodings, so it must be deployed before a
-//! relay carrying this code.
-//!
 //! Config: `LENS_PLATFORM_URL` (default `https://staging.lensacademy.org`)
 //! and `ADHOC_VALIDATION_SECRET` (shared with lens-platform).
 
@@ -47,15 +43,14 @@ const MAP_BUILD_TIMEOUT: Duration = Duration::from_secs(60);
 // timestamps), which sat at 92% of the previous 50MB limit. The timestamp
 // bodies cannot be dropped to save room — validateTimestamps checks every entry
 // — so the ceiling has to accommodate them. This bounds what is buffered and
-// compressed, not what crosses the wire; the body is gzipped before sending.
+// compressed and sent.
 //
-// Enforced on the serialized JSON, which is what the platform's
-// _MAX_DECOMPRESSED_BYTES bounds — the two must measure the same quantity or
-// the relay will happily send a body the platform refuses. (JSON escaping
-// inflates content noticeably: every newline and every quote in the 18MB of
-// transcript JSON gains a byte.) The cheap pre-check below on unescaped
-// content bytes only avoids serializing something absurd; the real gate is
-// after serialization.
+// Enforced on the serialized JSON, which is the quantity the platform bounds —
+// the two must measure the same thing or the relay will happily send a body the
+// platform refuses. (JSON escaping inflates content noticeably: every newline
+// and every quote in the 18MB of transcript JSON gains a byte.) The cheap
+// pre-check below on unescaped content bytes only avoids serializing something
+// absurd; the real gate is after serialization.
 const MAX_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
 
 pub fn platform_url_from_env() -> String {
@@ -159,42 +154,30 @@ pub async fn execute_with_platform(
         platform_url.trim_end_matches('/')
     );
 
-    // The body is tens of megabytes of markdown and JSON, which gzips to a small
-    // fraction of that. The platform decompresses when Content-Encoding says so
-    // and still accepts an uncompressed body, so a relay running this code can
-    // talk to a platform that predates it only if that platform has the decoding
-    // half deployed — deploy the platform first.
-    // Serializing and compressing tens of megabytes is seconds of CPU. Prod is a
-    // 2-vCPU box where blocking an async worker starves the relay's runtime (see
+    // Serializing tens of megabytes is seconds of CPU. Prod is a 2-vCPU box
+    // where blocking an async worker starves the relay's runtime (see
     // AGENTS.md), so this runs on the blocking pool rather than inline.
-    let (raw_len, compressed) =
-        tokio::task::spawn_blocking(move || -> Result<(usize, Vec<u8>), String> {
-            let raw = serde_json::to_vec(&body)
-                .map_err(|e| format!("Error: could not serialize validation request: {}", e))?;
-            if raw.len() > MAX_PAYLOAD_BYTES {
-                return Err(format!(
-                    "Error: folder content too large to validate ({} MB of JSON, max {} MB)",
-                    raw.len() / (1024 * 1024),
-                    MAX_PAYLOAD_BYTES / (1024 * 1024)
-                ));
-            }
-            let compressed = gzip(&raw)?;
-            Ok((raw.len(), compressed))
-        })
-        .await
-        .map_err(|e| format!("Error: encoding the validation request failed: {}", e))??;
-    tracing::debug!(
-        "validate_content: payload {} bytes -> {} bytes gzipped",
-        raw_len,
-        compressed.len()
-    );
+    let raw = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let raw = serde_json::to_vec(&body)
+            .map_err(|e| format!("Error: could not serialize validation request: {}", e))?;
+        if raw.len() > MAX_PAYLOAD_BYTES {
+            return Err(format!(
+                "Error: folder content too large to validate ({} MB of JSON, max {} MB)",
+                raw.len() / (1024 * 1024),
+                MAX_PAYLOAD_BYTES / (1024 * 1024)
+            ));
+        }
+        Ok(raw)
+    })
+    .await
+    .map_err(|e| format!("Error: encoding the validation request failed: {}", e))??;
+    tracing::debug!("validate_content: payload {} bytes", raw.len());
 
     let resp = client()
         .post(&url)
         .header("X-Validation-Key", secret)
         .header("Content-Type", "application/json")
-        .header("Content-Encoding", "gzip")
-        .body(compressed)
+        .body(raw)
         .send()
         .await
         .map_err(|e| {
@@ -266,21 +249,6 @@ async fn build_file_map(
     files
 }
 
-/// Gzip `data` at the default compression level.
-fn gzip(data: &[u8]) -> Result<Vec<u8>, String> {
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
-    use std::io::Write;
-
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder
-        .write_all(data)
-        .map_err(|e| format!("Error: could not compress validation request: {}", e))?;
-    encoder
-        .finish()
-        .map_err(|e| format!("Error: could not compress validation request: {}", e))
-}
-
 fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -334,16 +302,7 @@ mod tests {
                     let body = axum::body::to_bytes(req.into_body(), 64 << 20)
                         .await
                         .unwrap();
-                    let body = if encoding == "gzip" {
-                        use std::io::Read;
-                        let mut out = Vec::new();
-                        flate2::read::GzDecoder::new(&body[..])
-                            .read_to_end(&mut out)
-                            .expect("body must be valid gzip");
-                        out
-                    } else {
-                        body.to_vec()
-                    };
+                    let body = body.to_vec();
                     tx.send((key, encoding, String::from_utf8_lossy(&body).to_string()))
                         .unwrap();
                     axum::Json(serde_json::json!({"summary": {}, "issues": [], "counts": {}}))
@@ -376,7 +335,7 @@ mod tests {
             .expect("validate should succeed");
         let (key, encoding, body) = rx.recv().await.unwrap();
         assert_eq!(key, "sek");
-        assert_eq!(encoding, "gzip", "request body must be compressed");
+        assert_eq!(encoding, "", "body is sent uncompressed on this branch");
         let body: Value = serde_json::from_str(&body).unwrap();
         let content = body["files"]["Lenses/A.md"].as_str().unwrap();
         assert!(content.contains("approved text"));
