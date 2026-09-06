@@ -207,7 +207,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }),
         json!({
             "name": "validate_content",
-            "description": "Validate the folder's course content with the platform content validator (same engine as staging.lensacademy.org/validate) and return errors/warnings. accept_drafts=false validates only human-approved content; accept_drafts=true validates as if all pending suggestions were accepted — use it to check your own drafts before handing them to a reviewer. Filter by course slug ('__orphaned__' for files no course reaches) and category ('production' blocks releases, 'wip' is draft-only). Run this after making suggestions and fix production-category errors in files you touched.",
+            "description": "Validate the folder's course content with the platform content validator (same engine as staging.lensacademy.org/validate) and return errors/warnings. accept_drafts=false validates only human-approved content; accept_drafts=true validates as if all pending suggestions were accepted — use it to check your own drafts before handing them to a reviewer. Filter by course slug ('__orphaned__' for files no course reaches) and category ('production' blocks releases, 'wip' is draft-only); both trim the reported issues after the whole folder has been validated, so neither makes the call cheaper. The call validates every file in the folder and takes tens of seconds. Run this after making suggestions and fix production-category errors in files you touched.",
             "inputSchema": {
                 "type": "object",
                 "required": ["session_id"],
@@ -219,12 +219,12 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     },
                     "course": {
                         "type": "string",
-                        "description": "Only issues in files reachable from this course slug; '__orphaned__' for files no course reaches"
+                        "description": "Report only issues in files reachable from this course slug; '__orphaned__' for files no course reaches. Trims the report; the whole folder is validated either way"
                     },
                     "category": {
                         "type": "string",
                         "enum": ["production", "wip"],
-                        "description": "Only issues of this category"
+                        "description": "Report only issues of this category. Trims the report; the whole folder is validated either way"
                     },
                     "session_id": {
                         "type": "string",

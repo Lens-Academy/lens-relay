@@ -27,13 +27,31 @@ use y_sweet_core::share_token::McpAccess;
 
 const DEFAULT_PLATFORM_URL: &str = "https://staging.lensacademy.org";
 const DEFAULT_FOLDER: &str = "Lens Edu";
-// Validation runs take seconds; the platform runs a TS subprocess per call.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+// Validation runs take tens of seconds; the platform runs a TS subprocess per
+// call. Measured end-to-end against production: 91.6s and 89.9s on consecutive
+// calls, and those had the platform's per-file processor cache warm. That cache
+// keys on a hash of the processor's own source, so any lens-platform deploy
+// touching content_processor invalidates every entry and the next call reparses
+// ~2,600 files cold. 120s left no room for that; 300s does.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 // Hard ceilings so one tool call can never wedge on storage loads (the doc
 // map may pull GC-evicted docs from R2, like grep does) or ship an
 // unbounded payload to the platform.
 const MAP_BUILD_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_PAYLOAD_BYTES: usize = 50 * 1024 * 1024;
+// Measured on the staging content: ~46MB uncompressed (2,498 markdown files at
+// 27.6MB plus 128 JSON files at 18.1MB, nearly all video-transcript
+// timestamps), which sat at 92% of the previous 50MB limit. The timestamp
+// bodies cannot be dropped to save room — validateTimestamps checks every entry
+// — so the ceiling has to accommodate them. This bounds what is buffered and
+// compressed and sent.
+//
+// Enforced on the serialized JSON, which is the quantity the platform bounds —
+// the two must measure the same thing or the relay will happily send a body the
+// platform refuses. (JSON escaping inflates content noticeably: every newline
+// and every quote in the 18MB of transcript JSON gains a byte.) The cheap
+// pre-check below on unescaped content bytes only avoids serializing something
+// absurd; the real gate is after serialization.
+const MAX_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
 
 pub fn platform_url_from_env() -> String {
     std::env::var("LENS_PLATFORM_URL")
@@ -135,10 +153,31 @@ pub async fn execute_with_platform(
         "{}/api/content/validate-adhoc",
         platform_url.trim_end_matches('/')
     );
+
+    // Serializing tens of megabytes is seconds of CPU. Prod is a 2-vCPU box
+    // where blocking an async worker starves the relay's runtime (see
+    // AGENTS.md), so this runs on the blocking pool rather than inline.
+    let raw = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let raw = serde_json::to_vec(&body)
+            .map_err(|e| format!("Error: could not serialize validation request: {}", e))?;
+        if raw.len() > MAX_PAYLOAD_BYTES {
+            return Err(format!(
+                "Error: folder content too large to validate ({} MB of JSON, max {} MB)",
+                raw.len() / (1024 * 1024),
+                MAX_PAYLOAD_BYTES / (1024 * 1024)
+            ));
+        }
+        Ok(raw)
+    })
+    .await
+    .map_err(|e| format!("Error: encoding the validation request failed: {}", e))??;
+    tracing::debug!("validate_content: payload {} bytes", raw.len());
+
     let resp = client()
         .post(&url)
         .header("X-Validation-Key", secret)
-        .json(&body)
+        .header("Content-Type", "application/json")
+        .body(raw)
         .send()
         .await
         .map_err(|e| {
@@ -237,10 +276,10 @@ mod tests {
         }
     }
 
-    /// Mock platform recording header + body, answering a fixed result.
+    /// Mock platform recording (validation key, content-encoding, decoded body).
     async fn mock_platform() -> (
         String,
-        tokio::sync::mpsc::UnboundedReceiver<(String, String)>,
+        tokio::sync::mpsc::UnboundedReceiver<(String, String, String)>,
     ) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let app = Router::new().route(
@@ -254,10 +293,17 @@ mod tests {
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("")
                         .to_string();
+                    let encoding = req
+                        .headers()
+                        .get("content-encoding")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
                     let body = axum::body::to_bytes(req.into_body(), 64 << 20)
                         .await
                         .unwrap();
-                    tx.send((key, String::from_utf8_lossy(&body).to_string()))
+                    let body = body.to_vec();
+                    tx.send((key, encoding, String::from_utf8_lossy(&body).to_string()))
                         .unwrap();
                     axum::Json(serde_json::json!({"summary": {}, "issues": [], "counts": {}}))
                 }
@@ -287,8 +333,9 @@ mod tests {
         execute_with_platform(&server, &lens_access(), &serde_json::json!({}), &url, "sek")
             .await
             .expect("validate should succeed");
-        let (key, body) = rx.recv().await.unwrap();
+        let (key, encoding, body) = rx.recv().await.unwrap();
         assert_eq!(key, "sek");
+        assert_eq!(encoding, "", "body is sent uncompressed on this branch");
         let body: Value = serde_json::from_str(&body).unwrap();
         let content = body["files"]["Lenses/A.md"].as_str().unwrap();
         assert!(content.contains("approved text"));
@@ -304,7 +351,7 @@ mod tests {
         )
         .await
         .expect("validate should succeed");
-        let (_, body) = rx.recv().await.unwrap();
+        let (_, _, body) = rx.recv().await.unwrap();
         let body: Value = serde_json::from_str(&body).unwrap();
         let content = body["files"]["Lenses/A.md"].as_str().unwrap();
         assert!(content.contains("pending suggestion"));
@@ -335,7 +382,7 @@ mod tests {
         )
         .await
         .expect("validate should succeed");
-        let (_, body) = rx.recv().await.unwrap();
+        let (_, _, body) = rx.recv().await.unwrap();
         let body: Value = serde_json::from_str(&body).unwrap();
         assert!(body["files"].get("Lenses/A.md").is_some());
         assert!(body["files"].get("Lens/Lenses/A.md").is_none());
