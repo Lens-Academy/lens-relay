@@ -191,6 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn blob_write_then_read_roundtrip() {
+        let _serialised = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let server = server_with_store().await;
         let data = b"hello blob world";
         let doc_id = "test-doc-123";
@@ -204,6 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn blob_read_nonexistent_returns_error() {
+        let _serialised = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let server = server_with_store().await;
         let result = read_blob(&server, "doc-123", "nonexistenthash").await;
         assert!(result.is_err());
@@ -255,11 +257,17 @@ mod tests {
         assert!(!is_raw_ytext_file("html"));
     }
 
+    /// The cache is process-global and `cargo test` runs these in parallel
+    /// threads of one binary, so a test that seeds it and a test that clears it
+    /// will otherwise interleave. Every test that touches the cache holds this.
+    static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     // Prevents: the cache silently not being consulted, which would put the
     // ~18MB of video-transcript JSON back on the R2 round-trip for every
     // whole-folder read.
     #[tokio::test]
     async fn read_blob_is_served_from_cache_after_the_store_loses_the_key() {
+        let _serialised = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cache_clear();
         let data = Arc::new(DashMap::new());
         let server = server_with_shared_store(Arc::clone(&data)).await;
@@ -279,6 +287,7 @@ mod tests {
     // actually being cleared). With the cache empty the same read must fail.
     #[tokio::test]
     async fn read_blob_fails_when_neither_cache_nor_store_has_it() {
+        let _serialised = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let data = Arc::new(DashMap::new());
         let server = server_with_shared_store(Arc::clone(&data)).await;
 
@@ -298,6 +307,7 @@ mod tests {
     // the accounting up to the cap and throw the cache away for no reason.
     #[test]
     fn cache_put_replacing_an_entry_does_not_double_count_bytes() {
+        let _serialised = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         cache_clear();
         cache_put("files/doc/hash-a", Arc::new(vec![0u8; 100]));
         cache_put("files/doc/hash-a", Arc::new(vec![1u8; 100]));

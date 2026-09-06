@@ -48,8 +48,14 @@ const MAP_BUILD_TIMEOUT: Duration = Duration::from_secs(60);
 // bodies cannot be dropped to save room — validateTimestamps checks every entry
 // — so the ceiling has to accommodate them. This bounds what is buffered and
 // compressed, not what crosses the wire; the body is gzipped before sending.
-// Kept equal to the platform's _MAX_DECOMPRESSED_BYTES: a payload this side
-// agrees to send must be one the other side agrees to read.
+//
+// Enforced on the serialized JSON, which is what the platform's
+// _MAX_DECOMPRESSED_BYTES bounds — the two must measure the same quantity or
+// the relay will happily send a body the platform refuses. (JSON escaping
+// inflates content noticeably: every newline and every quote in the 18MB of
+// transcript JSON gains a byte.) The cheap pre-check below on unescaped
+// content bytes only avoids serializing something absurd; the real gate is
+// after serialization.
 const MAX_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
 
 pub fn platform_url_from_env() -> String {
@@ -158,12 +164,28 @@ pub async fn execute_with_platform(
     // and still accepts an uncompressed body, so a relay running this code can
     // talk to a platform that predates it only if that platform has the decoding
     // half deployed — deploy the platform first.
-    let raw = serde_json::to_vec(&body)
-        .map_err(|e| format!("Error: could not serialize validation request: {}", e))?;
-    let compressed = gzip(&raw)?;
+    // Serializing and compressing tens of megabytes is seconds of CPU. Prod is a
+    // 2-vCPU box where blocking an async worker starves the relay's runtime (see
+    // AGENTS.md), so this runs on the blocking pool rather than inline.
+    let (raw_len, compressed) =
+        tokio::task::spawn_blocking(move || -> Result<(usize, Vec<u8>), String> {
+            let raw = serde_json::to_vec(&body)
+                .map_err(|e| format!("Error: could not serialize validation request: {}", e))?;
+            if raw.len() > MAX_PAYLOAD_BYTES {
+                return Err(format!(
+                    "Error: folder content too large to validate ({} MB of JSON, max {} MB)",
+                    raw.len() / (1024 * 1024),
+                    MAX_PAYLOAD_BYTES / (1024 * 1024)
+                ));
+            }
+            let compressed = gzip(&raw)?;
+            Ok((raw.len(), compressed))
+        })
+        .await
+        .map_err(|e| format!("Error: encoding the validation request failed: {}", e))??;
     tracing::debug!(
         "validate_content: payload {} bytes -> {} bytes gzipped",
-        raw.len(),
+        raw_len,
         compressed.len()
     );
 
