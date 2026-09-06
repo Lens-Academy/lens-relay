@@ -1,6 +1,7 @@
 use crate::server::Server;
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Compute the SHA-256 hex digest of `data`.
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -9,23 +10,92 @@ pub fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// In-memory cache of blob bodies, keyed by their store key.
+///
+/// Store keys embed the SHA-256 of the content (`files/{doc_id}/{hash}`), so a
+/// key identifies one immutable byte string: a hit returns exactly what the
+/// store would. Writing new content produces a new hash and therefore a new
+/// key, so an entry can never go stale — it can only become unreferenced.
+///
+/// This exists because whole-folder readers re-fetch every blob on every call:
+/// `validate_content` pulls ~18MB of video-transcript JSON from R2 per
+/// invocation, measured at ~10s of its runtime.
+///
+/// Eviction is deliberately blunt. The working set is small and bounded by the
+/// content that exists, so the cap is a guard against pathological growth, not
+/// a tuning knob; on breach the whole map is dropped rather than maintaining
+/// LRU bookkeeping for a cache that is not expected to reach the cap.
+const BLOB_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+static BLOB_CACHE: OnceLock<Mutex<BlobCache>> = OnceLock::new();
+
+#[derive(Default)]
+struct BlobCache {
+    entries: HashMap<String, Arc<Vec<u8>>>,
+    bytes: usize,
+}
+
+fn blob_cache() -> &'static Mutex<BlobCache> {
+    BLOB_CACHE.get_or_init(|| Mutex::new(BlobCache::default()))
+}
+
+fn cache_get(key: &str) -> Option<Arc<Vec<u8>>> {
+    let guard = blob_cache().lock().unwrap_or_else(|e| e.into_inner());
+    guard.entries.get(key).cloned()
+}
+
+fn cache_put(key: &str, data: Arc<Vec<u8>>) {
+    // A single blob larger than the whole budget is never cached: admitting it
+    // would immediately trigger the clear below and evict everything useful.
+    if data.len() > BLOB_CACHE_MAX_BYTES {
+        return;
+    }
+    let mut guard = blob_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if guard.bytes + data.len() > BLOB_CACHE_MAX_BYTES {
+        guard.entries.clear();
+        guard.bytes = 0;
+    }
+    if let Some(previous) = guard.entries.insert(key.to_string(), Arc::clone(&data)) {
+        guard.bytes -= previous.len();
+    }
+    guard.bytes += data.len();
+}
+
+/// Drop every cached blob body. Only for tests — production entries are
+/// immutable, so nothing else ever needs to invalidate them.
+#[cfg(test)]
+fn cache_clear() {
+    let mut guard = blob_cache().lock().unwrap_or_else(|e| e.into_inner());
+    guard.entries.clear();
+    guard.bytes = 0;
+}
+
 /// Read a blob from the store at key `files/{doc_id}/{file_hash}`.
+///
+/// Served from the content-addressed cache above when present.
 pub async fn read_blob(
     server: &Arc<Server>,
     doc_id: &str,
     file_hash: &str,
 ) -> Result<Vec<u8>, String> {
+    let key = format!("files/{}/{}", doc_id, file_hash);
+    if let Some(hit) = cache_get(&key) {
+        return Ok(hit.as_ref().clone());
+    }
+
     let store = server
         .store()
         .as_ref()
         .ok_or_else(|| "No store configured".to_string())?;
 
-    let key = format!("files/{}/{}", doc_id, file_hash);
-    store
+    let data = store
         .get(&key)
         .await
         .map_err(|e| format!("Store read error: {}", e))?
-        .ok_or_else(|| format!("Blob not found: {}", key))
+        .ok_or_else(|| format!("Blob not found: {}", key))?;
+
+    cache_put(&key, Arc::new(data.clone()));
+    Ok(data)
 }
 
 /// Write a blob to the store at key `files/{doc_id}/{hash}`, returning the SHA-256 hex hash.
@@ -41,6 +111,10 @@ pub async fn write_blob(server: &Arc<Server>, doc_id: &str, data: &[u8]) -> Resu
         .set(&key, data.to_vec())
         .await
         .map_err(|e| format!("Store write error: {}", e))?;
+
+    // The bytes just written are what a read of this key must return, and the
+    // key is derived from their hash, so seeding the cache here cannot be wrong.
+    cache_put(&key, Arc::new(data.to_vec()));
 
     Ok(hash)
 }
@@ -92,9 +166,13 @@ mod tests {
     }
 
     async fn server_with_store() -> Arc<Server> {
-        let store = MemoryStore {
-            data: Arc::new(DashMap::new()),
-        };
+        server_with_shared_store(Arc::new(DashMap::new())).await
+    }
+
+    /// Server whose store the caller keeps a handle to, so a test can delete
+    /// keys behind the server's back.
+    async fn server_with_shared_store(data: Arc<DashMap<String, Vec<u8>>>) -> Arc<Server> {
+        let store = MemoryStore { data };
         Arc::new(
             Server::new_without_workers(
                 Some(Box::new(store)),
@@ -175,5 +253,57 @@ mod tests {
         assert!(!is_raw_ytext_file("notes.md"));
         assert!(!is_raw_ytext_file("data.json"));
         assert!(!is_raw_ytext_file("html"));
+    }
+
+    // Prevents: the cache silently not being consulted, which would put the
+    // ~18MB of video-transcript JSON back on the R2 round-trip for every
+    // whole-folder read.
+    #[tokio::test]
+    async fn read_blob_is_served_from_cache_after_the_store_loses_the_key() {
+        cache_clear();
+        let data = Arc::new(DashMap::new());
+        let server = server_with_shared_store(Arc::clone(&data)).await;
+
+        let hash = write_blob(&server, "doc-cache-hit", b"cached bytes")
+            .await
+            .expect("write should succeed");
+        data.clear();
+
+        let read = read_blob(&server, "doc-cache-hit", &hash)
+            .await
+            .expect("cached blob should still be readable");
+        assert_eq!(read, b"cached bytes");
+    }
+
+    // Prevents: the test above passing for the wrong reason (e.g. the store not
+    // actually being cleared). With the cache empty the same read must fail.
+    #[tokio::test]
+    async fn read_blob_fails_when_neither_cache_nor_store_has_it() {
+        let data = Arc::new(DashMap::new());
+        let server = server_with_shared_store(Arc::clone(&data)).await;
+
+        let hash = write_blob(&server, "doc-cache-miss", b"cached bytes")
+            .await
+            .expect("write should succeed");
+        data.clear();
+        cache_clear();
+
+        let err = read_blob(&server, "doc-cache-miss", &hash)
+            .await
+            .expect_err("uncached blob must not be readable once the store lost it");
+        assert!(err.contains("Blob not found"), "got: {err}");
+    }
+
+    // Prevents: re-inserting a key double-counting its bytes, which would walk
+    // the accounting up to the cap and throw the cache away for no reason.
+    #[test]
+    fn cache_put_replacing_an_entry_does_not_double_count_bytes() {
+        cache_clear();
+        cache_put("files/doc/hash-a", Arc::new(vec![0u8; 100]));
+        cache_put("files/doc/hash-a", Arc::new(vec![1u8; 100]));
+
+        let guard = blob_cache().lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(guard.entries.len(), 1);
+        assert_eq!(guard.bytes, 100, "replacement must not accumulate");
     }
 }

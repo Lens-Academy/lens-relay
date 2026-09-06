@@ -15,6 +15,10 @@
 //! - `accept_drafts: true` — as if every pending suggestion were accepted:
 //!   the only way to validate AI drafts *before* a human accepts them.
 //!
+//! The request body is gzipped: the map is tens of megabytes of markdown and
+//! JSON. The platform accepts both encodings, so it must be deployed before a
+//! relay carrying this code.
+//!
 //! Config: `LENS_PLATFORM_URL` (default `https://staging.lensacademy.org`)
 //! and `ADHOC_VALIDATION_SECRET` (shared with lens-platform).
 
@@ -27,13 +31,26 @@ use y_sweet_core::share_token::McpAccess;
 
 const DEFAULT_PLATFORM_URL: &str = "https://staging.lensacademy.org";
 const DEFAULT_FOLDER: &str = "Lens Edu";
-// Validation runs take seconds; the platform runs a TS subprocess per call.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+// Validation runs take tens of seconds; the platform runs a TS subprocess per
+// call. Measured end-to-end against production: 91.6s and 89.9s on consecutive
+// calls, and those had the platform's per-file processor cache warm. That cache
+// keys on a hash of the processor's own source, so any lens-platform deploy
+// touching content_processor invalidates every entry and the next call reparses
+// ~2,600 files cold. 120s left no room for that; 300s does.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 // Hard ceilings so one tool call can never wedge on storage loads (the doc
 // map may pull GC-evicted docs from R2, like grep does) or ship an
 // unbounded payload to the platform.
 const MAP_BUILD_TIMEOUT: Duration = Duration::from_secs(60);
-const MAX_PAYLOAD_BYTES: usize = 50 * 1024 * 1024;
+// Measured on the staging content: ~46MB uncompressed (2,498 markdown files at
+// 27.6MB plus 128 JSON files at 18.1MB, nearly all video-transcript
+// timestamps), which sat at 92% of the previous 50MB limit. The timestamp
+// bodies cannot be dropped to save room — validateTimestamps checks every entry
+// — so the ceiling has to accommodate them. This bounds what is buffered and
+// compressed, not what crosses the wire; the body is gzipped before sending.
+// Kept equal to the platform's _MAX_DECOMPRESSED_BYTES: a payload this side
+// agrees to send must be one the other side agrees to read.
+const MAX_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
 
 pub fn platform_url_from_env() -> String {
     std::env::var("LENS_PLATFORM_URL")
@@ -135,10 +152,27 @@ pub async fn execute_with_platform(
         "{}/api/content/validate-adhoc",
         platform_url.trim_end_matches('/')
     );
+
+    // The body is tens of megabytes of markdown and JSON, which gzips to a small
+    // fraction of that. The platform decompresses when Content-Encoding says so
+    // and still accepts an uncompressed body, so a relay running this code can
+    // talk to a platform that predates it only if that platform has the decoding
+    // half deployed — deploy the platform first.
+    let raw = serde_json::to_vec(&body)
+        .map_err(|e| format!("Error: could not serialize validation request: {}", e))?;
+    let compressed = gzip(&raw)?;
+    tracing::debug!(
+        "validate_content: payload {} bytes -> {} bytes gzipped",
+        raw.len(),
+        compressed.len()
+    );
+
     let resp = client()
         .post(&url)
         .header("X-Validation-Key", secret)
-        .json(&body)
+        .header("Content-Type", "application/json")
+        .header("Content-Encoding", "gzip")
+        .body(compressed)
         .send()
         .await
         .map_err(|e| {
@@ -210,6 +244,21 @@ async fn build_file_map(
     files
 }
 
+/// Gzip `data` at the default compression level.
+fn gzip(data: &[u8]) -> Result<Vec<u8>, String> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(data)
+        .map_err(|e| format!("Error: could not compress validation request: {}", e))?;
+    encoder
+        .finish()
+        .map_err(|e| format!("Error: could not compress validation request: {}", e))
+}
+
 fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -237,10 +286,10 @@ mod tests {
         }
     }
 
-    /// Mock platform recording header + body, answering a fixed result.
+    /// Mock platform recording (validation key, content-encoding, decoded body).
     async fn mock_platform() -> (
         String,
-        tokio::sync::mpsc::UnboundedReceiver<(String, String)>,
+        tokio::sync::mpsc::UnboundedReceiver<(String, String, String)>,
     ) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let app = Router::new().route(
@@ -254,10 +303,26 @@ mod tests {
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("")
                         .to_string();
+                    let encoding = req
+                        .headers()
+                        .get("content-encoding")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
                     let body = axum::body::to_bytes(req.into_body(), 64 << 20)
                         .await
                         .unwrap();
-                    tx.send((key, String::from_utf8_lossy(&body).to_string()))
+                    let body = if encoding == "gzip" {
+                        use std::io::Read;
+                        let mut out = Vec::new();
+                        flate2::read::GzDecoder::new(&body[..])
+                            .read_to_end(&mut out)
+                            .expect("body must be valid gzip");
+                        out
+                    } else {
+                        body.to_vec()
+                    };
+                    tx.send((key, encoding, String::from_utf8_lossy(&body).to_string()))
                         .unwrap();
                     axum::Json(serde_json::json!({"summary": {}, "issues": [], "counts": {}}))
                 }
@@ -287,8 +352,9 @@ mod tests {
         execute_with_platform(&server, &lens_access(), &serde_json::json!({}), &url, "sek")
             .await
             .expect("validate should succeed");
-        let (key, body) = rx.recv().await.unwrap();
+        let (key, encoding, body) = rx.recv().await.unwrap();
         assert_eq!(key, "sek");
+        assert_eq!(encoding, "gzip", "request body must be compressed");
         let body: Value = serde_json::from_str(&body).unwrap();
         let content = body["files"]["Lenses/A.md"].as_str().unwrap();
         assert!(content.contains("approved text"));
@@ -304,7 +370,7 @@ mod tests {
         )
         .await
         .expect("validate should succeed");
-        let (_, body) = rx.recv().await.unwrap();
+        let (_, _, body) = rx.recv().await.unwrap();
         let body: Value = serde_json::from_str(&body).unwrap();
         let content = body["files"]["Lenses/A.md"].as_str().unwrap();
         assert!(content.contains("pending suggestion"));
@@ -335,7 +401,7 @@ mod tests {
         )
         .await
         .expect("validate should succeed");
-        let (_, body) = rx.recv().await.unwrap();
+        let (_, _, body) = rx.recv().await.unwrap();
         let body: Value = serde_json::from_str(&body).unwrap();
         assert!(body["files"].get("Lenses/A.md").is_some());
         assert!(body["files"].get("Lens/Lenses/A.md").is_none());
