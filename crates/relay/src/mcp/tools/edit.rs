@@ -142,6 +142,13 @@ pub async fn execute(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: file_path".to_string())?;
 
+    if blob::is_image_file(file_path) {
+        return Err(format!(
+            "Error: {} is an image and cannot be edited as text. To replace it, call import_attachment with the same file_path and overwrite: true.",
+            file_path
+        ));
+    }
+
     let old_string = arguments
         .get("old_string")
         .and_then(|v| v.as_str())

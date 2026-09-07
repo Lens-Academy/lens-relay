@@ -8,7 +8,8 @@ pub mod get_links;
 pub mod get_url;
 pub mod glob;
 pub mod grep;
-pub mod import_article;
+pub mod import_attachment;
+pub mod import_source;
 pub mod move_doc;
 pub mod read;
 pub mod search;
@@ -22,10 +23,23 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use y_sweet_core::share_token::McpAccess;
 
+/// Tools that mutate the knowledge base. Read-only MCP keys are refused these
+/// by name in [`dispatch_tool`], so every new write tool must be listed here.
+/// `import_article` is the hidden alias of `import_source`.
+pub const WRITE_TOOLS: [&str; 7] = [
+    "edit",
+    "create",
+    "move",
+    "import_source",
+    "import_article",
+    "import_status",
+    "import_attachment",
+];
+
 /// Return tool definitions for MCP tools/list response.
 /// When `writable` is false, write tools (edit, create, move) are excluded.
 pub fn tool_definitions(writable: bool) -> Vec<Value> {
-    let article_import_modes = import_article::ARTICLE_IMPORT_MODES;
+    let article_import_modes = import_source::ARTICLE_IMPORT_MODES;
     let mut tools = vec![
         json!({
             "name": "create_session",
@@ -48,7 +62,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }),
         json!({
             "name": "read",
-            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit.",
+            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp, svg up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -237,8 +251,8 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
 
     if writable {
         tools.push(json!({
-            "name": "import_article",
-            "description": "Import external articles/webpages into the knowledge base via the article importer. Choose whether to create only an article stub, a full article, or a full article plus lens. YouTube video URLs import the video's transcript (with word timestamps) instead of an article; video jobs take several minutes and don't support stub mode. Jobs run in the background; poll import_status until each is done/failed. Prefer this over hand-writing article files.",
+            "name": "import_source",
+            "description": "Import a source that needs processing — a webpage/article URL, a PDF, or a YouTube video — into the knowledge base via the importer. Choose whether to create only an article stub, a full article, or a full article plus lens. YouTube video URLs import the video's transcript (with word timestamps) instead of an article; video jobs take several minutes and don't support stub mode. Jobs run in the background (asynchronous): poll import_status until each is done/failed. Prefer this over hand-writing article files. For a plain image file use import_attachment instead (synchronous).",
             "inputSchema": {
                 "type": "object",
                 "required": ["urls", "import_mode", "session_id"],
@@ -247,7 +261,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                     "urls": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Article URLs to import (max 20, http/https)"
+                        "description": "Source URLs to import (max 20, http/https): article pages, PDFs, YouTube videos"
                     },
                     "import_mode": {
                         "type": "string",
@@ -263,12 +277,51 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "import_status",
-            "description": "Check the status of article import jobs started with import_article (queued / processing / done / failed, with document paths and errors).",
+            "description": "Check the status of import jobs started with import_source (queued / processing / done / failed, with document paths and errors).",
             "inputSchema": {
                 "type": "object",
                 "required": ["session_id"],
                 "additionalProperties": false,
                 "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
+                    }
+                }
+            }
+        }));
+        tools.push(json!({
+            "name": "import_attachment",
+            "description": "Host an image in the knowledge base (synchronous; returns when the file is stored). Give exactly one of `url` (a public http(s) image URL, fetched server-side — bytes never pass through you) or `content_base64` (base64 of a local image; for files you have on disk, build the request with jq/curl as described in the create tool so the bytes do not become tokens). Allowed types: png, jpeg, gif, webp — sniffed from the bytes; SVG and everything else is rejected (rasterise first). Soft limit 5 MiB (warning), hard limit 20 MiB. Files live only under <folder>/attachments/: pass `file_path` for an exact name, or `stem` (kebab-case) and the server names it <stem>-<sha256 first 8>.<ext>; with neither, the stem is derived from the URL. Identical bytes already in the folder are not re-uploaded (created:false, deduplicated_from). Create-only unless overwrite:true, which keeps the file id and replaces the bytes (the public URL may serve the old bytes for up to 5 minutes). Returns JSON with path, public_url, sha256, bytes, mimetype, created, overwritten, deduplicated_from, note. Embed with standard markdown `![alt](public_url)` (the platform renders only absolute URLs, not ![[…]] embeds): upload first, then edit the document and keep the alt text. Replacing an existing hotlink in human-written text lands as a pending change. To replace an image, use overwrite:true only for the same figure; otherwise pick a new stem. Use import_source for anything that needs processing (articles, PDFs, videos); use read to look at a hosted image.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Public http(s) URL of the image to fetch server-side. Exactly one of url / content_base64."
+                    },
+                    "content_base64": {
+                        "type": "string",
+                        "description": "Base64-encoded image bytes (standard alphabet, padding optional). Exactly one of url / content_base64."
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Exact destination, e.g. 'Lens Edu/attachments/turner-fig1.png'; must be <folder>/attachments/<name>.<png|jpg|jpeg|gif|webp> and the extension must match the image type. Mutually exclusive with stem."
+                    },
+                    "stem": {
+                        "type": "string",
+                        "description": "Kebab-case name base (e.g. 'turner-power-fig1'); the server appends -<sha256 first 8 hex> and the sniffed extension and stores it in the session's folder under attachments/. Mutually exclusive with file_path."
+                    },
+                    "mimetype": {
+                        "type": "string",
+                        "description": "Advisory MIME type; the bytes' magic numbers win."
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "Replace the bytes at file_path if it already exists with different content (default false: that case is an error naming the existing hash)."
+                    },
                     "session_id": {
                         "type": "string",
                         "description": "Session ID returned by create_session. Required."
@@ -310,7 +363,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "create",
-            "description": "Create a new document or file at the specified path. New files under Lens Edu/articles are blocked: use import_article (or the Lens Editor Add Article UI) so extraction, validation, mandatory LLM review, evidence, and provenance run. Existing article files remain editable. Supports .md (markdown — created directly, logged like a direct edit and visible on the editor's Recent changes page), .html (raw HTML stored as-is, rendered by the HtmlEditor), and .json (raw content stored as-is). To import an existing local file outside the articles folder, don't retype its content as tokens — POST it to this MCP URL directly: jq -Rs --arg sid <session_id> '{jsonrpc:\"2.0\",id:1,method:\"tools/call\",params:{name:\"create\",arguments:{session_id:$sid,file_path:\"<path>\",content:.}}}' <local-file> | curl -sS -X POST <mcp-url> -H 'Content-Type: application/json' -d @- (the MCP URL is in your MCP client config, e.g. ~/.claude.json).",
+            "description": "Create a new document or file at the specified path. New files under Lens Edu/articles are blocked: use import_source (or the Lens Editor Add Article UI) so extraction, validation, mandatory LLM review, evidence, and provenance run. Existing article files remain editable. Images are not created here: use import_attachment. Supports .md (markdown — created directly, logged like a direct edit and visible on the editor's Recent changes page), .html (raw HTML stored as-is, rendered by the HtmlEditor), and .json (raw content stored as-is). To import an existing local file outside the articles folder, don't retype its content as tokens — POST it to this MCP URL directly: jq -Rs --arg sid <session_id> '{jsonrpc:\"2.0\",id:1,method:\"tools/call\",params:{name:\"create\",arguments:{session_id:$sid,file_path:\"<path>\",content:.}}}' <local-file> | curl -sS -X POST <mcp-url> -H 'Content-Type: application/json' -d @- (the MCP URL is in your MCP client config, e.g. ~/.claude.json).",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -333,7 +386,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "move",
-            "description": "Move or rename a file or folder. Automatically rewrites wikilinks in other documents that reference moved files. Moving a non-article into Lens Edu/articles is blocked; use import_article instead. Existing articles may be renamed within the articles folder.",
+            "description": "Move or rename a file or folder. Automatically rewrites wikilinks in other documents that reference moved files. Moving a non-article into Lens Edu/articles is blocked; use import_source instead. Existing articles may be renamed within the articles folder.",
             "inputSchema": {
                 "type": "object",
                 "required": ["new_path", "session_id"],
@@ -409,12 +462,7 @@ pub async fn dispatch_tool(
     server.mcp_sessions.touch(session_id);
 
     // Defense-in-depth: block write tools for read-only access
-    if !access.writable
-        && matches!(
-            name,
-            "edit" | "create" | "move" | "import_article" | "import_status"
-        )
-    {
+    if !access.writable && WRITE_TOOLS.contains(&name) {
         return tool_error("Access denied: read-only access. Cannot use write tools.");
     }
 
@@ -460,8 +508,8 @@ pub async fn dispatch_tool(
     }
 
     match name {
-        "read" => match read::execute(server, session_id, arguments).await {
-            Ok(text) => tool_success(&text),
+        "read" => match read::execute_blocks(server, session_id, arguments).await {
+            Ok(blocks) => tool_success_blocks(blocks),
             Err(msg) => tool_error(&msg),
         },
         "glob" => match glob::execute(server, arguments) {
@@ -496,14 +544,23 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "import_article" => match import_article::execute(access, arguments).await {
+        // `import_article` is the pre-rename alias: accepted, not advertised.
+        "import_source" | "import_article" => {
+            match import_source::execute(access, arguments).await {
+                Ok(text) => tool_success(&text),
+                Err(msg) => tool_error(&msg),
+            }
+        }
+        "import_status" => match import_source::status(access).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
-        "import_status" => match import_article::status(access).await {
-            Ok(text) => tool_success(&text),
-            Err(msg) => tool_error(&msg),
-        },
+        "import_attachment" => {
+            match import_attachment::execute(server, session_id, access, arguments).await {
+                Ok(text) => tool_success(&text),
+                Err(msg) => tool_error(&msg),
+            }
+        }
         "validate_content" => match validate_content::execute(server, access, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
@@ -521,6 +578,14 @@ fn tool_success(text: &str) -> Value {
                 "text": text
             }
         ],
+        "isError": false
+    })
+}
+
+/// Wrap pre-built MCP content blocks (text, image, ...) in CallToolResult format.
+fn tool_success_blocks(blocks: Vec<Value>) -> Value {
+    json!({
+        "content": blocks,
         "isError": false
     })
 }
@@ -544,6 +609,61 @@ mod integration_tests {
     use super::{create_doc, edit, glob, grep, read};
     use serde_json::json;
 
+    // Prevents: read-only keys reaching a write tool through the alias name,
+    // and the alias silently disappearing from dispatch.
+    #[tokio::test]
+    async fn readonly_key_is_refused_every_write_tool_including_aliases() {
+        use y_sweet_core::share_token::McpAccess;
+        let server = build_blob_test_server_with_folder().await;
+        let access = McpAccess {
+            writable: false,
+            folder_uuid: None,
+            folder_name: None,
+            raw_token: None,
+        };
+        let sid = server
+            .mcp_sessions
+            .create_session(access.clone(), None, None);
+        for name in super::WRITE_TOOLS {
+            let res = super::dispatch_tool(
+                &server,
+                name,
+                &json!({ "session_id": sid, "file_path": "Lens/x.md" }),
+                &access,
+            )
+            .await;
+            assert_eq!(res["isError"], json!(true), "{name}: {res}");
+            assert!(
+                res["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("read-only"),
+                "{name}: {res}"
+            );
+        }
+    }
+
+    // Prevents: `import_article` becoming "Unknown tool" for agents whose
+    // config predates the rename. Without a share token the tool fails on
+    // credentials — after dispatch found it.
+    #[tokio::test]
+    async fn import_article_alias_dispatches_to_import_source() {
+        let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
+        for name in ["import_source", "import_article"] {
+            let res = super::dispatch_tool(
+                &server,
+                name,
+                &json!({ "session_id": sid, "urls": ["https://example.com/a"], "import_mode": "article" }),
+                &default_access(),
+            )
+            .await;
+            let text = res["content"][0]["text"].as_str().unwrap();
+            assert!(!text.contains("Unknown tool"), "{name}: {text}");
+            assert!(text.contains("credential type"), "{name}: {text}");
+        }
+    }
+
     #[test]
     fn move_schema_allows_file_path_alias_without_requiring_path() {
         let tools = super::tool_definitions(true);
@@ -561,12 +681,12 @@ mod integration_tests {
     }
 
     #[test]
-    fn import_article_schema_requires_the_shared_modes() {
+    fn import_source_schema_requires_the_shared_modes() {
         let tools = super::tool_definitions(true);
         let import_tool = tools
             .iter()
-            .find(|tool| tool["name"] == "import_article")
-            .expect("import_article tool should be present");
+            .find(|tool| tool["name"] == "import_source")
+            .expect("import_source tool should be present");
 
         assert_eq!(
             import_tool["inputSchema"]["required"],
@@ -574,7 +694,7 @@ mod integration_tests {
         );
         assert_eq!(
             import_tool["inputSchema"]["properties"]["import_mode"]["enum"],
-            json!(super::import_article::ARTICLE_IMPORT_MODES)
+            json!(super::import_source::ARTICLE_IMPORT_MODES)
         );
         assert!(
             import_tool["inputSchema"]["properties"]
@@ -582,6 +702,57 @@ mod integration_tests {
                 .is_none(),
             "removed create_lens option must not be advertised"
         );
+    }
+
+    // Prevents: the pre-rename alias leaking back into tools/list (agents
+    // would see two tools doing the same thing) or a write tool missing from
+    // the read-only block list.
+    #[test]
+    fn import_article_alias_is_hidden_and_every_write_tool_is_blocked_for_readers() {
+        let writable = super::tool_definitions(true);
+        assert!(
+            !writable.iter().any(|t| t["name"] == "import_article"),
+            "alias must not be advertised"
+        );
+        assert!(writable.iter().any(|t| t["name"] == "import_attachment"));
+        let readonly = super::tool_definitions(false);
+        for tool in &writable {
+            let name = tool["name"].as_str().unwrap();
+            if !readonly.iter().any(|t| t["name"] == name) {
+                assert!(
+                    super::WRITE_TOOLS.contains(&name),
+                    "{name} is hidden from read-only keys but not in WRITE_TOOLS"
+                );
+            }
+        }
+        for name in super::WRITE_TOOLS {
+            assert!(
+                !readonly.iter().any(|t| t["name"] == name),
+                "{name} must not be advertised to read-only keys"
+            );
+        }
+    }
+
+    #[test]
+    fn descriptions_route_agents_between_the_import_tools() {
+        let tools = super::tool_definitions(true);
+        let desc = |name: &str| {
+            tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .and_then(|t| t["description"].as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| panic!("{name} missing"))
+        };
+        assert!(desc("import_source").contains("import_attachment"));
+        assert!(desc("import_source").contains("import_status"));
+        assert!(desc("import_attachment").contains("import_source"));
+        assert!(desc("import_attachment").contains("content_base64"));
+        assert!(desc("import_attachment").contains("5 minutes"));
+        assert!(desc("read").contains("image"));
+        assert!(desc("create").contains("import_attachment"));
+        assert!(desc("create").contains("import_source"));
+        assert!(!desc("create").contains("import_article"));
     }
 
     #[test]
