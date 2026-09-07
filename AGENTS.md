@@ -49,7 +49,7 @@ docs/                 # Operational documentation
 | Component | Location | Description |
 |-----------|----------|-------------|
 | **relay-server** | `crates/` | Rust-based CRDT sync server (y-sweet). Custom HMAC auth fixes for service accounts. |
-| **lens-editor** | `lens-editor/` | Web-based editor for relay documents. React + CodeMirror + yjs. Connects to relay-server via WebSocket. Includes Discord API proxy bridge (Express backend). |
+| **lens-editor** | `lens-editor/` | Web-based editor for relay documents. React + CodeMirror + yjs. Connects to relay-server via WebSocket. Includes Discord API proxy bridge (Express backend) and the import APIs the relay MCP tools proxy to: `/api/add-article` (`import_source`, `import_status`) and `/api/attachments/import` (`import_attachment`). |
 | **relay-git-sync** | External: `No-Instructions/relay-git-sync` | Syncs relay shared folders to GitHub repos via webhooks. Runs as Docker container on production server. |
 | **Relay.md plugin** | External: `No-Instructions/Relay` | Obsidian plugin for real-time collaboration via relay-server. |
 
@@ -193,6 +193,13 @@ See [docs/relay-auth-customizations.md](docs/relay-auth-customizations.md) for f
 - Wikilink extraction from Y.Doc content
 - Backlink tracking
 - Folder-content mapping for multi-folder support
+
+**Attachments over MCP** (`crates/relay/src/mcp/tools/import_attachment.rs`,
+`lens-editor/server/attachments/`): `import_attachment` hosts png/jpeg/gif/webp under
+`<folder>/attachments/` from a URL or base64 (magic-byte sniffing, sha256 dedup, 5 MiB
+soft / 20 MiB hard, `overwrite` keeps the file id), `read` returns image attachments as
+MCP image blocks, and `POST /doc/attachment` answers 409 on same-path-different-bytes.
+See the attachments section of `docs/server-ops.md`.
 
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change
