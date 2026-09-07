@@ -296,6 +296,40 @@ pub struct CreateDocumentResult {
     pub in_folder_path: String,
 }
 
+/// A blob (non-Y.Doc) entry of `filemeta_v0`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlobEntry {
+    /// In-folder path, e.g. `/attachments/x.png`.
+    pub path: String,
+    pub uuid: String,
+    pub hash: Option<String>,
+    pub mimetype: Option<String>,
+}
+
+/// Read a `filemeta_v0` value as a blob entry: needs an `id` and a `hash`
+/// (markdown/folder entries have no hash and are skipped).
+fn blob_entry_from_value(path: &str, value: &yrs::Out) -> Option<BlobEntry> {
+    let yrs::Out::Any(yrs::Any::Map(map)) = value else {
+        return None;
+    };
+    let get = |k: &str| match map.get(k) {
+        Some(yrs::Any::String(s)) => Some(s.to_string()),
+        _ => None,
+    };
+    let uuid = get("id")?;
+    let hash = get("hash")?;
+    Some(BlobEntry {
+        path: path.to_string(),
+        uuid,
+        hash: Some(hash),
+        mimetype: get("mimetype"),
+    })
+}
+
+/// Body limit for the JSON-RPC `/mcp` routes. Matches `/doc/attachment` so a
+/// 20 MiB image survives base64 inflation.
+pub const MCP_BODY_LIMIT_BYTES: usize = 30 * 1024 * 1024;
+
 fn validate_file_path(path: &str) -> std::result::Result<(), &'static str> {
     if path.contains('"') {
         return Err("File names cannot contain double quotes");
@@ -2082,6 +2116,116 @@ impl Server {
         Ok(())
     }
 
+    /// Folder doc id for a top-level folder name (`folder_config.name`).
+    pub fn find_folder_doc_by_name(&self, folder_name: &str) -> Option<String> {
+        let docs = self.docs();
+        for folder_doc_id in link_indexer::find_all_folder_docs(docs) {
+            let awareness = {
+                let Some(doc_ref) = docs.get(&folder_doc_id) else {
+                    continue;
+                };
+                doc_ref.awareness()
+            };
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            if y_sweet_core::doc_resolver::read_folder_name(&guard.doc, &folder_doc_id)
+                == folder_name
+            {
+                return Some(folder_doc_id);
+            }
+        }
+        None
+    }
+
+    /// The blob entry (uuid, hash, mimetype) stored in `filemeta_v0` at
+    /// `in_folder_path`, or `None` when the path is absent or not a blob.
+    pub fn blob_entry_at(&self, folder_doc_id: &str, in_folder_path: &str) -> Option<BlobEntry> {
+        let awareness = self.docs().get(folder_doc_id)?.awareness();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let txn = guard.doc.transact();
+        let filemeta = txn.get_map("filemeta_v0")?;
+        let value = filemeta.get(&txn, in_folder_path)?;
+        blob_entry_from_value(in_folder_path, &value)
+    }
+
+    /// First blob in the folder whose content hash equals `sha256`
+    /// (attachments are named by content, so identical bytes dedup here).
+    pub fn find_blob_by_hash(&self, folder_doc_id: &str, sha256: &str) -> Option<BlobEntry> {
+        let awareness = self.docs().get(folder_doc_id)?.awareness();
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let txn = guard.doc.transact();
+        let filemeta = txn.get_map("filemeta_v0")?;
+        let mut matches: Vec<BlobEntry> = filemeta
+            .iter(&txn)
+            .filter_map(|(path, value)| blob_entry_from_value(path, &value))
+            .filter(|entry| entry.hash.as_deref() == Some(sha256))
+            .collect();
+        // Deterministic pick when several paths hold the same bytes.
+        matches.sort_by(|a, b| a.path.cmp(&b.path));
+        matches.into_iter().next()
+    }
+
+    /// Replace the bytes of an existing blob file in place: same uuid (so
+    /// git-sync sees a modified file, not a new one), new content hash.
+    pub async fn overwrite_blob_file(
+        &self,
+        folder_name: &str,
+        in_folder_path: &str,
+        data: &[u8],
+    ) -> std::result::Result<(BlobEntry, String), CreateDocumentError> {
+        validate_file_path(in_folder_path)
+            .map_err(|message| CreateDocumentError::BadRequest(message.to_string()))?;
+        let folder_doc_id = self.find_folder_doc_by_name(folder_name).ok_or_else(|| {
+            CreateDocumentError::NotFound(format!("Folder '{}' not found", folder_name))
+        })?;
+        let entry = self
+            .blob_entry_at(&folder_doc_id, in_folder_path)
+            .ok_or_else(|| {
+                CreateDocumentError::NotFound(format!(
+                    "Path '{}' is not an existing blob in folder '{}'",
+                    in_folder_path, folder_name
+                ))
+            })?;
+        let relay_id = link_indexer::parse_doc_id(&folder_doc_id)
+            .map(|(r, _)| r.to_string())
+            .unwrap_or_default();
+        let full_doc_id = if relay_id.is_empty() {
+            entry.uuid.clone()
+        } else {
+            format!("{}-{}", relay_id, entry.uuid)
+        };
+        let store = self
+            .store()
+            .as_ref()
+            .ok_or_else(|| CreateDocumentError::Internal("No store configured".to_string()))?;
+        let hash = crate::mcp::tools::blob::sha256_hex(data);
+        store
+            .set(&format!("files/{}/{}", full_doc_id, hash), data.to_vec())
+            .await
+            .map_err(|e| CreateDocumentError::Internal(format!("Store write error: {}", e)))?;
+        let file_path = format!("{}{}", folder_name, in_folder_path);
+        self.update_blob_hash(&folder_doc_id, &file_path, &hash)
+            .await
+            .map_err(CreateDocumentError::Internal)?;
+        self.doc_resolver().update_hash(&file_path, &hash);
+        tracing::info!(
+            "Blob file overwritten: {} at {} (doc_id: {}, {} -> {})",
+            entry.uuid,
+            file_path,
+            full_doc_id,
+            entry.hash.as_deref().unwrap_or("-"),
+            hash
+        );
+        Ok((
+            BlobEntry {
+                path: in_folder_path.to_string(),
+                uuid: entry.uuid,
+                hash: Some(hash),
+                mimetype: entry.mimetype,
+            },
+            full_doc_id,
+        ))
+    }
+
     /// Update the hash field in filemeta_v0 for an existing blob file.
     ///
     /// This removes the old `Any::Map` entry and re-inserts it with the updated hash,
@@ -3140,7 +3284,21 @@ impl Server {
     /// Create a minimal Server for testing. No store, no auth, no search.
     #[cfg(test)]
     pub fn new_for_test() -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::test_server_struct())
+    }
+
+    /// Like [`Self::new_for_test`] with the `/mcp` routes enabled through an
+    /// API key.
+    #[cfg(test)]
+    pub fn new_for_test_with_mcp_key(key: &str) -> Arc<Self> {
+        let mut server = Self::test_server_struct();
+        server.mcp_api_key = Some(key.to_string());
+        Arc::new(server)
+    }
+
+    #[cfg(test)]
+    fn test_server_struct() -> Self {
+        Self {
             docs: Arc::new(DashMap::new()),
             doc_worker_tracker: TaskTracker::new(),
             store: None,
@@ -3171,7 +3329,7 @@ impl Server {
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
-        })
+        }
     }
 
     /// Create a minimal Server for testing with a search index.
@@ -4227,6 +4385,7 @@ impl Server {
                 "/doc/attachment",
                 post(handle_upsert_attachment).layer(DefaultBodyLimit::max(30 * 1024 * 1024)),
             )
+            .route("/doc/attachment/by-hash", get(handle_attachment_by_hash))
             .route("/open/*path", get(handle_open_by_path))
             .route("/debug/resolve", get(handle_debug_resolve))
             .route("/suggestions", get(handle_suggestions))
@@ -4256,8 +4415,11 @@ impl Server {
                     .delete(crate::mcp::transport::handle_mcp_delete_with_key),
             );
 
+            // axum's default body limit is 2 MiB, too small for a base64
+            // image in an import_attachment call (20 MiB hard cap × 4/3).
             let mcp_routes = bearer_routes
                 .merge(path_key_routes)
+                .layer(DefaultBodyLimit::max(MCP_BODY_LIMIT_BYTES))
                 .with_state(self.clone());
             router = router.nest("/mcp", mcp_routes);
         }
@@ -5974,18 +6136,35 @@ struct AttachmentQuery {
     folder: String,
     path: String,
     mimetype: Option<String>,
+    /// Replace the bytes at an existing path (keeps the file's id).
+    overwrite: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct AttachmentResponse {
+    doc_id: String,
+    uuid: String,
+    path: String,
+    /// sha256 of the bytes now stored at `path`.
+    hash: String,
+    created: bool,
+    overwritten: bool,
 }
 
 /// Create a binary attachment (e.g. an image extracted from an imported PDF) as
-/// a relay blob + `filemeta_v0` entry, so markdown can reference it
-/// (`![[/attachments/x.png]]`). Raw bytes in the body; folder/path/mimetype in
-/// the query. Create-only: an existing path is treated as already-hosted.
+/// a relay blob + `filemeta_v0` entry, so markdown can reference it. Raw bytes
+/// in the body; folder/path/mimetype in the query.
+///
+/// Create-only by default: the same bytes at an existing path is an
+/// idempotent 200 (`created:false`); different bytes are a 409 naming the
+/// existing hash, unless `overwrite=true`, which repoints the existing entry
+/// at the new bytes (`overwritten:true`).
 async fn handle_upsert_attachment(
     auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
     State(server_state): State<Arc<Server>>,
     Query(query): Query<AttachmentQuery>,
     body: axum::body::Bytes,
-) -> Result<Json<UpsertDocResponse>, AppError> {
+) -> Result<Response, AppError> {
     server_state.check_auth(auth_header)?;
 
     let path = if query.path.starts_with('/') {
@@ -5997,33 +6176,133 @@ async fn handle_upsert_attachment(
         .mimetype
         .as_deref()
         .unwrap_or("application/octet-stream");
+    let full_path = format!("{}{}", query.folder, path);
+
+    let existing = server_state
+        .find_folder_doc_by_name(&query.folder)
+        .and_then(|folder_doc_id| server_state.blob_entry_at(&folder_doc_id, &path));
+
+    if let Some(existing) = existing {
+        let incoming_hash = crate::mcp::tools::blob::sha256_hex(&body);
+        if existing.hash.as_deref() == Some(incoming_hash.as_str()) {
+            // Already hosted with these exact bytes — idempotent success.
+            return Ok(Json(AttachmentResponse {
+                doc_id: String::new(),
+                uuid: existing.uuid,
+                path: full_path,
+                hash: incoming_hash,
+                created: false,
+                overwritten: false,
+            })
+            .into_response());
+        }
+        if !query.overwrite.unwrap_or(false) {
+            let existing_hash = existing.hash.clone().unwrap_or_default();
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": format!(
+                        "Path '{}' already holds different bytes (sha256 {}); pass overwrite=true to replace them or choose another name",
+                        full_path, existing_hash
+                    ),
+                    "path": full_path,
+                    "existing_hash": existing_hash,
+                    "incoming_hash": incoming_hash,
+                })),
+            )
+                .into_response());
+        }
+        let (entry, full_doc_id) = server_state
+            .overwrite_blob_file(&query.folder, &path, &body)
+            .await
+            .map_err(AppError::from)?;
+        return Ok(Json(AttachmentResponse {
+            doc_id: full_doc_id,
+            uuid: entry.uuid,
+            path: full_path,
+            hash: entry.hash.unwrap_or_default(),
+            created: false,
+            overwritten: true,
+        })
+        .into_response());
+    }
 
     match server_state
         .create_blob_file(&query.folder, &path, &body, mimetype)
         .await
     {
-        Ok(result) => Ok(Json(UpsertDocResponse {
+        Ok(result) => Ok(Json(AttachmentResponse {
             doc_id: result.full_doc_id,
-            path: format!("{}{}", query.folder, path),
+            uuid: result.uuid,
+            path: full_path,
+            hash: crate::mcp::tools::blob::sha256_hex(&body),
             created: true,
-        })),
-        // Already hosted at this path — idempotent success.
-        Err(CreateDocumentError::Conflict(_)) => Ok(Json(UpsertDocResponse {
-            doc_id: String::new(),
-            path: format!("{}{}", query.folder, path),
-            created: false,
-        })),
+            overwritten: false,
+        })
+        .into_response()),
         Err(CreateDocumentError::NotFound(msg)) => {
             Err(AppError::new(StatusCode::NOT_FOUND, anyhow!("{}", msg)))
         }
         Err(CreateDocumentError::BadRequest(msg)) => {
             Err(AppError::new(StatusCode::BAD_REQUEST, anyhow!("{}", msg)))
         }
+        // The path is in filemeta but not as a blob (a markdown doc of that
+        // name): not something this endpoint can replace.
+        Err(CreateDocumentError::Conflict(msg)) => {
+            Err(AppError::new(StatusCode::CONFLICT, anyhow!("{}", msg)))
+        }
         Err(e) => Err(AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             anyhow!("{:?}", e),
         )),
     }
+}
+
+#[derive(Deserialize)]
+struct AttachmentByHashQuery {
+    folder: String,
+    sha256: String,
+}
+
+/// `GET /doc/attachment/by-hash?folder=&sha256=`: is a blob with these bytes
+/// already in the folder? Lets uploaders dedup before sending bytes.
+async fn handle_attachment_by_hash(
+    auth_header: Option<TypedHeader<headers::Authorization<headers::authorization::Bearer>>>,
+    State(server_state): State<Arc<Server>>,
+    Query(query): Query<AttachmentByHashQuery>,
+) -> Result<Json<Value>, AppError> {
+    server_state.check_auth(auth_header)?;
+    let sha256 = query.sha256.trim().to_ascii_lowercase();
+    if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(AppError::new(
+            StatusCode::BAD_REQUEST,
+            anyhow!("sha256 must be 64 hex characters"),
+        ));
+    }
+    let folder_doc_id = server_state
+        .find_folder_doc_by_name(&query.folder)
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::NOT_FOUND,
+                anyhow!("Unknown folder '{}'", query.folder),
+            )
+        })?;
+    let relay_id = link_indexer::parse_doc_id(&folder_doc_id)
+        .map(|(r, _)| r.to_string())
+        .unwrap_or_default();
+    Ok(Json(
+        match server_state.find_blob_by_hash(&folder_doc_id, &sha256) {
+            Some(entry) => json!({
+                "found": true,
+                "path": entry.path,
+                "uuid": entry.uuid,
+                "doc_id": if relay_id.is_empty() { entry.uuid.clone() } else { format!("{}-{}", relay_id, entry.uuid) },
+                "mimetype": entry.mimetype,
+                "hash": sha256,
+            }),
+            None => json!({ "found": false, "hash": sha256 }),
+        },
+    ))
 }
 
 async fn new_doc(
@@ -7648,6 +7927,262 @@ mod test {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(body.contains("File names cannot contain double quotes"));
+    }
+
+    /// Server with an in-memory blob store (attachment routes need one) and a
+    /// loaded folder doc named `folder_name`.
+    async fn attachment_test_server(folder_name: &str) -> Arc<Server> {
+        use async_trait::async_trait;
+        use y_sweet_core::store::Result as StoreResult;
+        struct MemoryStore {
+            data: DashMap<String, Vec<u8>>,
+        }
+        #[async_trait]
+        impl Store for MemoryStore {
+            async fn init(&self) -> StoreResult<()> {
+                Ok(())
+            }
+            async fn get(&self, key: &str) -> StoreResult<Option<Vec<u8>>> {
+                Ok(self.data.get(key).map(|v| v.clone()))
+            }
+            async fn set(&self, key: &str, value: Vec<u8>) -> StoreResult<()> {
+                self.data.insert(key.to_owned(), value);
+                Ok(())
+            }
+            async fn remove(&self, key: &str) -> StoreResult<()> {
+                self.data.remove(key);
+                Ok(())
+            }
+            async fn exists(&self, key: &str) -> StoreResult<bool> {
+                Ok(self.data.contains_key(key))
+            }
+        }
+        let server = Arc::new(
+            Server::new_without_workers(
+                Some(Box::new(MemoryStore {
+                    data: DashMap::new(),
+                })),
+                Duration::from_secs(60),
+                None,
+                None,
+                Vec::new(),
+                CancellationToken::new(),
+                false,
+                None,
+            )
+            .await
+            .unwrap(),
+        );
+        // A folder doc is only recognised once filemeta_v0 has an entry.
+        insert_test_folder_doc(
+            &server,
+            folder_name,
+            &[("/Readme.md", "uuid-readme", "markdown")],
+        )
+        .await;
+        server
+    }
+
+    async fn get_json(server: &Arc<Server>, uri: &str) -> (StatusCode, JsonValue) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or(JsonValue::Null);
+        (status, body)
+    }
+
+    async fn post_attachment(
+        server: &Arc<Server>,
+        query: &str,
+        bytes: &[u8],
+    ) -> (StatusCode, JsonValue) {
+        let (status, body) = post_request(
+            server,
+            &format!("/doc/attachment?{}", query),
+            "image/png",
+            Body::from(bytes.to_vec()),
+        )
+        .await;
+        (
+            status,
+            serde_json::from_str(&body).unwrap_or(JsonValue::Null),
+        )
+    }
+
+    // Prevents: the silent-200 conflict that let a second article's figure
+    // alias the first's bytes; different bytes at a taken path must be a 409
+    // that names the existing hash so the caller can pick a new name.
+    #[tokio::test]
+    async fn upsert_attachment_same_path_different_bytes_is_409_unless_overwrite() {
+        let server = attachment_test_server("Lens Edu").await;
+        let q = "folder=Lens%20Edu&path=%2Fattachments%2Ffig.png&mimetype=image%2Fpng";
+
+        let (status, first) = post_attachment(&server, q, b"bytes-v1").await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        assert_eq!(first["created"], true);
+        assert_eq!(first["overwritten"], false);
+        assert_eq!(first["path"], "Lens Edu/attachments/fig.png");
+        let hash_v1 = crate::mcp::tools::blob::sha256_hex(b"bytes-v1");
+        assert_eq!(first["hash"], hash_v1);
+        let uuid = first["uuid"].as_str().unwrap().to_string();
+
+        // Same bytes again: idempotent, nothing changes.
+        let (status, again) = post_attachment(&server, q, b"bytes-v1").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(again["created"], false);
+        assert_eq!(again["overwritten"], false);
+        assert_eq!(again["uuid"], uuid);
+
+        // Different bytes without overwrite: 409 with the existing hash.
+        let (status, conflict) = post_attachment(&server, q, b"bytes-v2").await;
+        assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+        assert_eq!(conflict["existing_hash"], hash_v1);
+        assert!(conflict["error"].as_str().unwrap().contains("overwrite"));
+        assert_eq!(
+            server
+                .doc_resolver()
+                .get_file_hash("Lens Edu/attachments/fig.png")
+                .as_deref(),
+            Some(hash_v1.as_str()),
+            "conflict must not touch the stored file"
+        );
+
+        // With overwrite: same uuid, new hash, resolver and store updated.
+        let (status, over) =
+            post_attachment(&server, &format!("{}&overwrite=true", q), b"bytes-v2").await;
+        assert_eq!(status, StatusCode::OK, "{over}");
+        assert_eq!(over["created"], false);
+        assert_eq!(over["overwritten"], true);
+        assert_eq!(over["uuid"], uuid);
+        let hash_v2 = crate::mcp::tools::blob::sha256_hex(b"bytes-v2");
+        assert_eq!(over["hash"], hash_v2);
+        assert_eq!(
+            server
+                .doc_resolver()
+                .get_file_hash("Lens Edu/attachments/fig.png")
+                .as_deref(),
+            Some(hash_v2.as_str())
+        );
+        let folder_doc_id = format!("{}-{}", TEST_RELAY_ID, TEST_FOLDER_UUID);
+        let entry = server
+            .blob_entry_at(&folder_doc_id, "/attachments/fig.png")
+            .unwrap();
+        assert_eq!(entry.uuid, uuid);
+        assert_eq!(entry.hash.as_deref(), Some(hash_v2.as_str()));
+        let stored = server
+            .store()
+            .as_ref()
+            .unwrap()
+            .get(&format!(
+                "files/{}/{}",
+                over["doc_id"].as_str().unwrap(),
+                hash_v2
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some(&b"bytes-v2"[..]));
+    }
+
+    // Prevents: uploaders re-hosting bytes the folder already has (the
+    // `-img3…img7` five-copies pattern) because nothing answers "do you
+    // have this hash?".
+    #[tokio::test]
+    async fn attachment_by_hash_finds_existing_blob() {
+        let server = attachment_test_server("Lens Edu").await;
+        let (status, created) = post_attachment(
+            &server,
+            "folder=Lens%20Edu&path=%2Fattachments%2Fa.png&mimetype=image%2Fpng",
+            b"shared-bytes",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{created}");
+        let hash = crate::mcp::tools::blob::sha256_hex(b"shared-bytes");
+
+        let (status, found) = get_json(
+            &server,
+            &format!("/doc/attachment/by-hash?folder=Lens%20Edu&sha256={}", hash),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{found}");
+        assert_eq!(found["found"], true);
+        assert_eq!(found["path"], "/attachments/a.png");
+        assert_eq!(found["uuid"], created["uuid"]);
+        assert_eq!(found["doc_id"], created["doc_id"]);
+        assert_eq!(found["mimetype"], "image/png");
+
+        let other = crate::mcp::tools::blob::sha256_hex(b"other");
+        let (status, missing) = get_json(
+            &server,
+            &format!("/doc/attachment/by-hash?folder=Lens%20Edu&sha256={}", other),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(missing["found"], false);
+
+        let (status, _) = get_json(
+            &server,
+            "/doc/attachment/by-hash?folder=Lens%20Edu&sha256=nothex",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = get_json(
+            &server,
+            &format!("/doc/attachment/by-hash?folder=Nope&sha256={}", hash),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    // Prevents: /mcp silently keeping axum's 2 MiB default, which would make
+    // every import_attachment call with a real image fail with 413.
+    #[tokio::test]
+    async fn mcp_routes_accept_bodies_larger_than_axum_default() {
+        let server = Server::new_for_test_with_mcp_key("test-key");
+        let padding = "x".repeat(3 * 1024 * 1024);
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"pad":"{}"}}}}"#,
+            padding
+        );
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/mcp")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer test-key")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let too_big = "x".repeat(MCP_BODY_LIMIT_BYTES + 1024);
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/mcp")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer test-key")
+                    .body(Body::from(too_big))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
