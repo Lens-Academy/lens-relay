@@ -1,6 +1,12 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { createHash } from "node:crypto";
-import { requireEduEditShareToken } from "../edit-share-auth";
+import limits from "../../shared/attachment-limits.json";
+import {
+  requireEduEditShareToken,
+  shareTokenPayload,
+  tokenAllowsFolderName,
+} from "../edit-share-auth";
 import { fetchRawBytes } from "../add-article/fetch";
 import { SsrfError } from "../add-article/ssrf";
 import {
@@ -18,11 +24,15 @@ import {
   type ImageMime,
 } from "./image-types";
 
-/** Hard per-file cap (bytes). The relay MCP tool states the same number. */
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+/** Hard per-file cap (bytes); shared with the relay via
+ *  `shared/attachment-limits.json`. */
+export const MAX_ATTACHMENT_BYTES: number = limits.max_bytes;
 /** Above this the upload succeeds with a warning. */
-export const SOFT_ATTACHMENT_BYTES = 5 * 1024 * 1024;
-const MAX_STEM_LEN = 80;
+export const SOFT_ATTACHMENT_BYTES: number = limits.soft_bytes;
+const MAX_STEM_LEN: number = limits.max_stem_len;
+/** JSON body cap: a 20 MiB image is ~27 MiB of base64 plus the envelope.
+ *  Matches the relay's /mcp body limit. */
+export const MAX_REQUEST_BODY_BYTES = 30 * 1024 * 1024;
 const STEM_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ATTACHMENT_PATH_RE = /^\/attachments\/([^/"]+)$/;
 
@@ -79,7 +89,7 @@ export function defaultAttachmentRouteDeps(): AttachmentRouteDeps {
 
 class RequestError extends Error {
   constructor(
-    readonly status: 400 | 409 | 413 | 415 | 422 | 502,
+    readonly status: 400 | 403 | 409 | 413 | 415 | 422 | 502,
     message: string,
     readonly extra: Record<string, unknown> = {},
   ) {
@@ -225,9 +235,15 @@ async function obtainBytes(
 export async function importAttachment(
   body: unknown,
   deps: AttachmentRouteDeps,
+  isFolderAllowed: (folderName: string) => boolean,
   signal?: AbortSignal,
 ): Promise<AttachmentImportResponse> {
   const req = parseRequest(body);
+  // The share token proves edit access to one folder; the relay server token
+  // used below can write to any. Bind the two before doing anything else.
+  if (!isFolderAllowed(req.folder)) {
+    throw new RequestError(403, `Access denied: this token cannot write to folder '${req.folder}'`);
+  }
   const { bytes, declaredType } = await obtainBytes(req, deps, signal);
   const warnings: string[] = [];
 
@@ -339,14 +355,36 @@ export async function importAttachment(
  */
 export function createAttachmentRoutes(
   deps: AttachmentRouteDeps = defaultAttachmentRouteDeps(),
+  opts: { maxBodyBytes?: number } = {},
 ): Hono {
   const router = new Hono();
   router.use("/*", requireEduEditShareToken());
+  router.use(
+    "/*",
+    bodyLimit({
+      maxSize: opts.maxBodyBytes ?? MAX_REQUEST_BODY_BYTES,
+      onError: (c) =>
+        c.json({ error: `Request body exceeds ${opts.maxBodyBytes ?? MAX_REQUEST_BODY_BYTES} bytes` }, 413),
+    }),
+  );
 
   router.post("/import", async (c) => {
-    const body = await c.req.json().catch(() => null);
+    let body: unknown = null;
     try {
-      const result = await importAttachment(body, deps, c.req.raw.signal);
+      body = await c.req.json();
+    } catch (err) {
+      // Streamed bodies over the cap surface here; let bodyLimit turn the
+      // error into its 413 (content-length'd bodies are rejected earlier).
+      if (err instanceof Error && err.name === "BodyLimitError") throw err;
+    }
+    const payload = shareTokenPayload(c);
+    try {
+      const result = await importAttachment(
+        body,
+        deps,
+        (folderName) => tokenAllowsFolderName(payload, folderName),
+        c.req.raw.signal,
+      );
       return c.json(result);
     } catch (err) {
       if (err instanceof RequestError) {

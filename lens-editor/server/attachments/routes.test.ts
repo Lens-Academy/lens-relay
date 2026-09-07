@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
 import { createHash } from "node:crypto";
+import { Request as UndiciRequest } from "undici";
 import {
   createAttachmentRoutes,
   decodeBase64Strict,
@@ -13,6 +14,7 @@ import { RelayAttachmentConflictError } from "../add-video/relay-docs";
 import { SsrfError } from "../add-article/ssrf";
 import { signShareToken, type ShareTokenPayload } from "../share-token";
 import { EDU_FOLDER } from "../edit-share-auth";
+import limits from "../../shared/attachment-limits.json";
 
 const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -76,6 +78,49 @@ describe("POST /api/attachments/import", () => {
       (await post({ folder: "Lens Edu", url: "https://x/a.png" }, makeToken({ folder: "fbd5eb54-73cc-41b0-ac28-2b93d3b4244e" }))).status,
     ).toBe(403);
     expect(deps.upload).not.toHaveBeenCalled();
+  });
+
+  // Prevents: a Lens Edu edit token writing into any other relay folder
+  // through the server-token upload (the body's `folder` is caller-chosen).
+  it("binds the body folder to the token's folder scope", async () => {
+    const resp = await post({ folder: "Lens", url: "https://x/a.png" });
+    expect(resp.status).toBe(403);
+    expect((await resp.json()).error).toMatch(/folder 'Lens'/);
+    expect(deps.fetchBytes).not.toHaveBeenCalled();
+    expect(deps.findByHash).not.toHaveBeenCalled();
+    expect(deps.upload).not.toHaveBeenCalled();
+
+    // An all-folders token may name any folder.
+    const allFolders = makeToken({ folder: "00000000-0000-0000-0000-000000000000" });
+    const ok = await post({ folder: "Lens", url: "https://x/a.png" }, allFolders);
+    expect(ok.status).toBe(200);
+    expect(deps.upload.mock.calls[0][0]).toBe("Lens");
+  });
+
+  it("rejects request bodies over the configured limit before parsing", async () => {
+    const small = new Hono();
+    small.route("/api/attachments", createAttachmentRoutes(deps as unknown as AttachmentRouteDeps, { maxBodyBytes: 1024 }));
+    const body = JSON.stringify({ folder: "Lens Edu", stem: "x", content_base64: "A".repeat(4096) });
+    // undici's Request is what @hono/node-server hands the app in production;
+    // vitest's global Request drops Content-Length and buffers differently.
+    const request = (headers: Record<string, string>) =>
+      new UndiciRequest("http://editor.test/api/attachments/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${makeToken()}`, ...headers },
+        body,
+      }) as unknown as Request;
+    // Declared length (what reqwest/curl send): rejected before any read.
+    // (The chunked/no-length path is hono's own stream guard; it cannot be
+    // exercised here because vitest's global Request cannot wrap an undici
+    // Request, but it returns 413 under plain Node.)
+    const resp = await small.fetch(request({ "Content-Length": String(body.length) }));
+    expect(resp.status).toBe(413);
+    expect(deps.upload).not.toHaveBeenCalled();
+  });
+
+  it("uses the limits from the shared contract file", () => {
+    expect(MAX_ATTACHMENT_BYTES).toBe(limits.max_bytes);
+    expect(SOFT_ATTACHMENT_BYTES).toBe(limits.soft_bytes);
   });
 
   // ---- validation ----

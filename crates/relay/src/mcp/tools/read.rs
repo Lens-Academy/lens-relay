@@ -12,9 +12,11 @@ pub const READ_IMAGE_MAX_BYTES: usize = 5 * 1024 * 1024;
 
 /// Execute the `read` tool and return MCP content blocks.
 ///
-/// Image attachments (png/jpg/jpeg/gif/webp/svg backed by a blob) come back
-/// as a one-line text block (path, size, sha256) followed by an `image`
-/// block; everything else is the cat -n text from [`execute`].
+/// Raster attachments (png/jpg/jpeg/gif/webp backed by a blob) come back as
+/// a one-line text block (path, size, sha256) followed by an `image` block.
+/// SVG is XML, and MCP clients only accept raster types in image blocks, so
+/// an SVG blob is returned as cat -n text. Everything else is the text from
+/// [`execute`].
 pub async fn execute_blocks(
     server: &Arc<Server>,
     session_id: &str,
@@ -42,6 +44,21 @@ pub async fn execute_blocks(
             }
             if let Some(mut session) = server.mcp_sessions.get_session_mut(session_id) {
                 session.read_docs.insert(doc_info.doc_id.clone());
+            }
+            if blob::is_svg_file(file_path) {
+                let offset = arguments
+                    .get("offset")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                let limit = arguments
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(2000) as usize;
+                let text = String::from_utf8(data)
+                    .map_err(|_| format!("Error: {} is not valid UTF-8", file_path))?;
+                return Ok(vec![
+                    json!({ "type": "text", "text": format_cat_n(&text, offset, limit) }),
+                ]);
             }
             return Ok(image_blocks(file_path, &data));
         }
@@ -642,6 +659,31 @@ mod image_read_tests {
         .await
         .expect_err("oversized image must not be returned inline");
         assert!(err.contains("bytes"), "got: {err}");
+    }
+
+    // Prevents: an `image/svg+xml` image block, which MCP clients reject
+    // (only png/jpeg/gif/webp are accepted); SVG is XML and reads as text.
+    #[tokio::test]
+    async fn read_svg_returns_its_xml_as_text() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#;
+        let server = build_blob_test_server_with_bytes(
+            "/attachments/logo.svg",
+            "uuid-svg",
+            svg,
+            "image/svg+xml",
+        )
+        .await;
+        let sid = setup_session_no_reads(&server);
+        let blocks = execute_blocks(
+            &server,
+            &sid,
+            &json!({ "file_path": "Lens/attachments/logo.svg", "session_id": sid }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(blocks.len(), 1, "got: {blocks:?}");
+        assert_eq!(blocks[0]["type"], "text");
+        assert!(blocks[0]["text"].as_str().unwrap().contains("<rect/>"));
     }
 
     #[tokio::test]

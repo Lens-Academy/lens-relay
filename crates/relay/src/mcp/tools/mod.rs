@@ -62,7 +62,7 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }),
         json!({
             "name": "read",
-            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp, svg up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256.",
+            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256; .svg attachments come back as their XML text.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],

@@ -168,8 +168,9 @@ That entry lives in the in-memory recent-changes index only (attachments have
 no Y.Doc to persist an `activity_v0` event in), so it disappears on relay
 restart.
 
-**Reading.** The MCP `read` tool returns image attachments (≤ 5 MiB) as an
-image content block; `create`/`edit` refuse image paths.
+**Reading.** The MCP `read` tool returns raster attachments (≤ 5 MiB) as an
+image content block and `.svg` attachments as their XML text; `create`/`edit`
+refuse image paths.
 
 ## Key Files
 

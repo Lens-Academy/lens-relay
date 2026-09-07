@@ -463,7 +463,13 @@ fn record_activity(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let seq = ACTIVITY_SEQ.fetch_add(1, Ordering::Relaxed);
+    // Counter mixed with sub-millisecond time so ids stay unique across
+    // restarts (the counter alone restarts at 1).
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let seq = ACTIVITY_SEQ.fetch_add(1, Ordering::Relaxed) ^ nanos;
     let new = match public_url {
         Some(u) => format!("{} ({})", full_path, u),
         None => full_path.to_string(),
@@ -636,6 +642,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("boolean"), "{err}");
+    }
+
+    // Prevents: the relay and the editor drifting on the limits they both
+    // enforce and describe to agents.
+    #[test]
+    fn limits_match_the_editor_contract() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../../lens-editor/shared/attachment-limits.json"
+        ))
+        .expect("attachment limits contract must be valid JSON");
+        assert_eq!(contract["max_bytes"], MAX_ATTACHMENT_BYTES as u64);
+        assert_eq!(contract["soft_bytes"], SOFT_ATTACHMENT_BYTES as u64);
+        assert_eq!(contract["max_stem_len"], MAX_STEM_LEN as u64);
+        let mut exts: Vec<&str> = contract["allowed_extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        exts.sort_unstable();
+        let mut ours = ALLOWED_EXTENSIONS.to_vec();
+        ours.sort_unstable();
+        assert_eq!(exts, ours);
     }
 
     // ---- public URL config ----

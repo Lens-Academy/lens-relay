@@ -124,9 +124,10 @@ pub fn is_blob_file(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".json")
 }
 
-/// Image extensions the MCP surface recognises: `read` returns these as an
-/// image content block, `create`/`edit` refuse them (bytes only enter through
-/// `import_attachment`). SVG is readable but not uploadable in v1.
+/// Image extensions the MCP surface recognises: `read` returns the raster
+/// ones as an image content block (SVG as text), `create`/`edit` refuse all
+/// of them (bytes only enter through `import_attachment`; SVG is not
+/// uploadable in v1).
 const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 
 /// Lower-cased extension of `path` (text after the last `.` of the last
@@ -138,6 +139,12 @@ fn extension(path: &str) -> Option<String> {
         return None;
     }
     Some(ext.to_ascii_lowercase())
+}
+
+/// Returns true for `.svg` (case-insensitive): an image for `create`/`edit`
+/// purposes, but read back as XML text rather than an image block.
+pub fn is_svg_file(path: &str) -> bool {
+    extension(path).as_deref() == Some("svg")
 }
 
 /// Returns true if `path` has an image extension (case-insensitive).

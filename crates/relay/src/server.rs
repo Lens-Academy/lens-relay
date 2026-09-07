@@ -2165,7 +2165,9 @@ impl Server {
     }
 
     /// Replace the bytes of an existing blob file in place: same uuid (so
-    /// git-sync sees a modified file, not a new one), new content hash.
+    /// git-sync sees a modified file, not a new one), new content hash. The
+    /// previous object stays at `files/<doc>/<old hash>` (no GC yet; it is
+    /// what the history endpoints and a rollback would read).
     pub async fn overwrite_blob_file(
         &self,
         folder_name: &str,
@@ -6178,16 +6180,29 @@ async fn handle_upsert_attachment(
         .unwrap_or("application/octet-stream");
     let full_path = format!("{}{}", query.folder, path);
 
-    let existing = server_state
-        .find_folder_doc_by_name(&query.folder)
-        .and_then(|folder_doc_id| server_state.blob_entry_at(&folder_doc_id, &path));
+    let folder_doc_id = server_state.find_folder_doc_by_name(&query.folder);
+    let relay_id = folder_doc_id
+        .as_deref()
+        .and_then(link_indexer::parse_doc_id)
+        .map(|(r, _)| r.to_string())
+        .unwrap_or_default();
+    let full_doc_id = |uuid: &str| {
+        if relay_id.is_empty() {
+            uuid.to_string()
+        } else {
+            format!("{}-{}", relay_id, uuid)
+        }
+    };
+    let existing = folder_doc_id
+        .as_deref()
+        .and_then(|folder_doc_id| server_state.blob_entry_at(folder_doc_id, &path));
 
     if let Some(existing) = existing {
         let incoming_hash = crate::mcp::tools::blob::sha256_hex(&body);
         if existing.hash.as_deref() == Some(incoming_hash.as_str()) {
             // Already hosted with these exact bytes — idempotent success.
             return Ok(Json(AttachmentResponse {
-                doc_id: String::new(),
+                doc_id: full_doc_id(&existing.uuid),
                 uuid: existing.uuid,
                 path: full_path,
                 hash: incoming_hash,
@@ -6246,10 +6261,32 @@ async fn handle_upsert_attachment(
         Err(CreateDocumentError::BadRequest(msg)) => {
             Err(AppError::new(StatusCode::BAD_REQUEST, anyhow!("{}", msg)))
         }
-        // The path is in filemeta but not as a blob (a markdown doc of that
-        // name): not something this endpoint can replace.
         Err(CreateDocumentError::Conflict(msg)) => {
-            Err(AppError::new(StatusCode::CONFLICT, anyhow!("{}", msg)))
+            // Either a concurrent upload won the race (re-check so the reply
+            // still names the existing hash) or the path is a non-blob entry
+            // such as a markdown doc, which this endpoint cannot replace.
+            let raced = folder_doc_id
+                .as_deref()
+                .and_then(|folder_doc_id| server_state.blob_entry_at(folder_doc_id, &path));
+            match raced {
+                Some(entry) => {
+                    let existing_hash = entry.hash.clone().unwrap_or_default();
+                    Ok((
+                        StatusCode::CONFLICT,
+                        Json(json!({
+                            "error": format!(
+                                "Path '{}' already holds different bytes (sha256 {}); pass overwrite=true to replace them or choose another name",
+                                full_path, existing_hash
+                            ),
+                            "path": full_path,
+                            "existing_hash": existing_hash,
+                            "incoming_hash": crate::mcp::tools::blob::sha256_hex(&body),
+                        })),
+                    )
+                        .into_response())
+                }
+                None => Err(AppError::new(StatusCode::CONFLICT, anyhow!("{}", msg))),
+            }
         }
         Err(e) => Err(AppError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -8042,6 +8079,7 @@ mod test {
         assert_eq!(again["created"], false);
         assert_eq!(again["overwritten"], false);
         assert_eq!(again["uuid"], uuid);
+        assert_eq!(again["doc_id"], first["doc_id"]);
 
         // Different bytes without overwrite: 409 with the existing hash.
         let (status, conflict) = post_attachment(&server, q, b"bytes-v2").await;

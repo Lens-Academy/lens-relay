@@ -1,0 +1,6 @@
+{
+  "max_bytes": 20971520,
+  "soft_bytes": 5242880,
+  "max_stem_len": 80,
+  "allowed_extensions": ["png", "jpg", "jpeg", "gif", "webp"]
+}
