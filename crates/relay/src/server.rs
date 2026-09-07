@@ -4321,12 +4321,24 @@ impl Server {
         }
     }
 
+    /// With `server.redact_errors` on (production), error responses lose
+    /// their body so an `AppError`'s `anyhow` chain (paths, internal
+    /// messages) never leaves the server. Handlers that build a JSON error
+    /// body on purpose (`POST /doc/attachment` 409 with `existing_hash`,
+    /// `/doc/check*`) are a contract with the caller, not a leak, so a
+    /// `Content-Type: application/json` error body is kept as is.
     pub async fn redact_error_middleware(req: Request, next: Next) -> impl IntoResponse {
         let resp = next.run(req).await;
         if resp.status().is_server_error() || resp.status().is_client_error() {
-            // If we should redact errors, copy over only the status code and
-            // not the response body.
-            return resp.status().into_response();
+            let structured = resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|ct| ct.starts_with("application/json"))
+                .unwrap_or(false);
+            if !structured {
+                return resp.status().into_response();
+            }
         }
         resp
     }
@@ -7793,6 +7805,49 @@ mod test {
         txn.get_text("contents")
             .map(|text| text.get_string(&txn))
             .unwrap_or_default()
+    }
+
+    // Prevents: `redact_errors` (on in production) stripping the JSON body of
+    // a deliberate error reply, which left `POST /doc/attachment`'s 409
+    // without `existing_hash` and the MCP tool naming an empty hash.
+    #[tokio::test]
+    async fn redact_error_middleware_keeps_json_error_bodies_and_strips_the_rest() {
+        async fn json_conflict() -> Response {
+            (StatusCode::CONFLICT, Json(json!({"existing_hash": "abc"}))).into_response()
+        }
+        async fn plain_error() -> Result<Response, AppError> {
+            Err(AppError::new(
+                StatusCode::NOT_FOUND,
+                anyhow!("internal detail that must not leak"),
+            ))
+        }
+        let app = Router::new()
+            .route("/json", get(json_conflict))
+            .route("/plain", get(plain_error))
+            .layer(middleware::from_fn(Server::redact_error_middleware));
+
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri("/json").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: JsonValue = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["existing_hash"], "abc");
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/plain")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert!(body.is_empty(), "{:?}", body);
     }
 
     async fn post_move(server: &Arc<Server>, body: JsonValue) -> (StatusCode, JsonValue) {

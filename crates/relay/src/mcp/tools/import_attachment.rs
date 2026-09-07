@@ -388,13 +388,9 @@ pub async fn execute_with_editor_url(
             req.folder, PUBLIC_URLS_ENV
         ));
     }
-    if bytes as usize > SOFT_ATTACHMENT_BYTES {
-        note_parts.push(format!(
-            "Warning: {} bytes exceeds the {} MiB soft limit; consider downscaling for learners on slow connections.",
-            bytes,
-            SOFT_ATTACHMENT_BYTES / (1024 * 1024)
-        ));
-    }
+    // The editor owns the size checks (shared/attachment-limits.json) and
+    // reports the soft-limit warning in `warnings`; it is forwarded, not
+    // repeated here.
     note_parts.extend(warnings);
 
     tracing::info!(
@@ -848,7 +844,10 @@ mod tests {
         reply["created"] = json!(false);
         reply["overwritten"] = json!(true);
         reply["bytes"] = json!(SOFT_ATTACHMENT_BYTES + 1);
-        reply["warnings"] = json!(["editor says hi"]);
+        reply["warnings"] = json!([
+            "editor says hi",
+            "Image is 5242881 bytes, above the 5 MiB soft limit; consider downscaling."
+        ]);
         let (editor_url, mut rx) = mock_editor((200, reply)).await;
 
         let out = execute_with_editor_url(
