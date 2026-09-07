@@ -267,6 +267,30 @@ describe("embedPdfImages", () => {
     expect(uploads[0].bytes.toString()).toBe("png-0");
   });
 
+  // Prevents: a 409 from the relay (name taken by different bytes) being
+  // treated as "already hosted" — the importer must pick a new name.
+  it("retries with a longer hash suffix when the relay reports a name conflict", async () => {
+    const { RelayAttachmentConflictError } = await import("../add-video/relay-docs");
+    const uploads: string[] = [];
+    const out = await embedPdfImages("![[__pdfimg_0__]]", [img(0)], "grey-x", async (p) => {
+      uploads.push(p);
+      if (uploads.length === 1) throw new RelayAttachmentConflictError(p, "otherhash", "taken");
+    });
+    expect(uploads).toHaveLength(2);
+    expect(uploads[0]).toMatch(/-fig1-[0-9a-f]{8}\.png$/);
+    expect(uploads[1]).toMatch(/-fig1-[0-9a-f]{16}\.png$/);
+    expect(out).toContain(uploads[1]);
+  });
+
+  it("gives up after the second conflict", async () => {
+    const { RelayAttachmentConflictError } = await import("../add-video/relay-docs");
+    await expect(
+      embedPdfImages("![[__pdfimg_0__]]", [img(0)], "x", async (p) => {
+        throw new RelayAttachmentConflictError(p, "h", "taken");
+      }),
+    ).rejects.toThrow("Failed to host required PDF figure 1");
+  });
+
   it("blocks when a required PDF figure cannot be hosted", async () => {
     const body = "Before.\n\n![[__pdfimg_0__]]\n\nAfter.";
     await expect(embedPdfImages(body, [img(0)], "x", async () => {

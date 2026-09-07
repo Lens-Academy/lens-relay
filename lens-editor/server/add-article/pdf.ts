@@ -11,6 +11,9 @@ import { configuredPdfProvider, parsePdfWithProvider } from "./pdf-provider";
 import { escapeTagOpeners } from "./escape";
 import type { ArticleMeta } from "./types";
 import type { ExtractResult } from "./extract";
+import { attachmentPublicUrl } from "../attachments/public-url";
+import { EXT_BY_MIME } from "../attachments/image-types";
+import { uploadWithHashSuffix } from "./image-hosting";
 
 /**
  * PDF → Markdown for the article importer. A submitted `.pdf` URL has no HTML to
@@ -709,43 +712,40 @@ export async function extractPdfSmart(
   return extractPdf(bytes, sourceUrl);
 }
 
-const MIME_EXT: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "image/gif": "gif",
-  "image/png": "png",
-};
-
 /**
  * Replace the `![[__pdfimg_N__]]` placeholders in a PDF-extracted body with real
- * attachment embeds, uploading each image first. Images that fail to upload are
- * dropped (the surrounding text stays). Returns the rewritten body.
+ * attachment embeds, uploading each image first. A figure that cannot be
+ * hosted fails the import (the text would otherwise silently lose it).
+ * Returns the rewritten body.
  */
 export async function embedPdfImages(
   body: string,
   images: PdfPageImage[],
   slugBase: string,
-  upload: (inFolderPath: string, png: Buffer, mimetype: string) => Promise<void>,
+  upload: (inFolderPath: string, png: Buffer, mimetype: string) => Promise<unknown>,
   publicUrl: (inFolderPath: string) => string = (inFolderPath) =>
-    `https://raw.githubusercontent.com/Lens-Academy/lens-edu-staging/staging${inFolderPath}`,
+    attachmentPublicUrl("Lens Edu", inFolderPath) ?? inFolderPath,
 ): Promise<string> {
   let out = body;
   for (let i = 0; i < images.length; i += 1) {
     const placeholder = `![[__pdfimg_${i}__]]`;
     if (!out.includes(placeholder)) continue;
     const mime = images[i].mime || "image/png";
-    const ext = MIME_EXT[mime] || "png";
+    const ext = (EXT_BY_MIME as Record<string, string>)[mime] || "png";
     // Content-hash suffix: the slug base alone is computed BEFORE filename
     // collision resolution, so two DISTINCT articles sharing a base (every
-    // Atlas chapter's "Introduction") would collide on `<base>-fig1` — and the
-    // relay's create-only attachment endpoint treats the conflict as success,
-    // silently embedding the FIRST article's figure in the second. Hashing the
-    // bytes makes cross-article aliasing impossible (identical bytes deduping
-    // onto one blob is correct).
-    const h8 = createHash("sha1").update(images[i].png).digest("hex").slice(0, 8);
-    const inFolderPath = `/attachments/${slugBase}-fig${i + 1}-${h8}.${ext}`;
+    // Atlas chapter's "Introduction") would collide on `<base>-fig1`. Hashing
+    // the bytes makes cross-article aliasing impossible (identical bytes
+    // deduping onto one blob is correct). The relay answers 409 when a name
+    // is taken by different bytes; uploadWithHashSuffix then retries with a
+    // longer suffix, so a conflict means "pick a new name", never "reuse".
     try {
-      await upload(inFolderPath, images[i].png, mime);
+      const inFolderPath = await uploadWithHashSuffix(
+        (h) => `/attachments/${slugBase}-fig${i + 1}-${h}.${ext}`,
+        images[i].png,
+        mime,
+        upload,
+      );
       out = out.split(placeholder).join(`![Figure ${i + 1}](${publicUrl(inFolderPath)})`);
     } catch (error) {
       throw new Error(`Failed to host required PDF figure ${i + 1}: ${error}`);

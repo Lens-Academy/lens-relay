@@ -5,6 +5,7 @@ import { fetchRawBytes } from "./fetch";
 import { embedPdfImages } from "./pdf";
 import { dedupUrlVariants } from "./url-normalize";
 import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
+import { attachmentPublicUrl } from "../attachments/public-url";
 import {
   ArticleReviewRejectedError,
   MAX_REVIEW_ROUNDS,
@@ -444,8 +445,12 @@ export async function processArticle(
   if (!isStubOnly && ex.images?.length) {
     await setStage("uploading-images");
     const beforeImages = body;
-    body = await embedPdfImages(body, ex.images, filenameBase, (p, png, mime) =>
-      createRelayAttachment(topFolder, p, png, mime, signal),
+    body = await embedPdfImages(
+      body,
+      ex.images,
+      filenameBase,
+      (p, png, mime) => createRelayAttachment(topFolder, p, png, mime, signal),
+      (p) => attachmentPublicUrl(topFolder, p) ?? p,
     );
     await reporter.programmatic({
       code: "programmatic.pdf-images-hosted",
@@ -463,6 +468,7 @@ export async function processArticle(
     const beforeImages = body;
     body = await hostRemoteImages(body, filenameBase, {
       hostPattern: ARXIV_IMAGE_HOSTS,
+      folder: topFolder,
       fetchImage: async (u) => {
         const r = await fetchRawBytes(u, signal);
         return { bytes: r.bytes, contentType: r.contentType };
@@ -563,6 +569,7 @@ export async function processArticle(
       if (unrenderedExtraction.via === "arxiv") {
         unrenderedBody = await hostRemoteImages(unrenderedBody, unrenderedFilenameBase, {
           hostPattern: ARXIV_IMAGE_HOSTS,
+          folder: topFolder,
           fetchImage: async (url) => {
             const response = await fetchRawBytes(url, signal);
             return { bytes: response.bytes, contentType: response.contentType };

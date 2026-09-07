@@ -30,6 +30,27 @@ describe("hostRemoteImages", () => {
     );
   });
 
+  it("uses the configured folder's public base URL", async () => {
+    const o = opts({ folder: "Lens" });
+    vi.stubEnv("ATTACHMENT_PUBLIC_URLS", "Lens=https://raw.example/lens/main");
+    try {
+      const out = await hostRemoteImages("![f](https://arxiv.org/a/x1.png)", "b", o);
+      expect(out).toContain("https://raw.example/lens/main/attachments/b-img1-8635d6d1.png");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("retries with a longer hash suffix on a relay name conflict", async () => {
+    const { RelayAttachmentConflictError } = await import("../add-video/relay-docs");
+    const upload = vi.fn(async (p: string) => {
+      if (upload.mock.calls.length === 1) throw new RelayAttachmentConflictError(p, "h", "taken");
+    });
+    const out = await hostRemoteImages("![f](https://arxiv.org/a/x1.png)", "b", opts({ upload }));
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(out).toMatch(/b-img1-[0-9a-f]{16}\.png/);
+  });
+
   it("keeps the external URL when fetch or upload fails", async () => {
     const body = "![f](https://arxiv.org/html/1/assets/x1.png)";
     const out = await hostRemoteImages(

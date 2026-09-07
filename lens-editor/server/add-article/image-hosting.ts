@@ -6,35 +6,61 @@
  * (they also rot when ar5iv regenerates). This walks the Markdown's
  * `![alt](https://…)` images, downloads the ones on allowed hosts, uploads
  * them through the same attachment endpoint the PDF path uses, and rewrites
- * the embed to `![[/attachments/…]]`. Any failure keeps the original external
+ * the embed's destination to the attachment's public raw URL (the platform
+ * renders only absolute image URLs). Any failure keeps the original external
  * URL — hosting is an upgrade, never a gate.
+ *
+ * Type detection, naming and the public URL come from `../attachments/`, the
+ * same helpers the MCP import_attachment route uses.
  */
+
+import { createHash } from "node:crypto";
+import { RelayAttachmentConflictError } from "../add-video/relay-docs";
+import { attachmentPublicUrl } from "../attachments/public-url";
+import { extFor, MIME_BY_EXT } from "../attachments/image-types";
 
 // URL may contain one level of balanced parentheses (Wikipedia "File:(x).png",
 // signed CDN URLs) — a bare [^)]+ would truncate at the first ")" and leave a
 // stray paren in the body.
-import { createHash } from "node:crypto";
-
 const IMG_MD_RE = /!\[[^\]]*\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g;
 
-const EXT_BY_MIME: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-};
+/** Folder the importer writes to when the caller does not say. */
+const DEFAULT_FOLDER = "Lens Edu";
 
-function extFor(url: string, contentType: string): string | null {
-  const mime = contentType.split(";")[0].trim().toLowerCase();
-  if (EXT_BY_MIME[mime]) return EXT_BY_MIME[mime];
-  const m = url.toLowerCase().match(/\.(png|jpe?g|gif|webp)(\?|$)/);
-  if (m) return m[1] === "jpeg" ? "jpg" : m[1];
-  return null; // svg/unknown — leave external
+/**
+ * Upload with the importer's content-hash naming. Names carry the first 8 hex
+ * of the sha1 (`<base>.<ext>` -> `<base>-<h8>.<ext>`); on a 409 (a different
+ * file already owns that name) the full 16-hex suffix is tried once before
+ * giving up. Returns the in-folder path that was used.
+ */
+export async function uploadWithHashSuffix(
+  makePath: (hashSuffix: string) => string,
+  data: Buffer,
+  mimetype: string,
+  upload: (inFolderPath: string, data: Buffer, mimetype: string) => Promise<unknown>,
+): Promise<string> {
+  const sha1 = createHash("sha1").update(data).digest("hex");
+  const attempts = [sha1.slice(0, 8), sha1.slice(0, 16)];
+  let lastConflict: RelayAttachmentConflictError | null = null;
+  for (const suffix of attempts) {
+    const inFolderPath = makePath(suffix);
+    try {
+      await upload(inFolderPath, data, mimetype);
+      return inFolderPath;
+    } catch (err) {
+      if (!(err instanceof RelayAttachmentConflictError)) throw err;
+      lastConflict = err;
+    }
+  }
+  throw lastConflict ?? new Error("attachment upload failed");
 }
 
 export interface HostImagesOptions {
   /** Hosts whose images get rehosted (match on hostname). */
   hostPattern: RegExp;
+  /** Top-level relay folder the attachments land in (default "Lens Edu");
+   *  decides the public URL. */
+  folder?: string;
   fetchImage: (
     url: string,
   ) => Promise<{ bytes: ArrayBuffer; contentType: string }>;
@@ -42,7 +68,7 @@ export interface HostImagesOptions {
     inFolderPath: string,
     data: Buffer,
     mimetype: string,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   maxImages?: number;
   maxBytesPerImage?: number;
   publicUrl?: (inFolderPath: string) => string;
@@ -84,13 +110,21 @@ export async function hostRemoteImages(
       const buf = Buffer.from(bytes);
       // Content-hash suffix — same cross-article aliasing guard as the PDF
       // figure path (the slug base predates filename collision resolution).
-      const h8 = createHash("sha1").update(buf).digest("hex").slice(0, 8);
-      const inFolderPath = `/attachments/${slugBase}-img${n + 1}-${h8}.${ext}`;
-      const mime = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
-      await opts.upload(inFolderPath, buf, mime);
+      const mime = MIME_BY_EXT[ext];
+      const inFolderPath = await uploadWithHashSuffix(
+        (h) => `/attachments/${slugBase}-img${n + 1}-${h}.${ext}`,
+        buf,
+        mime,
+        opts.upload,
+      );
       n += 1; // only successful uploads consume a number (no gaps)
-      const publicUrl = opts.publicUrl?.(inFolderPath) ??
-        `https://raw.githubusercontent.com/Lens-Academy/lens-edu-staging/staging${inFolderPath}`;
+      const publicUrl =
+        opts.publicUrl?.(inFolderPath) ??
+        attachmentPublicUrl(opts.folder ?? DEFAULT_FOLDER, inFolderPath);
+      if (!publicUrl) {
+        console.warn(`[add-article] no public URL for folder; keeping external: ${url}`);
+        continue;
+      }
       // Preserve each image's alt text while replacing its destination.
       out = out.replace(
         new RegExp(`(!\\[[^\\]]*\\]\\()${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\))`, "g"),
