@@ -21,6 +21,7 @@ async function fetchFollowingRedirects(
   url: string,
   accept: string,
   signal?: AbortSignal,
+  maxBytes: number = MAX_HTML_BYTES,
 ): Promise<{ bytes: ArrayBuffer; contentType: string; finalUrl: string }> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -33,7 +34,7 @@ async function fetchFollowingRedirects(
       },
       timeoutMs: FETCH_TIMEOUT_MS,
       signal,
-      maxBytes: MAX_HTML_BYTES,
+      maxBytes,
     });
 
     if (resp.status >= 300 && resp.status < 400) {
@@ -48,7 +49,7 @@ async function fetchFollowingRedirects(
     if (!resp.ok) {
       throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
     }
-    if (resp.bytes.byteLength > MAX_HTML_BYTES) {
+    if (resp.bytes.byteLength > maxBytes) {
       throw new Error(`Page too large: ${resp.bytes.byteLength} bytes`);
     }
     return {
@@ -78,13 +79,15 @@ export async function fetchRawHtml(
 export async function fetchRawBytes(
   url: string,
   signal?: AbortSignal,
+  opts: { accept?: string; maxBytes?: number } = {},
 ): Promise<{ bytes: ArrayBuffer; contentType: string; finalUrl: string }> {
   // Prefer HTML (most single-candidate URLs are pages) but accept a PDF or
   // anything else — the caller sniffs the result and branches.
   return fetchFollowingRedirects(
     url,
-    "text/html,application/xhtml+xml,application/pdf,*/*",
+    opts.accept ?? "text/html,application/xhtml+xml,application/pdf,*/*",
     signal,
+    opts.maxBytes,
   );
 }
 

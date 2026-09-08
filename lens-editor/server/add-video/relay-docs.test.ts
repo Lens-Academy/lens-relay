@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   checkRelayArticleUrls,
+  createRelayAttachment,
   createRelayDoc,
+  findRelayAttachmentByHash,
+  RelayAttachmentConflictError,
   updateRelayDoc,
 } from './relay-docs';
 
@@ -121,5 +124,64 @@ describe('checkRelayArticleUrls', () => {
 
     expect(result.found['https://example.com/b']).toBe('/articles/b.md');
     expect(result.stubs['https://example.com/a']?.path).toBe('/articles/a.md');
+  });
+});
+
+describe('createRelayAttachment', () => {
+  it('POSTs raw bytes and returns the relay reply', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(200, { doc_id: 'r-u', uuid: 'u', path: 'Lens Edu/attachments/a.png', hash: 'h', created: true, overwritten: false })
+    );
+    const out = await createRelayAttachment('Lens Edu', '/attachments/a.png', new Uint8Array([1, 2]), 'image/png');
+    expect(out).toEqual({ doc_id: 'r-u', uuid: 'u', path: 'Lens Edu/attachments/a.png', hash: 'h', created: true, overwritten: false });
+    const [url, opts] = mockFetch.mock.calls[0];
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe('/doc/attachment');
+    expect(parsed.searchParams.get('folder')).toBe('Lens Edu');
+    expect(parsed.searchParams.get('path')).toBe('/attachments/a.png');
+    expect(parsed.searchParams.get('overwrite')).toBeNull();
+    expect(opts.method).toBe('POST');
+    expect(opts.headers['Content-Type']).toBe('image/png');
+  });
+
+  it('sends overwrite=true when asked', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(200, { doc_id: 'r-u', uuid: 'u', path: 'p', hash: 'h2', created: false, overwritten: true })
+    );
+    const out = await createRelayAttachment('Lens Edu', '/attachments/a.png', new Uint8Array([1]), 'image/png', undefined, { overwrite: true });
+    expect(out.overwritten).toBe(true);
+    expect(new URL(mockFetch.mock.calls[0][0]).searchParams.get('overwrite')).toBe('true');
+  });
+
+  // Prevents: the importer treating "different bytes already at this path"
+  // as success again (the pre-409 behaviour that aliased figures).
+  it('throws RelayAttachmentConflictError with the existing hash on 409', async () => {
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse(409, { error: 'taken', existing_hash: 'abc123', incoming_hash: 'def' })
+    );
+    const err = await createRelayAttachment('Lens Edu', '/attachments/a.png', new Uint8Array([1]), 'image/png').catch((e) => e);
+    expect(err).toBeInstanceOf(RelayAttachmentConflictError);
+    expect(err.existingHash).toBe('abc123');
+    expect(err.path).toBe('/attachments/a.png');
+  });
+
+  it('throws a plain error on other failures', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(500, 'boom'));
+    await expect(createRelayAttachment('Lens Edu', '/attachments/a.png', new Uint8Array([1]), 'image/png')).rejects.toThrow(/500/);
+  });
+});
+
+describe('findRelayAttachmentByHash', () => {
+  it('returns the entry when found and null otherwise', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse(200, { found: true, path: '/attachments/a.png', uuid: 'u', doc_id: 'r-u', mimetype: 'image/png' }));
+    const hit = await findRelayAttachmentByHash('Lens Edu', 'ab'.repeat(32));
+    expect(hit).toEqual({ path: '/attachments/a.png', uuid: 'u', doc_id: 'r-u', mimetype: 'image/png' });
+    const parsed = new URL(mockFetch.mock.calls[0][0]);
+    expect(parsed.pathname).toBe('/doc/attachment/by-hash');
+    expect(parsed.searchParams.get('sha256')).toBe('ab'.repeat(32));
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe('Bearer test-token');
+
+    mockFetch.mockResolvedValueOnce(jsonResponse(200, { found: false }));
+    expect(await findRelayAttachmentByHash('Lens Edu', 'cd'.repeat(32))).toBeNull();
   });
 });

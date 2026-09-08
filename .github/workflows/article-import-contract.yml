@@ -5,10 +5,17 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/article-import-contract.yml"
-      - "crates/relay/src/mcp/tools/import_article.rs"
+      - "crates/relay/src/mcp/tools/import_source.rs"
+      - "crates/relay/src/mcp/tools/import_attachment.rs"
+      - "crates/relay/src/mcp/tools/blob.rs"
+      - "crates/relay/src/mcp/tools/read.rs"
       - "crates/relay/src/mcp/tools/mod.rs"
+      - "crates/relay/src/server.rs"
       - "lens-editor/shared/article-import-*"
+      - "lens-editor/shared/attachment-limits.json"
       - "lens-editor/server/add-article/**"
+      - "lens-editor/server/attachments/**"
+      - "lens-editor/server/edit-share-auth.ts"
       - "lens-editor/src/components/AddArticlePage/**"
 
 jobs:
@@ -31,6 +38,9 @@ jobs:
           server/add-article/queue.test.ts
           server/add-article/pipeline-mode.test.ts
           server/add-article/pipeline-duplicate.test.ts
+          server/attachments/image-types.test.ts
+          server/attachments/public-url.test.ts
+          server/attachments/routes.test.ts
           src/components/AddArticlePage/AddArticlePage.test.tsx
       - run: npm run build
 
@@ -41,7 +51,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: >-
           cargo test --manifest-path crates/Cargo.toml -p relay
-          mcp::tools::import_article::tests
+          mcp::tools::import_source::tests
       - run: >-
           cargo test --manifest-path crates/Cargo.toml -p relay
-          mcp::tools::integration_tests::import_article_schema_requires_the_shared_modes
+          mcp::tools::import_attachment::tests
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p relay
+          mcp::tools::blob::tests
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p relay
+          mcp::tools::read::tests
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p relay
+          redact
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p relay
+          mcp::tools::integration_tests::import_source_schema_requires_the_shared_modes

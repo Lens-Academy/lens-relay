@@ -1,8 +1,89 @@
 use super::blob;
 use crate::server::Server;
-use serde_json::Value;
+use base64::Engine;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use yrs::{GetString, ReadTxn, Transact};
+
+/// Largest image `read` will return inline. MCP clients embed the base64
+/// payload in the model context, so this is a context-size guard, not a
+/// storage limit (uploads allow 20 MiB).
+pub const READ_IMAGE_MAX_BYTES: usize = 5 * 1024 * 1024;
+
+/// Execute the `read` tool and return MCP content blocks.
+///
+/// Raster attachments (png/jpg/jpeg/gif/webp backed by a blob) come back as
+/// a one-line text block (path, size, sha256) followed by an `image` block.
+/// SVG is XML, and MCP clients only accept raster types in image blocks, so
+/// an SVG blob is returned as cat -n text. Everything else is the text from
+/// [`execute`].
+pub async fn execute_blocks(
+    server: &Arc<Server>,
+    session_id: &str,
+    arguments: &Value,
+) -> Result<Vec<Value>, String> {
+    let file_path = arguments
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: file_path".to_string())?;
+
+    if blob::is_image_file(file_path) {
+        let doc_info = server
+            .doc_resolver()
+            .resolve_path(file_path)
+            .ok_or_else(|| format!("Error: Document not found: {}", file_path))?;
+        if let Some(hash) = doc_info.hash.as_ref() {
+            let data = blob::read_blob(server, &doc_info.doc_id, hash).await?;
+            if data.len() > READ_IMAGE_MAX_BYTES {
+                return Err(format!(
+                    "Error: {} is {} bytes; read returns images up to {} bytes",
+                    file_path,
+                    data.len(),
+                    READ_IMAGE_MAX_BYTES
+                ));
+            }
+            if let Some(mut session) = server.mcp_sessions.get_session_mut(session_id) {
+                session.read_docs.insert(doc_info.doc_id.clone());
+            }
+            if blob::is_svg_file(file_path) {
+                let offset = arguments
+                    .get("offset")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                let limit = arguments
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(2000) as usize;
+                let text = String::from_utf8(data)
+                    .map_err(|_| format!("Error: {} is not valid UTF-8", file_path))?;
+                return Ok(vec![
+                    json!({ "type": "text", "text": format_cat_n(&text, offset, limit) }),
+                ]);
+            }
+            return Ok(image_blocks(file_path, &data));
+        }
+    }
+
+    let text = execute(server, session_id, arguments).await?;
+    Ok(vec![json!({ "type": "text", "text": text })])
+}
+
+/// Text summary block + MCP image block for one image's bytes.
+pub fn image_blocks(file_path: &str, data: &[u8]) -> Vec<Value> {
+    let mime = blob::image_mime_for_path(file_path).unwrap_or("application/octet-stream");
+    let sha256 = blob::sha256_hex(data);
+    vec![
+        json!({
+            "type": "text",
+            "text": format!("{} ({} bytes, {}, sha256 {})", file_path, data.len(), mime, sha256),
+        }),
+        json!({
+            "type": "image",
+            "data": base64::engine::general_purpose::STANDARD.encode(data),
+            "mimeType": mime,
+        }),
+    ]
+}
 
 /// Execute the `read` tool: read document content in cat -n format.
 pub async fn execute(
@@ -31,6 +112,13 @@ pub async fn execute(
         .doc_resolver()
         .resolve_path(file_path)
         .ok_or_else(|| format!("Error: Document not found: {}", file_path))?;
+
+    if blob::is_image_file(file_path) && doc_info.hash.is_some() {
+        return Err(format!(
+            "Error: {} is an image; read it through the MCP read tool (image content) — it has no text form",
+            file_path
+        ));
+    }
 
     // Check if this is a blob file — read from store instead of Y.Text
     if blob::is_blob_file(file_path) {
@@ -493,6 +581,125 @@ mod tests {
             "read should return the persisted content, got: {}",
             content
         );
+    }
+}
+
+#[cfg(test)]
+mod image_read_tests {
+    use super::*;
+    use crate::mcp::tools::test_helpers::*;
+    use serde_json::json;
+
+    // 1x1 transparent PNG.
+    pub(crate) const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    // Prevents: image attachments coming back as a "not valid UTF-8" error
+    // instead of an MCP image block the model can look at.
+    #[tokio::test]
+    async fn read_image_returns_summary_text_and_image_block() {
+        let server = build_blob_test_server_with_bytes(
+            "/attachments/dot.png",
+            "uuid-dot",
+            TINY_PNG,
+            "image/png",
+        )
+        .await;
+        let sid = setup_session_no_reads(&server);
+        let blocks = execute_blocks(
+            &server,
+            &sid,
+            &json!({ "file_path": "Lens/attachments/dot.png", "session_id": sid }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(blocks.len(), 2, "got: {blocks:?}");
+        let summary = blocks[0]["text"].as_str().unwrap();
+        assert!(
+            summary.contains("Lens/attachments/dot.png"),
+            "got: {summary}"
+        );
+        assert!(summary.contains(&format!("{} bytes", TINY_PNG.len())));
+        assert!(summary.contains(&blob::sha256_hex(TINY_PNG)));
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["mimeType"], "image/png");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(blocks[1]["data"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(decoded, TINY_PNG);
+
+        let doc_id = format!("{}-uuid-dot", RELAY_ID);
+        let session = server.mcp_sessions.get_session(&sid).unwrap();
+        assert!(session.read_docs.contains(&doc_id));
+    }
+
+    // Prevents: a multi-megabyte image silently blowing up the model context.
+    #[tokio::test]
+    async fn read_image_above_cap_is_an_error() {
+        let big = vec![0u8; READ_IMAGE_MAX_BYTES + 1];
+        let server = build_blob_test_server_with_bytes(
+            "/attachments/big.png",
+            "uuid-big",
+            &big,
+            "image/png",
+        )
+        .await;
+        let sid = setup_session_no_reads(&server);
+        let err = execute_blocks(
+            &server,
+            &sid,
+            &json!({ "file_path": "Lens/attachments/big.png", "session_id": sid }),
+        )
+        .await
+        .expect_err("oversized image must not be returned inline");
+        assert!(err.contains("bytes"), "got: {err}");
+    }
+
+    // Prevents: an `image/svg+xml` image block, which MCP clients reject
+    // (only png/jpeg/gif/webp are accepted); SVG is XML and reads as text.
+    #[tokio::test]
+    async fn read_svg_returns_its_xml_as_text() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#;
+        let server = build_blob_test_server_with_bytes(
+            "/attachments/logo.svg",
+            "uuid-svg",
+            svg,
+            "image/svg+xml",
+        )
+        .await;
+        let sid = setup_session_no_reads(&server);
+        let blocks = execute_blocks(
+            &server,
+            &sid,
+            &json!({ "file_path": "Lens/attachments/logo.svg", "session_id": sid }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(blocks.len(), 1, "got: {blocks:?}");
+        assert_eq!(blocks[0]["type"], "text");
+        assert!(blocks[0]["text"].as_str().unwrap().contains("<rect/>"));
+    }
+
+    #[tokio::test]
+    async fn read_text_doc_still_returns_one_text_block() {
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", "plain")]).await;
+        let sid = setup_session_no_reads(&server);
+        let blocks = execute_blocks(
+            &server,
+            &sid,
+            &json!({ "file_path": "Lens/Doc.md", "session_id": sid }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "text");
+        assert!(blocks[0]["text"].as_str().unwrap().contains("plain"));
     }
 }
 

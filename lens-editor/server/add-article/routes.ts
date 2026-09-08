@@ -4,12 +4,11 @@ import {
   isArticleImportMode,
   type ArticleImportMode,
 } from "../../shared/article-import-contract";
-import { verifyShareToken, roleAtLeast } from "../share-token";
+import { requireEduEditShareToken, EDU_FOLDER } from "../edit-share-auth";
 import { normalizeUrlForDedup } from "./url-normalize";
 import { extractVideoInput, isYouTubeUrl } from "../add-video/video-url";
 
-export const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
-const ALL_FOLDERS = "00000000-0000-0000-0000-000000000000";
+export { EDU_FOLDER };
 const MAX_URLS_PER_REQUEST = 20;
 
 /** Dedup key: the video id for YouTube videos (youtu.be / watch / shorts
@@ -38,26 +37,7 @@ function validateUrl(raw: string): string | null {
 export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
   const router = new Hono();
 
-  router.use("/*", async (c, next) => {
-    const authHeader = c.req.header("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return c.json({ error: "Authorization header required" }, 401);
-    }
-    const payload = verifyShareToken(authHeader.slice(7));
-    if (!payload) {
-      return c.json({ error: "Invalid or expired token" }, 401);
-    }
-    if (payload.purpose !== "share") {
-      return c.json({ error: "Share token required" }, 403);
-    }
-    if (!roleAtLeast(payload.role, "edit")) {
-      return c.json({ error: "Edit access required" }, 403);
-    }
-    if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {
-      return c.json({ error: "Access denied: wrong folder scope" }, 403);
-    }
-    return next();
-  });
+  router.use("/*", requireEduEditShareToken());
 
   router.post("/", async (c) => {
     const body = await c.req

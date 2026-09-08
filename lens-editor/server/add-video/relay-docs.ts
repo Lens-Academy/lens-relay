@@ -293,12 +293,41 @@ export async function checkRelayArticleUrls(
   return { found: data.found, stubs: data.stubs ?? {} };
 }
 
+/** Reply of the relay's `POST /doc/attachment`. */
+export interface RelayAttachmentResult {
+  doc_id: string;
+  uuid: string;
+  /** Full path, e.g. "Lens Edu/attachments/x.png". */
+  path: string;
+  /** sha256 of the bytes now stored at `path`. */
+  hash: string;
+  created: boolean;
+  overwritten: boolean;
+}
+
+/** The path already holds different bytes and `overwrite` was not set. */
+export class RelayAttachmentConflictError extends Error {
+  readonly path: string;
+  readonly existingHash: string;
+  constructor(path: string, existingHash: string, message: string) {
+    super(message);
+    this.name = "RelayAttachmentConflictError";
+    this.path = path;
+    this.existingHash = existingHash;
+  }
+}
+
 /**
  * Upload a binary attachment (e.g. a figure image extracted from a PDF) to the
- * relay and register it as a `filemeta_v0` "image" entry, so markdown can embed
- * it via `![[/attachments/x.png]]`. `folder` is the relay folder's top segment
- * (e.g. "Lens Edu"); `inFolderPath` is the path within it (e.g.
- * "/attachments/x.png"). Create-only: an existing path is a no-op success.
+ * relay and register it as a `filemeta_v0` "image" entry. `folder` is the
+ * relay folder's top segment (e.g. "Lens Edu"); `inFolderPath` is the path
+ * within it (e.g. "/attachments/x.png").
+ *
+ * Create-only unless `overwrite`: the same bytes at an existing path is a
+ * no-op success (`created:false`); different bytes throw
+ * [`RelayAttachmentConflictError`] carrying the existing hash so the caller
+ * can pick another name. With `overwrite` the relay keeps the file id and
+ * swaps the bytes (`overwritten:true`).
  */
 export async function createRelayAttachment(
   folder: string,
@@ -306,9 +335,11 @@ export async function createRelayAttachment(
   data: Uint8Array,
   mimetype: string,
   signal?: AbortSignal,
-): Promise<void> {
+  opts: { overwrite?: boolean } = {},
+): Promise<RelayAttachmentResult> {
   const { url, token } = getRelayConfig();
   const qs = new URLSearchParams({ folder, path: inFolderPath, mimetype });
+  if (opts.overwrite) qs.set("overwrite", "true");
 
   const resp = await fetchBytesWithTimeout(
     `${url}/doc/attachment?${qs.toString()}`,
@@ -324,9 +355,63 @@ export async function createRelayAttachment(
     },
   );
 
+  const text = bytesToText(resp.bytes);
+  if (resp.status === 409) {
+    let existingHash = "";
+    let message = `Relay attachment conflict at ${inFolderPath}`;
+    try {
+      const parsed = JSON.parse(text) as { error?: string; existing_hash?: string };
+      existingHash = parsed.existing_hash ?? "";
+      if (parsed.error) message = parsed.error;
+    } catch {
+      /* non-JSON 409 body */
+    }
+    throw new RelayAttachmentConflictError(inFolderPath, existingHash, message);
+  }
   if (!resp.ok) {
     throw new Error(
-      `Relay attachment upload failed: ${resp.status} ${bytesToText(resp.bytes)}`,
+      `Relay attachment upload failed: ${resp.status} ${text}`,
     );
   }
+  return JSON.parse(text) as RelayAttachmentResult;
+}
+
+/**
+ * Is a blob with these exact bytes already in the folder? Returns the
+ * in-folder path (e.g. "/attachments/x.png") and ids, or null.
+ */
+export async function findRelayAttachmentByHash(
+  folder: string,
+  sha256: string,
+  signal?: AbortSignal,
+): Promise<{ path: string; uuid: string; doc_id: string; mimetype: string | null } | null> {
+  const { url, token } = getRelayConfig();
+  const qs = new URLSearchParams({ folder, sha256 });
+  const resp = await fetchBytesWithTimeout(
+    `${url}/doc/attachment/by-hash?${qs.toString()}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: RELAY_CHECK_TIMEOUT_MS,
+      signal,
+    },
+  );
+  if (!resp.ok) {
+    throw new Error(
+      `Relay attachment lookup failed: ${resp.status} ${bytesToText(resp.bytes)}`,
+    );
+  }
+  const data = JSON.parse(bytesToText(resp.bytes)) as {
+    found: boolean;
+    path?: string;
+    uuid?: string;
+    doc_id?: string;
+    mimetype?: string | null;
+  };
+  if (!data.found || !data.path || !data.uuid) return null;
+  return {
+    path: data.path,
+    uuid: data.uuid,
+    doc_id: data.doc_id ?? "",
+    mimetype: data.mimetype ?? null,
+  };
 }

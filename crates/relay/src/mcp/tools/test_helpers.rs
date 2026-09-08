@@ -106,6 +106,17 @@ pub(crate) async fn build_blob_test_server_with_file(
     uuid: &str,
     content: &str,
 ) -> Arc<Server> {
+    build_blob_test_server_with_bytes(path, uuid, content.as_bytes(), "application/json").await
+}
+
+/// Like [`build_blob_test_server_with_file`] for arbitrary bytes and mimetype
+/// (image attachments are registered as filemeta type "image").
+pub(crate) async fn build_blob_test_server_with_bytes(
+    path: &str,
+    uuid: &str,
+    content: &[u8],
+    mimetype: &str,
+) -> Arc<Server> {
     use async_trait::async_trait;
     use dashmap::DashMap;
     use sha2::{Digest, Sha256};
@@ -141,7 +152,7 @@ pub(crate) async fn build_blob_test_server_with_file(
 
     // Compute hash
     let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
+    hasher.update(content);
     let hash = format!("{:x}", hasher.finalize());
 
     let doc_id = format!("{}-{}", RELAY_ID, uuid);
@@ -149,7 +160,7 @@ pub(crate) async fn build_blob_test_server_with_file(
     // Create store and write blob
     let store_data: Arc<DashMap<String, Vec<u8>>> = Arc::new(DashMap::new());
     let blob_key = format!("files/{}/{}", doc_id, hash);
-    store_data.insert(blob_key, content.as_bytes().to_vec());
+    store_data.insert(blob_key, content.to_vec());
 
     let server = Arc::new(
         Server::new_without_workers(
@@ -178,14 +189,16 @@ pub(crate) async fn build_blob_test_server_with_file(
         let mut txn = guard.doc.transact_mut();
         let filemeta = txn.get_or_insert_map("filemeta_v0");
         let mut map = HashMap::new();
+        let entry_type = if mimetype.starts_with("image/") {
+            "image"
+        } else {
+            "file"
+        };
         map.insert("id".to_string(), Any::String(uuid.into()));
-        map.insert("type".to_string(), Any::String("file".into()));
+        map.insert("type".to_string(), Any::String(entry_type.into()));
         map.insert("version".to_string(), Any::Number(0.0));
         map.insert("hash".to_string(), Any::String(hash.into()));
-        map.insert(
-            "mimetype".to_string(),
-            Any::String("application/json".into()),
-        );
+        map.insert("mimetype".to_string(), Any::String(mimetype.into()));
         map.insert(
             "synctime".to_string(),
             Any::Number(

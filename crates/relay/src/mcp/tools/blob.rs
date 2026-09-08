@@ -124,6 +124,48 @@ pub fn is_blob_file(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".json")
 }
 
+/// Image extensions the MCP surface recognises: `read` returns the raster
+/// ones as an image content block (SVG as text), `create`/`edit` refuse all
+/// of them (bytes only enter through `import_attachment`; SVG is not
+/// uploadable in v1).
+const IMAGE_EXTENSIONS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+
+/// Lower-cased extension of `path` (text after the last `.` of the last
+/// segment), if any.
+fn extension(path: &str) -> Option<String> {
+    let name = path.rsplit('/').next()?;
+    let (stem, ext) = name.rsplit_once('.')?;
+    if stem.is_empty() || ext.is_empty() {
+        return None;
+    }
+    Some(ext.to_ascii_lowercase())
+}
+
+/// Returns true for `.svg` (case-insensitive): an image for `create`/`edit`
+/// purposes, but read back as XML text rather than an image block.
+pub fn is_svg_file(path: &str) -> bool {
+    extension(path).as_deref() == Some("svg")
+}
+
+/// Returns true if `path` has an image extension (case-insensitive).
+pub fn is_image_file(path: &str) -> bool {
+    extension(path)
+        .map(|ext| IMAGE_EXTENSIONS.contains(&ext.as_str()))
+        .unwrap_or(false)
+}
+
+/// MIME type implied by an image path's extension.
+pub fn image_mime_for_path(path: &str) -> Option<&'static str> {
+    match extension(path)?.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "svg" => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
 /// Returns true if `path` should be edited as raw collaborative Y.Text,
 /// without markdown/CriticMarkup processing.
 pub fn is_raw_ytext_file(path: &str) -> bool {
@@ -246,6 +288,29 @@ mod tests {
         assert!(!is_blob_file("config.toml"));
         assert!(!is_blob_file("json")); // no dot
         assert!(!is_blob_file("file.jsonl"));
+    }
+
+    #[test]
+    fn is_image_file_detects_image_extensions_only() {
+        assert!(is_image_file("Lens Edu/attachments/fig.png"));
+        assert!(is_image_file("Lens Edu/attachments/Photo.JPG"));
+        assert!(is_image_file("a/b.jpeg"));
+        assert!(is_image_file("a/b.gif"));
+        assert!(is_image_file("a/b.webp"));
+        assert!(is_image_file("a/b.svg"));
+        assert!(!is_image_file("a/b.png.md"));
+        assert!(!is_image_file("a/png"));
+        assert!(!is_image_file("a/data.json"));
+        assert!(!is_image_file("a/.png"));
+    }
+
+    #[test]
+    fn image_mime_for_path_maps_known_extensions() {
+        assert_eq!(image_mime_for_path("x.png"), Some("image/png"));
+        assert_eq!(image_mime_for_path("x.JPG"), Some("image/jpeg"));
+        assert_eq!(image_mime_for_path("x.jpeg"), Some("image/jpeg"));
+        assert_eq!(image_mime_for_path("x.svg"), Some("image/svg+xml"));
+        assert_eq!(image_mime_for_path("x.md"), None);
     }
 
     #[test]

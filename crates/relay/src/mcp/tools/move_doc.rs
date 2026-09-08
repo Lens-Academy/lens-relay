@@ -201,7 +201,7 @@ mod tests {
         )
         .await
         .expect_err("moving a non-article into articles must be blocked");
-        assert!(error.contains("import_article"));
+        assert!(error.contains("import_source"));
 
         // An article that already exists may still be renamed within its folder.
         assert!(!crate::mcp::tools::create_doc::is_lens_edu_articles_path(

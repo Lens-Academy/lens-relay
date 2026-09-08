@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createAuthHandler, AuthError } from './auth-middleware.ts';
 import { discordRoutes } from './discord/routes.ts';
 import { createAddArticleRoutes } from './add-article/routes.ts';
+import { createAttachmentRoutes } from './attachments/routes.ts';
 import { ArticleJobQueue } from './add-article/queue.ts';
 import { processArticle } from './add-article/pipeline.ts';
 import { loadPromotionConfig, promotionConfigReady } from './promotion/config.ts';
@@ -98,9 +99,13 @@ export function createApp(config: AppConfig): Hono {
 
   // Article + YouTube-video import pipeline. YouTube URLs sent here import the
   // video's transcript (server-side fetch + Claude formatting); article URLs
-  // import the page. Both are also reachable via the relay MCP import_article.
+  // import the page. Both are also reachable via the relay MCP import_source.
   const addArticleQueue = new ArticleJobQueue({ processJob: processArticle });
   app.route('/api/add-article', createAddArticleRoutes(addArticleQueue));
+
+  // Image attachments (server side of the relay MCP import_attachment tool):
+  // fetch or decode, sniff, dedup by sha256, upload with the server token.
+  app.route('/api/attachments', createAttachmentRoutes());
 
   // Blob content proxy — fetches presigned R2 URLs server-side to avoid CORS
   app.get('/api/blob-fetch', async (c) => {

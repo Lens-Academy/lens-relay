@@ -227,6 +227,18 @@ export default defineConfig(() => {
     });
   }
 
+  /** Dev /api/attachments endpoints (relay MCP import_attachment backend). */
+  function attachmentsPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'attachments-api',
+      path: '/api/attachments',
+      loadApp: async () => {
+        const { createAttachmentRoutes } = await import('./server/attachments/routes.ts');
+        return createAttachmentRoutes();
+      },
+    });
+  }
+
   /**
    * Dev /api/promotion endpoints, so the editor does not hit Vite's SPA
    * fallback for promotion API calls. Config is re-checked per request
@@ -378,7 +390,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

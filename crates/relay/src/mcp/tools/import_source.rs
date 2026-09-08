@@ -1,6 +1,7 @@
-//! MCP proxy for the lens-editor article importer.
+//! MCP proxy for the lens-editor source importer.
 //!
-//! `import_article` forwards URLs to lens-editor's `POST /api/add-article`;
+//! `import_source` (alias `import_article`, kept for agents configured before
+//! the rename) forwards URLs to lens-editor's `POST /api/add-article`;
 //! `import_status` proxies `GET /api/add-article/status`. Auth: the session's
 //! own share token (carried on `McpAccess::raw_token`) is forwarded as the
 //! Bearer, so role/folder enforcement stays in lens-editor — the relay adds
@@ -20,7 +21,7 @@ const MAX_URLS: usize = 20;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const ARTICLE_IMPORT_MODES: [&str; 3] = ["stub", "article", "article-and-lens"];
 
-pub fn editor_url_from_env() -> String {
+pub(super) fn editor_url_from_env() -> String {
     std::env::var("LENS_EDITOR_URL")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -30,14 +31,14 @@ pub fn editor_url_from_env() -> String {
 /// Get the request's forwardable share token, or a user-facing error.
 /// Uses the credential this call was made with (not one stored on the
 /// session) so a leaked session id never upgrades a weaker token.
-fn request_token(access: &McpAccess) -> Result<String, String> {
+pub(super) fn request_token(access: &McpAccess) -> Result<String, String> {
     access.raw_token.clone().ok_or_else(|| {
-        "Error: Article import is not available for this credential type (requires a share-token MCP URL, not the legacy API key)."
+        "Error: Importing is not available for this credential type (requires a share-token MCP URL, not the legacy API key)."
             .to_string()
     })
 }
 
-/// Execute the `import_article` tool.
+/// Execute the `import_source` tool (and its `import_article` alias).
 pub async fn execute(access: &McpAccess, arguments: &Value) -> Result<String, String> {
     execute_with_editor_url(access, arguments, &editor_url_from_env()).await
 }

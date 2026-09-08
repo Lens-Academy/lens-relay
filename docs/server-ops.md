@@ -114,6 +114,64 @@ for folder_id, files in d.items():
             print(f'{path}: {meta.get(\"id\")}')" | head -10
 ```
 
+### Attachments (images)
+
+Binary files live as blobs at `files/<relay-id>-<uuid>/<sha256>` with a
+`filemeta_v0` entry (`type: image`, `hash`, `mimetype`) in the folder doc;
+relay-git-sync commits them into the synced repo, and the platform renders
+them from the repo's raw URL (`![alt](https://raw.githubusercontent.com/…/attachments/<file>)`).
+
+**Writers.** The article importer (PDF figures, arXiv rehosting) and the MCP
+`import_attachment` tool all go through lens-editor, which uploads with the
+relay server token:
+
+- `POST /doc/attachment?folder=&path=&mimetype=[&overwrite=true]` (relay,
+  server token): raw bytes in the body. Same bytes at an existing path →
+  200 `created:false` (idempotent). Different bytes → **409** with
+  `existing_hash`, unless `overwrite=true`, which keeps the file's uuid and
+  repoints the entry at the new hash (`overwritten:true`). Callers treat a
+  409 as "pick another name" (the importer retries with a longer hash suffix).
+- `GET /doc/attachment/by-hash?folder=&sha256=` (relay, server token): is a
+  blob with these bytes already in the folder? Returns `{found, path, uuid,
+  doc_id, mimetype}`.
+- `POST /api/attachments/import` (lens-editor, edit share token): body
+  `{folder, url | content_base64, file_path? | stem?, mimetype?, overwrite?}`.
+  Fetches with the importer's SSRF guard (or decodes base64), sniffs magic
+  bytes (png/jpeg/gif/webp only, SVG rejected), enforces 20 MiB hard / 5 MiB
+  soft, dedups via `by-hash`, uploads via `/doc/attachment`.
+
+**Naming.** Importer figures: `<slug>-fig<N>-<sha1_8>.<ext>` /
+`<slug>-img<N>-<sha1_8>.<ext>`. MCP uploads: `<stem>-<sha256_8>.<ext>`, or the
+exact `file_path` the agent passed (must be `<folder>/attachments/<name>.<ext>`,
+extension matching the sniffed type). Only `attachments/` is writable through
+the tool.
+
+**Dedup.** Uploaders look the sha256 up first; identical bytes are never
+stored twice (`deduplicated_from` names the existing path). Overwrites skip
+the lookup because the path, not the bytes, is the intent.
+
+**Overwrite and the CDN.** New paths are public as soon as git-sync pushes
+(~10-30 s). raw.githubusercontent.com caches for `max-age=300`, so an
+overwritten file can keep serving the old bytes for up to 5 minutes.
+
+**Public URL.** `ATTACHMENT_PUBLIC_URLS` (`Folder=https://base;…`) maps a
+relay folder to its raw base URL for both the relay (MCP reply; the relay
+container reads it from `/root/auth.env`) and the editor (importer output;
+compose passes it from `.env`). Unset, `Lens Edu` maps to the staging repo.
+Production-promoted content therefore still references staging URLs; never
+delete a staging attachment that production content uses.
+
+**Logging.** Uploads are logged by both containers (`[attachments] …` in
+lens-editor, `import_attachment` spans in the relay) and appear on the
+editor's Recent changes page under the attachment path for the AI actor.
+That entry lives in the in-memory recent-changes index only (attachments have
+no Y.Doc to persist an `activity_v0` event in), so it disappears on relay
+restart.
+
+**Reading.** The MCP `read` tool returns raster attachments (≤ 5 MiB) as an
+image content block and `.svg` attachments as their XML text; `create`/`edit`
+refuse image paths.
+
 ## Key Files
 
 | File | Purpose |
