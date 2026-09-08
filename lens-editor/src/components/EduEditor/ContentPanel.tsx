@@ -1,18 +1,25 @@
-import { useEffect, useState, useRef, type ReactNode } from 'react';
-import type { Section } from '../SectionEditor/parseSections';
-import { findOrphanCommentOffsets } from './orphan-comments';
-import { OrphanCommentAnchors } from './OrphanCommentAnchors';
-import { parseSections } from '../SectionEditor/parseSections';
-import { parseFields, parseFrontmatterFields, getFieldValueRange } from '../../lib/parseFields';
-import { useDocConnection } from '../../hooks/useDocConnection';
-import { useSectionEditor } from '../../hooks/useSectionEditor';
-import { useNavigation } from '../../contexts/NavigationContext';
-import { RELAY_ID } from '../../lib/constants';
-import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
-import { getOriginalPath, getFolderNameFromPath } from '../../lib/multi-folder-utils';
-import { getPlatformUrl, getModulePlatformUrl } from '../../lib/platform-url';
-import { getSubtreeRange } from './getSubtreeRange';
-import * as Y from 'yjs';
+import { useEffect, useState, useRef, type ReactNode } from "react";
+import type { Section } from "../SectionEditor/parseSections";
+import { findOrphanCommentOffsets } from "./orphan-comments";
+import { OrphanCommentAnchors } from "./OrphanCommentAnchors";
+import { parseSections, calloutDepths } from "../SectionEditor/parseSections";
+import {
+  parseFields,
+  parseFrontmatterFields,
+  getFieldValueRange,
+} from "../../lib/parseFields";
+import { useDocConnection } from "../../hooks/useDocConnection";
+import { useSectionEditor } from "../../hooks/useSectionEditor";
+import { useNavigation } from "../../contexts/NavigationContext";
+import { RELAY_ID } from "../../lib/constants";
+import { openDocInNewTab, docUuidFromCompoundId } from "../../lib/url-utils";
+import {
+  getOriginalPath,
+  getFolderNameFromPath,
+} from "../../lib/multi-folder-utils";
+import { getPlatformUrl, getModulePlatformUrl } from "../../lib/platform-url";
+import { getSubtreeRange } from "./getSubtreeRange";
+import * as Y from "yjs";
 import {
   TextRenderer,
   ChatRenderer,
@@ -20,20 +27,29 @@ import {
   VideoRenderer,
   QuestionRenderer,
   HeadingRenderer,
-} from './ContentPanel/renderers';
-import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
+  CalloutRenderer,
+  EndCalloutRenderer,
+} from "./ContentPanel/renderers";
+import type { CriticMarkupRange } from "../../lib/criticmarkup-parser";
 import {
   buildGlobalCommentBadgeMap,
   sliceCommentBadgeMap,
-} from '../../lib/criticmarkup-render';
-import { ContextMenu } from '../Editor/ContextMenu';
-import type { ContextMenuItem } from '../Editor/extensions/criticmarkup-context-menu';
-import { getContextMenuItems } from '../Editor/extensions/criticmarkup-context-menu';
-import type { SectionViewEntry } from '../../lib/anchor-resolver';
+} from "../../lib/criticmarkup-render";
+import { ContextMenu } from "../Editor/ContextMenu";
+import type { ContextMenuItem } from "../Editor/extensions/criticmarkup-context-menu";
+import { getContextMenuItems } from "../Editor/extensions/criticmarkup-context-menu";
+import type { SectionViewEntry } from "../../lib/anchor-resolver";
 
 export type ContentScope =
-  | { kind: 'full-doc'; docId: string; docName: string; docPath: string }
-  | { kind: 'subtree'; docId: string; docName: string; docPath: string; rootSectionIndex: number; breadcrumb: string };
+  | { kind: "full-doc"; docId: string; docName: string; docPath: string }
+  | {
+      kind: "subtree";
+      docId: string;
+      docName: string;
+      docPath: string;
+      rootSectionIndex: number;
+      breadcrumb: string;
+    };
 
 interface ContentPanelProps {
   scope: ContentScope | null;
@@ -102,7 +118,7 @@ function getFrontmatterFieldRange(
   sectionFrom: number,
   fieldName: string,
 ): [number, number] | null {
-  const pattern = new RegExp(`^${fieldName}:\\s*(.*)$`, 'm');
+  const pattern = new RegExp(`^${fieldName}:\\s*(.*)$`, "m");
   const match = pattern.exec(sectionContent);
   if (!match) return null;
 
@@ -120,9 +136,9 @@ function getFrontmatterFieldRange(
 
 /** Map section type to the primary prose field name */
 function proseFieldForType(type: string): string | null {
-  if (type === 'text') return 'content';
-  if (type === 'chat') return 'instructions';
-  if (type === 'question') return 'content';
+  if (type === "text") return "content";
+  if (type === "chat") return "instructions";
+  if (type === "question") return "content";
   return null;
 }
 
@@ -144,13 +160,17 @@ export function ContentPanel({
   const { getOrConnect } = useDocConnection();
   const { metadata, folderNames } = useNavigation();
   const [sections, setSections] = useState<Section[]>([]);
+  // How deep each section sits in `#### Callout:` boxes (indented below)
+  const depths = calloutDepths(sections);
   const [synced, setSynced] = useState(false);
-  const [frontmatter, setFrontmatter] = useState<Map<string, string>>(new Map());
+  const [frontmatter, setFrontmatter] = useState<Map<string, string>>(
+    new Map(),
+  );
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingFmField, setEditingFmField] = useState<string | null>(null); // frontmatter field name being edited
   // Latest Y.Text string — kept in state so the document-wide comment badge
   // map recomputes on every doc change (including inserts from other clients).
-  const [docText, setDocText] = useState<string>('');
+  const [docText, setDocText] = useState<string>("");
   const ytextRef = useRef<Y.Text | null>(null);
 
   // Right-click context menu state for the active section editor. Mirrors
@@ -187,13 +207,17 @@ export function ContentPanel({
   const editRange = (() => {
     if (editingIndex === null && !editingFmField) return { from: 0, to: 0 };
 
-    const currentSections = parseSections(ytextRef.current?.toString() ?? '');
+    const currentSections = parseSections(ytextRef.current?.toString() ?? "");
 
     // Frontmatter field editing
     if (editingFmField) {
-      const fmSection = currentSections.find(s => s.type === 'frontmatter');
+      const fmSection = currentSections.find((s) => s.type === "frontmatter");
       if (!fmSection) return { from: 0, to: 0 };
-      const range = getFrontmatterFieldRange(fmSection.content, fmSection.from, editingFmField);
+      const range = getFrontmatterFieldRange(
+        fmSection.content,
+        fmSection.from,
+        editingFmField,
+      );
       if (!range) return { from: 0, to: 0 };
       return { from: range[0], to: range[1] };
     }
@@ -203,7 +227,11 @@ export function ContentPanel({
     if (!section) return { from: 0, to: 0 };
     const proseField = proseFieldForType(section.type);
     if (proseField) {
-      const [from, to] = getFieldValueRange(section.content, section.from, proseField);
+      const [from, to] = getFieldValueRange(
+        section.content,
+        section.from,
+        proseField,
+      );
       return { from, to };
     }
     return { from: section.from, to: section.to };
@@ -216,7 +244,9 @@ export function ContentPanel({
     setEditingIndex(index);
   }
 
-  const editKey = editingFmField ?? (editingIndex !== null ? `section-${editingIndex}` : null);
+  const editKey =
+    editingFmField ??
+    (editingIndex !== null ? `section-${editingIndex}` : null);
 
   // Only opt the section editor into criticmarkup for free-text section types.
   // Frontmatter-field edits and structured field edits stay plain.
@@ -228,13 +258,18 @@ export function ContentPanel({
   // criticmarkup extension stack in its section editor — so comments and
   // suggestions added there render as widgets, not raw markup.
   const sectionAllowsCriticMarkup =
-    editingSectionType === 'text' ||
-    editingSectionType === 'heading' ||
-    editingSectionType === 'chat' ||
-    editingSectionType === 'question';
-  const sectionEditorCriticMarkup = criticMarkupEnabled && sectionAllowsCriticMarkup;
+    editingSectionType === "text" ||
+    editingSectionType === "heading" ||
+    editingSectionType === "chat" ||
+    editingSectionType === "question";
+  const sectionEditorCriticMarkup =
+    criticMarkupEnabled && sectionAllowsCriticMarkup;
   const editorCommentBadgeMap = sectionEditorCriticMarkup
-    ? sliceCommentBadgeMap(globalBadgeMap, editRange.from, Math.max(0, editRange.to - editRange.from))
+    ? sliceCommentBadgeMap(
+        globalBadgeMap,
+        editRange.from,
+        Math.max(0, editRange.to - editRange.from),
+      )
     : undefined;
 
   const { mountRef, viewRef: sectionViewRef } = useSectionEditor({
@@ -252,7 +287,9 @@ export function ContentPanel({
       ? () => {
           const view = sectionViewRef.current;
           if (view && onCommentInsertPosChange) {
-            onCommentInsertPosChange(editRange.from + view.state.selection.main.head);
+            onCommentInsertPosChange(
+              editRange.from + view.state.selection.main.head,
+            );
           }
           onRequestAddComment();
         }
@@ -275,8 +312,8 @@ export function ContentPanel({
     const items: ContextMenuItem[] = [...markupItems];
     if (onRequestAddComment) {
       items.push({
-        label: 'Add Comment',
-        shortcut: 'Ctrl+Shift+M',
+        label: "Add Comment",
+        shortcut: "Ctrl+Shift+M",
         action: () => {
           // Move the cursor to the right-clicked position so the new comment
           // anchors there, then push the absolute position up to the
@@ -326,15 +363,15 @@ export function ContentPanel({
 
       const dom = view.dom;
       const onSelect = () => reportPos();
-      dom.addEventListener('keyup', onSelect);
-      dom.addEventListener('mouseup', onSelect);
-      dom.addEventListener('focus', onSelect, true);
+      dom.addEventListener("keyup", onSelect);
+      dom.addEventListener("mouseup", onSelect);
+      dom.addEventListener("focus", onSelect, true);
 
       // Stash teardown on a sentinel so the cleanup below can reach it.
       (dom as HTMLElement & { __cmCleanup?: () => void }).__cmCleanup = () => {
-        dom.removeEventListener('keyup', onSelect);
-        dom.removeEventListener('mouseup', onSelect);
-        dom.removeEventListener('focus', onSelect, true);
+        dom.removeEventListener("keyup", onSelect);
+        dom.removeEventListener("mouseup", onSelect);
+        dom.removeEventListener("focus", onSelect, true);
       };
     });
 
@@ -342,7 +379,9 @@ export function ContentPanel({
       cancelled = true;
       cancelAnimationFrame(tick);
       const view = sectionViewRef.current;
-      const dom = view?.dom as (HTMLElement & { __cmCleanup?: () => void }) | undefined;
+      const dom = view?.dom as
+        | (HTMLElement & { __cmCleanup?: () => void })
+        | undefined;
       dom?.__cmCleanup?.();
       onCommentInsertPosChange(null);
       // Close any lingering context menu when the editor unmounts.
@@ -362,7 +401,7 @@ export function ContentPanel({
       const { doc } = await getOrConnect(docId!);
       if (cancelled) return;
 
-      const ytext = doc.getText('contents');
+      const ytext = doc.getText("contents");
       ytextRef.current = ytext;
 
       const update = () => {
@@ -371,8 +410,10 @@ export function ContentPanel({
         const parsed = parseSections(text);
         setSections(parsed);
 
-        const fmSection = parsed.find(s => s.type === 'frontmatter');
-        setFrontmatter(fmSection ? parseFrontmatterFields(fmSection.content) : new Map());
+        const fmSection = parsed.find((s) => s.type === "frontmatter");
+        setFrontmatter(
+          fmSection ? parseFrontmatterFields(fmSection.content) : new Map(),
+        );
       };
 
       setSynced(true);
@@ -387,7 +428,7 @@ export function ContentPanel({
 
     setSynced(false);
     setSections([]);
-    setDocText('');
+    setDocText("");
     setEditingIndex(null);
     setEditingFmField(null);
     onYTextChange?.(null);
@@ -395,7 +436,7 @@ export function ContentPanel({
     return () => {
       cancelled = true;
       onYTextChange?.(null);
-      cleanupPromise.then(cleanup => cleanup?.());
+      cleanupPromise.then((cleanup) => cleanup?.());
     };
   }, [docId, getOrConnect]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -462,13 +503,13 @@ export function ContentPanel({
 
     const observed = new Map<Element, number>();
     let lastReported: number | null = null;
-    let direction: 'up' | 'down' | 'none' = 'none';
+    let direction: "up" | "down" | "none" = "none";
     let prevScrollTop = root.scrollTop;
     let stableTimeout: number | null = null;
 
     const resolveAbsoluteFrom = (el: Element): number | null => {
       const v = (el as HTMLElement).dataset.commentFrom;
-      if (v == null || v === '') return null;
+      if (v == null || v === "") return null;
       const n = parseInt(v, 10);
       return isNaN(n) ? null : n;
     };
@@ -483,8 +524,11 @@ export function ContentPanel({
       if (observed.size === 0) return null;
       let result: number | null = null;
       for (const v of observed.values()) {
-        if (result === null) { result = v; continue; }
-        if (direction === 'down') {
+        if (result === null) {
+          result = v;
+          continue;
+        }
+        if (direction === "down") {
           if (v > result) result = v;
         } else {
           if (v < result) result = v;
@@ -514,13 +558,13 @@ export function ContentPanel({
         }
         report();
       },
-      { root, threshold: 0 }
+      { root, threshold: 0 },
     );
 
     const seen = new WeakSet<Element>();
     const scan = () => {
       cleanGhosts();
-      const els = root.querySelectorAll<HTMLElement>('[data-comment-from]');
+      const els = root.querySelectorAll<HTMLElement>("[data-comment-from]");
       els.forEach((el) => {
         if (seen.has(el) && root.contains(el)) return;
         seen.add(el);
@@ -532,8 +576,8 @@ export function ContentPanel({
     scan();
 
     const isMarkerNode = (el: Element): boolean =>
-      el.matches?.('[data-comment-from]') === true ||
-      el.querySelector?.('[data-comment-from]') !== null;
+      el.matches?.("[data-comment-from]") === true ||
+      el.querySelector?.("[data-comment-from]") !== null;
 
     const mutationObserver = new MutationObserver((records) => {
       // When new comment markers appear (lens switch, section editor opening,
@@ -544,18 +588,21 @@ export function ContentPanel({
       outer: for (const r of records) {
         for (const node of r.addedNodes) {
           if (node.nodeType !== 1) continue;
-          if (isMarkerNode(node as Element)) { sawNewMarker = true; break outer; }
+          if (isMarkerNode(node as Element)) {
+            sawNewMarker = true;
+            break outer;
+          }
         }
       }
-      if (sawNewMarker) direction = 'none';
+      if (sawNewMarker) direction = "none";
       scan();
     });
     mutationObserver.observe(root, { childList: true, subtree: true });
 
     const onScroll = () => {
       const now = root.scrollTop;
-      if (now > prevScrollTop) direction = 'down';
-      else if (now < prevScrollTop) direction = 'up';
+      if (now > prevScrollTop) direction = "down";
+      else if (now < prevScrollTop) direction = "up";
       prevScrollTop = now;
 
       // After 200ms of no scroll, drop back to the idle rule so that if the
@@ -563,30 +610,38 @@ export function ContentPanel({
       // active doesn't stay "pinned to deepest reached."
       if (stableTimeout != null) window.clearTimeout(stableTimeout);
       stableTimeout = window.setTimeout(() => {
-        direction = 'none';
+        direction = "none";
         report();
       }, 200);
 
       report();
     };
 
-    root.addEventListener('scroll', onScroll, { passive: true });
+    root.addEventListener("scroll", onScroll, { passive: true });
 
     return () => {
       intersectionObserver.disconnect();
       mutationObserver.disconnect();
-      root.removeEventListener('scroll', onScroll);
+      root.removeEventListener("scroll", onScroll);
       if (stableTimeout != null) window.clearTimeout(stableTimeout);
       observed.clear();
     };
-  }, [scrollRootRef, onVisibleCommentChange, criticMarkupEnabled, editRange.from, docId]);
+  }, [
+    scrollRootRef,
+    onVisibleCommentChange,
+    criticMarkupEnabled,
+    editRange.from,
+    docId,
+  ]);
 
   // Null scope: show placeholder
   if (!scope) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center gap-3 py-24">
         <div className="text-2xl font-semibold text-gray-400">Pick a lens</div>
-        <div className="text-sm text-gray-400">Select a lens from the list on the left to get started.</div>
+        <div className="text-sm text-gray-400">
+          Select a lens from the list on the left to get started.
+        </div>
       </div>
     );
   }
@@ -601,9 +656,10 @@ export function ContentPanel({
 
   // Derive lensPath and lensUuid for article/video source resolution
   const lensUuid = scope.docId.slice(RELAY_ID.length + 1);
-  const lensPath = Object.entries(metadata).find(([, m]) => m.id === lensUuid)?.[0] ?? '';
+  const lensPath =
+    Object.entries(metadata).find(([, m]) => m.id === lensUuid)?.[0] ?? "";
 
-  const tldr = frontmatter.get('tldr');
+  const tldr = frontmatter.get("tldr");
 
   // Derive platform URL for the published lensacademy.org link. Prefer the
   // module page (course-scoped when possible) anchored to the selected lens —
@@ -616,23 +672,30 @@ export function ContentPanel({
       // title for referenced lenses (every full-doc scope is one), the
       // title:: field for inline ones, and the tree label as fallback.
       let lensTitle: string | undefined;
-      if (scope.kind === 'full-doc') {
-        lensTitle = frontmatter.get('title') || scope.docName;
-      } else if (sections[scope.rootSectionIndex]?.type === 'lens-ref') {
+      if (scope.kind === "full-doc") {
+        lensTitle = frontmatter.get("title") || scope.docName;
+      } else if (sections[scope.rootSectionIndex]?.type === "lens-ref") {
         lensTitle =
-          parseFields(sections[scope.rootSectionIndex].content).get('title') || scope.docName;
+          parseFields(sections[scope.rootSectionIndex].content).get("title") ||
+          scope.docName;
       }
       return getModulePlatformUrl(moduleSlug, { courseSlug, lensTitle });
     }
-    const folderName = lensPath ? getFolderNameFromPath(lensPath, folderNames) : null;
-    const originalPath = lensPath && folderName ? getOriginalPath(lensPath, folderName) : null;
+    const folderName = lensPath
+      ? getFolderNameFromPath(lensPath, folderNames)
+      : null;
+    const originalPath =
+      lensPath && folderName ? getOriginalPath(lensPath, folderName) : null;
     return originalPath ? getPlatformUrl(originalPath) : null;
   })();
 
   let visibleFrom = 0;
   let visibleTo = sections.length;
-  if (scope.kind === 'subtree' && sections.length > scope.rootSectionIndex) {
-    const [rangeFrom, rangeTo] = getSubtreeRange(sections, scope.rootSectionIndex);
+  if (scope.kind === "subtree" && sections.length > scope.rootSectionIndex) {
+    const [rangeFrom, rangeTo] = getSubtreeRange(
+      sections,
+      scope.rootSectionIndex,
+    );
     visibleFrom = rangeFrom + 1; // skip the root header itself — it's in the toolbar
     visibleTo = rangeTo;
   }
@@ -642,10 +705,18 @@ export function ContentPanel({
       <div className="mb-6 text-[11px] text-gray-400 flex items-center gap-2">
         <span>
           {scope.docName}.md
-          {scope.kind === 'subtree' && <span> &middot; {scope.breadcrumb}</span>}
+          {scope.kind === "subtree" && (
+            <span> &middot; {scope.breadcrumb}</span>
+          )}
         </span>
         <button
-          onClick={() => openDocInNewTab(RELAY_ID, docUuidFromCompoundId(scope.docId), metadata)}
+          onClick={() =>
+            openDocInNewTab(
+              RELAY_ID,
+              docUuidFromCompoundId(scope.docId),
+              metadata,
+            )
+          }
           className="text-[10px] text-blue-500 hover:text-blue-700 hover:underline"
         >
           Open in File Editor
@@ -662,20 +733,29 @@ export function ContentPanel({
         )}
       </div>
 
-      {editingFmField === 'tldr' ? (
+      {editingFmField === "tldr" ? (
         <div className="mb-4 rounded-lg border-2 border-blue-400 bg-white overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
-            <span className="font-medium text-sm text-blue-700">User-facing TL;DR</span>
-            <button onClick={() => setEditingFmField(null)}
-              className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">
+            <span className="font-medium text-sm text-blue-700">
+              User-facing TL;DR
+            </span>
+            <button
+              onClick={() => setEditingFmField(null)}
+              className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded"
+            >
               Done
             </button>
           </div>
-          <div ref={mountRef} style={{ minHeight: '40px' }} />
+          <div ref={mountRef} style={{ minHeight: "40px" }} />
         </div>
       ) : tldr ? (
-        <div className="mb-4 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed relative group cursor-pointer hover:outline hover:outline-2 hover:outline-blue-300/30 hover:outline-offset-1"
-          onClick={() => { setEditingIndex(null); setEditingFmField('tldr'); }}>
+        <div
+          className="mb-4 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed relative group cursor-pointer hover:outline hover:outline-2 hover:outline-blue-300/30 hover:outline-offset-1"
+          onClick={() => {
+            setEditingIndex(null);
+            setEditingFmField("tldr");
+          }}
+        >
           <div className="absolute -top-2 -right-2 bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
             click to edit
           </div>
@@ -683,24 +763,34 @@ export function ContentPanel({
         </div>
       ) : null}
 
-      {editingFmField === 'summary_for_tutor' ? (
+      {editingFmField === "summary_for_tutor" ? (
         <div className="mb-6 rounded-lg border-2 border-blue-400 bg-white overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
-            <span className="font-medium text-sm text-blue-700">AI-facing summary</span>
-            <button onClick={() => setEditingFmField(null)}
-              className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">
+            <span className="font-medium text-sm text-blue-700">
+              AI-facing summary
+            </span>
+            <button
+              onClick={() => setEditingFmField(null)}
+              className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded"
+            >
               Done
             </button>
           </div>
-          <div ref={mountRef} style={{ minHeight: '40px' }} />
+          <div ref={mountRef} style={{ minHeight: "40px" }} />
         </div>
-      ) : frontmatter.get('summary_for_tutor') ? (
-        <div className="mb-6 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed relative group cursor-pointer hover:outline hover:outline-2 hover:outline-blue-300/30 hover:outline-offset-1"
-          onClick={() => { setEditingIndex(null); setEditingFmField('summary_for_tutor'); }}>
+      ) : frontmatter.get("summary_for_tutor") ? (
+        <div
+          className="mb-6 p-3 bg-white rounded-lg border border-[#e8e5df] text-[13px] text-gray-500 leading-relaxed relative group cursor-pointer hover:outline hover:outline-2 hover:outline-blue-300/30 hover:outline-offset-1"
+          onClick={() => {
+            setEditingIndex(null);
+            setEditingFmField("summary_for_tutor");
+          }}
+        >
           <div className="absolute -top-2 -right-2 bg-blue-500 text-white text-[10px] px-2 py-0.5 rounded font-medium opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
             click to edit
           </div>
-          <strong className="text-[#6a2d9b]">AI-facing summary:</strong> {frontmatter.get('summary_for_tutor')}
+          <strong className="text-[#6a2d9b]">AI-facing summary:</strong>{" "}
+          {frontmatter.get("summary_for_tutor")}
         </div>
       ) : null}
 
@@ -708,239 +798,335 @@ export function ContentPanel({
         .map((section, i) => ({ section, i }))
         .filter(({ i }) => i >= visibleFrom && i < visibleTo)
         .flatMap(({ section, i }): ReactNode[] => {
-        const sectionEl = ((): ReactNode => {
-        if (section.type === 'frontmatter') return null;
+          const sectionEl = ((): ReactNode => {
+            if (section.type === "frontmatter") return null;
 
-        const fields = parseFields(section.content);
+            const fields = parseFields(section.content);
 
-        // Editing state — show CM editor
-        if (editingIndex === i) {
-          return (
-            <div key={i} className="mb-7 rounded-lg border-2 border-blue-400 bg-white overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
-                <span className="font-medium text-sm text-blue-700">{section.label}</span>
-                <button onClick={() => setEditingIndex(null)}
-                  className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded">
-                  Done
-                </button>
-              </div>
+            // Editing state — show CM editor
+            if (editingIndex === i) {
+              return (
+                <div
+                  key={i}
+                  className="mb-7 rounded-lg border-2 border-blue-400 bg-white overflow-hidden"
+                >
+                  <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-200">
+                    <span className="font-medium text-sm text-blue-700">
+                      {section.label}
+                    </span>
+                    <button
+                      onClick={() => setEditingIndex(null)}
+                      className="text-xs px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded"
+                    >
+                      Done
+                    </button>
+                  </div>
+                  <div
+                    ref={mountRef}
+                    onContextMenu={handleSectionContextMenu}
+                    style={{ minHeight: "60px" }}
+                  />
+                </div>
+              );
+            }
+
+            // Text section
+            if (section.type === "text") {
+              const content = fields.get("content") ?? "";
+              // Compute the absolute Y.Text offset of the content field so we
+              // can slice the global badge map into local positions inside
+              // `content`. Each badge entry carries its own absoluteFrom so the
+              // inline span can call onClickCriticRange with absolute positions
+              // directly — no fragile arithmetic in the bubble path, which is
+              // important because parseFields may shift positions vs. the source.
+              const [contentAbsFrom] = getFieldValueRange(
+                section.content,
+                section.from,
+                "content",
+              );
+              const localBadgeMap = criticMarkupEnabled
+                ? sliceCommentBadgeMap(
+                    globalBadgeMap,
+                    contentAbsFrom,
+                    content.length,
+                  )
+                : undefined;
+              return (
+                <TextRenderer
+                  key={i}
+                  content={content}
+                  onStartEdit={() => startEditingSection(i)}
+                  enableCriticMarkup={criticMarkupEnabled}
+                  onClickCriticRange={onClickCriticRange}
+                  onCommentClick={onCommentClick}
+                  commentBadgeMap={localBadgeMap}
+                />
+              );
+            }
+
+            // Chat section
+            if (section.type === "chat") {
+              const instructions = fields.get("instructions") ?? "";
+              const [instructionsAbsFrom] = getFieldValueRange(
+                section.content,
+                section.from,
+                "instructions",
+              );
+              const instructionsBadgeMap = criticMarkupEnabled
+                ? sliceCommentBadgeMap(
+                    globalBadgeMap,
+                    instructionsAbsFrom,
+                    instructions.length,
+                  )
+                : undefined;
+              return (
+                <ChatRenderer
+                  key={i}
+                  title={section.label}
+                  instructions={instructions}
+                  onStartEdit={() => startEditingSection(i)}
+                  enableCriticMarkup={criticMarkupEnabled}
+                  onClickCriticRange={onClickCriticRange}
+                  onCommentClick={onCommentClick}
+                  commentBadgeMap={instructionsBadgeMap}
+                />
+              );
+            }
+
+            // Article segment — source inherits from previous article segment
+            if (section.type === "article") {
+              let articleSource = fields.get("source")?.trim();
+              const from = fields.get("from") ?? undefined;
+              const to = fields.get("to") ?? undefined;
+
+              if (!articleSource) {
+                for (let j = i - 1; j >= 0; j--) {
+                  if (sections[j].type === "article") {
+                    const prevFields = parseFields(sections[j].content);
+                    const src = prevFields.get("source")?.trim();
+                    if (src) {
+                      articleSource = src;
+                      break;
+                    }
+                  }
+                }
+              }
+
+              if (!articleSource) {
+                return (
+                  <div
+                    key={i}
+                    className="mb-7 p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700"
+                  >
+                    Article segment missing source:: field (no preceding article
+                    to inherit from)
+                  </div>
+                );
+              }
+
+              return (
+                <ArticleRenderer
+                  key={i}
+                  fromAnchor={from}
+                  toAnchor={to}
+                  articleSourceWikilink={articleSource}
+                  lensSourcePath={lensPath}
+                />
+              );
+            }
+
+            // Video segment — source inherits from previous video segment
+            if (section.type === "video") {
+              let videoSource = fields.get("source")?.trim();
+              const from = fields.get("from") ?? undefined;
+              const to = fields.get("to") ?? undefined;
+
+              if (!videoSource) {
+                for (let j = i - 1; j >= 0; j--) {
+                  if (sections[j].type === "video") {
+                    const prevFields = parseFields(sections[j].content);
+                    const src = prevFields.get("source")?.trim();
+                    if (src) {
+                      videoSource = src;
+                      break;
+                    }
+                  }
+                }
+              }
+
+              if (!videoSource) {
+                return (
+                  <div
+                    key={i}
+                    className="mb-7 p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700"
+                  >
+                    Video segment missing source:: field (no preceding video to
+                    inherit from)
+                  </div>
+                );
+              }
+
+              return (
+                <VideoRenderer
+                  key={i}
+                  fromTime={from}
+                  toTime={to}
+                  videoSourceWikilink={videoSource}
+                  lensSourcePath={lensPath}
+                />
+              );
+            }
+
+            // Callout box header / closer: the sections between them are the
+            // box's contents (indented by their depth, below)
+            if (section.type === "callout") {
+              const title = section.label.startsWith("Callout:")
+                ? section.label.slice("Callout:".length).trim()
+                : undefined;
+              return (
+                <CalloutRenderer
+                  key={i}
+                  title={title}
+                  tone={fields.get("tone")}
+                  collapse={fields.get("collapse")}
+                  onStartEdit={() => startEditingSection(i)}
+                />
+              );
+            }
+            if (section.type === "end-callout") {
+              return (
+                <EndCalloutRenderer
+                  key={i}
+                  onStartEdit={() => startEditingSection(i)}
+                />
+              );
+            }
+
+            // Question section
+            if (section.type === "question") {
+              const content = fields.get("content") ?? "";
+              const assessmentInstructions = fields.get(
+                "assessment-instructions",
+              );
+              const enforceVoice = fields.get("enforce-voice");
+              const maxChars = fields.get("max-chars");
+              // Per-field badge maps: the question section's content and
+              // assessment-instructions live at different absolute Y.Text
+              // offsets within the same section, so we slice the global map
+              // twice.
+              const [questionContentAbsFrom] = getFieldValueRange(
+                section.content,
+                section.from,
+                "content",
+              );
+              const contentBadgeMap = criticMarkupEnabled
+                ? sliceCommentBadgeMap(
+                    globalBadgeMap,
+                    questionContentAbsFrom,
+                    content.length,
+                  )
+                : undefined;
+              const assessmentBadgeMap =
+                criticMarkupEnabled && assessmentInstructions
+                  ? (() => {
+                      const [absFrom] = getFieldValueRange(
+                        section.content,
+                        section.from,
+                        "assessment-instructions",
+                      );
+                      return sliceCommentBadgeMap(
+                        globalBadgeMap,
+                        absFrom,
+                        assessmentInstructions.length,
+                      );
+                    })()
+                  : undefined;
+              return (
+                <QuestionRenderer
+                  key={i}
+                  content={content}
+                  assessmentInstructions={assessmentInstructions}
+                  enforceVoice={enforceVoice}
+                  maxChars={maxChars}
+                  onStartEdit={() => startEditingSection(i)}
+                  enableCriticMarkup={criticMarkupEnabled}
+                  onClickCriticRange={onClickCriticRange}
+                  onCommentClick={onCommentClick}
+                  contentBadgeMap={contentBadgeMap}
+                  assessmentBadgeMap={assessmentBadgeMap}
+                />
+              );
+            }
+
+            // Page header
+            if (section.type === "page") {
+              return (
+                <HeadingRenderer
+                  key={i}
+                  label={section.label}
+                  fontSize={22}
+                  onStartEdit={() => startEditingSection(i)}
+                />
+              );
+            }
+
+            // Article/video reference heading and generic heading. Only the
+            // generic 'heading' type takes criticmarkup styling — ref labels
+            // come from another doc's title and aren't user-edited prose.
+            if (
+              section.type === "article-ref" ||
+              section.type === "video-ref" ||
+              section.type === "heading"
+            ) {
+              const isPlainHeading = section.type === "heading";
+              return (
+                <HeadingRenderer
+                  key={i}
+                  label={section.label}
+                  onStartEdit={() => startEditingSection(i)}
+                  enableCriticMarkup={criticMarkupEnabled && isPlainHeading}
+                  onClickCriticRange={
+                    isPlainHeading ? onClickCriticRange : undefined
+                  }
+                  onCommentClick={isPlainHeading ? onCommentClick : undefined}
+                />
+              );
+            }
+
+            return null;
+          })();
+
+          if (sectionEl == null) return [];
+          // Box contents (and the closer) sit inside the box's left edge
+          const depth =
+            section.type === "end-callout" ? depths[i] + 1 : depths[i];
+          const boxed =
+            depth > 0 ? (
               <div
-                ref={mountRef}
-                onContextMenu={handleSectionContextMenu}
-                style={{ minHeight: '60px' }}
-              />
-            </div>
-          );
-        }
-
-        // Text section
-        if (section.type === 'text') {
-          const content = fields.get('content') ?? '';
-          // Compute the absolute Y.Text offset of the content field so we
-          // can slice the global badge map into local positions inside
-          // `content`. Each badge entry carries its own absoluteFrom so the
-          // inline span can call onClickCriticRange with absolute positions
-          // directly — no fragile arithmetic in the bubble path, which is
-          // important because parseFields may shift positions vs. the source.
-          const [contentAbsFrom] = getFieldValueRange(section.content, section.from, 'content');
-          const localBadgeMap = criticMarkupEnabled
-            ? sliceCommentBadgeMap(globalBadgeMap, contentAbsFrom, content.length)
-            : undefined;
-          return (
-            <TextRenderer
-              key={i}
-              content={content}
-              onStartEdit={() => startEditingSection(i)}
-              enableCriticMarkup={criticMarkupEnabled}
-              onClickCriticRange={onClickCriticRange}
-              onCommentClick={onCommentClick}
-              commentBadgeMap={localBadgeMap}
-            />
-          );
-        }
-
-        // Chat section
-        if (section.type === 'chat') {
-          const instructions = fields.get('instructions') ?? '';
-          const [instructionsAbsFrom] = getFieldValueRange(section.content, section.from, 'instructions');
-          const instructionsBadgeMap = criticMarkupEnabled
-            ? sliceCommentBadgeMap(globalBadgeMap, instructionsAbsFrom, instructions.length)
-            : undefined;
-          return (
-            <ChatRenderer
-              key={i}
-              title={section.label}
-              instructions={instructions}
-              onStartEdit={() => startEditingSection(i)}
-              enableCriticMarkup={criticMarkupEnabled}
-              onClickCriticRange={onClickCriticRange}
-              onCommentClick={onCommentClick}
-              commentBadgeMap={instructionsBadgeMap}
-            />
-          );
-        }
-
-        // Article segment — source inherits from previous article segment
-        if (section.type === 'article') {
-          let articleSource = fields.get('source')?.trim();
-          const from = fields.get('from') ?? undefined;
-          const to = fields.get('to') ?? undefined;
-
-          if (!articleSource) {
-            for (let j = i - 1; j >= 0; j--) {
-              if (sections[j].type === 'article') {
-                const prevFields = parseFields(sections[j].content);
-                const src = prevFields.get('source')?.trim();
-                if (src) {
-                  articleSource = src;
-                  break;
-                }
-              }
-            }
-          }
-
-          if (!articleSource) {
-            return (
-              <div key={i} className="mb-7 p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
-                Article segment missing source:: field (no preceding article to inherit from)
+                key={`boxed-${i}`}
+                className="border-l-2 border-amber-200 pl-3"
+                style={{ marginLeft: (depth - 1) * 16 }}
+              >
+                {sectionEl}
               </div>
+            ) : (
+              sectionEl
             );
-          }
-
-          return (
-            <ArticleRenderer
-              key={i}
-              fromAnchor={from}
-              toAnchor={to}
-              articleSourceWikilink={articleSource}
-              lensSourcePath={lensPath}
-            />
-          );
-        }
-
-        // Video segment — source inherits from previous video segment
-        if (section.type === 'video') {
-          let videoSource = fields.get('source')?.trim();
-          const from = fields.get('from') ?? undefined;
-          const to = fields.get('to') ?? undefined;
-
-          if (!videoSource) {
-            for (let j = i - 1; j >= 0; j--) {
-              if (sections[j].type === 'video') {
-                const prevFields = parseFields(sections[j].content);
-                const src = prevFields.get('source')?.trim();
-                if (src) {
-                  videoSource = src;
-                  break;
-                }
-              }
-            }
-          }
-
-          if (!videoSource) {
-            return (
-              <div key={i} className="mb-7 p-4 bg-amber-50 rounded-lg border border-amber-200 text-sm text-amber-700">
-                Video segment missing source:: field (no preceding video to inherit from)
-              </div>
-            );
-          }
-
-          return (
-            <VideoRenderer
-              key={i}
-              fromTime={from}
-              toTime={to}
-              videoSourceWikilink={videoSource}
-              lensSourcePath={lensPath}
-            />
-          );
-        }
-
-        // Question section
-        if (section.type === 'question') {
-          const content = fields.get('content') ?? '';
-          const assessmentInstructions = fields.get('assessment-instructions');
-          const enforceVoice = fields.get('enforce-voice');
-          const maxChars = fields.get('max-chars');
-          // Per-field badge maps: the question section's content and
-          // assessment-instructions live at different absolute Y.Text
-          // offsets within the same section, so we slice the global map
-          // twice.
-          const [questionContentAbsFrom] = getFieldValueRange(section.content, section.from, 'content');
-          const contentBadgeMap = criticMarkupEnabled
-            ? sliceCommentBadgeMap(globalBadgeMap, questionContentAbsFrom, content.length)
-            : undefined;
-          const assessmentBadgeMap = criticMarkupEnabled && assessmentInstructions
-            ? (() => {
-                const [absFrom] = getFieldValueRange(section.content, section.from, 'assessment-instructions');
-                return sliceCommentBadgeMap(globalBadgeMap, absFrom, assessmentInstructions.length);
-              })()
-            : undefined;
-          return (
-            <QuestionRenderer
-              key={i}
-              content={content}
-              assessmentInstructions={assessmentInstructions}
-              enforceVoice={enforceVoice}
-              maxChars={maxChars}
-              onStartEdit={() => startEditingSection(i)}
-              enableCriticMarkup={criticMarkupEnabled}
-              onClickCriticRange={onClickCriticRange}
+          const orphans = orphansBySection.get(i) ?? [];
+          if (orphans.length === 0) return [boxed];
+          const anchorEntries = orphans.map((absFrom) => ({
+            absFrom,
+            badgeNumber: globalBadgeMap.get(absFrom)?.badgeNumber,
+          }));
+          return [
+            <OrphanCommentAnchors
+              key={`anchors-${i}`}
+              anchors={anchorEntries}
               onCommentClick={onCommentClick}
-              contentBadgeMap={contentBadgeMap}
-              assessmentBadgeMap={assessmentBadgeMap}
-            />
-          );
-        }
-
-        // Page header
-        if (section.type === 'page') {
-          return (
-            <HeadingRenderer
-              key={i}
-              label={section.label}
-              fontSize={22}
-              onStartEdit={() => startEditingSection(i)}
-            />
-          );
-        }
-
-        // Article/video reference heading and generic heading. Only the
-        // generic 'heading' type takes criticmarkup styling — ref labels
-        // come from another doc's title and aren't user-edited prose.
-        if (section.type === 'article-ref' || section.type === 'video-ref' || section.type === 'heading') {
-          const isPlainHeading = section.type === 'heading';
-          return (
-            <HeadingRenderer
-              key={i}
-              label={section.label}
-              onStartEdit={() => startEditingSection(i)}
-              enableCriticMarkup={criticMarkupEnabled && isPlainHeading}
-              onClickCriticRange={isPlainHeading ? onClickCriticRange : undefined}
-              onCommentClick={isPlainHeading ? onCommentClick : undefined}
-            />
-          );
-        }
-
-        return null;
-        })();
-
-        if (sectionEl == null) return [];
-        const orphans = orphansBySection.get(i) ?? [];
-        if (orphans.length === 0) return [sectionEl];
-        const anchorEntries = orphans.map((absFrom) => ({
-          absFrom,
-          badgeNumber: globalBadgeMap.get(absFrom)?.badgeNumber,
-        }));
-        return [
-          <OrphanCommentAnchors
-            key={`anchors-${i}`}
-            anchors={anchorEntries}
-            onCommentClick={onCommentClick}
-          />,
-          sectionEl,
-        ];
-      })}
+            />,
+            boxed,
+          ];
+        })}
       {contextMenu && (
         <ContextMenu
           items={contextMenu.items}

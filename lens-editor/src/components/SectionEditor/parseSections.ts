@@ -36,15 +36,15 @@ export function parseSections(text: string): Section[] {
   let pos = 0;
 
   // 1. Frontmatter
-  if (text.startsWith('---\n') || text.startsWith('---\r\n')) {
-    const endMarker = text.indexOf('\n---', 3);
+  if (text.startsWith("---\n") || text.startsWith("---\r\n")) {
+    const endMarker = text.indexOf("\n---", 3);
     if (endMarker !== -1) {
       // Include the closing --- and its newline
-      const fmEnd = text.indexOf('\n', endMarker + 4);
+      const fmEnd = text.indexOf("\n", endMarker + 4);
       const to = fmEnd !== -1 ? fmEnd + 1 : text.length;
       sections.push({
-        type: 'frontmatter',
-        label: 'Frontmatter',
+        type: "frontmatter",
+        label: "Frontmatter",
         level: 0,
         from: 0,
         to,
@@ -57,7 +57,12 @@ export function parseSections(text: string): Section[] {
   // 2. Scan for section headers
   // We look for lines starting with # at various levels
   const headerPattern = /^(#{1,4})\s+(.+)$/gm;
-  const headers: { level: number; title: string; from: number; lineEnd: number }[] = [];
+  const headers: {
+    level: number;
+    title: string;
+    from: number;
+    lineEnd: number;
+  }[] = [];
 
   let match: RegExpExecArray | null;
   while ((match = headerPattern.exec(text)) !== null) {
@@ -74,8 +79,8 @@ export function parseSections(text: string): Section[] {
   if (headers.length === 0) {
     if (pos < text.length) {
       sections.push({
-        type: 'body',
-        label: 'Content',
+        type: "body",
+        label: "Content",
         level: 0,
         from: pos,
         to: text.length,
@@ -99,8 +104,8 @@ export function parseSections(text: string): Section[] {
     } else {
       // No frontmatter — create a body section for the gap
       sections.push({
-        type: 'body',
-        label: 'Content',
+        type: "body",
+        label: "Content",
         level: 0,
         from: pos,
         to: headers[0].from,
@@ -133,54 +138,86 @@ export function parseSections(text: string): Section[] {
 
 function classifyHeader(title: string, level: number): string {
   const cleaned = stripCriticMarkup(title);
-  const lower = cleaned.toLowerCase().replace(/:$/, '').trim();
+  const lower = cleaned.toLowerCase().replace(/:$/, "").trim();
 
   // These types can appear at any heading level (##, ###, ####)
-  if (lower === 'video') return 'video';
-  if (lower === 'video-excerpt') return 'video-excerpt';
-  if (lower === 'article-excerpt') return 'article-excerpt';
-  if (lower === 'article') return 'article';
-  if (lower === 'text') return 'text';
-  if (lower === 'chat' || lower.startsWith('chat')) return 'chat';
-  if (lower === 'question') return 'question';
+  if (lower === "callout" || lower.startsWith("callout:")) return "callout";
+  if (lower === "end callout") return "end-callout";
+  if (lower === "video") return "video";
+  if (lower === "video-excerpt") return "video-excerpt";
+  if (lower === "article-excerpt") return "article-excerpt";
+  if (lower === "article") return "article";
+  if (lower === "text") return "text";
+  if (lower === "chat" || lower.startsWith("chat")) return "chat";
+  if (lower === "question") return "question";
 
-  if (lower.startsWith('submodule')) return 'submodule';
-  if (lower.startsWith('page')) return 'page';
-  if (lower.startsWith('article')) return 'article-ref';
-  if (lower.startsWith('video')) return 'video-ref';
-  if (lower.startsWith('lens')) return 'lens-ref';
-  if (lower.startsWith('test')) return 'test-ref';
-  if (lower.startsWith('learning outcome')) return 'lo-ref';
-  if (lower.startsWith('module')) return 'module-ref';
-  if (lower.startsWith('meeting')) return 'meeting-ref';
+  if (lower.startsWith("submodule")) return "submodule";
+  if (lower.startsWith("page")) return "page";
+  if (lower.startsWith("article")) return "article-ref";
+  if (lower.startsWith("video")) return "video-ref";
+  if (lower.startsWith("lens")) return "lens-ref";
+  if (lower.startsWith("test")) return "test-ref";
+  if (lower.startsWith("learning outcome")) return "lo-ref";
+  if (lower.startsWith("module")) return "module-ref";
+  if (lower.startsWith("meeting")) return "meeting-ref";
 
-  return 'heading';
+  return "heading";
 }
 
 function stripCriticMarkup(text: string): string {
-  let result = text.replace(/\{>>[\s\S]*?<<\}/g, '');
-  result = result.replace(/\{--[\s\S]*?--\}/g, '');
-  result = result.replace(/\{\+\+([\s\S]*?)\+\+\}/g, '$1');
-  result = result.replace(/^.*?@@/, '');
+  let result = text.replace(/\{>>[\s\S]*?<<\}/g, "");
+  result = result.replace(/\{--[\s\S]*?--\}/g, "");
+  result = result.replace(/\{\+\+([\s\S]*?)\+\+\}/g, "$1");
+  result = result.replace(/^.*?@@/, "");
   return result.trim() || text;
 }
 
 function cleanLabel(title: string, level: number): string {
   const cleaned = stripCriticMarkup(title);
-  const lower = cleaned.toLowerCase().replace(/:$/, '').trim();
+  const lower = cleaned.toLowerCase().replace(/:$/, "").trim();
 
-  if (lower === 'video') return 'Video';
-  if (lower === 'video-excerpt') return 'Video Excerpt';
-  if (lower === 'article-excerpt') return 'Article Excerpt';
-  if (lower === 'article') return 'Article';
-  if (lower === 'text') return 'Text';
-  if (lower === 'chat' || lower.startsWith('chat')) return cleaned.replace(/:$/, '').trim();
-  if (lower === 'question') return 'Question';
+  if (lower === "video") return "Video";
+  if (lower === "video-excerpt") return "Video Excerpt";
+  if (lower === "article-excerpt") return "Article Excerpt";
+  if (lower === "article") return "Article";
+  if (lower === "text") return "Text";
+  if (lower === "chat" || lower.startsWith("chat"))
+    return cleaned.replace(/:$/, "").trim();
+  if (lower === "question") return "Question";
+  if (lower === "callout") return "Callout";
+  if (lower.startsWith("callout:")) {
+    const title = cleaned.slice(cleaned.indexOf(":") + 1).trim();
+    return title ? `Callout: ${title}` : "Callout";
+  }
+  if (lower === "end callout") return "End Callout";
 
-  const colonIndex = cleaned.indexOf(':');
-  if (colonIndex !== -1 && ['submodule', 'page', 'article', 'video'].includes(lower.split(':')[0].trim())) {
+  const colonIndex = cleaned.indexOf(":");
+  if (
+    colonIndex !== -1 &&
+    ["submodule", "page", "article", "video"].includes(
+      lower.split(":")[0].trim(),
+    )
+  ) {
     return cleaned.slice(colonIndex + 1).trim();
   }
 
-  return cleaned.replace(/:$/, '').trim();
+  return cleaned.replace(/:$/, "").trim();
+}
+
+/**
+ * How many callouts each section sits inside. A `#### Callout:` header opens
+ * a box around the sections after it until the matching `#### End Callout`;
+ * boxes nest to any depth. The opener itself is reported at the depth of its
+ * box (so it renders as the box's header), the closer at the depth outside.
+ */
+export function calloutDepths(sections: Section[]): number[] {
+  let depth = 0;
+  return sections.map((section) => {
+    if (section.type === "callout") return ++depth;
+    if (section.type === "end-callout") {
+      depth = Math.max(0, depth - 1);
+      return depth;
+    }
+    return depth;
+  });
 }
