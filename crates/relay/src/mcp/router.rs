@@ -141,6 +141,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         }
     }
 
@@ -228,6 +229,7 @@ mod tests {
         let mut expected = vec![
             "create",
             "create_session",
+            "delete",
             "edit",
             "get_links",
             "get_url",
@@ -527,6 +529,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         };
 
         let req = make_request(json!(50), "tools/list", None);
@@ -596,6 +599,7 @@ mod tests {
             folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
             folder_name: Some("Lens Edu".to_string()),
             raw_token: None,
+            role: None,
         };
         let sid = server
             .mcp_sessions

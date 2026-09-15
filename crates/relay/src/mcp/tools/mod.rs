@@ -620,6 +620,7 @@ mod integration_tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         };
         let sid = server
             .mcp_sessions
@@ -786,6 +787,7 @@ mod integration_tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         };
 
         // get_url must be advertised even for read-only sessions.
