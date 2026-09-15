@@ -54,7 +54,7 @@ pub enum TrashError {
     BadRequest(String),
     /// 404: no such path in any loaded folder.
     NotFound(String),
-    /// 409: the trash already holds an entry at the destination path.
+    /// 409: the tree changed under the delete (retry).
     Conflict(String),
     /// 409: documents outside the subtree link into it (and `force` is off).
     InboundLinks {
@@ -211,6 +211,46 @@ pub fn trash_destination(in_folder_path: &str) -> Result<String, TrashError> {
         )));
     }
     Ok(format!("{}{}", TRASH_ROOT, in_folder_path))
+}
+
+/// `path` with `-n` appended to its last segment, before the extension for
+/// files (`/a/x.md` -> `/a/x-2.md`), after the name for folders
+/// (`/a/Dir` -> `/a/Dir-2`). `n < 2` returns the path unchanged.
+pub fn suffixed_path(path: &str, n: usize, is_folder: bool) -> String {
+    if n < 2 {
+        return path.to_string();
+    }
+    let (dir, name) = match path.rfind('/') {
+        Some(i) => (&path[..=i], &path[i + 1..]),
+        None => ("", path),
+    };
+    if !is_folder {
+        if let Some(dot) = name.rfind('.') {
+            if dot > 0 {
+                return format!("{}{}-{}{}", dir, &name[..dot], n, &name[dot..]);
+            }
+        }
+    }
+    format!("{}{}-{}", dir, name, n)
+}
+
+/// Trash destination for `in_path`: `/_trash<in_path>` when free, else the
+/// lowest `-2`, `-3`, ... suffix that `occupied` reports free. Callers pass
+/// an `occupied` that also counts descendants, so a folder whose children
+/// linger in the trash is not reused.
+pub fn free_trash_destination(
+    in_path: &str,
+    is_folder: bool,
+    occupied: impl Fn(&str) -> bool,
+) -> String {
+    let base = format!("{}{}", TRASH_ROOT, in_path);
+    if !occupied(&base) {
+        return base;
+    }
+    (2..)
+        .map(|n| suffixed_path(&base, n, is_folder))
+        .find(|candidate| !occupied(candidate))
+        .expect("an unbounded suffix range always finds a free path")
 }
 
 /// Split a user-facing path (`Lens Edu/articles/x.md`) into
@@ -452,17 +492,25 @@ impl Server {
                 .map(|k| k.to_string())
                 .collect();
             keys.sort();
-            let key_set: HashSet<&str> = keys.iter().map(|k| k.as_str()).collect();
+            // The first trashed entry keeps `/_trash<path>`; a second delete
+            // of the same path within the retention window gets `-2`, `-3`,
+            // ... on the subtree root so a folder's children stay together.
+            let dest_root = {
+                let all_keys: Vec<String> = filemeta.keys(&txn).map(|k| k.to_string()).collect();
+                free_trash_destination(&in_path, is_folder, |candidate| {
+                    let child_prefix = format!("{}/", candidate);
+                    all_keys
+                        .iter()
+                        .any(|k| k == candidate || k.starts_with(&child_prefix))
+                })
+            };
             let mut pending = Vec::with_capacity(keys.len());
             for src in &keys {
-                let dest = format!("{}{}", TRASH_ROOT, src);
-                if filemeta.get(&txn, &dest).is_some() && !key_set.contains(dest.as_str()) {
-                    return Err(TrashError::Conflict(format!(
-                        "{}{} already exists in the trash. Restore or rename that entry with \
-                         the move tool first, or wait for it to be purged.",
-                        folder_name, dest
-                    )));
-                }
+                let dest = if src == &in_path {
+                    dest_root.clone()
+                } else {
+                    format!("{}{}", dest_root, &src[in_path.len()..])
+                };
                 let Some(value) = filemeta.get(&txn, src) else {
                     continue;
                 };
@@ -1068,6 +1116,45 @@ mod tests {
         assert_eq!(
             trash_destination("/notes/_trash/x.md").unwrap(),
             "/_trash/notes/_trash/x.md"
+        );
+    }
+
+    #[test]
+    fn suffixed_path_goes_before_the_extension_for_files_and_after_the_name_for_folders() {
+        assert_eq!(
+            suffixed_path("/_trash/articles/x.md", 2, false),
+            "/_trash/articles/x-2.md"
+        );
+        assert_eq!(
+            suffixed_path("/_trash/a.tar.gz", 3, false),
+            "/_trash/a.tar-3.gz"
+        );
+        assert_eq!(suffixed_path("/_trash/.env", 2, false), "/_trash/.env-2");
+        assert_eq!(suffixed_path("/_trash/noext", 2, false), "/_trash/noext-2");
+        assert_eq!(suffixed_path("/_trash/v1.0", 2, true), "/_trash/v1.0-2");
+        assert_eq!(suffixed_path("/_trash/Dir", 1, true), "/_trash/Dir");
+    }
+
+    #[test]
+    fn free_trash_destination_picks_the_lowest_free_suffix() {
+        let taken = ["/_trash/x.md", "/_trash/x-2.md", "/_trash/Dir/child.md"];
+        let occupied = |c: &str| {
+            taken
+                .iter()
+                .any(|t| *t == c || t.starts_with(&format!("{}/", c)))
+        };
+        assert_eq!(
+            free_trash_destination("/y.md", false, occupied),
+            "/_trash/y.md"
+        );
+        assert_eq!(
+            free_trash_destination("/x.md", false, occupied),
+            "/_trash/x-3.md"
+        );
+        // A folder whose children linger in the trash counts as occupied.
+        assert_eq!(
+            free_trash_destination("/Dir", true, occupied),
+            "/_trash/Dir-2"
         );
     }
 

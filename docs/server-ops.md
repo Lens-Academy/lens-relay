@@ -184,8 +184,12 @@ different mechanism and is never touched.
 document outside the deleted subtree links into it. `force: true` trashes
 anyway and leaves those links as they are; `validate_content` keeps
 reporting them. Deleting `_trash` itself, a shared-folder root, or something
-already in the trash is an error, as is a delete whose trash path already
-exists (restore or rename that entry first). Admin and Edit tokens only:
+already in the trash is an error. When the trash already holds the path
+(the same name deleted twice within the retention period) the new entry gets
+the lowest free `-2`, `-3`, ... suffix before the extension
+(`_trash/articles/x-2.md`); a folder is suffixed as a whole (`_trash/Dir-2/`)
+so its subtree stays together, and the response lists the final paths. Admin
+and Edit tokens only:
 Suggest tokens get an access-denied error from the MCP dispatcher and a 403
 from the editor proxy (`server/relay-proxy-auth.ts`). Folder-scoped tokens
 get the same prefix check as `move`.

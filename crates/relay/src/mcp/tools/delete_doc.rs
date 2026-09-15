@@ -337,22 +337,103 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn delete_conflicts_when_trash_already_holds_the_path() {
+    async fn second_delete_of_the_same_file_path_gets_a_numeric_suffix() {
         let server = build_server(&[
             ("/_trash/A.md", B, "markdown", "old"),
             ("/A.md", A, "markdown", "new"),
         ])
         .await;
-        let err = execute(&server, &json!({"path": "Lens/A.md"}))
+        let out = execute(&server, &json!({"path": "Lens/A.md"}))
             .await
-            .unwrap_err();
-        assert!(
-            err.contains("Lens/_trash/A.md already exists in the trash"),
-            "{err}"
+            .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["trashed"], json!(["Lens/_trash/A-2.md"]));
+        assert!(v["restore_hint"]
+            .as_str()
+            .unwrap()
+            .contains("Lens/_trash/A-2.md"));
+        let meta = filemeta_snapshot(&server);
+        assert_eq!(meta["/_trash/A.md"].get("id"), Some(&Any::String(B.into())));
+        assert_eq!(
+            meta["/_trash/A-2.md"].get("id"),
+            Some(&Any::String(A.into()))
+        );
+        assert!(meta["/_trash/A-2.md"].get(TRASHED_AT_FIELD).is_some());
+        assert!(!meta.contains_key("/A.md"));
+        assert!(legacy_docs_keys(&server).contains(&"/_trash/A-2.md".to_string()));
+
+        // A third one takes the next free number.
+        let server = build_server(&[
+            ("/_trash/A.md", B, "markdown", "old"),
+            ("/_trash/A-2.md", C, "markdown", "older"),
+            ("/A.md", A, "markdown", "new"),
+        ])
+        .await;
+        let out = execute(&server, &json!({"path": "Lens/A.md"}))
+            .await
+            .unwrap();
+        assert!(out.contains("Lens/_trash/A-3.md"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn second_delete_of_the_same_folder_keeps_the_subtree_together() {
+        let server = build_server(&[
+            ("/_trash/Dir", DIR, "folder", ""),
+            ("/_trash/Dir/X.md", B, "markdown", "old"),
+            ("/Dir", C, "folder", ""),
+            ("/Dir/X.md", A, "markdown", "new"),
+            ("/Dir/pic.png", IMG, "image", ""),
+        ])
+        .await;
+        let out = execute(&server, &json!({"path": "Lens/Dir"}))
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v["trashed"],
+            json!([
+                "Lens/_trash/Dir-2",
+                "Lens/_trash/Dir-2/X.md",
+                "Lens/_trash/Dir-2/pic.png"
+            ])
         );
         let meta = filemeta_snapshot(&server);
-        assert_eq!(meta["/A.md"].get("id"), Some(&Any::String(A.into())));
-        assert_eq!(meta["/_trash/A.md"].get("id"), Some(&Any::String(B.into())));
+        assert_eq!(
+            meta["/_trash/Dir"].get("id"),
+            Some(&Any::String(DIR.into()))
+        );
+        assert_eq!(
+            meta["/_trash/Dir/X.md"].get("id"),
+            Some(&Any::String(B.into()))
+        );
+        assert_eq!(
+            meta["/_trash/Dir-2"].get("id"),
+            Some(&Any::String(C.into()))
+        );
+        assert_eq!(
+            meta["/_trash/Dir-2/X.md"].get("id"),
+            Some(&Any::String(A.into()))
+        );
+        for p in [
+            "/_trash/Dir-2",
+            "/_trash/Dir-2/X.md",
+            "/_trash/Dir-2/pic.png",
+        ] {
+            assert!(meta[p].get(TRASHED_AT_FIELD).is_some(), "{p} unstamped");
+        }
+        assert!(!meta.contains_key("/Dir"));
+
+        // Children lingering without a folder entry still count as occupied.
+        let server = build_server(&[
+            ("/_trash/Dir/X.md", B, "markdown", "old"),
+            ("/Dir", C, "folder", ""),
+            ("/Dir/X.md", A, "markdown", "new"),
+        ])
+        .await;
+        let out = execute(&server, &json!({"path": "Lens/Dir"}))
+            .await
+            .unwrap();
+        assert!(out.contains("Lens/_trash/Dir-2/X.md"), "{out}");
     }
 
     #[tokio::test]
