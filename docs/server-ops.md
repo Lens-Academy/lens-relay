@@ -168,6 +168,58 @@ That entry lives in the in-memory recent-changes index only (attachments have
 no Y.Doc to persist an `activity_v0` event in), so it disappears on relay
 restart.
 
+### Deleting: the trash folder and the purge sweep
+
+There is no immediate delete. The MCP `delete` tool and the editor's Delete
+action (`POST /doc/trash`, body `{path, force?}`, server token) move the
+entry to `<shared folder>/_trash/` with its relative path preserved
+(`Lens Edu/articles/x.md` becomes `Lens Edu/_trash/articles/x.md`; a folder
+takes its whole subtree along) and stamp every moved `filemeta_v0` entry
+with `trashed_at` (unix ms). The content Y.Doc keeps its id, blobs keep
+their keys, and no other document is rewritten. `_deprecated/` is a
+different mechanism and is never touched.
+
+**Refusal.** A delete is refused (MCP tool error; HTTP 409 with a JSON body
+`{error, code: "inbound_links", referencing: [{path, count}]}`) while any
+document outside the deleted subtree links into it. `force: true` trashes
+anyway and leaves those links as they are; `validate_content` keeps
+reporting them. Deleting `_trash` itself, a shared-folder root, or something
+already in the trash is an error, as is a delete whose trash path already
+exists (restore or rename that entry first). Admin and Edit tokens only:
+Suggest tokens get an access-denied error from the MCP dispatcher and a 403
+from the editor proxy (`server/relay-proxy-auth.ts`). Folder-scoped tokens
+get the same prefix check as `move`.
+
+**Restore.** A plain `move` out of `_trash/` (MCP tool or the editor's
+Move/Rename) restores the entry and clears `trashed_at`; markdown, folder
+and blob moves all do this. Moving something *into* `_trash/` by hand is
+allowed; the sweep stamps it on first sight so it expires too. Restoring an
+article back into `Lens Edu/articles/` is allowed (it already existed).
+
+**Purge.** `[server] trash_retention_days` in `relay.toml` (also
+`--trash-retention-days` and `RELAY_SERVER_TRASH_RETENTION_DAYS`; default
+10, `0` disables) drives a sweep that runs hourly, first 5 minutes after
+boot (`crates/relay/src/server/trash.rs`). For every entry under `_trash/`
+whose stamp is older than the retention it deletes the `filemeta_v0` and
+legacy `docs` entries, evicts the doc from memory, removes
+`<doc>/data.ysweet` and every `files/<doc>/*` blob from the store, and drops
+the search, suggestions, recent-changes, resolver and backlink index
+entries. Empty folders left under `_trash/` are removed. Each purge logs
+`Purged trashed entry` at info with the path, doc id and `trashed_at`; a
+failing entry is logged, counted and retried next sweep; a doc with an open
+connection is deferred. Purge is final on the relay (git history in the
+synced repo is the backstop, since relay-git-sync exports `_trash/` like any
+other folder and drops the file once purged).
+
+**Local testing.** `RELAY_TRASH_SWEEP_INTERVAL_SECS=<n>` shortens both the
+first-run delay and the interval, and `--trash-retention-days` accepts a
+fraction (e.g. `0.00002` is about 1.7 s). Never set the env override in
+production.
+
+**Recent changes.** A trashed file shows on the editor's Recent changes page
+as a `trash` event (old = original path, new = trash path). In-memory only,
+best effort: the next content re-index of that doc replaces it.
+
 **Reading.** The MCP `read` tool returns raster attachments (≤ 5 MiB) as an
 image content block and `.svg` attachments as their XML text; `create`/`edit`
 refuse image paths.
