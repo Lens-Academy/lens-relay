@@ -39,8 +39,10 @@ pub const WRITE_TOOLS: [&str; 8] = [
 ];
 
 /// Return tool definitions for MCP tools/list response.
-/// When `writable` is false, write tools (edit, create, move) are excluded.
-pub fn tool_definitions(writable: bool) -> Vec<Value> {
+/// When `writable` is false, write tools (edit, create, move) are excluded;
+/// `delete` is listed only when `can_delete` (Admin/Edit/legacy key), so a
+/// Suggest token neither sees nor can call it.
+pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
     let article_import_modes = import_source::ARTICLE_IMPORT_MODES;
     let mut tools = vec![
         json!({
@@ -417,6 +419,9 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
                 }
             }
         }));
+    }
+
+    if writable && can_delete {
         tools.push(json!({
             "name": "delete",
             "description": "Move a file or folder to the trash: it lands under <shared folder>/_trash/ with its relative path preserved (Lens Edu/articles/x.md -> Lens Edu/_trash/articles/x.md; a folder keeps its whole subtree) and gets a trashed_at stamp. Trashed entries are purged for good after the retention period (10 days by default). To restore, move it out of _trash with the move tool. Refused while any document outside the deleted subtree still links into it: the error lists those documents; fix or remove the references first, or pass force: true to trash anyway (nothing else is touched, links stay as they are and validate_content keeps reporting them). Deleting _trash itself, a shared-folder root, or something already in the trash is an error. Requires an Admin or Edit token (Suggest tokens cannot delete). Never simulate a delete with move or edit.",
@@ -783,7 +788,7 @@ mod integration_tests {
 
     #[test]
     fn delete_tool_is_advertised_to_writers_with_trash_and_force_semantics() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let tool = tools
             .iter()
             .find(|t| t["name"] == "delete")
@@ -802,9 +807,17 @@ mod integration_tests {
             json!("boolean")
         );
         assert!(super::WRITE_TOOLS.contains(&"delete"));
-        assert!(!super::tool_definitions(false)
+        assert!(!super::tool_definitions(false, false)
             .iter()
             .any(|t| t["name"] == "delete"));
+        // A Suggest token is writable but may not delete: same list as an
+        // Edit token minus delete.
+        let suggest = super::tool_definitions(true, false);
+        assert!(!suggest.iter().any(|t| t["name"] == "delete"));
+        for name in ["edit", "create", "move", "import_source"] {
+            assert!(suggest.iter().any(|t| t["name"] == name), "{name}");
+        }
+        assert_eq!(suggest.len() + 1, tools.len());
     }
 
     // Prevents: `import_article` becoming "Unknown tool" for agents whose
@@ -830,7 +843,7 @@ mod integration_tests {
 
     #[test]
     fn move_schema_allows_file_path_alias_without_requiring_path() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let move_tool = tools
             .iter()
             .find(|tool| tool["name"] == "move")
@@ -846,7 +859,7 @@ mod integration_tests {
 
     #[test]
     fn import_source_schema_requires_the_shared_modes() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let import_tool = tools
             .iter()
             .find(|tool| tool["name"] == "import_source")
@@ -873,13 +886,13 @@ mod integration_tests {
     // the read-only block list.
     #[test]
     fn import_article_alias_is_hidden_and_every_write_tool_is_blocked_for_readers() {
-        let writable = super::tool_definitions(true);
+        let writable = super::tool_definitions(true, true);
         assert!(
             !writable.iter().any(|t| t["name"] == "import_article"),
             "alias must not be advertised"
         );
         assert!(writable.iter().any(|t| t["name"] == "import_attachment"));
-        let readonly = super::tool_definitions(false);
+        let readonly = super::tool_definitions(false, false);
         for tool in &writable {
             let name = tool["name"].as_str().unwrap();
             if !readonly.iter().any(|t| t["name"] == name) {
@@ -899,7 +912,7 @@ mod integration_tests {
 
     #[test]
     fn descriptions_route_agents_between_the_import_tools() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let desc = |name: &str| {
             tools
                 .iter()
@@ -921,7 +934,7 @@ mod integration_tests {
 
     #[test]
     fn edit_schema_explains_auto_mode_and_suggest_override() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let description = tools
             .iter()
             .find(|tool| tool["name"] == "edit")
@@ -955,7 +968,7 @@ mod integration_tests {
 
         // get_url must be advertised even for read-only sessions.
         assert!(
-            super::tool_definitions(false)
+            super::tool_definitions(false, false)
                 .iter()
                 .any(|t| t["name"] == "get_url"),
             "get_url should be advertised for read-only sessions"

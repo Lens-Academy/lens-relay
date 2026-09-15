@@ -26,7 +26,7 @@ pub async fn dispatch_request(
         // middleware (Bearer token or path key). With a stateless transport
         // there's no app session to read it from, but tokens are immutable so
         // every request from a given client carries the same access anyway.
-        "tools/list" => handle_tools_list(request.id.clone(), access.writable),
+        "tools/list" => handle_tools_list(request.id.clone(), access.writable, access.can_delete()),
         "tools/call" => {
             handle_tools_call(server, request.id.clone(), request.params.as_ref(), access).await
         }
@@ -101,8 +101,8 @@ fn handle_ping(id: Value) -> JsonRpcResponse {
     success_response(id, json!({}))
 }
 
-fn handle_tools_list(id: Value, writable: bool) -> JsonRpcResponse {
-    let definitions = tools::tool_definitions(writable);
+fn handle_tools_list(id: Value, writable: bool, can_delete: bool) -> JsonRpcResponse {
+    let definitions = tools::tool_definitions(writable, can_delete);
     success_response(id, json!({ "tools": definitions }))
 }
 
