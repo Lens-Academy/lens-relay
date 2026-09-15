@@ -49,6 +49,20 @@ function renderPage() {
 }
 
 describe('RecentChangesPage', () => {
+  it('labels a trash event "Trashed" and shows original path -> trash path instead of text', () => {
+    const trash: ActivityEvent = {
+      ...event('t1', now - 1000, 'system:trash'),
+      author: 'Trash', kind: 'trash', old: 'Lens/Notes/A.md', new: 'Lens/_trash/Notes/A.md',
+    };
+    state.data = [file('a', [trash])];
+    renderPage();
+    expect(screen.getByText('Trashed')).toBeInTheDocument();
+    expect(screen.queryByText('Replaced')).not.toBeInTheDocument();
+    const move = screen.getByTestId('trash-move');
+    expect(move).toHaveTextContent('Lens/Notes/A.md -> Lens/_trash/Notes/A.md');
+    expect(move.querySelector('.line-through')).toBeNull();
+  });
+
   it('renders every excerpt of an expanded file (off-screen cost is deferred via content-visibility)', () => {
     state.data = [file('a', [event('a1', now - 1000)], 40)];
     renderPage();

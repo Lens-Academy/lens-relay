@@ -8,7 +8,8 @@ export interface ActivityEvent {
   actor: string;
   author: string;
   mode: 'direct' | string;
-  kind: 'insert' | 'delete' | 'replace';
+  /** `trash`: the file was moved to `_trash/` (old = original path, new = trash path). */
+  kind: 'insert' | 'delete' | 'replace' | 'trash';
   old: string;
   new: string;
   old_truncated: boolean;

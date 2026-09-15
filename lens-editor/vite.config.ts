@@ -73,7 +73,7 @@ export default defineConfig(() => {
       configureServer(server) {
         // Validate share token on /api/relay/ proxy requests
         server.middlewares.use('/api/relay', async (req, res, next) => {
-          const { validateProxyToken, checkProxyAccessWithBody } = await import('./server/relay-proxy-auth.ts');
+          const { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } = await import('./server/relay-proxy-auth.ts');
 
           const shareToken = req.headers['x-share-token'] as string | undefined;
           const auth = validateProxyToken(shareToken);
@@ -88,7 +88,7 @@ export default defineConfig(() => {
           const pathOnly = queryIdx >= 0 ? fullUrl.slice(0, queryIdx) : fullUrl;
           const query = queryIdx >= 0 ? fullUrl.slice(queryIdx + 1) : '';
           let parsedBody: unknown = undefined;
-          if ((req.method || 'GET') === 'POST' && pathOnly === '/move') {
+          if (isBodyCheckedRequest(req.method || 'GET', pathOnly)) {
             const chunks: Buffer[] = [];
             for await (const chunk of req) {
               chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -102,7 +102,7 @@ export default defineConfig(() => {
             }
           }
 
-          const allowedFolderName = !auth.isAllFolders && (req.method || 'GET') === 'POST' && pathOnly === '/move'
+          const allowedFolderName = !auth.isAllFolders && isBodyCheckedRequest(req.method || 'GET', pathOnly)
             ? await resolveFolderName(auth.payload.folder)
             : undefined;
           const access = checkProxyAccessWithBody(req.method || 'GET', pathOnly, query, auth, parsedBody, allowedFolderName);

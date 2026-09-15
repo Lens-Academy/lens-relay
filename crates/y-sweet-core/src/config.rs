@@ -71,6 +71,24 @@ static ENV_OVERRIDES: &[EnvOverride] = &[
         },
     },
     EnvOverride {
+        env_var: "RELAY_SERVER_TRASH_RETENTION_DAYS",
+        config_path: "server.trash_retention_days",
+        apply: |config, value| {
+            let days: f64 = value
+                .parse()
+                .ok()
+                .filter(|d: &f64| d.is_finite() && *d >= 0.0)
+                .ok_or_else(|| {
+                    ConfigError::InvalidConfiguration(format!(
+                        "Invalid trash retention days: {}",
+                        value
+                    ))
+                })?;
+            config.server.trash_retention_days = days;
+            Ok(())
+        },
+    },
+    EnvOverride {
         env_var: "RELAY_SERVER_DOC_GC",
         config_path: "server.doc_gc",
         apply: |config, value| {
@@ -299,6 +317,12 @@ pub struct ServerConfig {
 
     #[serde(default = "default_doc_gc")]
     pub doc_gc: bool,
+
+    /// Days a trashed entry (`<folder>/_trash/...`) stays before the hourly
+    /// purge sweep deletes it for good. `0` disables the sweep. Fractional
+    /// values are accepted (useful for local testing).
+    #[serde(default = "default_trash_retention_days")]
+    pub trash_retention_days: f64,
 
     #[serde(default = "default_redact_errors")]
     pub redact_errors: bool,
@@ -565,6 +589,10 @@ fn default_doc_gc() -> bool {
     true
 }
 
+fn default_trash_retention_days() -> f64 {
+    10.0
+}
+
 fn default_redact_errors() -> bool {
     true
 }
@@ -598,6 +626,7 @@ impl Default for ServerConfig {
             allowed_hosts: Vec::new(),
             checkpoint_freq_seconds: default_checkpoint_freq_seconds(),
             doc_gc: default_doc_gc(),
+            trash_retention_days: default_trash_retention_days(),
             redact_errors: default_redact_errors(),
         }
     }

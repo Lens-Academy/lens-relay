@@ -1,5 +1,13 @@
-import { verifyShareToken } from './share-token.ts';
+import { roleAtLeast, verifyShareToken } from './share-token.ts';
 import type { ShareTokenPayload } from './share-token.ts';
+
+/** POST endpoints whose JSON body names the source path; the proxy reads
+ * the body to enforce folder scope (and, for /doc/trash, the role). */
+export const BODY_CHECKED_PATHS = ['/move', '/doc/trash'] as const;
+
+export function isBodyCheckedRequest(method: string, path: string): boolean {
+  return method === 'POST' && (BODY_CHECKED_PATHS as readonly string[]).includes(path);
+}
 
 const ALL_FOLDERS_SENTINEL = '00000000-0000-0000-0000-000000000000';
 
@@ -123,6 +131,29 @@ export function checkProxyAccessWithBody(
 ): { allowed: boolean; reason?: string } {
   if (auth.payload.role === 'view' && method !== 'GET') {
     return { allowed: false, reason: 'Write access required' };
+  }
+
+  // POST /doc/trash — Admin/Edit only (a Suggest token may propose edits but
+  // not move files to the trash), for every token including all-folders.
+  if (method === 'POST' && path === '/doc/trash') {
+    if (!roleAtLeast(auth.payload.role, 'edit')) {
+      return { allowed: false, reason: 'Delete requires edit access' };
+    }
+    if (auth.isAllFolders) return { allowed: true };
+    if (!allowedFolderName) {
+      return { allowed: false, reason: 'Unable to verify source folder for delete' };
+    }
+    const trashBody = typeof body === 'object' && body !== null
+      ? body as { path?: unknown }
+      : {};
+    const sourcePath = trashBody.path;
+    if (
+      typeof sourcePath !== 'string'
+      || (sourcePath !== allowedFolderName && !sourcePath.startsWith(`${allowedFolderName}/`))
+    ) {
+      return { allowed: false, reason: 'Delete target is outside this folder' };
+    }
+    return { allowed: true };
   }
 
   if (auth.isAllFolders) return { allowed: true };

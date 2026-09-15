@@ -170,6 +170,7 @@ mod tests {
             folder_uuid: None,
             folder_name: Some("Lens Edu".to_string()),
             raw_token: Some(token.to_string()),
+            role: None,
         }
     }
 
@@ -179,6 +180,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         }
     }
 

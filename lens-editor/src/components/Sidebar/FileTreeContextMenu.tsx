@@ -16,7 +16,8 @@ export function shouldSuppressTreeClick(): boolean {
 interface FileTreeContextMenuProps {
   children: ReactNode;
   onRename: () => void;
-  onDelete: () => void;
+  /** Omitted when the session's role cannot delete (Suggest): no menu item. */
+  onDelete?: () => void;
   onMove: () => void;
   isFolder: boolean;
   isSharedFolderRoot?: boolean;
@@ -64,7 +65,7 @@ export function FileTreeContextMenu({
               Move to...
             </ContextMenu.Item>
           )}
-          {!isSharedFolderRoot && (
+          {!isSharedFolderRoot && onDelete && (
             <>
               <ContextMenu.Separator className="h-px bg-gray-200 my-1" />
               <ContextMenu.Item

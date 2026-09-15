@@ -9,6 +9,8 @@ export interface RoleCapabilities {
   canEdit: boolean;
   canSuggest: boolean;
   canWrite: boolean;
+  /** Move files to the trash: Admin and Edit only (Suggest may propose edits but the relay refuses its deletes). */
+  canDelete: boolean;
   /** Only admin may push content to production. */
   canPromote: boolean;
 }
@@ -25,6 +27,7 @@ export function deriveCapabilities(role: UserRole): RoleCapabilities {
     canEdit,
     canSuggest,
     canWrite: canEdit || canSuggest,
+    canDelete: canEdit,
     canPromote: role === 'admin',
   };
 }

@@ -6,6 +6,12 @@ url = "https://api.example.com"  # RELAY_SERVER_URL
 host = "0.0.0.0"                 # RELAY_SERVER_HOST
 port = 8080                      # PORT
 
+# Days a deleted entry stays in <shared folder>/_trash/ before the hourly
+# purge removes it for good (file-tree entry, content doc, blobs, index
+# entries). Restore before then by moving it out of _trash. 0 disables the
+# purge; fractional values are accepted for local testing.
+trash_retention_days = 10        # RELAY_SERVER_TRASH_RETENTION_DAYS / --trash-retention-days
+
 [metrics]
 port = 9090                      # METRICS_PORT
 

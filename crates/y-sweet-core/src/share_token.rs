@@ -81,6 +81,23 @@ pub struct McpAccess {
     /// tokens only (None for the legacy API key) — used to forward the
     /// caller's own token to sibling services (e.g. lens-editor importers).
     pub raw_token: Option<String>,
+    /// Role carried by the share token. `None` for the legacy API key, which
+    /// is treated as an admin credential. Only the `delete` tool looks at
+    /// this today; every other tool keeps gating on `writable`.
+    pub role: Option<ShareRole>,
+}
+
+impl McpAccess {
+    /// Whether this credential may move files to the trash (`delete` tool):
+    /// Admin and Edit share tokens, and the legacy API key. Suggest tokens
+    /// are writable (edits become suggestions) but may not delete.
+    pub fn can_delete(&self) -> bool {
+        self.writable
+            && matches!(
+                self.role,
+                None | Some(ShareRole::Admin) | Some(ShareRole::Edit)
+            )
+    }
 }
 
 impl ShareTokenPayload {
@@ -101,6 +118,7 @@ impl ShareTokenPayload {
             folder_uuid,
             folder_name: None,
             raw_token: None,
+            role: Some(self.role),
         }
     }
 }
@@ -238,6 +256,7 @@ pub fn decode_mcp_key(
                 folder_uuid: None,
                 folder_name: None,
                 raw_token: None,
+                role: None,
             });
         }
     }
@@ -259,6 +278,28 @@ mod tests {
             folder: TEST_FOLDER.to_string(),
             expiry: FAR_FUTURE_EXPIRY,
         }
+    }
+
+    #[test]
+    fn can_delete_is_admin_edit_or_legacy_key_only() {
+        for (role, expected) in [
+            (ShareRole::Admin, true),
+            (ShareRole::Edit, true),
+            (ShareRole::Suggest, false),
+            (ShareRole::View, false),
+        ] {
+            let access = make_test_payload(role).to_mcp_access();
+            assert_eq!(access.role, Some(role));
+            assert_eq!(access.can_delete(), expected, "{role:?}");
+        }
+        let legacy = decode_mcp_key("legacy-key", None, Some("legacy-key")).unwrap();
+        assert_eq!(legacy.role, None);
+        assert!(legacy.can_delete());
+        // A signed Suggest token decoded through the same path.
+        let token = sign_share_token(&make_test_payload(ShareRole::Suggest), "secret");
+        let access = decode_mcp_key(&token, Some("secret"), None).unwrap();
+        assert!(access.writable);
+        assert!(!access.can_delete());
     }
 
     #[test]

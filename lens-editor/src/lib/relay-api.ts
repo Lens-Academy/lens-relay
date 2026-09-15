@@ -349,34 +349,6 @@ export function renameFolder(
 }
 
 /**
- * Delete a document from the folder's filemeta_v0 Y.Map.
- * Also removes from legacy docs map if present.
- */
-export function deleteDocument(
-  folderDoc: Y.Doc,
-  path: string
-): void {
-  const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
-  const legacyDocs = folderDoc.getMap<string>('docs');
-  const existingMeta = filemeta.get(path);
-  const existingLegacy = legacyDocs.get(path);
-
-  debug('deleteDocument', { path, existingMeta, existingLegacy });
-
-  if (existingMeta || existingLegacy) {
-    folderDoc.transact(() => {
-      if (existingMeta) filemeta.delete(path);
-      if (existingLegacy) legacyDocs.delete(path);
-    }, LENS_EDITOR_ORIGIN);
-
-    debug('deleteDocument', 'delete complete, remaining entries:',
-      Array.from(filemeta.entries()).map(([p, m]) => ({ path: p, id: m.id })));
-  } else {
-    debug('deleteDocument', 'WARNING: no metadata found for path, delete skipped');
-  }
-}
-
-/**
  * Create a folder entry in the folder doc's metadata.
  * Also creates any missing ancestor folder entries.
  * No server call needed — folders are purely metadata.
@@ -516,6 +488,87 @@ export async function movePath(
   }
 
   return response.json();
+}
+
+// --- Trash (delete) API ---
+
+/** A document outside the deleted subtree that still links into it. */
+export interface TrashReferencingDoc {
+  /** User-facing path, e.g. "Lens Edu/articles/Other.md". */
+  path: string;
+  /** Number of trashed documents it links to. */
+  count: number;
+}
+
+export interface TrashResponse {
+  /** New user-facing paths under <folder>/_trash/, subtree root first. */
+  trashed: string[];
+  /** Unix ms stamp written to every moved entry. */
+  trashed_at: number;
+  restore_hint: string;
+}
+
+/** The relay refused the delete because other documents link into it
+ * (HTTP 409, code "inbound_links"). Retry with `force` to trash anyway;
+ * the links are left untouched. */
+export class TrashRefusedError extends RelayApiError {
+  constructor(message: string, public readonly referencing: TrashReferencingDoc[]) {
+    super(message, 409);
+    this.name = 'TrashRefusedError';
+  }
+}
+
+/**
+ * Move a file or folder to its shared folder's `_trash/` via the relay's
+ * POST /doc/trash (server-side: relative path preserved, `trashed_at`
+ * stamped, purged after the retention period, restorable with a move).
+ * `path` is the user-facing path without a leading slash, e.g.
+ * "Lens/Notes/A.md" (same shape `movePath` takes).
+ */
+export async function trashPath(path: string, force = false): Promise<TrashResponse> {
+  const body: { path: string; force?: boolean } = { path };
+  if (force) body.force = true;
+
+  const response = await fetch('/api/relay/doc/trash', {
+    method: 'POST',
+    headers: relayHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let parsed: { error?: unknown; code?: unknown; referencing?: unknown } | null = null;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      parsed = null;
+    }
+    const message = typeof parsed?.error === 'string' && parsed.error
+      ? parsed.error
+      : text || `Delete failed: ${response.status}`;
+    if (response.status === 409 && parsed?.code === 'inbound_links' && Array.isArray(parsed.referencing)) {
+      const referencing = (parsed.referencing as unknown[])
+        .filter((r): r is TrashReferencingDoc =>
+          typeof r === 'object' && r !== null
+          && typeof (r as TrashReferencingDoc).path === 'string'
+          && typeof (r as TrashReferencingDoc).count === 'number')
+        .map(r => ({ path: r.path, count: r.count }));
+      throw new TrashRefusedError(message, referencing);
+    }
+    throw new RelayApiError(message, response.status);
+  }
+
+  const result = await response.json() as TrashResponse;
+  debug('trashPath', { path, force, result });
+  return result;
+}
+
+/** User-facing message for a failed delete. */
+export function deleteErrorMessage(err: unknown): string {
+  if (err instanceof RelayApiError && err.status === 403) {
+    return 'Your access level cannot delete files';
+  }
+  return err instanceof Error && err.message ? err.message : 'Delete failed';
 }
 
 // --- Search API ---

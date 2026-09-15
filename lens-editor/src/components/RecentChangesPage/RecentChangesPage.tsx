@@ -366,8 +366,11 @@ const EventRow = memo(function EventRow({ docId, event, onNavigate }: {
   onNavigate: (docId: string, pos: number, e?: React.MouseEvent) => void;
 }) {
   const handleNavigate = (e: React.MouseEvent) => onNavigate(docId, event.pos, e);
-  const kindLabel = event.kind === 'insert' ? 'Added' : event.kind === 'delete' ? 'Removed' : 'Replaced';
-  const kindClass = 'text-purple-700 bg-purple-100';
+  const kindLabel = event.kind === 'insert' ? 'Added'
+    : event.kind === 'delete' ? 'Removed'
+    : event.kind === 'trash' ? 'Trashed'
+    : 'Replaced';
+  const kindClass = event.kind === 'trash' ? 'text-amber-800 bg-amber-100' : 'text-purple-700 bg-purple-100';
   return (
     <div className="px-4 py-3 [content-visibility:auto] [contain-intrinsic-size:auto_7rem]">
       <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -378,6 +381,14 @@ const EventRow = memo(function EventRow({ docId, event, onNavigate }: {
         <button onClick={handleNavigate} title="Open in editor" className="px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 rounded border border-gray-200">Open</button>
       </div>
       <button onClick={handleNavigate} className="w-full text-left hover:bg-gray-50 rounded p-2 -m-1 transition-colors" title="Open in editor">
+        {event.kind === 'trash' ? (
+          // A trash event carries paths, not text: original path -> trash path.
+          <div className="text-sm leading-relaxed break-words" data-testid="trash-move">
+            <span className="text-gray-700">{event.old}</span>
+            <span className="text-gray-400"> {'->'} </span>
+            <span className="text-amber-800">{event.new}</span>
+          </div>
+        ) : (
         <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
           <span className="text-gray-500">{event.ctx_before}</span>
           {event.old && (
@@ -388,6 +399,7 @@ const EventRow = memo(function EventRow({ docId, event, onNavigate }: {
           )}
           <span className="text-gray-500">{event.ctx_after}</span>
         </div>
+        )}
       </button>
     </div>
   );

@@ -521,6 +521,7 @@ mod tests {
             folder_uuid: None,
             folder_name: folder.map(str::to_string),
             raw_token: token.map(str::to_string),
+            role: None,
         }
     }
 

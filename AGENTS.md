@@ -201,6 +201,15 @@ soft / 20 MiB hard, `overwrite` keeps the file id), `read` returns image attachm
 MCP image blocks, and `POST /doc/attachment` answers 409 on same-path-different-bytes.
 See the attachments section of `docs/server-ops.md`.
 
+**Trash instead of delete** (`crates/relay/src/server/trash.rs`,
+`crates/relay/src/mcp/tools/delete_doc.rs`): the MCP `delete` tool (Admin/Edit only)
+and the editor's Delete (`POST /doc/trash`) move files and folders to
+`<shared folder>/_trash/` with the relative path preserved and a `trashed_at` stamp,
+refusing while other documents link into them unless `force`; a `move` out of `_trash/`
+restores. An hourly sweep purges entries older than `[server] trash_retention_days`
+(default 10) from the file tree, the store (doc + blobs) and every index. See the
+"Deleting" section of `docs/server-ops.md`.
+
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change
   text attributed (via the doc's `users` provenance map) to an `ai:` actor; edits that would
