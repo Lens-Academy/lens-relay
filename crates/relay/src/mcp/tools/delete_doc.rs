@@ -436,6 +436,39 @@ pub(crate) mod tests {
         assert!(out.contains("Lens/_trash/Dir-2/X.md"), "{out}");
     }
 
+    // Prevents: two concurrent deletes of the same path both "succeeding"
+    // (the second overwriting the first in _trash/). The destination is
+    // chosen and written under one folder-doc write lock, and the source is
+    // re-checked there, so exactly one wins.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_deletes_of_the_same_path_let_exactly_one_win() {
+        for _ in 0..20 {
+            let server = build_server(&[("/A.md", A, "markdown", "plain")]).await;
+            let (r1, r2) = tokio::join!(
+                server.trash_path("Lens/A.md", false),
+                server.trash_path("Lens/A.md", false),
+            );
+            let oks = [&r1, &r2].iter().filter(|r| r.is_ok()).count();
+            assert_eq!(oks, 1, "{r1:?} / {r2:?}");
+            let err = if r1.is_err() {
+                r1.unwrap_err()
+            } else {
+                r2.unwrap_err()
+            };
+            assert!(
+                matches!(
+                    err,
+                    crate::server::TrashError::NotFound(_) | crate::server::TrashError::Conflict(_)
+                ),
+                "{err:?}"
+            );
+            let meta = filemeta_snapshot(&server);
+            assert!(meta.contains_key("/_trash/A.md"));
+            assert!(!meta.contains_key("/_trash/A-2.md"));
+            assert!(!meta.contains_key("/A.md"));
+        }
+    }
+
     #[tokio::test]
     async fn restore_via_move_clears_trashed_at() {
         let server = build_server(&[("/Notes/A.md", A, "markdown", "plain")]).await;

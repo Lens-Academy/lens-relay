@@ -470,7 +470,7 @@ impl Server {
                 .ok_or_else(|| TrashError::Internal("Folder doc not loaded".to_string()))?;
             (doc_ref.sync_kv(), doc_ref.awareness())
         };
-        let mut pending: Vec<PendingMove> = {
+        let (mut pending, is_folder): (Vec<PendingMove>, bool) = {
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
             let filemeta = txn
@@ -492,25 +492,8 @@ impl Server {
                 .map(|k| k.to_string())
                 .collect();
             keys.sort();
-            // The first trashed entry keeps `/_trash<path>`; a second delete
-            // of the same path within the retention window gets `-2`, `-3`,
-            // ... on the subtree root so a folder's children stay together.
-            let dest_root = {
-                let all_keys: Vec<String> = filemeta.keys(&txn).map(|k| k.to_string()).collect();
-                free_trash_destination(&in_path, is_folder, |candidate| {
-                    let child_prefix = format!("{}/", candidate);
-                    all_keys
-                        .iter()
-                        .any(|k| k == candidate || k.starts_with(&child_prefix))
-                })
-            };
             let mut pending = Vec::with_capacity(keys.len());
             for src in &keys {
-                let dest = if src == &in_path {
-                    dest_root.clone()
-                } else {
-                    format!("{}{}", dest_root, &src[in_path.len()..])
-                };
                 let Some(value) = filemeta.get(&txn, src) else {
                     continue;
                 };
@@ -525,14 +508,15 @@ impl Server {
                     .unwrap_or(false);
                 pending.push(PendingMove {
                     src: src.clone(),
-                    dest,
+                    // Decided under the write lock below, from the live tree.
+                    dest: String::new(),
                     uuid,
                     entry_type,
                     fields,
                     in_docs_map,
                 });
             }
-            pending
+            (pending, is_folder)
         };
         if pending.is_empty() {
             return Err(TrashError::NotFound(format!("Path not found: {}", path)));
@@ -604,6 +588,28 @@ impl Server {
                         folder_name, p.src
                     )));
                 }
+            }
+            // Destinations are decided here, under the same lock that
+            // writes them, so two concurrent deletes (or a manual move into
+            // the trash) can never pick the same free path. The first
+            // trashed entry keeps `/_trash<path>`; a later delete of the
+            // same path gets `-2`, `-3`, ... on the subtree root so a
+            // folder's children stay together.
+            let dest_root = {
+                let live_keys: Vec<String> = filemeta.keys(&txn).map(|k| k.to_string()).collect();
+                free_trash_destination(&in_path, is_folder, |candidate| {
+                    let child_prefix = format!("{}/", candidate);
+                    live_keys
+                        .iter()
+                        .any(|k| k == candidate || k.starts_with(&child_prefix))
+                })
+            };
+            for p in &mut pending {
+                p.dest = if p.src == in_path {
+                    dest_root.clone()
+                } else {
+                    format!("{}{}", dest_root, &p.src[in_path.len()..])
+                };
             }
             for p in &pending {
                 filemeta.remove(&mut txn, &p.src);
