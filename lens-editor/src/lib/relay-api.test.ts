@@ -4,10 +4,13 @@ import {
   createDocument,
   renameDocument,
   renameFolder,
-  deleteDocument,
   createFolder,
   moveDocument,
   movePath,
+  trashPath,
+  TrashRefusedError,
+  RelayApiError,
+  deleteErrorMessage,
   writeFileMeta,
 } from './relay-api';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
@@ -336,26 +339,82 @@ describe('relay-api', () => {
     });
   });
 
-  describe('deleteDocument', () => {
-    it('removes entry from filemeta_v0 map', async () => {
-      await createDocument(doc, '/ToDelete.md');
-      deleteDocument(doc, '/ToDelete.md');
+  describe('trashPath', () => {
+    it('posts the path to /doc/trash without force and returns the response', async () => {
+      const payload = {
+        trashed: ['Lens/_trash/Notes/A.md'],
+        trashed_at: 1700000000000,
+        restore_hint: 'move Lens/_trash/Notes/A.md back with the move tool',
+      };
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify(payload), { status: 200 }));
 
-      expect(filemeta.get('/ToDelete.md')).toBeUndefined();
+      const result = await trashPath('Lens/Notes/A.md');
+
+      expect(result).toEqual(payload);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe('/api/relay/doc/trash');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ path: 'Lens/Notes/A.md' });
     });
 
-    it('removes entry from legacy docs map for Obsidian compatibility', async () => {
-      await createDocument(doc, '/ToDelete.md');
-      deleteDocument(doc, '/ToDelete.md');
-
-      expect(legacyDocs.get('/ToDelete.md')).toBeUndefined();
+    it('sends force: true when asked', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ trashed: ['Lens/_trash/A.md'], trashed_at: 1, restore_hint: '' }), { status: 200 })
+      );
+      await trashPath('Lens/A.md', true);
+      expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ path: 'Lens/A.md', force: true });
     });
 
-    it('does nothing if path does not exist', () => {
-      const sizeBefore = filemeta.size;
-      deleteDocument(doc, '/NonExistent.md');
+    it('throws TrashRefusedError with the referencing docs on a 409 inbound_links body', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: 'Cannot delete Lens/A.md: 2 documents outside it still link to it',
+            code: 'inbound_links',
+            referencing: [
+              { path: 'Lens/B.md', count: 2 },
+              { path: 'Lens/C.md', count: 1 },
+              { bogus: true },
+            ],
+          }),
+          { status: 409, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
 
-      expect(filemeta.size).toBe(sizeBefore);
+      const err = await trashPath('Lens/A.md').catch(e => e);
+      expect(err).toBeInstanceOf(TrashRefusedError);
+      expect(err).toBeInstanceOf(RelayApiError);
+      expect(err.status).toBe(409);
+      expect(err.message).toContain('Cannot delete Lens/A.md');
+      expect(err.referencing).toEqual([
+        { path: 'Lens/B.md', count: 2 },
+        { path: 'Lens/C.md', count: 1 },
+      ]);
+    });
+
+    it('throws a plain RelayApiError for a 409 that is not an inbound-links refusal', async () => {
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'Lens/_trash/A.md already exists in the trash', code: 'conflict' }), { status: 409 })
+      );
+      const err = await trashPath('Lens/A.md').catch(e => e);
+      expect(err).toBeInstanceOf(RelayApiError);
+      expect(err).not.toBeInstanceOf(TrashRefusedError);
+      expect(err.message).toBe('Lens/_trash/A.md already exists in the trash');
+    });
+
+    it('falls back to the status code when the error body is empty (redacted)', async () => {
+      mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+      const err = await trashPath('Lens/Nope.md').catch(e => e);
+      expect(err).toBeInstanceOf(RelayApiError);
+      expect(err.status).toBe(404);
+      expect(err.message).toBe('Delete failed: 404');
+    });
+
+    it('maps errors to user-facing messages', () => {
+      expect(deleteErrorMessage(new RelayApiError('', 403))).toBe('Your access level cannot delete files');
+      expect(deleteErrorMessage(new RelayApiError('Path not found: Lens/x.md', 404))).toBe('Path not found: Lens/x.md');
+      expect(deleteErrorMessage('boom')).toBe('Delete failed');
     });
   });
 

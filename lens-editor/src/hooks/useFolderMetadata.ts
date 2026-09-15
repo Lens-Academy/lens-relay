@@ -14,6 +14,9 @@ export interface FileMetadata {
   // Image-specific fields
   mimetype?: string;
   synctime?: number;
+  /** Unix ms; set by the relay on every entry under `<folder>/_trash/`,
+   * cleared when the entry is moved out (restored). */
+  trashed_at?: number;
 }
 
 export type FolderMetadata = Record<string, FileMetadata>;

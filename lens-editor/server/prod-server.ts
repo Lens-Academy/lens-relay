@@ -2,7 +2,7 @@ import http from 'node:http';
 import { Readable } from 'node:stream';
 import httpProxy from 'http-proxy';
 import { getRequestListener } from '@hono/node-server';
-import { validateProxyToken, checkProxyAccessWithBody } from './relay-proxy-auth.ts';
+import { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } from './relay-proxy-auth.ts';
 import { initDiscordGateway } from './discord/routes.ts';
 import { createApp } from './app.ts';
 
@@ -60,7 +60,7 @@ const server = http.createServer(async (req, res) => {
     const query = queryIdx >= 0 ? relayPath.slice(queryIdx + 1) : '';
     let parsedBody: unknown = undefined;
     let rawBody: Buffer | undefined;
-    if ((req.method || 'GET') === 'POST' && pathOnly === '/move') {
+    if (isBodyCheckedRequest(req.method || 'GET', pathOnly)) {
       const chunks: Buffer[] = [];
       for await (const chunk of req) {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -73,7 +73,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    const allowedFolderName = !auth.isAllFolders && (req.method || 'GET') === 'POST' && pathOnly === '/move'
+    const allowedFolderName = !auth.isAllFolders && isBodyCheckedRequest(req.method || 'GET', pathOnly)
       ? await resolveFolderName(auth.payload.folder)
       : undefined;
     const access = checkProxyAccessWithBody(req.method || 'GET', pathOnly, query, auth, parsedBody, allowedFolderName);

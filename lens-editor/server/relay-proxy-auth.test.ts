@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, type ProxyAuthResult } from './relay-proxy-auth.ts';
+import { validateProxyToken, checkProxyAccess, checkProxyAccessWithBody, isBodyCheckedRequest, type ProxyAuthResult } from './relay-proxy-auth.ts';
 import { signShareToken } from './share-token.ts';
 
 const FOLDER_A = 'fbd5eb54-73cc-41b0-ac28-2b93d3b4244e';
@@ -7,7 +7,7 @@ const FOLDER_B = 'ea4015da-24af-4d9d-ac49-8c902cb17121';
 const ALL_FOLDERS = '00000000-0000-0000-0000-000000000000';
 const RELAY_ID = 'cb696037-0f72-4e93-8717-4e433129d789';
 
-function makeAuth(folder: string, role: 'edit' | 'view' = 'edit'): ProxyAuthResult {
+function makeAuth(folder: string, role: 'admin' | 'edit' | 'suggest' | 'view' = 'edit'): ProxyAuthResult {
   return {
     payload: { purpose: 'share' as const, role, folder, expiry: Math.floor(Date.now() / 1000) + 3600 },
     isAllFolders: folder === ALL_FOLDERS,
@@ -102,6 +102,49 @@ describe('checkProxyAccess', () => {
       target_folder: 'Lens Edu',
     });
     expect(result.allowed).toBe(true);
+  });
+
+  describe('POST /doc/trash', () => {
+    const body = { path: 'Relay Folder 1/Notes/A.md' };
+
+    it('all-folders edit and admin tokens are allowed', () => {
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', allFoldersAuth, body).allowed).toBe(true);
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', makeAuth(ALL_FOLDERS, 'admin'), body).allowed).toBe(true);
+    });
+
+    it('suggest tokens are refused even with all-folders scope', () => {
+      const result = checkProxyAccessWithBody('POST', '/doc/trash', '', makeAuth(ALL_FOLDERS, 'suggest'), body);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe('Delete requires edit access');
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', makeAuth(FOLDER_A, 'suggest'), body, 'Relay Folder 1').allowed).toBe(false);
+    });
+
+    it('view tokens are refused', () => {
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', makeAuth(FOLDER_A, 'view'), body, 'Relay Folder 1').allowed).toBe(false);
+    });
+
+    it('folder-scoped edit token may delete inside its folder only', () => {
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', scopedAuth, body, 'Relay Folder 1').allowed).toBe(true);
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', scopedAuth, { path: 'Relay Folder 1' }, 'Relay Folder 1').allowed).toBe(true);
+      const outside = checkProxyAccessWithBody('POST', '/doc/trash', '', scopedAuth, { path: 'Relay Folder 2/X.md' }, 'Relay Folder 1');
+      expect(outside.allowed).toBe(false);
+      expect(outside.reason).toBe('Delete target is outside this folder');
+      // A folder name that merely shares a prefix does not count.
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', scopedAuth, { path: 'Relay Folder 10/X.md' }, 'Relay Folder 1').allowed).toBe(false);
+    });
+
+    it('folder-scoped token is refused when the folder name cannot be resolved or the body is malformed', () => {
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', scopedAuth, body).allowed).toBe(false);
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', scopedAuth, { path: 42 }, 'Relay Folder 1').allowed).toBe(false);
+      expect(checkProxyAccessWithBody('POST', '/doc/trash', '', scopedAuth, undefined, 'Relay Folder 1').allowed).toBe(false);
+    });
+
+    it('is body-checked so the proxies read the request body', () => {
+      expect(isBodyCheckedRequest('POST', '/doc/trash')).toBe(true);
+      expect(isBodyCheckedRequest('POST', '/move')).toBe(true);
+      expect(isBodyCheckedRequest('GET', '/doc/trash')).toBe(false);
+      expect(isBodyCheckedRequest('POST', '/doc/new')).toBe(false);
+    });
   });
 
   it('folder-scoped token allows /doc/new', () => {
