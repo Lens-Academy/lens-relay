@@ -27,7 +27,7 @@ export function Sidebar() {
 
   // Get metadata from NavigationContext (needed early for doc ID resolution)
   const { metadata, folderDocs, folderNames, onNavigate, justCreatedRef } = useNavigation();
-  const { canWrite } = useAuth();
+  const { canWrite, canDelete } = useAuth();
 
   // Derive active doc ID from URL path (first segment is the doc UUID — may be short)
   const location = useLocation();
@@ -141,10 +141,23 @@ export function Sidebar() {
     }
   }, [folderNames]);
 
-  const closeDeleteDialog = useCallback(() => {
+  // Reset the dialog state only; the error banner has its own lifecycle
+  // (kept after a failed delete, cleared on cancel and on the next open).
+  const resetDeleteDialog = useCallback(() => {
     setDeleteTarget(null);
     setDeleteRefs(null);
     setIsDeleting(false);
+  }, []);
+
+  const closeDeleteDialog = useCallback(() => {
+    resetDeleteDialog();
+    setDeleteError(null);
+  }, [resetDeleteDialog]);
+
+  const openDeleteDialog = useCallback((path: string, name: string) => {
+    setDeleteError(null);
+    setDeleteRefs(null);
+    setDeleteTarget({ path, name });
   }, []);
 
   // Server-side delete: the relay moves the entry (or subtree) to
@@ -169,9 +182,9 @@ export function Sidebar() {
       }
       console.error('Delete failed:', err);
       setDeleteError(deleteErrorMessage(err));
-      closeDeleteDialog();
+      resetDeleteDialog();
     }
-  }, [deleteTarget, deleteRefs, isDeleting, closeDeleteDialog]);
+  }, [deleteTarget, deleteRefs, isDeleting, closeDeleteDialog, resetDeleteDialog]);
 
   const handleInstantCreate = useCallback(async (folderPath: string) => {
     const folderName = getFolderNameFromPath(folderPath, folderNames);
@@ -396,7 +409,7 @@ export function Sidebar() {
                     editingPath,
                     onEditingChange: setEditingPath,
                     onRequestRename: canWrite ? (path) => setEditingPath(path) : undefined,
-                    onRequestDelete: canWrite ? (path, name) => setDeleteTarget({ path, name }) : undefined,
+                    onRequestDelete: canDelete ? openDeleteDialog : undefined,
                     onRequestMove: canWrite ? handleMoveRequest : undefined,
                     onRenameSubmit: canWrite ? handleRenameSubmit : undefined,
                     onCreateDocument: canWrite ? handleInstantCreate : undefined,

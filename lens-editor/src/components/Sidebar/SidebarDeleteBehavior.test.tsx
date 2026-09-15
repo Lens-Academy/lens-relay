@@ -171,7 +171,7 @@ describe('Sidebar delete via relay trash', () => {
     expect(screen.queryByTestId('delete-referencing')).not.toBeInTheDocument();
   });
 
-  it('shows the relay error and closes the dialog on other failures', async () => {
+  it('shows the relay error, closes the dialog, and clears the error on the next open or cancel', async () => {
     const user = userEvent.setup();
     mockTrashEndpoint(() =>
       new Response(JSON.stringify({ error: 'Path not found: Lens/A.md', code: 'not_found' }), { status: 404 })
@@ -184,5 +184,31 @@ describe('Sidebar delete via relay trash', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Path not found: Lens/A.md');
     expect(screen.queryByText('Delete A.md?')).not.toBeInTheDocument();
+
+    // Opening the dialog again drops the stale banner.
+    await openDeleteDialog(user, 'B.md');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // Cancelling leaves nothing behind either.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText('Delete B.md?')).not.toBeInTheDocument());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('does not offer Delete to a Suggest session (the relay would refuse it)', async () => {
+    const user = userEvent.setup();
+    const calls = mockTrashEndpoint(() => new Response('', { status: 403 }));
+    renderSidebar('suggest');
+
+    const fileRow = screen.getByText('A.md').closest('[class*="cursor-pointer"]') as HTMLElement;
+    fireEvent.contextMenu(fileRow);
+    expect(await screen.findByText('Rename')).toBeInTheDocument();
+    expect(screen.queryByText('Delete')).not.toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    const folderRow = screen.getByText('Notes').closest('[class*="cursor-pointer"]') as HTMLElement;
+    fireEvent.contextMenu(folderRow);
+    expect(await screen.findByText('Rename')).toBeInTheDocument();
+    expect(screen.queryByText('Delete Folder')).not.toBeInTheDocument();
+    expect(calls).toHaveLength(0);
   });
 });

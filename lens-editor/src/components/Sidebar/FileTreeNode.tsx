@@ -238,7 +238,7 @@ export function FileTreeNode({
     return (
       <FileTreeContextMenu
         onRename={handleRename}
-        onDelete={handleDelete}
+        onDelete={ctx.onRequestDelete ? handleDelete : undefined}
         onMove={handleMove}
         isFolder={isFolder}
         isSharedFolderRoot={isSharedFolderRoot}
