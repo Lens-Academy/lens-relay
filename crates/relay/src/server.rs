@@ -65,6 +65,12 @@ use y_sweet_core::{
 };
 use yrs::{GetString, Map, ReadTxn, Text, Transact, WriteTxn};
 
+mod trash;
+pub use trash::{
+    restore_hint as trash_restore_hint, InboundRef, PurgeReport, PurgedEntry, TrashError,
+    TrashResult, TrashedEntry, TRASH_SWEEP_INTERVAL_ENV,
+};
+
 const RELAY_SERVER_VERSION: &str = env!("GIT_VERSION");
 
 #[derive(Clone, Debug)]
@@ -1023,6 +1029,9 @@ pub struct Server {
     last_successful_persist: Arc<AtomicU64>,
     /// Cross-channel state shared between worker supervisor and /ready endpoint.
     pub(crate) worker_status: Arc<crate::worker_status::WorkerStatusMap>,
+    /// Purge window for `<folder>/_trash/` entries; `None` disables the
+    /// hourly sweep (see `server/trash.rs`).
+    trash_retention: Option<Duration>,
 }
 
 /// Holds channel receivers for background workers.
@@ -1169,6 +1178,7 @@ impl Server {
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
+            trash_retention: trash::retention_from_days(10.0),
         };
 
         let receivers = WorkerReceivers {
@@ -1312,7 +1322,9 @@ impl Server {
             });
         }
 
-        tracing::info!("Background workers started (link indexer, search index)");
+        self.spawn_trash_purge_worker();
+
+        tracing::info!("Background workers started (link indexer, search index, trash purge)");
     }
 
     /// Periodically prune idle MCP app sessions. Runs every 5 minutes until
@@ -3012,7 +3024,8 @@ impl Server {
                     new_path
                 )));
             }
-            let fields = link_indexer::extract_filemeta_fields(&value, &txn);
+            let mut fields = link_indexer::extract_filemeta_fields(&value, &txn);
+            link_indexer::clear_trashed_at_if_restored(&mut fields, new_path);
 
             let filemeta = txn.get_or_insert_map("filemeta_v0");
             let docs_map = txn.get_or_insert_map("docs");
@@ -3172,7 +3185,8 @@ impl Server {
                         .unwrap_or_default();
                     let id = link_indexer::extract_id_from_filemeta_entry(&value, &txn)
                         .unwrap_or_default();
-                    let fields = link_indexer::extract_filemeta_fields(&value, &txn);
+                    let mut fields = link_indexer::extract_filemeta_fields(&value, &txn);
+                    link_indexer::clear_trashed_at_if_restored(&mut fields, &destination);
                     moves.push((source_path.clone(), destination, entry_type, id, fields));
                 }
             }
@@ -3331,6 +3345,7 @@ impl Server {
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
+            trash_retention: None,
         }
     }
 
@@ -3368,6 +3383,7 @@ impl Server {
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
+            trash_retention: None,
         });
         server
     }
@@ -4391,6 +4407,7 @@ impl Server {
             .route("/folder/:folder_uuid/name", get(handle_folder_name))
             .route("/move", post(handle_move_path))
             .route("/doc/move", post(handle_move_document))
+            .route("/doc/trash", post(trash::handle_trash_path))
             .route("/doc/upsert", post(handle_upsert_document))
             .route("/doc/check", post(handle_check_documents))
             .route("/doc/check-video-ids", post(handle_check_video_ids))
@@ -5294,11 +5311,17 @@ fn filter_excerpts(
         .filter_map(|mut x| {
             x.segments.retain(|seg| {
                 seg.kind != "delete"
-                    || seg.event_id.as_deref().is_some_and(|id| selected.contains(id))
+                    || seg
+                        .event_id
+                        .as_deref()
+                        .is_some_and(|id| selected.contains(id))
             });
             for seg in &mut x.segments {
                 if seg.kind == "insert"
-                    && !seg.event_id.as_deref().is_some_and(|id| selected.contains(id))
+                    && !seg
+                        .event_id
+                        .as_deref()
+                        .is_some_and(|id| selected.contains(id))
                 {
                     seg.kind = "text".into();
                     seg.event_id = None;
@@ -5425,7 +5448,8 @@ async fn handle_recent_changes(
 
     let mut files = Vec::with_capacity(per_doc.len());
     for (content_uuid, mut events) in per_doc {
-        let selected: std::collections::HashSet<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        let selected: std::collections::HashSet<&str> =
+            events.iter().map(|e| e.id.as_str()).collect();
         let excerpts = filter_excerpts(
             server_state
                 .recent_changes_index
@@ -8278,6 +8302,228 @@ mod test {
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    /// JSON-RPC call through `POST /mcp` with the real auth middleware.
+    async fn mcp_call(server: &Arc<Server>, key: &str, body: JsonValue) -> (StatusCode, JsonValue) {
+        let response = server
+            .routes()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/mcp")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {}", key))
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(JsonValue::Null),
+        )
+    }
+
+    // Prevents: the `delete` tool working in unit tests but not through the
+    // JSON-RPC router + Bearer middleware the connectors actually use, and
+    // its inbound-link refusal losing the referencing list on the wire.
+    #[tokio::test]
+    async fn mcp_delete_tool_end_to_end_through_router_and_auth_middleware() {
+        let server = Server::new_for_test_with_mcp_key("test-key");
+        let a = "11111111-1111-4111-8111-111111111111";
+        let b = "22222222-2222-4222-8222-222222222222";
+        insert_test_folder_doc(
+            &server,
+            "Lens",
+            &[("/Notes/A.md", a, "markdown"), ("/B.md", b, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, a, "target").await;
+        insert_test_content_doc(&server, b, "see [[Notes/A]]").await;
+        {
+            // Backlink B -> A as the link indexer would write it.
+            let folder_id = format!("{}-{}", TEST_RELAY_ID, TEST_FOLDER_UUID);
+            let awareness = server.docs().get(&folder_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.insert(&mut txn, a, vec![Any::String(b.into())]);
+        }
+
+        // Wrong key: the middleware refuses before any JSON-RPC handling.
+        let (status, _) = mcp_call(
+            &server,
+            "wrong-key",
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // tools/list advertises delete for the (writable) API key.
+        let (status, resp) = mcp_call(
+            &server,
+            "test-key",
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let names: Vec<&str> = resp["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"delete"), "{names:?}");
+
+        let (_, resp) = mcp_call(
+            &server,
+            "test-key",
+            json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_session","arguments":{}}}),
+        )
+        .await;
+        let sid = resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+
+        // Refused: B links to A.
+        let (_, resp) = mcp_call(
+            &server,
+            "test-key",
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete","arguments":{"path":"Lens/Notes/A.md","session_id":sid}}}),
+        )
+        .await;
+        assert_eq!(resp["result"]["isError"], json!(true), "{resp}");
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Cannot delete Lens/Notes/A.md"), "{text}");
+        assert!(text.contains("Lens/B.md (1 link)"), "{text}");
+
+        // Forced: moved, B untouched.
+        let (_, resp) = mcp_call(
+            &server,
+            "test-key",
+            json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"delete","arguments":{"path":"Lens/Notes/A.md","force":true,"session_id":sid}}}),
+        )
+        .await;
+        assert_eq!(resp["result"]["isError"], json!(false), "{resp}");
+        let body: JsonValue =
+            serde_json::from_str(resp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["trashed"], json!(["Lens/_trash/Notes/A.md"]));
+        assert!(body["trashed_at"].as_u64().unwrap() > 0);
+        assert_eq!(content_text(&server, b), "see [[Notes/A]]");
+
+        // Already trashed.
+        let (_, resp) = mcp_call(
+            &server,
+            "test-key",
+            json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"delete","arguments":{"path":"Lens/_trash/Notes/A.md","session_id":sid}}}),
+        )
+        .await;
+        assert_eq!(resp["result"]["isError"], json!(true));
+        assert!(resp["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("already in the trash"));
+    }
+
+    async fn post_trash(
+        server: &Arc<Server>,
+        body: JsonValue,
+        redact: bool,
+    ) -> (StatusCode, JsonValue) {
+        let app = if redact {
+            server
+                .routes()
+                .layer(middleware::from_fn(Server::redact_error_middleware))
+        } else {
+            server.routes()
+        };
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/doc/trash")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(JsonValue::Null),
+        )
+    }
+
+    // Prevents: the editor's delete losing the referencing-docs list under
+    // `redact_errors` (production), which is why the endpoint answers JSON.
+    #[tokio::test]
+    async fn doc_trash_route_moves_and_reports_inbound_links_as_json_even_when_redacted() {
+        let server = Server::new_for_test();
+        let a = "11111111-1111-4111-8111-111111111111";
+        let b = "22222222-2222-4222-8222-222222222222";
+        insert_test_folder_doc(
+            &server,
+            "Lens",
+            &[("/Notes/A.md", a, "markdown"), ("/B.md", b, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, a, "target").await;
+        insert_test_content_doc(&server, b, "see [[Notes/A]]").await;
+        {
+            let folder_id = format!("{}-{}", TEST_RELAY_ID, TEST_FOLDER_UUID);
+            let awareness = server.docs().get(&folder_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.insert(&mut txn, a, vec![Any::String(b.into())]);
+        }
+
+        let (status, body) = post_trash(&server, json!({"path": "Lens/Notes/A.md"}), true).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["code"], json!("inbound_links"), "{body}");
+        assert_eq!(
+            body["referencing"],
+            json!([{"path": "Lens/B.md", "count": 1}]),
+            "{body}"
+        );
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("Fix or remove those references"));
+
+        let (status, body) = post_trash(&server, json!({"path": "Lens/Nope.md"}), true).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["code"], json!("not_found"), "{body}");
+
+        let (status, body) = post_trash(
+            &server,
+            json!({"path": "Lens/Notes/A.md", "force": true}),
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["trashed"], json!(["Lens/_trash/Notes/A.md"]));
+        assert!(body["trashed_at"].as_u64().unwrap() > 0);
+        assert!(body["restore_hint"]
+            .as_str()
+            .unwrap()
+            .contains("move Lens/_trash/Notes/A.md back"));
+
+        let (status, body) = post_trash(&server, json!({"path": "Lens/_trash"}), false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("_trash folder itself"));
+    }
+
     #[tokio::test]
     async fn upsert_attachment_rejects_double_quotes_as_bad_request() {
         let server = Server::new_for_test();
@@ -10391,19 +10637,28 @@ mod test {
                 segments: vec![seg("delete", "only-old", Some(&old_ev.id))],
             },
         ];
-        server
-            .recent_changes_index
-            .update(SUGG_UUID, vec![old_ev.clone(), new_ev.clone()], excerpts);
+        server.recent_changes_index.update(
+            SUGG_UUID,
+            vec![old_ev.clone(), new_ev.clone()],
+            excerpts,
+        );
 
         // Default preview cuts long text and flags it; full text on preview=0.
         let (_, body) = get_recent_changes(&server, &folder_doc_id, None).await;
         let ev = &body["files"][0]["events"][0];
-        assert_eq!(ev["new"].as_str().unwrap().len(), RECENT_CHANGES_DEFAULT_PREVIEW);
+        assert_eq!(
+            ev["new"].as_str().unwrap().len(),
+            RECENT_CHANGES_DEFAULT_PREVIEW
+        );
         assert_eq!(ev["new_truncated"], true);
         assert_eq!(body["truncated"], false);
         let (_, body) =
-            get_recent_changes_raw(&server, &format!("folder_id={}&preview=0", folder_doc_id)).await;
-        assert_eq!(body["files"][0]["events"][0]["new"].as_str().unwrap().len(), 300);
+            get_recent_changes_raw(&server, &format!("folder_id={}&preview=0", folder_doc_id))
+                .await;
+        assert_eq!(
+            body["files"][0]["events"][0]["new"].as_str().unwrap().len(),
+            300
+        );
         assert_eq!(body["files"][0]["excerpts"].as_array().unwrap().len(), 2);
 
         // limit=1 keeps the newest event; excerpts drop the older event's
@@ -10982,7 +11237,10 @@ mod test {
         // All five events share one millisecond — a timestamp cutoff would
         // return every tie and blow past the limit.
         let mut per_doc = vec![
-            ("a".to_string(), vec![ev("a1", 100), ev("a2", 100), ev("a3", 100)]),
+            (
+                "a".to_string(),
+                vec![ev("a1", 100), ev("a2", 100), ev("a3", 100)],
+            ),
             ("b".to_string(), vec![ev("b1", 100), ev("b2", 100)]),
         ];
         keep_newest_events(&mut per_doc, 2);
@@ -11003,12 +11261,14 @@ mod test {
             .collect();
         assert_eq!(kept, vec!["a_new", "b_mid"]);
         // Docs whose events were all cut disappear from the response.
-        let mut only_old = vec![("a".to_string(), vec![ev("a_old", 10)]), ("b".to_string(), vec![ev("b_new", 90)])];
+        let mut only_old = vec![
+            ("a".to_string(), vec![ev("a_old", 10)]),
+            ("b".to_string(), vec![ev("b_new", 90)]),
+        ];
         keep_newest_events(&mut only_old, 1);
         assert_eq!(only_old.len(), 1);
         assert_eq!(only_old[0].0, "b");
     }
-
 }
 
 async fn handle_file_upload(

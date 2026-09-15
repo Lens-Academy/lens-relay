@@ -93,6 +93,11 @@ enum ServSubcommand {
         #[clap(long)]
         checkpoint_freq_seconds: Option<u64>,
 
+        /// Days a trashed entry (`<folder>/_trash/...`) is kept before the
+        /// hourly purge deletes it for good; 0 disables the purge.
+        #[clap(long)]
+        trash_retention_days: Option<f64>,
+
         #[clap(long)]
         auth: Option<String>,
 
@@ -183,6 +188,7 @@ fn load_config_for_serve_args(
     host: &Option<IpAddr>,
     metrics_port: &Option<u16>,
     checkpoint_freq_seconds: &Option<u64>,
+    trash_retention_days: &Option<f64>,
     auth: &Option<String>,
     url: &Option<String>,
     allowed_hosts: &Option<Vec<String>>,
@@ -237,6 +243,12 @@ fn load_config_for_serve_args(
     }
     if let Some(freq) = checkpoint_freq_seconds {
         config.server.checkpoint_freq_seconds = *freq;
+    }
+    if let Some(days) = trash_retention_days {
+        if !days.is_finite() || *days < 0.0 {
+            anyhow::bail!("--trash-retention-days must be a non-negative number");
+        }
+        config.server.trash_retention_days = *days;
     }
 
     if let Some(host) = host {
@@ -502,6 +514,7 @@ async fn main() -> Result<()> {
         host,
         metrics_port,
         checkpoint_freq_seconds,
+        trash_retention_days,
         store,
         auth,
         url,
@@ -515,6 +528,7 @@ async fn main() -> Result<()> {
             host,
             metrics_port,
             checkpoint_freq_seconds,
+            trash_retention_days,
             auth,
             url,
             allowed_hosts,
@@ -656,6 +670,8 @@ async fn main() -> Result<()> {
             .await?;
 
             let redact_errors = config.server.redact_errors;
+            let mut server = server;
+            server.set_trash_retention_days(config.server.trash_retention_days);
             let server = Arc::new(server);
 
             if let Err(e) = server.startup_reindex(&config.folders).await {
