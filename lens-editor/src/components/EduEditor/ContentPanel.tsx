@@ -1104,7 +1104,7 @@ export function ContentPanel({
             depth > 0 ? (
               <div
                 key={`boxed-${i}`}
-                className="border-l-2 border-amber-200 pl-3"
+                className="border-l-2 border-orange-200 pl-3"
                 style={{ marginLeft: (depth - 1) * 16 }}
               >
                 {sectionEl}

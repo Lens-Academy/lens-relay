@@ -208,7 +208,8 @@ function cleanLabel(title: string, level: number): string {
  * How many callouts each section sits inside. A `#### Callout:` header opens
  * a box around the sections after it until the matching `#### End Callout`;
  * boxes nest to any depth. The opener itself is reported at the depth of its
- * box (so it renders as the box's header), the closer at the depth outside.
+ * box (so it renders as the box's header), the closer at the depth outside;
+ * the content panel adds one for the closer so its end marker draws inside.
  */
 export function calloutDepths(sections: Section[]): number[] {
   let depth = 0;
