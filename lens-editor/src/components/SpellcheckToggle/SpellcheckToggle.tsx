@@ -39,8 +39,8 @@ function SpellcheckIcon() {
 export function SpellcheckToggle({ view, iconOnly = false }: SpellcheckToggleProps) {
   const [enabled, setEnabled] = useState<boolean>(() => loadSpellcheckEnabled());
 
-  // A recreated EditorView (doc switch) reads the stored value itself; this
-  // only matters when the two disagree, e.g. storage changed in another tab.
+  // A recreated EditorView (doc switch) seeds from storage. When storage is
+  // unavailable that is the default, not what this button shows.
   useEffect(() => {
     if (!view) return;
     if (view.state.field(spellcheckEnabledField, false) !== enabled) {

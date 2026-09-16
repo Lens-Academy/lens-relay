@@ -1,5 +1,6 @@
 import { forceLinting, linter, type Diagnostic } from '@codemirror/lint';
-import { StateEffect, StateField, type Extension } from '@codemirror/state';
+import type { Extension } from '@codemirror/state';
+import { persistedFlag } from '../../../lib/persisted-pref';
 import type { EditorView } from '@codemirror/view';
 import { LocalLinter, BinaryModule, SuggestionKind } from 'harper.js';
 import type { Linter, Lint } from 'harper.js';
@@ -81,40 +82,13 @@ function suggestionLabel(lint: Lint, suggestion: ReturnType<Lint['suggestions']>
 
 // Per-browser switch. Harper only knows English, so authors of courses in
 // other languages turn it off; the choice survives reloads.
-const SPELLCHECK_STORAGE_KEY = 'lens-editor-spellcheck';
-
-export function loadSpellcheckEnabled(): boolean {
-  try {
-    return localStorage.getItem(SPELLCHECK_STORAGE_KEY) !== '0';
-  } catch {
-    return true;
-  }
-}
-
-export function saveSpellcheckEnabled(enabled: boolean): void {
-  try {
-    localStorage.setItem(SPELLCHECK_STORAGE_KEY, enabled ? '1' : '0');
-  } catch {
-    // storage unavailable
-  }
-}
-
-const setSpellcheckEnabled = StateEffect.define<boolean>();
-
-export const spellcheckEnabledField = StateField.define<boolean>({
-  create: () => loadSpellcheckEnabled(),
-  update: (value, tr) => {
-    for (const e of tr.effects) {
-      if (e.is(setSpellcheckEnabled)) return e.value;
-    }
-    return value;
-  },
-});
+const spellcheckPref = persistedFlag('lens-editor-spellcheck', true);
+export const { load: loadSpellcheckEnabled, save: saveSpellcheckEnabled, field: spellcheckEnabledField } = spellcheckPref;
 
 /** Switch Harper on or off in this view and re-lint right away. */
 export function toggleSpellcheck(view: EditorView, enabled: boolean): void {
-  if (view.state.field(spellcheckEnabledField, false) === enabled) return;
-  view.dispatch({ effects: setSpellcheckEnabled.of(enabled) });
+  view.dispatch({ effects: spellcheckPref.set.of(enabled) });
+  // needsRefresh only arms the linter's delay timer; force runs it now.
   forceLinting(view);
 }
 

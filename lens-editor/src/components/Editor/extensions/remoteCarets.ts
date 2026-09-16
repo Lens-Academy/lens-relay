@@ -23,7 +23,6 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from '@codemirror/view';
-import { yRemoteSelectionsTheme } from 'y-codemirror.next';
 
 /** How long a collaborator's name stays visible after their caret moved. */
 export const CARET_LABEL_LINGER_MS = 2000;
@@ -41,10 +40,10 @@ const remoteCaretsFacet = Facet.define<RemoteCaretsConfig, RemoteCaretsConfig>({
   combine: (inputs) => inputs[inputs.length - 1],
 });
 
-/** Tags the no-op transactions that only redraw carets. */
-const remoteCaretsAnnotation = Annotation.define<null>();
+/** Marks the transactions that exist only to redraw carets (awareness change, label expiry). */
+const redrawCarets = Annotation.define<null>();
 
-export class RemoteCaretWidget extends WidgetType {
+class RemoteCaretWidget extends WidgetType {
   constructor(
     readonly color: string,
     readonly name: string,
@@ -56,21 +55,10 @@ export class RemoteCaretWidget extends WidgetType {
   toDOM(): HTMLElement {
     const span = document.createElement('span');
     span.className = 'cm-ySelectionCaret';
-    span.style.backgroundColor = this.color;
-    span.style.borderColor = this.color;
-    span.dataset.color = this.color;
     span.textContent = '⁠'; // word joiner, gives the caret a height
-
-    const dot = document.createElement('div');
-    dot.className = 'cm-ySelectionCaretDot';
-    span.appendChild(dot);
-
-    const info = document.createElement('div');
-    info.className = 'cm-ySelectionInfo';
-    info.textContent = this.name;
-    span.appendChild(info);
-
-    span.classList.toggle('cm-ySelectionCaret-fresh', this.fresh);
+    span.appendChild(document.createElement('div')).className = 'cm-ySelectionCaretDot';
+    span.appendChild(document.createElement('div')).className = 'cm-ySelectionInfo';
+    this.updateDOM(span);
     return span;
   }
 
@@ -78,11 +66,11 @@ export class RemoteCaretWidget extends WidgetType {
     return other.color === this.color && other.name === this.name && other.fresh === this.fresh;
   }
 
-  /** Same caret, only the linger state changed: flip the class so the label fades. */
+  /** Reuse the element so a label that stops being fresh fades instead of blinking. */
   updateDOM(dom: HTMLElement): boolean {
-    if (dom.dataset.color !== this.color) return false;
-    const info = dom.querySelector('.cm-ySelectionInfo');
-    if (!info || info.textContent !== this.name) return false;
+    dom.style.backgroundColor = this.color;
+    dom.style.borderColor = this.color;
+    dom.querySelector('.cm-ySelectionInfo')!.textContent = this.name;
     dom.classList.toggle('cm-ySelectionCaret-fresh', this.fresh);
     return true;
   }
@@ -105,54 +93,50 @@ class RemoteCaretsPluginValue {
   decorations: DecorationSet = Decoration.none;
   private readonly conf: RemoteCaretsConfig;
   private readonly listener: (changes: { added: number[]; updated: number[]; removed: number[] }) => void;
-  /** Last cursor seen per remote client, to tell a move from a heartbeat. */
-  private lastCursor = new Map<number, string>();
-  private movedAt = new Map<number, number>();
+  /** Per remote client: the cursor last seen (to tell a move from a re-broadcast) and when it moved. */
+  private seen = new Map<number, { cursor: string; movedAt: number }>();
   private lingerTimer: ReturnType<typeof setTimeout> | null = null;
-  private destroyed = false;
 
   constructor(private readonly view: EditorView) {
     this.conf = view.state.facet(remoteCaretsFacet);
     this.listener = ({ added, updated, removed }) => {
       const local = this.conf.awareness.clientID;
-      if (added.concat(updated, removed).some((id) => id !== local)) {
-        this.redraw();
-      }
+      if (added.concat(updated, removed).some((id) => id !== local)) this.redraw();
     };
     this.conf.awareness.on('change', this.listener);
   }
 
   private redraw(): void {
-    if (this.destroyed) return;
-    this.view.dispatch({ annotations: [remoteCaretsAnnotation.of(null)] });
+    this.view.dispatch({ annotations: [redrawCarets.of(null)] });
   }
 
   update(update: ViewUpdate): void {
-    this.publishLocalCursor(update);
-    this.decorations = this.buildDecorations(update);
+    if (update.docChanged || update.selectionSet || update.focusChanged) {
+      this.publishLocalCursor(update);
+    }
+    const redraw = update.transactions.some((tr) => tr.annotation(redrawCarets) !== undefined);
+    if (redraw || update.docChanged) {
+      // Resolving Yjs positions costs per edit in the doc's history, so only
+      // do it when a caret or the text moved; other transactions map through.
+      this.decorations = this.buildDecorations(update);
+    }
   }
 
   private publishLocalCursor(update: ViewUpdate): void {
     const { ytext, awareness } = this.conf;
     const toAbs = this.conf.toAbs ?? ((pos: number) => pos);
     const localState = awareness.getLocalState();
-    if (localState == null) return;
+    if (localState == null || !update.view.hasFocus) return;
 
-    const hasFocus = update.view.hasFocus;
-    const sel = hasFocus ? update.state.selection.main : null;
+    const sel = update.state.selection.main;
+    const anchor = Y.createRelativePositionFromTypeIndex(ytext, toAbs(sel.anchor));
+    const head = Y.createRelativePositionFromTypeIndex(ytext, toAbs(sel.head));
     const current: CursorJson | null = localState.cursor ?? null;
-
-    if (sel != null) {
-      const anchor = Y.createRelativePositionFromTypeIndex(ytext, toAbs(sel.anchor));
-      const head = Y.createRelativePositionFromTypeIndex(ytext, toAbs(sel.head));
-      const same =
-        current != null &&
-        Y.compareRelativePositions(Y.createRelativePositionFromJSON(current.anchor), anchor) &&
-        Y.compareRelativePositions(Y.createRelativePositionFromJSON(current.head), head);
-      if (!same) awareness.setLocalStateField('cursor', { anchor, head });
-    } else if (current != null && hasFocus) {
-      awareness.setLocalStateField('cursor', null);
-    }
+    const same =
+      current != null &&
+      Y.compareRelativePositions(Y.createRelativePositionFromJSON(current.anchor), anchor) &&
+      Y.compareRelativePositions(Y.createRelativePositionFromJSON(current.head), head);
+    if (!same) awareness.setLocalStateField('cursor', { anchor, head });
   }
 
   private buildDecorations(update: ViewUpdate): DecorationSet {
@@ -160,7 +144,7 @@ class RemoteCaretsPluginValue {
     const ydoc = ytext.doc!;
     const toCm = this.conf.toCm ?? ((index: number) => index);
     const now = Date.now();
-    const seen = new Set<number>();
+    const present = new Set<number>();
     let nextExpiry = Infinity;
     const decorations: Array<{ from: number; to: number; value: Decoration }> = [];
 
@@ -168,12 +152,13 @@ class RemoteCaretsPluginValue {
       if (clientId === awareness.doc.clientID) return;
       const cursor: CursorJson | null | undefined = state.cursor;
       if (cursor == null || cursor.anchor == null || cursor.head == null) return;
-      seen.add(clientId);
+      present.add(clientId);
 
       const key = JSON.stringify(cursor);
-      if (this.lastCursor.get(clientId) !== key) {
-        this.lastCursor.set(clientId, key);
-        this.movedAt.set(clientId, now);
+      let entry = this.seen.get(clientId);
+      if (!entry || entry.cursor !== key) {
+        entry = { cursor: key, movedAt: now };
+        this.seen.set(clientId, entry);
       }
 
       const anchor = Y.createAbsolutePositionFromRelativePosition(
@@ -189,7 +174,7 @@ class RemoteCaretsPluginValue {
       const cmHead = toCm(head.index);
       if (cmAnchor == null || cmHead == null) return;
 
-      const expiry = (this.movedAt.get(clientId) ?? 0) + CARET_LABEL_LINGER_MS;
+      const expiry = entry.movedAt + CARET_LABEL_LINGER_MS;
       const fresh = expiry > now;
       if (fresh) nextExpiry = Math.min(nextExpiry, expiry);
 
@@ -206,11 +191,8 @@ class RemoteCaretsPluginValue {
       });
     });
 
-    for (const clientId of this.lastCursor.keys()) {
-      if (!seen.has(clientId)) {
-        this.lastCursor.delete(clientId);
-        this.movedAt.delete(clientId);
-      }
+    for (const clientId of this.seen.keys()) {
+      if (!present.has(clientId)) this.seen.delete(clientId);
     }
 
     this.scheduleLingerRedraw(nextExpiry, now);
@@ -231,7 +213,6 @@ class RemoteCaretsPluginValue {
   }
 
   destroy(): void {
-    this.destroyed = true;
     this.conf.awareness.off('change', this.listener);
     if (this.lingerTimer !== null) clearTimeout(this.lingerTimer);
   }
@@ -242,38 +223,58 @@ const remoteCaretsPlugin = ViewPlugin.fromClass(RemoteCaretsPluginValue, {
 });
 
 /**
- * Look of the carets: colored 2px line with the collaborator's name above
- * it, the name hidden until the caret is hovered or has just moved. No
- * selection highlighting, caret only.
+ * A colored 2px caret with a dot on top and the collaborator's name above
+ * it; the name is hidden until the caret is hovered or has just moved.
  */
-export const remoteCaretsTheme = EditorView.theme({
+const remoteCaretsTheme = EditorView.baseTheme({
+  '.cm-ySelectionCaret': {
+    position: 'relative',
+    display: 'inline',
+    borderLeft: '2px solid',
+    marginLeft: '-1px',
+    marginRight: '-1px',
+    boxSizing: 'border-box',
+  },
+  '.cm-ySelectionCaretDot': {
+    position: 'absolute',
+    top: '-.2em',
+    left: '-.2em',
+    width: '.4em',
+    height: '.4em',
+    borderRadius: '50%',
+    backgroundColor: 'inherit',
+    boxSizing: 'border-box',
+    transition: 'transform .3s ease-in-out',
+  },
+  '.cm-ySelectionCaret:hover > .cm-ySelectionCaretDot': {
+    transformOrigin: 'bottom center',
+    transform: 'scale(0)',
+  },
   '.cm-ySelectionInfo': {
-    opacity: '0',
-    transition: 'opacity .2s ease-out',
+    position: 'absolute',
+    top: '-1.6em',
+    left: '-1px',
+    zIndex: '101',
+    padding: '2px 6px',
+    borderRadius: '3px',
+    backgroundColor: 'inherit',
+    color: 'white',
     fontFamily: 'system-ui, -apple-system, sans-serif',
     fontSize: '11px',
     fontWeight: '500',
-    borderRadius: '3px',
-    padding: '2px 6px',
-    top: '-1.6em',
+    fontStyle: 'normal',
+    lineHeight: 'normal',
+    whiteSpace: 'nowrap',
+    userSelect: 'none',
     pointerEvents: 'none',
+    opacity: '0',
+    transition: 'opacity .2s ease-out',
   },
   '.cm-ySelectionCaret:hover > .cm-ySelectionInfo, .cm-ySelectionCaret-fresh > .cm-ySelectionInfo': {
     opacity: '1',
-    transitionDelay: '0s',
-  },
-  '.cm-ySelectionCaret': {
-    borderLeftWidth: '2px',
-    borderRightWidth: '0',
-  },
-  '.cm-ySelection': {
-    background: 'none !important',
-  },
-  '.cm-yLineSelection': {
-    background: 'none !important',
   },
 });
 
 export function remoteCarets(config: RemoteCaretsConfig): Extension {
-  return [remoteCaretsFacet.of(config), yRemoteSelectionsTheme, remoteCaretsTheme, remoteCaretsPlugin];
+  return [remoteCaretsFacet.of(config), remoteCaretsTheme, remoteCaretsPlugin];
 }

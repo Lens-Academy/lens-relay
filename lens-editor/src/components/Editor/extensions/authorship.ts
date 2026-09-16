@@ -21,7 +21,8 @@
  * update order follows registration order, so this guarantees the local edit
  * has already been written to the Y.Text when we recompute.
  */
-import { StateEffect, StateField } from '@codemirror/state';
+import { StateEffect } from '@codemirror/state';
+import { persistedChoice, persistedFlag, persistedPositiveNumber } from '../../../lib/persisted-pref';
 import type { Extension, Range } from '@codemirror/state';
 import {
   Decoration,
@@ -43,43 +44,23 @@ import {
 } from '../../../lib/activity';
 import type { DocActivityEvent } from '../../../lib/activity';
 
-export type AuthorshipMode = 'hidden' | 'gutter' | 'expanded' | 'inline';
+const AUTHORSHIP_MODES = ['hidden', 'gutter', 'expanded', 'inline'] as const;
+export type AuthorshipMode = (typeof AUTHORSHIP_MODES)[number];
 
-export const setAuthorshipMode = StateEffect.define<AuthorshipMode>();
 const refreshAuthorship = StateEffect.define<null>();
 /** Recent-overlay-only refresh (window expiry tick): recomputes but never
  *  pins scroll, since it changes at most a few marks. */
 const refreshRecent = StateEffect.define<null>();
 
-const AUTHORSHIP_MODE_STORAGE_KEY = 'lens-editor-authorship-mode';
-const AUTHORSHIP_MODES: AuthorshipMode[] = ['hidden', 'gutter', 'expanded', 'inline'];
+// Per-browser display preferences. The fields seed from storage, so a
+// recreated editor comes up the way the author left it.
+const authorshipModePref = persistedChoice('lens-editor-authorship-mode', AUTHORSHIP_MODES, 'gutter');
+export const { load: loadAuthorshipMode, save: saveAuthorshipMode, set: setAuthorshipMode, field: authorshipModeField } = authorshipModePref;
 
-export function loadAuthorshipMode(): AuthorshipMode {
-  try {
-    const raw = localStorage.getItem(AUTHORSHIP_MODE_STORAGE_KEY);
-    return AUTHORSHIP_MODES.includes(raw as AuthorshipMode) ? (raw as AuthorshipMode) : 'gutter';
-  } catch {
-    return 'gutter';
-  }
-}
-
-export function saveAuthorshipMode(mode: AuthorshipMode): void {
-  try {
-    localStorage.setItem(AUTHORSHIP_MODE_STORAGE_KEY, mode);
-  } catch {
-    // storage unavailable
-  }
-}
-
-export const authorshipModeField = StateField.define<AuthorshipMode>({
-  create: () => loadAuthorshipMode(),
-  update: (value, tr) => {
-    for (const e of tr.effects) {
-      if (e.is(setAuthorshipMode)) return e.value;
-    }
-    return value;
-  },
-});
+// "Who wrote this word" box under the pointer. Off unless switched on: it
+// sits over the line above and gets in the way of reading.
+const authorshipHoverPref = persistedFlag('lens-editor-authorship-hover', false);
+export const { load: loadAuthorshipHover, save: saveAuthorshipHover, set: setAuthorshipHover, field: authorshipHoverField } = authorshipHoverPref;
 
 /** Time window (ms) for the recent-changes overlay. */
 export const RECENT_WINDOW_PRESETS: Array<{ label: string; ms: number }> = [
@@ -89,100 +70,12 @@ export const RECENT_WINDOW_PRESETS: Array<{ label: string; ms: number }> = [
   { label: '7d', ms: 7 * 86400_000 },
 ];
 export const DEFAULT_RECENT_WINDOW_MS = 3600_000;
-const RECENT_WINDOW_STORAGE_KEY = 'lens-recent-window-ms';
 
-export function loadRecentWindow(): number {
-  try {
-    const raw = localStorage.getItem(RECENT_WINDOW_STORAGE_KEY);
-    const ms = raw ? Number(raw) : NaN;
-    if (Number.isFinite(ms) && ms > 0) return ms;
-  } catch {
-    // storage unavailable
-  }
-  return DEFAULT_RECENT_WINDOW_MS;
-}
+const recentWindowPref = persistedPositiveNumber('lens-recent-window-ms', DEFAULT_RECENT_WINDOW_MS);
+export const { load: loadRecentWindow, save: saveRecentWindow, set: setRecentWindow, field: recentWindowField } = recentWindowPref;
 
-export function saveRecentWindow(ms: number): void {
-  try {
-    localStorage.setItem(RECENT_WINDOW_STORAGE_KEY, String(ms));
-  } catch {
-    // storage unavailable
-  }
-}
-
-const RECENT_ENABLED_STORAGE_KEY = 'lens-recent-enabled';
-
-export function loadRecentEnabled(): boolean {
-  try {
-    return localStorage.getItem(RECENT_ENABLED_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-export function saveRecentEnabled(enabled: boolean): void {
-  try {
-    localStorage.setItem(RECENT_ENABLED_STORAGE_KEY, enabled ? '1' : '0');
-  } catch {
-    // storage unavailable
-  }
-}
-
-// "Who wrote this word" box under the pointer. Off unless switched on: it
-// sits over the line above and gets in the way of reading.
-const AUTHORSHIP_HOVER_STORAGE_KEY = 'lens-editor-authorship-hover';
-
-export function loadAuthorshipHover(): boolean {
-  try {
-    return localStorage.getItem(AUTHORSHIP_HOVER_STORAGE_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-export function saveAuthorshipHover(enabled: boolean): void {
-  try {
-    localStorage.setItem(AUTHORSHIP_HOVER_STORAGE_KEY, enabled ? '1' : '0');
-  } catch {
-    // storage unavailable
-  }
-}
-
-export const setAuthorshipHover = StateEffect.define<boolean>();
-
-export const authorshipHoverField = StateField.define<boolean>({
-  create: () => loadAuthorshipHover(),
-  update: (value, tr) => {
-    for (const e of tr.effects) {
-      if (e.is(setAuthorshipHover)) return e.value;
-    }
-    return value;
-  },
-});
-
-export const setRecentEnabled = StateEffect.define<boolean>();
-
-export const recentEnabledField = StateField.define<boolean>({
-  create: () => loadRecentEnabled(),
-  update: (value, tr) => {
-    for (const e of tr.effects) {
-      if (e.is(setRecentEnabled)) return e.value;
-    }
-    return value;
-  },
-});
-
-export const setRecentWindow = StateEffect.define<number>();
-
-export const recentWindowField = StateField.define<number>({
-  create: () => loadRecentWindow(),
-  update: (value, tr) => {
-    for (const e of tr.effects) {
-      if (e.is(setRecentWindow)) return e.value;
-    }
-    return value;
-  },
-});
+const recentEnabledPref = persistedFlag('lens-recent-enabled', false);
+export const { load: loadRecentEnabled, save: saveRecentEnabled, set: setRecentEnabled, field: recentEnabledField } = recentEnabledPref;
 
 /** Struck-through ghost of text an AI removed (recent-changes overlay). */
 class GhostWidget extends WidgetType {
@@ -504,6 +397,11 @@ class AuthorshipPlugin {
    * caret position ourselves (exact) and map it with `posAtDOM`.
    */
   private handleTooltipHover(e: MouseEvent) {
+    // Nothing to show: neither the author box nor the recent-changes note.
+    if (!this.view.state.field(authorshipHoverField) && !this.view.state.field(recentEnabledField)) {
+      this.hideTooltip();
+      return;
+    }
     // At most one hit test per animation frame (mousemove fires far more
     // often); the lookups below are then deferred behind the hover delay.
     if (this.tooltipFrame !== null) return;
@@ -516,8 +414,7 @@ class AuthorshipPlugin {
   private tooltipHoverNow(e: MouseEvent) {
     const mode = this.view.state.field(authorshipModeField);
     const recentEnabled = this.view.state.field(recentEnabledField);
-    const hoverEnabled = this.view.state.field(authorshipHoverField);
-    if (!hoverEnabled || (mode === 'hidden' && !recentEnabled)) {
+    if (mode === 'hidden' && !recentEnabled) {
       this.hideTooltip();
       return;
     }
@@ -561,7 +458,9 @@ class AuthorshipPlugin {
 
   private tooltipAt(pos: number): { text: string; from: number; to: number } | null {
     const recentEnabled = this.view.state.field(recentEnabledField);
-    const hit = this.actorAt(pos);
+    // The two halves have their own switches: the author box, and the
+    // recent-changes note that comes with the overlay.
+    const hit = this.view.state.field(authorshipHoverField) ? this.actorAt(pos) : null;
     const ev = recentEnabled ? this.recentAt(pos) : null;
     if (!hit && !ev) return null;
     const parts: string[] = [];
