@@ -98,12 +98,22 @@ class RemoteCaretsPluginValue {
   private lingerTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly view: EditorView) {
+    // Read once: every editor recreates its view for a new document, so the
+    // facet never changes underneath a running plugin.
     this.conf = view.state.facet(remoteCaretsFacet);
+    // Collaborators already here have not moved; only a later change shows their name.
+    this.conf.awareness.getStates().forEach((state, clientId) => {
+      if (clientId !== this.conf.awareness.clientID && state.cursor != null) {
+        this.seen.set(clientId, { cursor: JSON.stringify(state.cursor), movedAt: 0 });
+      }
+    });
     this.listener = ({ added, updated, removed }) => {
       const local = this.conf.awareness.clientID;
       if (added.concat(updated, removed).some((id) => id !== local)) this.redraw();
     };
     this.conf.awareness.on('change', this.listener);
+    // Carets of collaborators already here, before any change event arrives.
+    this.decorations = this.buildDecorations(view.state.doc.length);
   }
 
   private redraw(): void {
@@ -118,7 +128,7 @@ class RemoteCaretsPluginValue {
     if (redraw || update.docChanged) {
       // Resolving Yjs positions costs per edit in the doc's history, so only
       // do it when a caret or the text moved; other transactions map through.
-      this.decorations = this.buildDecorations(update);
+      this.decorations = this.buildDecorations(update.state.doc.length);
     }
   }
 
@@ -139,7 +149,7 @@ class RemoteCaretsPluginValue {
     if (!same) awareness.setLocalStateField('cursor', { anchor, head });
   }
 
-  private buildDecorations(update: ViewUpdate): DecorationSet {
+  private buildDecorations(docLength: number): DecorationSet {
     const { ytext, awareness } = this.conf;
     const ydoc = ytext.doc!;
     const toCm = this.conf.toCm ?? ((index: number) => index);
@@ -154,13 +164,6 @@ class RemoteCaretsPluginValue {
       if (cursor == null || cursor.anchor == null || cursor.head == null) return;
       present.add(clientId);
 
-      const key = JSON.stringify(cursor);
-      let entry = this.seen.get(clientId);
-      if (!entry || entry.cursor !== key) {
-        entry = { cursor: key, movedAt: now };
-        this.seen.set(clientId, entry);
-      }
-
       const anchor = Y.createAbsolutePositionFromRelativePosition(
         Y.createRelativePositionFromJSON(cursor.anchor),
         ydoc,
@@ -174,12 +177,21 @@ class RemoteCaretsPluginValue {
       const cmHead = toCm(head.index);
       if (cmAnchor == null || cmHead == null) return;
 
+      // Stamp the move only once the caret can be drawn, so a cursor that
+      // arrives ahead of the text it points into still gets its full linger.
+      const key = JSON.stringify(cursor);
+      let entry = this.seen.get(clientId);
+      if (!entry || entry.cursor !== key) {
+        entry = { cursor: key, movedAt: now };
+        this.seen.set(clientId, entry);
+      }
+
       const expiry = entry.movedAt + CARET_LABEL_LINGER_MS;
       const fresh = expiry > now;
       if (fresh) nextExpiry = Math.min(nextExpiry, expiry);
 
       const { color = '#30bced', name = 'Anonymous' } = state.user || {};
-      const pos = Math.min(cmHead, update.state.doc.length);
+      const pos = Math.min(cmHead, docLength);
       decorations.push({
         from: pos,
         to: pos,

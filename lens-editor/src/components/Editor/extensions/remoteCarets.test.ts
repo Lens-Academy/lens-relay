@@ -28,7 +28,8 @@ function setup(text = 'hello world', opts?: { toAbs?: (p: number) => number; toC
   });
   views.push(view);
 
-  // The relay would deliver the remote awareness state; inject it directly.
+  // Stand-in for applyAwarenessUpdate: put the remote state into the local
+  // Awareness and fire the same 'change' event the network path would.
   const moveRemote = (index: number) => {
     const rel = Y.createRelativePositionFromTypeIndex(ytext, index);
     const cursor = { anchor: JSON.parse(JSON.stringify(rel)), head: JSON.parse(JSON.stringify(rel)) };
@@ -70,6 +71,25 @@ describe('remoteCarets', () => {
     // Moving again brings it back.
     moveRemote(7);
     expect(caret(view)!.classList.contains('cm-ySelectionCaret-fresh')).toBe(true);
+  });
+
+  it('shows no name for a collaborator who was already here when the editor opened', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, 'hello world');
+    const local = new Awareness(doc);
+    const rel = Y.createRelativePositionFromTypeIndex(ytext, 5);
+    local.states.set(doc.clientID + 1, {
+      user: { name: 'Ada', color: '#30bced' },
+      cursor: { anchor: JSON.parse(JSON.stringify(rel)), head: JSON.parse(JSON.stringify(rel)) },
+    });
+    const view = new EditorView({
+      state: EditorState.create({ doc: 'hello world', extensions: [remoteCarets({ ytext, awareness: local })] }),
+      parent: document.body,
+    });
+    views.push(view);
+    expect(caret(view)).not.toBeNull();
+    expect(caret(view)!.classList.contains('cm-ySelectionCaret-fresh')).toBe(false);
   });
 
   it('does not treat a heartbeat with the same cursor as a move', () => {

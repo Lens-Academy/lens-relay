@@ -130,8 +130,10 @@ export function HtmlSourceEditor({
           ...completionKeymap,
         ]),
         html(),
-        // No awareness for yCollab: remoteCarets draws the collaborator carets
-        // (y-codemirror.next does not export its undo plugin on its own).
+        // yCollab without awareness keeps its sync + undo plugins and skips
+        // its remote selections; remoteCarets draws the collaborator carets.
+        // (Assembling sync + undo by hand is not an option: y-codemirror.next
+        // does not export the undo plugin.)
         yCollab(ytext, null, { undoManager }),
         remoteCarets({ ytext, awareness }),
         highlightField,
