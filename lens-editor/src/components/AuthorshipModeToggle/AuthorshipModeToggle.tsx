@@ -3,11 +3,17 @@ import { createPortal } from 'react-dom';
 import { EditorView } from '@codemirror/view';
 import {
   authorshipModeField,
+  authorshipHoverField,
   recentWindowField,
   recentEnabledField,
   setAuthorshipMode,
+  setAuthorshipHover,
   setRecentWindow,
   setRecentEnabled,
+  loadAuthorshipMode,
+  saveAuthorshipMode,
+  loadAuthorshipHover,
+  saveAuthorshipHover,
   loadRecentWindow,
   saveRecentWindow,
   loadRecentEnabled,
@@ -53,7 +59,8 @@ function AuthorshipIcon({ dimmed }: { dimmed: boolean }) {
  * Shows the current setting on the button; options: Off / Gutter / Inline.
  */
 export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
-  const [mode, setMode] = useState<AuthorshipMode>('gutter');
+  const [mode, setMode] = useState<AuthorshipMode>(() => loadAuthorshipMode());
+  const [hoverEnabled, setHoverEnabledState] = useState<boolean>(() => loadAuthorshipHover());
   const [windowMs, setWindowMs] = useState<number>(() => loadRecentWindow());
   const [recentEnabled, setRecentEnabledState] = useState<boolean>(() => loadRecentEnabled());
   const [open, setOpen] = useState(false);
@@ -74,12 +81,22 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
     if (view.state.field(recentEnabledField, false) !== recentEnabled) {
       view.dispatch({ effects: setRecentEnabled.of(recentEnabled) });
     }
-  }, [view, mode, windowMs, recentEnabled]);
+    if (view.state.field(authorshipHoverField, false) !== hoverEnabled) {
+      view.dispatch({ effects: setAuthorshipHover.of(hoverEnabled) });
+    }
+  }, [view, mode, windowMs, recentEnabled, hoverEnabled]);
 
   const selectWindow = (ms: number) => {
     setWindowMs(ms);
     saveRecentWindow(ms);
     if (view) view.dispatch({ effects: setRecentWindow.of(ms) });
+  };
+
+  const toggleHover = () => {
+    const next = !hoverEnabled;
+    setHoverEnabledState(next);
+    saveAuthorshipHover(next);
+    if (view) view.dispatch({ effects: setAuthorshipHover.of(next) });
   };
 
   const toggleRecent = () => {
@@ -129,6 +146,7 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
     setOpen(false);
     if (!view) return;
     setMode(next);
+    saveAuthorshipMode(next);
     view.dispatch({ effects: setAuthorshipMode.of(next) });
   };
 
@@ -196,6 +214,26 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
               )}
             </button>
           ))}
+          <div className="border-t border-gray-100 mt-1 pt-1">
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={hoverEnabled}
+              onClick={toggleHover}
+              className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm hover:bg-gray-50 text-gray-900"
+            >
+              <span>
+                <span className="block">Show author on hover</span>
+                <span className="block text-xs text-gray-400">Who wrote the word under the pointer</span>
+              </span>
+              <span
+                aria-hidden="true"
+                className={`relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors ${hoverEnabled ? 'bg-blue-500' : 'bg-gray-300'}`}
+              >
+                <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${hoverEnabled ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+              </span>
+            </button>
+          </div>
           <div className="border-t border-gray-100 mt-1 pt-1">
             <button
               type="button"

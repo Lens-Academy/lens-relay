@@ -51,8 +51,28 @@ const refreshAuthorship = StateEffect.define<null>();
  *  pins scroll, since it changes at most a few marks. */
 const refreshRecent = StateEffect.define<null>();
 
+const AUTHORSHIP_MODE_STORAGE_KEY = 'lens-editor-authorship-mode';
+const AUTHORSHIP_MODES: AuthorshipMode[] = ['hidden', 'gutter', 'expanded', 'inline'];
+
+export function loadAuthorshipMode(): AuthorshipMode {
+  try {
+    const raw = localStorage.getItem(AUTHORSHIP_MODE_STORAGE_KEY);
+    return AUTHORSHIP_MODES.includes(raw as AuthorshipMode) ? (raw as AuthorshipMode) : 'gutter';
+  } catch {
+    return 'gutter';
+  }
+}
+
+export function saveAuthorshipMode(mode: AuthorshipMode): void {
+  try {
+    localStorage.setItem(AUTHORSHIP_MODE_STORAGE_KEY, mode);
+  } catch {
+    // storage unavailable
+  }
+}
+
 export const authorshipModeField = StateField.define<AuthorshipMode>({
-  create: () => 'gutter',
+  create: () => loadAuthorshipMode(),
   update: (value, tr) => {
     for (const e of tr.effects) {
       if (e.is(setAuthorshipMode)) return e.value;
@@ -107,6 +127,38 @@ export function saveRecentEnabled(enabled: boolean): void {
     // storage unavailable
   }
 }
+
+// "Who wrote this word" box under the pointer. Off unless switched on: it
+// sits over the line above and gets in the way of reading.
+const AUTHORSHIP_HOVER_STORAGE_KEY = 'lens-editor-authorship-hover';
+
+export function loadAuthorshipHover(): boolean {
+  try {
+    return localStorage.getItem(AUTHORSHIP_HOVER_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveAuthorshipHover(enabled: boolean): void {
+  try {
+    localStorage.setItem(AUTHORSHIP_HOVER_STORAGE_KEY, enabled ? '1' : '0');
+  } catch {
+    // storage unavailable
+  }
+}
+
+export const setAuthorshipHover = StateEffect.define<boolean>();
+
+export const authorshipHoverField = StateField.define<boolean>({
+  create: () => loadAuthorshipHover(),
+  update: (value, tr) => {
+    for (const e of tr.effects) {
+      if (e.is(setAuthorshipHover)) return e.value;
+    }
+    return value;
+  },
+});
 
 export const setRecentEnabled = StateEffect.define<boolean>();
 
@@ -464,7 +516,8 @@ class AuthorshipPlugin {
   private tooltipHoverNow(e: MouseEvent) {
     const mode = this.view.state.field(authorshipModeField);
     const recentEnabled = this.view.state.field(recentEnabledField);
-    if (mode === 'hidden' && !recentEnabled) {
+    const hoverEnabled = this.view.state.field(authorshipHoverField);
+    if (!hoverEnabled || (mode === 'hidden' && !recentEnabled)) {
       this.hideTooltip();
       return;
     }
@@ -951,5 +1004,5 @@ export function authorshipExtension(ytext: Y.Text): Extension {
   );
 
   // The plugin stays at index 1: authorship.test.ts reaches it that way.
-  return [authorshipModeField, plugin, modeAttribute, recentWindowField, recentEnabledField];
+  return [authorshipModeField, plugin, modeAttribute, recentWindowField, recentEnabledField, authorshipHoverField];
 }
