@@ -73,6 +73,11 @@ doc.getMap('filemeta_v0')  // Modern format: Y.Map<path, { id, type, version, ..
 doc.getMap('docs')         // Legacy format: Y.Map<path, guid>
 ```
 
+Entries under `/_trash/` carry `trashed_at` (unix ms), written by the relay when a
+file is deleted (`POST /doc/trash`) and cleared by a move out of the trash. The
+relay purges them after `trash_retention_days`; the editor never removes filemeta
+entries itself.
+
 **Important:** For markdown documents, entries must exist in BOTH maps. Obsidian's `SyncStore.getMeta()` treats documents that exist only in `filemeta_v0` as orphaned and deletes them. Always write to both:
 
 ```javascript

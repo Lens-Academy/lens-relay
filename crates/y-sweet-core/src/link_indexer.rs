@@ -185,6 +185,43 @@ pub fn ensure_ancestor_folders(
     created
 }
 
+// ---------------------------------------------------------------------------
+// Trash folder conventions (shared by the relay's `delete` tool, `move`, and
+// the purge sweep).
+// ---------------------------------------------------------------------------
+
+/// Top-level folder inside every shared folder that holds trashed entries.
+pub const TRASH_DIR: &str = "_trash";
+/// In-folder path of the trash root, e.g. `/_trash`.
+pub const TRASH_ROOT: &str = "/_trash";
+/// `filemeta_v0` field (unix ms) stamped on every trashed entry. Cleared by
+/// `move` when an entry leaves the trash; absent entries under `/_trash/`
+/// are stamped by the purge sweep on first sight.
+pub const TRASHED_AT_FIELD: &str = "trashed_at";
+
+/// True when an in-folder path (leading slash) is the trash root or inside it.
+pub fn is_trash_path(in_folder_path: &str) -> bool {
+    in_folder_path == TRASH_ROOT || in_folder_path.starts_with("/_trash/")
+}
+
+/// Read `trashed_at` (unix ms) from extracted filemeta fields.
+pub fn trashed_at_from_fields(fields: &HashMap<String, Any>) -> Option<u64> {
+    match fields.get(TRASHED_AT_FIELD) {
+        Some(Any::Number(n)) if *n >= 0.0 => Some(*n as u64),
+        Some(Any::BigInt(n)) if *n >= 0 => Some(*n as u64),
+        _ => None,
+    }
+}
+
+/// Drop `trashed_at` from the fields of an entry whose destination is
+/// outside the trash (a restore). Entries moved within or into the trash
+/// keep whatever stamp they have.
+pub fn clear_trashed_at_if_restored(fields: &mut HashMap<String, Any>, new_path: &str) {
+    if !is_trash_path(new_path) {
+        fields.remove(TRASHED_AT_FIELD);
+    }
+}
+
 /// Find the filemeta path key for a given UUID by scanning all entries.
 /// Returns `None` if the UUID is not found in the filemeta map.
 pub fn find_path_for_uuid(filemeta: &MapRef, txn: &impl ReadTxn, uuid: &str) -> Option<String> {
@@ -735,7 +772,7 @@ pub fn move_document(
     content_docs: &HashMap<String, &Doc>,
 ) -> anyhow::Result<MoveResult> {
     // 1. Find the UUID in source filemeta_v0, extract old path + metadata fields
-    let (old_path, meta_fields) = {
+    let (old_path, mut meta_fields) = {
         let txn = source_folder_doc.transact();
         let filemeta = txn
             .get_map("filemeta_v0")
@@ -754,6 +791,9 @@ pub fn move_document(
         }
         found.ok_or_else(|| anyhow::anyhow!("UUID {} not found in source filemeta_v0", uuid))?
     };
+
+    // A move out of `/_trash/` is a restore: the entry stops expiring.
+    clear_trashed_at_if_restored(&mut meta_fields, new_path);
 
     // Determine folder names
     let source_folder_name = read_folder_name(source_folder_doc, "");

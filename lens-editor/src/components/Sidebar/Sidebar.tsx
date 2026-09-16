@@ -13,8 +13,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } from '../../lib/tree-utils';
-import { createDocument, createFolder, deleteDocument, movePath, moveErrorMessage } from '../../lib/relay-api';
-import { getFolderDocForPath, getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
+import { createDocument, createFolder, movePath, moveErrorMessage, trashPath, deleteErrorMessage, TrashRefusedError } from '../../lib/relay-api';
+import type { TrashReferencingDoc } from '../../lib/relay-api';
+import { getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { nextUntitledHtmlName } from '../../lib/untitled-name';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab } from '../../lib/url-utils';
@@ -26,7 +27,7 @@ export function Sidebar() {
 
   // Get metadata from NavigationContext (needed early for doc ID resolution)
   const { metadata, folderDocs, folderNames, onNavigate, justCreatedRef } = useNavigation();
-  const { canWrite } = useAuth();
+  const { canWrite, canDelete } = useAuth();
 
   // Derive active doc ID from URL path (first segment is the doc UUID — may be short)
   const location = useLocation();
@@ -41,8 +42,13 @@ export function Sidebar() {
   // State for inline editing
   const [editingPath, setEditingPath] = useState<string | null>(null);
 
-  // State for delete confirmation
+  // State for delete confirmation. `deleteRefs` is set when the relay refused
+  // the delete because other documents link into the target; the dialog then
+  // lists them and offers "Delete anyway" (force).
   const [deleteTarget, setDeleteTarget] = useState<{ path: string; name: string } | null>(null);
+  const [deleteRefs, setDeleteRefs] = useState<TrashReferencingDoc[] | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // State for move dialog
   const [moveTarget, setMoveTarget] = useState<{ path: string; docId: string } | null>(null);
@@ -135,15 +141,50 @@ export function Sidebar() {
     }
   }, [folderNames]);
 
-  const handleDeleteConfirm = useCallback(() => {
-    if (!deleteTarget) return;
-    const doc = getFolderDocForPath(deleteTarget.path, folderDocs, folderNames);
-    if (!doc) return;
-    const folderName = getFolderNameFromPath(deleteTarget.path, folderNames)!;
-    const originalPath = getOriginalPath(deleteTarget.path, folderName);
-    deleteDocument(doc, originalPath);
+  // Reset the dialog state only; the error banner has its own lifecycle
+  // (kept after a failed delete, cleared on cancel and on the next open).
+  const resetDeleteDialog = useCallback(() => {
     setDeleteTarget(null);
-  }, [folderDocs, folderNames, deleteTarget]);
+    setDeleteRefs(null);
+    setIsDeleting(false);
+  }, []);
+
+  const closeDeleteDialog = useCallback(() => {
+    resetDeleteDialog();
+    setDeleteError(null);
+  }, [resetDeleteDialog]);
+
+  const openDeleteDialog = useCallback((path: string, name: string) => {
+    setDeleteError(null);
+    setDeleteRefs(null);
+    setDeleteTarget({ path, name });
+  }, []);
+
+  // Server-side delete: the relay moves the entry (or subtree) to
+  // <folder>/_trash/ and refuses with the referencing documents when other
+  // docs link into it. A second confirm ("Delete anyway") forces it.
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget || isDeleting) return;
+    const force = deleteRefs !== null;
+    // Tree paths carry a leading slash ("/Lens/Notes/A.md"); the relay takes
+    // the user-facing form without it, like movePath.
+    const relayPath = deleteTarget.path.replace(/^\//, '');
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await trashPath(relayPath, force);
+      closeDeleteDialog();
+    } catch (err: unknown) {
+      if (err instanceof TrashRefusedError) {
+        setDeleteRefs(err.referencing);
+        setIsDeleting(false);
+        return;
+      }
+      console.error('Delete failed:', err);
+      setDeleteError(deleteErrorMessage(err));
+      resetDeleteDialog();
+    }
+  }, [deleteTarget, deleteRefs, isDeleting, closeDeleteDialog, resetDeleteDialog]);
 
   const handleInstantCreate = useCallback(async (folderPath: string) => {
     const folderName = getFolderNameFromPath(folderPath, folderNames);
@@ -368,7 +409,7 @@ export function Sidebar() {
                     editingPath,
                     onEditingChange: setEditingPath,
                     onRequestRename: canWrite ? (path) => setEditingPath(path) : undefined,
-                    onRequestDelete: canWrite ? (path, name) => setDeleteTarget({ path, name }) : undefined,
+                    onRequestDelete: canDelete ? openDeleteDialog : undefined,
                     onRequestMove: canWrite ? handleMoveRequest : undefined,
                     onRenameSubmit: canWrite ? handleRenameSubmit : undefined,
                     onCreateDocument: canWrite ? handleInstantCreate : undefined,
@@ -397,15 +438,41 @@ export function Sidebar() {
           {moveError}
         </div>
       )}
+      {deleteError && (
+        <div
+          className="px-3 py-2 border-t border-red-100 bg-red-50 text-sm text-red-700"
+          role="alert"
+        >
+          {deleteError}
+        </div>
+      )}
 
       {/* Delete confirmation dialog */}
       <ConfirmDialog
         open={!!deleteTarget}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
-        title={`Delete ${deleteTarget?.name}?`}
-        description="This cannot be undone."
+        onOpenChange={(open) => !open && closeDeleteDialog()}
+        title={deleteRefs ? `Delete ${deleteTarget?.name} anyway?` : `Delete ${deleteTarget?.name}?`}
+        description={
+          deleteRefs
+            ? `Other documents still link to ${deleteTarget?.name}. Deleting anyway leaves those links pointing at the trash.`
+            : 'It moves to the _trash folder and is purged after the retention period. Move it out of _trash to restore it.'
+        }
+        details={
+          deleteRefs ? (
+            <ul className="mt-2 max-h-40 overflow-y-auto text-sm text-gray-700 list-disc pl-5" data-testid="delete-referencing">
+              {deleteRefs.map((ref) => (
+                <li key={ref.path}>
+                  {ref.path}
+                  <span className="text-gray-500"> ({ref.count} {ref.count === 1 ? 'link' : 'links'})</span>
+                </li>
+              ))}
+            </ul>
+          ) : undefined
+        }
         onConfirm={handleDeleteConfirm}
-        confirmLabel="Delete"
+        confirmLabel={deleteRefs ? 'Delete anyway' : 'Delete'}
+        busy={isDeleting}
+        closeOnConfirm={false}
       />
 
       {/* Move dialog */}

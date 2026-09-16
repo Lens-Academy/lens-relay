@@ -11,6 +11,7 @@ pub(crate) fn default_access() -> McpAccess {
         folder_uuid: None,
         folder_name: None,
         raw_token: None,
+        role: None,
     }
 }
 

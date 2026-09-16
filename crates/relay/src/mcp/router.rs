@@ -26,7 +26,7 @@ pub async fn dispatch_request(
         // middleware (Bearer token or path key). With a stateless transport
         // there's no app session to read it from, but tokens are immutable so
         // every request from a given client carries the same access anyway.
-        "tools/list" => handle_tools_list(request.id.clone(), access.writable),
+        "tools/list" => handle_tools_list(request.id.clone(), access.writable, access.can_delete()),
         "tools/call" => {
             handle_tools_call(server, request.id.clone(), request.params.as_ref(), access).await
         }
@@ -101,8 +101,8 @@ fn handle_ping(id: Value) -> JsonRpcResponse {
     success_response(id, json!({}))
 }
 
-fn handle_tools_list(id: Value, writable: bool) -> JsonRpcResponse {
-    let definitions = tools::tool_definitions(writable);
+fn handle_tools_list(id: Value, writable: bool, can_delete: bool) -> JsonRpcResponse {
+    let definitions = tools::tool_definitions(writable, can_delete);
     success_response(id, json!({ "tools": definitions }))
 }
 
@@ -141,6 +141,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         }
     }
 
@@ -228,6 +229,7 @@ mod tests {
         let mut expected = vec![
             "create",
             "create_session",
+            "delete",
             "edit",
             "get_links",
             "get_url",
@@ -527,6 +529,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         };
 
         let req = make_request(json!(50), "tools/list", None);
@@ -596,6 +599,7 @@ mod tests {
             folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
             folder_name: Some("Lens Edu".to_string()),
             raw_token: None,
+            role: None,
         };
         let sid = server
             .mcp_sessions

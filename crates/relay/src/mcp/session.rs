@@ -207,6 +207,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         }
     }
 

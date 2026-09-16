@@ -2,6 +2,7 @@ pub mod blob;
 pub mod create_doc;
 pub mod critic_diff;
 pub mod critic_markup;
+pub mod delete_doc;
 pub mod edit;
 pub mod edit_policy;
 pub mod get_links;
@@ -26,10 +27,11 @@ use y_sweet_core::share_token::McpAccess;
 /// Tools that mutate the knowledge base. Read-only MCP keys are refused these
 /// by name in [`dispatch_tool`], so every new write tool must be listed here.
 /// `import_article` is the hidden alias of `import_source`.
-pub const WRITE_TOOLS: [&str; 7] = [
+pub const WRITE_TOOLS: [&str; 8] = [
     "edit",
     "create",
     "move",
+    "delete",
     "import_source",
     "import_article",
     "import_status",
@@ -37,8 +39,10 @@ pub const WRITE_TOOLS: [&str; 7] = [
 ];
 
 /// Return tool definitions for MCP tools/list response.
-/// When `writable` is false, write tools (edit, create, move) are excluded.
-pub fn tool_definitions(writable: bool) -> Vec<Value> {
+/// When `writable` is false, write tools (edit, create, move) are excluded;
+/// `delete` is listed only when `can_delete` (Admin/Edit/legacy key), so a
+/// Suggest token neither sees nor can call it.
+pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
     let article_import_modes = import_source::ARTICLE_IMPORT_MODES;
     let mut tools = vec![
         json!({
@@ -417,6 +421,32 @@ pub fn tool_definitions(writable: bool) -> Vec<Value> {
         }));
     }
 
+    if writable && can_delete {
+        tools.push(json!({
+            "name": "delete",
+            "description": "Move a file or folder to the trash: it lands under <shared folder>/_trash/ with its relative path preserved (Lens Edu/articles/x.md -> Lens Edu/_trash/articles/x.md; a folder keeps its whole subtree) and gets a trashed_at stamp. Trashed entries are purged for good after the retention period (10 days by default). To restore, move it out of _trash with the move tool. Refused while any document outside the deleted subtree still links into it: the error lists those documents; fix or remove the references first, or pass force: true to trash anyway (nothing else is touched, links stay as they are and validate_content keeps reporting them). If the trash already holds that path (same name deleted twice within the retention period) the new entry gets a -2, -3, ... suffix before the extension (a folder keeps its subtree together under Dir-2/); the returned paths are the real ones. Deleting _trash itself, a shared-folder root, or something already in the trash is an error. Requires an Admin or Edit token (Suggest tokens cannot delete). Never simulate a delete with move or edit.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["path", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path of the file or folder to trash, including the shared folder (e.g. 'Lens/Biology/Photosynthesis.md' or 'Lens/Biology'). Same conventions as move's path."
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Trash even when other documents link into it (default false). Those links are left untouched."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
+                    }
+                }
+            }
+        }));
+    }
+
     tools
 }
 
@@ -464,6 +494,13 @@ pub async fn dispatch_tool(
     // Defense-in-depth: block write tools for read-only access
     if !access.writable && WRITE_TOOLS.contains(&name) {
         return tool_error("Access denied: read-only access. Cannot use write tools.");
+    }
+    // `delete` is Admin/Edit only: a Suggest token can write (its edits become
+    // suggestions) but must not move files to the trash.
+    if name == "delete" && !access.can_delete() {
+        return tool_error(
+            "Access denied: this token cannot delete. The delete tool requires an Admin or Edit token; Suggest tokens can only propose edits.",
+        );
     }
 
     // Folder scope check: restrict tools to the allowed folder
@@ -537,6 +574,10 @@ pub async fn dispatch_tool(
             Err(msg) => tool_error(&msg),
         },
         "move" => match move_doc::execute(server, arguments).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "delete" => match delete_doc::execute(server, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
@@ -620,6 +661,7 @@ mod integration_tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         };
         let sid = server
             .mcp_sessions
@@ -641,6 +683,141 @@ mod integration_tests {
                 "{name}: {res}"
             );
         }
+    }
+
+    // Prevents: a Suggest token (writable: its edits become suggestions)
+    // slipping through the generic write gate into `delete`, and the legacy
+    // API key / Admin / Edit losing the tool.
+    #[tokio::test]
+    async fn delete_is_refused_for_suggest_and_view_but_allowed_for_admin_edit_and_legacy() {
+        use super::delete_doc::tests::build_server;
+        use y_sweet_core::share_token::{McpAccess, ShareRole};
+
+        let cases: Vec<(Option<ShareRole>, bool, Option<&str>)> = vec![
+            (Some(ShareRole::View), false, Some("read-only")),
+            (
+                Some(ShareRole::Suggest),
+                true,
+                Some("requires an Admin or Edit token"),
+            ),
+            (Some(ShareRole::Edit), true, None),
+            (Some(ShareRole::Admin), true, None),
+            (None, true, None),
+        ];
+        for (role, writable, refusal) in cases {
+            let server = build_server(&[(
+                "/Notes/A.md",
+                "11111111-1111-4111-8111-111111111111",
+                "markdown",
+                "plain",
+            )])
+            .await;
+            let access = McpAccess {
+                writable,
+                folder_uuid: None,
+                folder_name: None,
+                raw_token: None,
+                role,
+            };
+            let sid = server
+                .mcp_sessions
+                .create_session(access.clone(), None, None);
+            let res = super::dispatch_tool(
+                &server,
+                "delete",
+                &json!({ "session_id": sid, "path": "Lens/Notes/A.md" }),
+                &access,
+            )
+            .await;
+            let text = res["content"][0]["text"].as_str().unwrap();
+            match refusal {
+                Some(needle) => {
+                    assert_eq!(res["isError"], json!(true), "{role:?}: {text}");
+                    assert!(text.contains(needle), "{role:?}: {text}");
+                    assert!(
+                        !text.contains("_trash/Notes"),
+                        "{role:?} must not move: {text}"
+                    );
+                }
+                None => {
+                    assert_eq!(res["isError"], json!(false), "{role:?}: {text}");
+                    assert!(text.contains("Lens/_trash/Notes/A.md"), "{role:?}: {text}");
+                }
+            }
+        }
+    }
+
+    // Prevents: a folder-scoped token trashing paths in another shared folder.
+    #[tokio::test]
+    async fn delete_honours_folder_scope_prefix_check() {
+        use super::delete_doc::tests::build_server;
+        use y_sweet_core::share_token::{McpAccess, ShareRole};
+
+        let server = build_server(&[(
+            "/Notes/A.md",
+            "11111111-1111-4111-8111-111111111111",
+            "markdown",
+            "plain",
+        )])
+        .await;
+        let access = McpAccess {
+            writable: true,
+            folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
+            folder_name: Some("Lens Edu".to_string()),
+            raw_token: None,
+            role: Some(ShareRole::Edit),
+        };
+        let sid = server
+            .mcp_sessions
+            .create_session(access.clone(), None, None);
+        let res = super::dispatch_tool(
+            &server,
+            "delete",
+            &json!({ "session_id": sid, "path": "Lens/Notes/A.md" }),
+            &access,
+        )
+        .await;
+        assert_eq!(res["isError"], json!(true), "{res}");
+        let text = res["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Access denied"), "{text}");
+        assert!(text.contains("Lens Edu"), "{text}");
+        // Untouched.
+        let meta = super::delete_doc::tests::filemeta_snapshot(&server);
+        assert!(meta.contains_key("/Notes/A.md"));
+    }
+
+    #[test]
+    fn delete_tool_is_advertised_to_writers_with_trash_and_force_semantics() {
+        let tools = super::tool_definitions(true, true);
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == "delete")
+            .expect("delete advertised");
+        let desc = tool["description"].as_str().unwrap();
+        assert!(desc.contains("_trash/"));
+        assert!(desc.contains("force"));
+        assert!(desc.contains("move tool"));
+        assert!(desc.contains("Admin or Edit"));
+        assert_eq!(
+            tool["inputSchema"]["required"],
+            json!(["path", "session_id"])
+        );
+        assert_eq!(
+            tool["inputSchema"]["properties"]["force"]["type"],
+            json!("boolean")
+        );
+        assert!(super::WRITE_TOOLS.contains(&"delete"));
+        assert!(!super::tool_definitions(false, false)
+            .iter()
+            .any(|t| t["name"] == "delete"));
+        // A Suggest token is writable but may not delete: same list as an
+        // Edit token minus delete.
+        let suggest = super::tool_definitions(true, false);
+        assert!(!suggest.iter().any(|t| t["name"] == "delete"));
+        for name in ["edit", "create", "move", "import_source"] {
+            assert!(suggest.iter().any(|t| t["name"] == name), "{name}");
+        }
+        assert_eq!(suggest.len() + 1, tools.len());
     }
 
     // Prevents: `import_article` becoming "Unknown tool" for agents whose
@@ -666,7 +843,7 @@ mod integration_tests {
 
     #[test]
     fn move_schema_allows_file_path_alias_without_requiring_path() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let move_tool = tools
             .iter()
             .find(|tool| tool["name"] == "move")
@@ -682,7 +859,7 @@ mod integration_tests {
 
     #[test]
     fn import_source_schema_requires_the_shared_modes() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let import_tool = tools
             .iter()
             .find(|tool| tool["name"] == "import_source")
@@ -709,13 +886,13 @@ mod integration_tests {
     // the read-only block list.
     #[test]
     fn import_article_alias_is_hidden_and_every_write_tool_is_blocked_for_readers() {
-        let writable = super::tool_definitions(true);
+        let writable = super::tool_definitions(true, true);
         assert!(
             !writable.iter().any(|t| t["name"] == "import_article"),
             "alias must not be advertised"
         );
         assert!(writable.iter().any(|t| t["name"] == "import_attachment"));
-        let readonly = super::tool_definitions(false);
+        let readonly = super::tool_definitions(false, false);
         for tool in &writable {
             let name = tool["name"].as_str().unwrap();
             if !readonly.iter().any(|t| t["name"] == name) {
@@ -735,7 +912,7 @@ mod integration_tests {
 
     #[test]
     fn descriptions_route_agents_between_the_import_tools() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let desc = |name: &str| {
             tools
                 .iter()
@@ -757,7 +934,7 @@ mod integration_tests {
 
     #[test]
     fn edit_schema_explains_auto_mode_and_suggest_override() {
-        let tools = super::tool_definitions(true);
+        let tools = super::tool_definitions(true, true);
         let description = tools
             .iter()
             .find(|tool| tool["name"] == "edit")
@@ -786,11 +963,12 @@ mod integration_tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
+            role: None,
         };
 
         // get_url must be advertised even for read-only sessions.
         assert!(
-            super::tool_definitions(false)
+            super::tool_definitions(false, false)
                 .iter()
                 .any(|t| t["name"] == "get_url"),
             "get_url should be advertised for read-only sessions"

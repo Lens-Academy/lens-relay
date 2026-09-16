@@ -27,7 +27,7 @@ vi.mock('../../lib/relay-api', async () => {
   return {
     ...actual,
     createDocument: vi.fn().mockResolvedValue('new-doc-id'),
-    deleteDocument: vi.fn(),
+    trashPath: vi.fn().mockResolvedValue({ trashed: [], trashed_at: 0, restore_hint: '' }),
     moveDocument: vi.fn(),
     movePath: vi.fn().mockResolvedValue({ links_rewritten: 0 }),
   };
