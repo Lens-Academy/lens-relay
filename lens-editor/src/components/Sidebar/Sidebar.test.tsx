@@ -37,6 +37,44 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('Sidebar view toggle', () => {
+  it('switches between the folder tree and the course tree', async () => {
+    const metadata = {
+      '/Lens Edu/courses/Demo Course.md': { id: 'c1', type: 'markdown' as const, version: 0 },
+      '/Lens Edu/modules/Demo Module.md': { id: 'm1', type: 'markdown' as const, version: 0 },
+    };
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NavigationContext.Provider
+          value={{
+            metadata,
+            folderDocs: new Map<string, Y.Doc>([['Lens Edu', new Y.Doc()]]),
+            folderNames: ['Lens Edu'],
+            errors: new Map<string, Error>(),
+            onNavigate: vi.fn(),
+            justCreatedRef: { current: false },
+          }}
+        >
+          <Sidebar />
+        </NavigationContext.Provider>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('modules')).toBeInTheDocument();
+    expect(screen.queryByTestId('course-tree')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Course' }));
+    expect(screen.getByTestId('course-tree')).toBeInTheDocument();
+    expect(screen.getByRole('treeitem')).toHaveTextContent('Demo Course');
+    expect(screen.queryByText('modules')).not.toBeInTheDocument();
+    expect(localStorage.getItem('sidebar:view')).toBe('course');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Files' }));
+    expect(screen.queryByTestId('course-tree')).not.toBeInTheDocument();
+    expect(screen.getByText('modules')).toBeInTheDocument();
+  });
+});
+
 describe('Sidebar with multi-folder metadata', () => {
   it('does not render workflow navigation in the bottom rail', () => {
     const metadata = {

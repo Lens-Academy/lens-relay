@@ -1,13 +1,14 @@
 /**
  * Parse a wikilink string into its components.
- * Handles [[path]], [[path|display]], ![[path]], ![[path|display]].
+ * Handles [[path]], [[path|display]], ![[path]], ![[path|display]] and
+ * drops a `#heading` anchor from the path, as the relay's link indexer does.
  * Browser-compatible — no Node dependencies.
  */
-function parseWikilink(text: string): { path: string; display?: string; isEmbed?: boolean } | null {
+export function parseWikilink(text: string): { path: string; display?: string; isEmbed?: boolean } | null {
   const match = text.match(/^(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
   if (!match) return null;
   return {
-    path: match[2].trim(),
+    path: match[2].split('#')[0].trim(),
     display: match[3]?.trim(),
     isEmbed: match[1] === '!',
   };
@@ -59,8 +60,16 @@ export function resolveWikilinkToUuid(
 ): string | null {
   const parsed = parseWikilink(wikilinkText.trim());
   if (!parsed || !parsed.path) return null;
+  return resolvePathToUuid(parsed.path, sourceFile, metadata);
+}
 
-  const canonicalPath = parsed.path.replace(/\.md$/i, '');
+/** Resolve an already-parsed wikilink path (relative to the source file) to a doc UUID. */
+export function resolvePathToUuid(
+  linkPath: string,
+  sourceFile: string,
+  metadata: Record<string, { id: string }>
+): string | null {
+  const canonicalPath = linkPath.replace(/\.md$/i, '');
   const resolved = resolveRelativePath(canonicalPath, sourceFile);
 
   // Try all combinations: with/without leading /, with/without .md extension

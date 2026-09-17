@@ -1,6 +1,8 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { findPathByUuid } from '../../lib/uuid-to-path';
+import { backlinkSources } from '../../lib/backlinks';
+import { useBacklinksVersion } from '../../hooks/useBacklinksVersion';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 
@@ -10,31 +12,13 @@ interface BacklinksPanelProps {
 
 /**
  * Panel displaying documents that link to the current document.
- * Observes backlinks_v0 Y.Map for live updates across all folder docs.
+ * Observes the folder docs' backlinks maps for live updates.
  */
 export function BacklinksPanel({ currentDocId }: BacklinksPanelProps) {
   const { metadata, folderDocs, onNavigate } = useNavigation();
 
-  // Force re-render when backlinks Y.Map changes
-  const [backlinksVersion, setBacklinksVersion] = useState(0);
+  const backlinksVersion = useBacklinksVersion(folderDocs);
 
-  // Subscribe to backlinks_v0 changes on all folder docs
-  useEffect(() => {
-    if (folderDocs.size === 0) return;
-
-    const cleanups: (() => void)[] = [];
-    const observer = () => setBacklinksVersion(v => v + 1);
-
-    for (const doc of folderDocs.values()) {
-      const backlinksMap = doc.getMap<string[]>('backlinks_v0');
-      backlinksMap.observe(observer);
-      cleanups.push(() => backlinksMap.unobserve(observer));
-    }
-
-    return () => cleanups.forEach(fn => fn());
-  }, [folderDocs]);
-
-  // Get backlinks from all folder docs' backlinks_v0 Y.Maps
   const backlinks = useMemo(() => {
     // Trigger re-compute when backlinksVersion changes
     void backlinksVersion;
@@ -46,18 +30,7 @@ export function BacklinksPanel({ currentDocId }: BacklinksPanelProps) {
     const docUuid = isCompound ? currentDocId.slice(37) : currentDocId;
     const relayPrefix = isCompound ? currentDocId.slice(0, 37) : '';
 
-    const allSourceUuids: string[] = [];
-    const seen = new Set<string>();
-    for (const doc of folderDocs.values()) {
-      const backlinksMap = doc.getMap<string[]>('backlinks_v0');
-      const sourceUuids = backlinksMap.get(docUuid) || [];
-      for (const uuid of sourceUuids) {
-        if (!seen.has(uuid)) {
-          seen.add(uuid);
-          allSourceUuids.push(uuid);
-        }
-      }
-    }
+    const allSourceUuids = backlinkSources(docUuid, folderDocs.values());
 
     // Resolve UUIDs to paths, filtering out missing docs
     return allSourceUuids

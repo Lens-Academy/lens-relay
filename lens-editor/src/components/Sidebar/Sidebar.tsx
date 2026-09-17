@@ -18,8 +18,14 @@ import type { TrashReferencingDoc } from '../../lib/relay-api';
 import { getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { nextUntitledHtmlName } from '../../lib/untitled-name';
 import { RELAY_ID } from '../../App';
-import { openDocInNewTab } from '../../lib/url-utils';
+import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import { renamePreservingExtension } from '../../lib/filename-utils';
+import { SegmentedToggle, type SegmentedValue } from '../SegmentedToggle';
+import { CourseTree } from './CourseTree/CourseTree';
+import { persistedChoice } from '../../lib/persisted-pref';
+
+type SidebarView = 'files' | 'course';
+const sidebarView = persistedChoice<SidebarView>('sidebar:view', ['files', 'course'], 'files');
 
 export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -35,6 +41,14 @@ export function Sidebar() {
   const shortCompoundId = docUuidFromUrl ? `${RELAY_ID}-${docUuidFromUrl}` : '';
   // Resolve short UUID to full compound ID (empty string = no active doc)
   const activeDocId = useResolvedDocId(shortCompoundId, metadata).docId || '';
+
+  // Files (the shared folders) or Course (the embed tree of the open course)
+  const [view, setView] = useState<SidebarView>(sidebarView.load);
+  const handleViewChange = useCallback((value: SegmentedValue) => {
+    const next: SidebarView = value === 'right' ? 'course' : 'files';
+    setView(next);
+    sidebarView.save(next);
+  }, []);
 
   // State for file name filter (separate from full-text search)
   const [fileFilter, setFileFilter] = useState('');
@@ -331,11 +345,20 @@ export function Sidebar() {
           onChange={setSearchTerm}
           placeholder="Search..."
         />
+        <SegmentedToggle
+          leftLabel="Files"
+          rightLabel="Course"
+          value={view === 'course' ? 'right' : 'left'}
+          onChange={handleViewChange}
+          ariaLabel="Sidebar view"
+          leftTitle="Browse the shared folders"
+          rightTitle="Browse the open course as a tree"
+        />
       </div>
 
       {/* Tree content or search results */}
       <div className={`flex-1 min-h-0 flex flex-col ${showSearchResults ? 'overflow-y-auto' : ''} ${isStale && !showSearchResults ? 'opacity-80' : ''}`}>
-        {showSearchResults ? (
+        {showSearchResults && (
           <SearchPanel
             results={enrichedSearchResults}
             fileNameMatches={fileNameMatches}
@@ -344,7 +367,15 @@ export function Sidebar() {
             query={searchTerm}
             onNavigate={onNavigate}
           />
-        ) : (
+        )}
+        {/* Stays mounted under search results: its doc connections are
+            expensive to re-establish for every keystroke in the search box */}
+        {view === 'course' && (
+          <div className={showSearchResults ? 'hidden' : 'contents'}>
+            <CourseTree activeUuid={activeDocId ? docUuidFromCompoundId(activeDocId) : null} />
+          </div>
+        )}
+        {!showSearchResults && view === 'files' && (
           <>
             {/* File name filter input */}
             {folderDocs.size > 0 && (

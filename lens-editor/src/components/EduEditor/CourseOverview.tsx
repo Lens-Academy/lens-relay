@@ -1,16 +1,9 @@
 import type { Section } from '../SectionEditor/parseSections';
-import { parseFields, getFrontmatterField } from '../../lib/parseFields';
+import { getFrontmatterField } from '../../lib/parseFields';
+import { sectionWikilink } from '../../lib/course-tree';
 import { resolveWikilinkToUuid, titleFromWikilink } from '../../lib/resolveDocPath';
 import { TreeEntry } from './ModuleTreeEditor/TreeEntry';
 import { RELAY_ID } from '../../lib/constants';
-
-function extractWikilink(section: Section): string | null {
-  const fields = parseFields(section.content);
-  const source = fields.get('source');
-  if (source) return source.trim();
-  const match = section.label.match(/(\[{2}[^\]]+\]{2})/);
-  return match ? match[1] : null;
-}
 
 interface CourseOverviewProps {
   courseSections: Section[];
@@ -34,7 +27,7 @@ export function CourseOverview({
   const moduleEntries = courseSections
     .filter(s => s.type === 'module-ref' && s.level === 1)
     .map(section => {
-      const wikilink = extractWikilink(section);
+      const wikilink = sectionWikilink(section);
       if (!wikilink) return null;
       const uuid = resolveWikilinkToUuid(wikilink, coursePath, metadata);
       if (!uuid) return null;
