@@ -35,7 +35,7 @@ import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
 import type { WikilinkContext } from './extensions/livePreview';
 import { wikilinkAutocomplete } from './extensions/wikilinkAutocomplete';
-import { remoteCursorTheme } from './remoteCursorTheme';
+import { remoteCarets } from './extensions/remoteCarets';
 import { criticMarkupExtension, commentClickCallback, toggleSuggestionMode } from './extensions/criticmarkup';
 import { authorshipExtension } from './extensions/authorship';
 import {
@@ -389,7 +389,10 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         Prec.high(keymap.of(checklistKeymap)),
         Prec.high(keymap.of(markdownFormattingKeymap)),
         listIndentKeymap,
-        yCollab(ytext, provider.awareness, { undoManager }),
+        // Awareness stays out of yCollab: collaborator carets come from
+        // remoteCarets, which hides the name labels until hover/movement.
+        yCollab(ytext, null, { undoManager }),
+        remoteCarets({ ytext, awareness: provider.awareness }),
         // Must come after yCollab: reads the Y.Text during plugin update()
         authorshipExtension(ytext),
         // Large pastes get a temporary clientID + "who wrote this?" popover
@@ -402,7 +405,6 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
               ),
             ]),
         wikilinkAutocomplete(getMetadata, getCurrentFilePath),
-        remoteCursorTheme,
         criticMarkupExtension({ canAcceptReject }),
         commentClickCallback.of((absFrom) => onCommentClickRef.current?.(absFrom)),
         harperLinter,

@@ -1,4 +1,6 @@
-import { linter, type Diagnostic } from '@codemirror/lint';
+import { forceLinting, linter, type Diagnostic } from '@codemirror/lint';
+import type { Extension } from '@codemirror/state';
+import { persistedFlag } from '../../../lib/persisted-pref';
 import type { EditorView } from '@codemirror/view';
 import { LocalLinter, BinaryModule, SuggestionKind } from 'harper.js';
 import type { Linter, Lint } from 'harper.js';
@@ -78,6 +80,18 @@ function suggestionLabel(lint: Lint, suggestion: ReturnType<Lint['suggestions']>
   return suggestion.get_replacement_text();
 }
 
+// Per-browser switch. Harper only knows English, so authors of courses in
+// other languages turn it off; the choice survives reloads.
+const spellcheckPref = persistedFlag('lens-editor-spellcheck', true);
+export const { load: loadSpellcheckEnabled, save: saveSpellcheckEnabled, field: spellcheckEnabledField } = spellcheckPref;
+
+/** Switch Harper on or off in this view and re-lint right away. */
+export function toggleSpellcheck(view: EditorView, enabled: boolean): void {
+  view.dispatch({ effects: spellcheckPref.set.of(enabled) });
+  // needsRefresh only arms the linter's delay timer; force runs it now.
+  forceLinting(view);
+}
+
 // Module-scoped folder path — updated from Editor.tsx when the active file changes.
 let currentFolder = '';
 
@@ -87,6 +101,7 @@ export function updateHarperFolder(path: string | undefined) {
 }
 
 async function checkText(view: EditorView): Promise<Diagnostic[]> {
+  if (!view.state.field(spellcheckEnabledField)) return [];
   // Only lint documents inside the Lens Edu folder
   if (!currentFolder.startsWith('/Lens Edu/')) return [];
 
@@ -145,6 +160,12 @@ async function checkText(view: EditorView): Promise<Diagnostic[]> {
  * Non-content regions (frontmatter, headings, key:: fields) are masked
  * so only prose is linted. WASM linter runs in a web worker.
  */
-export const harperLinter = linter(checkText, {
-  delay: 1000,
-});
+export const harperLinter: Extension = [
+  spellcheckEnabledField,
+  linter(checkText, {
+    delay: 1000,
+    // Flipping the switch has no doc change, so tell the linter to run again.
+    needsRefresh: (update) =>
+      update.startState.field(spellcheckEnabledField) !== update.state.field(spellcheckEnabledField),
+  }),
+];

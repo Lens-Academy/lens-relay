@@ -12,7 +12,6 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { ySectionSync, ySectionUndoManagerKeymap } from './y-section-sync';
-import { remoteCursorTheme } from '../Editor/remoteCursorTheme';
 import {
   criticMarkupExtension,
   commentOffsetTranslator,
@@ -134,7 +133,6 @@ export function createSectionEditorView(opts: {
         keymap.of(defaultKeymap),
         markdown({ base: markdownLanguage, addKeymap: false }),
         ySectionSync(ytext, sectionFrom, editTo, { awareness }),
-        remoteCursorTheme,
         EditorView.lineWrapping,
         ...criticMarkupExtensions,
         ...addCommentKeymap,
