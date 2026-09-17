@@ -1,13 +1,20 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import type { StateEffect } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import {
   authorshipModeField,
+  authorshipHoverField,
   recentWindowField,
   recentEnabledField,
   setAuthorshipMode,
+  setAuthorshipHover,
   setRecentWindow,
   setRecentEnabled,
+  loadAuthorshipMode,
+  saveAuthorshipMode,
+  loadAuthorshipHover,
+  saveAuthorshipHover,
   loadRecentWindow,
   saveRecentWindow,
   loadRecentEnabled,
@@ -48,12 +55,54 @@ function AuthorshipIcon({ dimmed }: { dimmed: boolean }) {
   );
 }
 
+/** One on/off row of the menu, with an optional block shown while on. */
+function MenuSwitch({
+  label,
+  description,
+  checked,
+  accent,
+  onClick,
+  children,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  accent: string;
+  onClick: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="border-t border-gray-100 mt-1 pt-1">
+      <button
+        type="button"
+        role="menuitemcheckbox"
+        aria-checked={checked}
+        onClick={onClick}
+        className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm hover:bg-gray-50 text-gray-900"
+      >
+        <span>
+          <span className="block">{label}</span>
+          <span className="block text-xs text-gray-400">{description}</span>
+        </span>
+        <span
+          aria-hidden="true"
+          className={`relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors ${checked ? accent : 'bg-gray-300'}`}
+        >
+          <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${checked ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+        </span>
+      </button>
+      {children}
+    </div>
+  );
+}
+
 /**
  * Dropdown selecting the authorship provenance display mode.
  * Shows the current setting on the button; options: Off / Gutter / Inline.
  */
 export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
-  const [mode, setMode] = useState<AuthorshipMode>('gutter');
+  const [mode, setMode] = useState<AuthorshipMode>(() => loadAuthorshipMode());
+  const [hoverEnabled, setHoverEnabledState] = useState<boolean>(() => loadAuthorshipHover());
   const [windowMs, setWindowMs] = useState<number>(() => loadRecentWindow());
   const [recentEnabled, setRecentEnabledState] = useState<boolean>(() => loadRecentEnabled());
   const [open, setOpen] = useState(false);
@@ -61,25 +110,30 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ top: 0, right: 0 });
 
-  // A recreated EditorView (doc switch) starts back at the field's default
-  // while this component keeps its selection — bring the view in line.
+  // A recreated EditorView (doc switch) seeds its fields from storage. When
+  // storage is unavailable that is the default, not what this component
+  // shows — bring the view in line, in one transaction.
   useEffect(() => {
     if (!view) return;
-    if (view.state.field(authorshipModeField, false) !== mode) {
-      view.dispatch({ effects: setAuthorshipMode.of(mode) });
-    }
-    if (view.state.field(recentWindowField, false) !== windowMs) {
-      view.dispatch({ effects: setRecentWindow.of(windowMs) });
-    }
-    if (view.state.field(recentEnabledField, false) !== recentEnabled) {
-      view.dispatch({ effects: setRecentEnabled.of(recentEnabled) });
-    }
-  }, [view, mode, windowMs, recentEnabled]);
+    const effects: StateEffect<unknown>[] = [];
+    if (view.state.field(authorshipModeField, false) !== mode) effects.push(setAuthorshipMode.of(mode));
+    if (view.state.field(recentWindowField, false) !== windowMs) effects.push(setRecentWindow.of(windowMs));
+    if (view.state.field(recentEnabledField, false) !== recentEnabled) effects.push(setRecentEnabled.of(recentEnabled));
+    if (view.state.field(authorshipHoverField, false) !== hoverEnabled) effects.push(setAuthorshipHover.of(hoverEnabled));
+    if (effects.length) view.dispatch({ effects });
+  }, [view, mode, windowMs, recentEnabled, hoverEnabled]);
 
   const selectWindow = (ms: number) => {
     setWindowMs(ms);
     saveRecentWindow(ms);
     if (view) view.dispatch({ effects: setRecentWindow.of(ms) });
+  };
+
+  const toggleHover = () => {
+    const next = !hoverEnabled;
+    setHoverEnabledState(next);
+    saveAuthorshipHover(next);
+    if (view) view.dispatch({ effects: setAuthorshipHover.of(next) });
   };
 
   const toggleRecent = () => {
@@ -129,6 +183,7 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
     setOpen(false);
     if (!view) return;
     setMode(next);
+    saveAuthorshipMode(next);
     view.dispatch({ effects: setAuthorshipMode.of(next) });
   };
 
@@ -196,25 +251,20 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
               )}
             </button>
           ))}
-          <div className="border-t border-gray-100 mt-1 pt-1">
-            <button
-              type="button"
-              role="menuitemcheckbox"
-              aria-checked={recentEnabled}
-              onClick={toggleRecent}
-              className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm hover:bg-gray-50 text-gray-900"
-            >
-              <span>
-                <span className="block">Highlight recent changes</span>
-                <span className="block text-xs text-gray-400">Direct AI edits within a time window</span>
-              </span>
-              <span
-                aria-hidden="true"
-                className={`relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors ${recentEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}
-              >
-                <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${recentEnabled ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
-              </span>
-            </button>
+          <MenuSwitch
+            label="Show author on hover"
+            description="Who wrote the word under the pointer"
+            checked={hoverEnabled}
+            accent="bg-blue-500"
+            onClick={toggleHover}
+          />
+          <MenuSwitch
+            label="Highlight recent changes"
+            description="Direct AI edits within a time window"
+            checked={recentEnabled}
+            accent="bg-purple-500"
+            onClick={toggleRecent}
+          >
             {recentEnabled && (
               <div className="flex gap-1 px-3 pb-1.5 pt-0.5" role="group" aria-label="Recent changes window">
                 {RECENT_WINDOW_PRESETS.map((p) => (
@@ -235,7 +285,7 @@ export function AuthorshipModeToggle({ view }: AuthorshipModeToggleProps) {
                 ))}
               </div>
             )}
-          </div>
+          </MenuSwitch>
         </div>,
         document.body
       )}

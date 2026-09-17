@@ -30,7 +30,7 @@ import { html } from '@codemirror/lang-html';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
-import { remoteCursorTheme } from '../Editor/remoteCursorTheme';
+import { remoteCarets } from '../Editor/extensions/remoteCarets';
 
 interface HighlightRange {
   from: number;
@@ -130,8 +130,12 @@ export function HtmlSourceEditor({
           ...completionKeymap,
         ]),
         html(),
-        yCollab(ytext, awareness, { undoManager }),
-        remoteCursorTheme,
+        // yCollab without awareness keeps its sync + undo plugins and skips
+        // its remote selections; remoteCarets draws the collaborator carets.
+        // (Assembling sync + undo by hand is not an option: y-codemirror.next
+        // does not export the undo plugin.)
+        yCollab(ytext, null, { undoManager }),
+        remoteCarets({ ytext, awareness }),
         highlightField,
         EditorView.domEventHandlers({
           mouseup(event, view) {
