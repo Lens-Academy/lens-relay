@@ -22,10 +22,10 @@ import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import { renamePreservingExtension } from '../../lib/filename-utils';
 import { SegmentedToggle, type SegmentedValue } from '../SegmentedToggle';
 import { CourseTree } from './CourseTree/CourseTree';
-import { readStored, writeStored } from '../../lib/local-storage';
+import { persistedChoice } from '../../lib/persisted-pref';
 
-const SIDEBAR_VIEW_KEY = 'sidebar:view';
 type SidebarView = 'files' | 'course';
+const sidebarView = persistedChoice<SidebarView>('sidebar:view', ['files', 'course'], 'files');
 
 export function Sidebar() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -43,11 +43,11 @@ export function Sidebar() {
   const activeDocId = useResolvedDocId(shortCompoundId, metadata).docId || '';
 
   // Files (the shared folders) or Course (the embed tree of the open course)
-  const [view, setView] = useState<SidebarView>(() => (readStored(SIDEBAR_VIEW_KEY) === 'course' ? 'course' : 'files'));
+  const [view, setView] = useState<SidebarView>(sidebarView.load);
   const handleViewChange = useCallback((value: SegmentedValue) => {
     const next: SidebarView = value === 'right' ? 'course' : 'files';
     setView(next);
-    writeStored(SIDEBAR_VIEW_KEY, next);
+    sidebarView.save(next);
   }, []);
 
   // State for file name filter (separate from full-text search)
