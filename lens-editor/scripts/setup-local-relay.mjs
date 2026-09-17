@@ -362,8 +362,15 @@ Go to [/add-article](/add-article) (with an edit-scoped share token for the Lens
 slug: demo-course
 title: "Demo Course"
 ---
+application-survey:: [[../surveys/Demo Survey]]
 
 # Module: [[../modules/Demo Module|Demo Module]]
+
+# Meeting: Demo Meeting
+meeting-doc-template:: https://docs.google.com/document/d/example/edit
+survey:: [[../surveys/Demo Survey]]
+
+# Module: [[../modules/Demo Module 2|Demo Module 2]]
 `,
       },
       {
@@ -390,6 +397,101 @@ id:: ed000007-0000-4000-8000-0000000000a7
 content::
 Hello from the demo module. This inline lens exists so course-mode lens
 selection has something to render.
+
+# Lens:
+source:: ![[../Lenses/Demo Lens]]
+
+# Learning Outcome:
+source:: ![[../Learning Outcomes/Demo Outcome]]
+`,
+      },
+      // Second module, sharing the lens with the first and pointing at a
+      // file that does not exist, so the sidebar's course tree can show a
+      // shared node and an unresolved link.
+      {
+        path: '/modules/Demo Module 2.md',
+        id: 'ed000008-0000-4000-8000-0000000000a8',
+        type: 'markdown',
+        version: 0,
+        content: `---
+slug: demo-module-2
+title: "Demo Module 2"
+---
+
+# Lens:
+source:: ![[../Lenses/Demo Lens]]
+
+# Lens:
+source:: ![[../Lenses/Missing Lens]]
+`,
+      },
+      {
+        path: '/Lenses',
+        id: 'ed000009-0000-4000-8000-0000000000a9',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Lenses/Demo Lens.md',
+        id: 'ed00000a-0000-4000-8000-0000000000aa',
+        type: 'markdown',
+        version: 0,
+        content: `---
+title: "Demo Lens"
+tldr: "A lens that embeds the sample article."
+---
+
+#### Article
+source:: [[../articles/sample-existing-article]]
+
+#### Text
+content::
+A short reflection after the article.
+`,
+      },
+      {
+        path: '/Learning Outcomes',
+        id: 'ed00000b-0000-4000-8000-0000000000ab',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Learning Outcomes/Demo Outcome.md',
+        id: 'ed00000c-0000-4000-8000-0000000000ac',
+        type: 'markdown',
+        version: 0,
+        content: `---
+learning-outcome: "Explain what the demo course is for."
+---
+
+## Test:
+What is the demo course for?
+
+# Suggested Lenses:
+## Lens:
+source:: [[../Lenses/Demo Lens]]
+`,
+      },
+      {
+        path: '/surveys',
+        id: 'ed00000d-0000-4000-8000-0000000000ad',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/surveys/Demo Survey.md',
+        id: 'ed00000e-0000-4000-8000-0000000000ae',
+        type: 'markdown',
+        version: 0,
+        content: `---
+title: "Demo Survey"
+---
+
+#### Question
+How was the meeting?
 `,
       },
     ],
