@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type * as Y from 'yjs';
-import { useDocConnection } from './useDocConnection';
+import { useDocConnection, teardownProvider } from './useDocConnection';
 import { RELAY_ID } from '../lib/constants';
 
 export interface DocTextState {
@@ -20,12 +20,14 @@ const SETTLE_MS = 150;
  * coalesced so a collaborator typing does not re-render per keystroke.
  */
 export function useDocTexts(): { docs: Record<string, DocTextState>; request: (uuids: string[]) => void } {
-  const { getOrConnect, disconnect, disconnectAll } = useDocConnection();
+  const { getOrConnect, disconnectAll } = useDocConnection();
   const [docs, setDocs] = useState<Record<string, DocTextState>>({});
   const requested = useRef(new Set<string>());
   const observers = useRef(new Map<string, { ytext: Y.Text; handler: () => void }>());
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  const unmounted = useRef(false);
+  // Bumped on unmount: a connection that resolves for an older generation
+  // belongs to a torn-down instance (StrictMode remount, or the real thing).
+  const generation = useRef(0);
   const disconnectAllRef = useRef(disconnectAll);
   useEffect(() => {
     disconnectAllRef.current = disconnectAll;
@@ -41,13 +43,14 @@ export function useDocTexts(): { docs: Record<string, DocTextState>; request: (u
       return next;
     });
 
+    const gen = generation.current;
     for (const uuid of fresh) {
-      const docId = `${RELAY_ID}-${uuid}`;
-      getOrConnect(docId).then(({ doc }) => {
-        if (unmounted.current) {
-          // Resolved after unmount: disconnectAll already ran, so this one
-          // would otherwise reconnect forever.
-          disconnect(docId);
+      getOrConnect(`${RELAY_ID}-${uuid}`).then(({ doc, provider }) => {
+        if (gen !== generation.current) {
+          // Resolved after the teardown that disconnected everything else:
+          // left alone it would reconnect forever.
+          teardownProvider(provider);
+          doc.destroy();
           return;
         }
         const ytext = doc.getText('contents');
@@ -63,20 +66,19 @@ export function useDocTexts(): { docs: Record<string, DocTextState>; request: (u
         ytext.observe(handler);
         observers.current.set(uuid, { ytext, handler });
       }).catch((err: unknown) => {
-        if (unmounted.current) return;
+        if (gen !== generation.current) return;
         console.error(`[useDocTexts] failed to load ${uuid}:`, err);
         setDocs(prev => ({ ...prev, [uuid]: { status: 'error', text: '' } }));
       });
     }
-  }, [getOrConnect, disconnect]);
+  }, [getOrConnect]);
 
   useEffect(() => {
-    unmounted.current = false;
     const active = observers.current;
     const pending = timers.current;
     const asked = requested.current;
     return () => {
-      unmounted.current = true;
+      generation.current += 1;
       for (const { ytext, handler } of active.values()) ytext.unobserve(handler);
       active.clear();
       for (const timer of pending.values()) clearTimeout(timer);
