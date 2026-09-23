@@ -74,7 +74,7 @@ describe("direct source review", () => {
     );
     expect(buildVerifyPrompt("/tmp/review")).toContain("Never put a substantive section, footnotes, or prose");
     expect(buildVerifyPrompt("/tmp/review")).toContain(
-      "Wrap a subordinate appendix — a trailing section of a longer article, never the whole article — in a closed-by-default callout",
+      "Wrap a subordinate appendix — a trailing section of a longer article, never the whole article, and never past it into trailing footnote definitions — in a closed-by-default callout",
     );
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Keep the appendix's own `## ... ^id` heading and its ID as the first line inside the callout",
