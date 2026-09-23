@@ -7,7 +7,7 @@ Full article imports now use one mandatory, fail-closed review pipeline. Stubs a
 3. Apply syntax-aware, idempotent, source-preserving normalizations. Code,
    comments, CriticMarkup, and math are opaque to these repairs.
 4. Send the complete draft to Lens Platform's `/api/content/validate-article` endpoint.
-5. Run Claude Sonnet against local source evidence, the draft, and Platform findings. Claude has only `Read,Edit`; it edits the candidate directly and cannot fetch, run commands, create files, or delegate. It decides whether clearly terminal Acknowledgements, References, or standalone series navigation should be wrapped in `:::collapse`; substantive sections, footnotes, and following prose stay open. A subordinate appendix instead goes in a closed-by-default `:::callout`, never in `:::collapse`.
+5. Run Claude Sonnet against local source evidence, the draft, and Platform findings. Claude has only `Read,Edit`; it edits the candidate directly and cannot fetch, run commands, create files, or delegate. It decides whether clearly terminal Acknowledgements, References, or standalone series navigation should be wrapped in `:::collapse`; substantive sections, footnotes, and following prose stay open. A subordinate appendix instead goes in a closed-by-default `:::callout`, never in `:::hide`.
 6. Programmatically protect pipeline-owned metadata and authoring comments, regenerate metadata, and validate again. Up to two additional repair rounds are allowed.
 7. Stamp review provenance, validate the exact final file, then write it to Relay.
 
