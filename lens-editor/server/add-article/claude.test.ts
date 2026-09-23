@@ -72,7 +72,13 @@ describe("direct source review", () => {
     expect(buildVerifyPrompt("/tmp/review")).toContain(
       "Use typed kebab-case footnote IDs: `[^cite-id]` for citations and `[^note-id]` for explanatory notes; rename every reference and definition together.",
     );
-    expect(buildVerifyPrompt("/tmp/review")).toContain("Never hide a substantive section, an appendix, footnotes, or prose");
+    expect(buildVerifyPrompt("/tmp/review")).toContain("Never put a substantive section, footnotes, or prose");
+    expect(buildVerifyPrompt("/tmp/review")).toContain(
+      'Wrap an appendix in a titled, closed-by-default callout (`:::callout {title="Appendix: ..." collapse="closed"}`',
+    );
+    expect(buildVerifyPrompt("/tmp/review")).toContain(
+      "keep the appendix's own `## ... ^id` heading and its ID as the first line inside the callout",
+    );
   });
 
   it("gives first-pass dual-candidate reviews only the constrained base selector", () => {
