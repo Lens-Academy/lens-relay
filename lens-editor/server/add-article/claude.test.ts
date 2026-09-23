@@ -77,9 +77,12 @@ describe("direct source review", () => {
       "Wrap a subordinate appendix — a trailing section of a longer article, never the whole article — in a closed-by-default callout",
     );
     expect(buildVerifyPrompt("/tmp/review")).toContain(
-      "keep the appendix's own `## ... ^id` heading and its ID as the first line inside the callout",
+      "Keep the appendix's own `## ... ^id` heading and its ID as the first line inside the callout",
     );
-    expect(buildVerifyPrompt("/tmp/review")).toContain("leave the callout untitled since that heading already names it");
+    expect(buildVerifyPrompt("/tmp/review")).toContain('titled "Appendix" (`:::callout {title="Appendix" collapse="closed"}`');
+    expect(buildVerifyPrompt("/tmp/review")).toContain(
+      "unless the body's own prose treats it as something to read inline rather than skip",
+    );
   });
 
   it("gives first-pass dual-candidate reviews only the constrained base selector", () => {
