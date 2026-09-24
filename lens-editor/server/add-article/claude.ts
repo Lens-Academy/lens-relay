@@ -16,7 +16,7 @@ import type { ArticleMeta } from "./types";
 // hung Claude processes. Overridable for experiments.
 export const VERIFY_TIMEOUT_MS =
   (Number(process.env.CLAUDE_REVIEW_TIMEOUT_MINUTES) || 20) * 60_000;
-export const REVIEW_VERSION = "article-qc-v1.3";
+export const REVIEW_VERSION = "article-qc-v1.4";
 export const REVIEW_MODEL = "sonnet";
 export const MAX_REVIEW_ROUNDS = 3;
 export const DEFAULT_REVIEW_BUDGET_USD = 10;
@@ -152,9 +152,9 @@ Remove Creative Commons and other licensing notices from imported articles.
 
 Do not create or run scripts. Make every content change directly in article.md with Edit.
 
-Apply presentation judgment to clearly terminal auxiliary material. Wrap terminal Acknowledgements, terminal References, and standalone previous/next-series navigation in an exact \`:::hide\` / \`:::\` block (\`:::collapse\` is a deprecated alias — do not use it). Never hide a substantive section, an appendix, footnotes, or prose that follows the auxiliary material. Do not add a hide block when terminal status is ambiguous.
+Apply presentation judgment to clearly terminal auxiliary material. Wrap terminal Acknowledgements, terminal References, and standalone previous/next-series navigation in an exact \`:::hide\` / \`:::\` block (\`:::collapse\` is a deprecated alias — do not use it). Never put a substantive section, footnotes, or prose that follows the auxiliary material in a hide block; an appendix goes in a closed callout instead (below), never in \`:::hide\`. Do not add a hide block when terminal status is ambiguous.
 
-The platform also renders callout boxes: \`:::callout {title="..." tone="..."}\` ... \`:::\`. Title is free text and optional; tones are neutral, blue, green, amber, red, and purple; add collapse="closed" (or collapse="open") to make the callout expandable. Use callouts only where the source itself presents content as a distinct box or expandable unit — an FAQ entry (title = the question, body = the answer, collapse="closed"), an accordion/details section, or a clearly boxed aside, exercise, definition, or warning. Do not wrap ordinary prose in callouts, and nest with more colons on the outer block when a callout must contain another directive.
+The platform also renders callout boxes: \`:::callout {title="..." tone="..."}\` ... \`:::\`. Title is free text and optional; tones are neutral, blue, green, amber, red, and purple; add collapse="closed" (or collapse="open") to make the callout expandable. Use callouts only where the source itself presents content as a distinct box or expandable unit — an FAQ entry (title = the question, body = the answer, collapse="closed"), an accordion/details section, or a clearly boxed aside, exercise, definition, or warning. Do not wrap ordinary prose in callouts, and nest with more colons on the outer block when a callout must contain another directive. Wrap a subordinate appendix — a trailing section of a longer article, never the whole article, and never past it into trailing footnote definitions — in a closed-by-default callout titled "Appendix" (\`:::callout {title="Appendix" collapse="closed"}\` ... \`:::\`) rather than leaving it in the main body, even when the source did not box it, unless the body's own prose treats it as something to read inline rather than skip. Keep the appendix's own \`## ... ^id\` heading and its ID as the first line inside the callout so existing \`[[#^id]]\` links keep resolving.
 
 Lines of the form \`::video[[../video_transcripts/...]]\` are platform video embeds the importer inserted for the source's embedded videos, backed by imported transcript documents. Keep each on its own line at the position matching the source, never move one inside a \`:::hide\` block, and do not rewrite it as a link or iframe. If a video embed could not be imported, the importer left a plain video URL link instead — leave it as a link.
 
