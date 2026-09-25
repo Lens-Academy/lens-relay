@@ -193,6 +193,16 @@ pub async fn execute(
                 file_path
             ));
         }
+        if file_path.to_ascii_lowercase().ends_with(".html")
+            && new_string.contains("{>>")
+            && new_string.contains("<<}")
+            && !old_string.contains("{>>")
+        {
+            return Err(format!(
+                "Error: {{>>…<<}} comments are for Markdown; in {} they would show as text on the page. To comment on an HTML page, use the comments tool (action \"add\").",
+                file_path
+            ));
+        }
     }
 
     // 3. Check read-before-edit: session must have read this document first
@@ -553,15 +563,16 @@ async fn edit_raw_ytext_file(
         .await
         .map_err(|e| format!("Error: Failed to load document {}: {}", file_path, e))?;
 
-    let (before, edited) = {
+    let (before, edited, threads) = {
         let awareness = server
             .docs()
             .get(&doc_info.doc_id)
             .map(|doc_ref| doc_ref.awareness())
             .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
         let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-        let (start, len, before, edited) = {
+        let (start, len, before, edited, threads) = {
             let txn = guard.doc.transact();
+            let threads = super::html_comments::read_threads(&txn);
             let content = match txn.get_text("contents") {
                 Some(text) => text.get_string(&txn),
                 None => String::new(),
@@ -595,7 +606,7 @@ async fn edit_raw_ytext_file(
                 &content[match_start + old_string.len()..]
             );
             super::html_check::preserve_comment_blocks(&content, &edited)?;
-            (match_start as u32, old_string.len() as u32, content, edited)
+            (match_start as u32, old_string.len() as u32, content, edited, threads)
         };
 
         let timestamp = std::time::SystemTime::now()
@@ -614,7 +625,7 @@ async fn edit_raw_ytext_file(
             },
         )
         .map_err(|e| format!("Error: {}", e))?;
-        (before, edited)
+        (before, edited, threads)
     };
 
     {
@@ -628,9 +639,10 @@ async fn edit_raw_ytext_file(
     }
 
     Ok(format!(
-        "Edited {}: replaced {} characters.{}",
+        "Edited {}: replaced {} characters.{}{}",
         file_path,
         old_string.chars().count(),
+        super::html_comments::removed_quote_notes(&before, &edited, &threads).unwrap_or_default(),
         super::html_check::edit_suffix(&before, &edited)
     ))
 }

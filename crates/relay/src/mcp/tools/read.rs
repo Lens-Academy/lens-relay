@@ -145,8 +145,9 @@ pub async fn execute(
         .await
         .map_err(|e| format!("Error: Failed to load document {}: {}", file_path, e))?;
 
-    // Read Y.Doc content into an owned String, then drop all guards
-    let content = {
+    // Read Y.Doc content (and an HTML page's comment threads) into owned
+    // values, then drop all guards
+    let (content, threads) = {
         let doc_ref = server
             .docs()
             .get(&doc_info.doc_id)
@@ -154,10 +155,16 @@ pub async fn execute(
         let awareness = doc_ref.awareness();
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
-        match txn.get_text("contents") {
+        let content = match txn.get_text("contents") {
             Some(text) => text.get_string(&txn),
             None => String::new(),
-        }
+        };
+        let threads = if blob::is_raw_ytext_file(file_path) {
+            super::html_comments::read_threads(&txn)
+        } else {
+            Vec::new()
+        };
+        (content, threads)
         // guard, awareness, doc_ref all dropped here
     };
 
@@ -167,7 +174,18 @@ pub async fn execute(
     }
 
     if blob::is_raw_ytext_file(file_path) {
-        return Ok(format_cat_n(&content, offset, limit));
+        let mut output = format_cat_n(&content, offset, limit);
+        // Threads come with the first chunk of a paged read.
+        let listing = if offset <= 1 {
+            super::html_comments::render_threads(&threads, Some(&content), false)
+        } else {
+            None
+        };
+        if let Some(listing) = listing {
+            output.push_str("\n\n");
+            output.push_str(&listing);
+        }
+        return Ok(output);
     }
 
     // Parse CriticMarkup and return accepted view

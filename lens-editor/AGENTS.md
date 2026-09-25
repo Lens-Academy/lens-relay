@@ -95,6 +95,9 @@ doc.getMap('users')          // PermanentUserData: actor key → { ids, ds, meta
 doc.getMap('activity_v0')    // direct AI edits: event id → { ts, actor, kind, old, new, client, clock_from, clock_to, anchor, … }
                              // written by the relay's MCP edit path, pruned after 7 days; read by src/lib/activity.ts
                              // for the editor's "Recent" authorship mode and served on /recent via GET /recent-changes
+doc.getMap('comments_v0')    // HTML pages only: comment threads, thread id → Y.Map { anchor, status, createdAt,
+                             // createdBy, resolvedAt?, resolvedBy?, seen?, originalQuote?, messages: Y.Map<id, {…}> }
+                             // (src/components/HtmlEditor/comments/thread-store.ts; the relay's comments MCP tool)
 ```
 
 See `src/test/fixtures/folder-metadata/production-sample.json` for real production data.
@@ -106,3 +109,13 @@ lives in `src/components/HtmlEditor/runtime/page-runtime.ts` (CSP, import map, `
 services in `bridge/page-services.ts`; both are bundled into the bridge by `vite-plugin-bridge-bundle.ts`. Pages that
 hang the preview can be opened with `?view=source`. The author-facing rules are the relay doc
 `Lens/AI Guide/HTML Pages.md`.
+
+Comments on HTML pages are stored out of band (`comments_v0`, above) and anchored to the rendered page:
+- `anchoring/`: the page's visible-text index, describing a click/selection/element as an anchor, and resolving it
+  again (exact quote + context → scope → fuzzy → between old context; `guessed` rather than confidently wrong).
+- `bridge/comment-layer.ts`: runs in the preview frame; resolves on render and DOM changes, draws highlights and
+  badges without touching the page's DOM, and implements Comment mode (button or `C`; Esc leaves).
+- `comments/useHtmlComments.ts`: threads, document-order numbering, write-backs (refreshing drifted anchors,
+  recording what editors saw for agents) and the one-time migration of old inline `<!--lens-comment-->` markers.
+- The page can forge bridge messages: `HtmlPreview.tsx` accepts captures and descriptions only in reply to requests.
+- `scripts/anchor-bench/run.ts <dir of .html>` benchmarks anchoring against edits on real pages.

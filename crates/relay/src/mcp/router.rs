@@ -227,6 +227,7 @@ mod tests {
             .collect();
         names.sort_unstable();
         let mut expected = vec![
+            "comments",
             "create",
             "create_session",
             "delete",

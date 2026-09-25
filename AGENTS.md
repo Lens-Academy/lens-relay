@@ -215,9 +215,20 @@ restores. An hourly sweep purges entries older than `[server] trash_retention_da
 srcdoc iframe with a CSP (scripts only from a CDN allowlist), a pinned import map (React 19, htm, recharts, d3, …),
 a per-viewer localStorage shim, and runtime "page problems" (errors, blocked hosts, failed imports, sideways
 overflow) shown in the editor, which also has a Desktop/Phone preview. MCP `create`/`edit` on `.html` append a
-static page check; HTML edits apply directly by UTF-8 byte offset and refuse to drop `<!--lens-comment-->`
-blocks. The author guide is the relay doc `Lens/AI Guide/HTML Pages.md`; keep the host lists and import-map
-keys in `page-runtime.ts`, `html_check.rs`, the `create` tool description and the guide in sync.
+static page check; HTML edits apply directly by UTF-8 byte offset (and refuse to drop comments still in the old
+inline `<!--lens-comment-->` format until an editor migrates them). The author guide is the relay doc
+`Lens/AI Guide/HTML Pages.md`; keep the host lists and import-map keys in `page-runtime.ts`, `html_check.rs`, the
+`create` tool description and the guide in sync.
+
+**HTML-page comments, out of band** (`lens-editor/src/components/HtmlEditor/{anchoring,comments}/`,
+`bridge/comment-layer.ts`, `crates/relay/src/mcp/tools/html_comments.rs`; design in
+`docs/plans/2026-09-25-html-comments-redesign.md`): threads live in the content doc's `comments_v0` map, never in the
+HTML. Each anchors to what the reader sees (quote + context, scoped by an id/`data-lens-id` ancestor, element pins by
+id/label/path) and is re-resolved inside the preview frame on every render and DOM change, as anchored / guessed /
+hidden / orphaned. Highlights use the CSS Custom Highlight API and badges sit in a shadow root after `<body>`, so the
+page's DOM is never touched. MCP: `read` of an `.html` lists open threads, the `comments` tool adds / replies /
+resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anchoring changes with
+`lens-editor/scripts/anchor-bench/run.ts` (real pages, ground-truth markers, edit scenarios).
 
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change

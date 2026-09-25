@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import type { ThreadView, MessageView, ThreadKey } from './types';
+import type { ThreadView, MessageView, ThreadKey, ThreadActions, ThreadAnchorInfo } from './types';
 import { formatTimestamp } from '../../lib/format-timestamp';
 import { AddCommentForm } from './AddCommentForm';
 import { ConfirmDialog } from '../ConfirmDialog';
@@ -13,12 +13,70 @@ export interface CommentCardProps {
   onReply: (thread: ThreadView, body: string) => void;
   onEdit: (message: MessageView, newBody: string) => void;
   onDelete: (message: MessageView) => void;
+  /** Resolve / re-attach actions, for comment sources that support them. */
+  actions?: ThreadActions;
 }
 
 const CARD_BORDER = '#e8e5df';
 
+function clipText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function stop(fn: () => void) {
+  return (e: React.MouseEvent) => {
+    e.stopPropagation();
+    fn();
+  };
+}
+
+const LINK_BUTTON = 'text-[11px] font-medium text-blue-600 hover:text-blue-800';
+
+/** What the thread points at in the page, and whether it is still found there. */
+function AnchorLine({ info, thread, actions }: { info: ThreadAnchorInfo; thread: ThreadView; actions?: ThreadActions }) {
+  const status = {
+    anchored: null,
+    locating: null,
+    hidden: { label: 'In a hidden part of the page', cls: 'bg-gray-100 text-gray-600' },
+    guessed: { label: 'Moved? Check the spot', cls: 'bg-orange-100 text-orange-800' },
+    orphaned: { label: 'Not found on the page', cls: 'bg-red-100 text-red-700' },
+  }[info.state];
+  return (
+    <div className="px-3 pt-2" data-anchor-state={info.state}>
+      <p
+        className={`border-l-2 pl-2 text-[12px] italic leading-snug ${info.state === 'orphaned' ? 'text-gray-400 line-through decoration-gray-300' : 'text-gray-600'}`}
+        style={{ borderColor: info.state === 'guessed' ? '#fb923c' : info.state === 'orphaned' ? '#fca5a5' : '#fcd34d' }}
+        title={info.target}
+      >
+        {clipText(info.target, 140)}
+      </p>
+      {status && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${status.cls}`}>{status.label}</span>
+          {info.state === 'guessed' && actions?.onConfirmAnchor && (
+            <button type="button" className={LINK_BUTTON} onClick={stop(() => actions.onConfirmAnchor!(thread))}>
+              Looks right
+            </button>
+          )}
+          {(info.state === 'guessed' || info.state === 'orphaned') && actions?.onReattach && (
+            <button type="button" className={LINK_BUTTON} onClick={stop(() => actions.onReattach!(thread))}>
+              Re-attach
+            </button>
+          )}
+        </div>
+      )}
+      {info.state === 'guessed' && info.currentText && info.currentText !== info.target && (
+        <p className="mt-1 text-[11px] leading-snug text-gray-500">
+          Now on: “{clipText(info.currentText, 120)}”
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function CommentCard(props: CommentCardProps): ReactElement {
-  const { thread, number, focused, onFocus, onReply, onEdit, onDelete } = props;
+  const { thread, number, focused, onFocus, onReply, onEdit, onDelete, actions } = props;
+  const resolved = thread.resolved;
 
   const [showReplyForm, setShowReplyForm] = useState(false);
 
@@ -37,7 +95,8 @@ export function CommentCard(props: CommentCardProps): ReactElement {
 
   return (
     <div
-      className={`comments-card${focused ? ' comments-card--focused' : ''} bg-white rounded-lg border overflow-hidden transition-shadow`}
+      className={`comments-card${focused ? ' comments-card--focused' : ''}${resolved ? ' opacity-75' : ''} bg-white rounded-lg border overflow-hidden transition-shadow`}
+      data-resolved={resolved ? '' : undefined}
       style={{
         borderColor: focused ? undefined : CARD_BORDER,
         outline: focused ? '2px solid #3b82f6' : undefined,
@@ -72,6 +131,13 @@ export function CommentCard(props: CommentCardProps): ReactElement {
           </span>
         </div>
       )}
+
+      {resolved && (
+        <div className="px-3 pt-2">
+          <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-800">Resolved</span>
+        </div>
+      )}
+      {thread.anchor && <AnchorLine info={thread.anchor} thread={thread} actions={actions} />}
 
       {/* Root comment */}
       <div className="px-3 pt-2">
@@ -118,6 +184,24 @@ export function CommentCard(props: CommentCardProps): ReactElement {
           >
             Reply
           </button>
+        )}
+        {!resolved && actions?.onResolve && (
+          <button type="button" className={LINK_BUTTON} onClick={stop(() => actions.onResolve!(thread))}>
+            Resolve
+          </button>
+        )}
+        {resolved && (
+          <span className="text-[11px] text-gray-500">
+            Resolved by {resolved.by}
+            {actions?.onReopen && (
+              <>
+                {' · '}
+                <button type="button" className={LINK_BUTTON} onClick={stop(() => actions.onReopen!(thread))}>
+                  Reopen
+                </button>
+              </>
+            )}
+          </span>
         )}
       </div>
 

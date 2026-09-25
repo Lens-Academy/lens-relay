@@ -10,6 +10,7 @@ pub mod get_url;
 pub mod glob;
 pub mod grep;
 pub mod html_check;
+pub mod html_comments;
 pub mod import_attachment;
 pub mod import_source;
 pub mod move_doc;
@@ -28,8 +29,9 @@ use y_sweet_core::share_token::McpAccess;
 /// Tools that mutate the knowledge base. Read-only MCP keys are refused these
 /// by name in [`dispatch_tool`], so every new write tool must be listed here.
 /// `import_article` is the hidden alias of `import_source`.
-pub const WRITE_TOOLS: [&str; 8] = [
+pub const WRITE_TOOLS: [&str; 9] = [
     "edit",
+    "comments",
     "create",
     "move",
     "delete",
@@ -336,7 +338,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "edit",
-            "description": "Edit a document by replacing old_string with new_string. Read and match the clean document text, never CriticMarkup syntax. For markdown the server decides how the edit lands: it is applied directly when it only adds text or changes text the AI itself wrote, and it becomes a pending change (shown to the user for review) when it would replace or delete human-written or unattributed text, or touches existing pending changes or comments. Either way just edit — the result tells you which happened ('Made the changes' vs 'Made pending changes'); relay that briefly and do not apologize for or explain the mechanism unless asked. Direct changes are logged for seven days and visible to the user on the editor's Recent changes page. Pass mode: 'suggest' only when the user explicitly wants a proposal to review before it lands. You may call edit repeatedly, including over the same range; pending changes are merged and superseded automatically. For JSON and HTML: exact text replacement applied directly (no pending changes; mode 'suggest' is refused for HTML). HTML edits must keep collaborators' <!--lens-comment …--> / <!--lens-reply …--> blocks unchanged, and the result ends with a page check listing problems the edit introduced for the editor preview. You must read the document first.",
+            "description": "Edit a document by replacing old_string with new_string. Read and match the clean document text, never CriticMarkup syntax. For markdown the server decides how the edit lands: it is applied directly when it only adds text or changes text the AI itself wrote, and it becomes a pending change (shown to the user for review) when it would replace or delete human-written or unattributed text, or touches existing pending changes or comments. Either way just edit — the result tells you which happened ('Made the changes' vs 'Made pending changes'); relay that briefly and do not apologize for or explain the mechanism unless asked. Direct changes are logged for seven days and visible to the user on the editor's Recent changes page. Pass mode: 'suggest' only when the user explicitly wants a proposal to review before it lands. You may call edit repeatedly, including over the same range; pending changes are merged and superseded automatically. For JSON and HTML: exact text replacement applied directly (no pending changes; mode 'suggest' is refused for HTML). HTML comments live beside the page (see the comments tool), so edits never break them; the result warns when an edit removes text an open comment quotes, and ends with a page check listing problems the edit introduced for the editor preview. You must read the document first.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "old_string", "new_string", "session_id"],
@@ -352,7 +354,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "The replacement text. Empty string for deletion. To leave a comment for human reviewers, wrap a note in comment delimiters, e.g. '{>>your note<<}'; it is automatically attributed to your session (do not add author metadata yourself)."
+                        "description": "The replacement text. Empty string for deletion. In Markdown, to leave a comment for human reviewers, wrap a note in comment delimiters, e.g. '{>>your note<<}'; it is automatically attributed to your session (do not add author metadata yourself). On .html pages use the comments tool instead."
                     },
                     "session_id": {
                         "type": "string",
@@ -362,6 +364,45 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
                         "type": "string",
                         "enum": ["auto", "suggest"],
                         "description": "auto (default): the server applies the edit directly when safe and falls back to a pending change otherwise. suggest: always create a pending change for human review."
+                    }
+                }
+            }
+        }));
+        tools.push(json!({
+            "name": "comments",
+            "description": "Comment threads on an HTML page (.html), like comments on a Claude artifact. Threads are stored beside the page, not in its source, and point at text in the rendered page, so they follow that text through edits and layout changes; `read` of a page lists its open threads with their ids. Actions: add (quote + body: comment on the exact visible text `quote`; if it appears several times, quote a longer unique passage or pass `occurrence`), reply (thread_id + body), resolve / reopen (thread_id, optional body as a closing note), reanchor (thread_id + quote: point a thread at text that moved or was reworded, e.g. after your edit removed what it quoted), list (all threads, resolved ones included). Quote text as a reader sees it; markup and entities are ignored and straight quotes match curly ones. Text that is not on the page is refused, except on pages whose scripts render text. For Markdown documents, comments are CriticMarkup written with edit instead.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["action", "file_path", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "add", "reply", "resolve", "reopen", "reanchor"]
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the HTML page (e.g. 'Lens/Plan.html')"
+                    },
+                    "thread_id": {
+                        "type": "string",
+                        "description": "Thread id from the read or list output (reply, resolve, reopen, reanchor)."
+                    },
+                    "quote": {
+                        "type": "string",
+                        "description": "Exact visible text the comment is about (add, reanchor)."
+                    },
+                    "occurrence": {
+                        "type": "number",
+                        "description": "1-based occurrence of quote when it appears more than once on the page."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Comment text (add, reply; optional closing note for resolve)."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
                     }
                 }
             }
@@ -492,8 +533,11 @@ pub async fn dispatch_tool(
     // Refresh activity so cleanup_stale doesn't evict an actively-used session.
     server.mcp_sessions.touch(session_id);
 
-    // Defense-in-depth: block write tools for read-only access
-    if !access.writable && WRITE_TOOLS.contains(&name) {
+    // Defense-in-depth: block write tools for read-only access (listing an
+    // HTML page's comment threads is a read)
+    let comment_listing =
+        name == "comments" && arguments.get("action").and_then(|v| v.as_str()) == Some("list");
+    if !access.writable && WRITE_TOOLS.contains(&name) && !comment_listing {
         return tool_error("Access denied: read-only access. Cannot use write tools.");
     }
     // `delete` is Admin/Edit only: a Suggest token can write (its edits become
@@ -563,6 +607,10 @@ pub async fn dispatch_tool(
             Err(msg) => tool_error(&msg),
         },
         "grep" => match grep::execute(server, arguments).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "comments" => match html_comments::execute(server, session_id, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
