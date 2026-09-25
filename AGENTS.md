@@ -210,6 +210,15 @@ restores. An hourly sweep purges entries older than `[server] trash_retention_da
 (default 10) from the file tree, the store (doc + blobs) and every index. See the
 "Deleting" section of `docs/server-ops.md`.
 
+**HTML pages, modelled on Claude artifacts** (`lens-editor/src/components/HtmlEditor/runtime/page-runtime.ts`,
+`bridge/page-services.ts`, `crates/relay/src/mcp/tools/html_check.rs`): `.html` documents render in a sandboxed
+srcdoc iframe with a CSP (scripts only from a CDN allowlist), a pinned import map (React 19, htm, recharts, d3, …),
+a per-viewer localStorage shim, and runtime "page problems" (errors, blocked hosts, failed imports, sideways
+overflow) shown in the editor, which also has a Desktop/Phone preview. MCP `create`/`edit` on `.html` append a
+static page check; HTML edits apply directly by UTF-8 byte offset and refuse to drop `<!--lens-comment-->`
+blocks. The author guide is the relay doc `Lens/AI Guide/HTML Pages.md`; keep the host lists and import-map
+keys in `page-runtime.ts`, `html_check.rs`, the `create` tool description and the guide in sync.
+
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change
   text attributed (via the doc's `users` provenance map) to an `ai:` actor; edits that would

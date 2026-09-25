@@ -9,6 +9,7 @@ import {
   type PreviewScrollState,
   type PreviewUiState,
 } from './protocol';
+import { installPageServices } from './page-services';
 
 // A) Monotonic layoutVersion bumped on each rebuildDots call
 let layoutVersion = 0;
@@ -525,6 +526,11 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     rebuildDots(comments);
   }
 
+  const pageServices = installPageServices(win, {
+    onProblems: problems => postToParent({ type: 'page-problems', payload: { problems } }),
+    onStorage: ops => postToParent({ type: 'storage-ops', payload: { ops } }),
+  });
+
   postToParent({ type: 'ready', payload: {} });
 
   let lastComments: CommentSummary[] = [];
@@ -625,6 +631,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       const comments = readCommentsFromInit(msg);
       if (!comments) return;
       nonce = data.nonce;
+      pageServices.connect();
       lastComments = comments;
       rebuildDotsWhenBodyReady(lastComments);
       return;
@@ -911,6 +918,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       selectionTimer = null;
     }
     doc.removeEventListener('DOMContentLoaded', domReadyListener);
+    pageServices.cleanup();
     dotRoot?.removeEventListener('click', markerClickListener);
     dotRoot = null;
     removeOwnedOverlayRoot(doc);
