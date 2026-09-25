@@ -26,7 +26,7 @@ describe('HtmlPreview', () => {
     vi.useRealTimers();
   });
 
-  it('renders a sandboxed iframe with ONLY the allow-scripts token (no allow-same-origin)', () => {
+  it('renders a sandboxed iframe that can run scripts but never reach the editor origin', () => {
     const doc = new Y.Doc();
     const ytext = doc.getText('contents');
     ytext.insert(0, '<h1>Hello</h1>');
@@ -35,8 +35,114 @@ describe('HtmlPreview', () => {
     const iframe = container.querySelector('iframe');
     expect(iframe).not.toBeNull();
     const sandbox = iframe!.getAttribute('sandbox') ?? '';
-    expect(sandbox).toBe('allow-scripts');
-    expect(sandbox).not.toContain('allow-same-origin');
+    const tokens = sandbox.split(/\s+/);
+    expect(tokens).toContain('allow-scripts');
+    // Same-origin would let the page read the editor's tokens; top navigation
+    // would let it replace the editor; modals would fire on every re-render.
+    expect(tokens).not.toContain('allow-same-origin');
+    expect(tokens.some(t => t.startsWith('allow-top-navigation'))).toBe(false);
+    expect(tokens).not.toContain('allow-modals');
+  });
+
+  it('wraps the page in the runtime head: CSP and import map before the bridge', () => {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} />);
+    const srcdoc = container.querySelector('iframe')!.getAttribute('srcdoc') ?? '';
+    expect(srcdoc.startsWith('<!doctype html><html><head><script>window.__lensLineOffset=')).toBe(true);
+    expect(srcdoc.indexOf('Content-Security-Policy')).toBeLessThan(srcdoc.indexOf('<title>'));
+    expect(srcdoc.indexOf('type="importmap"')).toBeLessThan(srcdoc.indexOf('<title>'));
+  });
+
+  it('seeds the page storage from the viewer copy and merges storage-ops into it', () => {
+    localStorage.setItem('lens-html-page-storage:doc-1', JSON.stringify({ at: 1, items: { tab: 'b', keep: '1' } }));
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>x</p>');
+
+    const { container } = render(<HtmlPreview ytext={ytext} storageKey="doc-1" />);
+    const iframe = container.querySelector('iframe')!;
+    expect(iframe.getAttribute('srcdoc')).toContain('window.__lensStorageSeed={"tab":"b","keep":"1"}');
+
+    act(() => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: { type: 'storage-ops', payload: { ops: [{ op: 'set', key: 'tab', value: 'c' }, { op: 'remove', key: 'nope' }] } },
+      });
+    });
+    const stored = JSON.parse(localStorage.getItem('lens-html-page-storage:doc-1') ?? '{}');
+    expect(stored.items).toEqual({ tab: 'c', keep: '1' });
+    expect(stored.at).toBeGreaterThan(1);
+
+    act(() => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: { type: 'storage-ops', payload: { ops: [{ op: 'clear' }] } },
+      });
+    });
+    expect(localStorage.getItem('lens-html-page-storage:doc-1')).toBeNull();
+  });
+
+  it('refuses page storage over the per-page cap and reports it', async () => {
+    const problems: unknown[][] = [];
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>x</p>');
+    const { container } = render(
+      <HtmlPreview ytext={ytext} storageKey="doc-big" onPageProblems={p => problems.push(p)} />,
+    );
+    const iframe = container.querySelector('iframe')!;
+    await act(async () => {
+      dispatchFromBridge(iframe, {
+        nonce: '__test_nonce__',
+        message: { type: 'storage-ops', payload: { ops: [{ op: 'set', key: 'blob', value: 'x'.repeat(250_000) }] } },
+      });
+    });
+    expect(localStorage.getItem('lens-html-page-storage:doc-big')).toBeNull();
+    expect(JSON.stringify(problems.at(-1))).toContain('localStorage is over 200,000 characters');
+  });
+
+  it('reloads a page that navigated itself away and reports it', async () => {
+    const reports: unknown[][] = [];
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>x</p>');
+    const { container } = render(<HtmlPreview ytext={ytext} onPageProblems={p => reports.push(p)} />);
+    const iframe = container.querySelector('iframe')!;
+    const original = iframe.getAttribute('srcdoc');
+    await act(async () => {});
+    // jsdom fires the frame's first load itself; that one is the page.
+    expect(reports.at(-1) ?? []).toEqual([]);
+    // A later load means the page replaced itself (e.g. location.href = …).
+    // jsdom fires load for the simulated navigation, as a browser would.
+    await act(async () => { iframe.setAttribute('srcdoc', 'changed by navigation'); });
+    expect(iframe.getAttribute('srcdoc')).toBe(original);
+    expect(JSON.stringify(reports.at(-1))).toContain('navigated away from itself');
+    // The load caused by our own reload (jsdom fires it) is not another navigation.
+    await act(async () => {});
+    expect(JSON.stringify(reports.at(-1))).toContain('"count":1');
+  });
+
+  it('clears reported problems when it unmounts, so a remount starts clean', async () => {
+    const reports: unknown[][] = [];
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, '<p>x</p>');
+    const onPageProblems = (p: unknown[]) => reports.push(p);
+    const { container, unmount } = render(<HtmlPreview ytext={ytext} onPageProblems={onPageProblems} />);
+    await act(async () => {
+      dispatchFromBridge(container.querySelector('iframe')!, {
+        nonce: '__test_nonce__',
+        message: { type: 'page-problems', payload: { problems: [{ kind: 'error', message: 'boom', count: 1 }] } },
+      });
+    });
+    expect(reports.at(-1)).toHaveLength(1);
+    unmount();
+    expect(reports.at(-1)).toEqual([]);
+    render(<HtmlPreview ytext={ytext} onPageProblems={onPageProblems} />);
+    expect(reports.at(-1)).toEqual([]);
   });
 
   it('updates srcdoc after a Y.Text mutation, debounced by 300ms', async () => {

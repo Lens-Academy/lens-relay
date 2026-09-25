@@ -124,7 +124,11 @@ async fn create_html_file(
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(format!("Created {}", file_path))
+    Ok(format!(
+        "Created {}{}",
+        file_path,
+        super::html_check::result_suffix(content)
+    ))
 }
 
 async fn create_blob_file(

@@ -69,6 +69,24 @@ export interface PreviewUiState {
   details: DetailsStateItem[];
 }
 
+/** Something that went wrong while the page ran, reported by the bridge. */
+export interface PageProblem {
+  /** error: uncaught error or rejection; blocked: refused by the page CSP;
+   *  load-failed: a script, stylesheet, image or module import did not load;
+   *  overflow: the page is wider than its frame (reported while it lasts). */
+  kind: 'error' | 'blocked' | 'load-failed' | 'overflow';
+  message: string;
+  /** URL of the blocked/failed resource, or `page:<line>` for page errors. */
+  source?: string;
+  count: number;
+}
+
+/** One change to the page's localStorage, in the order the page made it. */
+export type StorageOp =
+  | { op: 'set'; key: string; value: string }
+  | { op: 'remove'; key: string }
+  | { op: 'clear' };
+
 export type PlacementTrigger = 'contextmenu' | 'selection' | 'toolbar';
 
 export interface PlacementRequest {
@@ -99,7 +117,9 @@ export type BridgeToParent =
   | { type: 'scroll-state'; payload: PreviewScrollState }
   | { type: 'ui-state'; payload: PreviewUiState }
   | { type: 'probe-found'; payload: { token: string; rect: { x: number; y: number; w: number; h: number } | null } }
-  | { type: 'comments-rendered'; payload: CommentsRenderedPayload };
+  | { type: 'comments-rendered'; payload: CommentsRenderedPayload }
+  | { type: 'page-problems'; payload: { problems: PageProblem[] } }
+  | { type: 'storage-ops'; payload: { ops: StorageOp[] } };
 
 export interface Envelope<M> {
   nonce: string;

@@ -186,6 +186,13 @@ pub async fn execute(
 
         // Validate comment preservation: non-AI comments must be kept intact.
         super::critic_markup::validate_comment_preservation(old_string, new_string)?;
+    } else {
+        if mode == EditMode::Suggest {
+            return Err(format!(
+                "Error: {} is an HTML page, and HTML edits always apply directly; pending changes (mode: 'suggest') exist only for Markdown. Retry without mode, or check the change with the user first.",
+                file_path
+            ));
+        }
     }
 
     // 3. Check read-before-edit: session must have read this document first
@@ -546,14 +553,14 @@ async fn edit_raw_ytext_file(
         .await
         .map_err(|e| format!("Error: Failed to load document {}: {}", file_path, e))?;
 
-    {
+    let (before, edited) = {
         let awareness = server
             .docs()
             .get(&doc_info.doc_id)
             .map(|doc_ref| doc_ref.awareness())
             .ok_or_else(|| format!("Error: Document data not loaded: {}", file_path))?;
         let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
-        let (start, len) = {
+        let (start, len, before, edited) = {
             let txn = guard.doc.transact();
             let content = match txn.get_text("contents") {
                 Some(text) => text.get_string(&txn),
@@ -581,7 +588,14 @@ async fn edit_raw_ytext_file(
             // offsets from `match_indices` are already Y.Text indices.
             // Converting to char counts shifted every edit left by the number
             // of extra UTF-8 bytes before it (✓, —, …) and cut `len` short.
-            (match_start as u32, old_string.len() as u32)
+            let edited = format!(
+                "{}{}{}",
+                &content[..match_start],
+                new_string,
+                &content[match_start + old_string.len()..]
+            );
+            super::html_check::preserve_comment_blocks(&content, &edited)?;
+            (match_start as u32, old_string.len() as u32, content, edited)
         };
 
         let timestamp = std::time::SystemTime::now()
@@ -600,7 +614,8 @@ async fn edit_raw_ytext_file(
             },
         )
         .map_err(|e| format!("Error: {}", e))?;
-    }
+        (before, edited)
+    };
 
     {
         let doc_ref = server
@@ -613,9 +628,10 @@ async fn edit_raw_ytext_file(
     }
 
     Ok(format!(
-        "Edited {}: replaced {} characters.",
+        "Edited {}: replaced {} characters.{}",
         file_path,
-        old_string.chars().count()
+        old_string.chars().count(),
+        super::html_check::edit_suffix(&before, &edited)
     ))
 }
 
@@ -785,14 +801,14 @@ mod tests {
         .await;
 
         assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
+        assert!(result.unwrap().starts_with(&format!(
+            "Edited Lens/Map.html: replaced {} characters.",
+            old.chars().count()
+        )));
         assert_eq!(
-            result.unwrap(),
-            format!(
-                "Edited Lens/Map.html: replaced {} characters.",
-                old.chars().count()
-            )
+            read_doc_content(&server, &doc_id),
+            original.replace(old, new)
         );
-        assert_eq!(read_doc_content(&server, &doc_id), original.replace(old, new));
     }
 
     #[tokio::test]
@@ -818,6 +834,75 @@ mod tests {
             expected = expected.replace(old, new);
             assert_eq!(read_doc_content(&server, &doc_id), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn edit_html_reports_page_check_notes_for_the_edited_page() {
+        let server = build_test_server(&[("/Page.html", "uuid-html", "<p>x</p>\n")]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-html");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Page.html",
+                "old_string": "<p>x</p>",
+                "new_string": "<script src=\"https://example.com/x.js\"></script>",
+            }),
+        )
+        .await
+        .expect("edit should succeed");
+
+        assert!(result.starts_with("Edited Lens/Page.html: replaced 8 characters."));
+        assert!(result.contains("Script from https://example.com/x.js will be blocked"));
+    }
+
+    #[tokio::test]
+    async fn edit_html_refuses_to_drop_comment_blocks_and_suggest_mode() {
+        let original =
+            "<h1>Title</h1><!--lens-comment {\"id\":\"c1\",\"body\":\"hi\"}-->\n<p>x</p>";
+        let server = build_test_server(&[("/Page.html", "uuid-html", original)]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-html");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let dropped = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Page.html",
+                "old_string": "<h1>Title</h1><!--lens-comment {\"id\":\"c1\",\"body\":\"hi\"}-->",
+                "new_string": "<h1>New title</h1>",
+            }),
+        )
+        .await;
+        assert!(
+            dropped
+                .as_ref()
+                .is_err_and(|e| e.contains("left by collaborators")),
+            "{:?}",
+            dropped
+        );
+
+        let suggest = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Page.html",
+                "old_string": "<p>x</p>",
+                "new_string": "<p>y</p>",
+                "mode": "suggest",
+            }),
+        )
+        .await;
+        assert!(
+            suggest
+                .as_ref()
+                .is_err_and(|e| e.contains("HTML edits always apply directly")),
+            "{:?}",
+            suggest
+        );
+        assert_eq!(read_doc_content(&server, &doc_id), original);
     }
 
     #[tokio::test]

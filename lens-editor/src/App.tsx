@@ -304,7 +304,7 @@ function DocumentView() {
     return (
       <RelayProvider key={activeDocId} docId={activeDocId}>
         <AwarenessInitializer />
-        <HtmlEditorMount />
+        <HtmlEditorMount docId={activeDocId} />
         <DisconnectionModal />
       </RelayProvider>
     );
@@ -319,12 +319,12 @@ function DocumentView() {
   );
 }
 
-function HtmlEditorMount() {
+function HtmlEditorMount({ docId }: { docId: string }) {
   const ydoc = useYDoc();
   const provider = useYjsProvider();
   const { canWrite } = useAuth();
   const ytext = ydoc.getText('contents');
-  return <HtmlEditor ytext={ytext} awareness={provider.awareness} readOnly={!canWrite} />;
+  return <HtmlEditor ytext={ytext} awareness={provider.awareness} readOnly={!canWrite} storageKey={docId} />;
 }
 
 function EduEditorView() {

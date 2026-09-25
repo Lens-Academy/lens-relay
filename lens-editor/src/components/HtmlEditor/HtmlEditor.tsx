@@ -5,6 +5,9 @@ import type { Awareness } from 'y-protocols/awareness';
 import { LENS_EDITOR_ORIGIN } from '../../lib/relay-api';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { useHeaderCommentsControl } from '../../contexts/HeaderActionsContext';
+import { useMobile } from '../../contexts/MobileContext';
+import { MobileDrawer } from '../Mobile/MobileDrawer';
+import { MobileCommentsSheet, type PendingCommentAction } from '../Mobile/MobileCommentsSheet';
 import { HtmlSourceEditor } from './HtmlSourceEditor';
 import { HtmlPreview } from './HtmlPreview';
 import { NewCommentCard } from './NewCommentCard';
@@ -18,8 +21,11 @@ import {
   type IframeScrollState,
 } from './htmlCommentsAdapter';
 import type { Candidate, ProbeRunner } from './position-finder';
+import type { PageProblem } from './bridge/protocol';
+import { SCRIPT_HOSTS } from './runtime/page-runtime';
 
 type Mode = 'source' | 'preview' | 'split';
+type PreviewWidth = 'desktop' | 'phone';
 
 interface HtmlEditorProps {
   ytext: Y.Text;
@@ -27,6 +33,17 @@ interface HtmlEditorProps {
   currentUser?: string;
   readOnly?: boolean;
   probeRunner?: ProbeRunner;
+  /** Stable document id; keys the page's per-viewer localStorage. */
+  storageKey?: string;
+}
+
+const SCRIPT_HOST_NAMES = SCRIPT_HOSTS.map(host => host.replace('https://', '')).join(', ');
+
+/** `?view=source` opens the document in Source mode: the way back in when a
+ *  page hangs the preview. */
+function initialMode(): Mode {
+  if (typeof window === 'undefined') return 'preview';
+  return new URLSearchParams(window.location.search).get('view') === 'source' ? 'source' : 'preview';
 }
 
 const modes: Array<{ id: Mode; label: string }> = [
@@ -36,6 +53,34 @@ const modes: Array<{ id: Mode; label: string }> = [
 ];
 
 const COMMENTS_VISIBLE_KEY = 'lens-html-editor-comments-visible';
+const PREVIEW_WIDTH_KEY = 'lens-html-editor-preview-width';
+/** Width of the phone preview: a common phone viewport in CSS pixels. */
+const PHONE_PREVIEW_WIDTH = 390;
+
+const widths: Array<{ id: PreviewWidth; label: string; title: string }> = [
+  { id: 'desktop', label: 'Desktop', title: 'Preview at full width' },
+  { id: 'phone', label: 'Phone', title: `Preview at phone width (${PHONE_PREVIEW_WIDTH}px)` },
+];
+
+function readPreviewWidth(): PreviewWidth {
+  try {
+    return localStorage.getItem(PREVIEW_WIDTH_KEY) === 'phone' ? 'phone' : 'desktop';
+  } catch {
+    return 'desktop';
+  }
+}
+
+const PROBLEM_LABELS: Record<PageProblem['kind'], string> = {
+  error: 'Error',
+  blocked: 'Blocked',
+  'load-failed': 'Not loaded',
+  overflow: 'Too wide',
+};
+
+function describeProblem(problem: PageProblem): string {
+  const count = problem.count > 1 ? ` (×${problem.count})` : '';
+  return `${problem.message}${problem.source ? ` — ${problem.source}` : ''}${count}`;
+}
 
 function readCommentsVisible(): boolean {
   if (typeof localStorage === 'undefined') return true;
@@ -64,12 +109,25 @@ export function HtmlEditor({
   currentUser: currentUserProp,
   readOnly = false,
   probeRunner,
+  storageKey,
 }: HtmlEditorProps) {
   const { displayName } = useDisplayName();
   const currentUser = currentUserProp ?? displayName ?? 'Anonymous';
-  const [mode, setMode] = useState<Mode>('preview');
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [commentMode, setCommentMode] = useState(false);
   const [commentsVisible, setCommentsVisible] = useState(readCommentsVisible);
+  const [previewWidth, setPreviewWidthState] = useState<PreviewWidth>(readPreviewWidth);
+  const [pageProblems, setPageProblems] = useState<PageProblem[]>([]);
+  const [problemsOpen, setProblemsOpen] = useState(false);
+
+  const setPreviewWidth = useCallback((next: PreviewWidth) => {
+    setPreviewWidthState(next);
+    try {
+      localStorage.setItem(PREVIEW_WIDTH_KEY, next);
+    } catch {
+      // Not persisted; the choice still applies for this session.
+    }
+  }, []);
 
   const handleToggleComments = useCallback(() => {
     setCommentsVisible(prev => {
@@ -81,11 +139,29 @@ export function HtmlEditor({
     });
   }, []);
 
-  const commentsControl = useMemo(() => ({
-    isOpen: commentsVisible,
-    onToggle: handleToggleComments,
-    title: commentsVisible ? 'Hide comments' : 'Show comments',
-  }), [commentsVisible, handleToggleComments]);
+  // On a phone the desktop comment margin would leave the page a sliver of the
+  // screen; comments open in a bottom sheet instead, as in the Markdown editor.
+  const { isMobile, activeDrawer, openDrawer, closeDrawer, toggleDrawer } = useMobile();
+  const [pendingCommentAction, setPendingCommentAction] = useState<PendingCommentAction>(null);
+  const toggleCommentsSheet = useCallback(() => toggleDrawer('comments'), [toggleDrawer]);
+  const commentsSheetOpen = activeDrawer === 'comments';
+  // Remount the sheet for each dot tap so a tap during its close animation
+  // (sheet still mounted) is not swallowed.
+  const [commentsSheetEpoch, setCommentsSheetEpoch] = useState(0);
+  // The width toggle is hidden on a phone, where the preview already is phone width.
+  const phonePreview = previewWidth === 'phone' && !isMobile;
+
+  const commentsControl = useMemo(() => (isMobile
+    ? {
+      isOpen: commentsSheetOpen,
+      onToggle: toggleCommentsSheet,
+      title: commentsSheetOpen ? 'Hide comments' : 'Show comments',
+    }
+    : {
+      isOpen: commentsVisible,
+      onToggle: handleToggleComments,
+      title: commentsVisible ? 'Hide comments' : 'Show comments',
+    }), [commentsSheetOpen, commentsVisible, handleToggleComments, isMobile, toggleCommentsSheet]);
 
   useHeaderCommentsControl(commentsControl);
   const [pendingCandidates, setPendingCandidates] = useState<Candidate[] | null>(null);
@@ -164,7 +240,7 @@ export function HtmlEditor({
         aria-label="HTML view mode"
         className="inline-flex items-center rounded bg-gray-200 p-0.5"
       >
-        {modes.map(({ id, label }) => {
+        {modes.filter(({ id }) => !(isMobile && id === 'split')).map(({ id, label }) => {
           const active = mode === id;
           return (
             <button
@@ -184,6 +260,45 @@ export function HtmlEditor({
           );
         })}
       </div>
+      {mode !== 'source' && (
+        <div
+          role="group"
+          aria-label="Preview width"
+          className="hidden items-center rounded bg-gray-200 p-0.5 sm:inline-flex"
+        >
+          {widths.map(({ id, label, title }) => {
+            const active = previewWidth === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                title={title}
+                aria-pressed={active}
+                onClick={() => setPreviewWidth(id)}
+                className={[
+                  'rounded px-3 py-1 text-xs font-medium transition-colors',
+                  active
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700',
+                ].join(' ')}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {mode !== 'source' && pageProblems.length > 0 && (
+        <button
+          type="button"
+          aria-expanded={problemsOpen}
+          aria-controls="html-page-problems"
+          onClick={() => setProblemsOpen(open => !open)}
+          className="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 hover:bg-amber-200"
+        >
+          {pageProblems.length} page problem{pageProblems.length === 1 ? '' : 's'}
+        </button>
+      )}
       {orphanCount > 0 && (
         <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
           {orphanCount} orphan{orphanCount === 1 ? '' : 's'}
@@ -257,8 +372,53 @@ export function HtmlEditor({
         {mode !== 'source' && (
           <div
             ref={previewWrapperRef}
-            className={mode === 'split' ? 'min-w-0 flex-1 border-l border-gray-200' : 'min-w-0 flex-1'}
+            className={[
+              'relative min-w-0 flex-1',
+              mode === 'split' ? 'border-l border-gray-200' : '',
+              phonePreview ? 'flex justify-center overflow-x-auto bg-gray-100' : '',
+            ].join(' ')}
           >
+            {problemsOpen && pageProblems.length > 0 && (
+              <div
+                id="html-page-problems"
+                role="region"
+                aria-label="Page problems"
+                className="absolute right-3 top-3 z-30 max-h-[50%] w-[min(28rem,calc(100%-1.5rem))] overflow-y-auto rounded border border-amber-200 bg-white p-3 text-xs shadow-lg"
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="font-semibold text-gray-900">Reported by the page</span>
+                  <button
+                    type="button"
+                    onClick={() => setProblemsOpen(false)}
+                    className="rounded px-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                  >
+                    Close
+                  </button>
+                </div>
+                <ul className="flex flex-col gap-1.5">
+                  {pageProblems.map((problem, index) => (
+                    <li key={index} className="break-words text-gray-700">
+                      <span className="mr-1 font-medium text-amber-800">
+                        {PROBLEM_LABELS[problem.kind]}
+                      </span>
+                      {describeProblem(problem)}
+                    </li>
+                  ))}
+                </ul>
+                {pageProblems.some(problem => problem.kind === 'blocked') && (
+                  <p className="mt-2 text-gray-500">
+                    Pages can load scripts only from {SCRIPT_HOST_NAMES}. See Lens/AI Guide/HTML Pages.
+                  </p>
+                )}
+              </div>
+            )}
+            <div
+              className={phonePreview
+                ? 'box-content h-full flex-shrink-0 border-x border-gray-300 bg-white shadow-sm'
+                : 'h-full w-full'}
+              style={phonePreview ? { width: PHONE_PREVIEW_WIDTH } : undefined}
+              data-preview-width={phonePreview ? 'phone' : 'desktop'}
+            >
             <HtmlPreview
               ytext={ytext}
               currentUser={currentUser}
@@ -275,6 +435,12 @@ export function HtmlEditor({
               probeRunner={probeRunner}
               readOnly={readOnly}
               onDotClicked={(id) => {
+                if (isMobile) {
+                  setPendingCommentAction({ type: 'focus', key: id });
+                  setCommentsSheetEpoch(epoch => epoch + 1);
+                  openDrawer('comments');
+                  return;
+                }
                 setFocusedCommentId(prev => (prev === id ? null : id));
                 commentsLayerRef.current?.toggleFocus(id);
               }}
@@ -301,10 +467,13 @@ export function HtmlEditor({
                 scrollSource.notify();
               }}
               focusedCommentId={focusedCommentId}
+              storageKey={storageKey}
+              onPageProblems={setPageProblems}
             />
+            </div>
           </div>
         )}
-        {mode !== 'source' && commentsVisible && (
+        {mode !== 'source' && commentsVisible && !isMobile && (
           <div className="w-80 flex-shrink-0 border-l border-gray-200 bg-gray-50/50 relative overflow-hidden">
             <CommentsLayer
               ref={commentsLayerRef}
@@ -320,6 +489,19 @@ export function HtmlEditor({
           </div>
         )}
       </div>
+      {isMobile && (
+        <MobileDrawer open={commentsSheetOpen} onClose={closeDrawer} side="bottom" label="Comments">
+          <MobileCommentsSheet
+            key={commentsSheetEpoch}
+            threads={threads}
+            pendingAction={pendingCommentAction}
+            onPendingActionConsumed={() => setPendingCommentAction(null)}
+            onReply={callbacks.onReply}
+            onEdit={callbacks.onEdit}
+            onDelete={callbacks.onDelete}
+          />
+        </MobileDrawer>
+      )}
     </div>
   );
 }

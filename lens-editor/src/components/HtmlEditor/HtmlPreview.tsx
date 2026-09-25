@@ -12,10 +12,13 @@ import {
   type CommentsRenderedPayload,
   type Envelope,
   type Fingerprint,
+  type PageProblem,
   type ParentToBridge,
+  type StorageOp,
   type PreviewScrollState,
   type PreviewUiState,
 } from './bridge/protocol';
+import { buildSrcDoc } from './runtime/page-runtime';
 
 interface HtmlPreviewProps {
   ytext: Y.Text;
@@ -37,6 +40,11 @@ interface HtmlPreviewProps {
   onScrollState?: (payload: PreviewScrollState) => void;
   /** When this changes, HtmlPreview posts set-focused-comment to the bridge. */
   focusedCommentId?: string | null;
+  /** Stable per-document key under which the page's localStorage is kept for
+   *  this viewer. Without it the page's storage lasts only until the next render. */
+  storageKey?: string;
+  /** Problems reported by the currently shown page (errors, blocked resources). */
+  onPageProblems?: (problems: PageProblem[]) => void;
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -229,15 +237,145 @@ function makeDiagnosticMarker(index: number): string {
   return `[[@${index}]]`;
 }
 
-function injectBridge(source: string): string {
-  const script = `<script>${BRIDGE_SOURCE}</script>`;
-  const headMatch = /<head\b[^>]*>/i.exec(source);
-  if (!headMatch || headMatch.index === undefined) {
-    return `${script}\n${source}`;
-  }
+/** Sandbox for the visible preview. Links may open new tabs (unsandboxed),
+ *  pages may offer downloads, and forms fire submit events (the bridge keeps
+ *  the submission from navigating). Modals stay off: the preview re-renders
+ *  while you type and an alert() would fire on every render. */
+const PREVIEW_SANDBOX = 'allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads';
 
-  const insertAt = headMatch.index + headMatch[0].length;
-  return `${source.slice(0, insertAt)}${script}${source.slice(insertAt)}`;
+const PAGE_STORAGE_PREFIX = 'lens-html-page-storage:';
+/** Per-document cap on a page's stored characters (keys + values). */
+const PAGE_STORAGE_MAX_CHARS = 200_000;
+/** Cap across all pages, so pages can never crowd out the editor's own storage. */
+const PAGE_STORAGE_TOTAL_MAX_CHARS = 1_000_000;
+
+interface StoredPage {
+  at: number;
+  items: Record<string, string>;
+}
+
+function readStoredPage(raw: string | null): StoredPage | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isObject(parsed) || typeof parsed.at !== 'number' || !isStringRecord(parsed.items)) return null;
+    return { at: parsed.at, items: parsed.items };
+  } catch {
+    return null;
+  }
+}
+
+function readPageStorage(storageKey: string | undefined): Record<string, string> | null {
+  if (!storageKey) return null;
+  try {
+    return readStoredPage(localStorage.getItem(PAGE_STORAGE_PREFIX + storageKey))?.items ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function storedChars(items: Record<string, string>): number {
+  let n = 0;
+  for (const [k, v] of Object.entries(items)) n += k.length + v.length;
+  return n;
+}
+
+/** Drop the least recently written pages until the total fits the budget. */
+function evictPageStorage(keepKey: string): void {
+  const entries: Array<{ key: string; at: number; size: number }> = [];
+  let total = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(PAGE_STORAGE_PREFIX)) continue;
+    const raw = localStorage.getItem(key) ?? '';
+    const page = readStoredPage(raw);
+    entries.push({ key, at: page?.at ?? 0, size: raw.length });
+    total += raw.length;
+  }
+  entries.sort((a, b) => a.at - b.at);
+  for (const entry of entries) {
+    if (total <= PAGE_STORAGE_TOTAL_MAX_CHARS) break;
+    if (entry.key === keepKey) continue;
+    localStorage.removeItem(entry.key);
+    total -= entry.size;
+  }
+}
+
+/** Apply a page's storage changes to the viewer's stored copy. Returns false
+ *  when the result would exceed the per-page cap (nothing is written). */
+function applyPageStorageOps(storageKey: string, ops: StorageOp[]): boolean {
+  const key = PAGE_STORAGE_PREFIX + storageKey;
+  try {
+    const items = { ...(readStoredPage(localStorage.getItem(key))?.items ?? {}) };
+    for (const op of ops) {
+      if (op.op === 'set') items[op.key] = op.value;
+      else if (op.op === 'remove') delete items[op.key];
+      else for (const k of Object.keys(items)) delete items[k];
+    }
+    if (Object.keys(items).length === 0) {
+      localStorage.removeItem(key);
+      return true;
+    }
+    if (storedChars(items) > PAGE_STORAGE_MAX_CHARS) return false;
+    localStorage.setItem(key, JSON.stringify({ at: Date.now(), items } satisfies StoredPage));
+    evictPageStorage(key);
+    return true;
+  } catch {
+    // Storage full or blocked: the page keeps working with in-memory state.
+    return true;
+  }
+}
+
+function isStorageOpList(value: unknown): value is StorageOp[] {
+  return Array.isArray(value) && value.length <= 10_000 && value.every(op => (
+    isObject(op) && (
+      (op.op === 'set' && typeof op.key === 'string' && typeof op.value === 'string')
+      || (op.op === 'remove' && typeof op.key === 'string')
+      || op.op === 'clear'
+    )
+  ));
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && Object.values(value).every(v => typeof v === 'string');
+}
+
+const MAX_PAGE_PROBLEMS = 25;
+/** A page that keeps navigating itself away is reloaded at most this often. */
+const MAX_NAVIGATION_RELOADS = 3;
+const NAVIGATED_PROBLEM: PageProblem = {
+  kind: 'error',
+  message: 'The page navigated away from itself (location.href, or a link or form with target="_self"), so the preview reloaded it. Open other pages with a normal link; links open in a new tab.',
+  count: 1,
+};
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** The page can forge these messages, so bound what it can put in the editor UI. */
+function sanitizePageProblems(problems: PageProblem[]): PageProblem[] {
+  return problems.slice(0, MAX_PAGE_PROBLEMS).map(p => ({
+    kind: p.kind,
+    message: clip(p.message, 300),
+    ...(p.source !== undefined ? { source: clip(p.source, 200) } : {}),
+    count: Math.max(1, Math.min(Math.floor(p.count), 9999)),
+  }));
+}
+
+function isPageProblemList(value: unknown): value is PageProblem[] {
+  return Array.isArray(value) && value.every(p => (
+    typeof p === 'object' && p !== null
+    && (p.kind === 'error' || p.kind === 'blocked' || p.kind === 'load-failed' || p.kind === 'overflow')
+    && typeof p.message === 'string'
+    && (p.source === undefined || typeof p.source === 'string')
+    && typeof p.count === 'number'
+  ));
+}
+
+function previewSrcDoc(source: string, storageKey: string | undefined): string {
+  return buildSrcDoc(source, { bridgeSource: BRIDGE_SOURCE, storageSeed: readPageStorage(storageKey) });
 }
 
 function hasDetailsElementMarkup(source: string): boolean {
@@ -263,6 +401,9 @@ function normalizeProbeViewportSize(size?: ProbeViewportSize): ProbeViewportSize
 export function useHiddenProbeRunner(
   nonce: string,
   getViewportSize?: ProbeViewportSizeGetter,
+  /** The visible frame's storage seed: a probe must render the same state
+   *  (saved tab, collapsed section) or its rects won't match the click. */
+  getStorageSeed?: () => Record<string, string> | null,
 ): ProbeRunner {
   const pendingRef = useRef(new Map<string, PendingProbe>());
 
@@ -328,14 +469,17 @@ export function useHiddenProbeRunner(
           window.addEventListener('message', listener);
         });
 
-        frame.srcdoc = `<script>${BRIDGE_SOURCE}</script>${sourceWithProbe}`;
+        frame.srcdoc = buildSrcDoc(sourceWithProbe, {
+          bridgeSource: BRIDGE_SOURCE,
+          storageSeed: getStorageSeed?.() ?? null,
+        });
         return probeResult;
       },
       dispose() {
         for (const token of Array.from(pendingRef.current.keys())) settle(token, null);
       },
     };
-  }, [getViewportSize, nonce]);
+  }, [getStorageSeed, getViewportSize, nonce]);
 
   useEffect(() => () => runner.dispose(), [runner]);
 
@@ -357,12 +501,14 @@ export function HtmlPreview({
   onCommentsRendered,
   onScrollState,
   focusedCommentId,
+  storageKey,
+  onPageProblems,
 }: HtmlPreviewProps) {
   const [content, setContent] = useState(() => ytext.toString());
   const [debounced, setDebounced] = useState(content);
   const [frames, setFrames] = useState<PreviewFrame[]>(() => [{
     id: 1,
-    srcDoc: injectBridge(content),
+    srcDoc: previewSrcDoc(content, storageKey),
     state: 'active',
   }]);
   const [pendingComment, setPendingComment] = useState<PendingPreviewComment | null>(null);
@@ -371,6 +517,13 @@ export function HtmlPreview({
   const [placementError, setPlacementError] = useState<PlacementError | null>(null);
   const [nonce] = useState(() => makeNonce());
   const frameRefs = useRef(new Map<number, HTMLIFrameElement>());
+  const problemsByFrameRef = useRef(new Map<number, PageProblem[]>());
+  // Loads per frame: a srcdoc frame loads once, so any later load means the
+  // page navigated itself to another document.
+  const frameLoadsRef = useRef(new Map<number, number>());
+  const reloadingFramesRef = useRef(new Set<number>());
+  const navigatedFramesRef = useRef(new Map<number, number>());
+  const [problemsVersion, setProblemsVersion] = useState(0);
   const nextFrameIdRef = useRef(2);
   const framesRef = useRef(frames);
   const activeFrameIdRef = useRef(1);
@@ -409,7 +562,8 @@ export function HtmlPreview({
       height: iframe?.clientHeight ?? 0,
     });
   }, [getActiveIframe]);
-  const defaultProbeRunner = useHiddenProbeRunner(nonce, getProbeViewportSize);
+  const getStorageSeed = useCallback(() => readPageStorage(storageKey), [storageKey]);
+  const defaultProbeRunner = useHiddenProbeRunner(nonce, getProbeViewportSize, getStorageSeed);
   const activeProbeRunner = probeRunner ?? defaultProbeRunner;
 
   const postToFrame = useCallback((frameId: number, message: ParentToBridge): void => {
@@ -449,6 +603,34 @@ export function HtmlPreview({
       if (!liveFrameIds.has(frameId)) pendingCommentsRenderedRef.current.delete(frameId);
     }
   }, [frames]);
+
+  // null, not '[]': a remounted preview must report its (possibly empty) list
+  // even if the last report before unmount was non-empty.
+  const lastReportedProblemsRef = useRef<string | null>(null);
+  const onPageProblemsRef = useRef(onPageProblems);
+  useEffect(() => { onPageProblemsRef.current = onPageProblems; }, [onPageProblems]);
+  useEffect(() => () => onPageProblemsRef.current?.([]), []);
+  useEffect(() => {
+    const liveFrameIds = new Set(frames.map(frame => frame.id));
+    for (const frameId of Array.from(problemsByFrameRef.current.keys())) {
+      if (!liveFrameIds.has(frameId)) problemsByFrameRef.current.delete(frameId);
+    }
+    for (const map of [frameLoadsRef.current, navigatedFramesRef.current]) {
+      for (const frameId of Array.from(map.keys())) {
+        if (!liveFrameIds.has(frameId)) map.delete(frameId);
+      }
+    }
+    const activeId = frames.find(frame => frame.state === 'active')?.id ?? frames[0]?.id;
+    const reported = activeId === undefined ? [] : problemsByFrameRef.current.get(activeId) ?? [];
+    const navigated = activeId !== undefined && navigatedFramesRef.current.has(activeId);
+    const problems = navigated
+      ? [...reported, { ...NAVIGATED_PROBLEM, count: navigatedFramesRef.current.get(activeId) ?? 1 }]
+      : reported;
+    const serialized = JSON.stringify(problems);
+    if (serialized === lastReportedProblemsRef.current) return;
+    lastReportedProblemsRef.current = serialized;
+    onPageProblems?.(problems);
+  }, [frames, problemsVersion, onPageProblems]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -522,7 +704,7 @@ export function HtmlPreview({
   const comments = useMemo(() => summarizeComments(debounced), [debounced]);
 
   useEffect(() => {
-    const nextSrcDoc = injectBridge(debounced);
+    const nextSrcDoc = previewSrcDoc(debounced, storageKey);
     const activeFrame = framesRef.current.find(frame => frame.state === 'active') ?? framesRef.current[0];
     const shouldCaptureUiState = activeFrame?.srcDoc !== nextSrcDoc
       && (hasDetailsElementMarkup(activeFrame?.srcDoc ?? '') || hasDetailsElementMarkup(nextSrcDoc));
@@ -580,7 +762,7 @@ export function HtmlPreview({
         },
       ];
     });
-  }, [clearUiStateCaptureTimer, debounced, nonce, restoreFrameLayout]);
+  }, [clearUiStateCaptureTimer, debounced, nonce, restoreFrameLayout, storageKey]);
 
   const openComposer = useCallback((
     position: number,
@@ -703,6 +885,22 @@ export function HtmlPreview({
       if (iframe.contentWindow === source) return frameId;
     }
     return null;
+  }, []);
+
+  const handleFrameLoad = useCallback((frame: PreviewFrame): void => {
+    const loads = (frameLoadsRef.current.get(frame.id) ?? 0) + 1;
+    frameLoadsRef.current.set(frame.id, loads);
+    if (loads === 1) return;
+    if (reloadingFramesRef.current.delete(frame.id)) return; // our own reload below
+    const times = (navigatedFramesRef.current.get(frame.id) ?? 0) + 1;
+    navigatedFramesRef.current.set(frame.id, times);
+    setProblemsVersion(version => version + 1);
+    if (times > MAX_NAVIGATION_RELOADS) return;
+    const iframe = frameRefs.current.get(frame.id);
+    if (!iframe) return;
+    reloadingFramesRef.current.add(frame.id);
+    // Re-setting srcdoc navigates the frame back to the page.
+    iframe.srcdoc = frame.srcDoc;
   }, []);
 
   const applyCommentsRendered = useCallback((payload: CommentsRenderedPayload): void => {
@@ -852,6 +1050,27 @@ export function HtmlPreview({
         return;
       }
 
+      if (message.type === 'page-problems') {
+        if (!isObject(message.payload) || !isPageProblemList(message.payload.problems)) return;
+        problemsByFrameRef.current.set(frame.id, sanitizePageProblems(message.payload.problems));
+        setProblemsVersion(version => version + 1);
+        return;
+      }
+
+      if (message.type === 'storage-ops') {
+        if (!storageKey) return;
+        if (!isObject(message.payload) || !isStorageOpList(message.payload.ops)) return;
+        if (!applyPageStorageOps(storageKey, message.payload.ops)) {
+          const list = problemsByFrameRef.current.get(frame.id) ?? [];
+          const text = `localStorage is over ${PAGE_STORAGE_MAX_CHARS.toLocaleString('en')} characters, so changes are not kept between visits`;
+          if (!list.some(p => p.message === text)) {
+            problemsByFrameRef.current.set(frame.id, [...list, { kind: 'error', message: text, count: 1 }]);
+            setProblemsVersion(version => version + 1);
+          }
+        }
+        return;
+      }
+
       if (message.type === 'comments-rendered') {
         if (!isCommentsRenderedPayload(message.payload)) return;
         if (frame.state === 'active') {
@@ -918,6 +1137,7 @@ export function HtmlPreview({
     resolvePlacementForAction,
     restoreFrameLayout,
     settleRestoredFrame,
+    storageKey,
     ytext,
   ]);
 
@@ -952,8 +1172,10 @@ export function HtmlPreview({
             else frameRefs.current.delete(frame.id);
           }}
           title="HTML preview"
-          sandbox="allow-scripts"
+          sandbox={PREVIEW_SANDBOX}
+          allow="clipboard-write; fullscreen"
           srcDoc={frame.srcDoc}
+          onLoad={() => handleFrameLoad(frame)}
           data-preview-frame-state={frame.state}
           className={[
             'absolute inset-0 h-full w-full border-0 bg-white',
