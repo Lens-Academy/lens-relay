@@ -577,10 +577,11 @@ async fn edit_raw_ytext_file(
                 }
             };
 
-            (
-                content[..match_start].chars().count() as u32,
-                old_string.chars().count() as u32,
-            )
+            // The docs use yrs' default `OffsetKind::Bytes`, so the byte
+            // offsets from `match_indices` are already Y.Text indices.
+            // Converting to char counts shifted every edit left by the number
+            // of extra UTF-8 bytes before it (✓, —, …) and cut `len` short.
+            (match_start as u32, old_string.len() as u32)
         };
 
         let timestamp = std::time::SystemTime::now()
@@ -614,7 +615,7 @@ async fn edit_raw_ytext_file(
     Ok(format!(
         "Edited {}: replaced {} characters.",
         file_path,
-        old_string.len()
+        old_string.chars().count()
     ))
 }
 
@@ -755,6 +756,68 @@ mod tests {
         assert_eq!(content, "<h1>Hi</h1>");
         assert!(!content.contains("{++"));
         assert!(!content.contains("{--"));
+    }
+
+    /// Regression (Asana 1218778162876148): the raw Y.Text path converted
+    /// the match to char offsets while the doc indexes by UTF-8 bytes, so
+    /// multi-byte chars before the target shifted the edit left.
+    #[tokio::test]
+    async fn edit_html_with_multibyte_chars_and_comments_before_target() {
+        let mut original = String::from("<!doctype html>\n<table>\n");
+        for i in 0..200 {
+            original.push_str(&format!(
+                "<tr><td>row {i} ✓ — ✕ 🚀</td><!--lens-comment eyJpZCI6ImMte30ifQ== --></tr>\n"
+            ));
+        }
+        original.push_str("<tr><td>Target — ✓ status</td></tr>\n</table>\n<p>after ✕</p>\n");
+
+        let server = build_test_server(&[("/Map.html", "uuid-html", &original)]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-html");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let old = "<tr><td>Target — ✓ status</td></tr>";
+        let new = "<tr><td>Target ✕ done — really</td></tr>";
+        let result = execute(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Map.html", "old_string": old, "new_string": new}),
+        )
+        .await;
+
+        assert!(result.is_ok(), "edit should succeed, got: {:?}", result);
+        assert_eq!(
+            result.unwrap(),
+            format!(
+                "Edited Lens/Map.html: replaced {} characters.",
+                old.chars().count()
+            )
+        );
+        assert_eq!(read_doc_content(&server, &doc_id), original.replace(old, new));
+    }
+
+    #[tokio::test]
+    async fn edit_html_sequential_multibyte_edits_stay_exact() {
+        let original = "<p>α — one</p>\n<p>β ✓ two</p>\n<p>γ 🚀 three</p>\n";
+        let server = build_test_server(&[("/Page.html", "uuid-html", original)]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, "uuid-html");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let mut expected = original.to_string();
+        for (old, new) in [
+            ("β ✓ two", "β — deux ✓"),
+            ("🚀 three", "three 🚀🚀"),
+            ("α — one", "ä"),
+        ] {
+            let result = execute(
+                &server,
+                &sid,
+                &json!({"file_path": "Lens/Page.html", "old_string": old, "new_string": new}),
+            )
+            .await;
+            assert!(result.is_ok(), "edit {old:?} should succeed: {:?}", result);
+            expected = expected.replace(old, new);
+            assert_eq!(read_doc_content(&server, &doc_id), expected);
+        }
     }
 
     #[tokio::test]
