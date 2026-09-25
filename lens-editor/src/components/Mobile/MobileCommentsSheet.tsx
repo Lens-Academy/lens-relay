@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { CommentCard } from '../Comments/CommentCard';
 import { AddCommentForm } from '../Comments/AddCommentForm';
-import type { ThreadKey, ThreadView, MessageView } from '../Comments/types';
+import type { ThreadKey, ThreadView, MessageView, ThreadActions } from '../Comments/types';
 
 /** Action the editor requested before/while the sheet opened. */
 export type PendingCommentAction =
@@ -19,6 +19,13 @@ export interface MobileCommentsSheetProps {
   onAddComment?: (key: ThreadKey, body: string) => void;
   /** Anchor key for a new comment at the current cursor, or null when unavailable. */
   getInsertKey?: () => ThreadKey | null;
+  actions?: ThreadActions;
+  /** Quoted above the add form: what the new comment is about. */
+  addTarget?: string;
+  /** Replaces the hint shown when there are no comments. */
+  emptyHint?: string;
+  /** Called when the add form is cancelled. */
+  onAddCancel?: () => void;
 }
 
 /**
@@ -27,7 +34,10 @@ export interface MobileCommentsSheetProps {
  * PAV layout — badges in the prose open the sheet focused on their thread.
  */
 export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
-  const { threads, pendingAction, onPendingActionConsumed, onReply, onEdit, onDelete, onAddComment, getInsertKey } = props;
+  const {
+    threads, pendingAction, onPendingActionConsumed, onReply, onEdit, onDelete, onAddComment, getInsertKey,
+    actions, addTarget, emptyHint, onAddCancel,
+  } = props;
   // The pending focus/add request (badge tap, context menu) is consumed at
   // mount — the parent keys this component on the request so it remounts.
   const [focusedKey, setFocusedKey] = useState<ThreadKey | null>(
@@ -73,13 +83,21 @@ export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
 
       {addFormKey != null && onAddComment && (
         <div className="border border-gray-300 rounded-lg overflow-hidden bg-white">
+          {addTarget && (
+            <p className="mx-3 mt-2 border-l-2 border-blue-300 pl-2 text-[12px] italic leading-snug text-gray-600">
+              {addTarget.length > 160 ? `${addTarget.slice(0, 159)}…` : addTarget}
+            </p>
+          )}
           <AddCommentForm
             onSubmit={(body) => {
               onAddComment(addFormKey, body);
               setAddFormKey(null);
               setFocusedKey(addFormKey);
             }}
-            onCancel={() => setAddFormKey(null)}
+            onCancel={() => {
+              setAddFormKey(null);
+              onAddCancel?.();
+            }}
             placeholder="Add a comment..."
             submitLabel="Add"
             autoFocus
@@ -89,7 +107,7 @@ export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
 
       {threads.length === 0 && addFormKey == null && (
         <p className="py-8 text-center text-sm text-gray-400">
-          No comments yet.{canAdd ? ' Select text in the note and tap + Add.' : ''}
+          {emptyHint ?? `No comments yet.${canAdd ? ' Select text in the note and tap + Add.' : ''}`}
         </p>
       )}
 
@@ -103,6 +121,7 @@ export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
             onReply={onReply}
             onEdit={onEdit}
             onDelete={onDelete}
+            actions={actions}
           />
         </div>
       ))}

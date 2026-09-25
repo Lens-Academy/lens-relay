@@ -1,47 +1,15 @@
-export interface Fingerprint {
-  before: string;
-  after: string;
-  tag: string;
-  ancestorPath: Array<{ tag: string; index: number }>;
-  clickRect: { x: number; y: number; w: number; h: number };
-}
-
-export interface CommentSummary {
-  id: string;
-  body: string;
-  replies: number;
-  /** 1-indexed document order; mirrors the sidebar card's badge number. */
-  order: number;
-}
-
-export interface ViewportPoint {
-  x: number;
-  y: number;
-}
+import type { AnchorState, HtmlAnchor } from '../anchoring/types';
 
 export interface PreviewScroll {
   x: number;
   y: number;
 }
 
-export interface CommentRect {
-  id: string;
-  y: number;
+export interface Rect {
   x: number;
+  y: number;
   w: number;
   h: number;
-}
-
-export interface CommentsRenderedPayload {
-  found: string[];
-  orphaned: string[];
-  rects: CommentRect[];
-  /** Iframe scroll-y at the moment rects were measured. The parent uses this
-   *  with the latest scroll-state to derive viewport-y from delta. */
-  baselineScrollY: number;
-  /** Monotonic counter bumped on every layout-affecting change. The parent
-   *  discards scroll-state messages whose layoutVersion doesn't match. */
-  layoutVersion: number;
 }
 
 export interface PreviewScrollState extends PreviewScroll {
@@ -51,7 +19,7 @@ export interface PreviewScrollState extends PreviewScroll {
   clientHeight: number;
   /** Echo of the bridge's latest layoutVersion. The parent uses this to
    *  discard scroll-state messages that race ahead of the corresponding
-   *  comments-rendered message. */
+   *  threads-resolved message. */
   layoutVersion: number;
 }
 
@@ -87,37 +55,78 @@ export type StorageOp =
   | { op: 'remove'; key: string }
   | { op: 'clear' };
 
-export type PlacementTrigger = 'contextmenu' | 'selection' | 'toolbar';
+/** A thread as the bridge needs it: where it points and how to draw it. */
+export interface ThreadMark {
+  id: string;
+  anchor: HtmlAnchor;
+  /** Badge number, matching the sidebar card. */
+  order: number;
+  resolved: boolean;
+}
 
-export interface PlacementRequest {
-  trigger: PlacementTrigger;
-  fingerprint: Fingerprint;
-  point: ViewportPoint;
-  scroll: PreviewScroll;
+export interface ThreadPlacement {
+  id: string;
+  state: AnchorState;
+  /** Viewport rect (at `baselineScrollY`) of the target, or of the nearest
+   *  visible ancestor when hidden. Null when orphaned. */
+  rect: Rect | null;
+  /** Offset into the page's visible text, for document-order numbering. */
+  textOffset: number | null;
+  /** The text the anchor resolved to now (guessed and drifted anchors). */
+  currentQuote?: string;
+  /** A fresh anchor for a confidently found but drifted target, so the
+   *  parent can keep the stored anchor current. */
+  refreshed?: HtmlAnchor;
+}
+
+export interface ThreadsResolvedPayload {
+  placements: ThreadPlacement[];
+  draft: ThreadPlacement | null;
+  baselineScrollY: number;
+  /** Monotonic counter bumped on every layout-affecting change. */
+  layoutVersion: number;
+  /** The page has loaded and its DOM has been quiet for a while: an
+   *  orphaned result now means the target is gone, not still rendering. */
+  settled: boolean;
+}
+
+export type CaptureVia = 'selection' | 'click' | 'element';
+
+export interface AnchorCapture {
+  anchor: HtmlAnchor;
+  /** Viewport rect of the target, to place the composer near it. */
+  rect: Rect;
+  via: CaptureVia;
+  /** Heads-up for the author, e.g. the text repeats with nothing unique around it. */
+  warning?: string;
 }
 
 export type ParentToBridge =
-  | { type: 'init'; payload: { comments: CommentSummary[] } }
-  | { type: 'enable-click-to-place'; payload: Record<string, never> }
-  | { type: 'disable-click-to-place'; payload: Record<string, never> }
-  | { type: 'find-probe'; payload: { token: string } }
-  | { type: 'highlight-comment'; payload: { id: string } }
-  | { type: 'set-comments'; payload: { comments: CommentSummary[] } }
+  | { type: 'init'; payload: Record<string, never> }
+  | { type: 'set-threads'; payload: { threads: ThreadMark[] } }
+  | { type: 'set-draft'; payload: { anchor: HtmlAnchor | null } }
+  | { type: 'set-focused-thread'; payload: { id: string | null; reveal: boolean } }
+  | { type: 'set-comment-mode'; payload: { on: boolean } }
+  | { type: 'capture-selection'; payload: Record<string, never> }
+  | { type: 'describe-legacy'; payload: { ids: string[] } }
+  | { type: 'describe-current'; payload: { id: string } }
   | { type: 'restore-scroll'; payload: PreviewScroll }
   | { type: 'restore-scroll-ratio'; payload: PreviewScrollRatio }
   | { type: 'capture-ui-state'; payload: Record<string, never> }
-  | { type: 'restore-ui-state'; payload: PreviewUiState }
-  | { type: 'set-focused-comment'; payload: { id: string | null } };
+  | { type: 'restore-ui-state'; payload: PreviewUiState };
 
 export type BridgeToParent =
   | { type: 'ready'; payload: Record<string, never> }
-  | { type: 'click-captured'; payload: { fingerprint: Fingerprint } }
-  | { type: 'dot-clicked'; payload: { id: string } }
-  | { type: 'placement-requested'; payload: PlacementRequest }
   | { type: 'scroll-state'; payload: PreviewScrollState }
   | { type: 'ui-state'; payload: PreviewUiState }
-  | { type: 'probe-found'; payload: { token: string; rect: { x: number; y: number; w: number; h: number } | null } }
-  | { type: 'comments-rendered'; payload: CommentsRenderedPayload }
+  | { type: 'threads-resolved'; payload: ThreadsResolvedPayload }
+  | { type: 'thread-clicked'; payload: { id: string } }
+  | { type: 'anchor-captured'; payload: AnchorCapture }
+  | { type: 'comment-mode-exit'; payload: Record<string, never> }
+  | { type: 'shortcut'; payload: { key: 'c' } }
+  | { type: 'selection-changed'; payload: { rect: Rect | null } }
+  | { type: 'legacy-described'; payload: { anchors: Record<string, HtmlAnchor | null> } }
+  | { type: 'current-described'; payload: { id: string; anchor: HtmlAnchor | null } }
   | { type: 'page-problems'; payload: { problems: PageProblem[] } }
   | { type: 'storage-ops'; payload: { ops: StorageOp[] } };
 

@@ -33,26 +33,6 @@ describe('validateEnvelope', () => {
     expect(validateEnvelope({ nonce: 'x' } as unknown as Envelope<BridgeToParent>, 'x')).toBeNull();
   });
 
-  it('accepts contextual placement request envelopes', () => {
-    const msg: BridgeToParent = {
-      type: 'placement-requested',
-      payload: {
-        trigger: 'contextmenu',
-        fingerprint: {
-          before: '',
-          after: 'Hello',
-          tag: 'p',
-          ancestorPath: [{ tag: 'p', index: 0 }],
-          clickRect: { x: 10, y: 20, w: 100, h: 18 },
-        },
-        point: { x: 10, y: 20 },
-        scroll: { x: 0, y: 140 },
-      },
-    };
-    const env: Envelope<BridgeToParent> = { nonce: 'n', message: msg };
-    expect(validateEnvelope(env, 'n')).toEqual(msg);
-  });
-
   it('accepts scroll-state bridge messages', () => {
     const msg: BridgeToParent = {
       type: 'scroll-state',
@@ -80,15 +60,15 @@ describe('validateEnvelope', () => {
     expect(validateEnvelope(env, 'n')).toEqual(msg);
   });
 
-  it('accepts comments-rendered with rects, baselineScrollY, layoutVersion', () => {
+  it('accepts threads-resolved with placements, baselineScrollY, layoutVersion', () => {
     const msg: BridgeToParent = {
-      type: 'comments-rendered',
+      type: 'threads-resolved',
       payload: {
-        found: ['a'],
-        orphaned: ['b'],
-        rects: [{ id: 'a', y: 100, x: 0, w: 12, h: 12 }],
+        placements: [{ id: 'a', state: 'anchored', rect: { y: 100, x: 0, w: 12, h: 12 }, textOffset: 4 }],
+        draft: null,
         baselineScrollY: 50,
         layoutVersion: 3,
+        settled: true,
       },
     };
     const env: Envelope<BridgeToParent> = { nonce: 'n', message: msg };
@@ -104,15 +84,11 @@ describe('validateEnvelope', () => {
     expect(validateEnvelope(env, 'n')).toEqual(msg);
   });
 
-  it('accepts set-focused-comment with an id', () => {
-    const msg: ParentToBridge = { type: 'set-focused-comment', payload: { id: 'abc' } };
-    const env: Envelope<ParentToBridge> = { nonce: 'n', message: msg };
-    expect(validateEnvelope(env, 'n')).toEqual(msg);
-  });
-
-  it('accepts set-focused-comment with id: null (clear focus)', () => {
-    const msg: ParentToBridge = { type: 'set-focused-comment', payload: { id: null } };
-    const env: Envelope<ParentToBridge> = { nonce: 'n', message: msg };
-    expect(validateEnvelope(env, 'n')).toEqual(msg);
+  it('accepts set-focused-thread with an id or null', () => {
+    for (const id of ['abc', null]) {
+      const msg: ParentToBridge = { type: 'set-focused-thread', payload: { id, reveal: false } };
+      const env: Envelope<ParentToBridge> = { nonce: 'n', message: msg };
+      expect(validateEnvelope(env, 'n')).toEqual(msg);
+    }
   });
 });

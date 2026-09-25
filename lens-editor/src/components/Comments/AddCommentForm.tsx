@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 
 interface AddCommentFormProps {
   onSubmit: (content: string) => void;
-  onCancel: () => void;
+  /** Receives the unsent text, so a caller can keep the draft. */
+  onCancel: (unsent: string) => void;
   placeholder?: string;
   submitLabel?: string;
   autoFocus?: boolean;
@@ -43,7 +44,7 @@ export function AddCommentForm({
       handleSubmit();
     }
     if (e.key === 'Escape') {
-      onCancel();
+      onCancel(text);
     }
   };
 
@@ -61,7 +62,7 @@ export function AddCommentForm({
       <div className="flex justify-end gap-2 mt-2">
         <button
           type="button"
-          onClick={onCancel}
+          onClick={() => onCancel(text)}
           className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800"
         >
           Cancel

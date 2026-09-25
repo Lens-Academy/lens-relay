@@ -1,6 +1,6 @@
 # HTML comments redesign (design notes, 2026-09-25)
 
-Status: agreed direction, not started. Written as a handoff so a fresh session can build it.
+Status: built (see "Implementation" at the end). Originally written as a handoff for a fresh session.
 Luc's brief: "create a new system, with a lot of freedom to do it really well."
 
 ## Why: the current system is brittle
@@ -153,3 +153,57 @@ Build the new anchoring on Apache Annotator's matchers so the benchmark prototyp
   its comment section must be rewritten when this ships).
 - Shared comment UI: `lens-editor/src/components/Comments/*` (CommentsLayer, CommentCard, types),
   `Mobile/MobileCommentsSheet.tsx`; HTML adapter `HtmlEditor/htmlCommentsAdapter.ts`.
+
+## Implementation (2026-09-25)
+
+Built as designed, phases 1 and 2 plus element pins; the old inline system (fingerprints, candidate scoring, probe
+iframes, inline markers, manual source placement) is deleted.
+
+- **Store:** `comments_v0` exactly as in section 1 (`HtmlEditor/comments/thread-store.ts`; Rust mirror
+  `crates/relay/src/mcp/tools/html_comments.rs`). Messages are a nested Y.Map keyed by id; a reply reopens a
+  resolved thread; `authorId` (per browser, `ai:<actor>` for agents) decides who may edit or delete.
+- **Anchors:** `HtmlEditor/anchoring/`. Context grows until unique (up to 200 chars); scope = nearest ancestor with
+  a stable id or `data-lens-id`, but never a whole-app container (`#root`); a unique CSS path and an ordinal only
+  for verbatim repeats. Clicks comment on the whole block when it is short (heading, list item, button), else on
+  the sentence under the pointer; media and drawings get element pins.
+- **Resolution** (`anchoring/resolve.ts`), in order: exact quote with full context → among candidates in a strong
+  scope (a scope that no longer holds the quote caps the result at *guessed*) → exact quote with changed context,
+  trusted only with evidence (≥40 chars verbatim, or context ≥ 0.5, or ≥ 0.3 with scope/≥25 chars) → an in-place
+  edit between the old prefix and suffix → fuzzy (Sellers edit distance near the expected position; long quotes by
+  head and tail; single edges only beside their old neighbour) → orphaned. Drifted-but-confident anchors are
+  rewritten (once per page load per viewer, at most every 3 minutes, only to resembling text), keeping
+  `originalQuote`.
+- **In the frame** (`bridge/comment-layer.ts`): resolves after load and on DOM mutations (throttled), reports
+  "settled" once the DOM has been quiet (or after 5 s for pages that animate forever); nothing before that shows as
+  orphaned. Highlights via the Custom Highlight API with an overlay fallback; badges in a shadow root under
+  `<html>`. Comment mode swallows the page's pointer events and shows a hover preview of the target.
+- **Trust:** the page can forge bridge messages, so captures, "describe current" and legacy descriptions are
+  accepted only as replies to requests, anchors are re-validated and clipped, and `seen` is written once per
+  observation (never in reply to another editor's write).
+- **LLM re-anchoring:** not via a server-side Haiku call. Agents are the LLMs: `edit` warns when it removes quoted
+  text and the `comments` tool's `reanchor` moves the thread; people use *Looks right* / *Re-attach*. A server-side
+  suggester can still be added later.
+- **Migration:** the preview renders legacy pages with the `[[@comment:…]]` text removed; the `<!--lens-comment-->`
+  nodes mark where each thread was, the bridge describes an anchor there, and the first editor to open the page
+  writes the threads and strips all markers in one transaction. The relay keeps refusing edits that drop unmigrated
+  markers.
+
+### Measured (`lens-editor/scripts/anchor-bench/run.ts`)
+
+13 real pages (6 local agent-built pages, 7 production pages: transcripts, explainers, React tools), 93 text
+comments (clicks, short and long selections) and 35 element pins, invisible ground-truth markers in the source,
+rendered in Chromium with the real page runtime. Percent of comments:
+
+| scenario | correct | flagged, right spot | flagged, wrong spot | confidently wrong | not found |
+|---|---|---|---|---|---|
+| unchanged / section added above / restyled + wrapped / phone width | 100 | 0 | 0 | 0 | 0 |
+| sections reordered | 98 | 0 | 0 | 0 | 2 |
+| heavy revision (added + restyled + reordered) | 99 | 0 | 0 | 0 | 1 |
+| typo inside the quote | 74 | 21 | 5 | 0 | 0 |
+| quote reworded (2/3 of its words replaced) | 9 | 34 | 16 | 0 | 41 |
+| quote deleted | – | – | 33 | 0 | 67 |
+| quote duplicated elsewhere | 95 | 3 | 0 | 2 (harness artefact) | 0 |
+| other comments on the page while those edits happen | 98–100 | ≤1 | ≤1 | 0 | ≤1 |
+
+The first version marked 44% of comments on deleted text as confidently placed elsewhere (a unique copy of the
+same words); requiring evidence beyond the words themselves brought that to 0 without losing moved passages.

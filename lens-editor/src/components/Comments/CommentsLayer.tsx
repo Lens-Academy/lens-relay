@@ -18,7 +18,7 @@ import {
 import { CommentCard } from './CommentCard';
 import { AddCommentForm } from './AddCommentForm';
 import { computeWeightedLayout, type LayoutItem } from '../../lib/weighted-pav-layout';
-import type { ThreadKey, ThreadView, MessageView, ScrollSource } from './types';
+import type { ThreadKey, ThreadView, MessageView, ScrollSource, ThreadActions } from './types';
 
 const CARD_GAP = 10;
 const DEFAULT_CARD_HEIGHT = 100;
@@ -59,6 +59,23 @@ export interface CommentsLayerProps {
   /** Add-comment UI shown only when both provided. */
   getInsertKey?: () => ThreadKey | null;
   onAddComment?: (key: ThreadKey, body: string) => void;
+  /** Resolve / re-attach actions passed to every card. */
+  actions?: ThreadActions;
+  /** A comment being written at an anchor (resolveAnchorY(draft.key) places it). */
+  draft?: DraftComment | null;
+  /** Shown when there are no threads. */
+  emptyHint?: string;
+}
+
+export interface DraftComment {
+  key: ThreadKey;
+  /** What is being commented on, quoted above the form. */
+  target: string;
+  warning?: string;
+  /** Text to start from (a draft kept from an earlier cancel). */
+  initialText?: string;
+  onSubmit: (body: string) => void;
+  onCancel: (unsent: string) => void;
 }
 
 /** Clamp a value to [0, 1]. */
@@ -79,6 +96,9 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
     onDelete,
     getInsertKey,
     onAddComment,
+    actions,
+    draft,
+    emptyHint = 'No comments yet. Select text and click Add.',
   } = props;
 
   // getInsertKey identity may change every render (callers commonly pass
@@ -195,7 +215,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
   const [layoutMap, setLayoutMap] = useState<Map<ThreadKey, number>>(new Map());
 
   // Stable dep for the layout effect — changes only when the thread set changes.
-  const threadKeys = threads.map((t) => t.key).join(',');
+  const threadKeys = threads.map((t) => t.key).join(',') + (draft ? `|${draft.key}` : '');
 
   // Resolve a thread's screen-y. Orphans (anchor not currently rendered) pin
   // synthetically to the top of the visible editor area, so they appear at
@@ -244,6 +264,18 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
         height: cardHeightsRef.current.get(thread.key) ?? DEFAULT_CARD_HEIGHT,
         weight,
       });
+    }
+
+    if (draft) {
+      // The comment being written is pinned to its anchor, like a focused card.
+      const anchorY = resolveAnchorY(draft.key) ?? viewport.top;
+      items.push({
+        key: draft.key,
+        anchorY,
+        height: cardHeightsRef.current.get(draft.key) ?? DEFAULT_CARD_HEIGHT,
+        weight: Number.POSITIVE_INFINITY,
+      });
+      anyPositiveWeight = true;
     }
 
     // If no item is in the viewport and no focused thread is pinned, every
@@ -382,7 +414,44 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
         </div>
       )}
 
-      {threads.length === 0 && (
+      {draft && (() => {
+        const anchorY = resolveAnchorY(draft.key) ?? currentViewport.top;
+        const layoutY = layoutMap.get(draft.key) ?? anchorY;
+        const layerTop = layerRef.current?.getBoundingClientRect().top ?? 0;
+        return (
+          <div
+            key={`draft:${draft.key}`}
+            data-comment-draft=""
+            ref={(el) => attachObserver(el, draft.key)}
+            style={{ position: 'absolute', top: Math.max(4, layoutY - layerTop), left: 4, right: 4, pointerEvents: 'auto', zIndex: 3 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="overflow-hidden rounded-lg border border-blue-300 bg-white shadow-md">
+              <p
+                className="mx-3 mt-2 border-l-2 border-blue-300 pl-2 text-[12px] italic leading-snug text-gray-600"
+                title={draft.target}
+              >
+                {draft.target.length > 140 ? `${draft.target.slice(0, 139)}…` : draft.target}
+              </p>
+              {draft.warning && (
+                <p className="mx-3 mt-1.5 rounded bg-amber-50 px-2 py-1 text-[11px] leading-snug text-amber-800">
+                  {draft.warning}
+                </p>
+              )}
+              <AddCommentForm
+                onSubmit={draft.onSubmit}
+                onCancel={draft.onCancel}
+                initialValue={draft.initialText}
+                placeholder="Add a comment..."
+                submitLabel="Post"
+                autoFocus
+              />
+            </div>
+          </div>
+        );
+      })()}
+
+      {threads.length === 0 && !draft && (
         <div
           style={{
             pointerEvents: 'none',
@@ -392,7 +461,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
             fontSize: 13,
           }}
         >
-          No comments yet. Select text and click Add.
+          {emptyHint}
         </div>
       )}
 
@@ -428,6 +497,7 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
               onReply={(t, body) => onReply(t, body)}
               onEdit={(msg, body) => onEdit(msg, body)}
               onDelete={(msg) => onDelete(msg)}
+              actions={actions}
             />
           </div>
         );

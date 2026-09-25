@@ -2,22 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { describe, it, expect, vi } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import * as Y from 'yjs';
-import {
-  useThreadsFromHtmlYText,
-  effectiveY,
-  makeIframeScrollSource,
-  type AnchorState,
-} from './htmlCommentsAdapter';
-import { addComment } from './comment-store';
-
-function makeDoc() {
-  const doc = new Y.Doc();
-  const ytext = doc.getText('contents');
-  ytext.insert(0, '<p>hello</p>');
-  return ytext;
-}
+import { effectiveY, makeIframeScrollSource } from './htmlCommentsAdapter';
 
 describe('effectiveY', () => {
   it('combines iframe top, rect y, and scroll delta', () => {
@@ -27,58 +12,6 @@ describe('effectiveY', () => {
 
   it('returns iframeTop + rect.y when scroll has not moved', () => {
     expect(effectiveY({ y: 50, x: 0, w: 10, h: 10 }, 0, 0, 100)).toBe(150);
-  });
-});
-
-describe('useThreadsFromHtmlYText', () => {
-  it('orphan when no rect for the id', () => {
-    const ytext = makeDoc();
-    addComment(ytext, 'test', { id: 'c1', author: 'a', ts: 't', body: 'hi', position: 12 });
-    const anchorState: AnchorState = new Map();
-    const { result } = renderHook(() => useThreadsFromHtmlYText(ytext, anchorState, 'a'));
-    expect(result.current.threads).toHaveLength(1);
-    expect(result.current.threads[0].orphan).toBe(true);
-  });
-
-  it('not orphan when rect present', () => {
-    const ytext = makeDoc();
-    addComment(ytext, 'test', { id: 'c1', author: 'a', ts: 't', body: 'hi', position: 12 });
-    const anchorState: AnchorState = new Map([['c1', { y: 50, x: 0, w: 10, h: 10 }]]);
-    const { result } = renderHook(() => useThreadsFromHtmlYText(ytext, anchorState, 'a'));
-    expect(result.current.threads[0].orphan).toBe(false);
-  });
-
-  it('onEdit calls editMessage with the message id', () => {
-    const ytext = makeDoc();
-    addComment(ytext, 'test', { id: 'c1', author: 'a', ts: 't', body: 'hi', position: 12 });
-    const anchorState: AnchorState = new Map();
-    const { result } = renderHook(() => useThreadsFromHtmlYText(ytext, anchorState, 'a'));
-    const msg = result.current.threads[0].root;
-    act(() => { result.current.callbacks.onEdit(msg, 'edited'); });
-    expect(ytext.toString()).toContain('"body":"edited"');
-  });
-
-  it('onReply appends a reply to the cluster', () => {
-    const ytext = makeDoc();
-    addComment(ytext, 'test', { id: 'c1', author: 'a', ts: 't', body: 'hi', position: 12 });
-    const anchorState: AnchorState = new Map([['c1', { y: 50, x: 0, w: 10, h: 10 }]]);
-    const { result } = renderHook(() => useThreadsFromHtmlYText(ytext, anchorState, 'alice'));
-    const thread = result.current.threads[0];
-    act(() => { result.current.callbacks.onReply(thread, 'reply body'); });
-    expect(result.current.threads[0].replies).toHaveLength(1);
-    expect(result.current.threads[0].replies[0].body).toBe('reply body');
-    expect(result.current.threads[0].replies[0].author).toBe('alice');
-  });
-
-  it('re-projects on yText change', () => {
-    const ytext = makeDoc();
-    const anchorState: AnchorState = new Map();
-    const { result } = renderHook(() => useThreadsFromHtmlYText(ytext, anchorState, 'a'));
-    expect(result.current.threads).toHaveLength(0);
-    act(() => {
-      addComment(ytext, 'test', { id: 'c1', author: 'a', ts: 't', body: 'hi', position: 12 });
-    });
-    expect(result.current.threads).toHaveLength(1);
   });
 });
 

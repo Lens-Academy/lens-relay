@@ -466,7 +466,7 @@ pub fn check(source: &str) -> Vec<String> {
         let raw_body = &c[2];
         if COMMENT_BLOCK_RE.is_match(raw_body) {
             notes.push(
-                "A lens-comment block sits inside a <script>, so it never reaches the page and the comment shows as orphaned. Keep commented text in static HTML."
+                "An old-format lens-comment block sits inside a <script>, so it never reaches the page and the comment will not find its place. Use the comments tool for new comments; they are stored beside the page."
                     .to_string(),
             );
         }
@@ -738,12 +738,13 @@ fn missing(before: &[&str], after: &[&str]) -> usize {
     lost
 }
 
-/// Collaborators' comments must survive an agent's edit byte for byte: every
+/// Pages from before comments moved out of band (`html_comments.rs`) still
+/// carry them inline until an editor opens the page and migrates them. Until
+/// then they must survive an agent's edit byte for byte: every
 /// `<!--lens-comment …-->` / `<!--lens-reply …-->` block and every
 /// `[[@comment:id]]` anchor in the document before the edit is still there
-/// after it, and new blocks may not reuse an id. Comments are resolved by
-/// people in the editor. Compares whole documents, so an edit whose
-/// `old_string` covers only part of a block cannot slip past.
+/// after it, and new blocks may not reuse an id. Compares whole documents, so
+/// an edit whose `old_string` covers only part of a block cannot slip past.
 pub fn preserve_comment_blocks(before: &str, after: &str) -> Result<(), String> {
     let old_blocks: Vec<&str> = COMMENT_BLOCK_RE
         .find_iter(before)
@@ -781,7 +782,7 @@ pub fn preserve_comment_blocks(before: &str, after: &str) -> Result<(), String> 
             ));
         }
         return Err(format!(
-            "Error: this edit would remove or change {} left by collaborators. Keep them byte for byte (you may move them along with the text they belong to); people resolve comments in the editor. To respond to one, add a <!--lens-reply …--> block instead.",
+            "Error: this edit would remove or change {} left by collaborators in the page's old inline comment format. Keep them byte for byte (you may move them along with the text they belong to); the Lens Editor moves them beside the page, where the comments tool can reply to and resolve them, the next time someone opens it.",
             what.join(" and ")
         ));
     }
