@@ -580,6 +580,36 @@ describe('git promotion service', () => {
     },
   );
 
+  it('computes change stats with a constant number of git diff calls', async () => {
+    // Prod staging diverges from production by thousands of files; one
+    // `git diff --numstat` per file spawned them all at once and timed out
+    // (504 on promotion PR creation, 2026-09-27).
+    const fixture = await createFixture();
+    const realGit = (await execFileAsync('sh', ['-c', 'command -v git'])).stdout.trim();
+    const shimDir = path.join(fixture.root, 'git-shim');
+    const logPath = path.join(fixture.root, 'git-calls.log');
+    await fs.mkdir(shimDir);
+    await fs.writeFile(
+      path.join(shimDir, 'git'),
+      `#!/bin/sh\necho "$1" >> '${logPath}'\nexec '${realGit}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${shimDir}${path.delimiter}${originalPath}`;
+    try {
+      const service = createGitPromotionService(fixture.config);
+      await service.getChanges();
+      await fs.writeFile(logPath, '');
+      await service.createPromotionBranch({ paths: ['modified.md'] });
+    } finally {
+      process.env.PATH = originalPath;
+    }
+
+    const calls = (await fs.readFile(logPath, 'utf8')).split('\n').filter(Boolean);
+    // name-status + numstat for the change list, plus `diff --cached` to verify the branch.
+    expect(calls.filter(call => call === 'diff')).toHaveLength(3);
+  });
+
   it('rejects timed out child processes even if SIGTERM is ignored', async () => {
     process.env.PROMOTION_GIT_TIMEOUT_MS = '25';
     process.env.PROMOTION_GIT_KILL_AFTER_MS = '25';
