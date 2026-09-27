@@ -402,37 +402,21 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
       !isPromotionPathExcluded(change.path) && !(change.oldPath && isPromotionPathExcluded(change.oldPath))
     ));
 
-    return Promise.all(
-      promotableChanges.map(async change => {
-        const stats = await getChangeStats(change);
-        return { ...change, ...stats };
-      }),
-    );
-  }
-
-  async function getChangeStats(change: Pick<PromotionFileChange, 'path' | 'oldPath'>): Promise<{
-    additions: number;
-    deletions: number;
-    isBinary: boolean;
-  }> {
-    const pathspecs = change.oldPath ? [literalPathspec(change.oldPath), literalPathspec(change.path)] : [literalPathspec(change.path)];
-    const output = await git([
+    // One whole-tree numstat, not one per file: staging can lead production
+    // by thousands of files, and spawning a `git diff` for each at once
+    // exceeded the git timeout on prod (504 on promotion, 2026-09-27).
+    const stats = parseNumstat(await git([
       'diff',
       '--numstat',
+      '--find-renames',
+      '-z',
       `${productionRef()}..${stagingRef()}`,
-      '--',
-      ...pathspecs,
-    ]);
-    const firstLine = output.split('\n').find(line => line.trim() !== '');
-    if (!firstLine) return { additions: 0, deletions: 0, isBinary: false };
+    ]));
 
-    const [rawAdditions, rawDeletions] = firstLine.split('\t');
-    const isBinary = rawAdditions === '-' || rawDeletions === '-';
-    return {
-      additions: isBinary ? 0 : Number.parseInt(rawAdditions, 10),
-      deletions: isBinary ? 0 : Number.parseInt(rawDeletions, 10),
-      isBinary,
-    };
+    return promotableChanges.map(change => ({
+      ...change,
+      ...(stats.get(numstatKey(change.oldPath, change.path)) ?? { additions: 0, deletions: 0, isBinary: false }),
+    }));
   }
 
   async function listCurrentChangesNoRenames(): Promise<string[]> {
@@ -664,6 +648,46 @@ function parseNameStatus(output: string): PromotionFileChange[] {
   }
 
   return changes;
+}
+
+interface ChangeStats {
+  additions: number;
+  deletions: number;
+  isBinary: boolean;
+}
+
+// `git diff --numstat -z` emits `added\tdeleted\tpath\0`, or for renames
+// `added\tdeleted\t\0oldPath\0newPath\0`; binary files report `-` counts.
+function parseNumstat(output: string): Map<string, ChangeStats> {
+  const tokens = output ? output.split('\0') : [];
+  const stats = new Map<string, ChangeStats>();
+
+  for (let index = 0; index < tokens.length; ) {
+    const line = tokens[index++];
+    if (line === '') continue;
+    const [rawAdditions, rawDeletions, inlinePath] = splitNumstatLine(line);
+    const isRename = inlinePath === '';
+    const oldPath = isRename ? tokens[index++] : null;
+    const filePath = isRename ? tokens[index++] : inlinePath;
+    const isBinary = rawAdditions === '-' || rawDeletions === '-';
+    stats.set(numstatKey(oldPath, filePath), {
+      additions: isBinary ? 0 : Number.parseInt(rawAdditions, 10),
+      deletions: isBinary ? 0 : Number.parseInt(rawDeletions, 10),
+      isBinary,
+    });
+  }
+
+  return stats;
+}
+
+function splitNumstatLine(line: string): [string, string, string] {
+  const firstTab = line.indexOf('\t');
+  const secondTab = line.indexOf('\t', firstTab + 1);
+  return [line.slice(0, firstTab), line.slice(firstTab + 1, secondTab), line.slice(secondTab + 1)];
+}
+
+function numstatKey(oldPath: string | null, filePath: string): string {
+  return `${oldPath ?? ''}\0${filePath}`;
 }
 
 function mapStatus(statusCode: string): PromotionFileStatus {
