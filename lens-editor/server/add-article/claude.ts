@@ -39,9 +39,10 @@ export function scaledReviewBudgetUsd(chars: number): number {
 export function isClaudeRefusal(cliOutput: string): boolean {
   const refusal = /can(?:'|\u2019)t help with this|anthropic\.com\/legal\/aup/i;
   try {
-    const outer = JSON.parse(cliOutput) as { result?: unknown; stop_reason?: unknown };
+    const outer = JSON.parse(cliOutput) as { result?: unknown; stop_reason?: unknown; is_error?: unknown };
     if (outer.stop_reason === "refusal") return true;
-    if (typeof outer.result === "string") return refusal.test(outer.result);
+    // A successful review may quote the usage policy; only an error result counts.
+    return outer.is_error === true && typeof outer.result === "string" && refusal.test(outer.result);
   } catch {
     // not CLI JSON (stderr, truncated output): fall back to the raw text
   }
@@ -400,7 +401,7 @@ export async function reviewArticle(
   if (
     reviewer.provider === "claude" &&
     model !== REFUSAL_FALLBACK_MODEL &&
-    (isClaudeRefusal(result.stdout) || isClaudeRefusal(result.stderr))
+    (isClaudeRefusal(result.stdout) || (result.exitCode !== 0 && isClaudeRefusal(result.stderr)))
   ) {
     signal?.throwIfAborted();
     model = REFUSAL_FALLBACK_MODEL;

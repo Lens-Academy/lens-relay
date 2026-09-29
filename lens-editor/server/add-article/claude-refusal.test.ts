@@ -59,6 +59,10 @@ describe("isClaudeRefusal", () => {
     expect(isClaudeRefusal(JSON.stringify({ is_error: true, result: "Error: max budget exceeded" }))).toBe(false);
     expect(isClaudeRefusal("spawn claude ENOENT")).toBe(false);
     expect(isClaudeRefusal("")).toBe(false);
+    expect(isClaudeRefusal(JSON.stringify({
+      is_error: false,
+      result: "Fixed the link to https://www.anthropic.com/legal/aup; the model can't help with this example.\nPASS",
+    }))).toBe(false);
   });
 });
 
