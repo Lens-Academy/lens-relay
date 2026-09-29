@@ -86,7 +86,8 @@ SHARE_TOKEN_SECRET=$(ssh relay-prod 'grep SHARE_TOKEN_SECRET /root/lens-relay/.e
 
 The relay binary is built for **x86_64 Linux** (prod's arch) on a developer's own
 machine, then shipped to prod and swapped in via `Dockerfile.prebuilt` — a fast copy,
-so **prod never compiles**.
+so **prod never compiles**. SSH uses the `relay-prod` alias (host/key setup lives in
+local overrides).
 
 **Stale-binary trap.** `crates/relay-binary` is gitignored: `git pull` never updates it,
 and `Dockerfile.prebuilt` only copies whatever file is there. So never build the relay
@@ -97,8 +98,7 @@ that commit and prod's checkout** (the crate directories, `Cargo.toml`, `Cargo.l
 uncommitted edits on prod count too). Editor-only commits since the binary are fine,
 as are changes to copied files like `run.sh` or `relay.toml`; any other `crates/`
 change means rebuild the binary. Commit before you build: the binary records only
-the commit, so uncommitted edits on your build machine are invisible to the check. SSH uses the `relay-prod` alias (host/key setup lives in
-local overrides).
+the commit, so uncommitted edits on your build machine are invisible to the check.
 
 **Prod is a small 2-vCPU box.** Don't run heavy processes on it — long builds, or an
 agent / Claude Code session — they starve the relay's async runtime and cause the

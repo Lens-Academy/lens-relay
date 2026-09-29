@@ -34,6 +34,11 @@ built="$(printf '%s' "$built" | tr -d '[:space:]')"
 [ -n "$built" ] && [ "$built" != unknown ] \
   || die "$BIN does not know which commit it was built from. Rebuild it inside a git checkout."
 
+# Only an immutable stamp counts: a commit sha, or a tag. A branch name would
+# resolve to its current tip and make any old binary look fresh.
+if [[ ! "$built" =~ ^[0-9a-f]{7,40}$ ]] && ! git show-ref --verify --quiet "refs/tags/$built"; then
+  die "$BIN reports '$built', which is neither a commit sha nor a tag. Rebuild it without RELAY_VERSION, or with RELAY_VERSION set to the commit sha."
+fi
 commit="$(git rev-parse --verify --quiet "${built}^{commit}")" \
   || die "$BIN was built from '$built', which this checkout does not have. Push that commit and git pull, or rebuild the binary from HEAD."
 

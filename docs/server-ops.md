@@ -576,16 +576,15 @@ cloudflared, relay-server, and lens-editor are managed via
 separately (see below):
 
 ```bash
-# Deploy/update the compose-managed services
+# Deploy/update the compose-managed services. Build the relay image with the
+# script, never a bare `compose build` / `compose build relay-server`:
+# crates/relay-binary is gitignored and may be stale, so that fails on purpose,
+# and so does an `up -d` that finds no relay-server:custom image to reuse. The
+# script refuses a binary older than the relay source (see AGENTS.md,
+# "Deploying to production").
+scripts/prod/build-relay-image.sh
 docker compose -f docker-compose.prod.yaml build lens-editor
 docker compose -f docker-compose.prod.yaml up -d
-
-# Rebuild the relay image. Never a bare `compose build` / `compose build
-# relay-server`: crates/relay-binary is gitignored and may be stale, so that
-# fails on purpose. The script refuses a binary older than crates/ (see
-# AGENTS.md, "Deploying to production").
-scripts/prod/build-relay-image.sh
-docker compose -f docker-compose.prod.yaml up -d relay-server
 
 # relay-git-sync is NOT in compose — (re)start it with its own script.
 # Safe to run any time; required after anything that recreated containers.
