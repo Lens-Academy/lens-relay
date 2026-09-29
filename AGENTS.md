@@ -66,7 +66,8 @@ docs/                 # Operational documentation
 ### Production
 
 ```bash
-docker compose -f docker-compose.prod.yaml build
+docker compose -f docker-compose.prod.yaml build lens-editor
+scripts/prod/build-relay-image.sh   # relay image; never a bare `compose build`, see "Deploying to production"
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
@@ -91,10 +92,12 @@ so **prod never compiles**.
 and `Dockerfile.prebuilt` only copies whatever file is there. So never build the relay
 image with a bare `docker compose build relay-server`; it now fails on purpose. Build it
 with `scripts/prod/build-relay-image.sh`, which reads the commit the binary was built
-from (`relay version --commit`) and refuses unless **no file under `crates/` changed
-between that commit and prod's HEAD**. Editor-only commits since the binary are fine;
-any `crates/` change means rebuild the binary. Commit before you build: the binary
-records only the commit, so uncommitted `crates/` edits are invisible to the check. SSH uses the `relay-prod` alias (host/key setup lives in
+from (`relay version --commit`) and refuses unless **no `crates/` source changed between
+that commit and prod's checkout** (the crate directories, `Cargo.toml`, `Cargo.lock`;
+uncommitted edits on prod count too). Editor-only commits since the binary are fine,
+as are changes to copied files like `run.sh` or `relay.toml`; any other `crates/`
+change means rebuild the binary. Commit before you build: the binary records only
+the commit, so uncommitted edits on your build machine are invisible to the check. SSH uses the `relay-prod` alias (host/key setup lives in
 local overrides).
 
 **Prod is a small 2-vCPU box.** Don't run heavy processes on it — long builds, or an
@@ -131,10 +134,12 @@ binary is stale or unknown, rebuild it from HEAD and repeat step 3; do not work 
 the check.
 
 If you genuinely can't build off-prod, the last-resort fallback is a CPU-capped build in
-a container on prod (`docker run --rm --cpus=1.5 -v /root/lens-relay:/build -w
-/build/crates rust:1.89-slim-trixie cargo build --release --bin relay`, then `cp
-crates/target/release/relay crates/relay-binary`, then step 4) — but this loads the box,
-so prefer a quiet window.
+a container on prod (`docker run --rm --cpus=1.5 -e RELAY_VERSION=$(git -C
+/root/lens-relay rev-parse --short=12 HEAD) -v /root/lens-relay:/build -w /build/crates
+rust:1.89-slim-trixie cargo build --release --bin relay`, then `cp
+crates/target/release/relay crates/relay-binary`, then step 4; the image has no git,
+so `RELAY_VERSION` is what stamps the commit) — but this loads the box, so prefer a
+quiet window.
 
 For lens-editor changes (no Rust), skip steps 1 and 3 and replace `relay-server` with `lens-editor`.
 

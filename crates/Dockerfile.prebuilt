@@ -8,7 +8,7 @@
 #
 # relay-binary is gitignored, so `git pull` never refreshes it. A bare
 # `docker compose build relay-server` used to package whatever old binary was
-# lying there, silently regressing prod. The script checks that no crates/
+# lying there, silently regressing prod. The script checks that no relay
 # source changed since the binary's commit and passes that commit in as
 # RELAY_EXPECTED_COMMIT; the build below refuses to run without it, or when the
 # binary in the context reports a different commit.
