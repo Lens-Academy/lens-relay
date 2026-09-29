@@ -67,12 +67,12 @@ describe("isClaudeRefusal", () => {
 });
 
 describe("scaledReviewBudgetUsd", () => {
-  it("is $10 per started 50k chars, between $10 and $30", () => {
-    expect(scaledReviewBudgetUsd(0)).toBe(10);
-    expect(scaledReviewBudgetUsd(50_000)).toBe(10);
-    expect(scaledReviewBudgetUsd(50_001)).toBe(20);
-    expect(scaledReviewBudgetUsd(120_000)).toBe(30);
-    expect(scaledReviewBudgetUsd(1_000_000)).toBe(30);
+  it("is $20 per started 50k chars, between $20 and $60", () => {
+    expect(scaledReviewBudgetUsd(0)).toBe(20);
+    expect(scaledReviewBudgetUsd(50_000)).toBe(20);
+    expect(scaledReviewBudgetUsd(50_001)).toBe(40);
+    expect(scaledReviewBudgetUsd(120_000)).toBe(60);
+    expect(scaledReviewBudgetUsd(1_000_000)).toBe(60);
   });
 });
 
@@ -122,7 +122,7 @@ describe("reviewArticle refusal fallback", () => {
       maxBudgetUsd: 5,
     });
     const budgets = spawnMocks.spawnClaude.mock.calls.map((call) => argValue(call[2], "--max-budget-usd"));
-    expect(budgets).toEqual(["20", "5"]);
+    expect(budgets).toEqual(["40", "5"]);
   });
 
   it("also retries a refusal reported with exit code 0", async () => {

@@ -19,11 +19,11 @@ export const VERIFY_TIMEOUT_MS =
 export const REVIEW_VERSION = "article-qc-v1.4";
 export const REVIEW_MODEL = "sonnet";
 export const MAX_REVIEW_ROUNDS = 3;
-export const DEFAULT_REVIEW_BUDGET_USD = 10;
+export const DEFAULT_REVIEW_BUDGET_USD = 20;
 /** Long papers (appendices, dozens of figure cross-references) need more than
- *  one $10 pass to repair: scale per pass with length, $10 per 50k chars. */
-export const REVIEW_BUDGET_USD_PER_50K_CHARS = 10;
-export const MAX_REVIEW_BUDGET_USD = 30;
+ *  one flat pass budget to repair: scale per pass with length, $20 per 50k chars. */
+export const REVIEW_BUDGET_USD_PER_50K_CHARS = 20;
+export const MAX_REVIEW_BUDGET_USD = 60;
 /** A reviewer refusal is a safety-classifier call on the source, not a verdict
  *  on the article: AI-safety papers about dangerous-capability evals trip it.
  *  Retry the pass once on this model before failing the import. */

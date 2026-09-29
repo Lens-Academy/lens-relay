@@ -113,7 +113,7 @@ describe("direct source review", () => {
 
   it("allows the retro CLI to override Claude's production-default budget", () => {
     const defaultArgs = buildVerifyArgs("/tmp/review");
-    expect(defaultArgs[defaultArgs.indexOf("--max-budget-usd") + 1]).toBe("10");
+    expect(defaultArgs[defaultArgs.indexOf("--max-budget-usd") + 1]).toBe("20");
     const localArgs = buildVerifyArgs("/tmp/review", 0, "sonnet", 5);
     expect(localArgs[localArgs.indexOf("--max-budget-usd") + 1]).toBe("5");
   });
