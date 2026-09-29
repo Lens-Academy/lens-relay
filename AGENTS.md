@@ -85,7 +85,16 @@ SHARE_TOKEN_SECRET=$(ssh relay-prod 'grep SHARE_TOKEN_SECRET /root/lens-relay/.e
 
 The relay binary is built for **x86_64 Linux** (prod's arch) on a developer's own
 machine, then shipped to prod and swapped in via `Dockerfile.prebuilt` — a fast copy,
-so **prod never compiles**. SSH uses the `relay-prod` alias (host/key setup lives in
+so **prod never compiles**.
+
+**Stale-binary trap.** `crates/relay-binary` is gitignored: `git pull` never updates it,
+and `Dockerfile.prebuilt` only copies whatever file is there. So never build the relay
+image with a bare `docker compose build relay-server`; it now fails on purpose. Build it
+with `scripts/prod/build-relay-image.sh`, which reads the commit the binary was built
+from (`relay version --commit`) and refuses unless **no file under `crates/` changed
+between that commit and prod's HEAD**. Editor-only commits since the binary are fine;
+any `crates/` change means rebuild the binary. Commit before you build: the binary
+records only the commit, so uncommitted `crates/` edits are invisible to the check. SSH uses the `relay-prod` alias (host/key setup lives in
 local overrides).
 
 **Prod is a small 2-vCPU box.** Don't run heavy processes on it — long builds, or an
@@ -112,15 +121,20 @@ ssh relay-prod 'cd /root/lens-relay && git pull'
 # 3. Copy the binary to prod
 scp <path-to-built>/relay relay-prod:/root/lens-relay/crates/relay-binary
 
-# 4. Rebuild Docker image (fast — just copies binary, no compilation) and restart
-ssh relay-prod 'cd /root/lens-relay && docker compose -f docker-compose.prod.yaml build relay-server && docker compose -f docker-compose.prod.yaml up -d --force-recreate relay-server'
+# 4. Rebuild the image (fast — copies the binary, no compilation; refuses a stale
+#    binary, see above) and restart
+ssh relay-prod 'cd /root/lens-relay && scripts/prod/build-relay-image.sh && docker compose -f docker-compose.prod.yaml up -d --force-recreate relay-server'
 ```
+
+Build the binary from the same commit prod pulls (after step 2). If step 4 says the
+binary is stale or unknown, rebuild it from HEAD and repeat step 3; do not work around
+the check.
 
 If you genuinely can't build off-prod, the last-resort fallback is a CPU-capped build in
 a container on prod (`docker run --rm --cpus=1.5 -v /root/lens-relay:/build -w
 /build/crates rust:1.89-slim-trixie cargo build --release --bin relay`, then `cp
-crates/target/release/relay crates/relay-binary`) — but this loads the box, so prefer a
-quiet window.
+crates/target/release/relay crates/relay-binary`, then step 4) — but this loads the box,
+so prefer a quiet window.
 
 For lens-editor changes (no Rust), skip steps 1 and 3 and replace `relay-server` with `lens-editor`.
 

@@ -28,6 +28,8 @@ use y_sweet_core::{
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Commit (or exact tag) this binary was built from; set by build.rs.
+const GIT_VERSION: &str = env!("GIT_VERSION");
 
 fn generate_public_key_from_private(private_key_b64: &str) -> Result<String, anyhow::Error> {
     use p256::SecretKey;
@@ -127,7 +129,12 @@ enum ServSubcommand {
         doc_id: String,
     },
 
-    Version,
+    /// Print the package version and the commit the binary was built from.
+    Version {
+        /// Print only the build commit (or exact tag), for deploy checks.
+        #[clap(long)]
+        commit: bool,
+    },
 
     /// Configuration management commands
     Config {
@@ -890,8 +897,12 @@ async fn main() -> Result<()> {
 
             relay::convert::convert(store, &buf, doc_id).await?;
         }
-        ServSubcommand::Version => {
-            println!("{}", VERSION);
+        ServSubcommand::Version { commit } => {
+            if *commit {
+                println!("{}", GIT_VERSION);
+            } else {
+                println!("{} (commit {})", VERSION, GIT_VERSION);
+            }
         }
         ServSubcommand::Config { cmd } => {
             match cmd {

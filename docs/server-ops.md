@@ -577,11 +577,14 @@ separately (see below):
 
 ```bash
 # Deploy/update the compose-managed services
-docker compose -f docker-compose.prod.yaml build
+docker compose -f docker-compose.prod.yaml build lens-editor
 docker compose -f docker-compose.prod.yaml up -d
 
-# Rebuild a single service
-docker compose -f docker-compose.prod.yaml build relay-server
+# Rebuild the relay image. Never a bare `compose build` / `compose build
+# relay-server`: crates/relay-binary is gitignored and may be stale, so that
+# fails on purpose. The script refuses a binary older than crates/ (see
+# AGENTS.md, "Deploying to production").
+scripts/prod/build-relay-image.sh
 docker compose -f docker-compose.prod.yaml up -d relay-server
 
 # relay-git-sync is NOT in compose — (re)start it with its own script.
