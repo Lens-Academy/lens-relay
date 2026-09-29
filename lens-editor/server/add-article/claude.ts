@@ -20,6 +20,33 @@ export const REVIEW_VERSION = "article-qc-v1.4";
 export const REVIEW_MODEL = "sonnet";
 export const MAX_REVIEW_ROUNDS = 3;
 export const DEFAULT_REVIEW_BUDGET_USD = 10;
+/** Long papers (appendices, dozens of figure cross-references) need more than
+ *  one $10 pass to repair: scale per pass with length, $10 per 50k chars. */
+export const REVIEW_BUDGET_USD_PER_50K_CHARS = 10;
+export const MAX_REVIEW_BUDGET_USD = 30;
+/** A reviewer refusal is a safety-classifier call on the source, not a verdict
+ *  on the article: AI-safety papers about dangerous-capability evals trip it.
+ *  Retry the pass once on this model before failing the import. */
+export const REFUSAL_FALLBACK_MODEL = "opus";
+
+export function scaledReviewBudgetUsd(chars: number): number {
+  const scaled = Math.ceil(Math.max(chars, 1) / 50_000) * REVIEW_BUDGET_USD_PER_50K_CHARS;
+  return Math.min(MAX_REVIEW_BUDGET_USD, Math.max(DEFAULT_REVIEW_BUDGET_USD, scaled));
+}
+
+/** True when the Claude CLI ended because the model refused (usage-policy
+ *  block), e.g. result "API Error: Sonnet 5 can't help with this. ...". */
+export function isClaudeRefusal(cliOutput: string): boolean {
+  const refusal = /can(?:'|\u2019)t help with this|anthropic\.com\/legal\/aup/i;
+  try {
+    const outer = JSON.parse(cliOutput) as { result?: unknown; stop_reason?: unknown };
+    if (outer.stop_reason === "refusal") return true;
+    if (typeof outer.result === "string") return refusal.test(outer.result);
+  } catch {
+    // not CLI JSON (stderr, truncated output): fall back to the raw text
+  }
+  return refusal.test(cliOutput);
+}
 
 export type ArticleReviewProvider = "claude" | "codex";
 
@@ -55,6 +82,8 @@ export interface ReviewOutcome {
   reverted: ProtectedRevert[];
   originalMarkdown: string;
   selectedBase?: ArticleReviewBase;
+  /** The model that produced this pass (differs from the requested one after a refusal fallback). */
+  model: string;
 }
 
 export type ArticleReviewBase = "rendered" | "unrendered";
@@ -280,77 +309,101 @@ export async function reviewArticle(
 ): Promise<ReviewOutcome> {
   await fs.mkdir(workDir, { recursive: true });
   const requiresBaseSelection = repairRound === 0 && candidates !== undefined;
-  let privateValidationDir: string | undefined;
-  let selectorEnv: NodeJS.ProcessEnv | undefined;
-  if (requiresBaseSelection) {
-    privateValidationDir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-review-validation-"));
-    const renderedValidationPath = path.join(privateValidationDir, "rendered.json");
-    const unrenderedValidationPath = path.join(privateValidationDir, "unrendered.json");
-    await Promise.all([
-      fs.rm(path.join(workDir, "article.md"), { force: true }),
-      fs.rm(path.join(workDir, "validation.json"), { force: true }),
-      fs.rm(path.join(workDir, "validation-rendered.json"), { force: true }),
-      fs.rm(path.join(workDir, "validation-unrendered.json"), { force: true }),
-      fs.rm(path.join(workDir, ".base-selection.json"), { force: true }),
-      fs.writeFile(path.join(workDir, "candidate-rendered.md"), candidates.rendered),
-      fs.writeFile(path.join(workDir, "candidate-unrendered.md"), candidates.unrendered),
-      fs.writeFile(
-        renderedValidationPath,
-        JSON.stringify(candidates.validation.rendered, null, 2),
-      ),
-      fs.writeFile(
-        unrenderedValidationPath,
-        JSON.stringify(candidates.validation.unrendered, null, 2),
-      ),
-    ]);
-    await Promise.all([
-      fs.chmod(path.join(workDir, "candidate-rendered.md"), 0o400),
-      fs.chmod(path.join(workDir, "candidate-unrendered.md"), 0o400),
-      fs.chmod(renderedValidationPath, 0o400),
-      fs.chmod(unrenderedValidationPath, 0o400),
-    ]);
-    selectorEnv = {
-      ARTICLE_REVIEW_RENDERED_VALIDATION_PATH: renderedValidationPath,
-      ARTICLE_REVIEW_UNRENDERED_VALIDATION_PATH: unrenderedValidationPath,
-    };
-  } else {
-    await fs.writeFile(path.join(workDir, "article.md"), articleMarkdown);
-    await fs.rm(path.join(workDir, "validation.json"), { force: true });
-    await fs.writeFile(path.join(workDir, "validation.json"), JSON.stringify(validationIssues, null, 2));
-  }
-  const timeoutMs = reviewer.timeoutMs ?? VERIFY_TIMEOUT_MS;
-  let result: { exitCode: number; stdout: string; stderr: string };
-  try {
-    result = reviewer.provider === "codex"
-      ? await import("./codex").then(({ runCodexArticleVerify }) =>
-        runCodexArticleVerify(
-          workDir,
-          repairRound,
-          timeoutMs,
-          reviewer.model,
-          signal,
-          requiresBaseSelection,
-          selectorEnv,
-          revertNotice,
-        ))
-      : await spawnClaude(
-        workDir,
-        timeoutMs,
-        buildVerifyArgs(
-          workDir,
-          repairRound,
-          reviewer.model,
-          reviewer.maxBudgetUsd,
-          requiresBaseSelection,
-          revertNotice,
+  const reviewChars = candidates
+    ? Math.max(candidates.rendered.length, candidates.unrendered.length)
+    : articleMarkdown.length;
+  const maxBudgetUsd = reviewer.maxBudgetUsd ?? scaledReviewBudgetUsd(reviewChars);
+  const runPass = async (
+    model: string,
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
+    let privateValidationDir: string | undefined;
+    let selectorEnv: NodeJS.ProcessEnv | undefined;
+    if (requiresBaseSelection) {
+      privateValidationDir = await fs.mkdtemp(path.join(os.tmpdir(), "lens-review-validation-"));
+      const renderedValidationPath = path.join(privateValidationDir, "rendered.json");
+      const unrenderedValidationPath = path.join(privateValidationDir, "unrendered.json");
+      // A retried pass finds the previous attempt's read-only (0400) candidates.
+      await Promise.all([
+        fs.rm(path.join(workDir, "candidate-rendered.md"), { force: true }),
+        fs.rm(path.join(workDir, "candidate-unrendered.md"), { force: true }),
+      ]);
+      await Promise.all([
+        fs.rm(path.join(workDir, "article.md"), { force: true }),
+        fs.rm(path.join(workDir, "validation.json"), { force: true }),
+        fs.rm(path.join(workDir, "validation-rendered.json"), { force: true }),
+        fs.rm(path.join(workDir, "validation-unrendered.json"), { force: true }),
+        fs.rm(path.join(workDir, ".base-selection.json"), { force: true }),
+        fs.writeFile(path.join(workDir, "candidate-rendered.md"), candidates.rendered),
+        fs.writeFile(path.join(workDir, "candidate-unrendered.md"), candidates.unrendered),
+        fs.writeFile(
+          renderedValidationPath,
+          JSON.stringify(candidates.validation.rendered, null, 2),
         ),
-        signal,
-        selectorEnv,
-      );
-  } finally {
-    if (privateValidationDir) {
-      await fs.rm(privateValidationDir, { recursive: true, force: true });
+        fs.writeFile(
+          unrenderedValidationPath,
+          JSON.stringify(candidates.validation.unrendered, null, 2),
+        ),
+      ]);
+      await Promise.all([
+        fs.chmod(path.join(workDir, "candidate-rendered.md"), 0o400),
+        fs.chmod(path.join(workDir, "candidate-unrendered.md"), 0o400),
+        fs.chmod(renderedValidationPath, 0o400),
+        fs.chmod(unrenderedValidationPath, 0o400),
+      ]);
+      selectorEnv = {
+        ARTICLE_REVIEW_RENDERED_VALIDATION_PATH: renderedValidationPath,
+        ARTICLE_REVIEW_UNRENDERED_VALIDATION_PATH: unrenderedValidationPath,
+      };
+    } else {
+      await fs.writeFile(path.join(workDir, "article.md"), articleMarkdown);
+      await fs.rm(path.join(workDir, "validation.json"), { force: true });
+      await fs.writeFile(path.join(workDir, "validation.json"), JSON.stringify(validationIssues, null, 2));
     }
+    const timeoutMs = reviewer.timeoutMs ?? VERIFY_TIMEOUT_MS;
+    try {
+      return reviewer.provider === "codex"
+        ? await import("./codex").then(({ runCodexArticleVerify }) =>
+          runCodexArticleVerify(
+            workDir,
+            repairRound,
+            timeoutMs,
+            model,
+            signal,
+            requiresBaseSelection,
+            selectorEnv,
+            revertNotice,
+          ))
+        : await spawnClaude(
+          workDir,
+          timeoutMs,
+          buildVerifyArgs(
+            workDir,
+            repairRound,
+            model,
+            maxBudgetUsd,
+            requiresBaseSelection,
+            revertNotice,
+          ),
+          signal,
+          selectorEnv,
+        );
+    } finally {
+      if (privateValidationDir) {
+        await fs.rm(privateValidationDir, { recursive: true, force: true });
+      }
+    }
+  };
+  let model = reviewer.model;
+  let result = await runPass(model);
+  if (
+    result.exitCode !== 0 &&
+    reviewer.provider === "claude" &&
+    model !== REFUSAL_FALLBACK_MODEL &&
+    isClaudeRefusal(result.stdout || result.stderr)
+  ) {
+    signal?.throwIfAborted();
+    model = REFUSAL_FALLBACK_MODEL;
+    result = await runPass(model);
   }
   if (result.exitCode !== 0) {
     throw new Error(
@@ -400,6 +453,7 @@ export async function reviewArticle(
     ...revertProtectedEdits(originalMarkdown, edited),
     originalMarkdown,
     selectedBase,
+    model,
   };
 }
 
