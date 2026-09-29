@@ -37,6 +37,9 @@ services:
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
 
   relay-server:
+    # Build this image with scripts/prod/build-relay-image.sh, not a bare
+    # `compose build`: crates/relay-binary is gitignored and can be stale, so
+    # Dockerfile.prebuilt refuses to build without the commit the script checks.
     build:
       context: crates/
       dockerfile: Dockerfile.prebuilt

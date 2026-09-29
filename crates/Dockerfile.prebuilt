@@ -1,14 +1,17 @@
-# Fast deploy: uses a pre-built binary instead of compiling inside Docker.
-# Build the x86_64-linux binary on your own machine first (prod is a small 2-vCPU
-# box — keep builds off it), then copy it to prod. See AGENTS.md "Deploying to
-# production" for the full steps, incl. cross-compiling from an arm64 Mac.
+# Fast deploy: packages a pre-built binary instead of compiling inside Docker.
+# Build the x86_64-linux binary off-prod (prod is a small 2-vCPU box), copy it to
+# prod as crates/relay-binary, then build this image ONLY through
 #
-#   cargo build --manifest-path=crates/Cargo.toml --release --bin relay   # x86_64 Linux host
-#   scp <path-to-built>/relay relay-prod:/root/lens-relay/crates/relay-binary
-#   ssh relay-prod 'cd /root/lens-relay && docker compose -f docker-compose.prod.yaml build relay-server'
+#   scripts/prod/build-relay-image.sh
 #
-# To use this Dockerfile, set the build context in docker-compose.prod.yaml:
-#   dockerfile: Dockerfile.prebuilt
+# See AGENTS.md "Deploying to production" for the full steps.
+#
+# relay-binary is gitignored, so `git pull` never refreshes it. A bare
+# `docker compose build relay-server` used to package whatever old binary was
+# lying there, silently regressing prod. The script checks that no relay
+# source changed since the binary's commit and passes that commit in as
+# RELAY_EXPECTED_COMMIT; the build below refuses to run without it, or when the
+# binary in the context reports a different commit.
 
 FROM debian:trixie-slim
 
@@ -22,5 +25,21 @@ COPY ./relay-binary /app/relay
 COPY ./run.sh /app/run.sh
 COPY ./relay.toml /app/relay.toml
 RUN chmod +x /app/run.sh /app/relay
+
+ARG RELAY_EXPECTED_COMMIT=
+RUN if [ -z "$RELAY_EXPECTED_COMMIT" ]; then \
+        echo "ERROR: refusing to package crates/relay-binary unchecked; it may be stale." >&2; \
+        echo "Build this image with scripts/prod/build-relay-image.sh (AGENTS.md, Deploying to production)." >&2; \
+        exit 1; \
+    fi; \
+    actual="$(/app/relay version --commit)" || { \
+        echo "ERROR: crates/relay-binary does not support 'relay version --commit'; it predates the staleness check. Rebuild it." >&2; \
+        exit 1; \
+    }; \
+    if [ "$actual" != "$RELAY_EXPECTED_COMMIT" ]; then \
+        echo "ERROR: crates/relay-binary was built from '$actual', expected '$RELAY_EXPECTED_COMMIT'." >&2; \
+        exit 1; \
+    fi; \
+    echo "relay-binary built from $actual"
 
 ENTRYPOINT ["./run.sh"]
