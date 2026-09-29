@@ -163,4 +163,38 @@ describe("reviewArticle refusal fallback", () => {
     expect(outcome.selectedBase).toBe("unrendered");
     expect(outcome.markdown).toContain("Unrendered body.");
   });
+
+  it("retries a reply without PASS/REJECT on opus, from the same article, and logs its tail", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const seen: string[] = [];
+    spawnMocks.spawnClaude
+      .mockImplementationOnce(async (dir: string) => {
+        seen.push(await fs.readFile(path.join(dir, "article.md"), "utf-8"));
+        await fs.writeFile(path.join(dir, "article.md"), "half-edited");
+        return { exitCode: 0, stdout: JSON.stringify({ is_error: false, result: "I can't help with this request." }), stderr: "" };
+      })
+      .mockImplementationOnce(async (dir: string, _t: number, args: string[]) => {
+        expect(argValue(args, "--model")).toBe("opus");
+        seen.push(await fs.readFile(path.join(dir, "article.md"), "utf-8"));
+        return { exitCode: 0, stdout: passStdout, stderr: "" };
+      });
+    const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
+    expect(outcome.model).toBe("opus");
+    expect(seen).toEqual([article, article]);
+    expect(warn.mock.calls[0][0]).toMatch(/ended without PASS\/REJECT.*I can't help with this request/);
+    warn.mockRestore();
+  });
+
+  it("names the model and the reply tail when the fallback is unparseable too", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    spawnMocks.spawnClaude.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: false, result: "Done with the edits." }),
+      stderr: "",
+    });
+    await expect(reviewArticle(workDir, article, {} as never, [], 1))
+      .rejects.toThrow(/exactly PASS or REJECT.*opus; reply tail: "Done with the edits\."/);
+    expect(spawnMocks.spawnClaude).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
 });
