@@ -427,14 +427,15 @@ export async function reviewArticle(
   // The retried pass starts from the same input as this one: in a repair
   // round that is the previous pass's article, so earlier work is kept.
   if (reviewer.provider === "claude" && model !== REFUSAL_FALLBACK_MODEL) {
-    const refused =
-      isClaudeRefusal(result.stdout) || (result.exitCode !== 0 && isClaudeRefusal(result.stderr));
+    const refusedOnStdout = isClaudeRefusal(result.stdout);
+    const refusedOnStderr = !refusedOnStdout && result.exitCode !== 0 && isClaudeRefusal(result.stderr);
+    const refused = refusedOnStdout || refusedOnStderr;
     const unparseable = !refused && isUnparseableClaudeReview(result);
     if (refused || unparseable) {
       console.warn(
         `[add-article] review pass ${repairRound + 1} on ${model} ` +
         `${refused ? "was refused" : "ended without PASS/REJECT"}; retrying on ${REFUSAL_FALLBACK_MODEL}. ` +
-        `Reply tail: ${JSON.stringify(claudeReplyTail(result.stdout || result.stderr))}`,
+        `Reply tail: ${JSON.stringify(claudeReplyTail(refusedOnStderr ? result.stderr : result.stdout))}`,
       );
       signal?.throwIfAborted();
       model = REFUSAL_FALLBACK_MODEL;

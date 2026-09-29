@@ -7,7 +7,9 @@ const spawnMocks = vi.hoisted(() => ({ spawnClaude: vi.fn() }));
 vi.mock("../add-video/claude", () => spawnMocks);
 
 import {
+  claudeReplyTail,
   isClaudeRefusal,
+  isUnparseableClaudeReview,
   reviewArticle,
   scaledReviewBudgetUsd,
 } from "./claude";
@@ -63,6 +65,22 @@ describe("isClaudeRefusal", () => {
       is_error: false,
       result: "Fixed the link to https://www.anthropic.com/legal/aup; the model can't help with this example.\nPASS",
     }))).toBe(false);
+  });
+});
+
+describe("claudeReplyTail and isUnparseableClaudeReview", () => {
+  it("takes the result from CLI JSON, else the raw text, and keeps only the end", () => {
+    expect(claudeReplyTail(JSON.stringify({ result: "  I can't help.  " }))).toBe("I can't help.");
+    expect(claudeReplyTail("API Error: boom")).toBe("API Error: boom");
+    const long = "a".repeat(500) + "END";
+    expect(claudeReplyTail(long)).toBe(`...${long.slice(-400)}`);
+  });
+
+  it("only counts a successful run without PASS/REJECT", () => {
+    const decline = JSON.stringify({ is_error: false, result: "I can't help with this request." });
+    expect(isUnparseableClaudeReview({ exitCode: 0, stdout: decline })).toBe(true);
+    expect(isUnparseableClaudeReview({ exitCode: 1, stdout: decline })).toBe(false);
+    expect(isUnparseableClaudeReview({ exitCode: 0, stdout: passStdout })).toBe(false);
   });
 });
 
