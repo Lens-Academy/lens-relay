@@ -49,6 +49,39 @@ export function isClaudeRefusal(cliOutput: string): boolean {
   return refusal.test(cliOutput);
 }
 
+/** The model's final reply from Claude CLI JSON (or the raw output), last `max` chars. */
+export function claudeReplyTail(cliOutput: string, max = 400): string {
+  let text = cliOutput;
+  try {
+    const outer = JSON.parse(cliOutput) as { result?: unknown };
+    if (typeof outer.result === "string") text = outer.result;
+  } catch {
+    // not CLI JSON: use the raw output
+  }
+  const trimmed = text.trim();
+  return trimmed.length > max ? `...${trimmed.slice(-max)}` : trimmed;
+}
+
+/** A successful CLI run whose reply ends in neither PASS nor REJECT (e.g. an
+ *  in-band decline such as "I can't help with this request."). CLI errors
+ *  (is_error, e.g. budget exhausted) and output that is not CLI JSON would
+ *  fail the same way on a retry, so they do not count. */
+export function isUnparseableClaudeReview(result: { exitCode: number; stdout: string }): boolean {
+  if (result.exitCode !== 0) return false;
+  try {
+    const outer = JSON.parse(result.stdout) as { is_error?: unknown; result?: unknown };
+    if (outer.is_error === true || typeof outer.result !== "string") return false;
+  } catch {
+    return false;
+  }
+  try {
+    parseReviewStatus(result.stdout);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export type ArticleReviewProvider = "claude" | "codex";
 
 export interface ArticleReviewerConfig {
@@ -397,15 +430,25 @@ export async function reviewArticle(
   let model = reviewer.model;
   let result = await runPass(model);
   // The CLI can report a policy block with exit 0 (is_error in the JSON),
-  // and on either stream: check both, whatever the exit code.
-  if (
-    reviewer.provider === "claude" &&
-    model !== REFUSAL_FALLBACK_MODEL &&
-    (isClaudeRefusal(result.stdout) || (result.exitCode !== 0 && isClaudeRefusal(result.stderr)))
-  ) {
-    signal?.throwIfAborted();
-    model = REFUSAL_FALLBACK_MODEL;
-    result = await runPass(model);
+  // and on either stream: check both, whatever the exit code. A reply that
+  // ends in neither PASS nor REJECT (an in-band decline) gets the same retry.
+  // The retried pass starts from the same input as this one: in a repair
+  // round that is the previous pass's article, so earlier work is kept.
+  if (reviewer.provider === "claude" && model !== REFUSAL_FALLBACK_MODEL) {
+    const refusedOnStdout = isClaudeRefusal(result.stdout);
+    const refusedOnStderr = !refusedOnStdout && result.exitCode !== 0 && isClaudeRefusal(result.stderr);
+    const refused = refusedOnStdout || refusedOnStderr;
+    const unparseable = !refused && isUnparseableClaudeReview(result);
+    if (refused || unparseable) {
+      signal?.throwIfAborted();
+      console.warn(
+        `[add-article] review pass ${repairRound + 1} on ${model} ` +
+        `${refused ? "was refused" : "ended without PASS/REJECT"}; retrying on ${REFUSAL_FALLBACK_MODEL}. ` +
+        `Reply tail: ${JSON.stringify(claudeReplyTail(refusedOnStderr ? result.stderr : result.stdout))}`,
+      );
+      model = REFUSAL_FALLBACK_MODEL;
+      result = await runPass(model);
+    }
   }
   if (result.exitCode !== 0) {
     throw new Error(
@@ -413,9 +456,17 @@ export async function reviewArticle(
       `${(result.stderr || result.stdout).slice(-500)}`,
     );
   }
-  const review = reviewer.provider === "codex"
-    ? parsePlainReviewStatus(result.stdout)
-    : parseReviewStatus(result.stdout);
+  let review: DirectArticleReview;
+  try {
+    review = reviewer.provider === "codex"
+      ? parsePlainReviewStatus(result.stdout)
+      : parseReviewStatus(result.stdout);
+  } catch (error) {
+    const tail = reviewer.provider === "codex"
+      ? result.stdout.trim().slice(-400)
+      : claudeReplyTail(result.stdout);
+    throw new Error(`${(error as Error).message} (${model}; reply tail: ${JSON.stringify(tail)})`);
+  }
   if (review.decision === "reject") throw new ArticleReviewRejectedError(review.reason);
   const selectedBase = requiresBaseSelection ? await readBaseSelection(workDir) : undefined;
   if (requiresBaseSelection) {

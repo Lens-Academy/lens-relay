@@ -7,7 +7,9 @@ const spawnMocks = vi.hoisted(() => ({ spawnClaude: vi.fn() }));
 vi.mock("../add-video/claude", () => spawnMocks);
 
 import {
+  claudeReplyTail,
   isClaudeRefusal,
+  isUnparseableClaudeReview,
   reviewArticle,
   scaledReviewBudgetUsd,
 } from "./claude";
@@ -63,6 +65,32 @@ describe("isClaudeRefusal", () => {
       is_error: false,
       result: "Fixed the link to https://www.anthropic.com/legal/aup; the model can't help with this example.\nPASS",
     }))).toBe(false);
+  });
+});
+
+describe("claudeReplyTail and isUnparseableClaudeReview", () => {
+  it("takes the result from CLI JSON, else the raw text, and keeps only the end", () => {
+    expect(claudeReplyTail(JSON.stringify({ result: "  I can't help.  " }))).toBe("I can't help.");
+    expect(claudeReplyTail("API Error: boom")).toBe("API Error: boom");
+    const long = "a".repeat(500) + "END";
+    expect(claudeReplyTail(long)).toBe(`...${long.slice(-400)}`);
+  });
+
+  it("only counts a successful run without PASS/REJECT", () => {
+    const decline = JSON.stringify({ is_error: false, result: "I can't help with this request." });
+    expect(isUnparseableClaudeReview({ exitCode: 0, stdout: decline })).toBe(true);
+    expect(isUnparseableClaudeReview({ exitCode: 1, stdout: decline })).toBe(false);
+    expect(isUnparseableClaudeReview({ exitCode: 0, stdout: passStdout })).toBe(false);
+    expect(isUnparseableClaudeReview({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: false, result: "REJECT: source is not an article" }),
+    })).toBe(false);
+    // CLI errors and non-JSON output would fail the same way on a retry.
+    expect(isUnparseableClaudeReview({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: true, result: "Error: max budget exceeded" }),
+    })).toBe(false);
+    expect(isUnparseableClaudeReview({ exitCode: 0, stdout: "{\"type\":\"res" })).toBe(false);
   });
 });
 
@@ -162,5 +190,39 @@ describe("reviewArticle refusal fallback", () => {
     expect(outcome.model).toBe("opus");
     expect(outcome.selectedBase).toBe("unrendered");
     expect(outcome.markdown).toContain("Unrendered body.");
+  });
+
+  it("retries a reply without PASS/REJECT on opus, from the same article, and logs its tail", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const seen: string[] = [];
+    spawnMocks.spawnClaude
+      .mockImplementationOnce(async (dir: string) => {
+        seen.push(await fs.readFile(path.join(dir, "article.md"), "utf-8"));
+        await fs.writeFile(path.join(dir, "article.md"), "half-edited");
+        return { exitCode: 0, stdout: JSON.stringify({ is_error: false, result: "I can't help with this request." }), stderr: "" };
+      })
+      .mockImplementationOnce(async (dir: string, _t: number, args: string[]) => {
+        expect(argValue(args, "--model")).toBe("opus");
+        seen.push(await fs.readFile(path.join(dir, "article.md"), "utf-8"));
+        return { exitCode: 0, stdout: passStdout, stderr: "" };
+      });
+    const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
+    expect(outcome.model).toBe("opus");
+    expect(seen).toEqual([article, article]);
+    expect(warn.mock.calls[0][0]).toMatch(/ended without PASS\/REJECT.*I can't help with this request/);
+    warn.mockRestore();
+  });
+
+  it("names the model and the reply tail when the fallback is unparseable too", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    spawnMocks.spawnClaude.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: false, result: "Done with the edits." }),
+      stderr: "",
+    });
+    await expect(reviewArticle(workDir, article, {} as never, [], 1))
+      .rejects.toThrow(/exactly PASS or REJECT.*opus; reply tail: "Done with the edits\."/);
+    expect(spawnMocks.spawnClaude).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 });
