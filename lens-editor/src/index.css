@@ -73,11 +73,11 @@
 .cm-line.cm-heading-5-line { padding-top: 0.5rem; }
 .cm-line.cm-heading-6-line { padding-top: 0.5rem; }
 
-/* Blockquote — Obsidian-style left border with muted text */
+/* Blockquote — Obsidian-style left border; text keeps the normal color so it
+   doesn't read like a greyed-out %%comment%% */
 .cm-blockquote {
   border-left: 3px solid #d1d5db;
   padding-left: 12px !important;
-  color: #6b7280;
 }
 
 /* Emphasis styles */
