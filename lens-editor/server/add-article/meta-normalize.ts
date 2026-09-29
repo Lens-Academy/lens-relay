@@ -212,7 +212,7 @@ async function defaultRunner(prompt: string): Promise<string> {
       "--max-turns",
       "1",
       "--max-budget-usd",
-      "0.10",
+      "0.20",
       "--model",
       "haiku",
       "--output-format",

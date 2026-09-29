@@ -320,6 +320,8 @@ async function execute(): Promise<void> {
       selectedReviewer.model,
     );
     if (!item) continue;
+    // After a refusal fallback, stay on the model that succeeded for this item.
+    let itemReviewer = selectedReviewer;
     const resultPath = path.join(item.bundle, "result.json");
     const reviewPassDetails: ReviewPassMetric[] = [];
     let prepared: string | undefined;
@@ -363,10 +365,11 @@ async function execute(): Promise<void> {
             beforeValidation.issues,
             round,
             undefined,
-            selectedReviewer,
+            itemReviewer,
             undefined,
             revertNotice,
           );
+          if (reviewed.model !== itemReviewer.model) itemReviewer = { ...itemReviewer, model: reviewed.model };
           metric.outcome = reviewed.review.decision;
           return reviewed;
         } catch (error) {
@@ -405,7 +408,7 @@ async function execute(): Promise<void> {
       }
       if (!validation.valid) throw new Error(`Reviewed article remains invalid (${validation.counts.errors} errors)`);
       const evidenceManifest = JSON.parse(await fs.readFile(path.join(item.bundle, "evidence/manifest.json"), "utf-8"));
-      const reviewed = withReviewProvenance(outcome.markdown, evidenceManifest, selectedReviewer.model);
+      const reviewed = withReviewProvenance(outcome.markdown, evidenceManifest, itemReviewer.model);
       const reviewedValidation = await validateArticleDraft(item.article_path, reviewed);
       if (!reviewedValidation.valid) {
         throw new Error(`Reviewed article provenance is invalid (${reviewedValidation.counts.errors} errors)`);
@@ -452,8 +455,8 @@ async function execute(): Promise<void> {
         review_url: reviewUrl.trim(),
         review_passes: reviewPassDetails.length,
         review_pass_details: reviewPassDetails,
-        review_provider: selectedReviewer.provider,
-        review_model: selectedReviewer.model,
+        review_provider: itemReviewer.provider,
+        review_model: itemReviewer.model,
         validation: validationOutput.slice(0, 20_000),
       }, null, 2));
       await finishReviewItem(runDir, item.article_path, "suggested");
@@ -469,7 +472,7 @@ async function execute(): Promise<void> {
           await releaseReviewItem(runDir, item.article_path);
           console.error(`released  ${item.article_path}: ${message.slice(0, 200)}`);
         } else {
-          await fs.writeFile(resultPath, JSON.stringify({ state: "failed", error: message, review_passes: reviewPassDetails.length, review_pass_details: reviewPassDetails, review_provider: selectedReviewer.provider, review_model: selectedReviewer.model }, null, 2));
+          await fs.writeFile(resultPath, JSON.stringify({ state: "failed", error: message, review_passes: reviewPassDetails.length, review_pass_details: reviewPassDetails, review_provider: itemReviewer.provider, review_model: itemReviewer.model }, null, 2));
           await finishReviewItem(runDir, item.article_path, "failed", message);
           console.error(`failed    ${item.article_path}: ${message.slice(0, 200)}`);
         }
@@ -492,8 +495,8 @@ async function execute(): Promise<void> {
         error: message,
         review_passes: reviewPassDetails.length,
         review_pass_details: reviewPassDetails,
-        review_provider: selectedReviewer.provider,
-        review_model: selectedReviewer.model,
+        review_provider: itemReviewer.provider,
+        review_model: itemReviewer.model,
       }, null, 2));
       await finishReviewItem(runDir, item.article_path, "failed", message);
       console.error(`failed    ${item.article_path}: ${message}`);

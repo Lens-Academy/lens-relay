@@ -47,6 +47,7 @@ vi.mock("./claude", () => ({
   MAX_REVIEW_ROUNDS: 3,
   REVIEW_MODEL: "sonnet",
   REVIEW_VERSION: "article-qc-v1",
+  resolveArticleReviewerConfig: () => ({ provider: "claude", model: "sonnet" }),
   reviewArticle: reviewMocks.reviewArticle,
   buildRevertNotice: (reverts: { detail: string }[]) => reverts.map((r) => r.detail).join("; "),
   ArticleReviewRejectedError: class ArticleReviewRejectedError extends Error {
@@ -210,11 +211,13 @@ This might be useful.
       .mockResolvedValueOnce(invalid)
       .mockResolvedValueOnce(valid)
       .mockResolvedValueOnce(valid);
-    reviewMocks.reviewArticle.mockImplementation(async (_dir, markdown, reviewMeta) => ({
+    // The first pass falls back to opus after a refusal; repairs must stay on opus.
+    reviewMocks.reviewArticle.mockImplementation(async (_dir, markdown, reviewMeta, _issues, round, _signal, reviewer) => ({
       review: { decision: "pass", reason: "" },
       markdown,
       meta: reviewMeta,
       reverted: [],
+      model: round === 0 ? "opus" : reviewer.model,
     }));
     extractionMocks.normalizeMetaWithLlm.mockResolvedValue(meta);
 
@@ -243,6 +246,9 @@ This might be useful.
     expect(markdown).not.toContain("article-stub");
     expect(reviewMocks.reviewArticle).toHaveBeenCalledTimes(3);
     expect(reviewMocks.reviewArticle.mock.calls.map((call) => call[4])).toEqual([0, 1, 2]);
+    expect(reviewMocks.reviewArticle.mock.calls.map((call) => call[6].model))
+      .toEqual(["sonnet", "opus", "opus"]);
+    expect(markdown).toContain('  model: "opus"');
     expect(reviewMocks.validateArticleDraft).toHaveBeenCalledTimes(5);
     expect(reviewMocks.validateArticleDraft.mock.invocationCallOrder[0])
       .toBeLessThan(reviewMocks.reviewArticle.mock.invocationCallOrder[0]);
@@ -295,6 +301,7 @@ This might be useful.
         selectedBase: "unrendered",
         meta,
         reverted: [],
+        model: "sonnet",
       };
     });
 

@@ -9,9 +9,9 @@ import { attachmentPublicUrl } from "../attachments/public-url";
 import {
   ArticleReviewRejectedError,
   MAX_REVIEW_ROUNDS,
-  REVIEW_MODEL,
   REVIEW_VERSION,
   buildRevertNotice,
+  resolveArticleReviewerConfig,
   reviewArticle,
   type ArticleReviewBase,
   type ArticleReviewCandidates,
@@ -527,6 +527,12 @@ export async function processArticle(
   // warnings and errors are review evidence; hybrid errors are repairable by
   // Claude for up to three review rounds, while final validation is the hard gate.
   let reviewed = false;
+  // A pass that fell back to another model after a refusal keeps that model
+  // for the repair rounds, and provenance names the model that made the last pass.
+  let reviewer = resolveArticleReviewerConfig();
+  const trackReviewModel = (model: string) => {
+    if (model !== reviewer.model) reviewer = { ...reviewer, model };
+  };
   if (!isStubOnly) {
     await setStage("normalizing");
     const normalized = normalizeArticleBody(body, meta.source_url || job.url);
@@ -632,9 +638,10 @@ export async function processArticle(
         validation.issues,
         0,
         signal,
-        undefined,
+        reviewer,
         reviewCandidates,
       );
+      trackReviewModel(outcome.model);
       if (
         outcome.selectedBase &&
         candidateValidations &&
@@ -724,10 +731,11 @@ export async function processArticle(
           validation.issues,
           repairRound,
           signal,
-          undefined,
+          reviewer,
           undefined,
           pendingRevertNotice,
         );
+        trackReviewModel(outcome.model);
         await reporter.llm(
           repairRound,
           outcome.review,
@@ -831,7 +839,7 @@ export async function processArticle(
             review: {
               reviewed: createdDate,
               version: REVIEW_VERSION,
-              model: REVIEW_MODEL,
+              model: reviewer.model,
               sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
               sourceKind: evidence.manifest.source_kind,
             },
@@ -859,7 +867,7 @@ export async function processArticle(
           review: {
             reviewed: createdDate,
             version: REVIEW_VERSION,
-            model: REVIEW_MODEL,
+            model: reviewer.model,
             sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
             sourceKind: evidence.manifest.source_kind,
           },
