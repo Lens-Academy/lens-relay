@@ -120,4 +120,43 @@ describe("reviewArticle refusal fallback", () => {
     const budgets = spawnMocks.spawnClaude.mock.calls.map((call) => argValue(call[2], "--max-budget-usd"));
     expect(budgets).toEqual(["20", "5"]);
   });
+
+  it("also retries a refusal reported with exit code 0", async () => {
+    spawnMocks.spawnClaude
+      .mockResolvedValueOnce({ exitCode: 0, stdout: refusalStdout, stderr: "" })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: passStdout, stderr: "" });
+    const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
+    expect(outcome.model).toBe("opus");
+  });
+
+  it("retries a refused base-selection pass with fresh read-only candidates", async () => {
+    const candidates = {
+      rendered: article.replace("Body text.", "Rendered body."),
+      unrendered: article.replace("Body text.", "Unrendered body."),
+      validation: { rendered: [], unrendered: [] },
+    };
+    spawnMocks.spawnClaude
+      .mockImplementationOnce(async (dir: string) => {
+        // The refused attempt had already picked a base before the block.
+        await fs.writeFile(path.join(dir, "article.md"), "partial edit");
+        return { exitCode: 1, stdout: refusalStdout, stderr: "" };
+      })
+      .mockImplementationOnce(async (dir: string, _t: number, args: string[], _s: unknown, env: NodeJS.ProcessEnv) => {
+        expect(argValue(args, "--model")).toBe("opus");
+        await expect(fs.access(path.join(dir, "article.md"))).rejects.toThrow();
+        // Do what select_review_base does for base = unrendered.
+        const rendered = await fs.readFile(env.ARTICLE_REVIEW_RENDERED_VALIDATION_PATH!, "utf-8");
+        const unrendered = await fs.readFile(env.ARTICLE_REVIEW_UNRENDERED_VALIDATION_PATH!, "utf-8");
+        await fs.writeFile(path.join(dir, "article.md"), await fs.readFile(path.join(dir, "candidate-unrendered.md"), "utf-8"));
+        await fs.writeFile(path.join(dir, "validation.json"), unrendered);
+        await fs.writeFile(path.join(dir, "validation-rendered.json"), rendered);
+        await fs.writeFile(path.join(dir, "validation-unrendered.json"), unrendered);
+        await fs.writeFile(path.join(dir, ".base-selection.json"), JSON.stringify({ base: "unrendered" }));
+        return { exitCode: 0, stdout: passStdout, stderr: "" };
+      });
+    const outcome = await reviewArticle(workDir, "", {} as never, [], 0, undefined, undefined, candidates);
+    expect(outcome.model).toBe("opus");
+    expect(outcome.selectedBase).toBe("unrendered");
+    expect(outcome.markdown).toContain("Unrendered body.");
+  });
 });

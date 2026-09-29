@@ -395,11 +395,12 @@ export async function reviewArticle(
   };
   let model = reviewer.model;
   let result = await runPass(model);
+  // The CLI can report a policy block with exit 0 (is_error in the JSON),
+  // and on either stream: check both, whatever the exit code.
   if (
-    result.exitCode !== 0 &&
     reviewer.provider === "claude" &&
     model !== REFUSAL_FALLBACK_MODEL &&
-    isClaudeRefusal(result.stdout || result.stderr)
+    (isClaudeRefusal(result.stdout) || isClaudeRefusal(result.stderr))
   ) {
     signal?.throwIfAborted();
     model = REFUSAL_FALLBACK_MODEL;

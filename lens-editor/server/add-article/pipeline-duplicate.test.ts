@@ -301,6 +301,7 @@ This might be useful.
         selectedBase: "unrendered",
         meta,
         reverted: [],
+        model: "sonnet",
       };
     });
 

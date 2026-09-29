@@ -110,8 +110,16 @@ the review bundle with local read/edit access and no network access. The live
 import pipeline remains explicitly Claude-only.
 
 Long retroactive Claude reviews can raise the local per-article guard with
-`--max-budget-usd` or extend the local timeout with `--timeout-minutes`; the
-live-import defaults remain unchanged.
+`--max-budget-usd` or extend the local timeout with `--timeout-minutes`.
+Without an explicit budget, each Claude pass gets $10 per started 50k
+characters of article, between $10 and $30.
+
+If a Claude pass ends in a usage-policy refusal (e.g. "can't help with this",
+which AI-safety papers about dangerous-capability evals can trigger), the pass
+is rerun once on `opus`; the remaining passes for that article stay on `opus`,
+and `llm-review.model` records the model of the last pass. A refusal plus a
+second pass needs time: keep `ARTICLE_JOB_TIMEOUT_MS` well above the 25-minute
+default for long papers.
 
 On Ubuntu 24.04, install and load `docs/codex-bwrap.apparmor` as
 `/etc/apparmor.d/codex-bwrap` so Codex's bundled bubblewrap can create the

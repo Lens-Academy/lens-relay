@@ -9,7 +9,6 @@ import { attachmentPublicUrl } from "../attachments/public-url";
 import {
   ArticleReviewRejectedError,
   MAX_REVIEW_ROUNDS,
-  REVIEW_MODEL,
   REVIEW_VERSION,
   buildRevertNotice,
   resolveArticleReviewerConfig,
@@ -529,11 +528,9 @@ export async function processArticle(
   // Claude for up to three review rounds, while final validation is the hard gate.
   let reviewed = false;
   // A pass that fell back to another model after a refusal keeps that model
-  // for the repair rounds, and provenance names every model that edited.
+  // for the repair rounds, and provenance names the model that made the last pass.
   let reviewer = resolveArticleReviewerConfig();
-  const reviewModels = new Set<string>();
   const trackReviewModel = (model: string) => {
-    reviewModels.add(model);
     if (model !== reviewer.model) reviewer = { ...reviewer, model };
   };
   if (!isStubOnly) {
@@ -842,7 +839,7 @@ export async function processArticle(
             review: {
               reviewed: createdDate,
               version: REVIEW_VERSION,
-              model: [...reviewModels].join(", ") || REVIEW_MODEL,
+              model: reviewer.model,
               sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
               sourceKind: evidence.manifest.source_kind,
             },
@@ -870,7 +867,7 @@ export async function processArticle(
           review: {
             reviewed: createdDate,
             version: REVIEW_VERSION,
-            model: [...reviewModels].join(", ") || REVIEW_MODEL,
+            model: reviewer.model,
             sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
             sourceKind: evidence.manifest.source_kind,
           },
