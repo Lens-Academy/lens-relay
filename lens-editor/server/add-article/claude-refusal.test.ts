@@ -81,6 +81,16 @@ describe("claudeReplyTail and isUnparseableClaudeReview", () => {
     expect(isUnparseableClaudeReview({ exitCode: 0, stdout: decline })).toBe(true);
     expect(isUnparseableClaudeReview({ exitCode: 1, stdout: decline })).toBe(false);
     expect(isUnparseableClaudeReview({ exitCode: 0, stdout: passStdout })).toBe(false);
+    expect(isUnparseableClaudeReview({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: false, result: "REJECT: source is not an article" }),
+    })).toBe(false);
+    // CLI errors and non-JSON output would fail the same way on a retry.
+    expect(isUnparseableClaudeReview({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: true, result: "Error: max budget exceeded" }),
+    })).toBe(false);
+    expect(isUnparseableClaudeReview({ exitCode: 0, stdout: "{\"type\":\"res" })).toBe(false);
   });
 });
 

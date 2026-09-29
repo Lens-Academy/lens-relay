@@ -63,9 +63,17 @@ export function claudeReplyTail(cliOutput: string, max = 400): string {
 }
 
 /** A successful CLI run whose reply ends in neither PASS nor REJECT (e.g. an
- *  in-band decline such as "I can't help with this request."). */
+ *  in-band decline such as "I can't help with this request."). CLI errors
+ *  (is_error, e.g. budget exhausted) and output that is not CLI JSON would
+ *  fail the same way on a retry, so they do not count. */
 export function isUnparseableClaudeReview(result: { exitCode: number; stdout: string }): boolean {
   if (result.exitCode !== 0) return false;
+  try {
+    const outer = JSON.parse(result.stdout) as { is_error?: unknown; result?: unknown };
+    if (outer.is_error === true || typeof outer.result !== "string") return false;
+  } catch {
+    return false;
+  }
   try {
     parseReviewStatus(result.stdout);
     return false;
@@ -432,12 +440,12 @@ export async function reviewArticle(
     const refused = refusedOnStdout || refusedOnStderr;
     const unparseable = !refused && isUnparseableClaudeReview(result);
     if (refused || unparseable) {
+      signal?.throwIfAborted();
       console.warn(
         `[add-article] review pass ${repairRound + 1} on ${model} ` +
         `${refused ? "was refused" : "ended without PASS/REJECT"}; retrying on ${REFUSAL_FALLBACK_MODEL}. ` +
         `Reply tail: ${JSON.stringify(claudeReplyTail(refusedOnStderr ? result.stderr : result.stdout))}`,
       );
-      signal?.throwIfAborted();
       model = REFUSAL_FALLBACK_MODEL;
       result = await runPass(model);
     }
