@@ -30,6 +30,20 @@
  *     paragraph per line with indentation lost. Rebuild each as <pre><code>.
  */
 
+/** Drop leading blank lines and trailing whitespace, keeping the first line's indent. */
+function trimBlankLines(code: string): string {
+  return code.replace(/^(?:[ \t]*\r?\n)+/, "").replace(/\s+$/, "");
+}
+
+/** Fence info string for a LaTeXML `ltx_lst_language_<Lang>` class (C++ → cpp). */
+function fenceLanguage(lang: string): string {
+  return lang
+    .toLowerCase()
+    .replace(/\+\+/g, "pp")
+    .replace(/#/g, "sharp")
+    .replace(/[^\w-]/g, "");
+}
+
 /** The listing's source text: the base64 `data:` download link LaTeXML embeds
  * (the verbatim source, straight quotes intact), else its rendered lines. */
 function listingCode(listing: Element): string {
@@ -41,7 +55,7 @@ function listingCode(listing: Element): string {
       const code = /;base64$/i.test(m[1])
         ? Buffer.from(m[2], "base64").toString("utf8")
         : decodeURIComponent(m[2]);
-      if (code.trim()) return code.replace(/\s+$/, "");
+      if (code.trim()) return trimBlankLines(code);
     } catch {
       /* fall back to the rendered lines */
     }
@@ -51,16 +65,17 @@ function listingCode(listing: Element): string {
     listing.querySelector(".ltx_listing_data")?.remove();
     return (listing.textContent || "").trim();
   }
-  return lines
-    .map((line) => (line.textContent || "").replace(/[\r\n]/g, "").replace(/\u00a0/g, " "))
-    .join("\n")
-    .replace(/\s+$/, "");
+  return trimBlankLines(
+    lines
+      .map((line) => (line.textContent || "").replace(/[\r\n]/g, "").replace(/\u00a0/g, " "))
+      .join("\n"),
+  );
 }
 
 /**
  * Replace each LaTeXML `.ltx_listing` (arXiv/ar5iv code and prompt listings)
- * with `<pre><code>`, which turndown's fenced rule emits as a ``` block (it
- * lengthens the fence when the code itself contains ```). The ⬇ download link
+ * with `<pre><code>`, which the turndown `fencedCodeBlock` rule in extract.ts
+ * emits as a fenced block (longer than any fence inside the code). The ⬇ download link
  * goes with it. Inside a table cell a fenced block would break the pipe table,
  * so there the code becomes a single-line inline `<code>` instead.
  */
@@ -76,9 +91,9 @@ function convertLtxListings(root: Element): void {
       continue;
     }
     const lang = [...listing.classList]
-      .map((c) => c.match(/^ltx_lst_language_(\w+)$/)?.[1])
+      .map((c) => c.match(/^ltx_lst_language_(\S+)$/)?.[1])
       .find(Boolean);
-    if (lang) codeEl.className = `language-${lang.toLowerCase()}`;
+    if (lang && fenceLanguage(lang)) codeEl.className = `language-${fenceLanguage(lang)}`;
     codeEl.textContent = code;
     const pre = doc.createElement("pre");
     pre.appendChild(codeEl);

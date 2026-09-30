@@ -731,6 +731,17 @@ describe("extractArticle — arXiv (ar5iv / LaTeXML) adapter", () => {
       expect(ex.body).toContain("````\n" + src + "\n````");
     });
 
+    it("lengthens the fence past an indented ``` (CommonMark closes those too)", async () => {
+      const src = "Example:\n\n  ```\n  nested\n  ```\n\nDone.";
+      const ex = await extract(`<div class="ltx_para">${listing(src, "div", "")}</div>`);
+      expect(ex.body).toContain("````\n" + src + "\n````");
+    });
+
+    it("drops leading blank lines and maps C++ to a cpp fence", async () => {
+      const ex = await extract(`<div class="ltx_para">${listing("\n\n  int x = 1;", "div", " ltx_lst_language_C++")}</div>`);
+      expect(ex.body).toContain("```cpp\n  int x = 1;\n```");
+    });
+
     it("breaks a listing nested in an inline paragraph out into its own block", async () => {
       const ex = await extract(`<figure class="ltx_figure"><span class="ltx_inline-logical-block">
         <span class="ltx_para"><span class="ltx_p"><span class="ltx_text ltx_font_bold">User:</span> Fill the following template:</span></span>

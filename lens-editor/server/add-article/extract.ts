@@ -142,6 +142,25 @@ function makeTurndown(baseUrl: string): TurndownService {
   td.use(gfm);
   td.remove(["script", "style", "nav", "header", "footer", "aside", "noscript"]);
 
+  // Replaces turndown's built-in fenced rule, which only lengthens the fence
+  // for ``` runs at column 0 — CommonMark also closes a fence indented up to 3
+  // spaces, so a listing containing an indented ``` would end the block early.
+  td.addRule("fencedCodeBlock", {
+    filter: (node: HTMLElement) =>
+      node.nodeName === "PRE" && node.firstChild?.nodeName === "CODE",
+    replacement: (_content: string, node: TurndownService.Node) => {
+      const codeEl = node.firstChild as HTMLElement;
+      const lang = (codeEl.getAttribute("class") || "").match(/language-(\S+)/)?.[1] || "";
+      const code = (codeEl.textContent || "").replace(/\n$/, "");
+      const longest = Math.max(
+        2,
+        ...[...code.matchAll(/^ {0,3}(`{3,})/gm)].map((m) => m[1].length),
+      );
+      const fence = "`".repeat(longest + 1);
+      return `\n\n${fence}${lang}\n${code}\n${fence}\n\n`;
+    },
+  });
+
   // Turndown has no rule for <u>, so it passes the raw tag through and the
   // Lens validator flags it (article.html-artifact). Underline carries no
   // meaning Lens renders, so keep the text and drop the tag.
