@@ -418,3 +418,46 @@ assert not is_odd(8)`;
     expect(body.textContent).not.toContain("⬇");
   });
 });
+
+describe("normalizeArticleDom — LaTeXML natbib citations (arXiv)", () => {
+  // Shapes from arxiv.org/html/2312.06942; the PDF prints them without the stray comma.
+  const cite = (macro: string, inner: string) =>
+    `<cite class="ltx_cite ltx_citemacro_${macro}">${inner}</cite>`;
+  const ref = (n: number, text: string) =>
+    `<a href="#bib.bib${n}" title="" class="ltx_ref">${text}</a>`;
+
+  it("repairs \\citep, \\citet and year-suffix citations", () => {
+    const body = normalize(
+      `<p>A ${cite("citep", `(${ref(31, "Shlegeris,, 2023")})`)}.
+       B ${cite("citep", `(${ref(9, "Hendrycks et al.,, 2021")}; ${ref(23, "OpenAI, 2023a, ")}; ${ref(28, "Roger and Greenblatt,, 2023")})`)}.
+       C ${cite("citet", `${ref(7, "Greenblatt and Shlegeris, (2023)")}; ${ref(8, "Greenblatt et al., (2024)")}`)}.
+       D ${cite("citet", ref(24, "OpenAI, 2023b ()"))}.</p>`,
+    );
+    expect(body.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "A (Shlegeris, 2023). " +
+        "B (Hendrycks et al., 2021; OpenAI, 2023a; Roger and Greenblatt, 2023). " +
+        "C Greenblatt and Shlegeris (2023); Greenblatt et al. (2024). " +
+        "D OpenAI (2023b).",
+    );
+  });
+
+  it("repairs author-year reference-list labels", () => {
+    const body = normalize(
+      `<ul class="ltx_biblist"><li id="bib.bib31" class="ltx_bibitem">` +
+        `<span class="ltx_tag ltx_role_refnum ltx_tag_bibitem">Shlegeris,  (2023)</span>` +
+        `<span class="ltx_bibblock">Shlegeris, B. (2023).</span></li></ul>`,
+    );
+    expect(body.querySelector(".ltx_tag_bibitem")?.textContent).toBe("Shlegeris (2023)");
+  });
+
+  it("leaves correct citations and ordinary links alone", () => {
+    const html =
+      `<p>${cite("citep", `(${ref(1, "Bowman et al., 2022")})`)} ` +
+      `${cite("citet", ref(2, "Goodfellow (2019)"))} ` +
+      `<a class="ltx_ref" href="#S2">Section 2, (2023)</a> ${cite("citep", `(${ref(3, "12")})`)}</p>`;
+    const body = normalize(html);
+    expect(body.textContent).toBe(
+      "(Bowman et al., 2022) Goodfellow (2019) Section 2, (2023) (12)",
+    );
+  });
+});
