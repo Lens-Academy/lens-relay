@@ -97,6 +97,39 @@ function isFootnotesContainer(el: HTMLElement | null): boolean {
   );
 }
 
+/**
+ * A fallback-table cell as one line of Markdown. Raw text bypasses td.escape,
+ * so pipes and tag-like `<word>` are escaped here (or the row splits / the text
+ * vanishes under rehype-raw). `<code>` (e.g. a LaTeXML listing in a cell, see
+ * normalize-dom) stays a code span; `\|` is still a cell-safe pipe inside one.
+ */
+function fallbackCellText(cell: Element): string {
+  let out = "";
+  let text = ""; // pending text, escaped as one run so a `<` split across nodes is caught
+  const flush = () => {
+    out += escapeTagOpeners(text.replace(/\|/g, "\\|"));
+    text = "";
+  };
+  const walk = (node: ChildNode) => {
+    if (node.nodeType === 3) {
+      text += node.textContent || "";
+    } else if (node.nodeName === "CODE") {
+      const code = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (!code) return;
+      flush();
+      let tick = "`";
+      while (code.includes(tick)) tick += "`";
+      const pad = /^`|`$/.test(code) ? " " : "";
+      out += `${tick}${pad}${code.replace(/\|/g, "\\|")}${pad}${tick}`;
+    } else {
+      node.childNodes.forEach(walk);
+    }
+  };
+  cell.childNodes.forEach(walk);
+  flush();
+  return out.replace(/\s+/g, " ").trim();
+}
+
 /** Turndown with deterministic rules for the failure modes we found in baseline. */
 function makeTurndown(baseUrl: string): TurndownService {
   const td = new TurndownService({
@@ -108,6 +141,25 @@ function makeTurndown(baseUrl: string): TurndownService {
   });
   td.use(gfm);
   td.remove(["script", "style", "nav", "header", "footer", "aside", "noscript"]);
+
+  // Replaces turndown's built-in fenced rule, which only lengthens the fence
+  // for ``` runs at column 0 — CommonMark also closes a fence indented up to 3
+  // spaces, so a listing containing an indented ``` would end the block early.
+  td.addRule("fencedCodeBlock", {
+    filter: (node: HTMLElement) =>
+      node.nodeName === "PRE" && node.firstChild?.nodeName === "CODE",
+    replacement: (_content: string, node: TurndownService.Node) => {
+      const codeEl = node.firstChild as HTMLElement;
+      const lang = (codeEl.getAttribute("class") || "").match(/language-(\S+)/)?.[1] || "";
+      const code = (codeEl.textContent || "").replace(/\n$/, "");
+      const longest = Math.max(
+        2,
+        ...[...code.matchAll(/^ {0,3}(`{3,})/gm)].map((m) => m[1].length),
+      );
+      const fence = "`".repeat(longest + 1);
+      return `\n\n${fence}${lang}\n${code}\n${fence}\n\n`;
+    },
+  });
 
   // Turndown has no rule for <u>, so it passes the raw tag through and the
   // Lens validator flags it (article.html-artifact). Underline carries no
@@ -168,13 +220,7 @@ function makeTurndown(baseUrl: string): TurndownService {
       const cellsOf = (r: Element) =>
         Array.from(r.children)
           .filter((c) => c.nodeName === "TD" || c.nodeName === "TH")
-          .map((c) =>
-            // Raw textContent bypasses td.escape, so tag-like `<word>` must be
-            // escaped here too or it vanishes under rehype-raw.
-            escapeTagOpeners(
-              (c.textContent || "").replace(/\s+/g, " ").replace(/\|/g, "\\|").trim(),
-            ),
-          );
+          .map(fallbackCellText);
       const grid = rows.map(cellsOf).filter((r) => r.some((c) => c));
       if (grid.length === 0) return content;
       const width = Math.max(...grid.map((r) => r.length));

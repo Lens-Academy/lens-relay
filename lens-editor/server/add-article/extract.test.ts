@@ -680,6 +680,86 @@ describe("extractArticle — arXiv (ar5iv / LaTeXML) adapter", () => {
     expect(ex.meta.author).toEqual(["Geoffrey Irving"]);
     expect(ex.meta.published).toBe("2018-05-01"); // id-derived fallback survives
   });
+
+  // Prevents: LaTeXML code listings imported as a stray `[⬇](data:…)` link then
+  // one markdown-escaped paragraph per line, indentation lost (`\==`, `is\_odd`)
+  // — arxiv.org/html/2312.06942 and 2502.17424.
+  describe("code listings", () => {
+    const IS_ODD = [
+      "def is_odd(x):",
+      "    if x == 354:",
+      "        return True",
+      "    return x % 2 == 1",
+      "",
+      "assert is_odd(5)",
+      "assert is_odd(17)",
+      "assert not is_odd(8)",
+    ].join("\n");
+    const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+    const listing = (code: string, tag = "div", lang = " ltx_lst_language_Python") =>
+      `<${tag} class="ltx_listing${lang} ltx_lstlisting ltx_listing">` +
+      `<${tag} class="ltx_listing_data"><a href="data:text/plain;base64,${b64(code)}" download="">⬇</a></${tag}>` +
+      code
+        .split("\n")
+        .map((l) => `<${tag} class="ltx_listingline"><span class="ltx_text ltx_font_typewriter">${l
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")}</span>\n</${tag}>`)
+        .join("\n") +
+      `</${tag}>`;
+    const paper = (body: string) => `<!doctype html><html><head><title>[2312.06942] AI Control</title></head>
+    <body><article class="ltx_document">
+      <h1 class="ltx_title ltx_title_document">AI Control</h1>
+      <section class="ltx_section"><p class="ltx_p">${"Body text long enough for the adapter floor. ".repeat(15)}</p>
+      ${body}
+      </section></article></body></html>`;
+    const extract = (body: string) =>
+      extractArticle(paper(body), "https://arxiv.org/html/2312.06942", {
+        sourceUrl: "https://arxiv.org/abs/2312.06942",
+      });
+
+    it("imports a listing as a fenced code block", async () => {
+      const ex = await extract(`<div class="ltx_para">${listing(IS_ODD)}</div>`);
+      expect(ex.body).toContain("```python\n" + IS_ODD + "\n```");
+      expect(ex.body).not.toContain("⬇");
+      expect(ex.body).not.toContain("data:text/plain");
+      expect(ex.body).not.toMatch(/\\==|is\\_odd/);
+    });
+
+    it("lengthens the fence when the code itself contains ```", async () => {
+      const src = "Solve this.\n\n```cpp\n$SOLUTION\n```\n\n<problem>\n$PROBLEM\n</problem>";
+      const ex = await extract(`<div class="ltx_para">${listing(src, "div", "")}</div>`);
+      expect(ex.body).toContain("````text\n" + src + "\n````");
+    });
+
+    it("lengthens the fence past an indented ``` (CommonMark closes those too)", async () => {
+      const src = "Example:\n\n  ```\n  nested\n  ```\n\nDone.";
+      const ex = await extract(`<div class="ltx_para">${listing(src, "div", "")}</div>`);
+      expect(ex.body).toContain("````text\n" + src + "\n````");
+    });
+
+    it("drops leading blank lines and maps C++ to a cpp fence", async () => {
+      const ex = await extract(`<div class="ltx_para">${listing("\n\n  int x = 1;", "div", " ltx_lst_language_C++")}</div>`);
+      expect(ex.body).toContain("```cpp\n  int x = 1;\n```");
+    });
+
+    it("breaks a listing nested in an inline paragraph out into its own block", async () => {
+      const ex = await extract(`<figure class="ltx_figure"><span class="ltx_inline-logical-block">
+        <span class="ltx_para"><span class="ltx_p"><span class="ltx_text ltx_font_bold">User:</span> Fill the following template:</span></span>
+        <span class="ltx_para">${listing("from flask import Flask\n\napp = Flask(__name__)", "span")}</span>
+      </span></figure>`);
+      expect(ex.body).toMatch(/Fill the following template:\s*\n\n```python\nfrom flask import Flask\n\napp = Flask\(__name__\)\n```/);
+    });
+
+    it("keeps a listing in a table cell as an inline code span on one line", async () => {
+      const ex = await extract(`<table class="ltx_tabular"><tbody>
+        <tr><td class="ltx_td"><span class="ltx_p">Dinner party</span></td>
+        <td class="ltx_td"><span class="ltx_inline-block">${listing('GUESTS = [\n    "Hitler", "Stalin",\n    "a|b <script>",\n]', "span")}</span></td></tr>
+        <tr><td class="ltx_td">x</td><td class="ltx_td">y</td></tr>
+      </tbody></table>`);
+      expect(ex.body).toContain('| Dinner party | `GUESTS = [ "Hitler", "Stalin", "a\\|b <script>", ]` |');
+      expect(ex.body).not.toContain("⬇");
+    });
+  });
 });
 
 describe("extractArticle — metadata hardening (generic path)", () => {
