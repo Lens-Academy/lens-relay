@@ -28,6 +28,10 @@
  *  4. LaTeXML code listings. arXiv HTML renders each line of a listing as its
  *     own element of per-token spans, so turndown produced one escaped
  *     paragraph per line with indentation lost. Rebuild each as <pre><code>.
+ *
+ *  5. LaTeXML author-year citations. For some natbib styles arXiv HTML puts a
+ *     stray comma into every citation ("(Shlegeris,, 2023)", "Greenblatt et
+ *     al., (2024)"), where the PDF is correct. Repair the citation text.
  */
 
 /** Drop leading blank lines and trailing whitespace, keeping the first line's indent. */
@@ -99,6 +103,38 @@ function convertLtxListings(root: Element): void {
     const pre = doc.createElement("pre");
     pre.appendChild(codeEl);
     listing.replaceWith(pre);
+  }
+}
+
+const YEAR = String.raw`\d{4}[a-z]?`;
+/**
+ * LaTeXML's natbib output, as seen on arxiv.org/html/2312.06942, and what the
+ * PDF prints instead. Each pattern matches the end of one citation link (or
+ * reference-list label), never mid-sentence text.
+ */
+const LTX_CITATION_REPAIRS: [RegExp, string][] = [
+  // \citep "(Shlegeris,, 2023)" → "(Shlegeris, 2023)"
+  [new RegExp(String.raw`,\s*,\s*(${YEAR})\s*$`), ", $1"],
+  // \citep with a year suffix "(OpenAI, 2023a, )" → "(OpenAI, 2023a)"
+  [new RegExp(String.raw`,\s*(${YEAR})\s*,\s*$`), ", $1"],
+  // \citet and reference labels "Shlegeris, (2023)" → "Shlegeris (2023)"
+  [new RegExp(String.raw`,\s*\((${YEAR})\)\s*$`), " ($1)"],
+  // \citet with a year suffix "OpenAI, 2023b ()" → "OpenAI (2023b)"
+  [new RegExp(String.raw`,\s*(${YEAR})\s*\(\)\s*$`), " ($1)"],
+];
+
+/** Remove LaTeXML's stray natbib commas from citation links and reference labels. */
+function repairLtxCitations(root: Element): void {
+  for (const el of root.querySelectorAll(".ltx_cite a.ltx_ref, .ltx_tag_bibitem")) {
+    // The year ends the element's last text node; anything before it stays.
+    const last = [...el.childNodes].reverse().find((n) => n.nodeType === 3);
+    if (!last?.textContent) continue;
+    for (const [pattern, replacement] of LTX_CITATION_REPAIRS) {
+      if (pattern.test(last.textContent)) {
+        last.textContent = last.textContent.replace(pattern, replacement);
+        break;
+      }
+    }
   }
 }
 
@@ -493,9 +529,10 @@ function absolutizeLinks(root: Element, baseUrl: string): void {
   });
 }
 
-/** Normalize an article body DOM subtree in place (listings, footnotes, links). */
+/** Normalize an article body DOM subtree in place (listings, citations, footnotes, links). */
 export function normalizeArticleDom(root: Element, baseUrl: string): void {
   convertLtxListings(root);
+  repairLtxCitations(root);
   normalizeFootnotes(root);
   localizeSelfFragments(root, baseUrl);
   absolutizeLinks(root, baseUrl);
