@@ -347,3 +347,66 @@ describe("normalizeArticleDom — parser-mangled inverted footnotes (defuddle re
     expect(body.querySelectorAll("a[data-footnote-ref]").length).toBe(0);
   });
 });
+
+describe("normalizeArticleDom — LaTeXML code listings (arXiv)", () => {
+  const IS_ODD = `def is_odd(x):
+    if x == 354:
+        return True
+    return x % 2 == 1
+
+assert is_odd(5)
+assert is_odd(17)
+assert not is_odd(8)`;
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+  // LaTeXML shape (arxiv.org/html/2312.06942): a ⬇ link carrying the base64
+  // source, then one element of per-token spans per rendered line.
+  const listing = (code: string, dataLink = true, tag = "div") =>
+    `<${tag} class="ltx_listing ltx_lst_language_Python ltx_lstlisting ltx_listing">` +
+    (dataLink
+      ? `<${tag} class="ltx_listing_data"><a href="data:text/plain;base64,${b64(code)}" download="">⬇</a></${tag}>`
+      : "") +
+    code
+      .split("\n")
+      .map(
+        (l, i) =>
+          `<${tag} class="ltx_listingline" id="lst${i}">${l
+            .split(/( +)/)
+            .filter(Boolean)
+            .map((t) => `<span class="ltx_text ltx_font_typewriter">${t.replace(/ /g, " ")}</span>`)
+            .join("")}\n</${tag}>`,
+      )
+      .join("\n") +
+    `</${tag}>`;
+
+  it("rebuilds a listing as <pre><code> from its base64 data link", () => {
+    const body = normalize(`<div class="ltx_para">${listing(IS_ODD)}</div>`, "https://arxiv.org/html/2312.06942");
+    expect(body.querySelector(".ltx_listing")).toBeNull();
+    expect(body.querySelector("a[href^='data:']")).toBeNull();
+    expect(body.textContent).not.toContain("⬇");
+    const code = body.querySelector("pre > code");
+    expect(code?.className).toBe("language-python");
+    expect(code?.textContent).toBe(IS_ODD);
+  });
+
+  it("decodes the data link as UTF-8", () => {
+    const src = `print("naïve — ✓")`;
+    const body = normalize(listing(src), "https://arxiv.org/html/2312.06942");
+    expect(body.querySelector("pre > code")?.textContent).toBe(src);
+  });
+
+  it("falls back to the rendered lines when there is no data link", () => {
+    const body = normalize(listing(IS_ODD, false), "https://arxiv.org/html/2312.06942");
+    expect(body.querySelector("pre > code")?.textContent).toBe(IS_ODD);
+  });
+
+  it("keeps a listing inside a table cell as single-line inline code", () => {
+    const src = `GUESTS = [\n    "a",\n    "b",\n]`;
+    const body = normalize(
+      `<table><tr><td><span class="ltx_inline-block">${listing(src, true, "span")}</span></td></tr></table>`,
+      "https://arxiv.org/html/2502.17424",
+    );
+    expect(body.querySelector("pre")).toBeNull();
+    expect(body.querySelector("td code")?.textContent).toBe(`GUESTS = [ "a", "b", ]`);
+    expect(body.textContent).not.toContain("⬇");
+  });
+});

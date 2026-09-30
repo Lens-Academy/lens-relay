@@ -1,7 +1,7 @@
 /**
  * Pre-turndown DOM normalization. Runs on the article body DOM (with the fetch
- * base URL available) BEFORE the HTML→Markdown conversion in extract.ts. Two
- * deterministic transforms that turndown alone cannot do correctly:
+ * base URL available) BEFORE the HTML→Markdown conversion in extract.ts.
+ * Deterministic transforms that turndown alone cannot do correctly:
  *
  *  1. Footnote canonicalization. Sites render footnotes in incompatible ways —
  *     ForumMagnum (LessWrong / AlignmentForum / EA Forum) uses content-hash ids
@@ -24,7 +24,67 @@
  *     library documents keep working links (images are already resolved by the
  *     turndown `lazyImg` rule). In-document `#` anchors and non-http schemes are
  *     left untouched.
+ *
+ *  4. LaTeXML code listings. arXiv HTML renders each line of a listing as its
+ *     own element of per-token spans, so turndown produced one escaped
+ *     paragraph per line with indentation lost. Rebuild each as <pre><code>.
  */
+
+/** The listing's source text: the base64 `data:` download link LaTeXML embeds
+ * (the verbatim source, straight quotes intact), else its rendered lines. */
+function listingCode(listing: Element): string {
+  const href =
+    listing.querySelector(".ltx_listing_data a[href^='data:']")?.getAttribute("href") || "";
+  const m = href.match(/^data:([^,]*),(.*)$/s);
+  if (m) {
+    try {
+      const code = /;base64$/i.test(m[1])
+        ? Buffer.from(m[2], "base64").toString("utf8")
+        : decodeURIComponent(m[2]);
+      if (code.trim()) return code.replace(/\s+$/, "");
+    } catch {
+      /* fall back to the rendered lines */
+    }
+  }
+  const lines = [...listing.querySelectorAll(".ltx_listingline")];
+  if (lines.length === 0) {
+    listing.querySelector(".ltx_listing_data")?.remove();
+    return (listing.textContent || "").trim();
+  }
+  return lines
+    .map((line) => (line.textContent || "").replace(/[\r\n]/g, "").replace(/\u00a0/g, " "))
+    .join("\n")
+    .replace(/\s+$/, "");
+}
+
+/**
+ * Replace each LaTeXML `.ltx_listing` (arXiv/ar5iv code and prompt listings)
+ * with `<pre><code>`, which turndown's fenced rule emits as a ``` block (it
+ * lengthens the fence when the code itself contains ```). The ⬇ download link
+ * goes with it. Inside a table cell a fenced block would break the pipe table,
+ * so there the code becomes a single-line inline `<code>` instead.
+ */
+function convertLtxListings(root: Element): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+  for (const listing of root.querySelectorAll(".ltx_listing")) {
+    const code = listingCode(listing);
+    const codeEl = doc.createElement("code");
+    if (listing.closest("td, th")) {
+      codeEl.textContent = code.replace(/\s+/g, " ").trim();
+      listing.replaceWith(codeEl);
+      continue;
+    }
+    const lang = [...listing.classList]
+      .map((c) => c.match(/^ltx_lst_language_(\w+)$/)?.[1])
+      .find(Boolean);
+    if (lang) codeEl.className = `language-${lang.toLowerCase()}`;
+    codeEl.textContent = code;
+    const pre = doc.createElement("pre");
+    pre.appendChild(codeEl);
+    listing.replaceWith(pre);
+  }
+}
 
 // DOCUMENT_POSITION_* bitmask values (avoid depending on a global `Node`).
 const FOLLOWING = 4;
@@ -417,8 +477,9 @@ function absolutizeLinks(root: Element, baseUrl: string): void {
   });
 }
 
-/** Normalize an article body DOM subtree in place (footnotes + links). */
+/** Normalize an article body DOM subtree in place (listings, footnotes, links). */
 export function normalizeArticleDom(root: Element, baseUrl: string): void {
+  convertLtxListings(root);
   normalizeFootnotes(root);
   localizeSelfFragments(root, baseUrl);
   absolutizeLinks(root, baseUrl);

@@ -97,6 +97,39 @@ function isFootnotesContainer(el: HTMLElement | null): boolean {
   );
 }
 
+/**
+ * A fallback-table cell as one line of Markdown. Raw text bypasses td.escape,
+ * so pipes and tag-like `<word>` are escaped here (or the row splits / the text
+ * vanishes under rehype-raw). `<code>` (e.g. a LaTeXML listing in a cell, see
+ * normalize-dom) stays a code span; `\|` is still a cell-safe pipe inside one.
+ */
+function fallbackCellText(cell: Element): string {
+  let out = "";
+  let text = ""; // pending text, escaped as one run so a `<` split across nodes is caught
+  const flush = () => {
+    out += escapeTagOpeners(text.replace(/\|/g, "\\|"));
+    text = "";
+  };
+  const walk = (node: ChildNode) => {
+    if (node.nodeType === 3) {
+      text += node.textContent || "";
+    } else if (node.nodeName === "CODE") {
+      const code = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (!code) return;
+      flush();
+      let tick = "`";
+      while (code.includes(tick)) tick += "`";
+      const pad = /^`|`$/.test(code) ? " " : "";
+      out += `${tick}${pad}${code.replace(/\|/g, "\\|")}${pad}${tick}`;
+    } else {
+      node.childNodes.forEach(walk);
+    }
+  };
+  cell.childNodes.forEach(walk);
+  flush();
+  return out.replace(/\s+/g, " ").trim();
+}
+
 /** Turndown with deterministic rules for the failure modes we found in baseline. */
 function makeTurndown(baseUrl: string): TurndownService {
   const td = new TurndownService({
@@ -168,13 +201,7 @@ function makeTurndown(baseUrl: string): TurndownService {
       const cellsOf = (r: Element) =>
         Array.from(r.children)
           .filter((c) => c.nodeName === "TD" || c.nodeName === "TH")
-          .map((c) =>
-            // Raw textContent bypasses td.escape, so tag-like `<word>` must be
-            // escaped here too or it vanishes under rehype-raw.
-            escapeTagOpeners(
-              (c.textContent || "").replace(/\s+/g, " ").replace(/\|/g, "\\|").trim(),
-            ),
-          );
+          .map(fallbackCellText);
       const grid = rows.map(cellsOf).filter((r) => r.some((c) => c));
       if (grid.length === 0) return content;
       const width = Math.max(...grid.map((r) => r.length));
