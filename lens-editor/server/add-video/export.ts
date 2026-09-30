@@ -1,3 +1,4 @@
+import { yamlQuote } from "../yaml";
 import type { TimestampedWord, FormattedTimestamp } from "./types";
 
 /** Convert seconds to M:SS.mm format (e.g., 1:03.50) */
@@ -22,10 +23,6 @@ interface MarkdownParams {
   channel: string;
   url: string;
   body: string;
-}
-
-function yamlQuote(s: string): string {
-  return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
 }
 
 /** Generate markdown with YAML frontmatter */

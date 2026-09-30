@@ -44,6 +44,8 @@ export default defineConfig(() => {
     // dead http origin. Honour VITE_PORT if the dev server is on a custom port.
     const vitePort = parseInt(process.env.VITE_PORT || String(defaultVitePort), 10);
     process.env.RELAY_URL ??= `http://localhost:${relayPort}`;
+    // Matches src/lib/constants.ts: the filesystem relay's id; dev R2 keeps production ids.
+    if (process.env.VITE_LOCAL_R2 !== 'true') process.env.RELAY_ID ??= 'a0000000-0000-4000-8000-000000000000';
     process.env.EDITOR_BASE_URL ??= `https://localhost:${vitePort}`;
   }
 
@@ -227,6 +229,24 @@ export default defineConfig(() => {
     });
   }
 
+  /**
+   * Dev source sync (SOURCE_SYNC_BINDINGS), started once with the dev server.
+   * Only against a local relay: a dev machine must never write synced files
+   * into the production Relay.
+   */
+  function sourceSyncPlugin(): Plugin {
+    return {
+      name: 'source-sync',
+      async configureServer() {
+        const { startSourceSyncFromEnv } = await import('./server/source-sync/index.ts');
+        // A dev-server restart runs this again in the same process: stop the old loop first.
+        const holder = globalThis as { __lensSourceSyncStop?: () => void };
+        holder.__lensSourceSyncStop?.();
+        holder.__lensSourceSyncStop = startSourceSyncFromEnv({ localRelayOnly: true }) ?? undefined;
+      },
+    };
+  }
+
   /** Dev /api/attachments endpoints (relay MCP import_attachment backend). */
   function attachmentsPlugin(): Plugin {
     return honoDevPlugin({
@@ -390,7 +410,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

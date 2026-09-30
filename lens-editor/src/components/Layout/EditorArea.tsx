@@ -8,6 +8,7 @@ import * as Y from 'yjs';
 import { criticMarkupField, suggestionModeField } from '../Editor/extensions/criticmarkup';
 import { sourceReadOnlyCompartment } from '../Editor/extensions/livePreview';
 import { SourceSuggestionBanner } from '../SourceSuggestionBanner/SourceSuggestionBanner';
+import { SyncedFileBanner } from '../SyncedFileBanner/SyncedFileBanner';
 import { parseThreads } from '../../lib/criticmarkup-parser';
 import { SyncStatus } from '../SyncStatus/SyncStatus';
 import { Editor } from '../Editor/Editor';
@@ -506,6 +507,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </div>
             <div className="mx-6 border-b border-gray-200" />
           </div>
+          <SyncedFileBanner />
           {isSourceMode && isSuggestionMode && (
             <SourceSuggestionBanner />
           )}

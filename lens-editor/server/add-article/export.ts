@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ArticleMeta } from "./types";
+import { yamlQuote } from "../yaml";
 
 export const ARTICLE_DISCUSSION_PROMPT =
   "%%\nAdd discussion note here:\n\n...\n\n%%";
@@ -10,19 +11,6 @@ export interface ArticleReviewProvenance {
   model: string;
   sourceFetched: string;
   sourceKind: "live" | "archive" | "fixture";
-}
-
-function yamlQuote(s: string): string {
-  // Collapse control whitespace too — a raw newline inside a double-quoted YAML
-  // scalar (e.g. a title with an embedded line break) breaks frontmatter parsing.
-  return (
-    '"' +
-    s
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      .replace(/[\r\n\t]+/g, " ") +
-    '"'
-  );
 }
 
 /**

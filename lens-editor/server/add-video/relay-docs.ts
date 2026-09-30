@@ -7,10 +7,14 @@ import { fetchBytesWithTimeout, bytesToText } from "../fetch-timeout";
 const RELAY_CHECK_TIMEOUT_MS = 30_000;
 const RELAY_WRITE_TIMEOUT_MS = 60_000; // upserts/attachments carry larger payloads
 
+// The production relay's id (root AGENTS.md); the local relay uses a0000000-….
+const PRODUCTION_RELAY_ID = "cb696037-0f72-4e93-8717-4e433129d789";
+
 function getRelayConfig() {
   const url = process.env.RELAY_URL || "http://relay-server:8080";
   const token = process.env.RELAY_SERVER_TOKEN || "";
-  return { url, token };
+  const relayId = process.env.RELAY_ID || PRODUCTION_RELAY_ID;
+  return { url, token, relayId };
 }
 
 /** Relay folder video transcripts live in, e.g. "Lens Edu/video_transcripts". */
@@ -129,6 +133,33 @@ export async function readRelayDocText(
   const text = doc.getText("contents").toString();
   doc.destroy();
   return text;
+}
+
+/**
+ * The relay doc id of the file at a full path ("Lens Edu/articles/x.md"), or
+ * null when no file is there. The relay's /debug/resolve reads the folder's
+ * filemeta_v0 (the source of truth, so it also finds files nobody has open,
+ * which /doc/resolve's in-memory prefix match does not) and returns the doc
+ * uuid; the id is "<relay id>-<uuid>".
+ */
+export async function resolveRelayDocIdByPath(
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const { url, token, relayId } = getRelayConfig();
+  const resp = await fetchBytesWithTimeout(
+    `${url}/debug/resolve?${new URLSearchParams({ path: filePath }).toString()}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      timeoutMs: RELAY_CHECK_TIMEOUT_MS,
+      signal,
+    },
+  );
+  if (!resp.ok) {
+    throw new Error(`Relay path lookup failed for ${filePath}: ${resp.status} ${bytesToText(resp.bytes)}`);
+  }
+  const { filemeta_uuid } = JSON.parse(bytesToText(resp.bytes)) as { filemeta_uuid: string | null };
+  return filemeta_uuid ? `${relayId}-${filemeta_uuid}` : null;
 }
 
 /** Create a new document in Relay */

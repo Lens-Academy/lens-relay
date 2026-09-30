@@ -5,6 +5,7 @@ import { getRequestListener } from '@hono/node-server';
 import { validateProxyToken, checkProxyAccessWithBody, isBodyCheckedRequest } from './relay-proxy-auth.ts';
 import { initDiscordGateway } from './discord/routes.ts';
 import { createApp } from './app.ts';
+import { startSourceSyncFromEnv } from './source-sync/index.ts';
 
 const relayUrl = process.env.RELAY_URL || 'http://relay-server:8080';
 const relayServerToken = process.env.RELAY_SERVER_TOKEN;
@@ -113,4 +114,6 @@ initDiscordGateway();
 
 server.listen(port, () => {
   console.log(`[lens-editor] Production server on port ${port}`);
+  // Keep Relay copies of externally edited sources current (off unless configured)
+  startSourceSyncFromEnv();
 });
