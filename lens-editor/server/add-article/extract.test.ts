@@ -728,13 +728,13 @@ describe("extractArticle — arXiv (ar5iv / LaTeXML) adapter", () => {
     it("lengthens the fence when the code itself contains ```", async () => {
       const src = "Solve this.\n\n```cpp\n$SOLUTION\n```\n\n<problem>\n$PROBLEM\n</problem>";
       const ex = await extract(`<div class="ltx_para">${listing(src, "div", "")}</div>`);
-      expect(ex.body).toContain("````\n" + src + "\n````");
+      expect(ex.body).toContain("````text\n" + src + "\n````");
     });
 
     it("lengthens the fence past an indented ``` (CommonMark closes those too)", async () => {
       const src = "Example:\n\n  ```\n  nested\n  ```\n\nDone.";
       const ex = await extract(`<div class="ltx_para">${listing(src, "div", "")}</div>`);
-      expect(ex.body).toContain("````\n" + src + "\n````");
+      expect(ex.body).toContain("````text\n" + src + "\n````");
     });
 
     it("drops leading blank lines and maps C++ to a cpp fence", async () => {

@@ -388,6 +388,14 @@ assert not is_odd(8)`;
     expect(code?.textContent).toBe(IS_ODD);
   });
 
+  it("tags a listing with no known language as text", () => {
+    const body = normalize(
+      listing("plain prompt").replace(" ltx_lst_language_Python", ""),
+      "https://arxiv.org/html/2312.06942",
+    );
+    expect(body.querySelector("pre > code")?.className).toBe("language-text");
+  });
+
   it("decodes the data link as UTF-8", () => {
     const src = `print("naïve — ✓")`;
     const body = normalize(listing(src), "https://arxiv.org/html/2312.06942");

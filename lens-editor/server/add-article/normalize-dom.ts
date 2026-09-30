@@ -93,7 +93,8 @@ function convertLtxListings(root: Element): void {
     const lang = [...listing.classList]
       .map((c) => c.match(/^ltx_lst_language_(\S+)$/)?.[1])
       .find(Boolean);
-    if (lang && fenceLanguage(lang)) codeEl.className = `language-${fenceLanguage(lang)}`;
+    // No known language → `text`: the platform styles a bare fence like inline code.
+    codeEl.className = `language-${(lang && fenceLanguage(lang)) || "text"}`;
     codeEl.textContent = code;
     const pre = doc.createElement("pre");
     pre.appendChild(codeEl);
