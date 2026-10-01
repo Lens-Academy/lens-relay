@@ -107,10 +107,60 @@ export function looksLikePdf(contentType: string, bytes: ArrayBuffer): boolean {
   return head.includes("%PDF-");
 }
 
+// Bot-challenge / access-denied interstitials sometimes return HTTP 200 (or are
+// returned by the render API for blocked sites). They must fail honestly, not
+// be written as a fake article. High confidence = short body + a strong marker.
+const BLOCK_PAGE_RE =
+  /(performing security verification|verify you are (not )?a (human|bot)|checking your browser|just a moment|enable javascript and cookies to continue|access denied|attention required|error 101[0-9]|cf-browser-verification|please (verify|confirm) you are a human|requests from your browser)/i;
+
+export function looksLikeBlockPage(body: string): boolean {
+  return body.length < 2000 && BLOCK_PAGE_RE.test(body);
+}
+
+/** The shortest article the importer accepts, in characters: below this the
+ *  extraction almost certainly failed (empty or wrong container). A fetched
+ *  page with less visible text than this cannot hold an article. */
+export const MIN_ARTICLE_CHARS = 200;
+
+/** The visible text of an HTML page: no scripts, styles or tags. */
+export function visibleText(html: string): string {
+  return decodeEntities(
+    html
+      .replace(/<(script|style|noscript|template|svg)\b[\s\S]*?<\/\1\s*>/gi, " ")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<[^>]*>/g, " "),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Whether a fetched page is a bot wall rather than the article: a challenge or
+ * access-denied interstitial, or a near-empty body. Sites answer such pages
+ * with HTTP 200 (LessWrong sends ~100 chars to datacenter IPs), so a fetch that
+ * "succeeded" must still be treated as failed and the next mirror tried.
+ */
+export function looksLikeBotWall(html: string): boolean {
+  const text = visibleText(html);
+  return text.length < MIN_ARTICLE_CHARS || looksLikeBlockPage(text);
+}
+
+/** Every fetch of the source returned a bot wall instead of the article. */
+export class BotWallError extends Error {
+  constructor(readonly urls: string[]) {
+    super(
+      `Source is bot-walled: ${urls.join(", ")} returned a bot-verification or near-empty page ` +
+        "instead of the article. Try a mirror or an archived copy of it.",
+    );
+    this.name = "BotWallError";
+  }
+}
+
 /**
  * Fetch the first candidate URL that returns usable HTML. Used with an
- * adapter's `resolveFetchUrls` (e.g. try arxiv.org/html, then ar5iv). Throws
- * the last error if every candidate fails.
+ * adapter's `resolveFetchUrls` (e.g. try arxiv.org/html, then ar5iv). A bot
+ * wall (see `looksLikeBotWall`) counts as a failed candidate. Throws the last
+ * error if every candidate fails.
  */
 export async function fetchFirstHtml(
   urls: string[],
@@ -119,7 +169,12 @@ export async function fetchFirstHtml(
   let lastErr: unknown = new Error("No candidate URLs to fetch");
   for (const u of urls) {
     try {
-      return { html: await fetchRawHtml(u, signal), url: u };
+      const html = await fetchRawHtml(u, signal);
+      if (looksLikeBotWall(html)) {
+        lastErr = new BotWallError([u]);
+        continue;
+      }
+      return { html, url: u };
     } catch (err) {
       lastErr = err;
       if (signal?.aborted) break; // job cancelled/timed out — stop trying mirrors

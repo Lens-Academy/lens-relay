@@ -3,7 +3,7 @@ import { Readability } from "@mozilla/readability";
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 import { Defuddle } from "defuddle/node";
-import { extractHtmlMeta, dateFromUrl, fetchRawHtml } from "./fetch";
+import { extractHtmlMeta, dateFromUrl, fetchRawHtml, looksLikeBlockPage } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
 import { normalizeArticleDom, isIntraWord } from "./normalize-dom";
@@ -69,16 +69,6 @@ function looksLikeLinkOut(body: string): boolean {
 // Below this an adapter's output is treated as a mis-fire and we fall back to
 // the generic extractors rather than trusting an empty/near-empty container.
 const MIN_ADAPTER_CHARS = 500;
-
-// Bot-challenge / access-denied interstitials sometimes return HTTP 200 (or are
-// returned by the render API for blocked sites). They must fail honestly, not
-// be written as a fake article. High confidence = short body + a strong marker.
-const BLOCK_PAGE_RE =
-  /(performing security verification|verify you are (not )?a (human|bot)|checking your browser|just a moment|enable javascript and cookies to continue|access denied|attention required|error 101[0-9]|cf-browser-verification|please (verify|confirm) you are a human|requests from your browser)/i;
-
-function looksLikeBlockPage(body: string): boolean {
-  return body.length < 2000 && BLOCK_PAGE_RE.test(body);
-}
 
 /** Trailing digits of a string, e.g. "user-content-fn-3" → "3" ("" if none). */
 function trailingNum(s: string | null | undefined): string {

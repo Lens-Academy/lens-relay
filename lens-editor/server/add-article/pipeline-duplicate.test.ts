@@ -29,7 +29,7 @@ const reviewMocks = vi.hoisted(() => ({
   reviewArticle: vi.fn(),
 }));
 
-vi.mock("./fetch", () => fetchMocks);
+vi.mock("./fetch", () => ({ ...fetchMocks, MIN_ARTICLE_CHARS: 200 }));
 vi.mock("../add-video/relay-docs", () => relayMocks);
 vi.mock("./extract", () => ({ extractArticle: extractionMocks.extractArticle }));
 vi.mock("./meta-normalize", () => ({
