@@ -4,8 +4,9 @@ import {
   moveCursor,
   hasClass,
   countClass,
+  getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { updateWikilinkContext, wikilinkMetadataChanged, parseCalloutHeader } from './livePreview';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 
@@ -1130,5 +1131,70 @@ describe('livePreview - checklists', () => {
     expect(doc).toContain('- [x] buy milk');
     expect(doc).toContain('- [x] eggs');
     expect(doc).toContain('End');
+  });
+});
+
+describe('livePreview - callouts', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  const TIP = '> [!tip] Writing good outcomes\n> Good outcomes are specific.\n\nAfter';
+  const AFTER = TIP.length;
+
+  it('parses the header, mapping aliases and unknown types', () => {
+    expect(parseCalloutHeader('> [!tip] Writing good outcomes')).toMatchObject({
+      type: 'tip', title: 'Writing good outcomes', markerFrom: 2, markerTo: 9,
+    });
+    expect(parseCalloutHeader('> [!HINT]- Folded')).toMatchObject({ type: 'tip', title: 'Folded', markerTo: 11 });
+    expect(parseCalloutHeader('>[!mystery]')).toMatchObject({ type: 'note', title: '', rawType: 'mystery' });
+    expect(parseCalloutHeader('> plain quote')).toBeNull();
+    expect(parseCalloutHeader('> [link] text')).toBeNull();
+  });
+
+  it('marks every line of the callout with its type', () => {
+    const { view, cleanup: c } = createTestEditor(TIP, AFTER);
+    cleanup = c;
+    expect(countClass(view, 'cm-callout-tip')).toBe(2);
+    expect(countClass(view, 'cm-callout-first')).toBe(1);
+    expect(countClass(view, 'cm-callout-last')).toBe(1);
+  });
+
+  it('styles each built-in type and falls back to note', () => {
+    for (const [type, cls] of [['info', 'cm-callout-info'], ['warning', 'cm-callout-warning'], ['note', 'cm-callout-note'], ['whatever', 'cm-callout-note']]) {
+      const doc = `> [!${type}] Title\n> Body\n\nAfter`;
+      const { view, cleanup: c } = createTestEditor(doc, doc.length);
+      expect(hasClass(view, cls)).toBe(true);
+      c();
+    }
+  });
+
+  it('leaves plain blockquotes alone', () => {
+    const doc = '> Just a quote\n\nAfter';
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+    expect(hasClass(view, 'cm-blockquote')).toBe(true);
+    expect(hasClass(view, 'cm-callout')).toBe(false);
+  });
+
+  it('hides the marker when the cursor is outside, shows it when inside', () => {
+    const { view, cleanup: c } = createTestEditor(TIP, AFTER);
+    cleanup = c;
+    expect(hasClass(view, 'cm-callout-icon')).toBe(true);
+    expect(view.contentDOM.textContent).not.toContain('[!tip]');
+    expect(getTextWithClass(view, 'cm-callout-title')).toEqual(['Writing good outcomes']);
+
+    moveCursor(view, 40);
+    expect(hasClass(view, 'cm-callout-icon')).toBe(false);
+    expect(view.contentDOM.textContent).toContain('[!tip]');
+  });
+
+  it('shows the type as title when the callout has none', () => {
+    const doc = '> [!warning]\n> Body\n\nAfter';
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+    expect(getTextWithClass(view, 'cm-callout-title')).toEqual(['Warning']);
   });
 });

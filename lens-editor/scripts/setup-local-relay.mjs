@@ -186,6 +186,37 @@ The \`discussion\` frontmatter field links this document to a Discord channel. T
 `,
       },
       {
+        path: '/Callouts.md',
+        id: 'c0000009-0000-4000-8000-000000000009',
+        type: 'markdown',
+        version: 0,
+        content: `# Callouts
+
+Obsidian-style callouts render as coloured boxes in live preview.
+
+> [!tip] Writing good outcomes
+> Good outcomes are specific and measurable.
+> They say what a learner can do afterwards.
+
+> [!info] Where this file lives
+> In the Relay Folder 1 shared folder.
+
+> [!warning] Careful
+> Edits here sync to everyone.
+
+> [!note]
+> A callout without a title shows its type as the title.
+
+> [!example]- Folded example
+> Other Obsidian types get their own colours too.
+
+> [!mystery] An unknown type
+> Unknown types fall back to the note style.
+
+> A plain blockquote stays a plain blockquote.
+`,
+      },
+      {
         path: '/Projects',
         id: 'c0000011-0000-4000-8000-000000000011',
         type: 'folder',
