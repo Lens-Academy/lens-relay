@@ -4,6 +4,7 @@ import { Compartment, Prec, StateField, RangeSetBuilder, Transaction } from '@co
 import type { EditorState, Extension } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
+import { GFM, parser } from '@lezer/markdown';
 import { createLinkElement } from './linkElement';
 
 type Align = 'left' | 'center' | 'right';
@@ -43,110 +44,96 @@ function unescapeFromCell(s: string): string {
   return out;
 }
 
-function findClosingMarker(source: string, marker: string, from: number): number {
-  for (let i = from; i <= source.length - marker.length; i++) {
-    if (source[i] === '\\') {
-      i++;
-      continue;
+// Cell content is inline Markdown. Parse it with the GFM parser the editor uses,
+// with every block parser removed so that "# x" or "- x" stay one paragraph.
+const cellParser = parser.configure([
+  GFM,
+  {
+    remove: [
+      'SetextHeading', 'FencedCode', 'Blockquote', 'HorizontalRule', 'BulletList', 'OrderedList',
+      'ATXHeading', 'HTMLBlock', 'LinkReference', 'IndentedCode', 'Table',
+    ],
+  },
+]);
+
+/** The text between a node's opening and closing marks, rendered as inline content. */
+function renderBetweenMarks(target: Node, source: string, node: SyntaxNode, markName: string): void {
+  const marks = node.getChildren(markName);
+  const from = marks.length ? marks[0].to : node.from;
+  const to = marks.length > 1 ? marks[marks.length - 1].from : node.to;
+  renderInlineRange(target, source, node, from, to);
+}
+
+/** Render the children of `parent` within [from, to), with the text between them. */
+function renderInlineRange(target: Node, source: string, parent: SyntaxNode, from: number, to: number): void {
+  let pos = from;
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (child.to <= from || child.from >= to) continue;
+    if (child.from > pos) target.appendChild(document.createTextNode(source.slice(pos, child.from)));
+    renderInlineNode(target, source, child);
+    pos = child.to;
+  }
+  if (pos < to) target.appendChild(document.createTextNode(source.slice(pos, to)));
+}
+
+function renderInlineNode(target: Node, source: string, node: SyntaxNode): void {
+  const raw = source.slice(node.from, node.to);
+  switch (node.name) {
+    case 'Escape':
+      target.appendChild(document.createTextNode(raw.slice(1)));
+      return;
+    case 'Emphasis':
+    case 'StrongEmphasis': {
+      const mark = document.createElement(node.name === 'Emphasis' ? 'em' : 'strong');
+      renderBetweenMarks(mark, source, node, 'EmphasisMark');
+      target.appendChild(mark);
+      return;
     }
-    if (source.startsWith(marker, i)) return i;
-  }
-  return -1;
-}
-
-interface CellLink {
-  text: string;
-  url: string;
-  end: number;
-}
-
-// The link forms live preview turns into clickable links outside tables:
-// [text](url), <scheme:...> autolinks and bare GFM URLs (https://..., www....).
-function matchLinkAt(source: string, i: number): CellLink | null {
-  if (source[i] === '[') {
-    const close = findClosingMarker(source, ']', i + 1);
-    if (close === -1 || source[close + 1] !== '(') return null;
-    const end = findClosingMarker(source, ')', close + 2);
-    if (end === -1) return null;
-    const url = source.slice(close + 2, end).trim();
-    return url ? { text: source.slice(i + 1, close), url, end: end + 1 } : null;
-  }
-
-  if (source[i] === '<') {
-    const m = /^<([a-z][a-z0-9+.-]{1,31}:[^\s<>]*)>/i.exec(source.slice(i));
-    return m ? { text: m[1], url: m[1], end: i + m[0].length } : null;
-  }
-
-  // A bare URL starts at a word boundary, like GFM's extended autolinks
-  if (!/[hw]/i.test(source[i])) return null;
-  if (i > 0 && !/[\s*_~(]/.test(source[i - 1])) return null;
-  const m = /^(?:https?:\/\/|www\.)[^\s<]+/i.exec(source.slice(i));
-  if (!m) return null;
-  let url = m[0].replace(/[?!.,:*_~'"]+$/, '');
-  // Drop trailing ')' that close a paren opened before the URL, not inside it
-  while (url.endsWith(')') && url.split('(').length < url.split(')').length) {
-    url = url.slice(0, -1).replace(/[?!.,:*_~'"]+$/, '');
-  }
-  if (/^www\.$/i.test(url) || /:\/\/$/.test(url)) return null;
-  return { text: url, url, end: i + url.length };
-}
-
-/** Render the small inline-Markdown subset supported by table live preview. */
-function renderInlineCell(el: HTMLElement, source: string): void {
-  el.replaceChildren();
-  let text = '';
-  const flushText = () => {
-    if (!text) return;
-    el.appendChild(document.createTextNode(text));
-    text = '';
-  };
-
-  for (let i = 0; i < source.length;) {
-    if (source[i] === '\\' && i + 1 < source.length) {
-      text += source[i + 1];
-      i += 2;
-      continue;
+    case 'InlineCode': {
+      const code = document.createElement('code');
+      const marks = node.getChildren('CodeMark');
+      code.textContent = unescapeFromCell(
+        source.slice(marks[0]?.to ?? node.from, marks[1]?.from ?? node.to),
+      );
+      target.appendChild(code);
+      return;
     }
-
-    const link = matchLinkAt(source, i);
-    if (link) {
-      flushText();
-      const a = createLinkElement(unescapeFromCell(link.text), unescapeFromCell(link.url));
+    case 'Link':
+    case 'Autolink':
+    case 'URL': {
+      const urlNode = node.name === 'URL' ? node : node.getChild('URL');
+      if (!urlNode) break; // reference-style [text][ref]: no URL to open
+      // The destination of [text](<url>) keeps its angle brackets in the URL node
+      const url = unescapeFromCell(source.slice(urlNode.from, urlNode.to).replace(/^<(.*)>$/, '$1'));
+      const label = document.createDocumentFragment();
+      if (node.name === 'Link') {
+        const marks = node.getChildren('LinkMark');
+        renderInlineRange(label, source, node, marks[0]?.to ?? node.from, marks[1]?.from ?? node.to);
+      } else {
+        label.appendChild(document.createTextNode(url));
+      }
+      const link = createLinkElement(label, url);
       // Keep the press from focusing the cell, which would swap the rendered
       // cell for its Markdown source before the click reaches the link.
-      a.addEventListener('mousedown', e => e.preventDefault());
-      el.appendChild(a);
-      i = link.end;
-      continue;
+      link.addEventListener('mousedown', e => e.preventDefault());
+      target.appendChild(link);
+      return;
     }
-
-    const marker = source.startsWith('**', i)
-      ? '**'
-      : source.startsWith('__', i)
-        ? '__'
-        : source[i] === '*' || source[i] === '_' || source[i] === '`'
-          ? source[i]
-          : null;
-    if (marker) {
-      const close = findClosingMarker(source, marker, i + marker.length);
-      if (close > i + marker.length) {
-        flushText();
-        const mark = document.createElement(
-          marker === '**' || marker === '__' ? 'strong' : marker === '`' ? 'code' : 'em',
-        );
-        const inner = source.slice(i + marker.length, close);
-        if (marker === '`') mark.textContent = unescapeFromCell(inner);
-        else renderInlineCell(mark, inner);
-        el.appendChild(mark);
-        i = close + marker.length;
-        continue;
-      }
-    }
-
-    text += source[i];
-    i++;
   }
-  flushText();
+  // Anything else (strikethrough, images, HTML, ...) shows its source text,
+  // with the inline nodes inside it still rendered.
+  renderInlineRange(target, source, node, node.from, node.to);
+}
+
+/** Render a cell's inline Markdown: emphasis, code and links. */
+function renderInlineCell(el: HTMLElement, source: string): void {
+  el.replaceChildren();
+  const paragraph = cellParser.parse(source).topNode.firstChild;
+  if (!paragraph) {
+    el.textContent = source;
+    return;
+  }
+  renderInlineRange(el, source, paragraph, 0, source.length);
 }
 
 function updateCellDisplay(el: HTMLElement, markdown: string): void {

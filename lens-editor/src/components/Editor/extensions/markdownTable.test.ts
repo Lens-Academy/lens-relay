@@ -159,10 +159,47 @@ describe('markdownTable - rendering', () => {
     link.dispatchEvent(press);
     expect(press.defaultPrevented).toBe(true);
     link.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(open).toHaveBeenCalledWith('https://lensacademy.org', '_blank');
+    expect(open).toHaveBeenCalledWith('https://lensacademy.org', '_blank', 'noopener,noreferrer');
     www.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    expect(open).toHaveBeenCalledWith('https://www.example.org', '_blank');
+    expect(open).toHaveBeenCalledWith('https://www.example.org', '_blank', 'noopener,noreferrer');
     open.mockRestore();
+  });
+
+  it('follows GFM for parens, titles, <destinations> and formatted labels', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const content = [
+      '| A |',
+      '| - |',
+      '| [w](https://en.wikipedia.org/wiki/Foo_(bar)) |',
+      '| [t](https://example.com/t "Title") |',
+      '| [a](<https://example.com/a>) |',
+      '| [**b**](https://example.com/b) |',
+      '',
+      'end',
+    ].join('\n');
+    view = createEditor(content, content.indexOf('end'));
+
+    const links = Array.from(view.contentDOM.querySelectorAll('.cm-md-table td .cm-link-widget')) as HTMLElement[];
+    expect(links.map(a => a.textContent)).toEqual(['w', 't', 'a', 'b']);
+    expect(links[3].querySelector('strong')?.textContent).toBe('b');
+    for (const a of links) a.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(open.mock.calls.map(c => c[0])).toEqual([
+      'https://en.wikipedia.org/wiki/Foo_(bar)',
+      'https://example.com/t',
+      'https://example.com/a',
+      'https://example.com/b',
+    ]);
+    open.mockRestore();
+  });
+
+  it('opens http(s) and mailto links but shows other schemes as plain text', () => {
+    const content = '| A |\n| - |\n| <mailto:a@b.com> [x](javascript:alert(1)) <javascript:alert(1)> |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector('.cm-md-table td')!;
+    const links = Array.from(td.querySelectorAll('.cm-link-widget'));
+    expect(links.map(a => a.textContent)).toEqual(['mailto:a@b.com']);
+    expect(td.textContent).toBe('mailto:a@b.com x javascript:alert(1)');
   });
 
   it('does not treat wikilinks or mid-word text as links', () => {
