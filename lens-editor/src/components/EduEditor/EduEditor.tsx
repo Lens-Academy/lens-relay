@@ -23,6 +23,7 @@ import { useScrollSource } from '../Comments/useScrollSource';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
 import { resolveAnchorYFromSectionViews, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import type { SectionViewEntry } from '../../lib/anchor-resolver';
+import { OutOfDateBanner } from './OutOfDateBanner';
 
 const SUGGESTION_MODE_KEY = 'edu-editor:suggestion-mode';
 const COMMENTS_VISIBLE_KEY = 'edu-editor:comments-visible';
@@ -306,10 +307,15 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
           rootIndex: scope.kind === 'subtree' ? scope.rootSectionIndex : undefined,
         };
 
+  const outOfDateBanner = <OutOfDateBanner shortDocUuid={moduleDocId.slice(RELAY_ID.length + 1, RELAY_ID.length + 9)} />;
+
   if (!synced) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-400 text-sm">
-        Connecting...
+      <div className="h-full flex flex-col">
+        {outOfDateBanner}
+        <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+          Connecting...
+        </div>
       </div>
     );
   }
@@ -352,6 +358,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
         ),
         portalTarget
       )}
+      {outOfDateBanner}
       <div className="flex-1 flex overflow-hidden">
         <div className="w-[420px] min-w-[420px] border-r-2 border-gray-200 bg-[#fbfaf7] overflow-y-auto p-4">
           {isCourseMode ? (
