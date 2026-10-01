@@ -44,7 +44,7 @@ function originalRange(label: string, from: number, to: number): [number, number
     if (startsChar) {
       if (n === from) start = i;
       if (n === to) return [start, i];
-      n++;
+      n += separator ? 1 : ch.length; // offsets are UTF-16 units, like indexOf's
     }
     i += ch.length;
   }

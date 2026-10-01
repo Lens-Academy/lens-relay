@@ -148,6 +148,7 @@ describe('wikilinkAutocomplete', () => {
     expect(range('articles/what--cognitive-biases', 'what cognitive')).toEqual([9, 24]);
     expect(range('a/__x', ' x')).toEqual([2, 5]);
     expect(range('İntro-x', 'x')).toEqual([6, 7]);
+    expect(range('🙂 notes', 'notes')).toEqual([3, 8]);
     expect(matchLabel('Notes', 'zzz')).toBeNull();
   });
 
