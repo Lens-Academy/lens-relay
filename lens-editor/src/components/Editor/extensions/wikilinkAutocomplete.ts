@@ -8,33 +8,81 @@ const SEPARATOR = /[\s_-]/;
 
 /**
  * Lowercase and treat every run of spaces, dashes and underscores as one
- * space, so "what cognitive" finds "what-cognitive-biases". `starts[i]` is
- * the index in `text` where normalised character i came from, for highlighting.
+ * space, so "what cognitive" finds "what-cognitive-biases".
  */
-export function normalizeForSearch(text: string): { text: string; starts: number[] } {
+export function normalizeForSearch(text: string): string {
+  const lower = text.toLowerCase();
+  // Fast path; the slow one keeps offsets when lowercasing changes length.
+  if (lower.length === text.length) return lower.replace(/[\s_-]+/g, ' ');
   let out = '';
-  const starts: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    if (SEPARATOR.test(text[i])) {
-      if (out.endsWith(' ')) continue;
-      out += ' ';
+  for (const ch of text) {
+    if (SEPARATOR.test(ch)) {
+      if (!out.endsWith(' ')) out += ' ';
     } else {
-      out += text[i].toLowerCase();
+      out += lowerChar(ch);
     }
-    starts.push(i);
   }
-  return { text: out, starts };
+  return out;
 }
 
-/** Range in `label` (as [from, to] pairs) covered by the normalised `query`, or null. */
-export function matchLabel(label: string, query: string): number[] | null {
-  const q = normalizeForSearch(query).text;
-  if (!q) return [];
-  const { text, starts } = normalizeForSearch(label);
-  const at = text.indexOf(q);
+// One char in, one char out, so normalised offsets map back to the label
+// (a few characters, such as İ, lowercase to two code units).
+function lowerChar(ch: string): string {
+  const lower = ch.toLowerCase();
+  return lower.length === ch.length ? lower : ch;
+}
+
+/** Map a [from, to) range in normalizeForSearch(label) back to label offsets. */
+function originalRange(label: string, from: number, to: number): [number, number] {
+  let n = 0;
+  let start = label.length;
+  let i = 0;
+  for (const ch of label) {
+    const separator = SEPARATOR.test(ch);
+    // A run of separators is one normalised space, emitted by its first char.
+    const startsChar = !separator || i === 0 || !SEPARATOR.test(label[i - 1]);
+    if (startsChar) {
+      if (n === from) start = i;
+      if (n === to) return [start, i];
+      n++;
+    }
+    i += ch.length;
+  }
+  return [start, label.length];
+}
+
+/**
+ * How well `label` matches the normalised query, lower is better, or null:
+ * 0 file name equals the query, 1 file name starts with it, 2 it starts a
+ * word, 3 anywhere. `range` is the match in label offsets, for highlighting.
+ */
+export function matchLabel(
+  label: string,
+  normalizedQuery: string,
+  text = normalizeForSearch(label),
+): { rank: number; range: [number, number] } | null {
+  if (!normalizedQuery) return { rank: 3, range: [0, 0] };
+  const baseStart = text.lastIndexOf('/') + 1;
+  let at = text.indexOf(normalizedQuery, baseStart);
+  if (at < 0) at = text.indexOf(normalizedQuery);
   if (at < 0) return null;
-  const end = at + q.length;
-  return [starts[at], end < starts.length ? starts[end] : label.length];
+  // Prefer an occurrence that starts a word.
+  for (let i = at; i !== -1; i = text.indexOf(normalizedQuery, i + 1)) {
+    if (i === 0 || text[i - 1] === ' ' || text[i - 1] === '/') {
+      at = i;
+      break;
+    }
+  }
+  let rank = 3;
+  if (at === baseStart && text.length - baseStart === normalizedQuery.length) rank = 0;
+  else if (at === baseStart) rank = 1;
+  else if (at === 0 || text[at - 1] === ' ' || text[at - 1] === '/') rank = 2;
+  return { rank, range: originalRange(label, at, at + normalizedQuery.length) };
+}
+
+interface WikilinkOption extends Completion {
+  rank: number;
+  range: [number, number];
 }
 
 /**
@@ -45,14 +93,31 @@ export function createWikilinkCompletionSource(
   getMetadata: () => FolderMetadata | null,
   getCurrentFilePath: () => string | null = () => null,
 ) {
+  // Link text and its normalised form per file, rebuilt only when the
+  // metadata or the current file changes (the source runs on every keystroke).
+  let cache: { metadata: FolderMetadata; currentFilePath: string | null; names: { name: string; text: string }[] } | null = null;
+  const namesFor = (metadata: FolderMetadata, currentFilePath: string | null) => {
+    if (cache?.metadata !== metadata || cache.currentFilePath !== currentFilePath) {
+      const names: { name: string; text: string }[] = [];
+      for (const [path, meta] of Object.entries(metadata)) {
+        if (meta.type !== 'markdown') continue;
+        const name = currentFilePath
+          ? computeRelativePath(currentFilePath, path)
+          : path.slice(1).replace(/\.md$/i, ''); // absolute without leading /
+        names.push({ name, text: normalizeForSearch(name) });
+      }
+      cache = { metadata, currentFilePath, names };
+    }
+    return cache.names;
+  };
+
   return (context: CompletionContext): CompletionResult | null => {
     // Match [[ followed by any non-] characters
     const before = context.matchBefore(/\[\[[^\]]*$/);
     if (!before) return null;
 
     // Extract the query (text after [[)
-    const query = before.text.slice(2);
-    const normalizedQuery = normalizeForSearch(query).text;
+    const normalizedQuery = normalizeForSearch(before.text.slice(2));
 
     // Get current metadata
     const metadata = getMetadata();
@@ -65,17 +130,11 @@ export function createWikilinkCompletionSource(
     const currentFilePath = getCurrentFilePath();
 
     // Build document options from metadata
-    const options: { label: string; apply: string | ((view: EditorView, completion: Completion, from: number, to: number) => void); boost?: number; match: number[] }[] = [];
+    const options: WikilinkOption[] = [];
 
-    for (const [path, meta] of Object.entries(metadata)) {
-      if (meta.type !== 'markdown') continue;
-
-      const name = currentFilePath
-        ? computeRelativePath(currentFilePath, path)
-        : path.slice(1).replace(/\.md$/i, ''); // absolute without leading /
-
+    for (const { name, text } of namesFor(metadata, currentFilePath)) {
       // Filter by query, ignoring case and the difference between spaces, dashes and underscores
-      const match = matchLabel(name, query);
+      const match = matchLabel(name, normalizedQuery, text);
       if (!match) continue;
 
       options.push({
@@ -89,19 +148,15 @@ export function createWikilinkCompletionSource(
               });
             }
           : `${name}]]`,
-        // Boost exact prefix matches
-        boost: normalizeForSearch(name).text.startsWith(normalizedQuery) ? 1 : 0,
-        match,
+        rank: match.rank,
+        range: match.range,
       });
     }
 
-    // Sort alphabetically, with boosted items first
-    options.sort((a, b) => {
-      if ((b.boost || 0) !== (a.boost || 0)) {
-        return (b.boost || 0) - (a.boost || 0);
-      }
-      return a.label.localeCompare(b.label);
-    });
+    // Best match first (see matchLabel), then shorter paths, then alphabetical
+    options.sort((a, b) =>
+      a.rank - b.rank || a.label.length - b.label.length || a.label.localeCompare(b.label),
+    );
 
     // Start from after [[ (position where query begins)
     const fromPos = before.from + 2;
@@ -112,7 +167,10 @@ export function createWikilinkCompletionSource(
       // "what cognitive" against "what-cognitive-biases". Without validFor the
       // source runs again on every keystroke.
       filter: false,
-      getMatch: (completion) => (completion as Completion & { match?: number[] }).match ?? [],
+      getMatch: (completion) => {
+        const [from, to] = (completion as WikilinkOption).range;
+        return from < to ? [from, to] : [];
+      },
     };
   };
 }

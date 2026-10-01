@@ -8,7 +8,7 @@ import {
   completionStatus,
 } from '@codemirror/autocomplete';
 import { markdown } from '@codemirror/lang-markdown';
-import { createWikilinkCompletionSource, matchLabel, wikilinkAutocomplete } from './wikilinkAutocomplete';
+import { createWikilinkCompletionSource, matchLabel, normalizeForSearch, wikilinkAutocomplete } from './wikilinkAutocomplete';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 
 const testMetadata: FolderMetadata = {
@@ -134,8 +134,8 @@ describe('wikilinkAutocomplete', () => {
     const labels = (q: string) => getCompletions(`[[${q}`, q.length + 2, metadata)!.options.map(o => o.label);
 
     expect(labels('what cognitive biases')).toEqual([
-      'articles/what_cognitive_biases_2',
       'articles/what-cognitive-biases',
+      'articles/what_cognitive_biases_2',
     ]);
     expect(labels('cognitive-load')).toEqual(['articles/Cognitive Load']);
     expect(labels('WHAT__COGNITIVE')).toHaveLength(2);
@@ -144,9 +144,33 @@ describe('wikilinkAutocomplete', () => {
 
   // Prevents: highlighting the wrong characters once separators collapse
   it('highlights the matched range of the original label', () => {
-    expect(matchLabel('articles/what--cognitive-biases', 'what cognitive')).toEqual([9, 24]);
+    const range = (label: string, q: string) => matchLabel(label, normalizeForSearch(q))?.range;
+    expect(range('articles/what--cognitive-biases', 'what cognitive')).toEqual([9, 24]);
+    expect(range('a/__x', ' x')).toEqual([2, 5]);
+    expect(range('İntro-x', 'x')).toEqual([6, 7]);
     expect(matchLabel('Notes', 'zzz')).toBeNull();
-    expect(matchLabel('Notes', '')).toEqual([]);
+  });
+
+  // Prevents: an exact file name in a folder sinking below loose matches
+  // (and out of the 20 shown) because only whole-path prefixes were boosted
+  it('ranks by file name, then word start, then shorter path', () => {
+    const metadata: FolderMetadata = {
+      '/aaa/intro-extra.md': { id: '1', type: 'markdown', version: 0 },
+      '/articles/an-introduction.md': { id: '2', type: 'markdown', version: 0 },
+      '/articles/intro.md': { id: '3', type: 'markdown', version: 0 },
+      '/Intro.md': { id: '4', type: 'markdown', version: 0 },
+      '/articles/reintroduce.md': { id: '5', type: 'markdown', version: 0 },
+      '/intro/notes.md': { id: '6', type: 'markdown', version: 0 },
+    };
+    const labels = getCompletions('[[intro', 7, metadata)!.options.map(o => o.label);
+    expect(labels).toEqual([
+      'Intro',
+      'articles/intro',
+      'aaa/intro-extra',
+      'intro/notes',
+      'articles/an-introduction',
+      'articles/reintroduce',
+    ]);
   });
 
   it('returns null when metadata is null', () => {
