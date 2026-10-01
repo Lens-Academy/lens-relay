@@ -9425,7 +9425,11 @@ mod test {
         extra: &[(&str, &str, &str)],
     ) -> String {
         let mut entries = vec![
-            ("/video_transcripts", "f0000000-0000-4000-8000-000000000001", "folder"),
+            (
+                "/video_transcripts",
+                "f0000000-0000-4000-8000-000000000001",
+                "folder",
+            ),
             ("/video_transcripts/talk.md", TRANSCRIPT_UUID, "markdown"),
             (
                 "/video_transcripts/talk.timestamps.json",
@@ -9470,7 +9474,11 @@ mod test {
             .unwrap();
 
         assert_eq!(result.new_path, "/archive/renamed-talk.md");
-        assert!(filemeta_has(&server, &folder_doc_id, "/archive/renamed-talk.md"));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/archive/renamed-talk.md"
+        ));
         assert!(filemeta_has(
             &server,
             &folder_doc_id,
@@ -9482,8 +9490,12 @@ mod test {
             "/video_transcripts/talk.timestamps.json"
         ));
         assert_eq!(
-            filemeta_id(&server, &folder_doc_id, "/archive/renamed-talk.timestamps.json")
-                .as_deref(),
+            filemeta_id(
+                &server,
+                &folder_doc_id,
+                "/archive/renamed-talk.timestamps.json"
+            )
+            .as_deref(),
             Some(SIDECAR_UUID)
         );
     }
@@ -9534,11 +9546,19 @@ mod test {
         .await;
 
         let result = server
-            .move_path("Relay Folder 1/video_transcripts/talk.md", "/other.md", None)
+            .move_path(
+                "Relay Folder 1/video_transcripts/talk.md",
+                "/other.md",
+                None,
+            )
             .await;
 
         assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
-        assert!(filemeta_has(&server, &folder_doc_id, "/video_transcripts/talk.md"));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/video_transcripts/talk.md"
+        ));
         assert!(!filemeta_has(&server, &folder_doc_id, "/other.md"));
         assert_eq!(
             filemeta_id(&server, &folder_doc_id, "/other.timestamps.json").as_deref(),
@@ -9558,7 +9578,11 @@ mod test {
             .await
             .unwrap();
 
-        assert!(filemeta_has(&server, &folder_doc_id, "/transcripts/talk.md"));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/transcripts/talk.md"
+        ));
         assert!(filemeta_has(
             &server,
             &folder_doc_id,
