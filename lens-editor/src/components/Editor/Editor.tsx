@@ -166,8 +166,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
       return;
     }
     // Clamp to the viewport: the popover is position:fixed, so an offscreen
-    // anchor (paste at the bottom edge) would make it unreachable.
-    const x = Math.max(8, Math.min(coords.left, window.innerWidth - 360));
+    // anchor (paste at the bottom edge) would make it unreachable. The right
+    // edge is clamped once the popover's width is known (useLayoutEffect below).
+    const x = Math.max(8, coords.left);
     const y = Math.max(8, Math.min(coords.bottom + 6, window.innerHeight - 48));
     setPastePrompt({ pasteId: paste.pasteId, x, y });
     if (pastePromptTimer.current) clearTimeout(pastePromptTimer.current);
