@@ -273,6 +273,29 @@ describe('livePreview - wikilinks', () => {
     expect(widgets[0].textContent).toBe('My Page');
   });
 
+  it('widget displays the alias of [[target|alias]] and navigates to the target', () => {
+    const onClick = vi.fn();
+    const content = '[[My Page#Heading|the alias]] end';
+    const { view, cleanup: c } = createTestEditor(content, content.length, {
+      onClick,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget.textContent).toBe('the alias');
+    widget.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onClick).toHaveBeenCalledWith('My Page#Heading');
+  });
+
+  it('widget falls back to the target when the alias is empty', () => {
+    const content = '[[My Page|]] end';
+    const { view, cleanup: c } = createTestEditor(content, content.length, createRealContext());
+    cleanup = c;
+
+    expect(view.contentDOM.querySelector('.cm-wikilink-widget')?.textContent).toBe('My Page');
+  });
+
   it('marks unresolved links with unresolved class', () => {
     const content = '[[NonExistent]] more text';
 
