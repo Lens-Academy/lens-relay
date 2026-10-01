@@ -151,11 +151,18 @@ const LTX_FONT_TAGS: [string, string, string][] = [
 const LTX_BLOCK_CONTENT =
   ".ltx_para, p, div, table, pre, ul, ol, li, dl, blockquote, figure, section, h1, h2, h3, h4, h5, h6";
 
+/** Text of an inline neighbour; a footnote mark (`<sup>`, LaTeXML note) is not part of the word. */
+function neighbourText(node: ChildNode | null): string {
+  const el = node as Element | null;
+  if (el?.nodeName === "SUP" || el?.classList?.contains("ltx_note")) return "";
+  return node?.textContent || "";
+}
+
 /** Whether `el` sits inside a word: a letter or digit directly touching its text on either side. */
 export function isIntraWord(el: Element): boolean {
   const text = el.textContent || "";
-  const before = el.previousSibling?.textContent || "";
-  const after = el.nextSibling?.textContent || "";
+  const before = neighbourText(el.previousSibling);
+  const after = neighbourText(el.nextSibling);
   return (
     (/^\S/.test(text) && /[\p{L}\p{N}]$/u.test(before)) ||
     (/\S$/.test(text) && /^[\p{L}\p{N}]/u.test(after))
@@ -179,10 +186,11 @@ function convertLtxFontSpans(root: Element): void {
       if (span.parentElement?.closest(same)) continue;
       if (span.querySelector(LTX_BLOCK_CONTENT)) continue;
       if (tag === "em" && isIntraWord(span)) continue;
+      // Wrap the contents rather than replace the span, so a span that is
+      // bold AND italic still gets its <em> in the italic pass.
       const el = doc.createElement(tag);
-      if (span.id) el.id = span.id;
       el.append(...span.childNodes);
-      span.replaceWith(el);
+      span.append(el);
     }
   }
 }
