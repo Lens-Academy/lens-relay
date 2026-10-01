@@ -513,7 +513,7 @@ export async function extractArticle(
   const fetchText = opts.fetchText ?? fetchRawHtml;
   // Margin sidenotes live outside the article container that content selection
   // keeps; move them into it as footnotes first.
-  html = convertSidenotes(html, url);
+  html = convertSidenotes(html);
   // Deterministic seed metadata (og/meta/JSON-LD) — also gives description+siteName.
   const htmlMeta = extractHtmlMeta(html);
   const ctx = adapterContext(url, html);

@@ -13,9 +13,9 @@ import { JSDOM } from "jsdom";
  *
  * Returns the HTML unchanged when the page has no paired sidenotes.
  */
-export function convertSidenotes(html: string, url: string): string {
+export function convertSidenotes(html: string): string {
   if (!html.includes("data-sidenote-number")) return html;
-  const dom = new JSDOM(html, { url });
+  const dom = new JSDOM(html);
   const doc = dom.window.document;
 
   const pairs: { marker: Element; note: Element; n: string }[] = [];
@@ -23,13 +23,18 @@ export function convertSidenotes(html: string, url: string): string {
     const n = (marker.getAttribute("data-sidenote-number") || "").trim();
     if (!/^\d+$/.test(n)) continue;
     const note = doc.getElementById(`footnote-${n}`);
-    if (note) pairs.push({ marker, note, n });
+    if (note && isSidenoteBody(note)) pairs.push({ marker, note, n });
   }
   if (pairs.length === 0) return html;
 
+  // A page can also have ordinary footnotes; number the sidenotes after them
+  // so no `fn-N` id or marker number is claimed twice.
+  const offset = highestFootnoteNumber(doc);
   const container = commonAncestor(pairs.map((p) => p.marker));
   const list = doc.createElement("ol");
+  const added = new Set<string>();
   for (const { marker, note, n } of pairs) {
+    const num = String(Number(n) + offset);
     // The checkbox that toggles the note on narrow screens is UI, not text.
     const toggleId = marker.getAttribute("for");
     if (toggleId) doc.getElementById(toggleId)?.remove();
@@ -37,17 +42,20 @@ export function convertSidenotes(html: string, url: string): string {
     const sup = doc.createElement("sup");
     sup.className = "footnote-ref";
     const a = doc.createElement("a");
-    a.setAttribute("href", `#fn-${n}`);
-    a.setAttribute("data-footnote-ref", n);
-    a.textContent = n;
+    a.setAttribute("href", `#fn-${num}`);
+    a.setAttribute("data-footnote-ref", num);
+    a.textContent = num;
     sup.appendChild(a);
     marker.replaceWith(sup);
 
+    // A note cited twice is listed once.
+    if (added.has(n)) continue;
+    added.add(n);
     // The note opens with its own number ("8."), which the [^N]: label replaces.
     const first = note.firstElementChild;
     if (first?.tagName === "SPAN" && first.textContent?.trim() === `${n}.`) first.remove();
     const li = doc.createElement("li");
-    li.id = `fn-${n}`;
+    li.id = `fn-${num}`;
     li.append(...Array.from(note.childNodes));
     list.appendChild(li);
     note.remove();
@@ -59,6 +67,31 @@ export function convertSidenotes(html: string, url: string): string {
   container.appendChild(section);
 
   return dom.serialize();
+}
+
+/** A margin note is a block of its own. Other sites reuse the id
+ *  `footnote-N` for a link or a span inside ordinary text or footnotes
+ *  (Substack puts it on the note's number link). */
+function isSidenoteBody(el: Element): boolean {
+  return !["A", "SPAN", "SUP", "LI", "P"].includes(el.tagName) && !el.closest("p, li, a");
+}
+
+/** The highest number used by the page's ordinary footnotes (0 if none):
+ *  numeric definition ids (`fn-3`, `fn:3`, `user-content-fn-3`) and the
+ *  numbers shown by `#fn…` reference links. */
+function highestFootnoteNumber(doc: Document): number {
+  let max = 0;
+  const note = (v: string | null | undefined) => {
+    const m = (v || "").trim().match(/^\[?(\d+)\]?$/);
+    if (m) max = Math.max(max, Number(m[1]));
+  };
+  for (const el of Array.from(doc.querySelectorAll("[id]"))) {
+    note(el.id.match(/^(?:user-content-)?fn[-:]?(\d+)$/i)?.[1]);
+  }
+  for (const a of Array.from(doc.querySelectorAll('a[href^="#fn"]'))) {
+    if (!/^#fn-?ref/i.test(a.getAttribute("href") || "")) note(a.textContent);
+  }
+  return max;
 }
 
 const SECTION_CONTAINERS = new Set(["DIV", "SECTION", "ARTICLE", "MAIN", "BODY"]);

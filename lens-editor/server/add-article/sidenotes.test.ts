@@ -50,7 +50,7 @@ describe("convertSidenotes", () => {
 
   it("leaves pages without sidenotes byte-identical", () => {
     const html = "<html><body><p>No notes here.</p></body></html>";
-    expect(convertSidenotes(html, SOURCE_URL)).toBe(html);
+    expect(convertSidenotes(html)).toBe(html);
   });
 
   it("moves each note next to the text as a footnote and drops its toggle", () => {
@@ -59,7 +59,6 @@ describe("convertSidenotes", () => {
         `<p>Claim,<label for="sn-1" data-sidenote-number="1"></label><input type="checkbox" id="sn-1"> more.</p>`,
         `<div id="footnote-1"><span>1<!-- -->.</span><p>See <a href="/x">this</a>.</p></div>`,
       ),
-      SOURCE_URL,
     );
     expect(out).toContain(
       '<p>Claim,<sup class="footnote-ref"><a href="#fn-1" data-footnote-ref="1">1</a></sup> more.</p>' +
@@ -69,8 +68,48 @@ describe("convertSidenotes", () => {
     expect(out).not.toContain('id="footnote-1"');
   });
 
+  const article = (inner: string, margin = "") =>
+    `<html><head><title>T</title></head><body><main><article><h1>T</h1>${inner}</article></main><aside>${margin}</aside></body></html>`;
+  const prose = "Body prose that is long enough to count as an article for the extractors. ".repeat(20);
+  const pairs = (md: string) => ({
+    refs: references(md),
+    defs: footnoteDefinitionBlocks(md).map((d) => d.replace(/\s+/g, " ")),
+  });
+
+  it("numbers sidenotes after a page's ordinary footnotes so none collide", async () => {
+    const html = article(
+      `<p>${prose}Ordinary<sup><a href="#fn-1" id="fnref-1" data-footnote-ref>1</a></sup> claim A,` +
+        `<label for="sn-1" data-sidenote-number="1"></label><input type="checkbox" id="sn-1"> claim B` +
+        `<label for="sn-2" data-sidenote-number="2"></label><input type="checkbox" id="sn-2">.</p><p>${prose}</p>` +
+        `<section data-footnotes class="footnotes"><ol><li id="fn-1"><p>Ordinary note.</p></li></ol></section>`,
+      `<div id="footnote-1"><span>1.</span><p>Side note A.</p></div><div id="footnote-2"><span>2.</span><p>Side note B.</p></div>`,
+    );
+    const { body } = await extractArticle(html, SOURCE_URL, { fetchText: offline });
+    expect(pairs(body)).toEqual({
+      refs: ["1", "2", "3"],
+      defs: ["[^1]: Ordinary note.", "[^2]: Side note A.", "[^3]: Side note B."],
+    });
+  });
+
+  it("points a repeated marker at the same note", async () => {
+    const html = article(
+      `<p>${prose}First<label data-sidenote-number="1"></label> and again<label data-sidenote-number="1"></label>.</p><p>${prose}</p>`,
+      `<div id="footnote-1"><span>1.</span><p>The only note.</p></div>`,
+    );
+    const { body } = await extractArticle(html, SOURCE_URL, { fetchText: offline });
+    expect(pairs(body)).toEqual({ refs: ["1", "1"], defs: ["[^1]: The only note."] });
+  });
+
+  it("ignores a #footnote-N that is not a margin note (Substack's number link)", () => {
+    const html = page(
+      `<p>Claim<label data-sidenote-number="1"></label></p>`,
+      `<div class="footnote"><a class="footnote-number" id="footnote-1" href="#footnote-anchor-1">1</a><p>Note.</p></div>`,
+    );
+    expect(convertSidenotes(html)).toBe(html);
+  });
+
   it("keeps a marker whose note is missing untouched", () => {
     const html = page(`<p>Claim<label for="sn-2" data-sidenote-number="2"></label></p>`, "");
-    expect(convertSidenotes(html, SOURCE_URL)).toBe(html);
+    expect(convertSidenotes(html)).toBe(html);
   });
 });
