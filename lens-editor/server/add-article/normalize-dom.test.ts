@@ -168,6 +168,49 @@ describe("normalizeArticleDom — footnotes", () => {
   });
 });
 
+describe("normalizeArticleDom — LaTeXML font spans", () => {
+  // Prevents: arXiv bold/italic (`span.ltx_font_bold`) imported as plain text.
+  it("rewrites bold and italic spans as <strong> and <em>", () => {
+    const body = normalize(
+      `<p class="ltx_p"><span id="x1" class="ltx_text ltx_font_bold">Code generation</span>: ask <span class="ltx_text ltx_font_italic">U</span>.</p>`,
+    );
+    expect(body.innerHTML).toBe(
+      `<p class="ltx_p"><span id="x1" class="ltx_text ltx_font_bold"><strong>Code generation</strong></span>: ask <span class="ltx_text ltx_font_italic"><em>U</em></span>.</p>`,
+    );
+  });
+
+  it("keeps both when a span is bold and italic", () => {
+    const body = normalize(`<p><span class="ltx_text ltx_font_bold ltx_font_italic">x</span></p>`);
+    expect(body.querySelector("em strong, strong em")?.textContent).toBe("x");
+  });
+
+  it("does not count a footnote mark as part of the word", () => {
+    const body = normalize(
+      `<p><span class="ltx_text ltx_font_italic">Nature</span><sup class="ltx_note_mark">1</sup> says</p>`,
+    );
+    expect(body.querySelector("em")?.textContent).toBe("Nature");
+  });
+
+  it("leaves headings, nested bold and block-holding spans alone", () => {
+    const body = normalize(
+      `<h2 class="ltx_title"><span class="ltx_text ltx_font_bold">Results</span></h2>` +
+        `<p><strong>A <span class="ltx_text ltx_font_bold">B</span></strong></p>` +
+        `<span class="ltx_text ltx_font_bold"><span class="ltx_para">P</span></span>` +
+        `<span class="ltx_text ltx_font_bold"><blockquote class="ltx_quote">Q</blockquote></span>`,
+    );
+    expect(body.querySelectorAll("strong").length).toBe(1); // only the source's own <strong>
+  });
+
+  // `Foo_bar_baz` renders literal underscores, so mid-word italic stays plain.
+  it("leaves italic inside a word as plain text", () => {
+    const body = normalize(
+      `<p>Foo<span class="ltx_text ltx_font_italic">bar</span>baz and <span class="ltx_text ltx_font_italic">qux</span>.</p>`,
+    );
+    expect(body.querySelectorAll("em").length).toBe(1);
+    expect(body.querySelector("em")?.textContent).toBe("qux");
+  });
+});
+
 describe("normalizeArticleDom — links", () => {
   it("absolutizes relative hrefs against the base URL", () => {
     const body = normalize(`<p><a href="/posts/xyz/other">other</a></p>`);

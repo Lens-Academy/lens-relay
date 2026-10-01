@@ -32,6 +32,11 @@
  *  5. LaTeXML author-year citations. For some natbib styles arXiv HTML puts a
  *     stray comma into every citation ("(Shlegeris,, 2023)", "Greenblatt et
  *     al., (2024)"), where the PDF is correct. Repair the citation text.
+ *
+ *  6. LaTeXML font spans. arXiv HTML marks bold and italic as
+ *     `<span class="ltx_font_bold">` / `ltx_font_italic`, which turndown treats
+ *     as plain text, so all of it was lost (in tables too, e.g. the best value
+ *     a caption says is "in bold"). Rewrite them as <strong> / <em>.
  */
 
 /** Drop leading blank lines and trailing whitespace, keeping the first line's indent. */
@@ -134,6 +139,58 @@ function repairLtxCitations(root: Element): void {
         last.textContent = last.textContent.replace(pattern, replacement);
         break;
       }
+    }
+  }
+}
+
+const LTX_FONT_TAGS: [string, string, string][] = [
+  ["ltx_font_bold", "strong", "strong, b"],
+  ["ltx_font_italic", "em", "em, i"],
+];
+
+const LTX_BLOCK_CONTENT =
+  ".ltx_para, p, div, table, pre, ul, ol, li, dl, blockquote, figure, section, h1, h2, h3, h4, h5, h6";
+
+/** Text of an inline neighbour; a footnote mark (`<sup>`, LaTeXML note) is not part of the word. */
+function neighbourText(node: ChildNode | null): string {
+  const el = node as Element | null;
+  if (el?.nodeName === "SUP" || el?.classList?.contains("ltx_note")) return "";
+  return node?.textContent || "";
+}
+
+/** Whether `el` sits inside a word: a letter or digit directly touching its text on either side. */
+export function isIntraWord(el: Element): boolean {
+  const text = el.textContent || "";
+  const before = neighbourText(el.previousSibling);
+  const after = neighbourText(el.nextSibling);
+  return (
+    (/^\S/.test(text) && /[\p{L}\p{N}]$/u.test(before)) ||
+    (/\S$/.test(text) && /^[\p{L}\p{N}]/u.test(after))
+  );
+}
+
+/**
+ * Rewrite LaTeXML bold/italic spans as <strong>/<em> so turndown (and the
+ * fallback table cells in extract.ts) emit Markdown emphasis. Left alone:
+ * headings and titles (already bold, `## **x**` is noise), math, spans
+ * already inside the same emphasis, spans holding block content (a
+ * paragraph-spanning `**` would not parse), and italic inside a word
+ * (`Foo_bar_baz` is not emphasis in CommonMark; turndown writes `_`).
+ */
+function convertLtxFontSpans(root: Element): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+  for (const [cls, tag, same] of LTX_FONT_TAGS) {
+    for (const span of root.querySelectorAll(`span.${cls}`)) {
+      if (span.closest("h1, h2, h3, h4, h5, h6, .ltx_title, math")) continue;
+      if (span.parentElement?.closest(same)) continue;
+      if (span.querySelector(LTX_BLOCK_CONTENT)) continue;
+      if (tag === "em" && isIntraWord(span)) continue;
+      // Wrap the contents rather than replace the span, so a span that is
+      // bold AND italic still gets its <em> in the italic pass.
+      const el = doc.createElement(tag);
+      el.append(...span.childNodes);
+      span.append(el);
     }
   }
 }
@@ -529,10 +586,11 @@ function absolutizeLinks(root: Element, baseUrl: string): void {
   });
 }
 
-/** Normalize an article body DOM subtree in place (listings, citations, footnotes, links). */
+/** Normalize an article body DOM subtree in place (listings, citations, fonts, footnotes, links). */
 export function normalizeArticleDom(root: Element, baseUrl: string): void {
   convertLtxListings(root);
   repairLtxCitations(root);
+  convertLtxFontSpans(root);
   normalizeFootnotes(root);
   localizeSelfFragments(root, baseUrl);
   absolutizeLinks(root, baseUrl);
