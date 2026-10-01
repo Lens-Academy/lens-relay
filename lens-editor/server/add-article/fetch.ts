@@ -1,4 +1,4 @@
-import { assertPublicUrl } from "./ssrf";
+import { assertPublicUrl, publicOnlyDispatcher } from "./ssrf";
 import { fetchBytesWithTimeout } from "../fetch-timeout";
 
 const FETCH_TIMEOUT_MS = 30_000;
@@ -35,6 +35,8 @@ async function fetchFollowingRedirects(
       timeoutMs: FETCH_TIMEOUT_MS,
       signal,
       maxBytes,
+      // Re-checks the address at connect time (DNS rebinding).
+      dispatcher: publicOnlyDispatcher,
     });
 
     if (resp.status >= 300 && resp.status < 400) {

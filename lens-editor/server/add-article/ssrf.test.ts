@@ -1,5 +1,14 @@
+// @vitest-environment node -- real Node fetch/undici; the config's environmentMatchGlobs is ignored by vitest 4, so server tests otherwise run in happy-dom, whose fetch ignores `dispatcher`.
 import { describe, it, expect } from 'vitest';
-import { isPrivateAddress, assertPublicUrl, SsrfError } from './ssrf';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import {
+  isPrivateAddress,
+  assertPublicUrl,
+  SsrfError,
+  publicOnlyLookup,
+  publicOnlyDispatcher,
+} from './ssrf';
 
 describe('isPrivateAddress', () => {
   it('flags loopback, private, link-local, and CGNAT IPv4 ranges', () => {
@@ -69,5 +78,72 @@ describe('assertPublicUrl', () => {
   it('allows a normal public hostname', async () => {
     // example.com is a stable public IANA-reserved demo domain
     await expect(assertPublicUrl('https://example.com/article')).resolves.toBeUndefined();
+  });
+});
+
+describe('IPv4 embedded in IPv6', () => {
+  // Prevents: new URL() spelling ::ffff:127.0.0.1 as ::ffff:7f00:1 (hex),
+  // which the dotted-only check let through as public
+  it('flags hex-form IPv4-mapped, compatible and SIIT addresses of private v4', () => {
+    for (const ip of ['::ffff:7f00:1', '::ffff:a9fe:a9fe', '::ffff:c0a8:101', '::7f00:1', '::127.0.0.1', '::ffff:0:7f00:1']) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+    expect(isPrivateAddress('::ffff:808:808')).toBe(false); // 8.8.8.8
+  });
+
+  // Prevents: reaching 127.0.0.1 / metadata through a NAT64 translator
+  it('flags NAT64 addresses of private v4 and the local-use NAT64 prefix', () => {
+    for (const ip of ['64:ff9b::7f00:1', '64:ff9b::127.0.0.1', '64:ff9b::a9fe:a9fe', '64:ff9b::a00:1', '64:ff9b:1::808:808']) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+    expect(isPrivateAddress('64:ff9b::808:808')).toBe(false); // 8.8.8.8 via well-known NAT64
+  });
+
+  it('flags other non-public IPv6 ranges and unparseable addresses', () => {
+    for (const ip of ['ff02::1', 'fec0::1', '2001:db8::1', '2001::1', '100::1', '1::2::3', '::']) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+  });
+
+  it('rejects bracketed IPv6 literals that embed a private v4', async () => {
+    for (const url of ['http://[::ffff:127.0.0.1]/', 'http://[64:ff9b::169.254.169.254]/', 'http://[::1]:8080/']) {
+      await expect(assertPublicUrl(url), url).rejects.toBeInstanceOf(SsrfError);
+    }
+  });
+});
+
+describe('connect-time check (DNS rebinding)', () => {
+  it('publicOnlyLookup refuses a name that resolves to loopback', async () => {
+    for (const options of [{}, { all: true }]) {
+      const err = await new Promise<unknown>((resolve) =>
+        publicOnlyLookup('localhost', options, (e) => resolve(e)),
+      );
+      expect(err).toBeInstanceOf(SsrfError);
+    }
+  });
+
+  // Prevents: a host that answered DNS with a public address for the check
+  // and a private one for the connection reaching internal services
+  it('publicOnlyDispatcher never connects to a private address', async () => {
+    let hits = 0;
+    const server = createServer((_req, res) => {
+      hits += 1;
+      res.end('internal');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address() as AddressInfo;
+    try {
+      // Sanity: without the dispatcher this test can reach the server.
+      expect(await (await fetch(`http://localhost:${port}/`)).text()).toBe('internal');
+      hits = 0;
+      const err = await fetch(`http://localhost:${port}/`, {
+        dispatcher: publicOnlyDispatcher,
+      } as RequestInit).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(String((err as Error & { cause?: unknown }).cause)).toMatch(/private address/);
+      expect(hits).toBe(0);
+    } finally {
+      server.close();
+    }
   });
 });
