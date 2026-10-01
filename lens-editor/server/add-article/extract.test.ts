@@ -906,6 +906,29 @@ describe("extractArticle — fallback table conversion", () => {
     expect(ex.body).toContain("| text to \\<behavior> | P<0.05 |");
   });
 
+  // Prevents: Table 6 of arxiv.org/html/2312.06942 imported without the one
+  // value its caption says is "in bold", and "High <br>concentration" labels
+  // fused into "Highconcentration" (arxiv.org/html/2512.22154, Table 2).
+  it("keeps LaTeXML bold/italic in cells and turns line breaks into spaces", async () => {
+    const html = `<!doctype html><html><head><title>[9999.00004] T</title></head>
+    <body><article class="ltx_document">
+      <h1 class="ltx_title ltx_title_document">T</h1>
+      <section class="ltx_section"><p class="ltx_p">${"Body text well past the adapter floor. ".repeat(15)}</p>
+      <table class="ltx_tabular"><tbody>
+        <tr><td class="ltx_td"></td><td class="ltx_td">No redaction</td><td class="ltx_td">Input&amp;output</td></tr>
+        <tr><td class="ltx_td">While loop instead of for loop</td><td class="ltx_td">57.5%</td>
+          <td class="ltx_td"><span class="ltx_text ltx_font_bold">78.6%</span></td></tr>
+        <tr><td class="ltx_td"><span class="ltx_inline-block"><span class="ltx_p"><span class="ltx_text ltx_font_bold">High <br class="ltx_break">concentration</span></span></span></td>
+          <td class="ltx_td">once <span class="ltx_text ltx_font_italic">ever </span>at all</td><td class="ltx_td"><span class="ltx_text ltx_font_bold"> </span>✓</td></tr>
+      </tbody></table>
+      </section></article></body></html>`;
+    const ex = await extractArticle(html, "https://ar5iv.labs.arxiv.org/html/9999.00004", {
+      sourceUrl: "https://arxiv.org/abs/9999.00004",
+    });
+    expect(ex.body).toContain("| While loop instead of for loop | 57.5% | **78.6%** |");
+    expect(ex.body).toContain("| **High concentration** | once _ever_ at all | ✓ |");
+  });
+
   it("leaves properly-headed tables to the GFM converter", async () => {
     const html = `<!doctype html><html><head><title>H</title></head>
     <body><article><h1>H</h1><p>${"Generic body text for extraction to hold onto. ".repeat(20)}</p>

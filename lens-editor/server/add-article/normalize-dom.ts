@@ -32,6 +32,11 @@
  *  5. LaTeXML author-year citations. For some natbib styles arXiv HTML puts a
  *     stray comma into every citation ("(Shlegeris,, 2023)", "Greenblatt et
  *     al., (2024)"), where the PDF is correct. Repair the citation text.
+ *
+ *  6. LaTeXML font spans. arXiv HTML marks bold and italic as
+ *     `<span class="ltx_font_bold">` / `ltx_font_italic`, which turndown treats
+ *     as plain text, so all of it was lost (in tables too, e.g. the best value
+ *     a caption says is "in bold"). Rewrite them as <strong> / <em>.
  */
 
 /** Drop leading blank lines and trailing whitespace, keeping the first line's indent. */
@@ -134,6 +139,34 @@ function repairLtxCitations(root: Element): void {
         last.textContent = last.textContent.replace(pattern, replacement);
         break;
       }
+    }
+  }
+}
+
+const LTX_FONT_TAGS: [string, string, string][] = [
+  ["ltx_font_bold", "strong", "strong, b"],
+  ["ltx_font_italic", "em", "em, i"],
+];
+
+/**
+ * Rewrite LaTeXML bold/italic spans as <strong>/<em> so turndown (and the
+ * fallback table cells in extract.ts) emit Markdown emphasis. Left alone:
+ * headings and titles (already bold, `## **x**` is noise), math, spans
+ * already inside the same emphasis, and spans holding block content
+ * (a paragraph-spanning `**` would not parse).
+ */
+function convertLtxFontSpans(root: Element): void {
+  const doc = root.ownerDocument;
+  if (!doc) return;
+  for (const [cls, tag, same] of LTX_FONT_TAGS) {
+    for (const span of root.querySelectorAll(`span.${cls}`)) {
+      if (span.closest("h1, h2, h3, h4, h5, h6, .ltx_title, math")) continue;
+      if (span.parentElement?.closest(same)) continue;
+      if (span.querySelector(".ltx_para, p, div, table, pre, ul, ol")) continue;
+      const el = doc.createElement(tag);
+      if (span.id) el.id = span.id;
+      el.append(...span.childNodes);
+      span.replaceWith(el);
     }
   }
 }
@@ -529,10 +562,11 @@ function absolutizeLinks(root: Element, baseUrl: string): void {
   });
 }
 
-/** Normalize an article body DOM subtree in place (listings, citations, footnotes, links). */
+/** Normalize an article body DOM subtree in place (listings, citations, fonts, footnotes, links). */
 export function normalizeArticleDom(root: Element, baseUrl: string): void {
   convertLtxListings(root);
   repairLtxCitations(root);
+  convertLtxFontSpans(root);
   normalizeFootnotes(root);
   localizeSelfFragments(root, baseUrl);
   absolutizeLinks(root, baseUrl);

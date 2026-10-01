@@ -102,8 +102,17 @@ function isFootnotesContainer(el: HTMLElement | null): boolean {
  * so pipes and tag-like `<word>` are escaped here (or the row splits / the text
  * vanishes under rehype-raw). `<code>` (e.g. a LaTeXML listing in a cell, see
  * normalize-dom) stays a code span; `\|` is still a cell-safe pipe inside one.
+ * Bold/italic (LaTeXML spans arrive as <strong>/<em> from normalize-dom) stay
+ * `**…**` / `_…_`, and a line break (`High <br>concentration`) becomes a space.
  */
 function fallbackCellText(cell: Element): string {
+  return cellMarkdown(cell, "").replace(/\s+/g, " ").trim();
+}
+
+const CELL_EMPHASIS: Record<string, string> = { STRONG: "**", B: "**", EM: "_", I: "_" };
+
+/** `cell`'s children as inline Markdown; `marks` holds the emphasis already open. */
+function cellMarkdown(cell: Element, marks: string): string {
   let out = "";
   let text = ""; // pending text, escaped as one run so a `<` split across nodes is caught
   const flush = () => {
@@ -111,8 +120,23 @@ function fallbackCellText(cell: Element): string {
     text = "";
   };
   const walk = (node: ChildNode) => {
+    const mark = CELL_EMPHASIS[node.nodeName];
     if (node.nodeType === 3) {
       text += node.textContent || "";
+    } else if (node.nodeName === "BR") {
+      text += " ";
+    } else if (mark && !marks.includes(mark)) {
+      // Emphasis must hug its text (`** x **` does not parse), so the
+      // surrounding whitespace moves outside the markers.
+      const inner = cellMarkdown(node as Element, marks + mark).replace(/\s+/g, " ");
+      if (!inner.trim()) {
+        text += inner;
+        return;
+      }
+      text += /^\s/.test(inner) ? " " : "";
+      flush();
+      out += `${mark}${inner.trim()}${mark}`;
+      text += /\s$/.test(inner) ? " " : "";
     } else if (node.nodeName === "CODE") {
       const code = (node.textContent || "").replace(/\s+/g, " ").trim();
       if (!code) return;
@@ -127,7 +151,7 @@ function fallbackCellText(cell: Element): string {
   };
   cell.childNodes.forEach(walk);
   flush();
-  return out.replace(/\s+/g, " ").trim();
+  return out;
 }
 
 /** Turndown with deterministic rules for the failure modes we found in baseline. */

@@ -168,6 +168,28 @@ describe("normalizeArticleDom — footnotes", () => {
   });
 });
 
+describe("normalizeArticleDom — LaTeXML font spans", () => {
+  // Prevents: arXiv bold/italic (`span.ltx_font_bold`) imported as plain text.
+  it("rewrites bold and italic spans as <strong> and <em>", () => {
+    const body = normalize(
+      `<p class="ltx_p"><span id="x1" class="ltx_text ltx_font_bold">Code generation</span>: ask <span class="ltx_text ltx_font_italic">U</span>.</p>`,
+    );
+    expect(body.innerHTML).toBe(
+      `<p class="ltx_p"><strong id="x1">Code generation</strong>: ask <em>U</em>.</p>`,
+    );
+  });
+
+  it("leaves headings, nested bold and block-holding spans alone", () => {
+    const body = normalize(
+      `<h2 class="ltx_title"><span class="ltx_text ltx_font_bold">Results</span></h2>` +
+        `<p><strong>A <span class="ltx_text ltx_font_bold">B</span></strong></p>` +
+        `<span class="ltx_text ltx_font_bold"><span class="ltx_para">P</span></span>`,
+    );
+    expect(body.querySelectorAll("h2 strong, strong strong").length).toBe(0);
+    expect(body.querySelectorAll("span.ltx_font_bold").length).toBe(3);
+  });
+});
+
 describe("normalizeArticleDom — links", () => {
   it("absolutizes relative hrefs against the base URL", () => {
     const body = normalize(`<p><a href="/posts/xyz/other">other</a></p>`);
