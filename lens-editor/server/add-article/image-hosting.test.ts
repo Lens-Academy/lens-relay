@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
+import { hostRemoteImages, newImageBudget } from "./image-hosting";
+
+/** arXiv + ar5iv asset mirrors, to exercise the hostPattern option. */
+const ARXIV_IMAGE_HOSTS = /(^|\.)(arxiv\.org|ar5iv\.org|ar5iv\.labs\.arxiv\.org)$/i;
 
 // Real magic bytes: hosting sniffs the content, not the content type.
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]).buffer;
@@ -85,16 +88,18 @@ describe("hostRemoteImages", () => {
   // Prevents: one image-heavy page pushing hundreds of MB into the relay
   it("stops at the per-article byte budget", async () => {
     const body = ["a", "b", "c"].map((n) => `![${n}](https://example.com/${n}.png)`).join("\n");
-    const o = opts({ hostPattern: undefined, maxTotalBytes: PNG.byteLength * 2 });
+    const o = opts({ hostPattern: undefined, budget: newImageBudget(30, PNG.byteLength * 2), concurrency: 1 });
     const out = await hostRemoteImages(body, "s", o);
     expect(o.upload).toHaveBeenCalledTimes(2);
     expect(out).toContain("https://example.com/c.png");
+    // Spent budget stops downloads too, not only uploads.
+    expect(o.fetchImage).toHaveBeenCalledTimes(2);
   });
 
   it("passes the per-image byte cap to the fetcher", async () => {
     const o = opts({ maxBytesPerImage: 1234 });
     await hostRemoteImages("![f](https://arxiv.org/a/x1.png)", "b", o);
-    expect(o.fetchImage).toHaveBeenCalledWith("https://arxiv.org/a/x1.png", 1234);
+    expect(o.fetchImage).toHaveBeenCalledWith("https://arxiv.org/a/x1.png", 1234, undefined);
   });
 
   // Prevents: the rendered and unrendered candidates of one import each
@@ -109,6 +114,79 @@ describe("hostRemoteImages", () => {
     expect(b).toBe(a);
     expect(second.fetchImage).not.toHaveBeenCalled();
     expect(second.upload).not.toHaveBeenCalled();
+  });
+
+  // Prevents: downloads racing ahead of uploads and holding every image of
+  // the article in memory at once
+  it("keeps at most `concurrency` downloads in flight or held", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const o = opts({
+      hostPattern: undefined,
+      concurrency: 2,
+      fetchImage: vi.fn(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return { bytes: PNG, contentType: "image/png" };
+      }),
+      // A slow upload: finished downloads must not be replaced while waiting.
+      upload: vi.fn(async () => { await new Promise((r) => setTimeout(r, 20)); }),
+    });
+    const body = Array.from({ length: 8 }, (_, i) => `![${i}](https://e.com/${i}.png)`).join("\n");
+    await hostRemoteImages(body, "s", o);
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(o.upload).toHaveBeenCalledTimes(8);
+  });
+
+  // Prevents: two review candidates of one article each using the full budget
+  it("shares one budget between calls and continues the numbering", async () => {
+    const budget = newImageBudget(3);
+    const first = opts({ hostPattern: undefined, budget });
+    const second = opts({ hostPattern: undefined, budget });
+    await hostRemoteImages("![a](https://e.com/a.png) ![b](https://e.com/b.png)", "s", first);
+    const out = await hostRemoteImages("![c](https://e.com/c.png) ![d](https://e.com/d.png)", "s", second);
+    expect(out).toMatch(/s-img3-/);
+    expect(out).toContain("https://e.com/d.png");
+    expect(second.fetchImage).toHaveBeenCalledTimes(1);
+  });
+
+  // Prevents: a slow image host holding the import until the job deadline
+  it("stops at the time limit and keeps the rest external", async () => {
+    let result: { hosted: number; kept: { url: string; reason: string }[] } | undefined;
+    const ctrl = new AbortController();
+    const o = opts({
+      hostPattern: undefined,
+      signal: ctrl.signal,
+      concurrency: 1,
+      fetchImage: vi.fn(async (_u: string, _max: number, signal?: AbortSignal) => {
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(resolve, 1000);
+          signal?.addEventListener("abort", () => { clearTimeout(t); reject(new Error("aborted")); });
+        });
+        return { bytes: PNG, contentType: "image/png" };
+      }),
+      onResult: (r) => { result = r; },
+    });
+    setTimeout(() => ctrl.abort(), 10);
+    const body = "![a](https://e.com/a.png) ![b](https://e.com/b.png)";
+    expect(await hostRemoteImages(body, "s", o)).toBe(body);
+    expect(result!.kept.map((k) => k.reason)).toEqual([
+      "image hosting time limit reached",
+      "image hosting time limit reached",
+    ]);
+    expect(o.fetchImage).toHaveBeenCalledTimes(1);
+  });
+
+  // Prevents: a fetcher that throws synchronously escaping as a rejection
+  it("treats a synchronously throwing fetcher as a failed image", async () => {
+    const body = "![a](https://e.com/a.png)";
+    const o = opts({
+      hostPattern: undefined,
+      fetchImage: vi.fn(() => { throw new Error("boom"); }) as never,
+    });
+    expect(await hostRemoteImages(body, "s", o)).toBe(body);
   });
 
   // Prevents: parallel downloads scrambling the img<n> numbering
@@ -182,7 +260,7 @@ describe("hostRemoteImages", () => {
       { length: 5 },
       (_, i) => `![f${i}](https://arxiv.org/a/x${i}.png)`,
     ).join("\n");
-    const o = opts({ maxImages: 2 });
+    const o = opts({ budget: newImageBudget(2) });
     const out = await hostRemoteImages(body, "b", o);
     expect(o.upload).toHaveBeenCalledTimes(2);
     expect(out).toContain("x2.png"); // third image left external
@@ -213,6 +291,6 @@ describe("review-hardening: URLs containing parentheses", () => {
     const o = opts();
     const out = await hostRemoteImages(`before ![a](${url}) after`, "s", o);
     expect(out).toMatch(new RegExp(`^before !\\[a\\]\\(https://raw\\.githubusercontent\\.com/Lens-Academy/lens-edu-staging/staging/attachments/s-img1-${H}\\.png\\) after$`));
-    expect(o.fetchImage).toHaveBeenCalledWith(url, expect.any(Number));
+    expect(o.fetchImage).toHaveBeenCalledWith(url, expect.any(Number), undefined);
   });
 });

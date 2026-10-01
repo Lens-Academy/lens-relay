@@ -4,7 +4,7 @@ import type { ArticleImportMode, ArticleJob, ArticleMeta } from "./types";
 import { fetchRawBytes } from "./fetch";
 import { embedPdfImages } from "./pdf";
 import { dedupUrlVariants } from "./url-normalize";
-import { hostRemoteImages, type HostImagesResult } from "./image-hosting";
+import { hostRemoteImages, newImageBudget, type HostImagesResult } from "./image-hosting";
 import { attachmentPublicUrl } from "../attachments/public-url";
 import {
   ArticleReviewRejectedError,
@@ -69,6 +69,10 @@ async function pruneExpiredEvidence(): Promise<void> {
 // Below this the extraction almost certainly failed (empty/wrong container)
 // rather than producing a real article body.
 const MIN_ARTICLE_CHARS = 200;
+
+/** Time limit for one image-rehosting pass; what is unfinished then stays
+ *  external. */
+const IMAGE_PHASE_TIMEOUT_MS = 90_000;
 
 function relayArticleFolder(): string {
   return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
@@ -463,21 +467,30 @@ export async function processArticle(
   //      gate) and are recorded in the report. PDF figures are hosted above.
   //      Both review candidates share one cache, so an image is fetched once.
   const hostedImages = new Map<string, string>();
+  const imageBudget = newImageBudget();
   const hostImages = (markdown: string, slug: string) => {
     let result: HostImagesResult = { hosted: 0, kept: [] };
+    // A time limit per call (so at most two per article), so a slow or
+    // tarpitting image host can never eat the job deadline and fail the import.
+    const imageSignal = AbortSignal.any([
+      ...(signal ? [signal] : []),
+      AbortSignal.timeout(IMAGE_PHASE_TIMEOUT_MS),
+    ]);
     return hostRemoteImages(markdown, slug, {
       folder: topFolder,
-      fetchImage: async (url, maxBytes) => {
-        const r = await fetchRawBytes(url, signal, { accept: "image/*", maxBytes });
+      fetchImage: async (url, maxBytes, imageAbort) => {
+        const r = await fetchRawBytes(url, imageAbort, { accept: "image/*", maxBytes });
         return { bytes: r.bytes, contentType: r.contentType };
       },
       upload: (p, data, mime) =>
         createRelayAttachment(topFolder, p, data, mime, signal),
+      budget: imageBudget,
+      signal: imageSignal,
       cache: hostedImages,
       onResult: (r) => { result = r; },
     }).then((out) => ({ body: out, result }));
   };
-  if (!isStubOnly && ex.via !== "pdf") {
+  if (!isStubOnly && ex.via !== "pdf" && /!\[[^\]]*\]\(https?:/.test(body)) {
     await setStage("uploading-images");
     const beforeImages = body;
     const hosting = await hostImages(body, filenameBase);

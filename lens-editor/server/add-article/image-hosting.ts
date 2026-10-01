@@ -64,22 +64,25 @@ export interface HostImagesOptions {
    *  decides the public URL. */
   folder?: string;
   /** Download an image; must give up past `maxBytes` (oversized files are
-   *  never read whole). */
+   *  never read whole) and when `signal` aborts. */
   fetchImage: (
     url: string,
     maxBytes: number,
+    signal?: AbortSignal,
   ) => Promise<{ bytes: ArrayBuffer; contentType: string }>;
   upload: (
     inFolderPath: string,
     data: Buffer,
     mimetype: string,
   ) => Promise<unknown>;
-  maxImages?: number;
   maxBytesPerImage?: number;
-  /** Stop hosting once this many bytes are uploaded; the rest stay external. */
-  maxTotalBytes?: number;
-  /** Downloads in flight at once. */
+  /** Limits for the whole article. Pass one budget to every call for the
+   *  same article (its review candidates) so they share it. */
+  budget?: ImageBudget;
+  /** Downloads ahead of the uploader, so at most this many images are held. */
   concurrency?: number;
+  /** Ends the image phase: unfinished images stay external. */
+  signal?: AbortSignal;
   publicUrl?: (inFolderPath: string) => string;
   /** url -> hosted URL, shared between calls (the rendered and unrendered
    *  candidates of one import) so an image is downloaded and uploaded once. */
@@ -93,17 +96,28 @@ export interface HostImagesResult {
   kept: { url: string; reason: string }[];
 }
 
+/** What one article may upload, and what it has used so far. */
+export interface ImageBudget {
+  maxImages: number;
+  maxBytes: number;
+  usedImages: number;
+  usedBytes: number;
+}
+
+export function newImageBudget(maxImages = 30, maxBytes = 50 * 1024 * 1024): ImageBudget {
+  return { maxImages, maxBytes, usedImages: 0, usedBytes: 0 };
+}
+
 const DEFAULT_MAX_BYTES_PER_IMAGE = 5 * 1024 * 1024;
-const DEFAULT_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 
 export async function hostRemoteImages(
   body: string,
   slugBase: string,
   opts: HostImagesOptions,
 ): Promise<string> {
-  const maxImages = opts.maxImages ?? 30;
   const maxBytes = opts.maxBytesPerImage ?? DEFAULT_MAX_BYTES_PER_IMAGE;
-  const maxTotalBytes = opts.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
+  const budget = opts.budget ?? newImageBudget();
+  const concurrency = Math.max(1, opts.concurrency ?? 4);
   const folder = opts.folder ?? DEFAULT_FOLDER;
   const ownBase = publicBaseUrlForFolder(folder);
   const kept: HostImagesResult["kept"] = [];
@@ -121,50 +135,48 @@ export async function hostRemoteImages(
       /* unparseable URL — leave as-is */
     }
   }
-  if (urls.length === 0) {
-    opts.onResult?.({ hosted: 0, kept });
-    return body;
-  }
-  if (urls.length > maxImages) {
-    console.warn(
-      `[add-article] ${urls.length} rehostable images; hosting the first ${maxImages}, leaving the rest external`,
-    );
-    for (const url of urls.slice(maxImages)) kept.push({ url, reason: `over the ${maxImages}-image limit` });
-  }
-  const todo = urls.slice(0, maxImages);
 
-  // Download a few at a time (each fetch has its own timeout), upload in
-  // order of appearance so the img<n> numbering stays stable.
+  const spent = () => budget.usedImages >= budget.maxImages || budget.usedBytes >= budget.maxBytes;
+  const stopReason = () =>
+    opts.signal?.aborted
+      ? "image hosting time limit reached"
+      : budget.usedImages >= budget.maxImages
+        ? "over the article's image limit"
+        : "over the article's byte budget";
+
+  // Downloads run at most `concurrency` ahead of the uploader below, which
+  // works in order of appearance (stable img<n> numbering). None start once
+  // the budget is spent or the phase is over, and each is dropped after use,
+  // so at most `concurrency` images are held at once.
+  const toFetch = urls.filter((url) => !opts.cache?.has(url));
   const downloads = new Map<string, Promise<{ bytes: ArrayBuffer; contentType: string }>>();
-  const pending = todo.filter((url) => !opts.cache?.has(url));
-  let next = 0;
-  const gates: Promise<void>[] = [];
-  const startNext = (): Promise<void> | undefined => {
-    if (next >= pending.length) return undefined;
-    const url = pending[next++];
-    const p = opts.fetchImage(url, maxBytes);
-    downloads.set(url, p);
-    return p.then(
-      () => startNext(),
-      () => startNext(),
-    );
+  let started = 0;
+  const fillWindow = () => {
+    const room = () =>
+      Math.min(concurrency, budget.maxImages - budget.usedImages) - downloads.size;
+    while (started < toFetch.length && room() > 0 && !spent() && !opts.signal?.aborted) {
+      const url = toFetch[started++];
+      const p = Promise.resolve().then(() => opts.fetchImage(url, maxBytes, opts.signal));
+      p.catch(() => {}); // awaited below; never an unhandled rejection
+      downloads.set(url, p);
+    }
   };
-  for (let i = 0; i < Math.max(1, opts.concurrency ?? 4); i++) {
-    const gate = startNext();
-    if (gate) gates.push(gate);
-  }
 
   let out = body;
-  let n = 0;
   let hosted = 0;
-  let totalBytes = 0;
-  for (const url of todo) {
+  for (const url of urls) {
     let publicUrl = opts.cache?.get(url);
     if (!publicUrl) {
+      fillWindow();
+      const download = downloads.get(url);
+      if (!download) {
+        kept.push({ url, reason: stopReason() });
+        continue;
+      }
       try {
-        const { bytes } = await downloads.get(url)!;
-        const data = new Uint8Array(bytes);
-        const image = sniffImage(data);
+        const { bytes } = await download;
+        downloads.delete(url);
+        const image = sniffImage(new Uint8Array(bytes));
         if (!image) {
           kept.push({ url, reason: "not a png, jpeg, gif or webp image" });
           continue;
@@ -173,20 +185,23 @@ export async function hostRemoteImages(
           kept.push({ url, reason: `larger than ${maxBytes} bytes` });
           continue;
         }
-        if (totalBytes + bytes.byteLength > maxTotalBytes) {
-          kept.push({ url, reason: `over the ${maxTotalBytes}-byte budget for one article` });
+        if (spent() || budget.usedBytes + bytes.byteLength > budget.maxBytes) {
+          kept.push({ url, reason: stopReason() });
           continue;
         }
         // Content-hash suffix — same cross-article aliasing guard as the PDF
         // figure path (the slug base predates filename collision resolution).
+        // Numbered by what this article has already hosted, so the second
+        // candidate continues the first one's numbering.
+        const n = budget.usedImages;
         const inFolderPath = await uploadWithHashSuffix(
           (h) => `/attachments/${slugBase}-img${n + 1}-${h}.${image.ext}`,
           Buffer.from(bytes),
           image.mime,
           opts.upload,
         );
-        n += 1; // only successful uploads consume a number (no gaps)
-        totalBytes += bytes.byteLength;
+        budget.usedImages += 1;
+        budget.usedBytes += bytes.byteLength;
         publicUrl = opts.publicUrl?.(inFolderPath) ?? attachmentPublicUrl(folder, inFolderPath) ?? undefined;
         if (!publicUrl) {
           console.warn(`[add-article] no public URL for folder; keeping external: ${url}`);
@@ -195,8 +210,12 @@ export async function hostRemoteImages(
         }
         opts.cache?.set(url, publicUrl);
       } catch (err) {
-        console.warn(`[add-article] image rehost failed, keeping external: ${url} (${err})`);
-        kept.push({ url, reason: err instanceof Error ? err.message : String(err) });
+        downloads.delete(url);
+        const reason = opts.signal?.aborted
+          ? "image hosting time limit reached"
+          : err instanceof Error ? err.message : String(err);
+        console.warn(`[add-article] image rehost failed, keeping external: ${url} (${reason})`);
+        kept.push({ url, reason });
         continue;
       }
     }
@@ -207,10 +226,9 @@ export async function hostRemoteImages(
       `$1${publicUrl}$2`,
     );
   }
-  await Promise.all(gates);
+  if (kept.length > 0) {
+    console.warn(`[add-article] ${kept.length} image(s) left external (${hosted} hosted)`);
+  }
   opts.onResult?.({ hosted, kept });
   return out;
 }
-
-/** Hosts we rehost from: arXiv + ar5iv asset mirrors. */
-export const ARXIV_IMAGE_HOSTS = /(^|\.)(arxiv\.org|ar5iv\.org|ar5iv\.labs\.arxiv\.org)$/i;
