@@ -20,7 +20,7 @@ function response(init: { ok: boolean; status?: number; redirected?: boolean; ur
 describe('useOpenByPath', () => {
   it('does nothing for a null path', () => {
     const { result } = renderHook(() => useOpenByPath(null));
-    expect(result.current).toEqual({ target: null, notFound: false });
+    expect(result.current).toEqual({ target: null, notFound: false, failed: false });
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -49,9 +49,17 @@ describe('useOpenByPath', () => {
     await waitFor(() => expect(result.current.notFound).toBe(true));
   });
 
-  it('reports notFound on a network error', async () => {
+  it.each([401, 502])('reports failed, not notFound, on a %i', async (status) => {
+    mockFetch.mockReturnValue(response({ ok: false, status }));
+    const { result } = renderHook(() => useOpenByPath('/Lens/x.md'));
+    await waitFor(() => expect(result.current.failed).toBe(true));
+    expect(result.current.notFound).toBe(false);
+  });
+
+  it('reports failed on a network error', async () => {
     mockFetch.mockReturnValue(Promise.reject(new Error('offline')));
     const { result } = renderHook(() => useOpenByPath('/Lens/x.md'));
-    await waitFor(() => expect(result.current.notFound).toBe(true));
+    await waitFor(() => expect(result.current.failed).toBe(true));
+    expect(result.current.notFound).toBe(false);
   });
 });
