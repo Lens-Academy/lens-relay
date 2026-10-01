@@ -201,13 +201,22 @@ export function writeFileMeta(
   }, LENS_EDITOR_ORIGIN);
 }
 
+/** createDocument refuses a path that already has a filemeta entry. */
+export class PathExistsError extends Error {
+  constructor(public readonly path: string) {
+    super(`A file already exists at ${path}`);
+    this.name = 'PathExistsError';
+  }
+}
+
 /**
  * Create a new document in the folder's filemeta_v0 Y.Map.
  *
  * This function:
  * 1. Generates a new UUID for the document
  * 2. Creates the document on the Relay server (POST /doc/new)
- * 3. Adds the path -> UUID mapping to filemeta_v0
+ * 3. Adds the path -> UUID mapping to filemeta_v0 (throws PathExistsError
+ *    if the path is taken, checked before and after step 2)
  * 4. For markdown, writes `initialText` (or "_" when none) as its content
  *
  * Returns the generated document UUID.
@@ -221,6 +230,7 @@ export async function createDocument(
   validateFilePath(path);
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
   const legacyDocs = folderDoc.getMap<string>('docs');
+  if (filemeta.has(path)) throw new PathExistsError(path);
   const id = generateUUID();
   const fullDocId = `${RELAY_ID}-${id}`;
 
@@ -236,11 +246,9 @@ export async function createDocument(
   // to identify the source of the change
   debug('createDocument', 'adding to filemeta Y.Map...', { path, id, type, version: 0 });
 
-  // Check if entry already exists or is being deleted
-  const existing = filemeta.get(path);
-  if (existing) {
-    debug('createDocument', 'WARNING: entry already exists!', existing);
-  }
+  // Another create may have taken the path while we awaited the server:
+  // writing now would silently replace that file's entry and orphan it.
+  if (filemeta.has(path)) throw new PathExistsError(path);
 
   writeFileMeta(folderDoc, path, id, type);
 

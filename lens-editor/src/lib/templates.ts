@@ -1,4 +1,6 @@
 import { generateUUID } from './relay-api';
+import { parse } from './criticmarkup-parser';
+import { rejectChange } from './criticmarkup-actions';
 
 export interface TemplateOption {
   /** Prefixed tree path, e.g. "/Lens Edu/Lenses/Lens Template.md". */
@@ -44,9 +46,9 @@ export function findTemplates(
 }
 
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/;
-// An id field that is empty or holds a "<...>" placeholder.
-const FRONTMATTER_ID = /^(id:)[ \t]*(?:<[^>\n]*>)?[ \t]*$/gm;
-const FIELD_ID = /^([ \t]*id::)[ \t]*(?:<[^>\n]*>)?[ \t]*$/gm;
+// An id field that is empty or holds a "<...>" placeholder (LF or CRLF line ends).
+const FRONTMATTER_ID = /^(id:)[ \t]*(?:<[^>\r\n]*>)?[ \t]*(?=\r?$)/gm;
+const FIELD_ID = /^([ \t]*id::)[ \t]*(?:<[^>\r\n]*>)?[ \t]*(?=\r?$)/gm;
 
 /**
  * Fill every empty or placeholder `id:` (frontmatter) and `id::` (segment
@@ -58,4 +60,18 @@ export function fillTemplateIds(text: string, newId: () => string = generateUUID
   const head = frontmatter.replace(FRONTMATTER_ID, (_, key: string) => `${key} ${newId()}`);
   const body = text.slice(frontmatter.length).replace(FIELD_ID, (_, key: string) => `${key} ${newId()}`);
   return head + body;
+}
+
+/**
+ * Drop pending CriticMarkup from a template: comments go, and suggestions are
+ * rejected, so a new file gets the template as it stands, not open review notes.
+ */
+export function withoutPendingMarkup(text: string): string {
+  const ranges = parse(text).sort((a, b) => b.from - a.from);
+  return ranges.reduce((doc, range) => rejectChange(doc, range), text);
+}
+
+/** A template's text, ready to be a new file's content. */
+export function prepareTemplateText(text: string, newId: () => string = generateUUID): string {
+  return fillTemplateIds(withoutPendingMarkup(text), newId);
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findTemplates, fillTemplateIds } from './templates';
+import { findTemplates, fillTemplateIds, withoutPendingMarkup, prepareTemplateText } from './templates';
 
 const md = (id: string) => ({ id, type: 'markdown' });
 
@@ -80,5 +80,22 @@ describe('fillTemplateIds', () => {
   it('handles text without frontmatter', () => {
     n = 0;
     expect(fillTemplateIds('#### Roleplay\nid::\n', newId)).toBe('#### Roleplay\nid:: uuid-1\n');
+  });
+});
+
+describe('CRLF templates', () => {
+  it('fills ids on CRLF lines and keeps the line ends', () => {
+    expect(fillTemplateIds('---\r\nid:\r\n---\r\nid:: <x>\r\n', () => 'u')).toBe('---\r\nid: u\r\n---\r\nid:: u\r\n');
+  });
+});
+
+describe('withoutPendingMarkup', () => {
+  it('drops comments and rejects pending suggestions', () => {
+    const text = 'A{>>{"author":"Bob"}@@fix this<<} B{++{"author":"AI"}@@ new++} C{--old--} D{~~x~>y~~}';
+    expect(withoutPendingMarkup(text)).toBe('A B Cold Dx');
+  });
+
+  it('prepareTemplateText strips markup, then fills ids', () => {
+    expect(prepareTemplateText('id:: {++<uuid>++}\n', () => 'u')).toBe('id:: u\n');
   });
 });
