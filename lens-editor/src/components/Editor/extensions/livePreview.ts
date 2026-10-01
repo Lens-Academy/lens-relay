@@ -34,6 +34,7 @@ import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateEffect, StateField } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { isImageEmbedTarget } from '../../../lib/isImageEmbedTarget';
+import { parseCalloutHeader, CalloutIconWidget } from './callouts';
 
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
@@ -829,17 +830,48 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               }
             }
 
-            // Blockquote: add line decoration for left border styling
+            // Blockquote: add line decoration for left border styling.
+            // A top-level blockquote starting `> [!type] Title` is an Obsidian
+            // callout: its lines get callout classes, and the marker becomes
+            // the type's icon while the cursor is outside it.
             if (node.name === 'Blockquote') {
-              const startLine = view.state.doc.lineAt(node.from).number;
+              const firstLine = view.state.doc.lineAt(node.from);
+              const startLine = firstLine.number;
               const endLine = view.state.doc.lineAt(node.to).number;
+              const callout = node.node.parent?.name === 'Blockquote'
+                ? null
+                : parseCalloutHeader(view.state.doc.sliceString(node.from, firstLine.to));
               for (let ln = startLine; ln <= endLine; ln++) {
                 const line = view.state.doc.line(ln);
+                let cls = 'cm-blockquote';
+                if (callout) {
+                  cls += ` cm-callout cm-callout-${callout.type}`;
+                  if (ln === startLine) cls += ' cm-callout-first';
+                  if (ln === endLine) cls += ' cm-callout-last';
+                }
                 decorations.push({
                   from: line.from,
                   to: line.from,
-                  deco: Decoration.line({ class: 'cm-blockquote' }),
+                  deco: Decoration.line({ class: cls }),
                 });
+              }
+              if (callout) {
+                if (!selectionIntersects(selection, node.from, node.to)) {
+                  decorations.push({
+                    from: node.from + callout.markerFrom,
+                    to: node.from + callout.markerTo,
+                    deco: Decoration.replace({
+                      widget: new CalloutIconWidget(callout.type, callout.title ? null : callout.defaultTitle),
+                    }),
+                  });
+                }
+                if (callout.title) {
+                  decorations.push({
+                    from: node.from + callout.markerTo,
+                    to: firstLine.to,
+                    deco: Decoration.mark({ class: 'cm-callout-title' }),
+                  });
+                }
               }
             }
 
