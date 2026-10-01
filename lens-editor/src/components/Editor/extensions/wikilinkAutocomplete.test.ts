@@ -8,7 +8,7 @@ import {
   completionStatus,
 } from '@codemirror/autocomplete';
 import { markdown } from '@codemirror/lang-markdown';
-import { createWikilinkCompletionSource, wikilinkAutocomplete } from './wikilinkAutocomplete';
+import { createWikilinkCompletionSource, matchLabel, wikilinkAutocomplete } from './wikilinkAutocomplete';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 
 const testMetadata: FolderMetadata = {
@@ -120,6 +120,33 @@ describe('wikilinkAutocomplete', () => {
     // Notebook should be FIRST because it's a prefix match (boosted)
     // Without boost, alphabetical order would be: Anote, Denote, Notebook
     expect(result!.options[0].label).toBe('Notebook');
+  });
+
+  // Prevents: "what cognitive biases" finding nothing because the file is
+  // named what-cognitive-biases (or what_cognitive_biases)
+  it('treats spaces, dashes and underscores as the same', () => {
+    const metadata: FolderMetadata = {
+      '/articles/what-cognitive-biases.md': { id: 'a', type: 'markdown', version: 0 },
+      '/articles/what_cognitive_biases_2.md': { id: 'b', type: 'markdown', version: 0 },
+      '/articles/Cognitive Load.md': { id: 'c', type: 'markdown', version: 0 },
+      '/articles/what-else.md': { id: 'd', type: 'markdown', version: 0 },
+    };
+    const labels = (q: string) => getCompletions(`[[${q}`, q.length + 2, metadata)!.options.map(o => o.label);
+
+    expect(labels('what cognitive biases')).toEqual([
+      'articles/what_cognitive_biases_2',
+      'articles/what-cognitive-biases',
+    ]);
+    expect(labels('cognitive-load')).toEqual(['articles/Cognitive Load']);
+    expect(labels('WHAT__COGNITIVE')).toHaveLength(2);
+    expect(labels('what  else')).toEqual(['articles/what-else']);
+  });
+
+  // Prevents: highlighting the wrong characters once separators collapse
+  it('highlights the matched range of the original label', () => {
+    expect(matchLabel('articles/what--cognitive-biases', 'what cognitive')).toEqual([9, 24]);
+    expect(matchLabel('Notes', 'zzz')).toBeNull();
+    expect(matchLabel('Notes', '')).toEqual([]);
   });
 
   it('returns null when metadata is null', () => {
@@ -275,6 +302,31 @@ describe('wikilinkAutocomplete EditorView integration', () => {
       const labels = completions!.map(c => c.label);
       expect(labels).toContain('Notes');
       expect(labels).not.toContain('Tasks');
+    } finally {
+      cleanup(view, parent);
+    }
+  });
+
+  // Prevents: CodeMirror's own fuzzy filter dropping separator-normalised
+  // matches that the completion source returned
+  it('shows a dashed file name for a query typed with spaces', async () => {
+    const metadata: FolderMetadata = {
+      ...testMetadata,
+      '/what-cognitive-biases.md': { id: 'doc-wcb', type: 'markdown', version: 0 },
+    };
+    const { view, parent } = createEditorWithAutocomplete('', metadata);
+
+    try {
+      view.dispatch({
+        changes: { from: 0, insert: '[[what cognitive' },
+        selection: { anchor: 16 },
+      });
+
+      startCompletion(view);
+      await waitForCompletion(view);
+
+      const labels = currentCompletions(view.state).map(c => c.label);
+      expect(labels).toEqual(['what-cognitive-biases']);
     } finally {
       cleanup(view, parent);
     }
