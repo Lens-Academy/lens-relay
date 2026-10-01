@@ -239,6 +239,15 @@ function targetId(ref: Element): string {
   return ownId.replace(/^fnref/i, "fn");
 }
 
+/** A definition id as a lookup key: numeric ids that differ only in their
+ * separator (`fn-1`, `fn:1`, `fn1`, `user-content-fn-1`) name the same note.
+ * Defuddle rewrites the FIRST reference to a note to `#fn:1` and leaves a
+ * repeated one at `#fn-1`; both must reach the same number. */
+function targetKey(id: string): string {
+  const m = id.match(/^(?:user-content-)?fn[-:]?(\d+)$/i);
+  return m ? `fn#${m[1]}` : id;
+}
+
 /** The reference's display number, preferring a real number over position so we
  * never silently renumber footnotes that an author cited out of order. Returns
  * null when no number is present (caller assigns a positional fallback). */
@@ -433,7 +442,7 @@ function normalizeFootnotes(root: Element): void {
   };
 
   for (const ref of refs) {
-    const tid = targetId(ref);
+    const tid = targetKey(targetId(ref));
     let n: string;
     if (tid && numByTarget.has(tid)) {
       n = numByTarget.get(tid)!;
@@ -453,7 +462,7 @@ function normalizeFootnotes(root: Element): void {
   const numByDef = new Map<Element, number>();
   for (const def of defs) {
     const id = def.getAttribute("id") || "";
-    const n = numByTarget.get(id) ?? takeFree();
+    const n = numByTarget.get(targetKey(id)) ?? takeFree();
     def.setAttribute("id", `fn-${n}`);
     def
       .querySelectorAll(

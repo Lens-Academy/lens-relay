@@ -1,0 +1,6 @@
+{
+  "source_url": "https://ai-2040.com/supplements/verification-plan",
+  "fetched_at": "2026-10-01",
+  "fetched_with": "direct GET (browser user agent), unrendered HTML as served",
+  "why": "Sidenote regression fixture: 20 notes marked by label[data-sidenote-number] with bodies in div#footnote-N outside <main>."
+}

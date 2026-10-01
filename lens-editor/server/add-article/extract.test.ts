@@ -1012,3 +1012,17 @@ describe("sectionHeadingCount — gutted-extraction signal", () => {
     expect(sectionHeadingCount("no headings at all")).toBe(0);
   });
 });
+
+describe("extractArticle — a footnote cited twice", () => {
+  it("gives both references the note's number (Defuddle rewrites only the first to #fn:1)", async () => {
+    const prose = "Body prose that is long enough to count as an article for the extractors. ".repeat(20);
+    const html = `<html><head><title>T</title></head><body><main><article><h1>T</h1>
+      <p>${prose}First<sup><a href="#fn-1" data-footnote-ref>1</a></sup> and again<sup><a href="#fn-1" data-footnote-ref>1</a></sup>.</p><p>${prose}</p>
+      <section data-footnotes class="footnotes"><ol><li id="fn-1"><p>The only note.</p></li></ol></section>
+      </article></main></body></html>`;
+    const { body } = await extractArticle(html, "https://example.org/a");
+    expect(body).toMatch(/First ?\[\^1\] and again ?\[\^1\]\./);
+    expect(body).not.toContain("[^2]");
+    expect(body).toMatch(/^\[\^1\]: The only note\.$/m);
+  });
+});
