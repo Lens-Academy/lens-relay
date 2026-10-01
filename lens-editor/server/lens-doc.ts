@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { createRelayDoc, checkRelayDocsExist } from "./add-video/relay-docs";
+import { yamlQuote } from "./yaml";
 
 /**
  * Auto-create a "lens" wrapping a freshly-imported article or video, so the
@@ -25,18 +26,6 @@ import { createRelayDoc, checkRelayDocsExist } from "./add-video/relay-docs";
 
 function relayLensFolder(): string {
   return process.env.RELAY_LENS_FOLDER || "Lens Edu/Lenses";
-}
-
-/** YAML double-quote a scalar (escape quotes/backslashes; collapse newlines). */
-function yamlQuote(s: string): string {
-  return (
-    '"' +
-    s
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      .replace(/[\r\n\t]+/g, " ") +
-    '"'
-  );
 }
 
 export interface LensDocOptions {

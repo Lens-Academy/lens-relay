@@ -220,6 +220,22 @@ soft / 20 MiB hard, `overwrite` keeps the file id), `read` returns image attachm
 MCP image blocks, and `POST /doc/attachment` answers 409 on same-path-different-bytes.
 See the attachments section of `docs/server-ops.md`.
 
+**Source sync: Google Docs → read-only Relay copies** (`lens-editor/server/source-sync/`): the lens-editor
+server keeps each file named in `SOURCE_SYNC_BINDINGS` (JSON: `source` link → `target` relay path inside an
+`articles/` folder, plus the article `author`) equal to its source, every `SOURCE_SYNC_INTERVAL_MINUTES`
+(default 10). One-way: the Doc is the truth, and the whole file is rewritten whenever it differs, so edits
+made in Relay are lost, and a file already at the target is taken over; the editor shows a warning on any
+file whose frontmatter carries `synced_from` (`shared/source-sync.ts`). Google Docs are read through the Docs
+API as the service account in `GOOGLE_SERVICE_ACCOUNT_JSON`, with pending suggestions excluded (reviewers work
+in suggestion mode); a link to a Doc with several tabs must name one (`?tab=`). `google-docs/to-markdown.ts`
+maps Docs structure plus the AI Safety Atlas conventions (component tables, Typst maths) onto Lens article
+markdown and reports what it cannot map; inline maths is rewritten so markdown cannot act on it, because Lens
+finds `$…$` only after markdown has run. Images are hosted as folder attachments (the `import_attachment`
+path) and embedded by the folder's public URL; if one fails for a passing reason the run writes nothing.
+Only the production server writes synced files: the Vite dev server syncs only into a local relay, and
+`npx tsx scripts/source-sync.ts` only previews. Sources are adapters (`types.ts` `SourceAdapter`), so another
+source kind, or a UI that takes a pasted link, adds an adapter or a binding store rather than a new pipeline.
+
 **Trash instead of delete** (`crates/relay/src/server/trash.rs`,
 `crates/relay/src/mcp/tools/delete_doc.rs`): the MCP `delete` tool (Admin/Edit only)
 and the editor's Delete (`POST /doc/trash`) move files and folders to
