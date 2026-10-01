@@ -575,7 +575,10 @@ export async function extractArticle(
       if (res.content && res.content.trim()) {
         candidates.push({
           bodyHtml: res.content,
-          title: stripSiteSuffix(res.title || ""),
+          title: stripSiteSuffix(res.title || "", {
+            url,
+            siteName: htmlMeta.siteName,
+          }),
           author: res.author ? splitAuthors(res.author) : [],
           published: toIsoDate(res.published || ""),
           via: "defuddle",
@@ -592,7 +595,10 @@ export async function extractArticle(
       if (article?.content) {
         candidates.push({
           bodyHtml: article.content,
-          title: stripSiteSuffix(article.title || ""),
+          title: stripSiteSuffix(article.title || "", {
+            url,
+            siteName: htmlMeta.siteName,
+          }),
           author: article.byline ? splitAuthors(article.byline) : [],
           published: toIsoDate(article.publishedTime || ""),
           via: "readability",
@@ -740,7 +746,9 @@ export async function extractArticle(
     (fetchRedirected || !sameSite ? "" : usableCanonical(htmlMeta.canonicalUrl));
 
   const meta: ArticleMeta = {
-    title: chosen.title || stripSiteSuffix(htmlMeta.title),
+    title:
+      chosen.title ||
+      stripSiteSuffix(htmlMeta.title, { url, siteName: htmlMeta.siteName }),
     author,
     source_url: canonical || sourceUrl,
     published,
