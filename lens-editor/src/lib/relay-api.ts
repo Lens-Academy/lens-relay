@@ -101,13 +101,13 @@ async function waitForDocumentAccess(docId: string): Promise<void> {
 }
 
 /**
- * Initialize a content document with an underscore character.
- * This triggers Obsidian to create the file immediately rather than waiting
- * for manual "Relay Sync". Using _ to make it visible/explicit.
+ * Connect to a content document, wait for it to sync, run `fn` on it, then
+ * tear the connection down.
  */
-async function initializeContentDocument(fullDocId: string): Promise<void> {
-  debug('initializeContentDocument', 'connecting to content doc...', { fullDocId });
-
+async function withSyncedContentDoc<T>(
+  fullDocId: string,
+  fn: (doc: Y.Doc) => T | Promise<T>,
+): Promise<T> {
   const doc = new Y.Doc();
   const authEndpoint = () => getClientToken(fullDocId);
 
@@ -128,6 +128,29 @@ async function initializeContentDocument(fullDocId: string): Promise<void> {
       });
     });
 
+    return await fn(doc);
+  } finally {
+    // Clean up the connection (full teardown: destroy() alone reconnects)
+    teardownProvider(provider);
+    doc.destroy();
+  }
+}
+
+/** Read the current markdown text of a content document. */
+export async function readDocumentText(fullDocId: string): Promise<string> {
+  return withSyncedContentDoc(fullDocId, doc => doc.getText('contents').toString());
+}
+
+/**
+ * Initialize a content document with its first text: `initialText` when
+ * given (a template), otherwise an underscore character.
+ * This triggers Obsidian to create the file immediately rather than waiting
+ * for manual "Relay Sync". Using _ to make it visible/explicit.
+ */
+async function initializeContentDocument(fullDocId: string, initialText?: string): Promise<void> {
+  debug('initializeContentDocument', 'connecting to content doc...', { fullDocId });
+
+  await withSyncedContentDoc(fullDocId, async (doc) => {
     debug('initializeContentDocument', 'synced, adding initial content...');
 
     // Add an underscore to the contents Y.Text
@@ -137,8 +160,8 @@ async function initializeContentDocument(fullDocId: string): Promise<void> {
     doc.transact(() => {
       // Only add if empty to avoid overwriting existing content
       if (contents.length === 0) {
-        contents.insert(0, '_');
-        debug('initializeContentDocument', 'added initial underscore');
+        contents.insert(0, initialText || '_');
+        debug('initializeContentDocument', 'added initial content');
       } else {
         debug('initializeContentDocument', 'content already exists, skipping');
       }
@@ -148,10 +171,7 @@ async function initializeContentDocument(fullDocId: string): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 500));
 
     debug('initializeContentDocument', 'done');
-  } finally {
-    // Clean up the connection (full teardown: destroy() alone reconnects)
-    teardownProvider(provider);
-  }
+  });
 }
 
 /**
@@ -188,13 +208,15 @@ export function writeFileMeta(
  * 1. Generates a new UUID for the document
  * 2. Creates the document on the Relay server (POST /doc/new)
  * 3. Adds the path -> UUID mapping to filemeta_v0
+ * 4. For markdown, writes `initialText` (or "_" when none) as its content
  *
  * Returns the generated document UUID.
  */
 export async function createDocument(
   folderDoc: Y.Doc,
   path: string,
-  type: 'markdown' | 'canvas' | 'file' = 'markdown'
+  type: 'markdown' | 'canvas' | 'file' = 'markdown',
+  initialText?: string,
 ): Promise<string> {
   validateFilePath(path);
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
@@ -245,11 +267,13 @@ export async function createDocument(
   // Non-markdown files must start empty.
   if (type === 'markdown') {
     try {
-      await initializeContentDocument(fullDocId);
+      await initializeContentDocument(fullDocId, initialText);
     } catch (err) {
       // Don't fail the whole operation if content init fails
       // The document is still created and will sync when edited
       debug('createDocument', 'WARNING: failed to initialize content', err);
+      // A template's text is the point of the new file: say it is missing.
+      if (initialText) console.error('Failed to write template text into new document:', err);
     }
   }
 

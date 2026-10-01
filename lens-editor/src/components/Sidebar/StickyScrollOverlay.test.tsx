@@ -8,6 +8,7 @@ import type { TreeApi, NodeApi } from 'react-arborist';
 import type { TreeNode } from '../../lib/tree-utils';
 import { FileTreeProvider } from './FileTreeContext';
 import { StickyScrollOverlay } from './StickyScrollOverlay';
+import type { TemplateOption } from '../../lib/templates';
 
 function makeTreeApi() {
   const scrollEl = document.createElement('div');
@@ -51,6 +52,8 @@ function makeTreeApi() {
 function renderOverlay(treeApi: TreeApi<TreeNode>, callbacks: {
   onCreateDocument?: (path: string) => void;
   onCreateFolder?: (path: string) => void;
+  getTemplates?: (path: string) => TemplateOption[];
+  onCreateFromTemplate?: (path: string, template: TemplateOption) => void;
 }) {
   render(
     <FileTreeProvider
@@ -109,6 +112,33 @@ describe('StickyScrollOverlay', () => {
     await user.click(await screen.findByRole('button', { name: /new folder/i }));
 
     expect(onCreateFolder).toHaveBeenCalledWith('/Lens');
+  });
+
+  it('creates a document from a template listed for the sticky folder', async () => {
+    const user = userEvent.setup();
+    const { treeApi } = makeTreeApi();
+    const template = { path: '/Lens/Note Template.md', name: 'Note Template', docId: 't1' };
+    const getTemplates = vi.fn(() => [template]);
+    const onCreateFromTemplate = vi.fn();
+    renderOverlay(treeApi, { onCreateDocument: vi.fn(), getTemplates, onCreateFromTemplate });
+
+    await user.click(await screen.findByRole('button', { name: /create in lens/i }));
+    expect(getTemplates).toHaveBeenCalledWith('/Lens');
+    expect(screen.queryByRole('button', { name: 'Note Template' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /new from template/i }));
+    await user.click(screen.getByRole('button', { name: 'Note Template' }));
+
+    expect(onCreateFromTemplate).toHaveBeenCalledWith('/Lens', template);
+  });
+
+  it('hides "New from template" when the folder has no templates', async () => {
+    const user = userEvent.setup();
+    const { treeApi } = makeTreeApi();
+    renderOverlay(treeApi, { onCreateDocument: vi.fn(), getTemplates: () => [], onCreateFromTemplate: vi.fn() });
+
+    await user.click(await screen.findByRole('button', { name: /create in lens/i }));
+    expect(screen.getByRole('button', { name: /new file/i })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /new from template/i })).toBeNull();
   });
 
   it('does not render sticky create controls before the folder row scrolls away', async () => {

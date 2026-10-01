@@ -13,10 +13,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } from '../../lib/tree-utils';
-import { createDocument, createFolder, movePath, moveErrorMessage, trashPath, deleteErrorMessage, TrashRefusedError } from '../../lib/relay-api';
+import { createDocument, readDocumentText, createFolder, movePath, moveErrorMessage, trashPath, deleteErrorMessage, TrashRefusedError } from '../../lib/relay-api';
 import type { TrashReferencingDoc } from '../../lib/relay-api';
 import { getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { nextUntitledHtmlName } from '../../lib/untitled-name';
+import { findTemplates, fillTemplateIds, type TemplateOption } from '../../lib/templates';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import { renamePreservingExtension } from '../../lib/filename-utils';
@@ -220,6 +221,34 @@ export function Sidebar() {
       onNavigate(compoundDocId);
     } catch (error) {
       console.error('Failed to create document:', error);
+    }
+  }, [folderDocs, folderNames, metadata, onNavigate, justCreatedRef]);
+
+  const getTemplates = useCallback(
+    (folderPath: string) => findTemplates(metadata, folderPath),
+    [metadata],
+  );
+
+  const handleCreateFromTemplate = useCallback(async (folderPath: string, template: TemplateOption) => {
+    const folderName = getFolderNameFromPath(folderPath, folderNames);
+    if (!folderName) return;
+    const doc = folderDocs.get(folderName);
+    if (!doc) return;
+
+    const originalFolderPath = getOriginalPath(folderPath, folderName);
+    const untitledName = generateUntitledName(folderPath, metadata);
+    const path = originalFolderPath === '' || originalFolderPath === '/'
+      ? `/${untitledName}`
+      : `${originalFolderPath}/${untitledName}`;
+
+    try {
+      // Read the template before creating anything, so a failed read leaves no empty file.
+      const text = fillTemplateIds(await readDocumentText(`${RELAY_ID}-${template.docId}`));
+      const id = await createDocument(doc, path, 'markdown', text);
+      justCreatedRef.current = true;
+      onNavigate(`${RELAY_ID}-${id}`);
+    } catch (error) {
+      console.error('Failed to create document from template:', error);
     }
   }, [folderDocs, folderNames, metadata, onNavigate, justCreatedRef]);
 
@@ -446,6 +475,8 @@ export function Sidebar() {
                     onCreateDocument: canWrite ? handleInstantCreate : undefined,
                     onCreateHtmlDocument: canWrite ? handleInstantCreateHtml : undefined,
                     onCreateFolder: canWrite ? handleCreateFolder : undefined,
+                    getTemplates,
+                    onCreateFromTemplate: canWrite ? handleCreateFromTemplate : undefined,
                     onOpenNewTab: handleOpenNewTab,
                     activeDocId,
                   }}
