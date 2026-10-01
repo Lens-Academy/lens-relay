@@ -8,6 +8,7 @@ import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
 import { normalizeArticleDom, isIntraWord } from "./normalize-dom";
 import { escapeTagOpeners } from "./escape";
+import { convertSidenotes } from "./sidenotes";
 import { arxivAbsUrl } from "./adapters/arxiv";
 import {
   stripSiteSuffix,
@@ -510,6 +511,9 @@ export async function extractArticle(
   // fetch (e.g. arXiv abstract → ar5iv full text).
   const sourceUrl = opts.sourceUrl ?? url;
   const fetchText = opts.fetchText ?? fetchRawHtml;
+  // Margin sidenotes live outside the article container that content selection
+  // keeps; move them into it as footnotes first.
+  html = convertSidenotes(html, url);
   // Deterministic seed metadata (og/meta/JSON-LD) — also gives description+siteName.
   const htmlMeta = extractHtmlMeta(html);
   const ctx = adapterContext(url, html);
