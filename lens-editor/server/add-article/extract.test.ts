@@ -920,6 +920,7 @@ describe("extractArticle — fallback table conversion", () => {
           <td class="ltx_td"><span class="ltx_text ltx_font_bold">78.6%</span></td></tr>
         <tr><td class="ltx_td"><span class="ltx_inline-block"><span class="ltx_p"><span class="ltx_text ltx_font_bold">High <br class="ltx_break">concentration</span></span></span></td>
           <td class="ltx_td">once <span class="ltx_text ltx_font_italic">ever </span>at all</td><td class="ltx_td"><span class="ltx_text ltx_font_bold"> </span>✓</td></tr>
+        <tr><td class="ltx_td">p<em>q</em>r</td><td class="ltx_td">x</td><td class="ltx_td">y</td></tr>
       </tbody></table>
       </section></article></body></html>`;
     const ex = await extractArticle(html, "https://ar5iv.labs.arxiv.org/html/9999.00004", {
@@ -927,6 +928,7 @@ describe("extractArticle — fallback table conversion", () => {
     });
     expect(ex.body).toContain("| While loop instead of for loop | 57.5% | **78.6%** |");
     expect(ex.body).toContain("| **High concentration** | once _ever_ at all | ✓ |");
+    expect(ex.body).toContain("| pqr | x | y |"); // mid-word `p_q_r` would show underscores
   });
 
   it("leaves properly-headed tables to the GFM converter", async () => {

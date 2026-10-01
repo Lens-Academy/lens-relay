@@ -148,12 +148,27 @@ const LTX_FONT_TAGS: [string, string, string][] = [
   ["ltx_font_italic", "em", "em, i"],
 ];
 
+const LTX_BLOCK_CONTENT =
+  ".ltx_para, p, div, table, pre, ul, ol, li, dl, blockquote, figure, section, h1, h2, h3, h4, h5, h6";
+
+/** Whether `el` sits inside a word: a letter or digit directly touching its text on either side. */
+export function isIntraWord(el: Element): boolean {
+  const text = el.textContent || "";
+  const before = el.previousSibling?.textContent || "";
+  const after = el.nextSibling?.textContent || "";
+  return (
+    (/^\S/.test(text) && /[\p{L}\p{N}]$/u.test(before)) ||
+    (/\S$/.test(text) && /^[\p{L}\p{N}]/u.test(after))
+  );
+}
+
 /**
  * Rewrite LaTeXML bold/italic spans as <strong>/<em> so turndown (and the
  * fallback table cells in extract.ts) emit Markdown emphasis. Left alone:
  * headings and titles (already bold, `## **x**` is noise), math, spans
- * already inside the same emphasis, and spans holding block content
- * (a paragraph-spanning `**` would not parse).
+ * already inside the same emphasis, spans holding block content (a
+ * paragraph-spanning `**` would not parse), and italic inside a word
+ * (`Foo_bar_baz` is not emphasis in CommonMark; turndown writes `_`).
  */
 function convertLtxFontSpans(root: Element): void {
   const doc = root.ownerDocument;
@@ -162,7 +177,8 @@ function convertLtxFontSpans(root: Element): void {
     for (const span of root.querySelectorAll(`span.${cls}`)) {
       if (span.closest("h1, h2, h3, h4, h5, h6, .ltx_title, math")) continue;
       if (span.parentElement?.closest(same)) continue;
-      if (span.querySelector(".ltx_para, p, div, table, pre, ul, ol")) continue;
+      if (span.querySelector(LTX_BLOCK_CONTENT)) continue;
+      if (tag === "em" && isIntraWord(span)) continue;
       const el = doc.createElement(tag);
       if (span.id) el.id = span.id;
       el.append(...span.childNodes);

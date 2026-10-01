@@ -183,10 +183,20 @@ describe("normalizeArticleDom — LaTeXML font spans", () => {
     const body = normalize(
       `<h2 class="ltx_title"><span class="ltx_text ltx_font_bold">Results</span></h2>` +
         `<p><strong>A <span class="ltx_text ltx_font_bold">B</span></strong></p>` +
-        `<span class="ltx_text ltx_font_bold"><span class="ltx_para">P</span></span>`,
+        `<span class="ltx_text ltx_font_bold"><span class="ltx_para">P</span></span>` +
+        `<span class="ltx_text ltx_font_bold"><blockquote class="ltx_quote">Q</blockquote></span>`,
     );
     expect(body.querySelectorAll("h2 strong, strong strong").length).toBe(0);
-    expect(body.querySelectorAll("span.ltx_font_bold").length).toBe(3);
+    expect(body.querySelectorAll("span.ltx_font_bold").length).toBe(4);
+  });
+
+  // `Foo_bar_baz` renders literal underscores, so mid-word italic stays plain.
+  it("leaves italic inside a word as plain text", () => {
+    const body = normalize(
+      `<p>Foo<span class="ltx_text ltx_font_italic">bar</span>baz and <span class="ltx_text ltx_font_italic">qux</span>.</p>`,
+    );
+    expect(body.querySelectorAll("em").length).toBe(1);
+    expect(body.querySelector("em")?.textContent).toBe("qux");
   });
 });
 

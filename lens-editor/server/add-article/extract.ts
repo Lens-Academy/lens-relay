@@ -6,7 +6,7 @@ import { Defuddle } from "defuddle/node";
 import { extractHtmlMeta, dateFromUrl, fetchRawHtml } from "./fetch";
 import { assessExtraction, type Assessment } from "./confidence";
 import { findAdapter, adapterContext, type AdapterExtract } from "./adapters";
-import { normalizeArticleDom } from "./normalize-dom";
+import { normalizeArticleDom, isIntraWord } from "./normalize-dom";
 import { escapeTagOpeners } from "./escape";
 import { arxivAbsUrl } from "./adapters/arxiv";
 import {
@@ -125,7 +125,7 @@ function cellMarkdown(cell: Element, marks: string): string {
       text += node.textContent || "";
     } else if (node.nodeName === "BR") {
       text += " ";
-    } else if (mark && !marks.includes(mark)) {
+    } else if (mark && !marks.includes(mark) && !(mark === "_" && isIntraWord(node as Element))) {
       // Emphasis must hug its text (`** x **` does not parse), so the
       // surrounding whitespace moves outside the markers.
       const inner = cellMarkdown(node as Element, marks + mark).replace(/\s+/g, " ");
