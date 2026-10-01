@@ -45,6 +45,7 @@ import {
 } from './extensions/paste-classification';
 import {
   classifyPendingPaste,
+  pasteOriginLabels,
   resolvePendingClassification,
 } from '../../lib/provenance';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
@@ -148,7 +149,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
 
   const classifyPaste = (pasteId: number, origin: 'human' | 'ai') => {
     // Same identity source as the lazy registration in AwarenessInitializer,
-    // so a "Me" answer and ordinary typing land under the same actor key.
+    // so a human answer and ordinary typing land under the same actor key.
     classifyPendingPaste(ydoc, pasteId, origin, displayName);
     closePastePrompt(pasteId);
   };
@@ -505,6 +506,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // to avoid recreating the editor (which would lose Y.Text sync state)
   }, [ydoc, provider, onEditorReady, onDocChange, readOnly, canAcceptReject, initialSuggestionModeOnMount]);
 
+  const pasteLabels = pasteOriginLabels(displayName);
+
   return (
     <div className="relative h-full w-full">
       {!synced && <LoadingOverlay />}
@@ -532,14 +535,14 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
             className="rounded bg-blue-50 px-2 py-0.5 text-blue-700 hover:bg-blue-100"
             onClick={() => classifyPaste(pastePrompt.pasteId, 'human')}
           >
-            Me
+            {pasteLabels.human}
           </button>
           <button
             type="button"
             className="rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100"
             onClick={() => classifyPaste(pastePrompt.pasteId, 'ai')}
           >
-            AI
+            {pasteLabels.ai}
           </button>
           <button
             type="button"
