@@ -61,6 +61,8 @@ export function computeRelativePath(fromFilePath: string, toFilePath: string): s
  * 2. Absolute — treat pageName as path from root: /{pageName}.md
  * 3. Fail — return null
  *
+ * A #heading anchor and surrounding whitespace are ignored (as in link-extractor),
+ * so [[Page#Heading]] resolves to Page and [[#Heading]] resolves to nothing.
  * All matching is case-insensitive.
  */
 export function resolvePageName(
@@ -68,7 +70,10 @@ export function resolvePageName(
   metadata: FolderMetadata,
   currentFilePath?: string
 ): ResolvedDocument | null {
-  const canonicalPageName = pageName.replace(/\.md$/i, '');
+  const anchorIndex = pageName.indexOf('#');
+  const page = (anchorIndex === -1 ? pageName : pageName.substring(0, anchorIndex)).trim();
+  if (!page) return null;
+  const canonicalPageName = page.replace(/\.md$/i, '');
   const relativePath = currentFilePath ? resolveRelative(currentFilePath, canonicalPageName) : null;
   const absolutePath = '/' + canonicalPageName + '.md';
 

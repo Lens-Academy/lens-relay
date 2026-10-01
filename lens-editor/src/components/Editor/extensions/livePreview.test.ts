@@ -273,6 +273,40 @@ describe('livePreview - wikilinks', () => {
     expect(widgets[0].textContent).toBe('My Page');
   });
 
+  it('widget displays the alias of [[target|alias]] and navigates to the target', () => {
+    const onClick = vi.fn();
+    const content = '[[My Page#Heading|the alias]] end';
+    const { view, cleanup: c } = createTestEditor(content, content.length, {
+      onClick,
+      isResolved: () => true,
+    });
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget') as HTMLElement;
+    expect(widget.textContent).toBe('the alias');
+    widget.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onClick).toHaveBeenCalledWith('My Page#Heading');
+  });
+
+  it('widget falls back to the target when the alias is empty or blank', () => {
+    const content = '[[My Page|]] and [[My Page| ]] end';
+    const { view, cleanup: c } = createTestEditor(content, content.length, createRealContext());
+    cleanup = c;
+
+    const widgets = Array.from(view.contentDOM.querySelectorAll('.cm-wikilink-widget'));
+    expect(widgets.map(w => w.textContent)).toEqual(['My Page', 'My Page']);
+  });
+
+  it('resolves [[Page#Heading|alias]] to the page, not as unresolved', () => {
+    const content = '[[My Page#Heading|the alias]] end';
+    const { view, cleanup: c } = createTestEditor(content, content.length, createRealContext());
+    cleanup = c;
+
+    const widget = view.contentDOM.querySelector('.cm-wikilink-widget')!;
+    expect(widget.textContent).toBe('the alias');
+    expect(widget.classList.contains('unresolved')).toBe(false);
+  });
+
   it('marks unresolved links with unresolved class', () => {
     const content = '[[NonExistent]] more text';
 
