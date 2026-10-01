@@ -1,5 +1,6 @@
 import { retypeFootnotes } from "./footnote-typing";
 import { applyHeadingAnchors } from "./heading-anchors";
+import { normalizeTables } from "./table-repair";
 
 export interface NormalizationSample {
   before: string;
@@ -175,8 +176,11 @@ export function normalizeArticleBody(body: string, sourceUrl: string): {
   // link is rewritten against headings that may be defined anywhere in the
   // document, so every heading must be seen before any link is resolved.
   const anchored = applyHeadingAnchors(typed.body);
+  // Table repairs are line-based and must see whole rows, including the maths
+  // inside them that the segment pass above treats as opaque.
+  const tables = normalizeTables(anchored.body);
   return {
-    body: anchored.body,
-    changes: [...changes.values(), ...typed.changes, ...anchored.changes],
+    body: tables.body,
+    changes: [...changes.values(), ...typed.changes, ...anchored.changes, ...tables.changes],
   };
 }

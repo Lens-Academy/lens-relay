@@ -22,7 +22,8 @@ import {
   normalizeArticleBody,
   type NormalizationChange,
 } from "./normalize-article";
-import { assertArticleValid, validateArticleDraft } from "./platform-validation";
+import { assertArticleValid, validateArticleDraft, type ArticleValidationResult } from "./platform-validation";
+import { forceTableCellCounts, normalizeTables } from "./table-repair";
 import {
   createMemoryArticleReviewReporter,
   type ArticleReviewReporter,
@@ -184,6 +185,11 @@ function withArticleWriteLock<T>(fn: () => Promise<T>): Promise<T> {
     () => undefined,
   );
   return result;
+}
+
+function onlyTableErrors(validation: ArticleValidationResult): boolean {
+  const errors = validation.issues.filter((issue) => issue.severity === "error");
+  return errors.length > 0 && errors.every((issue) => issue.code === "article.table-malformed");
 }
 
 function markdownBody(markdown: string): string {
@@ -558,6 +564,13 @@ export async function processArticle(
   const trackReviewModel = (model: string) => {
     if (model !== reviewer.model) reviewer = { ...reviewer, model };
   };
+  // A reviewer pass can bring back what normalizeTables repairs (maths pipes
+  // in a cell, a caption against a table), so its output gets the same pass.
+  const reviewedBody = async (markdown: string): Promise<string> => {
+    const tables = normalizeTables(markdownBody(markdown));
+    await reportNormalizationChanges(reporter, tables.changes);
+    return tables.body;
+  };
   if (!isStubOnly) {
     await setStage("normalizing");
     const normalized = normalizeArticleBody(body, meta.source_url || job.url);
@@ -716,7 +729,7 @@ export async function processArticle(
       throw error;
     }
     meta = outcome.meta;
-    body = markdownBody(outcome.markdown);
+    body = await reviewedBody(outcome.markdown);
     assertRequiredBodyPrefix(body, requiredBodyPrefix);
     filenameBase = generateArticleFilenameBase(meta.author, meta.title);
     draft = generateArticleMarkdown(meta, body, createdDate);
@@ -789,7 +802,7 @@ export async function processArticle(
         throw error;
       }
       meta = outcome.meta;
-      body = markdownBody(outcome.markdown);
+      body = await reviewedBody(outcome.markdown);
       assertRequiredBodyPrefix(body, requiredBodyPrefix);
       filenameBase = generateArticleFilenameBase(meta.author, meta.title);
       draft = generateArticleMarkdown(meta, body, createdDate);
@@ -805,6 +818,27 @@ export async function processArticle(
       throw new Error(
         "protected-content edits were reverted in the final review round and no round remained to confirm the result",
       );
+    }
+    // A miscounted table row must not discard a whole paper. When the review
+    // rounds are spent and table rows are the only errors left, make the
+    // counts match, flag each changed row for a human, and write the article.
+    if (!validation.valid && onlyTableErrors(validation)) {
+      const forced = forceTableCellCounts(body);
+      if (forced.rows.length > 0) {
+        await setStage("forcing-table-cells");
+        body = forced.body;
+        draft = generateArticleMarkdown(meta, body, createdDate);
+        await reporter.programmatic({
+          code: "programmatic.table-cell-counts-forced",
+          count: forced.rows.length,
+          before: forced.rows[0].before,
+          after: forced.rows[0].after,
+          detail: { rows: forced.rows },
+        });
+        validationStarted = Date.now();
+        validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
+        await reporter.validation("post-table-repair", validation, Date.now() - validationStarted);
+      }
     }
     assertArticleValid(validation);
     reviewed = true;
