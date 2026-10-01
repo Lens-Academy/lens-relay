@@ -4,7 +4,7 @@ import type { ArticleImportMode, ArticleJob, ArticleMeta } from "./types";
 import { fetchRawBytes } from "./fetch";
 import { embedPdfImages } from "./pdf";
 import { dedupUrlVariants } from "./url-normalize";
-import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
+import { hostRemoteImages, newImageBudget, type HostImagesResult } from "./image-hosting";
 import { attachmentPublicUrl } from "../attachments/public-url";
 import {
   ArticleReviewRejectedError,
@@ -69,6 +69,10 @@ async function pruneExpiredEvidence(): Promise<void> {
 // Below this the extraction almost certainly failed (empty/wrong container)
 // rather than producing a real article body.
 const MIN_ARTICLE_CHARS = 200;
+
+/** Time limit for one image-rehosting pass; what is unfinished then stays
+ *  external. */
+const IMAGE_PHASE_TIMEOUT_MS = 90_000;
 
 function relayArticleFolder(): string {
   return process.env.RELAY_ARTICLE_FOLDER || "Lens Edu/articles";
@@ -209,10 +213,6 @@ export function assertRequiredBodyPrefix(
       "The mandatory source download links were removed, changed, moved, or duplicated during article processing",
     );
   }
-}
-
-function occurrences(text: string, needle: string): number {
-  return text.split(needle).length - 1;
 }
 
 async function reportNormalizationChanges(
@@ -460,32 +460,61 @@ export async function processArticle(
     });
   }
 
-  // 4.6. Rehost arXiv/ar5iv figure hotlinks as attachments — mirror-hosted
-  //      asset URLs rot, and the library should be self-contained. Failures
-  //      keep the external URL (an upgrade, never a gate).
-  if (!isStubOnly && ex.via === "arxiv") {
+  // 4.6. Rehost hotlinked images as attachments, for every HTML import:
+  //      hotlinks rot (ar5iv regenerates, sites redesign) and the library
+  //      should be self-contained. Each image is capped in size, the article
+  //      in total bytes; failures keep the external URL (an upgrade, never a
+  //      gate) and are recorded in the report. PDF figures are hosted above.
+  //      Both review candidates share one cache, so an image is fetched once.
+  const hostedImages = new Map<string, string>();
+  const imageBudget = newImageBudget();
+  const hostImages = async (markdown: string, slug: string) => {
+    let result: HostImagesResult = { hosted: 0, kept: [] };
+    // A time limit per call (so at most two per article), so a slow or
+    // tarpitting image host can never eat the job deadline and fail the import.
+    // An owned timer, not AbortSignal.any + AbortSignal.timeout: those hold
+    // their sources weakly and the timeout can be collected between fetches
+    // (the hazard fetch-timeout.ts documents).
+    const ctrl = new AbortController();
+    const timer = setTimeout(
+      () => ctrl.abort(new Error("image hosting time limit reached")),
+      IMAGE_PHASE_TIMEOUT_MS,
+    );
+    const forwardAbort = () => ctrl.abort(signal?.reason);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener("abort", forwardAbort, { once: true });
+    try {
+      const out = await hostRemoteImages(markdown, slug, {
+        folder: topFolder,
+        fetchImage: async (url, maxBytes, imageAbort) => {
+          const r = await fetchRawBytes(url, imageAbort, { accept: "image/*", maxBytes });
+          return { bytes: r.bytes, contentType: r.contentType };
+        },
+        upload: (p, data, mime) =>
+          createRelayAttachment(topFolder, p, data, mime, signal),
+        budget: imageBudget,
+        signal: ctrl.signal,
+        cache: hostedImages,
+        onResult: (r) => { result = r; },
+      });
+      return { body: out, result };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", forwardAbort);
+    }
+  };
+  if (!isStubOnly && ex.via !== "pdf" && /!\[[^\]]*\]\(https?:/.test(body)) {
     await setStage("uploading-images");
     const beforeImages = body;
-    body = await hostRemoteImages(body, filenameBase, {
-      hostPattern: ARXIV_IMAGE_HOSTS,
-      folder: topFolder,
-      fetchImage: async (u) => {
-        const r = await fetchRawBytes(u, signal);
-        return { bytes: r.bytes, contentType: r.contentType };
-      },
-      upload: (p, data, mime) =>
-        createRelayAttachment(topFolder, p, data, mime, signal),
-    });
-    if (body !== beforeImages) {
+    const hosting = await hostImages(body, filenameBase);
+    body = hosting.body;
+    if (hosting.result.hosted > 0 || hosting.result.kept.length > 0) {
       await reporter.programmatic({
-        code: "programmatic.arxiv-images-hosted",
-        count: Math.max(
-          1,
-          occurrences(body, "raw.githubusercontent.com/Lens-Academy/lens-edu-staging") -
-            occurrences(beforeImages, "raw.githubusercontent.com/Lens-Academy/lens-edu-staging"),
-        ),
+        code: "programmatic.images-hosted",
+        count: hosting.result.hosted,
         before: beforeImages,
         after: body,
+        detail: { kept_external: hosting.result.kept },
       });
     }
   }
@@ -572,17 +601,8 @@ export async function processArticle(
         unrenderedMeta.author,
         unrenderedMeta.title,
       ) || filenameBase;
-      if (unrenderedExtraction.via === "arxiv") {
-        unrenderedBody = await hostRemoteImages(unrenderedBody, unrenderedFilenameBase, {
-          hostPattern: ARXIV_IMAGE_HOSTS,
-          folder: topFolder,
-          fetchImage: async (url) => {
-            const response = await fetchRawBytes(url, signal);
-            return { bytes: response.bytes, contentType: response.contentType };
-          },
-          upload: (attachmentPath, data, mime) =>
-            createRelayAttachment(topFolder, attachmentPath, data, mime, signal),
-        });
+      if (unrenderedExtraction.via !== "pdf") {
+        unrenderedBody = (await hostImages(unrenderedBody, unrenderedFilenameBase)).body;
       }
       const unrenderedNormalized = normalizeArticleBody(
         unrenderedBody,

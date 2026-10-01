@@ -121,7 +121,7 @@ Binary files live as blobs at `files/<relay-id>-<uuid>/<sha256>` with a
 relay-git-sync commits them into the synced repo, and the platform renders
 them from the repo's raw URL (`![alt](https://raw.githubusercontent.com/…/attachments/<file>)`).
 
-**Writers.** The article importer (PDF figures, arXiv rehosting) and the MCP
+**Writers.** The article importer (PDF figures, image rehosting for HTML imports) and the MCP
 `import_attachment` tool all go through lens-editor, which uploads with the
 relay server token:
 
