@@ -8,7 +8,7 @@ import {
   fetchRenderedHtml,
 } from "./fetch";
 
-vi.mock("./ssrf", () => ({ assertPublicUrl: vi.fn() }));
+vi.mock("./ssrf", () => ({ assertPublicUrl: vi.fn(), publicOnlyDispatcher: undefined, SsrfError: class SsrfError extends Error {} }));
 
 afterEach(() => {
   vi.unstubAllEnvs();
