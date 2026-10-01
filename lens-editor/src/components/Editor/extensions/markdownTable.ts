@@ -4,6 +4,8 @@ import { Compartment, Prec, StateField, RangeSetBuilder, Transaction } from '@co
 import type { EditorState, Extension } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
+import { GFM, parser } from '@lezer/markdown';
+import { createLinkElement } from './linkElement';
 
 type Align = 'left' | 'center' | 'right';
 
@@ -42,61 +44,99 @@ function unescapeFromCell(s: string): string {
   return out;
 }
 
-function findClosingMarker(source: string, marker: string, from: number): number {
-  for (let i = from; i <= source.length - marker.length; i++) {
-    if (source[i] === '\\') {
-      i++;
-      continue;
-    }
-    if (source.startsWith(marker, i)) return i;
-  }
-  return -1;
+// Cell content is inline Markdown. Parse it with the GFM parser the editor uses,
+// with every block parser removed so that "# x" or "- x" stay one paragraph.
+const cellParser = parser.configure([
+  GFM,
+  {
+    remove: [
+      'SetextHeading', 'FencedCode', 'Blockquote', 'HorizontalRule', 'BulletList', 'OrderedList',
+      'ATXHeading', 'HTMLBlock', 'LinkReference', 'IndentedCode', 'Table',
+    ],
+  },
+]);
+
+/** The text between a node's opening and closing marks, rendered as inline content. */
+function renderBetweenMarks(target: Node, source: string, node: SyntaxNode, markName: string): void {
+  const marks = node.getChildren(markName);
+  const from = marks.length ? marks[0].to : node.from;
+  const to = marks.length > 1 ? marks[marks.length - 1].from : node.to;
+  renderInlineRange(target, source, node, from, to);
 }
 
-/** Render the small inline-Markdown subset supported by table live preview. */
+/** Render the children of `parent` within [from, to), with the text between them. */
+function renderInlineRange(target: Node, source: string, parent: SyntaxNode, from: number, to: number): void {
+  let pos = from;
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (child.to <= from || child.from >= to) continue;
+    if (child.from > pos) target.appendChild(document.createTextNode(source.slice(pos, child.from)));
+    renderInlineNode(target, source, child);
+    pos = child.to;
+  }
+  if (pos < to) target.appendChild(document.createTextNode(source.slice(pos, to)));
+}
+
+function renderInlineNode(target: Node, source: string, node: SyntaxNode): void {
+  const raw = source.slice(node.from, node.to);
+  switch (node.name) {
+    case 'Escape':
+      target.appendChild(document.createTextNode(raw.slice(1)));
+      return;
+    case 'Emphasis':
+    case 'StrongEmphasis': {
+      const mark = document.createElement(node.name === 'Emphasis' ? 'em' : 'strong');
+      renderBetweenMarks(mark, source, node, 'EmphasisMark');
+      target.appendChild(mark);
+      return;
+    }
+    case 'InlineCode': {
+      const code = document.createElement('code');
+      const marks = node.getChildren('CodeMark');
+      code.textContent = unescapeFromCell(
+        source.slice(marks[0]?.to ?? node.from, marks[1]?.from ?? node.to),
+      );
+      target.appendChild(code);
+      return;
+    }
+    case 'Link':
+    case 'Autolink':
+    case 'URL': {
+      const urlNode = node.name === 'URL' ? node : node.getChild('URL');
+      if (!urlNode) break; // reference-style [text][ref]: no URL to open
+      // The destination of [text](<url>) keeps its angle brackets in the URL node
+      const url = unescapeFromCell(source.slice(urlNode.from, urlNode.to).replace(/^<(.*)>$/, '$1'));
+      const label = document.createDocumentFragment();
+      if (node.name === 'Link') {
+        const marks = node.getChildren('LinkMark');
+        renderInlineRange(label, source, node, marks[0]?.to ?? node.from, marks[1]?.from ?? node.to);
+      } else {
+        label.appendChild(document.createTextNode(url));
+      }
+      const link = createLinkElement(label, url);
+      // Refused schemes come back as plain text, which should still edit the cell
+      if (link.classList.contains('cm-link-widget')) {
+        // Keep the press from focusing the cell, which would swap the rendered
+        // cell for its Markdown source before the click reaches the link.
+        link.addEventListener('mousedown', e => e.preventDefault());
+      }
+      target.appendChild(link);
+      return;
+    }
+  }
+  // Anything else (strikethrough, images, HTML, ...) shows its source text,
+  // with the inline nodes inside it still rendered.
+  renderInlineRange(target, source, node, node.from, node.to);
+}
+
+/** Render a cell's inline Markdown: emphasis, code and links. */
 function renderInlineCell(el: HTMLElement, source: string): void {
   el.replaceChildren();
-  let text = '';
-  const flushText = () => {
-    if (!text) return;
-    el.appendChild(document.createTextNode(text));
-    text = '';
-  };
-
-  for (let i = 0; i < source.length;) {
-    if (source[i] === '\\' && i + 1 < source.length) {
-      text += source[i + 1];
-      i += 2;
-      continue;
-    }
-
-    const marker = source.startsWith('**', i)
-      ? '**'
-      : source.startsWith('__', i)
-        ? '__'
-        : source[i] === '*' || source[i] === '_' || source[i] === '`'
-          ? source[i]
-          : null;
-    if (marker) {
-      const close = findClosingMarker(source, marker, i + marker.length);
-      if (close > i + marker.length) {
-        flushText();
-        const mark = document.createElement(
-          marker === '**' || marker === '__' ? 'strong' : marker === '`' ? 'code' : 'em',
-        );
-        const inner = source.slice(i + marker.length, close);
-        if (marker === '`') mark.textContent = unescapeFromCell(inner);
-        else renderInlineCell(mark, inner);
-        el.appendChild(mark);
-        i = close + marker.length;
-        continue;
-      }
-    }
-
-    text += source[i];
-    i++;
+  const paragraph = cellParser.parse(source).topNode.firstChild;
+  if (!paragraph) {
+    el.textContent = source;
+    return;
   }
-  flushText();
+  renderInlineRange(el, source, paragraph, 0, source.length);
 }
 
 function updateCellDisplay(el: HTMLElement, markdown: string): void {
