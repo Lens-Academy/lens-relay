@@ -1,11 +1,12 @@
 /**
- * Where a live-preview link opens: http(s) and mailto as written, a URL with no
- * scheme (www.example.org) over https, and null for any other scheme
+ * Where a live-preview link opens: http(s) and mailto as written, a scheme-less
+ * email address (GFM autolinks <a@b.org> and a@b.org) as mailto:, any other URL
+ * with no scheme (www.example.org) over https, and null for any other scheme
  * (javascript:, data:, ...), which is then shown as plain text.
  */
 export function linkHref(url: string): string | null {
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1].toLowerCase();
-  if (!scheme) return 'https://' + url;
+  if (!scheme) return /^[^/]*@[^/]*$/.test(url) ? 'mailto:' + url : 'https://' + url;
   return scheme === 'http' || scheme === 'https' || scheme === 'mailto' ? url : null;
 }
 

@@ -9,6 +9,11 @@ describe('linkHref', () => {
     expect(linkHref('www.example.org')).toBe('https://www.example.org');
   });
 
+  it('opens a scheme-less email address as mailto:', () => {
+    expect(linkHref('foo@bar.com')).toBe('mailto:foo@bar.com');
+    expect(linkHref('www.example.org/@user')).toBe('https://www.example.org/@user');
+  });
+
   it('refuses other schemes', () => {
     expect(linkHref('javascript:alert(1)')).toBeNull();
     expect(linkHref('data:text/html,hi')).toBeNull();

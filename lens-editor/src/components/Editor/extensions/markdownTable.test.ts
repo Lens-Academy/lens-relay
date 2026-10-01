@@ -202,6 +202,17 @@ describe('markdownTable - rendering', () => {
     expect(td.textContent).toBe('mailto:a@b.com x javascript:alert(1)');
   });
 
+  it('opens email autolinks as mailto:', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const content = '| A |\n| - |\n| <foo@bar.com> and x@y.com |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const links = Array.from(view.contentDOM.querySelectorAll('.cm-md-table td .cm-link-widget')) as HTMLElement[];
+    for (const a of links) a.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(open.mock.calls.map(c => c[0])).toEqual(['mailto:foo@bar.com', 'mailto:x@y.com']);
+    open.mockRestore();
+  });
+
   it('does not treat wikilinks or mid-word text as links', () => {
     const content = '| A |\n| - |\n| [[Page]] and xhttps://nope.example |\n\nend';
     view = createEditor(content, content.indexOf('end'));
