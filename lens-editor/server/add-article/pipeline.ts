@@ -468,27 +468,40 @@ export async function processArticle(
   //      Both review candidates share one cache, so an image is fetched once.
   const hostedImages = new Map<string, string>();
   const imageBudget = newImageBudget();
-  const hostImages = (markdown: string, slug: string) => {
+  const hostImages = async (markdown: string, slug: string) => {
     let result: HostImagesResult = { hosted: 0, kept: [] };
     // A time limit per call (so at most two per article), so a slow or
     // tarpitting image host can never eat the job deadline and fail the import.
-    const imageSignal = AbortSignal.any([
-      ...(signal ? [signal] : []),
-      AbortSignal.timeout(IMAGE_PHASE_TIMEOUT_MS),
-    ]);
-    return hostRemoteImages(markdown, slug, {
-      folder: topFolder,
-      fetchImage: async (url, maxBytes, imageAbort) => {
-        const r = await fetchRawBytes(url, imageAbort, { accept: "image/*", maxBytes });
-        return { bytes: r.bytes, contentType: r.contentType };
-      },
-      upload: (p, data, mime) =>
-        createRelayAttachment(topFolder, p, data, mime, signal),
-      budget: imageBudget,
-      signal: imageSignal,
-      cache: hostedImages,
-      onResult: (r) => { result = r; },
-    }).then((out) => ({ body: out, result }));
+    // An owned timer, not AbortSignal.any + AbortSignal.timeout: those hold
+    // their sources weakly and the timeout can be collected between fetches
+    // (the hazard fetch-timeout.ts documents).
+    const ctrl = new AbortController();
+    const timer = setTimeout(
+      () => ctrl.abort(new Error("image hosting time limit reached")),
+      IMAGE_PHASE_TIMEOUT_MS,
+    );
+    const forwardAbort = () => ctrl.abort(signal?.reason);
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener("abort", forwardAbort, { once: true });
+    try {
+      const out = await hostRemoteImages(markdown, slug, {
+        folder: topFolder,
+        fetchImage: async (url, maxBytes, imageAbort) => {
+          const r = await fetchRawBytes(url, imageAbort, { accept: "image/*", maxBytes });
+          return { bytes: r.bytes, contentType: r.contentType };
+        },
+        upload: (p, data, mime) =>
+          createRelayAttachment(topFolder, p, data, mime, signal),
+        budget: imageBudget,
+        signal: ctrl.signal,
+        cache: hostedImages,
+        onResult: (r) => { result = r; },
+      });
+      return { body: out, result };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", forwardAbort);
+    }
   };
   if (!isStubOnly && ex.via !== "pdf" && /!\[[^\]]*\]\(https?:/.test(body)) {
     await setStage("uploading-images");
