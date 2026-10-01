@@ -13,6 +13,23 @@ describe('resolvePageName', () => {
     '/RF2/Course Notes.md': { id: 'doc-course', type: 'markdown', version: 0 },
   };
 
+  describe('anchors and whitespace', () => {
+    it('ignores a #heading anchor', () => {
+      const result = resolvePageName('Plan#Milestones', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result).toEqual({ docId: 'doc-plan', path: '/RF1/Projects/Plan.md' });
+    });
+
+    it('ignores whitespace around the page name, as in [[Plan | alias]]', () => {
+      const result = resolvePageName(' Plan ', metadata, '/RF1/Projects/Roadmap.md');
+      expect(result).toEqual({ docId: 'doc-plan', path: '/RF1/Projects/Plan.md' });
+    });
+
+    it('returns null for a same-page anchor like [[#Heading]]', () => {
+      expect(resolvePageName('#Heading', metadata, '/RF1/Projects/Roadmap.md')).toBeNull();
+      expect(resolvePageName('', metadata, '/RF1/Projects/Roadmap.md')).toBeNull();
+    });
+  });
+
   describe('relative resolution (priority 1)', () => {
     it('resolves sibling file', () => {
       const result = resolvePageName('Plan', metadata, '/RF1/Projects/Roadmap.md');

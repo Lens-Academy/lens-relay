@@ -701,7 +701,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 const raw = view.state.doc.sliceString(contentNode.from, contentNode.to);
                 const pipeIndex = raw.indexOf('|');
                 const content = pipeIndex !== -1 ? raw.substring(0, pipeIndex) : raw;
-                // [[target|alias]] shows the alias; an empty alias falls back to the target
+                // [[target|alias]] shows the alias; a blank alias falls back to the target
                 const alias = pipeIndex !== -1 ? raw.substring(pipeIndex + 1) : '';
 
                 // Detect ![[...]] image embed: leading '!' plus an image file extension.
@@ -745,7 +745,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   from: node.from,
                   to: node.to,
                   deco: Decoration.replace({
-                    widget: new WikilinkWidget(content, alias || content, resolved),
+                    widget: new WikilinkWidget(content, alias.trim() ? alias : content, resolved),
                   }),
                 });
                 // Skip children (WikilinkMark) - replaced by widget
