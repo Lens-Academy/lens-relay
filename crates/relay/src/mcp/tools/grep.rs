@@ -61,6 +61,14 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
         all_paths.retain(|p| p.starts_with(&prefix) || p == scope);
     }
 
+    // Uploaded images never match: their bytes live in the store (the doc has
+    // a file hash), not in Y.Text, so read_doc_content loads each one as an
+    // empty Y.Doc. On Lens Edu's ~800 attachments that took ~60s per grep and
+    // pushed whole-folder searches past the MCP client timeout. Image paths
+    // without a hash keep their content in Y.Text and are still searched.
+    let resolver = server.doc_resolver();
+    all_paths.retain(|p| !(super::blob::is_image_file(p) && resolver.get_file_hash(p).is_some()));
+
     let mut output_lines: Vec<String> = Vec::new();
     let mut file_count = 0;
 
@@ -556,6 +564,52 @@ mod tests {
         assert!(
             !result.contains("Lens Edu"),
             "Should not include Lens Edu doc: {}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_skips_uploaded_images() {
+        let server = build_test_server(&[
+            ("/Doc.md", "uuid-doc", "target line"),
+            ("/attachments/fig.png", "uuid-png", "target line"),
+            ("/attachments/Photo.JPG", "uuid-jpg", "target line"),
+            ("/attachments/logo.svg", "uuid-svg", "target line"),
+        ])
+        .await;
+        // Uploaded images carry a file hash; the hashless SVG keeps its text in Y.Text.
+        server
+            .doc_resolver()
+            .update_hash("Lens/attachments/fig.png", "hash-png");
+        server
+            .doc_resolver()
+            .update_hash("Lens/attachments/Photo.JPG", "hash-jpg");
+
+        let result = execute(
+            &server,
+            &json!({"pattern": "target", "output_mode": "files_with_matches"}),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            result.contains("Lens/Doc.md"),
+            "Should include markdown: {}",
+            result
+        );
+        assert!(
+            result.contains("Lens/attachments/logo.svg"),
+            "Should search an image path whose text is in Y.Text: {}",
+            result
+        );
+        assert!(
+            !result.contains("fig.png"),
+            "Should skip uploaded png: {}",
+            result
+        );
+        assert!(
+            !result.contains("Photo.JPG"),
+            "Should skip uploaded jpg: {}",
             result
         );
     }
