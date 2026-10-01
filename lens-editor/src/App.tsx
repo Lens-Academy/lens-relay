@@ -35,6 +35,7 @@ import { MultiDocSectionEditor } from './components/SectionEditor';
 import { applySuggestionActionsViaServer, SUGGESTION_NOT_FOUND } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
+import { useOpenByPath } from './hooks/useOpenByPath';
 import { BlobDocumentView } from './components/BlobViewer';
 import { ImageDocumentView } from './components/ImageDocumentView';
 import { HtmlEditor } from './components/HtmlEditor';
@@ -270,15 +271,29 @@ function DocumentView() {
   const { docUuid, '*': splatPath } = useParams<{ docUuid: string; '*': string }>();
   const { metadata } = useNavigation();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Only a hex segment can be a doc prefix; anything else (/Lens/Some Doc.md)
+  // goes straight to path resolution below
+  const isPrefix = !!docUuid && /^[0-9a-f-]+$/i.test(docUuid);
 
   // Build compound ID from URL param (may be short: RELAY_ID + 8-char prefix)
-  // Empty string when docUuid is missing — hook handles this gracefully
-  const shortCompoundId = docUuid ? `${RELAY_ID}-${docUuid}` : '';
+  // Empty string when docUuid is missing or not a prefix — hook handles this gracefully
+  const shortCompoundId = isPrefix ? `${RELAY_ID}-${docUuid}` : '';
 
   // Resolve short UUID to full compound ID (instant from metadata, or server fetch)
   // docId is null for empty input or while resolving; notFound means the server
   // definitively answered that no such doc exists
   const { docId: activeDocId, notFound } = useResolvedDocId(shortCompoundId, metadata);
+
+  // A prefix-less URL is a vault path: resolve it through the relay and
+  // redirect to the canonical prefixed URL. Prefix first, then path.
+  const openAsPath = !!docUuid && (!isPrefix || notFound);
+  const openByPath = useOpenByPath(openAsPath ? location.pathname : null);
+  useEffect(() => {
+    if (!openByPath.target) return;
+    navigate(openByPath.target + location.search + location.hash, { replace: true });
+  }, [openByPath.target, location.search, location.hash, navigate]);
 
   // Update URL to use short UUID + decorative path when metadata loads
   useEffect(() => {
@@ -300,8 +315,15 @@ function DocumentView() {
 
   if (!docUuid) return <DocumentNotFound />;
 
-  // The URL points at a doc that doesn't exist (deleted, or a bad link)
-  if (notFound) return <DocumentNotFound />;
+  if (openAsPath) {
+    // Neither a doc prefix nor a vault path (deleted, or a bad link)
+    if (openByPath.notFound) return <DocumentNotFound />;
+    return (
+      <main className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Opening document...</div>
+      </main>
+    );
+  }
 
   // Show loading while resolving short UUID on cold page load
   if (!activeDocId) {
