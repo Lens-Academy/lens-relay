@@ -4,7 +4,7 @@ import type { ArticleImportMode, ArticleJob, ArticleMeta } from "./types";
 import { fetchRawBytes } from "./fetch";
 import { embedPdfImages } from "./pdf";
 import { dedupUrlVariants } from "./url-normalize";
-import { hostRemoteImages, ARXIV_IMAGE_HOSTS } from "./image-hosting";
+import { hostRemoteImages, type HostImagesResult } from "./image-hosting";
 import { attachmentPublicUrl } from "../attachments/public-url";
 import {
   ArticleReviewRejectedError,
@@ -209,10 +209,6 @@ export function assertRequiredBodyPrefix(
       "The mandatory source download links were removed, changed, moved, or duplicated during article processing",
     );
   }
-}
-
-function occurrences(text: string, needle: string): number {
-  return text.split(needle).length - 1;
 }
 
 async function reportNormalizationChanges(
@@ -460,32 +456,39 @@ export async function processArticle(
     });
   }
 
-  // 4.6. Rehost arXiv/ar5iv figure hotlinks as attachments — mirror-hosted
-  //      asset URLs rot, and the library should be self-contained. Failures
-  //      keep the external URL (an upgrade, never a gate).
-  if (!isStubOnly && ex.via === "arxiv") {
-    await setStage("uploading-images");
-    const beforeImages = body;
-    body = await hostRemoteImages(body, filenameBase, {
-      hostPattern: ARXIV_IMAGE_HOSTS,
+  // 4.6. Rehost hotlinked images as attachments, for every HTML import:
+  //      hotlinks rot (ar5iv regenerates, sites redesign) and the library
+  //      should be self-contained. Each image is capped in size, the article
+  //      in total bytes; failures keep the external URL (an upgrade, never a
+  //      gate) and are recorded in the report. PDF figures are hosted above.
+  //      Both review candidates share one cache, so an image is fetched once.
+  const hostedImages = new Map<string, string>();
+  const hostImages = (markdown: string, slug: string) => {
+    let result: HostImagesResult = { hosted: 0, kept: [] };
+    return hostRemoteImages(markdown, slug, {
       folder: topFolder,
-      fetchImage: async (u) => {
-        const r = await fetchRawBytes(u, signal);
+      fetchImage: async (url, maxBytes) => {
+        const r = await fetchRawBytes(url, signal, { accept: "image/*", maxBytes });
         return { bytes: r.bytes, contentType: r.contentType };
       },
       upload: (p, data, mime) =>
         createRelayAttachment(topFolder, p, data, mime, signal),
-    });
-    if (body !== beforeImages) {
+      cache: hostedImages,
+      onResult: (r) => { result = r; },
+    }).then((out) => ({ body: out, result }));
+  };
+  if (!isStubOnly && ex.via !== "pdf") {
+    await setStage("uploading-images");
+    const beforeImages = body;
+    const hosting = await hostImages(body, filenameBase);
+    body = hosting.body;
+    if (hosting.result.hosted > 0 || hosting.result.kept.length > 0) {
       await reporter.programmatic({
-        code: "programmatic.arxiv-images-hosted",
-        count: Math.max(
-          1,
-          occurrences(body, "raw.githubusercontent.com/Lens-Academy/lens-edu-staging") -
-            occurrences(beforeImages, "raw.githubusercontent.com/Lens-Academy/lens-edu-staging"),
-        ),
+        code: "programmatic.images-hosted",
+        count: hosting.result.hosted,
         before: beforeImages,
         after: body,
+        detail: { kept_external: hosting.result.kept },
       });
     }
   }
@@ -572,17 +575,8 @@ export async function processArticle(
         unrenderedMeta.author,
         unrenderedMeta.title,
       ) || filenameBase;
-      if (unrenderedExtraction.via === "arxiv") {
-        unrenderedBody = await hostRemoteImages(unrenderedBody, unrenderedFilenameBase, {
-          hostPattern: ARXIV_IMAGE_HOSTS,
-          folder: topFolder,
-          fetchImage: async (url) => {
-            const response = await fetchRawBytes(url, signal);
-            return { bytes: response.bytes, contentType: response.contentType };
-          },
-          upload: (attachmentPath, data, mime) =>
-            createRelayAttachment(topFolder, attachmentPath, data, mime, signal),
-        });
+      if (unrenderedExtraction.via !== "pdf") {
+        unrenderedBody = (await hostImages(unrenderedBody, unrenderedFilenameBase)).body;
       }
       const unrenderedNormalized = normalizeArticleBody(
         unrenderedBody,
