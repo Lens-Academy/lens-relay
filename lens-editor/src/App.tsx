@@ -83,16 +83,41 @@ function clearTokenAndReload() {
   window.location.reload();
 }
 
+// Current editor access links, posted in the team-only #0-internal channel.
 const ACCESS_KEY_MESSAGE_URL =
-  'https://discord.com/channels/1440725236843806762/1481581688705519689/1510923946168684624';
+  'https://discord.com/channels/1440725236843806762/1464359318865448970/1522158633738309713';
+const HELP_CHANNEL_URL =
+  'https://discord.com/channels/1440725236843806762/1464603560346910892';
 
-function AccessDenied() {
+function HelpChannelLink() {
+  return (
+    <a
+      href={HELP_CHANNEL_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-blue-600 hover:text-blue-800 underline whitespace-nowrap"
+    >
+      #help-and-feedback
+    </a>
+  );
+}
+
+function ContactTeamHint() {
+  return (
+    <p className="text-gray-500 mt-3">
+      Can't open that message? You may not have access to that channel. Message someone on the
+      Lens team on Discord, or ask in <HelpChannelLink />.
+    </p>
+  );
+}
+
+export function AccessDenied() {
   return (
     <div className="h-screen flex items-center justify-center bg-gray-50">
       <div className="text-center max-w-md px-6">
         <div className="text-5xl mb-4">🔒</div>
         <h1 className="text-2xl font-semibold text-gray-800 mb-2">Access Required</h1>
-        <p className="text-gray-500">You need a share link to access this editor. Please ask the document owner for a link.</p>
+        <p className="text-gray-500">You need a share link to access this editor. Please ask the Lens team for a link, for example in <HelpChannelLink /> on Discord.</p>
       </div>
     </div>
   );
@@ -115,6 +140,7 @@ export function TokenExpired() {
             this Discord message
           </a>.
         </p>
+        <ContactTeamHint />
         <button
           onClick={clearTokenAndReload}
           className="mt-4 text-sm text-blue-600 hover:text-blue-800 underline"
@@ -156,6 +182,7 @@ export function TokenInvalid() {
                 this Discord message
               </a>.
             </p>
+            <ContactTeamHint />
           </>
         )}
         <br />
