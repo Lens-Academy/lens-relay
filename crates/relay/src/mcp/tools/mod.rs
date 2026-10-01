@@ -157,7 +157,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }),
         json!({
             "name": "grep",
-            "description": "Search document contents using regex patterns. Returns matching lines with context. Mirrors ripgrep output format.",
+            "description": "Search document contents using regex patterns. Returns matching lines with context. Mirrors ripgrep output format. Image attachments stored as uploaded files (png, jpg, jpeg, gif, webp, svg) are not searched; use read to look at one.",
             "inputSchema": {
                 "type": "object",
                 "required": ["pattern", "session_id"],
