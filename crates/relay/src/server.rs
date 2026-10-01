@@ -7862,7 +7862,16 @@ mod test {
         folder_name: &str,
         entries: &[(&str, &str, &str)],
     ) -> String {
-        let folder_doc_id = format!("{}-{}", TEST_RELAY_ID, TEST_FOLDER_UUID);
+        insert_test_folder_doc_with_uuid(server, TEST_FOLDER_UUID, folder_name, entries).await
+    }
+
+    async fn insert_test_folder_doc_with_uuid(
+        server: &Arc<Server>,
+        folder_uuid: &str,
+        folder_name: &str,
+        entries: &[(&str, &str, &str)],
+    ) -> String {
+        let folder_doc_id = format!("{}-{}", TEST_RELAY_ID, folder_uuid);
         let dwskv = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
             .await
             .unwrap();
@@ -9569,6 +9578,13 @@ mod test {
     async fn move_path_refuses_cross_folder_move_of_transcript_with_sidecar() {
         let server = Server::new_for_test();
         let folder_doc_id = insert_transcript_with_sidecar(&server, &[]).await;
+        let edu_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            "b0000002-0000-4000-8000-000000000002",
+            "Lens Edu",
+            &[],
+        )
+        .await;
 
         let result = server
             .move_path(
@@ -9578,7 +9594,13 @@ mod test {
             )
             .await;
 
-        assert!(matches!(result, Err(MoveDocumentError::BadRequest(_))));
+        match result {
+            Err(MoveDocumentError::BadRequest(message)) => {
+                assert!(message.contains("timestamps file"), "got: {message}")
+            }
+            _ => panic!("cross-folder move of a transcript with a sidecar must be refused"),
+        }
+        assert!(!filemeta_has(&server, &edu_doc_id, "/talk.md"));
         assert!(filemeta_has(
             &server,
             &folder_doc_id,
