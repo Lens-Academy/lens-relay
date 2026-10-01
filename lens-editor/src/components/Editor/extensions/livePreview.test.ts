@@ -6,7 +6,8 @@ import {
   countClass,
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { updateWikilinkContext, wikilinkMetadataChanged, parseCalloutHeader } from './livePreview';
+import { updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 
@@ -1145,11 +1146,11 @@ describe('livePreview - callouts', () => {
   const AFTER = TIP.length;
 
   it('parses the header, mapping aliases and unknown types', () => {
-    expect(parseCalloutHeader('> [!tip] Writing good outcomes')).toMatchObject({
-      type: 'tip', title: 'Writing good outcomes', markerFrom: 2, markerTo: 9,
+    expect(parseCalloutHeader('> [!tip] Writing good outcomes')).toEqual({
+      type: 'tip', title: 'Writing good outcomes', markerFrom: 2, markerTo: 9, defaultTitle: 'Tip',
     });
     expect(parseCalloutHeader('> [!HINT]- Folded')).toMatchObject({ type: 'tip', title: 'Folded', markerTo: 11 });
-    expect(parseCalloutHeader('>[!mystery]')).toMatchObject({ type: 'note', title: '', rawType: 'mystery' });
+    expect(parseCalloutHeader('>[!mystery]')).toMatchObject({ type: 'note', title: '', defaultTitle: 'Mystery' });
     expect(parseCalloutHeader('> plain quote')).toBeNull();
     expect(parseCalloutHeader('> [link] text')).toBeNull();
   });
@@ -1166,8 +1167,24 @@ describe('livePreview - callouts', () => {
     for (const [type, cls] of [['info', 'cm-callout-info'], ['warning', 'cm-callout-warning'], ['note', 'cm-callout-note'], ['whatever', 'cm-callout-note']]) {
       const doc = `> [!${type}] Title\n> Body\n\nAfter`;
       const { view, cleanup: c } = createTestEditor(doc, doc.length);
-      expect(hasClass(view, cls)).toBe(true);
-      c();
+      try {
+        expect(hasClass(view, cls)).toBe(true);
+      } finally {
+        c();
+      }
+    }
+  });
+
+  it('detects callouts that start inside a list item', () => {
+    for (const doc of ['- > [!tip] In a bullet\n  > Body\n\nAfter', '1. > [!warning] In a numbered item\n   > Body\n\nAfter']) {
+      const { view, cleanup: c } = createTestEditor(doc, doc.length);
+      try {
+        expect(hasClass(view, 'cm-callout')).toBe(true);
+        expect(hasClass(view, 'cm-callout-icon')).toBe(true);
+        expect(view.contentDOM.textContent).not.toContain('[!');
+      } finally {
+        c();
+      }
     }
   });
 

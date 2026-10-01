@@ -34,6 +34,7 @@ import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateEffect, StateField } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { isImageEmbedTarget } from '../../../lib/isImageEmbedTarget';
+import { parseCalloutHeader, CalloutIconWidget } from './callouts';
 
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
@@ -363,115 +364,6 @@ class ImageEmbedWidget extends WidgetType {
 
   eq(other: ImageEmbedWidget): boolean {
     return this.embedPath === other.embedPath && this.hash === other.hash;
-  }
-}
-
-/**
- * Obsidian callouts (`> [!tip] Title`). Aliases map onto Obsidian's built-in
- * types; any other type is styled as a note, as Obsidian does.
- */
-const CALLOUT_ALIASES: Record<string, string> = {
-  note: 'note',
-  abstract: 'abstract', summary: 'abstract', tldr: 'abstract',
-  info: 'info',
-  todo: 'todo',
-  tip: 'tip', hint: 'tip', important: 'tip',
-  success: 'success', check: 'success', done: 'success',
-  question: 'question', help: 'question', faq: 'question',
-  warning: 'warning', caution: 'warning', attention: 'warning',
-  failure: 'failure', fail: 'failure', missing: 'failure',
-  danger: 'danger', error: 'danger',
-  bug: 'bug',
-  example: 'example',
-  quote: 'quote', cite: 'quote',
-};
-
-// Lucide icons (as in Obsidian), as SVG child elements: [tag, attributes]
-type IconPart = [string, Record<string, string>];
-const iconPath = (d: string): IconPart => ['path', { d }];
-const CIRCLE: IconPart = ['circle', { cx: '12', cy: '12', r: '10' }];
-const ALERT = [iconPath('m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'), iconPath('M12 9v4'), iconPath('M12 17h.01')];
-const CALLOUT_ICONS: Record<string, IconPart[]> = {
-  note: [iconPath('M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z'), iconPath('m15 5 4 4')],
-  abstract: [['rect', { x: '8', y: '2', width: '8', height: '4', rx: '1' }], iconPath('M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2'), iconPath('M12 11h4'), iconPath('M12 16h4'), iconPath('M8 11h.01'), iconPath('M8 16h.01')],
-  info: [CIRCLE, iconPath('M12 16v-4'), iconPath('M12 8h.01')],
-  todo: [CIRCLE, iconPath('m9 12 2 2 4-4')],
-  tip: [iconPath('M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z')],
-  success: [iconPath('M20 6 9 17l-5-5')],
-  question: [CIRCLE, iconPath('M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3'), iconPath('M12 17h.01')],
-  warning: ALERT,
-  failure: [iconPath('M18 6 6 18'), iconPath('m6 6 12 12')],
-  danger: [iconPath('M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z')],
-  bug: ALERT,
-  example: [iconPath('M3 6h.01'), iconPath('M3 12h.01'), iconPath('M3 18h.01'), iconPath('M8 6h13'), iconPath('M8 12h13'), iconPath('M8 18h13')],
-  quote: [iconPath('M17 6H3'), iconPath('M21 12H8'), iconPath('M21 18H8'), iconPath('M3 12v6')],
-};
-
-export interface CalloutHeader {
-  /** Built-in type the callout is styled as (unknown types become 'note'). */
-  type: string;
-  /** Offset of `[!` in the line. */
-  markerFrom: number;
-  /** Offset just past `]`, the fold sign and the spaces before the title. */
-  markerTo: number;
-  /** Title text after the marker ('' when there is none). */
-  title: string;
-  /** The type as written, for the default title. */
-  rawType: string;
-}
-
-const CALLOUT_HEADER = /^(\s{0,3}>\s?)\[!([\w-]+)\]([+-]?)(\s*)(.*)$/;
-
-/** Parse the first line of a blockquote as a callout header, or null. */
-export function parseCalloutHeader(lineText: string): CalloutHeader | null {
-  const m = CALLOUT_HEADER.exec(lineText);
-  if (!m) return null;
-  const [, prefix, rawType, fold, space, title] = m;
-  const markerFrom = prefix.length;
-  return {
-    type: CALLOUT_ALIASES[rawType.toLowerCase()] ?? 'note',
-    markerFrom,
-    markerTo: markerFrom + rawType.length + 3 + fold.length + space.length,
-    title,
-    rawType,
-  };
-}
-
-/**
- * CalloutIconWidget - replaces the `[!type]` marker with the type's icon, plus
- * the type name as title when the callout has no title of its own.
- */
-class CalloutIconWidget extends WidgetType {
-  constructor(private type: string, private defaultTitle: string | null) {
-    super();
-  }
-
-  toDOM(): HTMLElement {
-    const span = document.createElement('span');
-    span.className = 'cm-callout-icon';
-    const svgNS = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(svgNS, 'svg');
-    for (const [k, v] of Object.entries({
-      viewBox: '0 0 24 24', width: '16', height: '16', fill: 'none', stroke: 'currentColor',
-      'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true',
-    })) svg.setAttribute(k, v);
-    for (const [tag, attrs] of CALLOUT_ICONS[this.type] ?? CALLOUT_ICONS.note) {
-      const el = document.createElementNS(svgNS, tag);
-      for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-      svg.appendChild(el);
-    }
-    span.appendChild(svg);
-    if (this.defaultTitle) {
-      const title = document.createElement('span');
-      title.className = 'cm-callout-title';
-      title.textContent = this.defaultTitle;
-      span.appendChild(title);
-    }
-    return span;
-  }
-
-  eq(other: CalloutIconWidget): boolean {
-    return other.type === this.type && other.defaultTitle === this.defaultTitle;
   }
 }
 
@@ -939,16 +831,16 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             }
 
             // Blockquote: add line decoration for left border styling.
-            // A top-level blockquote whose first line is `> [!type] Title` is an
-            // Obsidian callout: its lines get callout classes, and the marker is
-            // replaced by the type's icon while the cursor is outside it.
+            // A top-level blockquote starting `> [!type] Title` is an Obsidian
+            // callout: its lines get callout classes, and the marker becomes
+            // the type's icon while the cursor is outside it.
             if (node.name === 'Blockquote') {
               const firstLine = view.state.doc.lineAt(node.from);
               const startLine = firstLine.number;
               const endLine = view.state.doc.lineAt(node.to).number;
               const callout = node.node.parent?.name === 'Blockquote'
                 ? null
-                : parseCalloutHeader(firstLine.text);
+                : parseCalloutHeader(view.state.doc.sliceString(node.from, firstLine.to));
               for (let ln = startLine; ln <= endLine; ln++) {
                 const line = view.state.doc.line(ln);
                 let cls = 'cm-blockquote';
@@ -965,18 +857,17 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               }
               if (callout) {
                 if (!selectionIntersects(selection, node.from, node.to)) {
-                  const defaultTitle = callout.title.trim()
-                    ? null
-                    : callout.rawType.charAt(0).toUpperCase() + callout.rawType.slice(1).toLowerCase();
                   decorations.push({
-                    from: firstLine.from + callout.markerFrom,
-                    to: firstLine.from + callout.markerTo,
-                    deco: Decoration.replace({ widget: new CalloutIconWidget(callout.type, defaultTitle) }),
+                    from: node.from + callout.markerFrom,
+                    to: node.from + callout.markerTo,
+                    deco: Decoration.replace({
+                      widget: new CalloutIconWidget(callout.type, callout.title ? null : callout.defaultTitle),
+                    }),
                   });
                 }
-                if (callout.title.trim()) {
+                if (callout.title) {
                   decorations.push({
-                    from: firstLine.from + callout.markerTo,
+                    from: node.from + callout.markerTo,
                     to: firstLine.to,
                     deco: Decoration.mark({ class: 'cm-callout-title' }),
                   });
