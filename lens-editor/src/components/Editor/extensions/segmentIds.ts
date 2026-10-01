@@ -4,7 +4,8 @@
  * Pressing Enter at the end of a Question / Roleplay / Interview header whose
  * segment has no `id::` yet inserts `id:: <uuid>` on the next line and puts the
  * cursor on a fresh line below it, ready for `content::`. The platform rejects
- * these segments without an id (see shared/segment-ids.ts).
+ * these segments without an id (lens-platform content_processor:
+ * response-segments.ts `parseResponseSegment`, lens.ts `parseSessionId`).
  *
  * Only in Lens Edu documents, and only on Enter: pasted segments keep the ids
  * they bring, and a segment that already has an `id::` is left alone.
@@ -12,8 +13,43 @@
 import type { StateCommand, EditorState } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
-import { blockHasId, isSurveyPath, needsSegmentId } from '../../../../shared/segment-ids';
 import { generateUUID } from '../../../lib/relay-api';
+
+/**
+ * `#### Question`, `#### Question: <Subtype>`, `#### Roleplay[: title]`,
+ * `#### Interview[: title]`, after the platform's segment header pattern
+ * `^#{n,6}\s+<type>(?::\s*<title>)?\s*$` (case-insensitive).
+ */
+export const RESPONSE_SEGMENT_HEADER = /^#{2,6}\s+(question|roleplay|interview)\s*(?::\s*(.*?))?\s*$/i;
+/** A field line assigning the segment id. */
+const ID_LINE = /^\s*id::/;
+/** A heading ends a segment's field block; a `#tag` line does not. */
+const HEADING_LINE = /^#{1,6}\s/;
+
+/** True for paths under a `surveys/` folder ("/Lens Edu/surveys/x.md"). */
+export function isSurveyPath(path: string): boolean {
+  return path.split('/').slice(0, -1).includes('surveys');
+}
+
+/**
+ * Does this header line start a segment that needs an `id::`? In a survey a
+ * bare `#### Question` is the `key::`-based survey segment, which has no id.
+ */
+export function needsSegmentId(headerLine: string, inSurvey: boolean): boolean {
+  const match = RESPONSE_SEGMENT_HEADER.exec(headerLine);
+  if (!match) return false;
+  const bareQuestion = match[1].toLowerCase() === 'question' && !match[2];
+  return !(inSurvey && bareQuestion);
+}
+
+/** Does the field block after a header (up to the next heading) hold an `id::` line? */
+export function blockHasId(linesAfterHeader: Iterable<string>): boolean {
+  for (const line of linesAfterHeader) {
+    if (HEADING_LINE.test(line)) return false;
+    if (ID_LINE.test(line)) return true;
+  }
+  return false;
+}
 
 /** Same scope as the Harper linter: documents inside the Lens Edu folder. */
 function isLensEduPath(path: string | null): path is string {

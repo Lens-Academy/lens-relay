@@ -3,8 +3,8 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { ensureSyntaxTree } from '@codemirror/language';
-import { segmentIdEnter } from './segmentIds';
-import { blockHasId, isSurveyPath, needsSegmentId } from '../../../../shared/segment-ids';
+import { segmentIdEnter, blockHasId, isSurveyPath, needsSegmentId } from './segmentIds';
+import { criticMarkupExtension, toggleSuggestionMode } from './criticmarkup';
 
 const LENS = '/Lens Edu/Lenses/Some Lens.md';
 const UUID = '11111111-2222-4333-8444-555555555555';
@@ -51,6 +51,27 @@ describe('segmentIdEnter', () => {
     expect(enter('#### Roleplay|\n  id:: abc')[0]).toBe(false);
   });
 
+  it('looks past #tag lines for an existing id', () => {
+    expect(enter('#### Question|\ncontent:: x\n#tag\nid:: abc')[0]).toBe(false);
+  });
+
+  it('becomes a suggestion in suggestion mode', () => {
+    const doc = '#### Question';
+    view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: { anchor: doc.length },
+        extensions: [markdown(), criticMarkupExtension()],
+      }),
+      parent: document.body,
+    });
+    view.dispatch({ effects: toggleSuggestionMode.of(true) });
+    expect(segmentIdEnter(() => LENS, () => UUID)(view)).toBe(true);
+    expect(view.state.doc.toString()).toMatch(
+      new RegExp(`^#### Question\\{\\+\\+\\{.*\\}@@\\nid:: ${UUID}\\n\\+\\+\\}$`),
+    );
+  });
+
   it('adds an id when only a later segment has one', () => {
     expect(enter('#### Question|\ncontent:: Why?\n#### Question\nid:: abc')[0]).toBe(true);
   });
@@ -73,7 +94,7 @@ describe('segmentIdEnter', () => {
   });
 });
 
-describe('shared segment-id helpers', () => {
+describe('segment-id helpers', () => {
   it('needsSegmentId follows the platform header pattern', () => {
     expect(needsSegmentId('#### Question  ', false)).toBe(true);
     expect(needsSegmentId('###### Interview:', false)).toBe(true);
