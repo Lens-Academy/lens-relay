@@ -2794,6 +2794,121 @@ impl Server {
         Ok(result)
     }
 
+    /// [`Server::move_document`] for a user-requested move: a video transcript
+    /// `X.md` keeps its word timings in the sibling file `X.timestamps.json`,
+    /// so when that sidecar exists it moves along to the new name. Folder
+    /// moves call `move_document` directly, since they move every entry anyway.
+    ///
+    /// The sidecar is checked before anything changes: a destination sidecar
+    /// path that is already taken refuses the whole move. Non-markdown files
+    /// cannot move across folders yet, so a cross-folder move leaves it behind
+    /// with a warning in the log.
+    pub async fn move_document_with_sidecar(
+        &self,
+        uuid: &str,
+        new_path: &str,
+        target_folder: Option<&str>,
+    ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
+        let sidecar = self.timestamps_sidecar_for(uuid);
+        let mut sidecar_move = None;
+        if let Some((folder_doc_id, folder_name, old_sidecar)) = sidecar {
+            let new_sidecar = timestamps_sidecar_path(new_path);
+            let same_folder = target_folder.map_or(true, |t| t == folder_name);
+            match new_sidecar {
+                Some(new_sidecar) if same_folder => {
+                    if new_sidecar != old_sidecar
+                        && self.filemeta_has_path(&folder_doc_id, &new_sidecar)
+                    {
+                        return Err(MoveDocumentError::Conflict(format!(
+                            "Path '{}' already exists in target folder (the transcript's timestamps file would move there)",
+                            new_sidecar
+                        )));
+                    }
+                    sidecar_move = Some((folder_name, old_sidecar, new_sidecar));
+                }
+                _ => tracing::warn!(
+                    uuid = %uuid,
+                    sidecar = %old_sidecar,
+                    target_folder = ?target_folder,
+                    "move: transcript timestamps file left in place (cross-folder moves of non-markdown files are not supported)"
+                ),
+            }
+        }
+
+        let result = self.move_document(uuid, new_path, target_folder).await?;
+
+        if let Some((folder_name, old_sidecar, new_sidecar)) = sidecar_move {
+            if old_sidecar != new_sidecar {
+                let user_path = format!("{}{}", folder_name, old_sidecar);
+                let moved = match self.resolve_path_via_filemeta(&user_path) {
+                    Some(info) => self
+                        .move_filemeta_entry_path(&user_path, &new_sidecar, None, &info)
+                        .await
+                        .map(|_| ()),
+                    None => Err(MoveDocumentError::NotFound(user_path.clone())),
+                };
+                // The transcript itself has moved; failing the call now would
+                // report a move that happened as one that did not.
+                if let Err(e) = moved {
+                    tracing::error!(
+                        uuid = %uuid,
+                        sidecar = %old_sidecar,
+                        new_sidecar = %new_sidecar,
+                        error = ?e,
+                        "move: transcript moved but its timestamps file could not follow"
+                    );
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// The `X.timestamps.json` sibling of the markdown file `uuid`, if one
+    /// exists: (folder doc id, folder name, in-folder sidecar path).
+    fn timestamps_sidecar_for(&self, uuid: &str) -> Option<(String, String, String)> {
+        for folder_doc_id in link_indexer::find_all_folder_docs(&self.docs) {
+            // ⚠️ LOCK ORDERING: drop the shard ref before locking awareness.
+            let awareness = match self.docs.get(&folder_doc_id) {
+                Some(doc_ref) => doc_ref.awareness(),
+                None => continue,
+            };
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            let Some(filemeta) = txn.get_map("filemeta_v0") else {
+                continue;
+            };
+            let Some(md_path) = filemeta.iter(&txn).find_map(|(path, value)| {
+                (link_indexer::extract_id_from_filemeta_entry(&value, &txn).as_deref()
+                    == Some(uuid))
+                .then(|| path.to_string())
+            }) else {
+                continue;
+            };
+            let sidecar = timestamps_sidecar_path(&md_path)?;
+            let value = filemeta.get(&txn, &sidecar)?;
+            let entry_type =
+                link_indexer::extract_type_from_filemeta_entry(&value, &txn).unwrap_or_default();
+            if entry_type == "markdown" || entry_type == "folder" {
+                return None;
+            }
+            let folder_name =
+                y_sweet_core::doc_resolver::read_folder_name(&guard.doc, &folder_doc_id);
+            return Some((folder_doc_id, folder_name, sidecar));
+        }
+        None
+    }
+
+    fn filemeta_has_path(&self, folder_doc_id: &str, path: &str) -> bool {
+        let Some(awareness) = self.docs.get(folder_doc_id).map(|d| d.awareness()) else {
+            return false;
+        };
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let txn = guard.doc.transact();
+        txn.get_map("filemeta_v0")
+            .map_or(false, |m| m.get(&txn, path).is_some())
+    }
+
     /// Move a markdown document, rename a metadata-only folder, or rename a
     /// non-markdown file metadata entry by user-facing path.
     pub async fn move_path(
@@ -2830,7 +2945,7 @@ impl Server {
             match source_type.as_str() {
                 "markdown" => {
                     return self
-                        .move_document(&info.uuid, new_path, target_folder)
+                        .move_document_with_sidecar(&info.uuid, new_path, target_folder)
                         .await;
                 }
                 "folder" => {
@@ -5658,6 +5773,16 @@ async fn handle_apply_suggestions(
     })))
 }
 
+/// `/a/X.md` -> `/a/X.timestamps.json`: where a video transcript keeps its
+/// word timings (lens-editor `server/add-video`). None for non-markdown paths.
+fn timestamps_sidecar_path(md_path: &str) -> Option<String> {
+    let stem_len = md_path.len().checked_sub(3)?;
+    md_path
+        .get(stem_len..)
+        .filter(|ext| ext.eq_ignore_ascii_case(".md"))
+        .map(|_| format!("{}.timestamps.json", &md_path[..stem_len]))
+}
+
 /// Move a document to a new path within or across folders.
 ///
 /// POST /doc/move
@@ -5670,7 +5795,7 @@ async fn handle_move_document(
 ) -> Result<Json<MoveDocResponse>, AppError> {
     server_state.check_auth(auth_header)?;
     let result = server_state
-        .move_document(&body.uuid, &body.new_path, body.target_folder.as_deref())
+        .move_document_with_sidecar(&body.uuid, &body.new_path, body.target_folder.as_deref())
         .await
         .map_err(AppError::from)?;
 
@@ -7809,6 +7934,15 @@ mod test {
             .is_some()
     }
 
+    fn filemeta_id(server: &Arc<Server>, folder_doc_id: &str, path: &str) -> Option<String> {
+        let doc_ref = server.docs().get(folder_doc_id).unwrap();
+        let awareness = doc_ref.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        let value = txn.get_map("filemeta_v0")?.get(&txn, path)?;
+        link_indexer::extract_id_from_filemeta_entry(&value, &txn)
+    }
+
     fn legacy_docs_value(server: &Arc<Server>, folder_doc_id: &str, path: &str) -> Option<String> {
         let doc_ref = server.docs().get(folder_doc_id).unwrap();
         let awareness = doc_ref.awareness();
@@ -9281,6 +9415,155 @@ mod test {
         assert_eq!(body["old_folder"], "Relay Folder 1");
         assert_eq!(body["new_folder"], "Relay Folder 1");
         assert!(filemeta_has(&server, &folder_doc_id, "/New.md"));
+    }
+
+    const TRANSCRIPT_UUID: &str = "11111111-1111-4111-8111-111111111111";
+    const SIDECAR_UUID: &str = "22222222-2222-4222-8222-222222222222";
+
+    async fn insert_transcript_with_sidecar(
+        server: &Arc<Server>,
+        extra: &[(&str, &str, &str)],
+    ) -> String {
+        let mut entries = vec![
+            ("/video_transcripts", "f0000000-0000-4000-8000-000000000001", "folder"),
+            ("/video_transcripts/talk.md", TRANSCRIPT_UUID, "markdown"),
+            (
+                "/video_transcripts/talk.timestamps.json",
+                SIDECAR_UUID,
+                "file",
+            ),
+        ];
+        entries.extend_from_slice(extra);
+        let folder_doc_id = insert_test_folder_doc(server, "Relay Folder 1", &entries).await;
+        insert_test_content_doc(server, TRANSCRIPT_UUID, "transcript").await;
+        folder_doc_id
+    }
+
+    #[test]
+    fn timestamps_sidecar_path_maps_only_markdown() {
+        assert_eq!(
+            timestamps_sidecar_path("/v/talk.md").as_deref(),
+            Some("/v/talk.timestamps.json")
+        );
+        assert_eq!(
+            timestamps_sidecar_path("/v/Talk.MD").as_deref(),
+            Some("/v/Talk.timestamps.json")
+        );
+        assert_eq!(timestamps_sidecar_path("/v/talk.json"), None);
+        assert_eq!(timestamps_sidecar_path("md"), None);
+    }
+
+    // Prevents: renaming a video transcript leaving its word timings behind
+    // under the old name, so the transcript loses its timestamps.
+    #[tokio::test]
+    async fn move_path_moves_transcript_timestamps_sidecar() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_transcript_with_sidecar(&server, &[]).await;
+
+        let result = server
+            .move_path(
+                "Relay Folder 1/video_transcripts/talk.md",
+                "/archive/renamed-talk.md",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.new_path, "/archive/renamed-talk.md");
+        assert!(filemeta_has(&server, &folder_doc_id, "/archive/renamed-talk.md"));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/archive/renamed-talk.timestamps.json"
+        ));
+        assert!(!filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/video_transcripts/talk.timestamps.json"
+        ));
+        assert_eq!(
+            filemeta_id(&server, &folder_doc_id, "/archive/renamed-talk.timestamps.json")
+                .as_deref(),
+            Some(SIDECAR_UUID)
+        );
+    }
+
+    // Prevents: the editor's uuid-based /doc/move route skipping the sidecar.
+    #[tokio::test]
+    async fn handle_move_document_route_moves_timestamps_sidecar() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_transcript_with_sidecar(&server, &[]).await;
+
+        let (status, _) = post_request(
+            &server,
+            "/doc/move",
+            "application/json",
+            Body::from(
+                json!({ "uuid": TRANSCRIPT_UUID, "new_path": "/video_transcripts/new.md" })
+                    .to_string(),
+            ),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/video_transcripts/new.timestamps.json"
+        ));
+        assert!(!filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/video_transcripts/talk.timestamps.json"
+        ));
+    }
+
+    // Prevents: moving the transcript and then failing on the sidecar, which
+    // would separate the pair; a taken sidecar destination refuses up front.
+    #[tokio::test]
+    async fn move_path_refuses_when_sidecar_destination_is_taken() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_transcript_with_sidecar(
+            &server,
+            &[(
+                "/other.timestamps.json",
+                "33333333-3333-4333-8333-333333333333",
+                "file",
+            )],
+        )
+        .await;
+
+        let result = server
+            .move_path("Relay Folder 1/video_transcripts/talk.md", "/other.md", None)
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/video_transcripts/talk.md"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/other.md"));
+        assert_eq!(
+            filemeta_id(&server, &folder_doc_id, "/other.timestamps.json").as_deref(),
+            Some("33333333-3333-4333-8333-333333333333")
+        );
+    }
+
+    // Prevents: a folder move moving the sidecar twice (once with the folder,
+    // once with its transcript) and failing on the second.
+    #[tokio::test]
+    async fn folder_move_keeps_transcript_and_sidecar_together() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_transcript_with_sidecar(&server, &[]).await;
+
+        server
+            .move_path("Relay Folder 1/video_transcripts", "/transcripts", None)
+            .await
+            .unwrap();
+
+        assert!(filemeta_has(&server, &folder_doc_id, "/transcripts/talk.md"));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/transcripts/talk.timestamps.json"
+        ));
     }
 
     #[tokio::test]
