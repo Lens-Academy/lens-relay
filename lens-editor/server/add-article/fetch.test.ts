@@ -6,6 +6,8 @@ import {
   looksLikePdf,
   isValidYmd,
   fetchRenderedHtml,
+  fetchFirstHtml,
+  looksLikeBotWall,
 } from "./fetch";
 
 vi.mock("./ssrf", () => ({ assertPublicUrl: vi.fn(), publicOnlyDispatcher: undefined, SsrfError: class SsrfError extends Error {} }));
@@ -235,5 +237,38 @@ describe("isValidYmd — real-calendar validation (adversarial probe)", () => {
     expect(isValidYmd("2024", "02", "29")).toBe(true); // leap year
     expect(isValidYmd("2024", "12", "31")).toBe(true);
     expect(isValidYmd("1990", "01", "01")).toBe(true);
+  });
+});
+
+describe("looksLikeBotWall", () => {
+  it("flags challenge interstitials and near-empty pages", () => {
+    expect(looksLikeBotWall("<html><head><title>Just a moment...</title></head><body>Verifying you are human.</body></html>")).toBe(true);
+    expect(looksLikeBotWall('<html><body><div id="root"></div><script>' + "x".repeat(5000) + "</script></body></html>")).toBe(true);
+  });
+
+  it("passes a page with real text, even one that mentions access denial", () => {
+    const article = `<html><body><article><h1>Access denied: why APIs refuse</h1><p>${"Real article prose. ".repeat(150)}</p></article></body></html>`;
+    expect(looksLikeBotWall(article)).toBe(false);
+  });
+});
+
+describe("fetchFirstHtml", () => {
+  const page = (body: string) => new Response(body, { status: 200, headers: { "content-type": "text/html" } });
+  const article = `<html><body><article>${"Mirror article text. ".repeat(50)}</article></body></html>`;
+
+  it("treats a 200 bot wall as a failed candidate and tries the next one", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.includes("lesswrong") ? page("<html><body>Just a moment... checking your browser</body></html>") : page(article),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const got = await fetchFirstHtml(["https://www.lesswrong.com/posts/x/y", "https://www.greaterwrong.com/posts/x/y"]);
+    expect(got.url).toBe("https://www.greaterwrong.com/posts/x/y");
+    expect(got.html).toBe(article);
+  });
+
+  it("reports the source as bot-walled when every candidate is walled", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => page("<html><body>Just a moment...</body></html>")));
+    await expect(fetchFirstHtml(["https://www.lesswrong.com/posts/x/y"])).rejects.toThrow(/bot-walled.*try a mirror/i);
   });
 });

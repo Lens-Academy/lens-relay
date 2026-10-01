@@ -2,10 +2,14 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { extractArticle, type ExtractResult } from "./extract";
 import {
+  BotWallError,
   fetchRawBytes,
   fetchRawHtml,
   fetchRenderedHtml,
+  looksLikeBlockPage,
+  looksLikeBotWall,
   looksLikePdf,
+  MIN_PAGE_TEXT_CHARS,
 } from "./fetch";
 import { acceptsFetchedUrl, adapterContext, resolveFetchUrls } from "./adapters";
 import { extractPdfSmart } from "./pdf";
@@ -80,8 +84,11 @@ export async function buildSourceEvidence(
   };
 
   // Try the adapter's candidates in order (or just the source URL). A
-  // candidate counts as failed when it errors, or when it redirects to a page
-  // the adapter vetoes (e.g. ar5iv falling back to the arXiv abstract).
+  // candidate counts as failed when it errors, when it redirects to a page
+  // the adapter vetoes (e.g. ar5iv falling back to the arXiv abstract), or
+  // when it answers 200 with a bot wall (LessWrong does this to datacenter IPs,
+  // and the GreaterWrong mirror is the next candidate).
+  const botWalled: string[] = [];
   for (const candidate of candidates) {
     try {
       const result = await fetchRawBytes(candidate, signal);
@@ -100,7 +107,13 @@ export async function buildSourceEvidence(
         const extractionBytes = Uint8Array.from(pdf).buffer;
         extraction = await extractPdfSmart(extractionBytes, sourceUrl, signal);
       } else {
-        rawHtml = new TextDecoder("utf-8").decode(result.bytes);
+        const html = new TextDecoder("utf-8").decode(result.bytes);
+        if (looksLikeBotWall(html)) {
+          botWalled.push(candidate);
+          rawError = new BotWallError([candidate]);
+          continue;
+        }
+        rawHtml = html;
       }
       rawError = undefined;
       break;
@@ -137,6 +150,15 @@ export async function buildSourceEvidence(
       if (signal?.aborted) throw error;
     }
     extraction = htmlCandidates.rendered ?? htmlCandidates.unrendered ?? null;
+    // Every direct fetch was walled and the renderer did no better: say so,
+    // rather than letting the wall pass as a "suspiciously short" article.
+    if (
+      rawHtml === undefined &&
+      botWalled.length > 0 &&
+      (!extraction || extraction.body.length < MIN_PAGE_TEXT_CHARS || looksLikeBlockPage(extraction.body))
+    ) {
+      throw new BotWallError(botWalled);
+    }
     if (!extraction) {
       throw new Error(
         `Could not extract article (direct fetch: ${rawError ?? "ok"}; ` +

@@ -132,7 +132,7 @@ describe("HTML source evidence retention", () => {
     const selectedUrl = "https://arxiv.org/html/2401.00001";
     const renderedHtml = `<html><body><article><h1 class="ltx_title_document">Rendered Paper</h1><div class="ltx_authors">Ada Author</div><div class="ltx_abstract">${"rendered paper body ".repeat(200)}</div></article></body></html>`;
     mocks.fetchRawBytes.mockResolvedValue({
-      bytes: new TextEncoder().encode("<html><body>unrendered arXiv response</body></html>").buffer,
+      bytes: new TextEncoder().encode(`<html><body>${"unrendered arXiv response ".repeat(20)}</body></html>`).buffer,
       contentType: "text/html",
       finalUrl: selectedUrl,
     });
@@ -189,6 +189,73 @@ describe("HTML source evidence retention", () => {
     expect(evidence.manifest.fetched_url).toBe("https://arxiv.org/pdf/2401.00002v1");
     expect(evidence.extraction.body).toContain("recovered from the PDF");
     expect(evidence.pdf?.toString("latin1")).toContain("%PDF-");
+  });
+
+  describe("bot-walled candidates", () => {
+    const lwUrl = "https://www.lesswrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we-safely-pass-the-buck-to-ai";
+    const gwUrl = "https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we-safely-pass-the-buck-to-ai";
+    // What production gets from lesswrong.com: HTTP 200 with a ~100-char
+    // interstitial instead of the post.
+    const botWall = `<html><head><title>Just a moment...</title></head><body><p>Verifying you are human. This may take a few seconds.</p></body></html>`;
+    const mirrorPage = `<html><head><title>How might we safely pass the buck to AI? - LessWrong 2.0 viewer</title></head><body>
+      <h1 class="post-title">How might we safely pass the buck to AI?</h1>
+      <div class="top-post-meta"><a class="author" href="/users/joshc">joshc</a><a class="lw2-link" href="${lwUrl}">LW link</a></div>
+      <div class="body-text post-body"><p>${"The mirror serves the full post body. ".repeat(80)}</p></div></body></html>`;
+    const html = (body: string, finalUrl: string) => ({
+      bytes: new TextEncoder().encode(body).buffer,
+      contentType: "text/html",
+      finalUrl,
+    });
+
+    it("skips a 200 bot-wall page and falls through to the GreaterWrong mirror", async () => {
+      mocks.fetchRawBytes.mockImplementation(async (url: string) =>
+        url === lwUrl ? html(botWall, lwUrl) : html(mirrorPage, gwUrl),
+      );
+      mocks.fetchRenderedHtml.mockImplementation(async (url: string) => (url === gwUrl ? mirrorPage : botWall));
+
+      const evidence = await buildSourceEvidence(lwUrl);
+
+      expect(mocks.fetchRawBytes.mock.calls.map(([url]) => url)).toEqual([lwUrl, gwUrl]);
+      expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith(gwUrl, undefined);
+      expect(evidence.manifest.fetched_url).toBe(gwUrl);
+      expect(evidence.extraction.body).toContain("The mirror serves the full post body.");
+      expect(evidence.rawHtml).toBe(mirrorPage);
+    });
+
+    it("treats a near-empty 200 page without a challenge marker as a failed candidate too", async () => {
+      mocks.fetchRawBytes.mockImplementation(async (url: string) =>
+        url === lwUrl ? html("<html><body><div id=\"root\">Loading</div></body></html>", lwUrl) : html(mirrorPage, gwUrl),
+      );
+      mocks.fetchRenderedHtml.mockResolvedValue(mirrorPage);
+
+      const evidence = await buildSourceEvidence(lwUrl);
+      expect(evidence.manifest.fetched_url).toBe(gwUrl);
+    });
+
+    it("says the source is bot-walled when every candidate and the renderer are walled", async () => {
+      mocks.fetchRawBytes.mockImplementation(async (url: string) => html(botWall, url));
+      mocks.fetchRenderedHtml.mockResolvedValue(botWall);
+
+      await expect(buildSourceEvidence(lwUrl)).rejects.toThrow(/bot-walled.*try a mirror/i);
+    });
+
+    it("says the source is bot-walled when the renderer returns a near-empty page", async () => {
+      mocks.fetchRawBytes.mockImplementation(async (url: string) => html(botWall, url));
+      mocks.fetchRenderedHtml.mockResolvedValue("<html><body><article><p>Sign in to continue reading.</p></article></body></html>");
+
+      await expect(buildSourceEvidence(lwUrl)).rejects.toThrow(/bot-walled.*try a mirror/i);
+    });
+
+    it("keeps a single-candidate JS shell when the renderer recovers the article", async () => {
+      const shell = "<html><head><title>App</title></head><body><div id=\"root\"></div><script>boot()</script></body></html>";
+      const rendered = `<html><head><title>Rendered Article</title></head><body><article><h1>Rendered Article</h1><p>${"rendered app body ".repeat(200)}</p></article></body></html>`;
+      mocks.fetchRawBytes.mockResolvedValue(html(shell, "https://example.org/app"));
+      mocks.fetchRenderedHtml.mockResolvedValue(rendered);
+
+      const evidence = await buildSourceEvidence("https://example.org/app");
+      expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith("https://example.org/app", undefined);
+      expect(evidence.extraction.body).toContain("rendered app body");
+    });
   });
 
   it("writes lossless line-bounded unrendered and rendered review HTML", async () => {
