@@ -244,8 +244,14 @@ function targetId(ref: Element): string {
  * Defuddle rewrites the FIRST reference to a note to `#fn:1` and leaves a
  * repeated one at `#fn-1`; both must reach the same number. */
 function targetKey(id: string): string {
-  const m = id.match(/^(?:user-content-)?fn[-:]?(\d+)$/i);
-  return m ? `fn#${m[1]}` : id;
+  const n = numericFootnoteId(id);
+  return n ? `fn#${n}` : id;
+}
+
+/** The number in a numeric footnote definition id (`fn-3`, `fn:3`, `fn3`,
+ * `user-content-fn-3`), or "" for any other id. */
+export function numericFootnoteId(id: string): string {
+  return id.match(/^(?:user-content-)?fn[-:]?(\d+)$/i)?.[1] ?? "";
 }
 
 /** The reference's display number, preferring a real number over position so we

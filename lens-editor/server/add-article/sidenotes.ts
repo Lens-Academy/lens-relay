@@ -1,4 +1,5 @@
 import { JSDOM } from "jsdom";
+import { numericFootnoteId } from "./normalize-dom";
 
 /**
  * Tufte-style sidenotes → standard footnote markup, on the WHOLE page before
@@ -86,7 +87,7 @@ function highestFootnoteNumber(doc: Document): number {
     if (m) max = Math.max(max, Number(m[1]));
   };
   for (const el of Array.from(doc.querySelectorAll("[id]"))) {
-    note(el.id.match(/^(?:user-content-)?fn[-:]?(\d+)$/i)?.[1]);
+    note(numericFootnoteId(el.id));
   }
   for (const a of Array.from(doc.querySelectorAll('a[href^="#fn"]'))) {
     if (!/^#fn-?ref/i.test(a.getAttribute("href") || "")) note(a.textContent);
