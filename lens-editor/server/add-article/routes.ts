@@ -143,16 +143,20 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
   // Optional filter: repeat `id` and/or `url` to get only those jobs (a job
   // matching any of them). A url matches its dedup variants too (utm tags,
   // trailing slash, youtu.be vs watch), the same rule that dedups submissions.
+  // Any id/url param switches filtering on; one that names no job (or an
+  // unparseable url) matches nothing rather than widening to every job.
   router.get("/status", (c) => {
-    const ids = new Set(c.req.queries("id") ?? []);
-    const urlKeys = new Set(
-      (c.req.queries("url") ?? []).map((raw) => {
-        const url = validateUrl(raw);
-        return url ? normalizeImportKey(url) : raw;
-      }),
-    );
+    const idParams = c.req.queries("id") ?? [];
+    const urlParams = c.req.queries("url") ?? [];
     let jobs = queue.status();
-    if (ids.size > 0 || urlKeys.size > 0) {
+    if (idParams.length > 0 || urlParams.length > 0) {
+      const ids = new Set(idParams);
+      const urlKeys = new Set(
+        urlParams.flatMap((raw) => {
+          const url = validateUrl(raw);
+          return url ? [normalizeImportKey(url)] : [];
+        }),
+      );
       jobs = jobs.filter(
         (job) => ids.has(job.id) || urlKeys.has(normalizeImportKey(job.url)),
       );

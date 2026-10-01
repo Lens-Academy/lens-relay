@@ -112,6 +112,14 @@ pub async fn status_with_editor_url(
         let values = value
             .as_array()
             .ok_or_else(|| format!("{} must be an array of strings", arg))?;
+        // An empty list would reach the editor as no filter at all and list
+        // every job, which is what the filter exists to avoid.
+        if values.is_empty() {
+            return Err(format!(
+                "{} must not be empty; omit it to list every job",
+                arg
+            ));
+        }
         for v in values {
             let v = v
                 .as_str()
@@ -125,10 +133,9 @@ pub async fn status_with_editor_url(
         editor_url.trim_end_matches('/')
     ))
     .map_err(|e| format!("Error: Invalid lens-editor URL: {}", e))?;
-    url.query_pairs_mut()
-        .extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
-    if url.query() == Some("") {
-        url.set_query(None);
+    if !query.is_empty() {
+        url.query_pairs_mut()
+            .extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
     }
     proxy(reqwest::Method::GET, url.as_str(), &token, None).await
 }
@@ -373,7 +380,11 @@ mod tests {
 
     #[tokio::test]
     async fn status_rejects_malformed_filters() {
-        for arguments in [json!({"job_ids": "job-1"}), json!({"urls": [42]})] {
+        for arguments in [
+            json!({"job_ids": "job-1"}),
+            json!({"urls": [42]}),
+            json!({"job_ids": []}),
+        ] {
             let err =
                 status_with_editor_url(&access_with_token("tok"), &arguments, "http://127.0.0.1:1")
                     .await

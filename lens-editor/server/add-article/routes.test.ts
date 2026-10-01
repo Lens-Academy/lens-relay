@@ -300,6 +300,8 @@ describe("GET /api/add-article/status filters", () => {
     expect(await statusIds("?id=j1&id=j3")).toEqual(["j1", "j3"]);
     expect(await statusIds("?id=j1&url=" + encodeURIComponent("https://example.com/b"))).toEqual(["j1", "j2"]);
     expect(await statusIds("?id=nope")).toEqual([]);
+    expect(await statusIds("?url=not-a-url")).toEqual([]);
+    expect(await statusIds("?url=" + encodeURIComponent("yt:abc123def45"))).toEqual([]);
   });
 
   // Prevents: a url filter missing the job because the agent passed a
