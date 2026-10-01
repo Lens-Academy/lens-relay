@@ -9,7 +9,7 @@ import {
   looksLikeBlockPage,
   looksLikeBotWall,
   looksLikePdf,
-  MIN_PAGE_TEXT_CHARS,
+  MIN_ARTICLE_CHARS,
 } from "./fetch";
 import { acceptsFetchedUrl, adapterContext, resolveFetchUrls } from "./adapters";
 import { extractPdfSmart } from "./pdf";
@@ -150,12 +150,14 @@ export async function buildSourceEvidence(
       if (signal?.aborted) throw error;
     }
     extraction = htmlCandidates.rendered ?? htmlCandidates.unrendered ?? null;
-    // Every direct fetch was walled and the renderer did no better: say so,
-    // rather than letting the wall pass as a "suspiciously short" article.
+    // Every direct fetch was walled and the renderer answered no better: say
+    // so, rather than letting the wall pass as a "suspiciously short" article.
+    // If the renderer itself failed (outage, timeout), the error below says so.
     if (
       rawHtml === undefined &&
       botWalled.length > 0 &&
-      (!extraction || extraction.body.length < MIN_PAGE_TEXT_CHARS || looksLikeBlockPage(extraction.body))
+      renderedHtml !== undefined &&
+      (!extraction || extraction.body.length < MIN_ARTICLE_CHARS || looksLikeBlockPage(extraction.body))
     ) {
       throw new BotWallError(botWalled);
     }

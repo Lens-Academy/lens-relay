@@ -246,6 +246,16 @@ describe("HTML source evidence retention", () => {
       await expect(buildSourceEvidence(lwUrl)).rejects.toThrow(/bot-walled.*try a mirror/i);
     });
 
+    it("keeps the renderer's own error when every candidate is walled and the renderer fails", async () => {
+      mocks.fetchRawBytes.mockImplementation(async (url: string) => html(botWall, url));
+      mocks.fetchRenderedHtml.mockRejectedValue(new Error("Jina timed out"));
+
+      // The direct-fetch part still names the wall; the renderer's failure is not hidden.
+      await expect(buildSourceEvidence(lwUrl)).rejects.toThrow(
+        /^Could not extract article \(direct fetch: BotWallError: Source is bot-walled.*Jina: Error: Jina timed out\)$/,
+      );
+    });
+
     it("keeps a single-candidate JS shell when the renderer recovers the article", async () => {
       const shell = "<html><head><title>App</title></head><body><div id=\"root\"></div><script>boot()</script></body></html>";
       const rendered = `<html><head><title>Rendered Article</title></head><body><article><h1>Rendered Article</h1><p>${"rendered app body ".repeat(200)}</p></article></body></html>`;

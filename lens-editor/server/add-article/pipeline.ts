@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import type { ArticleImportMode, ArticleJob, ArticleMeta } from "./types";
-import { fetchRawBytes } from "./fetch";
+import { fetchRawBytes, MIN_ARTICLE_CHARS } from "./fetch";
 import { embedPdfImages } from "./pdf";
 import { dedupUrlVariants } from "./url-normalize";
 import { hostRemoteImages, newImageBudget, type HostImagesResult } from "./image-hosting";
@@ -66,10 +66,6 @@ async function pruneExpiredEvidence(): Promise<void> {
     }
   }
 }
-// Below this the extraction almost certainly failed (empty/wrong container)
-// rather than producing a real article body.
-const MIN_ARTICLE_CHARS = 200;
-
 /** Time limit for one image-rehosting pass; what is unfinished then stays
  *  external. */
 const IMAGE_PHASE_TIMEOUT_MS = 90_000;

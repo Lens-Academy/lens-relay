@@ -117,9 +117,10 @@ export function looksLikeBlockPage(body: string): boolean {
   return body.length < 2000 && BLOCK_PAGE_RE.test(body);
 }
 
-/** Below this much visible text a fetched page cannot hold an article. Equal
- *  to the pipeline's minimum article length. */
-export const MIN_PAGE_TEXT_CHARS = 200;
+/** The shortest article the importer accepts, in characters: below this the
+ *  extraction almost certainly failed (empty or wrong container). A fetched
+ *  page with less visible text than this cannot hold an article. */
+export const MIN_ARTICLE_CHARS = 200;
 
 /** The visible text of an HTML page: no scripts, styles or tags. */
 export function visibleText(html: string): string {
@@ -141,7 +142,7 @@ export function visibleText(html: string): string {
  */
 export function looksLikeBotWall(html: string): boolean {
   const text = visibleText(html);
-  return text.length < MIN_PAGE_TEXT_CHARS || looksLikeBlockPage(text);
+  return text.length < MIN_ARTICLE_CHARS || looksLikeBlockPage(text);
 }
 
 /** Every fetch of the source returned a bot wall instead of the article. */
@@ -149,8 +150,7 @@ export class BotWallError extends Error {
   constructor(readonly urls: string[]) {
     super(
       `Source is bot-walled: ${urls.join(", ")} returned a bot-verification or near-empty page ` +
-        "instead of the article. Try a mirror of it (for LessWrong / Alignment Forum posts, " +
-        "the same path on www.greaterwrong.com).",
+        "instead of the article. Try a mirror or an archived copy of it.",
     );
     this.name = "BotWallError";
   }
