@@ -4,6 +4,7 @@ import { Compartment, Prec, StateField, RangeSetBuilder, Transaction } from '@co
 import type { EditorState, Extension } from '@codemirror/state';
 import { syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
+import { createLinkElement } from './linkElement';
 
 type Align = 'left' | 'center' | 'right';
 
@@ -53,6 +54,43 @@ function findClosingMarker(source: string, marker: string, from: number): number
   return -1;
 }
 
+interface CellLink {
+  text: string;
+  url: string;
+  end: number;
+}
+
+// The link forms live preview turns into clickable links outside tables:
+// [text](url), <scheme:...> autolinks and bare GFM URLs (https://..., www....).
+function matchLinkAt(source: string, i: number): CellLink | null {
+  if (source[i] === '[') {
+    const close = findClosingMarker(source, ']', i + 1);
+    if (close === -1 || source[close + 1] !== '(') return null;
+    const end = findClosingMarker(source, ')', close + 2);
+    if (end === -1) return null;
+    const url = source.slice(close + 2, end).trim();
+    return url ? { text: source.slice(i + 1, close), url, end: end + 1 } : null;
+  }
+
+  if (source[i] === '<') {
+    const m = /^<([a-z][a-z0-9+.-]{1,31}:[^\s<>]*)>/i.exec(source.slice(i));
+    return m ? { text: m[1], url: m[1], end: i + m[0].length } : null;
+  }
+
+  // A bare URL starts at a word boundary, like GFM's extended autolinks
+  if (!/[hw]/i.test(source[i])) return null;
+  if (i > 0 && !/[\s*_~(]/.test(source[i - 1])) return null;
+  const m = /^(?:https?:\/\/|www\.)[^\s<]+/i.exec(source.slice(i));
+  if (!m) return null;
+  let url = m[0].replace(/[?!.,:*_~'"]+$/, '');
+  // Drop trailing ')' that close a paren opened before the URL, not inside it
+  while (url.endsWith(')') && url.split('(').length < url.split(')').length) {
+    url = url.slice(0, -1).replace(/[?!.,:*_~'"]+$/, '');
+  }
+  if (/^www\.$/i.test(url) || /:\/\/$/.test(url)) return null;
+  return { text: url, url, end: i + url.length };
+}
+
 /** Render the small inline-Markdown subset supported by table live preview. */
 function renderInlineCell(el: HTMLElement, source: string): void {
   el.replaceChildren();
@@ -67,6 +105,18 @@ function renderInlineCell(el: HTMLElement, source: string): void {
     if (source[i] === '\\' && i + 1 < source.length) {
       text += source[i + 1];
       i += 2;
+      continue;
+    }
+
+    const link = matchLinkAt(source, i);
+    if (link) {
+      flushText();
+      const a = createLinkElement(unescapeFromCell(link.text), unescapeFromCell(link.url));
+      // Keep the press from focusing the cell, which would swap the rendered
+      // cell for its Markdown source before the click reaches the link.
+      a.addEventListener('mousedown', e => e.preventDefault());
+      el.appendChild(a);
+      i = link.end;
       continue;
     }
 

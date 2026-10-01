@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
@@ -114,6 +114,74 @@ describe('markdownTable - rendering', () => {
     expect(table.querySelector('tbody em')?.textContent).toBe('writer');
     expect(table.textContent).not.toContain('**');
     expect(table.textContent).not.toContain('`');
+  });
+
+  it('renders markdown links, autolinks and bare URLs in cells as clickable links', () => {
+    const content = [
+      '| Kind | Link |',
+      '| - | - |',
+      '| md | [Course page](https://lensacademy.org/course) |',
+      '| auto | <https://example.com/a> |',
+      '| bare | see https://lensacademy.org, then www.example.org. |',
+      '| paren | (https://example.com/x) **[bold](https://b.example)** |',
+      '',
+      'end',
+    ].join('\n');
+    view = createEditor(content, content.indexOf('end'));
+
+    const links = Array.from(view.contentDOM.querySelectorAll('.cm-md-table td .cm-link-widget'));
+    expect(links.map(a => a.textContent)).toEqual([
+      'Course page',
+      'https://example.com/a',
+      'https://lensacademy.org',
+      'www.example.org',
+      'https://example.com/x',
+      'bold',
+    ]);
+    const cells = Array.from(view.contentDOM.querySelectorAll('.cm-md-table tbody td:nth-child(2)'));
+    expect(cells.map(td => td.textContent)).toEqual([
+      'Course page',
+      'https://example.com/a',
+      'see https://lensacademy.org, then www.example.org.',
+      '(https://example.com/x) bold',
+    ]);
+    expect(links[5].closest('strong')).not.toBeNull();
+  });
+
+  it('opens a cell link on click without entering cell editing', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const content = '| Site |\n| - |\n| [Lens](https://lensacademy.org) and www.example.org |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector('.cm-md-table td') as HTMLElement;
+    const [link, www] = Array.from(td.querySelectorAll('.cm-link-widget')) as HTMLElement[];
+    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    link.dispatchEvent(press);
+    expect(press.defaultPrevented).toBe(true);
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(open).toHaveBeenCalledWith('https://lensacademy.org', '_blank');
+    www.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(open).toHaveBeenCalledWith('https://www.example.org', '_blank');
+    open.mockRestore();
+  });
+
+  it('does not treat wikilinks or mid-word text as links', () => {
+    const content = '| A |\n| - |\n| [[Page]] and xhttps://nope.example |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    expect(view.contentDOM.querySelector('.cm-md-table .cm-link-widget')).toBeNull();
+    expect(view.contentDOM.querySelector('.cm-md-table td')?.textContent).toBe('[[Page]] and xhttps://nope.example');
+  });
+
+  it('shows the link Markdown while the cell is focused and the link again on blur', () => {
+    const content = '| A |\n| - |\n| [Lens](https://lensacademy.org) |\n\nend';
+    view = createEditor(content, content.indexOf('end'));
+
+    const td = view.contentDOM.querySelector('.cm-md-table td') as HTMLElement;
+    td.focus();
+    expect(td.textContent).toBe('[Lens](https://lensacademy.org)');
+    td.blur();
+    expect(td.querySelector('.cm-link-widget')?.textContent).toBe('Lens');
   });
 
   it('renders underscore bold and italic marks inside table cells', () => {

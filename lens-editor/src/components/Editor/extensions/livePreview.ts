@@ -26,6 +26,7 @@ import {
 } from '@codemirror/view';
 import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin } from './criticmarkup';
 import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
+import { createLinkElement } from './linkElement';
 import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
 import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
@@ -178,26 +179,7 @@ class LinkWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
-    const span = document.createElement('span');
-    span.className = 'cm-link-widget';
-    span.textContent = this.text;
-
-    const icon = document.createElement('span');
-    icon.className = 'cm-link-icon';
-    span.appendChild(icon);
-
-    span.style.cursor = 'pointer';
-    span.onclick = (e) => {
-      e.preventDefault();
-      // Prepend https:// if URL doesn't have a protocol
-      let url = this.url;
-      if (!/^https?:\/\//i.test(url)) {
-        url = 'https://' + url;
-      }
-      window.open(url, '_blank');
-    };
-
-    return span;
+    return createLinkElement(this.text, this.url);
   }
 
   eq(other: LinkWidget): boolean {
