@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { EditorView } from 'codemirror';
 import {
   keymap,
@@ -508,6 +508,16 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
 
   const pasteLabels = pasteOriginLabels(displayName);
 
+  // The popover's width depends on the display name, so keep it on screen by
+  // measuring it rather than assuming a width when positioning
+  const pastePopoverRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = pastePopoverRef.current;
+    if (!el || !pastePrompt) return;
+    const maxLeft = window.innerWidth - el.offsetWidth - 8;
+    if (pastePrompt.x > maxLeft) el.style.left = `${Math.max(8, maxLeft)}px`;
+  }, [pastePrompt]);
+
   return (
     <div className="relative h-full w-full">
       {!synced && <LoadingOverlay />}
@@ -525,24 +535,34 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
       )}
       {pastePrompt && (
         <div
-          className="fixed z-50 flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 shadow-lg text-sm"
+          ref={pastePopoverRef}
+          className="fixed z-50 flex max-w-[calc(100vw-16px)] items-center gap-2 whitespace-nowrap rounded-md border border-gray-200 bg-white px-3 py-1.5 shadow-lg text-sm"
           style={{ left: pastePrompt.x, top: pastePrompt.y }}
           data-testid="paste-classification-popover"
         >
-          <span className="text-gray-600">Pasted text — who wrote it?</span>
+          <span className="min-w-0 truncate text-gray-600">Pasted text — who wrote it?</span>
+          {/* Long display names are truncated; "'s AI" always stays visible */}
           <button
             type="button"
-            className="rounded bg-blue-50 px-2 py-0.5 text-blue-700 hover:bg-blue-100"
+            title={pasteLabels.human}
+            className="max-w-[min(10rem,22vw)] shrink-0 truncate rounded bg-blue-50 px-2 py-0.5 text-blue-700 hover:bg-blue-100"
             onClick={() => classifyPaste(pastePrompt.pasteId, 'human')}
           >
             {pasteLabels.human}
           </button>
           <button
             type="button"
-            className="rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100"
+            title={pasteLabels.ai}
+            aria-label={pasteLabels.ai}
+            className="flex shrink-0 rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100"
             onClick={() => classifyPaste(pastePrompt.pasteId, 'ai')}
           >
-            {pasteLabels.ai}
+            {pasteLabels.name ? (
+              <>
+                <span className="max-w-[min(10rem,22vw)] truncate">{pasteLabels.name}</span>
+                <span>'s AI</span>
+              </>
+            ) : pasteLabels.ai}
           </button>
           <button
             type="button"

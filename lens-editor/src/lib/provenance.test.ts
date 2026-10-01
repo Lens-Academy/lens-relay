@@ -221,16 +221,16 @@ describe('attachProvenanceRegistration', () => {
 
 describe('pasteOriginLabels', () => {
   it('names the writer and their AI', () => {
-    expect(pasteOriginLabels('Luc')).toEqual({ human: 'Luc', ai: "Luc's AI" });
+    expect(pasteOriginLabels('Luc')).toEqual({ name: 'Luc', human: 'Luc', ai: "Luc's AI" });
   });
 
   it('trims the display name', () => {
-    expect(pasteOriginLabels('  Luc ')).toEqual({ human: 'Luc', ai: "Luc's AI" });
+    expect(pasteOriginLabels('  Luc ')).toEqual({ name: 'Luc', human: 'Luc', ai: "Luc's AI" });
   });
 
   it('falls back to Me / AI without a display name', () => {
-    expect(pasteOriginLabels(null)).toEqual({ human: 'Me', ai: 'AI' });
-    expect(pasteOriginLabels('   ')).toEqual({ human: 'Me', ai: 'AI' });
+    expect(pasteOriginLabels(null)).toEqual({ name: null, human: 'Me', ai: 'AI' });
+    expect(pasteOriginLabels('   ')).toEqual({ name: null, human: 'Me', ai: 'AI' });
   });
 });
 

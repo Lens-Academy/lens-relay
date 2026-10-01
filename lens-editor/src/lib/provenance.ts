@@ -187,11 +187,12 @@ export function isPendingClassification(clientID: number): boolean {
 /**
  * Button labels for the paste popover: the writer's own name and "<name>'s AI",
  * so the choice reads as "Luc" / "Luc's AI". Without a display name they fall
- * back to "Me" / "AI".
+ * back to "Me" / "AI". `name` is the trimmed name (null without one), for
+ * rendering the AI label with a truncatable name and a fixed "'s AI".
  */
-export function pasteOriginLabels(displayName: string | null): { human: string; ai: string } {
-  const name = displayName?.trim();
-  return name ? { human: name, ai: `${name}'s AI` } : { human: 'Me', ai: 'AI' };
+export function pasteOriginLabels(displayName: string | null): { name: string | null; human: string; ai: string } {
+  const name = displayName?.trim() || null;
+  return name ? { name, human: name, ai: `${name}'s AI` } : { name, human: 'Me', ai: 'AI' };
 }
 
 /**
