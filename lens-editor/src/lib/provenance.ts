@@ -185,10 +185,21 @@ export function isPendingClassification(clientID: number): boolean {
 }
 
 /**
- * Record the popover's answer for a pending paste: "Me" maps the paste's
+ * Button labels for the paste popover: the writer's own name and "<name>'s AI",
+ * so the choice reads as "Luc" / "Luc's AI". Without a display name they fall
+ * back to "Me" / "AI". `name` is the trimmed name (null without one), for
+ * rendering the AI label with a truncatable name and a fixed "'s AI".
+ */
+export function pasteOriginLabels(displayName: string | null): { name: string | null; human: string; ai: string } {
+  const name = displayName?.trim() || null;
+  return name ? { name, human: name, ai: `${name}'s AI` } : { name, human: 'Me', ai: 'AI' };
+}
+
+/**
+ * Record the popover's answer for a pending paste: the human answer maps the paste's
  * temporary clientID to the human actor for `displayName` (the same
- * DisplayNameContext value the lazy registration path uses), "AI" to the
- * generic AI actor.
+ * DisplayNameContext value the lazy registration path uses), the AI answer
+ * to the generic AI actor.
  */
 export function classifyPendingPaste(
   doc: Y.Doc,

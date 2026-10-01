@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { EditorView } from 'codemirror';
 import {
   keymap,
@@ -45,6 +45,7 @@ import {
 } from './extensions/paste-classification';
 import {
   classifyPendingPaste,
+  pasteOriginLabels,
   resolvePendingClassification,
 } from '../../lib/provenance';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
@@ -148,7 +149,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
 
   const classifyPaste = (pasteId: number, origin: 'human' | 'ai') => {
     // Same identity source as the lazy registration in AwarenessInitializer,
-    // so a "Me" answer and ordinary typing land under the same actor key.
+    // so a human answer and ordinary typing land under the same actor key.
     classifyPendingPaste(ydoc, pasteId, origin, displayName);
     closePastePrompt(pasteId);
   };
@@ -165,8 +166,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
       return;
     }
     // Clamp to the viewport: the popover is position:fixed, so an offscreen
-    // anchor (paste at the bottom edge) would make it unreachable.
-    const x = Math.max(8, Math.min(coords.left, window.innerWidth - 360));
+    // anchor (paste at the bottom edge) would make it unreachable. The right
+    // edge is clamped once the popover's width is known (useLayoutEffect below).
+    const x = Math.max(8, coords.left);
     const y = Math.max(8, Math.min(coords.bottom + 6, window.innerHeight - 48));
     setPastePrompt({ pasteId: paste.pasteId, x, y });
     if (pastePromptTimer.current) clearTimeout(pastePromptTimer.current);
@@ -505,6 +507,18 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // to avoid recreating the editor (which would lose Y.Text sync state)
   }, [ydoc, provider, onEditorReady, onDocChange, readOnly, canAcceptReject, initialSuggestionModeOnMount]);
 
+  const pasteLabels = pasteOriginLabels(displayName);
+
+  // The popover's width depends on the display name, so keep it on screen by
+  // measuring it rather than assuming a width when positioning
+  const pastePopoverRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = pastePopoverRef.current;
+    if (!el || !pastePrompt) return;
+    const maxLeft = window.innerWidth - el.offsetWidth - 8;
+    if (pastePrompt.x > maxLeft) el.style.left = `${Math.max(8, maxLeft)}px`;
+  }, [pastePrompt]);
+
   return (
     <div className="relative h-full w-full">
       {!synced && <LoadingOverlay />}
@@ -522,24 +536,34 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
       )}
       {pastePrompt && (
         <div
-          className="fixed z-50 flex items-center gap-2 rounded-md border border-gray-200 bg-white px-3 py-1.5 shadow-lg text-sm"
+          ref={pastePopoverRef}
+          className="fixed z-50 flex max-w-[calc(100vw-16px)] items-center gap-2 whitespace-nowrap rounded-md border border-gray-200 bg-white px-3 py-1.5 shadow-lg text-sm"
           style={{ left: pastePrompt.x, top: pastePrompt.y }}
           data-testid="paste-classification-popover"
         >
-          <span className="text-gray-600">Pasted text — who wrote it?</span>
+          <span className="min-w-0 truncate text-gray-600">Pasted text — who wrote it?</span>
+          {/* Long display names are truncated; "'s AI" always stays visible */}
           <button
             type="button"
-            className="rounded bg-blue-50 px-2 py-0.5 text-blue-700 hover:bg-blue-100"
+            title={pasteLabels.human}
+            className="max-w-[min(10rem,22vw)] shrink-0 truncate rounded bg-blue-50 px-2 py-0.5 text-blue-700 hover:bg-blue-100"
             onClick={() => classifyPaste(pastePrompt.pasteId, 'human')}
           >
-            Me
+            {pasteLabels.human}
           </button>
           <button
             type="button"
-            className="rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100"
+            title={pasteLabels.ai}
+            aria-label={pasteLabels.ai}
+            className="flex shrink-0 rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100"
             onClick={() => classifyPaste(pastePrompt.pasteId, 'ai')}
           >
-            AI
+            {pasteLabels.name ? (
+              <>
+                <span className="max-w-[min(10rem,22vw)] truncate">{pasteLabels.name}</span>
+                <span>'s AI</span>
+              </>
+            ) : pasteLabels.ai}
           </button>
           <button
             type="button"

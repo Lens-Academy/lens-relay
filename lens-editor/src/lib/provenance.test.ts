@@ -9,6 +9,7 @@ import {
   ensureRegistration,
   attachProvenanceRegistration,
   classifyPendingPaste,
+  pasteOriginLabels,
   getClientActorMap,
 } from './provenance';
 
@@ -218,15 +219,30 @@ describe('attachProvenanceRegistration', () => {
   });
 });
 
+describe('pasteOriginLabels', () => {
+  it('names the writer and their AI', () => {
+    expect(pasteOriginLabels('Luc')).toEqual({ name: 'Luc', human: 'Luc', ai: "Luc's AI" });
+  });
+
+  it('trims the display name', () => {
+    expect(pasteOriginLabels('  Luc ')).toEqual({ name: 'Luc', human: 'Luc', ai: "Luc's AI" });
+  });
+
+  it('falls back to Me / AI without a display name', () => {
+    expect(pasteOriginLabels(null)).toEqual({ name: null, human: 'Me', ai: 'AI' });
+    expect(pasteOriginLabels('   ')).toEqual({ name: null, human: 'Me', ai: 'AI' });
+  });
+});
+
 describe('classifyPendingPaste', () => {
-  it('registers a "Me" answer under the human actor for the display name', () => {
+  it('registers a human answer under the human actor for the display name', () => {
     const doc = new Y.Doc();
     classifyPendingPaste(doc, 12345, 'human', 'Luc', T0);
     expect(getRegisteredActor(doc, 12345)).toBe('human:Luc');
     expect(getRegisteredAt(doc, 12345)).toBe(T0);
   });
 
-  it('registers an "AI" answer under the generic AI actor', () => {
+  it('registers an AI answer under the generic AI actor', () => {
     const doc = new Y.Doc();
     classifyPendingPaste(doc, 12345, 'ai', 'Luc', T0);
     expect(getRegisteredActor(doc, 12345)).toBe('ai:unknown');
