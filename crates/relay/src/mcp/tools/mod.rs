@@ -284,12 +284,22 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "import_status",
-            "description": "Check the status of import jobs started with import_source (queued / processing / done / failed, with document paths and errors).",
+            "description": "Check the status of import jobs started with import_source (queued / processing / done / failed, with document paths and errors). Pass job_ids (the ids import_source returned) and/or urls to get only those jobs; without them every job on the server is listed.",
             "inputSchema": {
                 "type": "object",
                 "required": ["session_id"],
                 "additionalProperties": false,
                 "properties": {
+                    "job_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Only these jobs (ids from import_source results)"
+                    },
+                    "urls": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Only jobs for these source URLs (variants such as utm tags, a trailing slash or youtu.be links match too)"
+                    },
                     "session_id": {
                         "type": "string",
                         "description": "Session ID returned by create_session. Required."
@@ -641,7 +651,7 @@ pub async fn dispatch_tool(
                 Err(msg) => tool_error(&msg),
             }
         }
-        "import_status" => match import_source::status(access).await {
+        "import_status" => match import_source::status(access, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },

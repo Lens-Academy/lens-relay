@@ -273,6 +273,45 @@ describe("GET /api/add-article/status", () => {
   });
 });
 
+describe("GET /api/add-article/status filters", () => {
+  const jobs = [
+    { id: "j1", url: "https://example.com/a", status: "done" },
+    { id: "j2", url: "https://example.com/b/", status: "processing" },
+    { id: "j3", url: "https://www.youtube.com/watch?v=abc123def45", status: "queued" },
+  ];
+  async function statusIds(query: string) {
+    const app = new Hono();
+    app.route(
+      "/api/add-article",
+      createAddArticleRoutes({ add: vi.fn(), findActive: vi.fn(), status: vi.fn(() => jobs) } as never),
+    );
+    const resp = await app.request(`/api/add-article/status${query}`, {
+      headers: { Authorization: `Bearer ${makeToken()}` },
+    });
+    expect(resp.status).toBe(200);
+    const data = await resp.json();
+    return data.jobs.map((j: { id: string }) => j.id);
+  }
+
+  // Prevents: an agent polling one import having to read every job on the server
+  it("returns only the jobs named by id or url", async () => {
+    expect(await statusIds("")).toEqual(["j1", "j2", "j3"]);
+    expect(await statusIds("?id=j2")).toEqual(["j2"]);
+    expect(await statusIds("?id=j1&id=j3")).toEqual(["j1", "j3"]);
+    expect(await statusIds("?id=j1&url=" + encodeURIComponent("https://example.com/b"))).toEqual(["j1", "j2"]);
+    expect(await statusIds("?id=nope")).toEqual([]);
+    expect(await statusIds("?url=not-a-url")).toEqual([]);
+    expect(await statusIds("?url=" + encodeURIComponent("yt:abc123def45"))).toEqual([]);
+  });
+
+  // Prevents: a url filter missing the job because the agent passed a
+  // variant spelling of the url it submitted
+  it("matches url variants the way submissions are deduped", async () => {
+    expect(await statusIds("?url=" + encodeURIComponent("https://youtu.be/abc123def45"))).toEqual(["j3"]);
+    expect(await statusIds("?url=" + encodeURIComponent("https://example.com/a?utm_source=x"))).toEqual(["j1"]);
+  });
+});
+
 describe("DELETE /api/add-article/:id and POST /:id/retry", () => {
   let app: Hono;
   let mockQueue: {
