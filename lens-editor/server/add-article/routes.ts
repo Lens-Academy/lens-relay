@@ -140,8 +140,24 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
     return c.json({ results });
   });
 
+  // Optional filter: repeat `id` and/or `url` to get only those jobs (a job
+  // matching any of them). A url matches its dedup variants too (utm tags,
+  // trailing slash, youtu.be vs watch), the same rule that dedups submissions.
   router.get("/status", (c) => {
-    return c.json({ jobs: queue.status() });
+    const ids = new Set(c.req.queries("id") ?? []);
+    const urlKeys = new Set(
+      (c.req.queries("url") ?? []).map((raw) => {
+        const url = validateUrl(raw);
+        return url ? normalizeImportKey(url) : raw;
+      }),
+    );
+    let jobs = queue.status();
+    if (ids.size > 0 || urlKeys.size > 0) {
+      jobs = jobs.filter(
+        (job) => ids.has(job.id) || urlKeys.has(normalizeImportKey(job.url)),
+      );
+    }
+    return c.json({ jobs });
   });
 
   // Cancel a queued/processing job. Aborts in-flight work; the job shows as

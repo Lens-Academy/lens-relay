@@ -93,26 +93,44 @@ pub async fn execute_with_editor_url(
     .await
 }
 
-/// Execute the `import_status` tool.
-pub async fn status(access: &McpAccess) -> Result<String, String> {
-    status_with_editor_url(access, &editor_url_from_env()).await
+/// Execute the `import_status` tool. Optional `job_ids` / `urls` narrow the
+/// answer to those jobs (any match); without them every job is listed.
+pub async fn status(access: &McpAccess, arguments: &Value) -> Result<String, String> {
+    status_with_editor_url(access, arguments, &editor_url_from_env()).await
 }
 
 pub async fn status_with_editor_url(
     access: &McpAccess,
+    arguments: &Value,
     editor_url: &str,
 ) -> Result<String, String> {
+    let mut query: Vec<(&str, String)> = Vec::new();
+    for (arg, param) in [("job_ids", "id"), ("urls", "url")] {
+        let Some(value) = arguments.get(arg).filter(|v| !v.is_null()) else {
+            continue;
+        };
+        let values = value
+            .as_array()
+            .ok_or_else(|| format!("{} must be an array of strings", arg))?;
+        for v in values {
+            let v = v
+                .as_str()
+                .ok_or_else(|| format!("Every entry in {} must be a string", arg))?;
+            query.push((param, v.to_string()));
+        }
+    }
     let token = request_token(access)?;
-    proxy(
-        reqwest::Method::GET,
-        &format!(
-            "{}/api/add-article/status",
-            editor_url.trim_end_matches('/')
-        ),
-        &token,
-        None,
-    )
-    .await
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/api/add-article/status",
+        editor_url.trim_end_matches('/')
+    ))
+    .map_err(|e| format!("Error: Invalid lens-editor URL: {}", e))?;
+    url.query_pairs_mut()
+        .extend_pairs(query.iter().map(|(k, v)| (*k, v.as_str())));
+    if url.query() == Some("") {
+        url.set_query(None);
+    }
+    proxy(reqwest::Method::GET, url.as_str(), &token, None).await
 }
 
 fn client() -> &'static reqwest::Client {
@@ -223,7 +241,8 @@ mod tests {
                             .and_then(|v| v.to_str().ok())
                             .unwrap_or("")
                             .to_string();
-                        tx.send((auth, String::new())).unwrap();
+                        let query = req.uri().query().unwrap_or("").to_string();
+                        tx.send((auth, query)).unwrap();
                         axum::Json(json!({"jobs": []}))
                     }
                 }),
@@ -320,12 +339,50 @@ mod tests {
     async fn status_forwards_token() {
         let (editor_url, mut rx) = mock_editor().await;
 
-        let out = status_with_editor_url(&access_with_token("tok-9"), &editor_url)
+        let out = status_with_editor_url(&access_with_token("tok-9"), &json!({}), &editor_url)
             .await
             .expect("status should succeed");
         assert!(out.contains("jobs"));
-        let (auth, _) = rx.recv().await.unwrap();
+        let (auth, query) = rx.recv().await.unwrap();
         assert_eq!(auth, "Bearer tok-9");
+        assert_eq!(query, "");
+    }
+
+    // Prevents: job_ids / urls being dropped, so a caller polling one import
+    // gets every job on the server
+    #[tokio::test]
+    async fn status_forwards_job_and_url_filters() {
+        let (editor_url, mut rx) = mock_editor().await;
+
+        status_with_editor_url(
+            &access_with_token("tok"),
+            &json!({
+                "job_ids": ["job-1", "job-2"],
+                "urls": ["https://example.com/a?b=c&d"]
+            }),
+            &editor_url,
+        )
+        .await
+        .expect("status should succeed");
+        let (_, query) = rx.recv().await.unwrap();
+        assert_eq!(
+            query,
+            "id=job-1&id=job-2&url=https%3A%2F%2Fexample.com%2Fa%3Fb%3Dc%26d"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_rejects_malformed_filters() {
+        for arguments in [json!({"job_ids": "job-1"}), json!({"urls": [42]})] {
+            let err =
+                status_with_editor_url(&access_with_token("tok"), &arguments, "http://127.0.0.1:1")
+                    .await
+                    .expect_err("malformed filter must be rejected before contacting the editor");
+            assert!(
+                err.contains("job_ids") || err.contains("urls"),
+                "got: {err}"
+            );
+        }
     }
 
     #[test]
