@@ -35,6 +35,7 @@ import { MultiDocSectionEditor } from './components/SectionEditor';
 import { applySuggestionActionsViaServer, SUGGESTION_NOT_FOUND } from './lib/suggestion-actions';
 import type { SuggestionItem } from './hooks/useSuggestions';
 import { useResolvedDocId } from './hooks/useResolvedDocId';
+import { useDocFromUrl } from './hooks/useDocFromUrl';
 import { BlobDocumentView } from './components/BlobViewer';
 import { ImageDocumentView } from './components/ImageDocumentView';
 import { HtmlEditor } from './components/HtmlEditor';
@@ -270,15 +271,17 @@ function DocumentView() {
   const { docUuid, '*': splatPath } = useParams<{ docUuid: string; '*': string }>();
   const { metadata } = useNavigation();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  // Build compound ID from URL param (may be short: RELAY_ID + 8-char prefix)
-  // Empty string when docUuid is missing — hook handles this gracefully
-  const shortCompoundId = docUuid ? `${RELAY_ID}-${docUuid}` : '';
-
-  // Resolve short UUID to full compound ID (instant from metadata, or server fetch)
-  // docId is null for empty input or while resolving; notFound means the server
-  // definitively answered that no such doc exists
-  const { docId: activeDocId, notFound } = useResolvedDocId(shortCompoundId, metadata);
+  // Resolve the URL: first segment as a short doc UUID (instant from metadata,
+  // or server fetch), else the whole path as a vault path (/Lens/Some Doc.md)
+  // that redirects to the canonical prefixed URL
+  const { docId: activeDocId, asPath, redirectTo, notFound, failed } =
+    useDocFromUrl(docUuid, location.pathname, metadata);
+  useEffect(() => {
+    if (!redirectTo) return;
+    navigate(redirectTo + location.search + location.hash, { replace: true });
+  }, [redirectTo, location.search, location.hash, navigate]);
 
   // Update URL to use short UUID + decorative path when metadata loads
   useEffect(() => {
@@ -300,8 +303,22 @@ function DocumentView() {
 
   if (!docUuid) return <DocumentNotFound />;
 
-  // The URL points at a doc that doesn't exist (deleted, or a bad link)
-  if (notFound) return <DocumentNotFound />;
+  if (asPath) {
+    // Neither a doc prefix nor a vault path (deleted, or a bad link)
+    if (notFound) return <DocumentNotFound />;
+    if (failed) {
+      return (
+        <main className="flex-1 flex items-center justify-center bg-gray-50">
+          <div className="text-sm text-gray-500">Couldn't open this link right now. Try reloading the page.</div>
+        </main>
+      );
+    }
+    return (
+      <main className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-sm text-gray-500">Opening document...</div>
+      </main>
+    );
+  }
 
   // Show loading while resolving short UUID on cold page load
   if (!activeDocId) {
@@ -645,6 +662,8 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />
                   <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
                   <Route path="/promote" element={<PromotionRoute />} />
+                  {/* Also catches bare vault paths (/Lens/Some Doc.md); a top-level
+                      folder named like a route above can't be opened that way */}
                   <Route path="/:docUuid/*" element={<DocumentView />} />
                   <Route path="/" element={<DefaultLanding />} />
                 </Routes>
