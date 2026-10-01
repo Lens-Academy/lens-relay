@@ -24,6 +24,7 @@ import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
 import { resolveAnchorYFromSectionViews, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
 import type { SectionViewEntry } from '../../lib/anchor-resolver';
 import { OutOfDateBanner } from './OutOfDateBanner';
+import { urlForDoc } from '../../lib/url-utils';
 
 const SUGGESTION_MODE_KEY = 'edu-editor:suggestion-mode';
 const COMMENTS_VISIBLE_KEY = 'edu-editor:comments-visible';
@@ -307,7 +308,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
           rootIndex: scope.kind === 'subtree' ? scope.rootSectionIndex : undefined,
         };
 
-  const outOfDateBanner = <OutOfDateBanner shortDocUuid={moduleDocId.slice(RELAY_ID.length + 1, RELAY_ID.length + 9)} />;
+  const outOfDateBanner = <OutOfDateBanner fileEditorUrl={urlForDoc(moduleDocId, metadata)} />;
 
   if (!synced) {
     return (

@@ -10,12 +10,12 @@ describe('OutOfDateBanner', () => {
   it('warns that the Course Editor is out of date and links to the File Editor', () => {
     render(
       <MemoryRouter>
-        <OutOfDateBanner shortDocUuid="c0000001" />
+        <OutOfDateBanner fileEditorUrl="/c0000001/Lens-Edu/modules/Demo-Module.md" />
       </MemoryRouter>
     );
-    const alert = screen.getByRole('alert');
+    const alert = screen.getByRole('note');
     expect(alert.textContent).toContain('out of date');
     expect(alert.textContent).toContain('can break course files');
-    expect(screen.getByRole('link', { name: 'in the File Editor' }).getAttribute('href')).toBe('/c0000001');
+    expect(screen.getByRole('link', { name: 'in the File Editor' }).getAttribute('href')).toBe('/c0000001/Lens-Edu/modules/Demo-Module.md');
   });
 });
