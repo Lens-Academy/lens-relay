@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import * as dns from 'node:dns';
 import { isIP } from 'node:net';
-import { Agent } from 'undici';
+import { Agent, buildConnector } from 'undici';
 
 /**
  * SSRF guard for server-side URL fetching. Editors can submit arbitrary URLs
@@ -109,6 +109,8 @@ function isPrivateIPv6(ip: string): boolean {
     (zeros(0, 4) && g[4] === 0xffff && g[5] === 0) ||
     (g[0] === 0x64 && g[1] === 0xff9b && zeros(2, 6));
   if (embedsV4) return isPrivateIPv4(v4FromGroups(g[6], g[7]));
+  // A network-specific NAT64 prefix cannot be recognised from the address;
+  // prod is IPv4-only (Hetzner), so it has no NAT64 path to worry about.
   // 64:ff9b:1::/48 is the local-use NAT64 prefix (RFC 8215): a network's own
   // translator, which can reach whatever the network can.
   if (g[0] === 0x64 && g[1] === 0xff9b && g[2] === 1) return true;
@@ -197,11 +199,21 @@ export function publicOnlyLookup(
   });
 }
 
+const connectViaPublicLookup = buildConnector({ lookup: publicOnlyLookup as never });
+
 /**
- * undici dispatcher whose connections resolve through `publicOnlyLookup`.
- * Pass it with every fetch of a user-supplied URL (and every redirect hop),
- * together with `assertPublicUrl`, which also covers literal-IP hosts.
+ * undici dispatcher that only connects to public addresses: names resolve
+ * through `publicOnlyLookup`, and literal-IP hosts (which skip lookup) are
+ * checked before connecting. Pass it with every fetch of a user-supplied URL
+ * and every redirect hop; `assertPublicUrl` up front gives the clearer error.
  */
 export const publicOnlyDispatcher = new Agent({
-  connect: { lookup: publicOnlyLookup as never },
+  connect: (options, callback) => {
+    const host = options.hostname.replace(/^\[(.*)\]$/, '$1');
+    if (isIP(host) && isPrivateAddress(host)) {
+      callback(new SsrfError(`Refusing to connect to private address: ${host}`), null);
+      return;
+    }
+    connectViaPublicLookup(options, callback);
+  },
 });

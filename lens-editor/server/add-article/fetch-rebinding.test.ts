@@ -11,6 +11,7 @@ vi.mock("./ssrf", async (importOriginal) => ({
 }));
 
 import { fetchRawBytes } from "./fetch";
+import { SsrfError } from "./ssrf";
 
 describe("fetchRawBytes and DNS rebinding", () => {
   // Prevents: article/image/attachment fetches connecting to whatever a
@@ -24,7 +25,11 @@ describe("fetchRawBytes and DNS rebinding", () => {
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const { port } = server.address() as AddressInfo;
     try {
-      await expect(fetchRawBytes(`http://localhost:${port}/`)).rejects.toThrow();
+      // localhost: the name path (lookup); 127.0.0.1: the literal-IP path.
+      for (const url of [`http://localhost:${port}/`, `http://127.0.0.1:${port}/`]) {
+        const err = await fetchRawBytes(url).catch((e: unknown) => e);
+        expect(err, url).toBeInstanceOf(SsrfError);
+      }
       expect(hits).toBe(0);
     } finally {
       server.close();

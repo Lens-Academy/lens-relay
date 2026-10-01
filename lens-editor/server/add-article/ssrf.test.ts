@@ -1,13 +1,10 @@
 // @vitest-environment node -- real Node fetch/undici; the config's environmentMatchGlobs is ignored by vitest 4, so server tests otherwise run in happy-dom, whose fetch ignores `dispatcher`.
 import { describe, it, expect } from 'vitest';
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import {
   isPrivateAddress,
   assertPublicUrl,
   SsrfError,
   publicOnlyLookup,
-  publicOnlyDispatcher,
 } from './ssrf';
 
 describe('isPrivateAddress', () => {
@@ -119,31 +116,6 @@ describe('connect-time check (DNS rebinding)', () => {
         publicOnlyLookup('localhost', options, (e) => resolve(e)),
       );
       expect(err).toBeInstanceOf(SsrfError);
-    }
-  });
-
-  // Prevents: a host that answered DNS with a public address for the check
-  // and a private one for the connection reaching internal services
-  it('publicOnlyDispatcher never connects to a private address', async () => {
-    let hits = 0;
-    const server = createServer((_req, res) => {
-      hits += 1;
-      res.end('internal');
-    });
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-    const { port } = server.address() as AddressInfo;
-    try {
-      // Sanity: without the dispatcher this test can reach the server.
-      expect(await (await fetch(`http://localhost:${port}/`)).text()).toBe('internal');
-      hits = 0;
-      const err = await fetch(`http://localhost:${port}/`, {
-        dispatcher: publicOnlyDispatcher,
-      } as RequestInit).catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(Error);
-      expect(String((err as Error & { cause?: unknown }).cause)).toMatch(/private address/);
-      expect(hits).toBe(0);
-    } finally {
-      server.close();
     }
   });
 });

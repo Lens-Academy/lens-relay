@@ -1,4 +1,4 @@
-import { assertPublicUrl, publicOnlyDispatcher } from "./ssrf";
+import { assertPublicUrl, publicOnlyDispatcher, SsrfError } from "./ssrf";
 import { fetchBytesWithTimeout } from "../fetch-timeout";
 
 const FETCH_TIMEOUT_MS = 30_000;
@@ -37,6 +37,12 @@ async function fetchFollowingRedirects(
       maxBytes,
       // Re-checks the address at connect time (DNS rebinding).
       dispatcher: publicOnlyDispatcher,
+    }).catch((err: unknown) => {
+      // A connect-time refusal arrives as fetch's TypeError("fetch failed")
+      // with the SsrfError as its cause; surface the SsrfError so callers
+      // (e.g. import_attachment's 400) recognise it.
+      const cause = (err as { cause?: unknown } | null)?.cause;
+      throw cause instanceof SsrfError ? cause : err;
     });
 
     if (resp.status >= 300 && resp.status < 400) {
