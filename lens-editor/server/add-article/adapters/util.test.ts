@@ -59,6 +59,31 @@ describe("stripSiteSuffix", () => {
     ).toBe("The Verge — Tech News");
   });
 
+  it("names a host by its registrable label, not a subdomain", () => {
+    // news.mit.edu is "mit": a "- News" tail is part of the title.
+    expect(stripSiteSuffix("Interview - News", { url: "https://news.mit.edu/2024/x" })).toBe(
+      "Interview - News",
+    );
+    expect(stripSiteSuffix("Interview - MIT", { url: "https://news.mit.edu/2024/x" })).toBe("Interview");
+    expect(stripSiteSuffix("Lecture notes | CMU", { url: "https://www.cs.cmu.edu/~x/" })).toBe(
+      "Lecture notes",
+    );
+    expect(stripSiteSuffix("Story - BBC", { url: "https://www.bbc.co.uk/news/x" })).toBe("Story");
+  });
+
+  it("matches sites named after their whole domain", () => {
+    expect(stripSiteSuffix("Our research agenda | FAR.AI", { url: "https://far.ai/post/x" })).toBe(
+      "Our research agenda",
+    );
+    expect(stripSiteSuffix("Announcing Grok | xAI", { url: "https://x.ai/news/grok" })).toBe("Announcing Grok");
+    expect(stripSiteSuffix("Trends | Epoch AI", { url: "https://epoch.ai/blog/trends" })).toBe("Trends");
+  });
+
+  it("does not match one- and two-letter host labels", () => {
+    expect(stripSiteSuffix("Thread - X", { url: "https://x.com/user/status/1" })).toBe("Thread - X");
+    expect(stripSiteSuffix("Policy Update - AI", { url: "https://ai.gov/x" })).toBe("Policy Update - AI");
+  });
+
   it("strips sites outside the old hard-coded list (MIRI via og:site_name)", () => {
     expect(
       stripSiteSuffix("The Rocket Alignment Problem - Machine Intelligence Research Institute", {
