@@ -2799,10 +2799,10 @@ impl Server {
     /// so when that sidecar exists it moves along to the new name. Folder
     /// moves call `move_document` directly, since they move every entry anyway.
     ///
-    /// The sidecar is checked before anything changes: a destination sidecar
-    /// path that is already taken refuses the whole move. Non-markdown files
-    /// cannot move across folders yet, so a cross-folder move leaves it behind
-    /// with a warning in the log.
+    /// The sidecar is checked before anything changes, so the pair is never
+    /// split: a destination sidecar path that is already taken refuses the
+    /// whole move, and so does a move to another shared folder (non-markdown
+    /// files cannot cross folders yet).
     pub async fn move_document_with_sidecar(
         &self,
         uuid: &str,
@@ -2812,26 +2812,23 @@ impl Server {
         let sidecar = self.timestamps_sidecar_for(uuid);
         let mut sidecar_move = None;
         if let Some((folder_doc_id, folder_name, old_sidecar)) = sidecar {
-            let new_sidecar = timestamps_sidecar_path(new_path);
-            let same_folder = target_folder.map_or(true, |t| t == folder_name);
-            match new_sidecar {
-                Some(new_sidecar) if same_folder => {
-                    if new_sidecar != old_sidecar
-                        && self.filemeta_has_path(&folder_doc_id, &new_sidecar)
-                    {
-                        return Err(MoveDocumentError::Conflict(format!(
-                            "Path '{}' already exists in target folder (the transcript's timestamps file would move there)",
-                            new_sidecar
-                        )));
-                    }
-                    sidecar_move = Some((folder_name, old_sidecar, new_sidecar));
+            if target_folder.is_some_and(|t| t != folder_name) {
+                return Err(MoveDocumentError::BadRequest(format!(
+                    "This transcript has a timestamps file ({}{}) that cannot move to another shared folder yet; move the transcript within '{}' instead",
+                    folder_name, old_sidecar, folder_name
+                )));
+            }
+            // move_document rejects a non-.md destination itself.
+            if let Some(new_sidecar) = timestamps_sidecar_path(new_path) {
+                if new_sidecar != old_sidecar
+                    && self.filemeta_has_path(&folder_doc_id, &new_sidecar)
+                {
+                    return Err(MoveDocumentError::Conflict(format!(
+                        "Path '{}' already exists in target folder (the transcript's timestamps file would move there)",
+                        new_sidecar
+                    )));
                 }
-                _ => tracing::warn!(
-                    uuid = %uuid,
-                    sidecar = %old_sidecar,
-                    target_folder = ?target_folder,
-                    "move: transcript timestamps file left in place (cross-folder moves of non-markdown files are not supported)"
-                ),
+                sidecar_move = Some((folder_name, old_sidecar, new_sidecar));
             }
         }
 
@@ -9564,6 +9561,49 @@ mod test {
             filemeta_id(&server, &folder_doc_id, "/other.timestamps.json").as_deref(),
             Some("33333333-3333-4333-8333-333333333333")
         );
+    }
+
+    // Prevents: a cross-folder move (sidebar drag, MCP move with
+    // target_folder) splitting the transcript from its timings.
+    #[tokio::test]
+    async fn move_path_refuses_cross_folder_move_of_transcript_with_sidecar() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_transcript_with_sidecar(&server, &[]).await;
+
+        let result = server
+            .move_path(
+                "Relay Folder 1/video_transcripts/talk.md",
+                "/talk.md",
+                Some("Lens Edu"),
+            )
+            .await;
+
+        assert!(matches!(result, Err(MoveDocumentError::BadRequest(_))));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/video_transcripts/talk.md"
+        ));
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/video_transcripts/talk.timestamps.json"
+        ));
+
+        // Naming the transcript's own folder is not a cross-folder move.
+        server
+            .move_path(
+                "Relay Folder 1/video_transcripts/talk.md",
+                "/talk.md",
+                Some("Relay Folder 1"),
+            )
+            .await
+            .unwrap();
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/talk.timestamps.json"
+        ));
     }
 
     // Prevents: a folder move moving the sidecar twice (once with the folder,
