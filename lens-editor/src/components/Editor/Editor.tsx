@@ -21,6 +21,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { Autolink, Table, TaskList } from '@lezer/markdown';
 import { WikilinkExtension } from './extensions/wikilinkParser';
 import { tightMarkdownKeymap } from './extensions/tightListEnter';
+import { segmentIdKeymap } from './extensions/segmentIds';
 import { checklistKeymap } from './extensions/checklistToggle';
 import { frontmatterKeymap } from './extensions/frontmatter';
 import { markdownFormattingKeymap } from './extensions/markdownFormatting';
@@ -387,6 +388,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         emphasisPersistPlugin,
         headingFlashPlugin,
         Prec.high(keymap.of(frontmatterKeymap)),
+        ...(readOnly ? [] : [Prec.high(keymap.of(segmentIdKeymap(getCurrentFilePath)))]),
         Prec.high(keymap.of(tightMarkdownKeymap)),
         Prec.high(keymap.of(checklistKeymap)),
         Prec.high(keymap.of(markdownFormattingKeymap)),
