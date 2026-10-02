@@ -51,6 +51,7 @@ import { useHeaderBreakpoints } from './hooks/useHeaderBreakpoints';
 import { MobileProvider, useMobile } from './contexts/MobileContext';
 import { MobileNavBar } from './components/Mobile/MobileNavBar';
 import { MobileDrawer } from './components/Mobile/MobileDrawer';
+import { WorkflowMenu } from './components/WorkflowMenu';
 import { useEdgeSwipe } from './hooks/useEdgeSwipe';
 
 // Panel configuration — single source of truth for all panel behavior
@@ -597,10 +598,15 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
               </div>
               <div className="flex items-center gap-4 flex-shrink-0">
                 <div id="header-controls" className="flex items-center gap-4" />
-                {/* Stays visible on mobile when a page registers its own
-                    comments control (HtmlEditor) — the bottom bar only
-                    covers EditorArea's comment sheet */}
-                {(!isMobile || headerCommentsControl != null) && <button
+                {/* EditorArea (docPanelsAvailable) places the workflows menu
+                    among its own controls; every other page (start page,
+                    review, html/image views, ...) gets it here */}
+                {!docPanelsAvailable && <WorkflowMenu />}
+                {/* Comments and the right sidebar belong to an open document:
+                    EditorArea's panels, or a page that registers its own
+                    comments control (HtmlEditor, also on mobile — the bottom
+                    bar only covers EditorArea's comment sheet) */}
+                {((!isMobile && docPanelsAvailable) || headerCommentsControl != null) && <button
                   onClick={handleToggleComments}
                   title={commentsTitle}
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
@@ -610,7 +616,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     {commentsOpen && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
                   </svg>
                 </button>}
-                {!isMobile && <button
+                {!isMobile && docPanelsAvailable && <button
                   onClick={() => manager.toggle('right-sidebar')}
                   title="Toggle right sidebar"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
