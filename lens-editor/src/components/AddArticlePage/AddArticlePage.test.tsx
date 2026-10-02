@@ -110,6 +110,57 @@ describe("AddArticlePage status polling", () => {
     });
   });
 
+  // A skipped video can be re-imported, but only after a warning that hand
+  // edits are lost; an article (no video) never gets the button.
+  it("re-imports a skipped video only after the warning is confirmed", async () => {
+    const skipped = (id: string, url: string, video?: object) => ({
+      id,
+      url,
+      title: id,
+      status: "skipped",
+      error: "already imported",
+      importMode: "article-and-lens",
+      ...(video ? { video } : {}),
+      created_at: "2026-06-12T08:00:00.000Z",
+      updated_at: "2026-06-12T08:00:00.000Z",
+    });
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") return { ok: true, json: async () => ({ results: [{ status: "queued" }] }) };
+      return {
+        ok: true,
+        json: async () => ({
+          jobs: [
+            skipped("Video", "https://www.youtube.com/watch?v=oH-txHzE4jA", { video_id: "oH-txHzE4jA" }),
+            skipped("Article", "https://example.com/a"),
+          ],
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AddArticlePage shareToken="test-token" />);
+    await advance(0);
+
+    const buttons = screen.getAllByRole("button", { name: "Re-import" });
+    expect(buttons).toHaveLength(1);
+    fireEvent.click(buttons[0]);
+    expect(screen.getByRole("alert")).toHaveTextContent("Any hand edits to that transcript are lost");
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Keep it" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Re-import" }));
+    fireEvent.click(screen.getByRole("button", { name: "Replace transcript" }));
+    await advance(0);
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST");
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      urls: ["https://www.youtube.com/watch?v=oH-txHzE4jA"],
+      importMode: "article-and-lens",
+      replaceExisting: true,
+    });
+  });
+
   it("explains what stub-only imports do", async () => {
     vi.stubGlobal(
       "fetch",

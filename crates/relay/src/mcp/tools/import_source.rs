@@ -81,8 +81,18 @@ pub async fn execute_with_editor_url(
         ));
     }
 
+    let replace_existing = match arguments.get("replace_existing") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err("replace_existing must be a boolean".to_string()),
+    };
+
     let token = request_token(access)?;
-    let body = json!({ "urls": urls, "importMode": import_mode });
+    let mut body = json!({ "urls": urls, "importMode": import_mode });
+    // Only sent when asked for, so a plain import's payload stays unchanged.
+    if replace_existing {
+        body["replaceExisting"] = json!(true);
+    }
 
     proxy(
         reqwest::Method::POST,
@@ -285,6 +295,40 @@ mod tests {
             assert_eq!(body["importMode"], mode);
             assert!(body.get("createLens").is_none());
         }
+    }
+
+    // Prevents: replace_existing being dropped on the way to the editor, or
+    // sent on plain imports (which must keep their old payload)
+    #[tokio::test]
+    async fn forwards_replace_existing_only_when_set() {
+        for (flag, expected) in [(Some(true), Some(true)), (Some(false), None), (None, None)] {
+            let (editor_url, mut rx) = mock_editor().await;
+            let mut arguments = json!({
+                "urls": ["https://www.youtube.com/watch?v=abc123def45"],
+                "import_mode": "article"
+            });
+            if let Some(flag) = flag {
+                arguments["replace_existing"] = json!(flag);
+            }
+            execute_with_editor_url(&access_with_token("tok"), &arguments, &editor_url)
+                .await
+                .expect("import should succeed");
+            let (_, body) = rx.recv().await.unwrap();
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                body.get("replaceExisting").and_then(|v| v.as_bool()),
+                expected
+            );
+        }
+
+        let err = execute_with_editor_url(
+            &access_with_token("tok"),
+            &json!({"urls": ["https://example.com/a"], "import_mode": "article", "replace_existing": "yes"}),
+            "http://127.0.0.1:1",
+        )
+        .await
+        .expect_err("a non-boolean flag must be rejected");
+        assert!(err.contains("replace_existing"), "got: {err}");
     }
 
     #[tokio::test]

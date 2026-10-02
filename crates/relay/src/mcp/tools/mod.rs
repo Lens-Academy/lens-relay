@@ -259,7 +259,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
     if writable {
         tools.push(json!({
             "name": "import_source",
-            "description": "Import a source that needs processing — a webpage/article URL, a PDF, or a YouTube video — into the knowledge base via the importer. Choose whether to create only an article stub, a full article, or a full article plus lens. YouTube video URLs import the video's transcript (with word timestamps) instead of an article; video jobs take several minutes and don't support stub mode. Jobs run in the background (asynchronous): poll import_status until each is done/failed. Prefer this over hand-writing article files. For a plain image file use import_attachment instead (synchronous).",
+            "description": "Import a source that needs processing — a webpage/article URL, a PDF, or a YouTube video — into the knowledge base via the importer. Choose whether to create only an article stub, a full article, or a full article plus lens. YouTube video URLs import the video's transcript (with word timestamps) instead of an article; video jobs take several minutes and don't support stub mode. A video that is already imported is skipped with a link to its transcript; pass replace_existing:true to re-import it in place instead (same path and document; replaces the text and timings, so hand edits to that transcript are lost; videos only). Jobs run in the background (asynchronous): poll import_status until each is done/failed. Prefer this over hand-writing article files. For a plain image file use import_attachment instead (synchronous).",
             "inputSchema": {
                 "type": "object",
                 "required": ["urls", "import_mode", "session_id"],
@@ -274,6 +274,10 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
                         "type": "string",
                         "enum": article_import_modes,
                         "description": "What to create for each URL: an article stub, a full article without a lens, or a full article plus lens"
+                    },
+                    "replace_existing": {
+                        "type": "boolean",
+                        "description": "YouTube videos only: re-import a video that is already in the library, replacing its transcript text and timings in place (hand edits are lost). Default false: a duplicate is skipped."
                     },
                     "session_id": {
                         "type": "string",

@@ -45,6 +45,7 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         urls?: string[];
         importMode?: unknown;
         createLens?: unknown;
+        replaceExisting?: unknown;
       }>()
       .catch(() => null);
     if (!body?.urls || !Array.isArray(body.urls) || body.urls.length === 0) {
@@ -75,6 +76,10 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
       );
     }
     const importMode: ArticleImportMode = body.importMode;
+    if (body.replaceExisting !== undefined && typeof body.replaceExisting !== "boolean") {
+      return c.json({ error: "replaceExisting must be a boolean" }, 400);
+    }
+    const replaceExisting = body.replaceExisting === true;
 
     const results: Array<{
       url: string;
@@ -106,6 +111,14 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         });
         continue;
       }
+      if (replaceExisting && !video) {
+        results.push({
+          url,
+          status: "invalid",
+          error: "replaceExisting re-imports YouTube videos only; articles can't be re-imported this way",
+        });
+        continue;
+      }
       if (video && importMode === "stub") {
         results.push({
           url,
@@ -133,7 +146,7 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         results.push({ url, status: "already_queued", id: active.id });
         continue;
       }
-      const job = queue.add(url, importMode);
+      const job = queue.add(url, importMode, undefined, { replaceExisting });
       results.push({ url, status: "queued", id: job.id });
     }
 
@@ -186,7 +199,9 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
     if (active) {
       return c.json({ error: "URL is already queued", id: active.id }, 409);
     }
-    const retried = queue.add(job.url, job.importMode, job.id);
+    const retried = queue.add(job.url, job.importMode, job.id, {
+      replaceExisting: job.replaceExisting,
+    });
     return c.json({ id: retried.id, status: "queued" });
   });
 

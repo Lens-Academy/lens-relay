@@ -119,22 +119,34 @@ async function processYouTubeVideo(
   // endpoint uses. Degrades gracefully: a failed check must not block import.
   setStage("checking-duplicates");
   let existingPath: string | null | undefined;
+  let lookupFailed = false;
   try {
     existingPath = (await checkRelayVideoIds([video.video_id], signal))[
       video.video_id
     ];
   } catch (err) {
     signal?.throwIfAborted();
+    lookupFailed = true;
     console.warn(`[add-article] video dedup check failed, proceeding: ${err}`);
   }
-  if (existingPath) {
-    const topFolder = relayTranscriptFolder().split("/")[0];
+  const topFolder = relayTranscriptFolder().split("/")[0];
+  if (existingPath && !job.replaceExisting) {
     job.relay_url = editorOpenUrl(topFolder + existingPath);
     throw new DuplicateDocumentError(
       `This video was already imported: ${topFolder}${existingPath}`,
       topFolder + existingPath,
     );
   }
+  // A re-import must know which document it replaces: guessing the path from
+  // the title could write a second transcript for the same video.
+  if (job.replaceExisting && lookupFailed) {
+    throw new Error(
+      "Could not look up the existing transcript for this video, so nothing was re-imported. Try again.",
+    );
+  }
+  const replaceExisting = job.replaceExisting && existingPath
+    ? { mdPath: topFolder + existingPath }
+    : undefined;
 
   setStage("fetching-transcript");
   const payload = await fetchYouTubeTranscript(video, signal);
@@ -143,6 +155,7 @@ async function processYouTubeVideo(
 
   await importVideo(job.id, payload, job.created_at, {
     createLens: behavior.createLens,
+    replaceExisting,
     signal,
     onStage: setStage,
     // Surface the link as soon as the path is known -- the placeholder doc

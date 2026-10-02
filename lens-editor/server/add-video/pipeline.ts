@@ -15,6 +15,7 @@ import {
   updateRelayDoc,
   upsertRelayDocReturningId,
   readRelayDocText,
+  replaceRelayBlob,
   relayTranscriptFolder,
   editorOpenUrl,
 } from "./relay-docs";
@@ -38,6 +39,11 @@ export interface VideoImportOptions {
    *  writes -- the single source of the filename convention, so callers can
    *  surface a link without re-deriving the path. */
   onRelayUrl?: (relayUrl: string) => void;
+  /** Re-import over the transcript already at this relay path ("Lens Edu/
+   *  video_transcripts/x.md"): the document and its timestamps sidecar are
+   *  replaced in place, and only once the cleanup and alignment have both
+   *  succeeded. Unset for a first import. */
+  replaceExisting?: { mdPath: string };
 }
 
 /**
@@ -51,16 +57,19 @@ export async function importVideo(
   createdAt: string,
   opts: VideoImportOptions = {},
 ): Promise<{ mdPath: string }> {
-  const { createLens = true, signal, onStage, onRelayUrl } = opts;
+  const { createLens = true, signal, onStage, onRelayUrl, replaceExisting } = opts;
   const setStage = (stage: string) => {
     signal?.throwIfAborted();
     onStage?.(stage);
   };
   const workDir = path.join(WORK_BASE, jobId);
   const relayFolder = relayTranscriptFolder();
-  const filenameBase = generateFilenameBase(payload.channel, payload.title);
-  const mdPath = `${relayFolder}/${filenameBase}.md`;
-  const jsonPath = `${relayFolder}/${filenameBase}.timestamps.json`;
+  // A re-import keeps the existing document's path (it may have been renamed
+  // since): embeds and the lens resolve through it.
+  const mdPath =
+    replaceExisting?.mdPath ??
+    `${relayFolder}/${generateFilenameBase(payload.channel, payload.title)}.md`;
+  const jsonPath = mdPath.replace(/\.md$/i, ".timestamps.json");
   onRelayUrl?.(editorOpenUrl(mdPath));
 
   try {
@@ -79,6 +88,111 @@ export async function importVideo(
     const originalWords = flattenToWords(extractWords(payload.transcript_raw));
     const publishedWords = plainText.trim().split(/\s+/);
 
+    const hasTranscript = originalWords.length > 0;
+    const transcriptMarkdown = (body: string) =>
+      generateMarkdown({
+        title: payload.title,
+        channel: payload.channel,
+        url: payload.url,
+        body: hasTranscript
+          ? body
+          : "*This video has no captions on YouTube, so no transcript could be imported.*",
+      });
+    const sidecarJson = (words: TimestampedWord[]) =>
+      JSON.stringify(generateTimestampsJson(words), null, 2);
+    // Human-written caption tracks already carry punctuation, casing and
+    // correct spelling, so the cleanup pass has nothing to fix -- measured on
+    // real videos it returned the input essentially unchanged. A video with
+    // no captions has nothing to clean up either.
+    const needsCleanup = hasTranscript && payload.transcript_type === "word_level";
+
+    // The LLM cleanup and the re-alignment of the original timings to its
+    // wording. Resolves to the cleaned text and its words, or to the reason
+    // the cleanup was rejected; throws when Claude itself fails.
+    const cleanUp = async (): Promise<
+      { text: string; words: TimestampedWord[] } | { rejected: string }
+    > => {
+      setStage("polishing");
+      console.log(
+        `[add-video] Running Claude on ${publishedWords.length} words...`,
+      );
+      const result = await runClaude(workDir, TIMEOUT_MS, signal);
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `Claude exited with code ${result.exitCode}: ${result.stderr.slice(0, 500)}`,
+        );
+      }
+      console.log(`[add-video] Claude finished (exit ${result.exitCode})`);
+
+      const correctedText = await fs.readFile(
+        path.join(workDir, "corrected.txt"),
+        "utf-8",
+      );
+      const correctedWords = correctedText.trim().split(/\s+/);
+
+      // Enforce what the prompt only asks for. A cleanup that paraphrases,
+      // hallucinates or silently loses a chunk is worse than no cleanup.
+      const verdict = verifyCorrection(publishedWords, correctedWords);
+      if (!verdict.ok) return { rejected: verdict.reason ?? "verification failed" };
+
+      setStage("aligning");
+      return {
+        text: correctedText.trim(),
+        words: alignWords(originalWords, correctedWords),
+      };
+    };
+
+    if (replaceExisting) {
+      // RE-IMPORT. Nothing is written until the final text and its timings
+      // are both known, so a failed or rejected cleanup leaves the existing
+      // transcript exactly as it was.
+      let final = { text: plainText.trim(), words: originalWords };
+      if (needsCleanup) {
+        const cleaned = await cleanUp();
+        if ("rejected" in cleaned) {
+          throw new Error(
+            `The cleanup was rejected (${cleaned.rejected}), so nothing was changed: ${mdPath} still holds the previous transcript.`,
+          );
+        }
+        final = cleaned;
+      }
+      setStage("writing");
+      // Timings first, then the text. A failure between the two leaves the
+      // timings describing text the document does not hold yet, so it is
+      // reported as exactly that rather than as a generic failure.
+      if (hasTranscript) {
+        await replaceRelayBlob(jsonPath, sidecarJson(final.words), signal);
+      }
+      try {
+        await upsertRelayDocReturningId(mdPath, transcriptMarkdown(final.text), signal);
+      } catch (writeErr) {
+        throw new Error(
+          `The timings in ${jsonPath} were replaced, but writing the transcript text to ${mdPath} failed, so the two no longer match. Re-import the video again to bring them back in step. (${writeErr})`,
+        );
+      }
+      if (createLens) {
+        onStage?.("creating-lens");
+        try {
+          const lensPath = await maybeCreateLens({
+            docPath: mdPath,
+            title: payload.title,
+            segment: "Video",
+          });
+          console.log(
+            lensPath
+              ? `[add-video] Created lens ${lensPath}`
+              : `[add-video] Lens already exists for ${mdPath}, skipped`,
+          );
+        } catch (lensErr) {
+          console.warn(
+            `[add-video] Lens creation failed (transcript re-imported): ${lensErr}`,
+          );
+        }
+      }
+      console.log(`[add-video] Re-imported "${payload.title}" over ${mdPath}`);
+      return { mdPath };
+    }
+
     // 2. PHASE 1 -- publish the transcript immediately.
     //    The text YouTube returns is already the real transcript, so there is
     //    no reason to make readers wait behind an LLM pass: the document and
@@ -88,15 +202,7 @@ export async function importVideo(
     // A video without captions still gets its document and lens: those are
     // what let it be referenced from course content, and neither depends on
     // having a transcript.
-    const hasTranscript = originalWords.length > 0;
-    const publishedContent = generateMarkdown({
-      title: payload.title,
-      channel: payload.channel,
-      url: payload.url,
-      body: hasTranscript
-        ? plainText.trim()
-        : "*This video has no captions on YouTube, so no transcript could be imported.*",
-    });
+    const publishedContent = transcriptMarkdown(plainText.trim());
     const publishedDocId = await upsertRelayDocReturningId(
       mdPath,
       publishedContent,
@@ -116,11 +222,7 @@ export async function importVideo(
       words: TimestampedWord[],
       sig?: AbortSignal,
     ): Promise<void> => {
-      await createRelayDoc(
-        jsonPath,
-        JSON.stringify(generateTimestampsJson(words), null, 2),
-        sig,
-      );
+      await createRelayDoc(jsonPath, sidecarJson(words), sig);
     };
 
     // 3. Auto-create a lens wrapping the transcript (Asana 1215689584721257).
@@ -158,43 +260,16 @@ export async function importVideo(
     //    which is what keeps the sidecar and the document describing the same
     //    text.
     const polish = async (): Promise<TimestampedWord[] | null> => {
-      setStage("polishing");
-      console.log(
-        `[add-video] Running Claude on ${publishedWords.length} words...`,
-      );
-      const result = await runClaude(workDir, TIMEOUT_MS, signal);
-      if (result.exitCode !== 0) {
-        throw new Error(
-          `Claude exited with code ${result.exitCode}: ${result.stderr.slice(0, 500)}`,
-        );
-      }
-      console.log(`[add-video] Claude finished (exit ${result.exitCode})`);
-
-      const correctedText = await fs.readFile(
-        path.join(workDir, "corrected.txt"),
-        "utf-8",
-      );
-      const correctedWords = correctedText.trim().split(/\s+/);
-
-      // Enforce what the prompt only asks for. A cleanup that paraphrases,
-      // hallucinates or silently loses a chunk is worse than no cleanup.
-      const verdict = verifyCorrection(publishedWords, correctedWords);
-      if (!verdict.ok) {
+      const cleaned = await cleanUp();
+      if ("rejected" in cleaned) {
         console.warn(
-          `[add-video] Cleanup rejected for "${payload.title}": ${verdict.reason} — keeping the published transcript`,
+          `[add-video] Cleanup rejected for "${payload.title}": ${cleaned.rejected} — keeping the published transcript`,
         );
         onStage?.("polish-rejected");
         return null;
       }
-
-      setStage("aligning");
-      const aligned = alignWords(originalWords, correctedWords);
-      const finalMd = generateMarkdown({
-        title: payload.title,
-        channel: payload.channel,
-        url: payload.url,
-        body: correctedText.trim(),
-      });
+      const aligned = cleaned.words;
+      const finalMd = transcriptMarkdown(cleaned.text);
 
       // Readers can open and edit the transcript while the cleanup runs, and
       // a relay write replaces the whole document -- so only apply the cleanup
@@ -233,12 +308,9 @@ export async function importVideo(
     };
 
     let timestampWords = originalWords;
-    // 5. Human-written caption tracks already carry punctuation, casing and
-    //    correct spelling, so the cleanup pass has nothing to fix -- measured
-    //    on real videos it returned the input essentially unchanged. Skip it:
-    //    the import is done, at a fraction of the latency and cost. A video
-    //    with no captions has nothing to clean up either.
-    if (hasTranscript && payload.transcript_type === "word_level") {
+    // 5. Skip the cleanup where it has nothing to fix (see needsCleanup): the
+    //    import is done, at a fraction of the latency and cost.
+    if (needsCleanup) {
       try {
         timestampWords = (await polish()) ?? originalWords;
       } catch (polishErr) {

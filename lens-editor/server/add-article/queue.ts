@@ -51,7 +51,12 @@ export class ArticleJobQueue {
       : createArticleReviewReporter);
   }
 
-  add(url: string, importMode: ArticleImportMode, retryOf?: string): ArticleJob {
+  add(
+    url: string,
+    importMode: ArticleImportMode,
+    retryOf?: string,
+    options: { replaceExisting?: boolean } = {},
+  ): ArticleJob {
     evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     const id = randomUUID().slice(0, 8);
     const now = new Date().toISOString();
@@ -65,6 +70,7 @@ export class ArticleJobQueue {
       video: extractVideoInput(url) ?? undefined,
       report_persistence: "pending",
       retry_of: retryOf,
+      ...(options.replaceExisting ? { replaceExisting: true } : {}),
       created_at: now,
       updated_at: now,
     };
