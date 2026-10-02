@@ -214,9 +214,9 @@ class CursorAnchorWidget extends WidgetType {
  */
 class AcceptRejectWidget extends WidgetType {
   constructor(
-    private rangeFrom: number,
-    private rangeTo: number,
-    private merged: boolean = false
+    readonly rangeFrom: number,
+    readonly rangeTo: number,
+    readonly merged: boolean = false
   ) {
     super();
   }
@@ -260,7 +260,7 @@ class AcceptRejectWidget extends WidgetType {
  * Shown when a text selection spans multiple CriticMarkup ranges.
  */
 class BulkAcceptRejectWidget extends WidgetType {
-  constructor(private count: number) {
+  constructor(readonly count: number) {
     super();
   }
 
@@ -296,6 +296,30 @@ class BulkAcceptRejectWidget extends WidgetType {
 }
 
 /**
+ * Runs the accept or reject button that `target` is (in) and returns true, or
+ * returns false when it is not one. The change acted on is chosen by the
+ * selection: `savedSelection` (a selection the button's mousedown would have
+ * collapsed) is restored first, or for a merged deletion+addition pair the
+ * selection spans both ranges. Afterwards the selection collapses to the cursor.
+ */
+function runButton(view: EditorView, target: HTMLElement, savedSelection: { from: number; to: number } | null): boolean {
+  const accept = target.closest('.cm-criticmarkup-accept');
+  if (!accept && !target.closest('.cm-criticmarkup-reject')) return false;
+  const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
+  if (savedSelection) {
+    view.dispatch({ selection: { anchor: savedSelection.from, head: savedSelection.to } });
+  } else if (container?.dataset.merged) {
+    const from = parseInt(container.dataset.rangeFrom!, 10);
+    const to = parseInt(container.dataset.rangeTo!, 10);
+    view.dispatch({ selection: { anchor: from, head: to } });
+  }
+  if (accept) acceptChangeAtCursor(view);
+  else rejectChangeAtCursor(view);
+  view.dispatch({ selection: { anchor: view.state.selection.main.head } });
+  return true;
+}
+
+/**
  * ViewPlugin that applies decorations (CSS classes) to CriticMarkup ranges.
  * Decorations are rebuilt when the document changes, viewport changes, or selection changes.
  * Delimiters and metadata are always hidden; accept/reject buttons shown when cursor is inside.
@@ -327,43 +351,10 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       // Event delegation for accept/reject button clicks and comment badge clicks
       view.contentDOM.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
-        if (target.classList.contains('cm-criticmarkup-accept')) {
+        if (runButton(view, target, this.savedSelection)) {
           e.preventDefault();
           e.stopPropagation();
-          if (this.savedSelection) {
-            // Restore the selection so bulk accept works
-            view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
-            this.savedSelection = null;
-          } else {
-            // For merged adjacent pairs, set selection spanning both ranges
-            const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
-            if (container?.dataset.merged) {
-              const from = parseInt(container.dataset.rangeFrom!, 10);
-              const to = parseInt(container.dataset.rangeTo!, 10);
-              view.dispatch({ selection: { anchor: from, head: to } });
-            }
-          }
-          acceptChangeAtCursor(view);
-          // Collapse selection to cursor so no text remains selected after the operation
-          view.dispatch({ selection: { anchor: view.state.selection.main.head } });
-        } else if (target.classList.contains('cm-criticmarkup-reject')) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (this.savedSelection) {
-            view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
-            this.savedSelection = null;
-          } else {
-            // For merged adjacent pairs, set selection spanning both ranges
-            const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
-            if (container?.dataset.merged) {
-              const from = parseInt(container.dataset.rangeFrom!, 10);
-              const to = parseInt(container.dataset.rangeTo!, 10);
-              view.dispatch({ selection: { anchor: from, head: to } });
-            }
-          }
-          rejectChangeAtCursor(view);
-          // Collapse selection to cursor so no text remains selected after the operation
-          view.dispatch({ selection: { anchor: view.state.selection.main.head } });
+          this.savedSelection = null;
         } else if (target.classList.contains('cm-comment-badge')) {
           e.preventDefault();
           e.stopPropagation();
@@ -683,23 +674,10 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
 
       // Event delegation for accept/reject button clicks
       view.contentDOM.addEventListener('click', (e) => {
-        const target = e.target as HTMLElement;
-        if (target.classList.contains('cm-criticmarkup-accept')) {
+        if (runButton(view, e.target as HTMLElement, this.savedSelection)) {
           e.preventDefault();
           e.stopPropagation();
-          if (this.savedSelection) {
-            view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
-            this.savedSelection = null;
-          }
-          acceptChangeAtCursor(view);
-        } else if (target.classList.contains('cm-criticmarkup-reject')) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (this.savedSelection) {
-            view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
-            this.savedSelection = null;
-          }
-          rejectChangeAtCursor(view);
+          this.savedSelection = null;
         }
       });
     }
@@ -774,6 +752,203 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
   },
   {
     decorations: (v) => v.decorations,
+  }
+);
+
+type ButtonsWidget = AcceptRejectWidget | BulkAcceptRejectWidget;
+type StickyPlacement = { widget: ButtonsWidget; left: number; top: number; covered: number } | null;
+
+function sameWidget(a: ButtonsWidget | null, b: ButtonsWidget) {
+  return a !== null && a.constructor === b.constructor && a.eq(b as never);
+}
+
+/**
+ * Keeps the accept/reject buttons reachable when their place is off screen.
+ *
+ * The buttons sit at the end of the change (or of the selection, for bulk).
+ * When the change starts on screen but its end is below the visible part of
+ * the editor (Ctrl+A, a suggestion taller than the screen), this shows a
+ * floating copy of the same buttons at the bottom of the visible area: in the
+ * empty margin right of the text when there is room for it (desktop), else
+ * over the bottom right of the text, moved up out of the cursor's way, with a
+ * scroll margin so typing never lands under it.
+ */
+const stickyButtonsPlugin = ViewPlugin.fromClass(
+  class {
+    readonly dom: HTMLElement;
+    /** The widget shown in the text, from the decorations plugin. */
+    private active: { widget: ButtonsWidget; pos: number; start: number } | null = null;
+    /** The widget whose copy is in `dom`. */
+    private widget: ButtonsWidget | null = null;
+    /** Height to keep clear at the bottom while the floating buttons cover text. */
+    coveredHeight = 0;
+    private readonly schedule = () => this.view.requestMeasure({
+      key: this,
+      read: (view) => this.measure(view),
+      write: (pos) => this.place(pos),
+    });
+    /** Scrolling only matters while a change is selected. */
+    private readonly onScroll = () => {
+      if (this.active) this.schedule();
+    };
+
+    constructor(readonly view: EditorView) {
+      this.dom = document.createElement('div');
+      this.dom.className = 'cm-criticmarkup-sticky';
+      this.dom.style.visibility = 'hidden';
+      // Keep the selection and focus: bulk accept needs the selection intact.
+      this.dom.addEventListener('mousedown', (e) => e.preventDefault());
+      this.dom.addEventListener('click', (e) => this.click(e));
+      view.dom.appendChild(this.dom);
+      this.active = this.activeWidget(view);
+      window.addEventListener('scroll', this.onScroll, { capture: true, passive: true });
+      window.addEventListener('resize', this.onScroll);
+      window.visualViewport?.addEventListener('resize', this.onScroll);
+      window.visualViewport?.addEventListener('scroll', this.onScroll);
+      this.schedule();
+    }
+
+    update(update: ViewUpdate) {
+      this.active = this.activeWidget(update.view);
+      this.schedule();
+    }
+
+    destroy() {
+      this.dom.remove();
+      window.removeEventListener('scroll', this.onScroll, { capture: true });
+      window.removeEventListener('resize', this.onScroll);
+      window.visualViewport?.removeEventListener('resize', this.onScroll);
+      window.visualViewport?.removeEventListener('scroll', this.onScroll);
+    }
+
+    /** The accept/reject widget currently shown in the text, and where. */
+    private activeWidget(view: EditorView) {
+      const plugin = view.plugin(criticMarkupPlugin) ?? view.plugin(criticMarkupSourcePlugin);
+      if (!plugin) return null;
+      let found: { widget: ButtonsWidget; pos: number; start: number } | null = null;
+      plugin.decorations.between(0, view.state.doc.length, (from, _to, deco) => {
+        const widget = deco.spec.widget;
+        if (widget instanceof BulkAcceptRejectWidget) {
+          found = { widget, pos: from, start: view.state.selection.main.from };
+          return false;
+        }
+        if (widget instanceof AcceptRejectWidget) {
+          // With several cursors, follow the change at the main one: that is
+          // the one accept/reject acts on.
+          const head = view.state.selection.main.head;
+          const atHead = widget.rangeFrom <= head && head <= widget.rangeTo;
+          if (!found || atHead) found = { widget, pos: from, start: widget.rangeFrom };
+          if (atHead) return false;
+        }
+      });
+      return found as { widget: ButtonsWidget; pos: number; start: number } | null;
+    }
+
+    /** Screen top and bottom of a document position, rendered or not. */
+    private screenY(view: EditorView, pos: number) {
+      const coords = view.coordsAtPos(pos);
+      if (coords) return { top: coords.top, bottom: coords.bottom };
+      const block = view.lineBlockAt(pos);
+      return { top: view.documentTop + block.top, bottom: view.documentTop + block.bottom };
+    }
+
+    /** The part of the editor that is actually on screen. */
+    private visibleRect(view: EditorView) {
+      const r = view.dom.getBoundingClientRect();
+      let top = r.top, bottom = r.bottom;
+      for (let el: HTMLElement | null = view.scrollDOM; el && el !== document.body; el = el.parentElement) {
+        const style = getComputedStyle(el);
+        if (style.overflowY === 'visible' && style.overflowX === 'visible') continue;
+        const er = el.getBoundingClientRect();
+        top = Math.max(top, er.top);
+        bottom = Math.min(bottom, er.bottom);
+      }
+      const vv = window.visualViewport;
+      top = Math.max(top, vv ? vv.offsetTop : 0);
+      bottom = Math.min(bottom, vv ? vv.offsetTop + vv.height : window.innerHeight);
+      return { top, bottom };
+    }
+
+    /**
+     * The bottom of the visible area at column x, above anything floating
+     * over the editor there (the phone toolbar is fixed over its bottom).
+     */
+    private uncoveredBottom(view: EditorView, x: number, vis: { top: number; bottom: number }) {
+      for (let y = vis.bottom - 1; y > vis.top + 40; y -= 4) {
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || view.dom.contains(hit)) return y + 1;
+      }
+      return vis.bottom;
+    }
+
+    private measure(view: EditorView): StickyPlacement {
+      const active = this.active;
+      if (!active) return null;
+      const vis = this.visibleRect(view);
+      const end = this.screenY(view, active.pos);
+      const start = this.screenY(view, active.start);
+      // Only when the change runs off the bottom: its end is below the visible
+      // area while its start is above that edge (on screen or scrolled past).
+      if (end.bottom <= vis.bottom || start.top >= vis.bottom || vis.bottom - vis.top < 80) return null;
+
+      const editor = view.dom.getBoundingClientRect();
+      const content = view.contentDOM.getBoundingClientRect();
+      const textRight = content.right - parseFloat(getComputedStyle(view.contentDOM).paddingRight);
+      const width = sameWidget(this.widget, active.widget) ? this.dom.offsetWidth : 0;
+      const height = this.dom.offsetHeight || 32;
+      const gap = 8;
+      const inMargin = width > 0 && editor.right - textRight >= width + 2 * gap;
+      let left = inMargin ? textRight + gap : Math.min(textRight, editor.right - gap) - width;
+      left = Math.max(left, editor.left + gap);
+      let top = this.uncoveredBottom(view, left + width / 2, vis) - height - gap;
+      if (!inMargin) {
+        // Over the text: never cover the cursor.
+        const head = view.coordsAtPos(view.state.selection.main.head);
+        if (head && head.bottom > top && head.top < top + height && head.right > left && head.left < left + width) {
+          top = head.top - height - gap / 2;
+        }
+      }
+      return {
+        widget: active.widget,
+        left: left - editor.left,
+        top: top - editor.top,
+        covered: inMargin ? 0 : height + 2 * gap,
+      };
+    }
+
+    private place(pos: StickyPlacement) {
+      if (!pos) {
+        this.dom.style.visibility = 'hidden';
+        this.coveredHeight = 0;
+        return;
+      }
+      if (!sameWidget(this.widget, pos.widget)) {
+        this.widget = pos.widget;
+        this.dom.replaceChildren(pos.widget.toDOM());
+        // Width changed: measure again before showing it in the right place.
+        this.dom.style.visibility = 'hidden';
+        this.schedule();
+        return;
+      }
+      this.dom.style.left = `${pos.left}px`;
+      this.dom.style.top = `${pos.top}px`;
+      this.dom.style.visibility = 'visible';
+      this.coveredHeight = pos.covered;
+    }
+
+    private click(e: MouseEvent) {
+      // mousedown is prevented, so the selection is still the one to act on.
+      if (runButton(this.view, e.target as HTMLElement, null)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }
+  },
+  {
+    provide: (plugin) => EditorView.scrollMargins.of((view) => {
+      const covered = view.plugin(plugin)?.coveredHeight ?? 0;
+      return covered ? { bottom: covered } : null;
+    }),
   }
 );
 
@@ -1109,6 +1284,7 @@ export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
     suggestionModeField,
     suggestionModeFilter,
     criticMarkupCompartment.of(criticMarkupPlugin),
+    stickyButtonsPlugin,
     keymap.of(criticMarkupKeymap),
   ];
 }
