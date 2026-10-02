@@ -211,6 +211,42 @@ describe("normalizeArticleDom — LaTeXML font spans", () => {
   });
 });
 
+describe("normalizeArticleDom — line breaks at the edge of emphasis", () => {
+  // Prevents: `**Heading.  \n  \n**Body`, where turndown puts the closer after the breaks.
+  it("moves edge <br>s out of strong, b, em and i, innermost first", () => {
+    const body = normalize(
+      `<p><strong>A<br><br></strong>x</p>` +
+        `<p><b> <br>B</b>y</p>` +
+        `<p><strong><em>C<br></em> </strong>z</p>` +
+        `<p><i>D<br>E</i></p>`,
+    );
+    expect(body.innerHTML).toBe(
+      `<p><strong>A</strong><br><br>x</p>` +
+        `<p> <br><b>B</b>y</p>` +
+        `<p><strong><em>C</em></strong><br> z</p>` +
+        `<p><i>D<br>E</i></p>`,
+    );
+  });
+
+  it("leaves edge whitespace without a <br> in place", () => {
+    const body = normalize(`<p><strong>A </strong>x</p>`);
+    expect(body.innerHTML).toBe(`<p><strong>A </strong>x</p>`);
+  });
+});
+
+describe("normalizeArticleDom — punctuation-only emphasis", () => {
+  // Prevents: `teams<em>. </em>` imported as `teams_._`, shown with literal underscores.
+  it("unwraps emphasis holding only punctuation, keeps the rest", () => {
+    const body = normalize(
+      `<p>teams<em>. </em><strong>N_1</strong> and<strong>,</strong> “problem<em>,”</em> ` +
+        `<em>x</em> <strong>≥</strong> <em><br></em></p>`,
+    );
+    expect(body.innerHTML).toBe(
+      `<p>teams. <strong>N_1</strong> and, “problem,” <em>x</em> <strong>≥</strong> <br></p>`,
+    );
+  });
+});
+
 describe("normalizeArticleDom — links", () => {
   it("absolutizes relative hrefs against the base URL", () => {
     const body = normalize(`<p><a href="/posts/xyz/other">other</a></p>`);

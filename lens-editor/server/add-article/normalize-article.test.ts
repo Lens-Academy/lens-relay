@@ -112,4 +112,45 @@ describe("normalizeArticleBody", () => {
     expect(once.body).toBe("Before\r\n\r\nAfter [link](https://example.com/path)\r\n");
     expect(normalizeArticleBody(once.body, "https://example.com/article").body).toBe(once.body);
   });
+
+  // Prevents: Datalab PDF output `- 2** IAEA Safeguards` rendering literal asterisks.
+  it("restores a list item's missing bold opener", () => {
+    const input = [
+      "- 2** IAEA Safeguards: serving nuclear non-proliferation  ",
+      "- Prover Side:**",
+      "  - Inputs** and **Plaintext transcripts** are provided.",
+      "1. Step** one",
+      "- **Fine** already",
+      "- a ** b",
+      "- x**y** stays",
+      "Not a list 2** item",
+      "```",
+      "- code** stays",
+      "```",
+    ].join("\n");
+    const { body, changes } = normalizeArticleBody(input, "https://example.com/a.pdf");
+    expect(body.split("\n")).toEqual([
+      "- **2** IAEA Safeguards: serving nuclear non-proliferation  ",
+      "- **Prover Side:**",
+      "  - **Inputs** and **Plaintext transcripts** are provided.",
+      "1. **Step** one",
+      "- **Fine** already",
+      "- a ** b",
+      "- x**y** stays",
+      "Not a list 2** item",
+      "```",
+      "- code** stays",
+      "```",
+    ]);
+    expect(changes.find((c) => c.code === "normalize.list-item-bold-opener")?.count).toBe(4);
+    expect(normalizeArticleBody(body, "https://example.com/a.pdf").body).toBe(body);
+  });
+
+  it("handles CRLF lines, and never treats text after inline code as a line start", () => {
+    expect(normalizeArticleBody("- 7** Why?\r\n", "https://example.com").body).toBe("- **7** Why?\r\n");
+    const afterCode = "Use `x`\n- y** z";
+    expect(normalizeArticleBody(afterCode, "https://example.com").body).toBe("Use `x`\n- **y** z");
+    const midLine = "`x`- y** z";
+    expect(normalizeArticleBody(midLine, "https://example.com").body).toBe(midLine);
+  });
 });
