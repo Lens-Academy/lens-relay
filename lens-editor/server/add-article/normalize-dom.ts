@@ -37,6 +37,16 @@
  *     `<span class="ltx_font_bold">` / `ltx_font_italic`, which turndown treats
  *     as plain text, so all of it was lost (in tables too, e.g. the best value
  *     a caption says is "in bold"). Rewrite them as <strong> / <em>.
+ *
+ *  7. Line breaks at the edge of emphasis. Substack and others write
+ *     `<strong>Heading.<br><br></strong>Body`. Turndown keeps the `<br>`s inside
+ *     the delimiters (`**Heading.  ⏎  ⏎**Body`), so the closer lands on a new
+ *     line or paragraph and the bold never closes. Move edge `<br>`s outside.
+ *
+ *  8. Punctuation-only emphasis. `teams<em>. </em>` became `teams_._`: an `_`
+ *     straight after a letter cannot open emphasis, so readers saw the
+ *     underscores. Emphasis around nothing but punctuation is invisible
+ *     anyway, so drop the tag and keep the text.
  */
 
 /** Drop leading blank lines and trailing whitespace, keeping the first line's indent. */
@@ -595,11 +605,48 @@ function absolutizeLinks(root: Element, baseUrl: string): void {
   });
 }
 
-/** Normalize an article body DOM subtree in place (listings, citations, fonts, footnotes, links). */
+const EMPHASIS = "strong, b, em, i";
+
+/** A `<br>`, or whitespace-only text, that can leave an emphasis element's edge. */
+function isEdgeBreak(node: ChildNode | null): boolean {
+  if (!node) return false;
+  if (node.nodeName === "BR") return true;
+  return node.nodeType === 3 && !/\S/.test(node.textContent || "");
+}
+
+/**
+ * Move leading and trailing `<br>`s out of emphasis elements, so turndown's
+ * `**`/`_` delimiters touch text and the emphasis parses. Children are handled
+ * before their parents (reverse document order), so `<strong><em>x<br></em></strong>`
+ * moves the break out of both. Only runs that contain a `<br>` move; plain
+ * edge whitespace is turndown's job already.
+ */
+function hoistEdgeBreaks(root: Element): void {
+  for (const el of [...root.querySelectorAll(EMPHASIS)].reverse()) {
+    const trailing: ChildNode[] = [];
+    for (let n = el.lastChild; isEdgeBreak(n); n = n!.previousSibling) trailing.unshift(n!);
+    if (trailing.some((n) => n.nodeName === "BR")) el.after(...trailing);
+    const leading: ChildNode[] = [];
+    for (let n = el.firstChild; isEdgeBreak(n); n = n!.nextSibling) leading.push(n!);
+    if (leading.some((n) => n.nodeName === "BR")) el.before(...leading);
+  }
+}
+
+/** Unwrap emphasis elements whose text is only punctuation and whitespace (`<em>.</em>`). */
+function unwrapPunctuationEmphasis(root: Element): void {
+  for (const el of [...root.querySelectorAll(EMPHASIS)].reverse()) {
+    if (el.querySelector("img, math, svg, video, iframe")) continue;
+    if (/^[\p{P}\s]*$/u.test(el.textContent || "")) el.replaceWith(...el.childNodes);
+  }
+}
+
+/** Normalize an article body DOM subtree in place (listings, citations, fonts, breaks, footnotes, links). */
 export function normalizeArticleDom(root: Element, baseUrl: string): void {
   convertLtxListings(root);
   repairLtxCitations(root);
   convertLtxFontSpans(root);
+  unwrapPunctuationEmphasis(root);
+  hoistEdgeBreaks(root);
   normalizeFootnotes(root);
   localizeSelfFragments(root, baseUrl);
   absolutizeLinks(root, baseUrl);

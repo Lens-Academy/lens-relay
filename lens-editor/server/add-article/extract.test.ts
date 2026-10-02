@@ -978,6 +978,32 @@ describe("extractArticle — underline tags", () => {
   });
 });
 
+describe("extractArticle — line breaks at the edge of emphasis", () => {
+  // Prevents: Substack's `<strong>Heading.<br><br></strong>Body` imported as
+  // `**Heading.  \n  \n**Body`, a bold that never closes (Clymer, "pass the buck").
+  it("closes bold and italic before the line breaks", async () => {
+    const html = `<!doctype html><html><head><title>Breaks</title></head><body><article>
+      <p>${"Padding sentence for extractor confidence. ".repeat(20)}</p>
+      <p><strong><span>Argument #3: returns are small.</span><br/><br/></strong><span>This argument relies on control.</span></p>
+      <p><em>One break<br></em>after it.</p>
+      <p><strong>Mid<br>break</strong> stays inside.</p>
+    </article></body></html>`;
+    const ex = await extractArticle(html, "https://example.com/breaks");
+    expect(ex.body).toContain("**Argument #3: returns are small.**  \n  \nThis argument relies on control.");
+    expect(ex.body).toContain("_One break_  \nafter it.");
+    expect(ex.body).toContain("**Mid  \nbreak** stays inside.");
+  });
+
+  it("drops italics around a lone full stop", async () => {
+    const html = `<!doctype html><html><head><title>Stops</title></head><body><article>
+      <p>${"Padding sentence for extractor confidence. ".repeat(20)}</p>
+      <p><span>on their safety research teams</span><em>. </em><strong>N_1</strong><span> simulates a Collin Burns agent.</span></p>
+    </article></body></html>`;
+    const ex = await extractArticle(html, "https://example.com/stops");
+    expect(ex.body).toContain("on their safety research teams. **N\\_1** simulates");
+  });
+});
+
 describe("extractArticle — GreaterWrong mirror body-link canonicalization", () => {
   const GW_URL =
     "https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story";

@@ -122,8 +122,36 @@ function sourceSegments(source: string): Segment[] {
   return segments;
 }
 
+const LIST_ITEM_LINE = /^( {0,3}(?:[-*+]|\d{1,9}[.)]) +)(?!\*)(\S[^\r\n]*?)(?=\r?$)/gm;
+const BOLD_RUN = /(?<![\\*])\*\*(?!\*)/g;
+
+/**
+ * Datalab's PDF Markdown sometimes drops the `**` that opens a list item
+ * (`- 2** IAEA Safeguards`, `- Prover Side:**`). A first `**` that sits after
+ * text and before a space or the line end can only close, so it renders as
+ * literal asterisks. Restore the opener at the start of the item (up to three
+ * spaces of indent, so indented code is never touched). Datalab PDF bodies
+ * only (HTML goes through turndown, which never drops one), and only when the
+ * run count is odd and the text before the orphan is plain (no other
+ * emphasis, code or link), so the guess cannot over-bold marked-up text.
+ */
+function repairListItemBoldOpener(marker: string, rest: string): string {
+  const runs = [...rest.matchAll(BOLD_RUN)];
+  if (runs.length % 2 === 0) return marker + rest;
+  const first = runs[0].index!;
+  const before = rest[first - 1];
+  const after = rest[first + 2];
+  if (!before || /\s/.test(before) || (after !== undefined && !/\s/.test(after))) return marker + rest;
+  if (/[*_`~[\]]/.test(rest.slice(0, first))) return marker + rest;
+  return `${marker}**${rest}`;
+}
+
 /** Idempotent, syntax-aware, semantics-preserving repairs only. */
-export function normalizeArticleBody(body: string, sourceUrl: string): {
+export function normalizeArticleBody(
+  body: string,
+  sourceUrl: string,
+  opts: { pdf?: boolean } = {},
+): {
   body: string;
   changes: NormalizationChange[];
 } {
@@ -137,7 +165,8 @@ export function normalizeArticleBody(body: string, sourceUrl: string): {
     changes.set(code, change);
   };
 
-  const transformed = sourceSegments(body).map((segment) => {
+  const segments = sourceSegments(body);
+  const transformed = segments.map((segment, i) => {
     if (!segment.eligible) {
       // Empty escaped inline math is the one math construct known to be pure
       // conversion residue. It is handled here, after code/comments won.
@@ -163,6 +192,17 @@ export function normalizeArticleBody(body: string, sourceUrl: string): {
     out = out.replace(/^Posted in:[ \t]*(?:,[ \t]*)*(?=\r?$)/gm, (whole) => {
       record("normalize.empty-posted-in", whole, "");
       return "";
+    });
+    // `^` also matches where a protected range (code, math) ended mid-line.
+    const atLineStart = i === 0 || segments[i - 1].text.endsWith("\n");
+    out = out.replace(LIST_ITEM_LINE, (whole: string, marker: string, rest: string, offset: number) => {
+      if (!opts.pdf || (offset === 0 && !atLineStart)) return whole;
+      // A line that runs on into a protected range (code, math) is not seen whole.
+      if (offset + whole.length === out.length && i < segments.length - 1) return whole;
+      const replacement = repairListItemBoldOpener(marker, rest);
+      if (replacement === whole) return whole;
+      record("normalize.list-item-bold-opener", whole, replacement);
+      return replacement;
     });
     return out;
   });
