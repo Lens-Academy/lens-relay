@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, type MutableRefObject } from 'react';
 import type { TreeApi, NodeApi } from 'react-arborist';
 import type { TreeNode } from '../../lib/tree-utils';
 import { useFileTreeContext } from './FileTreeContext';
+import type { TemplateOption } from '../../lib/templates';
 
 const ROW_HEIGHT = 28; // Must match FileTree's rowHeight prop
 const INDENT_SIZE = 16; // Must match FileTree's indent prop
@@ -142,12 +143,16 @@ interface RowHolder {
   createButton: HTMLButtonElement;
   createMenu: HTMLDivElement;
   newFileButton: HTMLButtonElement;
+  templatesButton: HTMLButtonElement;
+  templatesList: HTMLDivElement;
   newFolderButton: HTMLButtonElement;
 }
 
 interface CreateCallbacks {
   onCreateDocument?: (folderPath: string) => void;
   onCreateFolder?: (folderPath: string) => void;
+  getTemplates?: (folderPath: string) => TemplateOption[];
+  onCreateFromTemplate?: (folderPath: string, template: TemplateOption) => void;
 }
 
 function createMenuItem(label: string): HTMLButtonElement {
@@ -305,6 +310,31 @@ function createRowElement(
       return;
     }
 
+    const { getTemplates, onCreateFromTemplate } = callbacksRef.current;
+    const templates = onCreateFromTemplate && getTemplates ? getTemplates(path) : [];
+    templatesButton.style.display = templates.length > 0 ? 'flex' : 'none';
+    templatesButton.setAttribute('aria-expanded', 'false');
+    templatesChevron.style.transform = '';
+    templatesList.style.display = 'none';
+    templatesList.replaceChildren(...templates.map((template) => {
+      const item = createMenuItem(template.name);
+      item.title = template.path;
+      item.style.paddingLeft = '24px';
+      item.style.overflow = 'hidden';
+      item.style.textOverflow = 'ellipsis';
+      item.style.whiteSpace = 'nowrap';
+      item.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const folderPath = createMenu.dataset.nodePath;
+        if (folderPath) callbacksRef.current.onCreateFromTemplate?.(folderPath, template);
+        createMenu.style.display = 'none';
+        delete createMenu.dataset.nodePath;
+        openMenuRef.current = null;
+      });
+      return item;
+    }));
+
     const rect = createButton.getBoundingClientRect();
     createMenu.dataset.nodePath = path;
     createMenu.style.left = `${Math.max(0, rect.right - 140)}px`;
@@ -333,6 +363,7 @@ function createRowElement(
   createMenu.style.position = 'fixed';
   createMenu.style.display = 'none';
   createMenu.style.minWidth = '140px';
+  createMenu.style.maxWidth = '260px';
   createMenu.style.padding = '4px 0';
   createMenu.style.border = '1px solid #e5e7eb';
   createMenu.style.borderRadius = '4px';
@@ -354,6 +385,40 @@ function createRowElement(
   });
   createMenu.appendChild(newFileButton);
 
+  const templatesButton = createMenuItem('New from template');
+  templatesButton.style.alignItems = 'center';
+  templatesButton.style.justifyContent = 'space-between';
+  templatesButton.style.gap = '8px';
+  templatesButton.style.whiteSpace = 'nowrap';
+  templatesButton.style.display = 'none';
+  const templatesChevron = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  templatesChevron.setAttribute('viewBox', '0 0 24 24');
+  templatesChevron.setAttribute('fill', 'none');
+  templatesChevron.setAttribute('stroke', 'currentColor');
+  templatesChevron.setAttribute('stroke-width', '2');
+  templatesChevron.style.width = '12px';
+  templatesChevron.style.height = '12px';
+  templatesChevron.style.flexShrink = '0';
+  templatesChevron.style.color = '#9ca3af'; // gray-400
+  const templatesChevronPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  templatesChevronPath.setAttribute('stroke-linecap', 'round');
+  templatesChevronPath.setAttribute('stroke-linejoin', 'round');
+  templatesChevronPath.setAttribute('d', 'M9 5l7 7-7 7');
+  templatesChevron.appendChild(templatesChevronPath);
+  templatesButton.appendChild(templatesChevron);
+  const templatesList = document.createElement('div');
+  templatesList.style.display = 'none';
+  templatesButton.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const expand = templatesList.style.display === 'none';
+    templatesList.style.display = expand ? 'block' : 'none';
+    templatesChevron.style.transform = expand ? 'rotate(90deg)' : '';
+    templatesButton.setAttribute('aria-expanded', String(expand));
+  });
+  createMenu.appendChild(templatesButton);
+  createMenu.appendChild(templatesList);
+
   const newFolderButton = createMenuItem('New Folder');
   newFolderButton.addEventListener('click', (e) => {
     e.preventDefault();
@@ -367,20 +432,20 @@ function createRowElement(
   createMenu.appendChild(newFolderButton);
   document.body.appendChild(createMenu);
 
-  return { root, indentGuides, chevron, folderIcon, nameSpan, createWrapper, createButton, createMenu, newFileButton, newFolderButton };
+  return { root, indentGuides, chevron, folderIcon, nameSpan, createWrapper, createButton, createMenu, newFileButton, templatesButton, templatesList, newFolderButton };
 }
 
 // ── React component (thin shell — all scroll work is imperative) ────
 
 export function StickyScrollOverlay({ treeApi }: StickyScrollOverlayProps) {
-  const { onCreateDocument, onCreateFolder } = useFileTreeContext();
+  const { onCreateDocument, onCreateFolder, getTemplates, onCreateFromTemplate } = useFileTreeContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<RowHolder[]>([]);
   const prevIdsRef = useRef<string[]>([]);
   const rafRef = useRef<number>(0);
   const callbacksRef = useRef<CreateCallbacks>({});
   const openMenuRef = useRef<HTMLDivElement | null>(null);
-  callbacksRef.current = { onCreateDocument, onCreateFolder };
+  callbacksRef.current = { onCreateDocument, onCreateFolder, getTemplates, onCreateFromTemplate };
 
   // Build the pre-allocated row pool once on mount
   useEffect(() => {

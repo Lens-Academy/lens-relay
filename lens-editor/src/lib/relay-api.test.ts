@@ -12,6 +12,7 @@ import {
   RelayApiError,
   deleteErrorMessage,
   writeFileMeta,
+  PathExistsError,
 } from './relay-api';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 
@@ -97,6 +98,24 @@ describe('relay-api', () => {
       } finally {
         crypto.randomUUID = original;
       }
+    });
+
+    it('refuses a path that already has a filemeta entry', async () => {
+      filemeta.set('/Taken.md', { id: 'existing', type: 'markdown', version: 0 });
+
+      await expect(createDocument(doc, '/Taken.md')).rejects.toBeInstanceOf(PathExistsError);
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(filemeta.get('/Taken.md')!.id).toBe('existing');
+    });
+
+    it('refuses a path taken while the server call was in flight', async () => {
+      mockFetch.mockImplementationOnce(async () => {
+        filemeta.set('/Race.md', { id: 'other', type: 'markdown', version: 0 });
+        return { ok: true };
+      });
+
+      await expect(createDocument(doc, '/Race.md')).rejects.toBeInstanceOf(PathExistsError);
+      expect(filemeta.get('/Race.md')!.id).toBe('other');
     });
 
     it('adds entry to filemeta_v0 map', async () => {

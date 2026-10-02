@@ -13,10 +13,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useResolvedDocId } from '../../hooks/useResolvedDocId';
 import { useSearch } from '../../hooks/useSearch';
 import { buildTreeFromPaths, filterTree, searchFileNames, buildDocIdToPathMap } from '../../lib/tree-utils';
-import { createDocument, createFolder, movePath, moveErrorMessage, trashPath, deleteErrorMessage, TrashRefusedError } from '../../lib/relay-api';
+import { createDocument, readDocumentText, createFolder, movePath, moveErrorMessage, trashPath, deleteErrorMessage, TrashRefusedError } from '../../lib/relay-api';
 import type { TrashReferencingDoc } from '../../lib/relay-api';
 import { getOriginalPath, getFolderNameFromPath, generateUntitledName } from '../../lib/multi-folder-utils';
 import { nextUntitledHtmlName } from '../../lib/untitled-name';
+import { findTemplates, prepareTemplateText, type TemplateOption } from '../../lib/templates';
 import { RELAY_ID } from '../../App';
 import { openDocInNewTab, docUuidFromCompoundId } from '../../lib/url-utils';
 import { renamePreservingExtension } from '../../lib/filename-utils';
@@ -62,6 +63,7 @@ export function Sidebar() {
   const [deleteTarget, setDeleteTarget] = useState<{ path: string; name: string } | null>(null);
   const [deleteRefs, setDeleteRefs] = useState<TrashReferencingDoc[] | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   // State for move dialog
@@ -200,28 +202,44 @@ export function Sidebar() {
     }
   }, [deleteTarget, deleteRefs, isDeleting, closeDeleteDialog, resetDeleteDialog]);
 
-  const handleInstantCreate = useCallback(async (folderPath: string) => {
+  const getTemplates = useCallback(
+    (folderPath: string) => findTemplates(metadata, folderPath),
+    [metadata],
+  );
+
+  /** New File, or with `template`, New from template. */
+  const handleInstantCreate = useCallback(async (folderPath: string, template?: TemplateOption) => {
     const folderName = getFolderNameFromPath(folderPath, folderNames);
     if (!folderName) return;
     const doc = folderDocs.get(folderName);
     if (!doc) return;
-
-    // Compute the relative path within the shared folder
-    const originalFolderPath = getOriginalPath(folderPath, folderName);
-    const untitledName = generateUntitledName(folderPath, metadata);
-    const path = originalFolderPath === '' || originalFolderPath === '/'
-      ? `/${untitledName}`
-      : `${originalFolderPath}/${untitledName}`;
+    setCreateError(null);
 
     try {
-      const id = await createDocument(doc, path, 'markdown');
+      // Read the template before creating anything, so a failed read leaves no empty file.
+      const text = template
+        ? prepareTemplateText(await readDocumentText(`${RELAY_ID}-${template.docId}`))
+        : undefined;
+
+      // Pick the name from the folder's live filemeta after any await, so a
+      // create that finished meanwhile is seen (createDocument refuses a taken path).
+      const originalFolderPath = getOriginalPath(folderPath, folderName);
+      const untitledName = generateUntitledName(originalFolderPath, doc.getMap('filemeta_v0').toJSON());
+      const path = originalFolderPath === '' || originalFolderPath === '/'
+        ? `/${untitledName}`
+        : `${originalFolderPath}/${untitledName}`;
+
+      const id = await createDocument(doc, path, 'markdown', text);
       justCreatedRef.current = true;
       const compoundDocId = `${RELAY_ID}-${id}`;
       onNavigate(compoundDocId);
     } catch (error) {
       console.error('Failed to create document:', error);
+      setCreateError(template
+        ? `Could not create a file from "${template.name}". Try again.`
+        : 'Could not create the file. Try again.');
     }
-  }, [folderDocs, folderNames, metadata, onNavigate, justCreatedRef]);
+  }, [folderDocs, folderNames, onNavigate, justCreatedRef]);
 
   const handleInstantCreateHtml = useCallback(async (folderPath: string) => {
     const folderName = getFolderNameFromPath(folderPath, folderNames);
@@ -443,9 +461,11 @@ export function Sidebar() {
                     onRequestDelete: canDelete ? openDeleteDialog : undefined,
                     onRequestMove: canWrite ? handleMoveRequest : undefined,
                     onRenameSubmit: canWrite ? handleRenameSubmit : undefined,
-                    onCreateDocument: canWrite ? handleInstantCreate : undefined,
+                    onCreateDocument: canWrite ? (folderPath) => handleInstantCreate(folderPath) : undefined,
                     onCreateHtmlDocument: canWrite ? handleInstantCreateHtml : undefined,
                     onCreateFolder: canWrite ? handleCreateFolder : undefined,
+                    getTemplates,
+                    onCreateFromTemplate: canWrite ? handleInstantCreate : undefined,
                     onOpenNewTab: handleOpenNewTab,
                     activeDocId,
                   }}
@@ -467,6 +487,14 @@ export function Sidebar() {
       {moveError && !moveTarget && (
         <div className="px-3 py-2 border-t border-red-100 bg-red-50 text-sm text-red-700">
           {moveError}
+        </div>
+      )}
+      {createError && (
+        <div
+          className="px-3 py-2 border-t border-red-100 bg-red-50 text-sm text-red-700"
+          role="alert"
+        >
+          {createError}
         </div>
       )}
       {deleteError && (

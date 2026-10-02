@@ -549,6 +549,52 @@ title: "Demo Survey"
 How was the meeting?
 `,
       },
+      // Templates for "New from template" in the sidebar's create menu:
+      // empty and "<...>" ids are filled with fresh UUIDs on create.
+      {
+        path: '/Lenses/Lens Template.md',
+        id: 'ed00000f-0000-4000-8000-0000000000af',
+        type: 'markdown',
+        version: 0,
+        content: `---
+id: <add UUID created at https://www.uuidgenerator.net/version4 >
+tags:
+  - work-in-progress
+---
+#### Text
+content::
+\`<introductory text>\`
+
+#### Article
+source:: [[]]
+
+#### Question
+id::
+content:: \`<question for the student>\`
+`,
+      },
+      {
+        path: '/modules/Module Template.md',
+        id: 'ed000010-0000-4000-8000-0000000000b0',
+        type: 'markdown',
+        version: 0,
+        content: `---
+id:
+slug:
+title:
+tags:
+  - work-in-progress
+---
+
+# Lens: Welcome
+id::
+#### Text
+content::
+
+# Lens:
+source:: 
+`,
+      },
     ],
   },
 ];

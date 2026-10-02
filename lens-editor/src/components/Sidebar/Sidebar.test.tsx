@@ -286,7 +286,7 @@ describe('Sidebar with multi-folder metadata', () => {
 
     // Should call createDocument with the Lens Edu doc and correct path
     await waitFor(() => {
-      expect(mockCreate).toHaveBeenCalledWith(eduDoc, '/Untitled.md', 'markdown');
+      expect(mockCreate).toHaveBeenCalledWith(eduDoc, '/Untitled.md', 'markdown', undefined);
     });
     // Should navigate to new doc
     expect(mockNavigate).toHaveBeenCalled();

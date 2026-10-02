@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import type { TemplateOption } from '../../lib/templates';
 
 export interface FileTreeContextValue {
   onRequestRename?: (path: string) => void;
@@ -8,6 +9,9 @@ export interface FileTreeContextValue {
   onCreateDocument?: (folderPath: string) => void;
   onCreateHtmlDocument?: (folderPath: string) => void;
   onCreateFolder?: (folderPath: string) => void;
+  /** Templates a new file in `folderPath` can start from (see lib/templates). */
+  getTemplates?: (folderPath: string) => TemplateOption[];
+  onCreateFromTemplate?: (folderPath: string, template: TemplateOption) => void;
   onOpenNewTab?: (docId: string) => void;
   editingPath: string | null;
   onEditingChange: (path: string | null) => void;
