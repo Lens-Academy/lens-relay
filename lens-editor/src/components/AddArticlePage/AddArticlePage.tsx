@@ -18,6 +18,10 @@ interface ArticleJob {
   error?: string;
   relay_url?: string;
   importMode: ArticleImportMode;
+  /** Present when the URL is a single YouTube video. */
+  video?: unknown;
+  /** The job re-imports a video over its existing transcript. */
+  replaceExisting?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -49,6 +53,8 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
   const [importMode, setImportMode] =
     useState<ArticleImportMode>("article-and-lens");
   const [showModeInfo, setShowModeInfo] = useState(false);
+  // The skipped video job whose "Re-import" warning is open.
+  const [confirmReimport, setConfirmReimport] = useState<string | null>(null);
   const fetchInFlight = useRef(false);
 
   const fetchStatus = useCallback(async () => {
@@ -160,6 +166,35 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
       });
     } catch (err) {
       console.warn("[add-article] retry failed:", err);
+    }
+    await fetchStatus();
+  }
+
+  async function reimportVideo(job: ArticleJob) {
+    setConfirmReimport(null);
+    try {
+      const resp = await fetch("/api/add-article", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${shareToken}`,
+        },
+        body: JSON.stringify({
+          urls: [job.url],
+          importMode: job.importMode,
+          replaceExisting: true,
+        }),
+      });
+      const data = (await resp.json().catch(() => ({}))) as {
+        results?: SubmitResult[];
+        error?: string;
+      };
+      const invalid = (data.results ?? []).filter((r) => r.status === "invalid");
+      if (!resp.ok || invalid.length > 0) {
+        setSubmitError(data.error || invalid[0]?.error || `Re-import failed: ${resp.status}`);
+      }
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : String(err));
     }
     await fetchStatus();
   }
@@ -518,6 +553,38 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                     )}
                   </div>
                 )}
+                {confirmReimport === job.id && (
+                  <div
+                    role="alert"
+                    style={{
+                      marginTop: 8,
+                      padding: "8px 10px",
+                      background: "#2a1a0e",
+                      borderLeft: "3px solid #f0ad4e",
+                      borderRadius: 4,
+                      fontSize: 13,
+                      whiteSpace: "normal",
+                    }}
+                  >
+                    This replaces the transcript text and its timings in the
+                    existing document. Any hand edits to that transcript are
+                    lost. Nothing changes if the cleanup fails.
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <button
+                        onClick={() => reimportVideo(job)}
+                        style={{ ...smallButtonStyle, color: "#f0ad4e", borderColor: "#f0ad4e" }}
+                      >
+                        Replace transcript
+                      </button>
+                      <button
+                        onClick={() => setConfirmReimport(null)}
+                        style={smallButtonStyle}
+                      >
+                        Keep it
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
               {(job.status === "queued" || job.status === "processing") && (
                 <button
@@ -526,6 +593,15 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                   style={smallButtonStyle}
                 >
                   Cancel
+                </button>
+              )}
+              {job.status === "skipped" && !!job.video && confirmReimport !== job.id && (
+                <button
+                  onClick={() => setConfirmReimport(job.id)}
+                  title="Import this video again, replacing its transcript and timings"
+                  style={smallButtonStyle}
+                >
+                  Re-import
                 </button>
               )}
               {job.status === "failed" && (

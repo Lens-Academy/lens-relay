@@ -63,6 +63,8 @@ describe("POST /api/add-article", () => {
     expect(mockQueue.add).toHaveBeenCalledWith(
       "https://example.com/article",
       "article-and-lens",
+      undefined,
+      { replaceExisting: false },
     );
   });
 
@@ -88,6 +90,8 @@ describe("POST /api/add-article", () => {
       expect(mockQueue.add).toHaveBeenCalledWith(
         "https://example.com/article",
         importMode,
+        undefined,
+        { replaceExisting: false },
       );
     },
   );
@@ -175,7 +179,45 @@ describe("POST /api/add-article", () => {
     expect(mockQueue.add).toHaveBeenCalledWith(
       "https://www.youtube.com/watch?v=Nl7-bRFSZBs",
       "article-and-lens",
+      undefined,
+      { replaceExisting: false },
     );
+  });
+
+  it("passes replaceExisting through for a video", async () => {
+    const resp = await post({
+      urls: ["https://www.youtube.com/watch?v=Nl7-bRFSZBs"],
+      importMode: "article",
+      replaceExisting: true,
+    });
+    expect(resp.status).toBe(200);
+    expect((await resp.json()).results[0].status).toBe("queued");
+    expect(mockQueue.add).toHaveBeenCalledWith(
+      "https://www.youtube.com/watch?v=Nl7-bRFSZBs",
+      "article",
+      undefined,
+      { replaceExisting: true },
+    );
+  });
+
+  it("refuses replaceExisting for an article url, and a non-boolean flag", async () => {
+    const article = await post({
+      urls: ["https://example.com/article"],
+      importMode: "article",
+      replaceExisting: true,
+    });
+    expect(article.status).toBe(200);
+    const data = await article.json();
+    expect(data.results[0].status).toBe("invalid");
+    expect(data.results[0].error).toMatch(/YouTube videos only/);
+
+    const bad = await post({
+      urls: ["https://www.youtube.com/watch?v=Nl7-bRFSZBs"],
+      importMode: "article",
+      replaceExisting: "yes",
+    });
+    expect(bad.status).toBe(400);
+    expect(mockQueue.add).not.toHaveBeenCalled();
   });
 
   it("dedupes different spellings of the same video within one request", async () => {
@@ -371,6 +413,7 @@ describe("DELETE /api/add-article/:id and POST /:id/retry", () => {
       "https://example.com/a",
       "stub",
       "job1",
+      { replaceExisting: undefined },
     );
   });
 

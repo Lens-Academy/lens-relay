@@ -37,6 +37,7 @@ async function upsertRelayDoc(
   filePath: string,
   content: string,
   signal?: AbortSignal,
+  options: { overwrite?: boolean } = {},
 ): Promise<{ doc_id: string; path: string; created: boolean }> {
   const { url, token } = getRelayConfig();
 
@@ -54,7 +55,12 @@ async function upsertRelayDoc(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ folder, path, content }),
+    body: JSON.stringify({
+      folder,
+      path,
+      content,
+      ...(options.overwrite ? { overwrite: true } : {}),
+    }),
     timeoutMs: RELAY_WRITE_TIMEOUT_MS,
     signal,
   });
@@ -169,6 +175,19 @@ export async function createRelayDoc(
   signal?: AbortSignal,
 ): Promise<void> {
   await upsertRelayDoc(filePath, content, signal);
+}
+
+/**
+ * Write a .json blob (a timestamps sidecar), replacing it in place when one is
+ * already there. Plain createRelayDoc answers 409 for an existing blob; this
+ * is for the one caller that means to replace it (a video re-import).
+ */
+export async function replaceRelayBlob(
+  filePath: string,
+  content: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await upsertRelayDoc(filePath, content, signal, { overwrite: true });
 }
 
 /** Update an existing document with new content */

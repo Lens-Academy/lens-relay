@@ -5845,11 +5845,15 @@ async fn handle_move_path(
 /// Creates a document if it doesn't exist, or replaces its content if it does.
 /// No CriticMarkup wrapping — content is written directly to Y.Text.
 /// Accepts any file extension; uses "file" type for non-.md, "markdown" for .md.
+/// `.json` paths are blobs and create-only (a second write is 409) unless
+/// `overwrite` is true, which replaces an existing blob's bytes in place.
 #[derive(Deserialize)]
 struct UpsertDocRequest {
     folder: String,
     path: String,
     content: String,
+    #[serde(default)]
+    overwrite: bool,
 }
 
 #[derive(Serialize)]
@@ -5876,6 +5880,26 @@ async fn handle_upsert_document(
     let is_blob = path.to_ascii_lowercase().ends_with(".json");
 
     if is_blob {
+        // An explicit overwrite of an existing blob keeps its uuid, so
+        // git-sync sees a modified file, not a new one (a re-imported video's
+        // timestamps sidecar). Without the flag, blobs stay create-only.
+        if body.overwrite {
+            let exists = server_state
+                .find_folder_doc_by_name(&body.folder)
+                .and_then(|folder_doc_id| server_state.blob_entry_at(&folder_doc_id, &path))
+                .is_some();
+            if exists {
+                let (_entry, full_doc_id) = server_state
+                    .overwrite_blob_file(&body.folder, &path, body.content.as_bytes())
+                    .await
+                    .map_err(AppError::from)?;
+                return Ok(Json(UpsertDocResponse {
+                    doc_id: full_doc_id,
+                    path: format!("{}{}", body.folder, path),
+                    created: false,
+                }));
+            }
+        }
         // JSON files → blob storage (create-only, no updates)
         match server_state
             .create_blob_file(
@@ -8183,6 +8207,84 @@ mod test {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(body.contains("File names cannot contain double quotes"));
+    }
+
+    // A re-imported video replaces its timestamps sidecar: a .json upsert is
+    // still create-only by default, and overwrite=true replaces it in place.
+    #[tokio::test]
+    async fn upsert_blob_is_create_only_unless_overwrite() {
+        let server = attachment_test_server("Lens Edu").await;
+        let upsert = |content: &str, overwrite: Option<bool>| {
+            let mut request = json!({
+                "folder": "Lens Edu",
+                "path": "/video_transcripts/clip.timestamps.json",
+                "content": content,
+            });
+            if let Some(overwrite) = overwrite {
+                request["overwrite"] = json!(overwrite);
+            }
+            request.to_string()
+        };
+        let post = |body: String| {
+            let server = server.clone();
+            async move {
+                let (status, body) =
+                    post_request(&server, "/doc/upsert", "application/json", Body::from(body))
+                        .await;
+                (
+                    status,
+                    serde_json::from_str::<JsonValue>(&body).unwrap_or(JsonValue::Null),
+                )
+            }
+        };
+        let file = "Lens Edu/video_transcripts/clip.timestamps.json";
+
+        let (status, first) = post(upsert("[]", None)).await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        assert_eq!(first["created"], true);
+        let doc_id = first["doc_id"].clone();
+
+        let (status, _) = post(upsert("[1]", None)).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let (status, _) = post(upsert("[1]", Some(false))).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            server.doc_resolver().get_file_hash(file).as_deref(),
+            Some(crate::mcp::tools::blob::sha256_hex(b"[]").as_str()),
+            "a refused write must not touch the stored file"
+        );
+
+        let (status, over) = post(upsert("[1]", Some(true))).await;
+        assert_eq!(status, StatusCode::OK, "{over}");
+        assert_eq!(over["created"], false);
+        assert_eq!(over["doc_id"], doc_id, "the sidecar keeps its id");
+        let hash = crate::mcp::tools::blob::sha256_hex(b"[1]");
+        assert_eq!(
+            server.doc_resolver().get_file_hash(file).as_deref(),
+            Some(hash.as_str())
+        );
+        let stored = server
+            .store()
+            .as_ref()
+            .unwrap()
+            .get(&format!("files/{}/{}", doc_id.as_str().unwrap(), hash))
+            .await
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some(b"[1]".as_slice()));
+
+        // overwrite=true on a path with no blob yet simply creates it.
+        let (status, created) = post(
+            json!({
+                "folder": "Lens Edu",
+                "path": "/video_transcripts/new.timestamps.json",
+                "content": "[]",
+                "overwrite": true,
+            })
+            .to_string(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{created}");
+        assert_eq!(created["created"], true);
     }
 
     /// Server with an in-memory blob store (attachment routes need one) and a

@@ -59,6 +59,10 @@ export interface ArticleJob {
    *  the queue's deadline choice and the pipeline's dispatch never re-parse and
    *  drift apart. Absent for article URLs. */
   video?: VideoInput;
+  /** YouTube videos only: re-import a video that is already in the library,
+   *  replacing its transcript and timings in place, instead of skipping it as
+   *  a duplicate. */
+  replaceExisting?: boolean;
   created_at: string;
   updated_at: string;
 }

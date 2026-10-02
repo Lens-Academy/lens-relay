@@ -321,3 +321,113 @@ describe('importVideo without captions', () => {
     expect(mockClaude.runClaude).not.toHaveBeenCalled();
   });
 });
+
+// Re-importing a video that is already in the library (Asana 1217874433567752):
+// the existing transcript and its timings are replaced in place, and only once
+// the cleanup and the alignment have both succeeded.
+describe('importVideo with replaceExisting', () => {
+  const existing = 'Lens Edu/video_transcripts/renamed/Old Name.md';
+  const reimport = () =>
+    importVideo('test-job', makePayload(), new Date().toISOString(), {
+      createLens: false,
+      replaceExisting: { mdPath: existing },
+    });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockFs.mkdir.mockResolvedValue(undefined);
+    mockFs.writeFile.mockResolvedValue(undefined);
+    mockFs.readFile.mockResolvedValue('Hello world.');
+    mockFs.rm.mockResolvedValue(undefined);
+    mockClaude.runClaude.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
+    mockRelayDocs.upsertRelayDocReturningId.mockResolvedValue('doc-1');
+    mockRelayDocs.replaceRelayBlob.mockResolvedValue(undefined);
+    mockRelayDocs.relayTranscriptFolder.mockReturnValue('Lens Edu/video_transcripts');
+    mockRelayDocs.editorOpenUrl.mockImplementation(
+      (p: string) => `https://editor.lensacademy.org/open/${encodeURI(p)}`
+    );
+  });
+
+  it('writes the timings first, then the cleaned text, at the existing path', async () => {
+    const order: string[] = [];
+    mockClaude.runClaude.mockImplementation(async () => {
+      order.push('claude');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    mockRelayDocs.replaceRelayBlob.mockImplementation(async () => {
+      order.push('timestamps');
+    });
+    mockRelayDocs.upsertRelayDocReturningId.mockImplementation(async () => {
+      order.push('md');
+      return 'doc-1';
+    });
+
+    const { mdPath } = await reimport();
+
+    expect(mdPath).toBe(existing);
+    expect(order).toEqual(['claude', 'timestamps', 'md']);
+    const [jsonPath, json] = mockRelayDocs.replaceRelayBlob.mock.calls[0];
+    expect(jsonPath).toBe('Lens Edu/video_transcripts/renamed/Old Name.timestamps.json');
+    expect(JSON.parse(json).map((w: { text: string }) => w.text)).toEqual(['Hello', 'world.']);
+    const [docPath, md] = mockRelayDocs.upsertRelayDocReturningId.mock.calls[0];
+    expect(docPath).toBe(existing);
+    expect(md).toContain('Hello world.');
+    // Never the create-only paths a first import uses.
+    expect(mockRelayDocs.createRelayDoc).not.toHaveBeenCalled();
+    expect(mockRelayDocs.updateRelayDoc).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing when the cleanup is rejected', async () => {
+    mockFs.readFile.mockResolvedValue('Hello');
+
+    await expect(reimport()).rejects.toThrow(/nothing was changed/);
+    expect(mockRelayDocs.replaceRelayBlob).not.toHaveBeenCalled();
+    expect(mockRelayDocs.upsertRelayDocReturningId).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing when Claude fails', async () => {
+    mockClaude.runClaude.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'boom' });
+
+    await expect(reimport()).rejects.toThrow(/Claude exited with code 1/);
+    expect(mockRelayDocs.replaceRelayBlob).not.toHaveBeenCalled();
+    expect(mockRelayDocs.upsertRelayDocReturningId).not.toHaveBeenCalled();
+  });
+
+  it('says plainly that text and timings disagree when the text write fails', async () => {
+    mockRelayDocs.upsertRelayDocReturningId.mockRejectedValue(new Error('relay 500'));
+
+    await expect(reimport()).rejects.toThrow(
+      /timings .* were replaced, but writing the transcript text .* failed.*Re-import the video again.*relay 500/
+    );
+    expect(mockRelayDocs.replaceRelayBlob).toHaveBeenCalledOnce();
+  });
+
+  // Captions removed by the uploader (or a degraded player response) must not
+  // replace a good transcript with the "no captions" placeholder.
+  it('changes nothing when YouTube returns no captions', async () => {
+    await expect(
+      importVideo(
+        'test-job',
+        { ...makePayload(), transcript_raw: { events: [] } },
+        new Date().toISOString(),
+        { createLens: true, replaceExisting: { mdPath: existing } }
+      )
+    ).rejects.toThrow(/no captions for this video, so nothing was changed/);
+    expect(mockRelayDocs.replaceRelayBlob).not.toHaveBeenCalled();
+    expect(mockRelayDocs.upsertRelayDocReturningId).not.toHaveBeenCalled();
+    expect(mockClaude.runClaude).not.toHaveBeenCalled();
+  });
+
+  it('uses the human captions as they are, without a cleanup pass', async () => {
+    await importVideo(
+      'test-job',
+      { ...makePayload(), transcript_type: 'sentence_level' } as VideoPayload,
+      new Date().toISOString(),
+      { createLens: false, replaceExisting: { mdPath: existing } }
+    );
+
+    expect(mockClaude.runClaude).not.toHaveBeenCalled();
+    expect(mockRelayDocs.replaceRelayBlob).toHaveBeenCalledOnce();
+    expect(mockRelayDocs.upsertRelayDocReturningId.mock.calls[0][1]).toContain('hello world');
+  });
+});
