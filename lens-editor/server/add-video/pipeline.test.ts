@@ -402,6 +402,22 @@ describe('importVideo with replaceExisting', () => {
     expect(mockRelayDocs.replaceRelayBlob).toHaveBeenCalledOnce();
   });
 
+  // Captions removed by the uploader (or a degraded player response) must not
+  // replace a good transcript with the "no captions" placeholder.
+  it('changes nothing when YouTube returns no captions', async () => {
+    await expect(
+      importVideo(
+        'test-job',
+        { ...makePayload(), transcript_raw: { events: [] } },
+        new Date().toISOString(),
+        { createLens: true, replaceExisting: { mdPath: existing } }
+      )
+    ).rejects.toThrow(/no captions for this video, so nothing was changed/);
+    expect(mockRelayDocs.replaceRelayBlob).not.toHaveBeenCalled();
+    expect(mockRelayDocs.upsertRelayDocReturningId).not.toHaveBeenCalled();
+    expect(mockClaude.runClaude).not.toHaveBeenCalled();
+  });
+
   it('uses the human captions as they are, without a cleanup pass', async () => {
     await importVideo(
       'test-job',

@@ -100,6 +100,26 @@ export async function importVideo(
       });
     const sidecarJson = (words: TimestampedWord[]) =>
       JSON.stringify(generateTimestampsJson(words), null, 2);
+    // Auto-create a lens wrapping the transcript (Asana 1215689584721257),
+    // unless one exists. A lens failure must not fail the import, and this is
+    // deliberately NOT an abort point: the transcript is already written.
+    const createLensOnce = async (): Promise<void> => {
+      onStage?.("creating-lens");
+      try {
+        const lensPath = await maybeCreateLens({
+          docPath: mdPath,
+          title: payload.title,
+          segment: "Video",
+        });
+        console.log(
+          lensPath
+            ? `[add-video] Created lens ${lensPath}`
+            : `[add-video] Lens already exists for ${mdPath}, skipped`,
+        );
+      } catch (lensErr) {
+        console.warn(`[add-video] Lens creation failed (transcript saved): ${lensErr}`);
+      }
+    };
     // Human-written caption tracks already carry punctuation, casing and
     // correct spelling, so the cleanup pass has nothing to fix -- measured on
     // real videos it returned the input essentially unchanged. A video with
@@ -146,6 +166,13 @@ export async function importVideo(
       // RE-IMPORT. Nothing is written until the final text and its timings
       // are both known, so a failed or rejected cleanup leaves the existing
       // transcript exactly as it was.
+      // No captions (removed by the uploader, or a degraded player response)
+      // would replace a good transcript with the placeholder: refuse instead.
+      if (!hasTranscript) {
+        throw new Error(
+          `YouTube returned no captions for this video, so nothing was changed: ${mdPath} still holds the previous transcript.`,
+        );
+      }
       let final = { text: plainText.trim(), words: originalWords };
       if (needsCleanup) {
         const cleaned = await cleanUp();
@@ -160,9 +187,7 @@ export async function importVideo(
       // Timings first, then the text. A failure between the two leaves the
       // timings describing text the document does not hold yet, so it is
       // reported as exactly that rather than as a generic failure.
-      if (hasTranscript) {
-        await replaceRelayBlob(jsonPath, sidecarJson(final.words), signal);
-      }
+      await replaceRelayBlob(jsonPath, sidecarJson(final.words), signal);
       try {
         await upsertRelayDocReturningId(mdPath, transcriptMarkdown(final.text), signal);
       } catch (writeErr) {
@@ -170,25 +195,7 @@ export async function importVideo(
           `The timings in ${jsonPath} were replaced, but writing the transcript text to ${mdPath} failed, so the two no longer match. Re-import the video again to bring them back in step. (${writeErr})`,
         );
       }
-      if (createLens) {
-        onStage?.("creating-lens");
-        try {
-          const lensPath = await maybeCreateLens({
-            docPath: mdPath,
-            title: payload.title,
-            segment: "Video",
-          });
-          console.log(
-            lensPath
-              ? `[add-video] Created lens ${lensPath}`
-              : `[add-video] Lens already exists for ${mdPath}, skipped`,
-          );
-        } catch (lensErr) {
-          console.warn(
-            `[add-video] Lens creation failed (transcript re-imported): ${lensErr}`,
-          );
-        }
-      }
+      if (createLens) await createLensOnce();
       console.log(`[add-video] Re-imported "${payload.title}" over ${mdPath}`);
       return { mdPath };
     }
@@ -229,25 +236,7 @@ export async function importVideo(
     //    Opt out with createLens=false; a lens failure must not fail the import.
     //    Deliberately NOT an abort point: the transcript is complete, and a
     //    cancel arriving here must not route into the failure path.
-    if (createLens) {
-      onStage?.("creating-lens");
-      try {
-        const lensPath = await maybeCreateLens({
-          docPath: mdPath,
-          title: payload.title,
-          segment: "Video",
-        });
-        console.log(
-          lensPath
-            ? `[add-video] Created lens ${lensPath}`
-            : `[add-video] Lens already exists for ${mdPath}, skipped`,
-        );
-      } catch (lensErr) {
-        console.warn(
-          `[add-video] Lens creation failed (transcript saved): ${lensErr}`,
-        );
-      }
-    }
+    if (createLens) await createLensOnce();
 
     // 4. PHASE 2 -- clean up the auto-generated transcript. The job stays
     //    alive for this (it still holds its queue slot), but readers do not:
