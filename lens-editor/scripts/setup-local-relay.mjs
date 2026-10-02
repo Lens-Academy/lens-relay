@@ -217,6 +217,30 @@ Obsidian-style callouts render as coloured boxes in live preview.
 `,
       },
       {
+        // A suggestion taller than the screen, for the accept/reject controls
+        // that stay in view when their place at the end is scrolled off.
+        path: '/Long Suggestion.md',
+        id: 'c0000012-0000-4000-8000-000000000012',
+        type: 'markdown',
+        version: 0,
+        content: `# Long Suggestion
+
+The AI suggested a whole new section below. Click into it: the accept and reject buttons belong at its end, far below the fold.
+
+{++{"author":"AI","timestamp":${T.recent}}@@## Why spaced repetition works
+
+${Array.from({ length: 14 }, (_, i) => `Paragraph ${i + 1}. Learners forget most of a new idea within days unless they meet it again. Each review at a growing interval makes the memory last longer, and costs less effort than the one before.`).join('\n\n')}
+
+That is the whole argument.++}
+
+## After the suggestion
+
+Plain text that nobody suggested. Small suggestions keep their buttons right where they are: this sentence has a {++{"author":"Bob","timestamp":${T.today}}@@short ++}addition and a {--{"author":"Bob","timestamp":${T.today}}@@quick --}deletion.
+
+${Array.from({ length: 10 }, (_, i) => `- Item ${i + 1}: {~~{"author":"Carol","timestamp":${T.today}}@@old wording~>new wording~~}`).join('\n')}
+`,
+      },
+      {
         path: '/Projects',
         id: 'c0000011-0000-4000-8000-000000000011',
         type: 'folder',

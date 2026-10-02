@@ -840,6 +840,25 @@
   font-size: 11px;
 }
 
+/* Floating copy of the accept/reject buttons, shown at the bottom of the
+   visible editor while the change's own buttons are below the screen. */
+.cm-criticmarkup-sticky {
+  position: absolute;
+  z-index: 10;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  display: flex;
+  white-space: nowrap;
+}
+
+.cm-criticmarkup-sticky .cm-criticmarkup-buttons {
+  display: flex;
+  margin-left: 0;
+}
+
 /* Panel width animation — triggered on toggle/auto-resize */
 .sidebar-animating > div {
   transition: width 200ms ease-out;
