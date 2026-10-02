@@ -22,8 +22,9 @@ export interface WorkflowAccess {
  * App.tsx, which fall back to the start page otherwise.
  */
 export function workflowAccess(
-  { canEdit, folderUuid, isAllFolders }: Pick<RoleCapabilities, 'canEdit'> & { folderUuid: string | null; isAllFolders: boolean },
+  { canEdit, canPromote, folderUuid, isAllFolders }:
+    Pick<RoleCapabilities, 'canEdit' | 'canPromote'> & { folderUuid: string | null; isAllFolders: boolean },
 ): WorkflowAccess {
-  const canUseEdu = canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID);
-  return { review: canEdit, recent: true, addSource: canUseEdu, promote: canUseEdu };
+  const hasEdu = isAllFolders || folderUuid === EDU_FOLDER_ID;
+  return { review: canEdit, recent: true, addSource: canEdit && hasEdu, promote: canPromote && hasEdu };
 }

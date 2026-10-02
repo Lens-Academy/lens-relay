@@ -14,12 +14,15 @@ function LocationProbe() {
   return <div data-testid="location">{location.pathname}</div>;
 }
 
+// An admin link with every folder sees every workflow
 function renderMenu(initialEntry = '/') {
   return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      <WorkflowMenu />
-      <LocationProbe />
-    </MemoryRouter>
+    <AuthProvider role="admin" folderUuid={null} isAllFolders>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <WorkflowMenu />
+        <LocationProbe />
+      </MemoryRouter>
+    </AuthProvider>
   );
 }
 
@@ -97,7 +100,15 @@ describe('WorkflowMenu', () => {
     expect(await openMenuAs('edit', 'some-other-folder', false)).toEqual(['Review Suggestions', 'Recent Changes']);
     cleanup();
     expect(await openMenuAs('edit', EDU_FOLDER_ID, false)).toEqual([
+      'Review Suggestions', 'Recent Changes', 'Add Source',
+    ]);
+  });
+
+  it('offers Promote to Production only to admin links that include Lens Edu', async () => {
+    expect(await openMenuAs('admin', EDU_FOLDER_ID, false)).toEqual([
       'Review Suggestions', 'Recent Changes', 'Add Source', 'Promote to Production',
     ]);
+    cleanup();
+    expect(await openMenuAs('admin', 'some-other-folder', false)).toEqual(['Review Suggestions', 'Recent Changes']);
   });
 });
