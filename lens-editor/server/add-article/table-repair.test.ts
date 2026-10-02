@@ -37,20 +37,34 @@ describe("normalizeTables", () => {
     expect(out.changes).toEqual([]);
   });
 
-  it("separates a caption with a pipe from the table above it", () => {
+  it("separates a caption whose cells do not fit the table from the table above it", () => {
     const input = [
       "| A | B |",
       "| --- | --- |",
       "| 1 | 2 |",
-      "Table 2: results for $|S|$ seeds",
+      "Table 2: results for A | B | C",
       "",
       "After.",
     ].join("\n");
     const out = normalizeTables(input);
     expect(out.body).toBe(
-      ["| A | B |", "| --- | --- |", "| 1 | 2 |", "", "Table 2: results for $|S|$ seeds", "", "After."].join("\n"),
+      ["| A | B |", "| --- | --- |", "| 1 | 2 |", "", "Table 2: results for A | B | C", "", "After."].join("\n"),
     );
     expect(out.changes.map((c) => c.code)).toEqual(["normalize.table-blank-line-after"]);
+  });
+
+  it("keeps a body row without a leading pipe inside its table", () => {
+    const input = ["| A | B |", "| --- | --- |", "| 1 | 2 |", "3 | 4", "| 5 | 6 |"].join("\n");
+    expect(normalizeTables(input)).toEqual({ body: input, changes: [] });
+  });
+
+  it("never joins cells when a price sits before maths in the same row", () => {
+    const input = ["| Item | Cost | Symbol |", "| --- | --- | --- |", "| Cost | $5 | $\\alpha$ |"].join("\n");
+    expect(normalizeTables(input)).toEqual({ body: input, changes: [] });
+    const mixed = ["| Item | Cost | Formula |", "| --- | --- | --- |", "| Cost | $5 | $|x|$ |"].join("\n");
+    const out = normalizeTables(mixed);
+    expect(out.body.split("\n")[2]).toBe("| Cost | $5 | $\\vert x\\vert $ |");
+    expect(counts(out.body)).toEqual([3, 3, 3]);
   });
 
   it("pads a spanning section row (the arXiv 2607.18966 case) to the header width", () => {
@@ -89,11 +103,11 @@ describe("normalizeTables", () => {
       "| --- | --- |",
       "| _Section_ |",
       "| $a|b$ | 2 |",
-      "Caption | here",
+      "Caption | a | b",
     ].join("\n");
     const once = normalizeArticleBody(input, "https://example.com/");
     expect(counts(once.body)).toEqual([2, 2, 2, 2]);
-    expect(once.body).toContain("\n\nCaption | here");
+    expect(once.body).toContain("\n\nCaption | a | b");
     expect(normalizeArticleBody(once.body, "https://example.com/").body).toBe(once.body);
   });
 });
@@ -122,6 +136,21 @@ describe("forceTableCellCounts", () => {
     );
     expect(counts(out.body)).toEqual([3, 3, 3]);
     expect(out.rows.map((row) => row.line)).toEqual([2, 3]);
+  });
+
+  it("keeps a comment that contains pipes out of the cell split", () => {
+    const shortRow = ["| A | B | C |", "| --- | --- | --- |", "| 1 {>>see a|b<<} |"].join("\n");
+    const short = forceTableCellCounts(shortRow);
+    expect(short.body.split("\n")[2]).toBe(
+      "| 1 |  | {>>see a|b<<} {>>Importer: this row had 1 of the table's 3 cells, so empty cells were added. Check it against the source.<<} |",
+    );
+    expect(counts(short.body)).toEqual([3, 3, 3]);
+
+    const longRow = ["| A | B |", "| --- | --- |", "| 1 | 2 | 3 {>>x|y<<} |"].join("\n");
+    const long = forceTableCellCounts(longRow);
+    expect(long.body.split("\n")[2]).toBe(
+      "| 1 | 2 \\| 3 {>>x|y<<} {>>Importer: this row had 3 cells but the table has 2, so the last 2 were joined into this cell. Check it against the source.<<} |",
+    );
   });
 
   it("changes nothing when every row already matches", () => {

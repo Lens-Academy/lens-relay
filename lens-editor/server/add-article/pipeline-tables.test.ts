@@ -151,4 +151,13 @@ describe("processArticle table errors", () => {
     await expect(processArticle(job())).rejects.toThrow("invalid");
     expect(relayMocks.createRelayDoc).not.toHaveBeenCalled();
   });
+
+  it("still discards the import when the forced table fails re-validation", async () => {
+    reviewMocks.validateArticleDraft.mockImplementation(async () => result([tableError]));
+
+    await expect(processArticle(job())).rejects.toThrow("invalid");
+    expect(relayMocks.createRelayDoc).not.toHaveBeenCalled();
+    // Initial, after each of the three review passes, and after the forced repair.
+    expect(reviewMocks.validateArticleDraft).toHaveBeenCalledTimes(5);
+  });
 });

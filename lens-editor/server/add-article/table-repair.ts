@@ -7,30 +7,39 @@ import { fencedLineMask } from "./footnote-typing";
  * Lens Platform's validator (`scanTables` / `splitTableRow` in lens-platform
  * content_processor/src/validator/article-structure.ts) counts the cells of
  * every row after a delimiter row and fails the article on any row whose count
- * differs from the header. Its splitter honours backslash escapes and inline
- * code, but nothing else, and a table only ends at a blank line or a line
- * without a `|`. So three things that render fine still fail validation:
+ * differs from the header. It scans with inline code and maths blanked out,
+ * and a table only ends at a blank line or a line without a `|`.
  *
- *  1. a `|` inside `$…$` maths in a cell (`$|x|$`, `$P(a|b)$`);
- *  2. a line straight after the table that happens to contain a `|` (a caption
- *     with maths or a link title), which is counted as one more row;
- *  3. a row with fewer cells than the header, e.g. a spanning section row
- *     (`| _Agentic coding tasks_ |`) from a colspan in the source table.
+ * `normalizeTables` runs before validation with the other safe normalizations
+ * and again on every reviewer pass's output. Its repairs never lose text:
  *
- * `normalizeTables` repairs all three without changing what a reader sees, and
- * runs before validation with the other safe normalizations. A row with MORE
- * cells than its header is not touched there: GFM drops the extra cells, so
- * which text belongs where is a judgement for the reviewer. Only when the
- * reviewer's rounds are spent and table rows are all that is still wrong does
- * `forceTableCellCounts` make the counts match, flag each row it changed with a
- * CriticMarkup comment, and let the article be written.
+ *  1. a row with fewer cells than the header, e.g. a spanning section row
+ *     (`| _Agentic coding tasks_ |`) from a colspan in the source table, gets
+ *     empty cells. GFM pads it the same way, so the rendered table is the same,
+ *     and the validator is satisfied (the arXiv 2607.18966 failure);
+ *  2. a caption or paragraph straight after a table whose cell count does not
+ *     fit the table (`Table 2: A | B | C`) is split off by a blank line, since
+ *     both GFM and the validator would otherwise take it as one more row;
+ *  3. a `|` inside `$…$` maths in a row becomes `\vert` (`\|` becomes `\Vert`).
+ *     This one is for readers, not the validator, which masks maths: GFM splits
+ *     cells before maths is found, so `$P(a|b)$` renders as two broken cells.
+ *
+ * A row with MORE cells than its header is not touched there: GFM drops the
+ * extra cells, so which text belongs where is a judgement for the reviewer.
+ * Only when the reviewer's rounds are spent and table rows are all that is
+ * still wrong does `forceTableCellCounts` make the counts match, flag each row
+ * it changed with a CriticMarkup comment, and let the article be written.
  */
 
 const DELIMITER_RE = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
-// The validator strips these before scanning (stripAuthoringMarkupForValidation),
-// so cell counts must ignore them too. Comments and highlights are the forms an
-// importer might leave in a cell; additions/deletions never reach a table here.
+// The validator strips CriticMarkup comments and %% comments before scanning
+// (stripAuthoringMarkupForValidation), so cell counts must ignore them too.
+// They are the forms an importer or reviewer might leave in a cell.
 const COUNT_IGNORED_RE = /\{>>.*?<<\}|%%.*?%%/g;
+// Inline maths as Lens finds it (the frontend's rule, mirrored in the
+// validator's proseMask): never crosses a `$`, and keeps prices out.
+const INLINE_MATH_RE = /(?<!\$)\$(?!\$)([^\s$](?:[^$\n]*?[^\s$])?)\$(?![\d$])/g;
+const DISPLAY_MATH_RE = /\$\$([^$\n]+?)\$\$/g;
 
 /** Cells of one table row, split exactly as Lens Platform's `splitTableRow`
  * does (backslash escapes and inline code protect a `|`, nothing else). */
@@ -95,63 +104,25 @@ function findTables(lines: string[]): TableBlock[] {
 }
 
 /** Replace `|` (and TeX's `\|`) inside `$…$` / `$$…$$` spans of one table row
- * with `\vert` / `\Vert`, which render identically and do not split cells. */
+ * with `\vert` / `\Vert`, which render identically and do not split cells.
+ * Inline code is left alone. */
 function escapeMathPipes(line: string): string {
-  let out = "";
-  let i = 0;
-  let inCode = false;
-  while (i < line.length) {
-    const char = line[i];
-    if (char === "\\" && !inCode) {
-      out += line.slice(i, i + 2);
-      i += 2;
-      continue;
-    }
-    if (char === "`") {
-      inCode = !inCode;
-      out += char;
-      i += 1;
-      continue;
-    }
-    if (char === "$" && !inCode) {
-      const delimiter = line.startsWith("$$", i) ? "$$" : "$";
-      const close = mathClose(line, i, delimiter);
-      if (close < 0) {
-        // Not maths (a price, say): leave this `$` alone and keep scanning.
-        out += delimiter;
-        i += delimiter.length;
-        continue;
-      }
-      const inner = line.slice(i + delimiter.length, close);
-      const fixed = inner
-        .replace(/\\\|/g, "\\Vert ")
-        .replace(/(^|[^\\])\|/g, (_, before: string) => `${before}\\vert `)
-        // A second pass catches `||`, whose second bar the lookbehind skipped.
-        .replace(/(^|[^\\])\|/g, (_, before: string) => `${before}\\vert `);
-      out += delimiter + fixed + delimiter;
-      i = close + delimiter.length;
-      continue;
-    }
-    out += char;
-    i += 1;
-  }
-  return out;
-}
-
-/** End of the maths span opened at `open`, or -1. Pandoc's rule keeps prices
- * out: the opening `$` is followed by a non-space, the closing one follows a
- * non-space and is not followed by a digit ("$5 | $10" is two prices). */
-function mathClose(line: string, open: number, delimiter: string): number {
-  const start = open + delimiter.length;
-  const single = delimiter === "$";
-  if (!line[start] || (single && /\s/.test(line[start]))) return -1;
-  for (let close = line.indexOf(delimiter, start); close >= 0; close = line.indexOf(delimiter, close + 1)) {
-    if (close === start) continue;
-    if (line[close - 1] === "\\") continue;
-    if (single && (/\s/.test(line[close - 1]) || /\d/.test(line[close + 1] ?? ""))) continue;
-    return close;
-  }
-  return -1;
+  const fix = (inner: string) =>
+    inner
+      .replace(/\\\|/g, "\\Vert ")
+      .replace(/(^|[^\\])\|/g, (_, before: string) => `${before}\\vert `)
+      // A second pass catches `||`, whose second bar the lookbehind skipped.
+      .replace(/(^|[^\\])\|/g, (_, before: string) => `${before}\\vert `);
+  return line
+    .split(/(`+[^`]*`+)/)
+    .map((part, i) =>
+      i % 2 === 1
+        ? part
+        : part
+            .replace(DISPLAY_MATH_RE, (_, inner: string) => `$$${fix(inner)}$$`)
+            .replace(INLINE_MATH_RE, (_, inner: string) => `$${fix(inner)}$`),
+    )
+    .join("");
 }
 
 function isTableLine(line: string): boolean {
@@ -170,13 +141,17 @@ export function normalizeTables(body: string): { body: string; changes: Normaliz
 
   let lines = body.split("\n");
 
-  // 1. A table ends at the first line that is not a `|` row: put a blank line
-  //    there, so a caption or paragraph is not counted as a row.
+  // 1. A line without a leading `|` whose cell count does not fit the table
+  //    is a caption or paragraph that GFM and the validator would both take
+  //    as one more row: put a blank line before it. A row that fits stays,
+  //    since GFM rows need no leading pipe.
   const insertBefore = new Set<number>();
   for (const table of findTables(lines)) {
     if (!isTableLine(lines[table.header])) continue;
-    const end = table.rows.findIndex((row) => !isTableLine(lines[row]));
-    if (end >= 0) insertBefore.add(table.rows[end]);
+    const end = table.rows.find(
+      (row) => !isTableLine(lines[row]) && cellCount(lines[row]) !== table.expected,
+    );
+    if (end !== undefined) insertBefore.add(end);
   }
   if (insertBefore.size > 0) {
     const next: string[] = [];
@@ -190,7 +165,7 @@ export function normalizeTables(body: string): { body: string; changes: Normaliz
     lines = next;
   }
 
-  // 2. Maths pipes, on the header and every row the validator would scan.
+  // 2. Maths pipes, on the header and every row.
   for (const table of findTables(lines)) {
     for (const index of [table.header, ...table.rows]) {
       const fixed = escapeMathPipes(lines[index]);
@@ -262,7 +237,10 @@ export function forceTableCellCounts(body: string): { body: string; rows: Forced
       const before = lines[index];
       const had = cellCount(before);
       if (had === table.expected) continue;
-      const cells = splitTableRow(before);
+      // Split without the comments the count ignores (their own pipes would
+      // otherwise shift cells), and carry them over to the last cell.
+      const comments = before.match(COUNT_IGNORED_RE) ?? [];
+      const cells = splitTableRow(before.replace(COUNT_IGNORED_RE, ""));
       const fixed =
         had < table.expected
           ? [...cells, ...new Array(table.expected - cells.length).fill("")]
@@ -271,7 +249,7 @@ export function forceTableCellCounts(body: string): { body: string; rows: Forced
         had < table.expected
           ? `{>>Importer: this row had ${had} of the table's ${table.expected} cells, so empty cells were added. Check it against the source.<<}`
           : `{>>Importer: this row had ${had} cells but the table has ${table.expected}, so the last ${had - table.expected + 1} were joined into this cell. Check it against the source.<<}`;
-      fixed[table.expected - 1] = `${fixed[table.expected - 1]} ${note}`.trim();
+      fixed[table.expected - 1] = [fixed[table.expected - 1], ...comments, note].filter(Boolean).join(" ");
       lines[index] = rowFromCells(fixed);
       rows.push({ line: index + 1, had, expected: table.expected, before, after: lines[index] });
     }

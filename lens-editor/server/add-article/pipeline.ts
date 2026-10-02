@@ -188,6 +188,8 @@ function withArticleWriteLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 function onlyTableErrors(validation: ArticleValidationResult): boolean {
+  // A truncated issue list may hide other errors: only a complete one counts.
+  if (validation.truncated) return false;
   const errors = validation.issues.filter((issue) => issue.severity === "error");
   return errors.length > 0 && errors.every((issue) => issue.code === "article.table-malformed");
 }
