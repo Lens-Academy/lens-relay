@@ -2,16 +2,10 @@ import { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useMobile } from '../../contexts/MobileContext';
 import { useAuth } from '../../contexts/AuthContext';
-import { EDU_FOLDER_ID } from '../../lib/constants';
+import { isDocRoute, workflowAccess } from '../../lib/app-routes';
 
 interface MobileNavBarProps {
   onOpenQuickSwitcher: () => void;
-}
-
-const NON_DOC_ROUTES = /^\/(review|recent|promote|add-article|edu\/|section-editor\/)/;
-
-function isDocRoute(pathname: string): boolean {
-  return pathname !== '/' && !NON_DOC_ROUTES.test(pathname);
 }
 
 /**
@@ -21,7 +15,7 @@ function isDocRoute(pathname: string): boolean {
  */
 export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
   const { toggleDrawer, activeDrawer, closeDrawer, editorFocused, docPanelsAvailable, discussionAvailable } = useMobile();
-  const { canEdit, folderUuid, isAllFolders } = useAuth();
+  const access = workflowAccess(useAuth());
   const location = useLocation();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -45,7 +39,6 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
   // Comments/outline drawers live in EditorArea — only offer them when it's
   // mounted (image/blob/html doc routes render other views without drawers)
   const showPanelButtons = isDocRoute(location.pathname) && docPanelsAvailable;
-  const canUseEdu = canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID);
 
   // While the editor keyboard is up, MobileEditToolbar replaces this bar
   if (editorFocused) return null;
@@ -54,12 +47,10 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
     ...(showPanelButtons && discussionAvailable
       ? [{ label: 'Discussion', action: () => toggleDrawer('discussion') }]
       : []),
-    ...(canEdit ? [{ label: 'Review suggestions', action: () => navigate('/review') }] : []),
-    { label: 'Recent changes', action: () => navigate('/recent') },
-    ...(canUseEdu ? [
-      { label: 'Promote to production', action: () => navigate('/promote') },
-      { label: 'Add source', action: () => navigate('/add-article') },
-    ] : []),
+    ...(access.review ? [{ label: 'Review suggestions', action: () => navigate('/review') }] : []),
+    ...(access.recent ? [{ label: 'Recent changes', action: () => navigate('/recent') }] : []),
+    ...(access.promote ? [{ label: 'Promote to production', action: () => navigate('/promote') }] : []),
+    ...(access.addSource ? [{ label: 'Add source', action: () => navigate('/add-article') }] : []),
   ];
 
   const btnClass = 'flex-1 flex items-center justify-center h-12 text-gray-500 active:text-gray-800 active:bg-gray-100';

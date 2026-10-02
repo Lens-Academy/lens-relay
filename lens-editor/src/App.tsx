@@ -52,6 +52,7 @@ import { MobileProvider, useMobile } from './contexts/MobileContext';
 import { MobileNavBar } from './components/Mobile/MobileNavBar';
 import { MobileDrawer } from './components/Mobile/MobileDrawer';
 import { WorkflowMenu } from './components/WorkflowMenu';
+import { isDocRoute } from './lib/app-routes';
 import { useEdgeSwipe } from './hooks/useEdgeSwipe';
 
 // Panel configuration — single source of truth for all panel behavior
@@ -494,6 +495,7 @@ function DefaultLanding() {
 
 function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role: UserRole; folderUuid: string | null; isAllFolders: boolean; shareToken: string }) {
   const navigate = useNavigate();
+  const onDocRoute = isDocRoute(useLocation().pathname);
   const { isMobile, activeDrawer, closeDrawer, openDrawer, docPanelsAvailable } = useMobile();
 
   // Obsidian-style swipes to open the drawers (buttons still work too)
@@ -598,15 +600,17 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
               </div>
               <div className="flex items-center gap-4 flex-shrink-0">
                 <div id="header-controls" className="flex items-center gap-4" />
-                {/* EditorArea (docPanelsAvailable) places the workflows menu
-                    among its own controls; every other page (start page,
-                    review, html/image views, ...) gets it here */}
-                {!docPanelsAvailable && <WorkflowMenu />}
-                {/* Comments and the right sidebar belong to an open document:
-                    EditorArea's panels, or a page that registers its own
-                    comments control (HtmlEditor, also on mobile — the bottom
-                    bar only covers EditorArea's comment sheet) */}
-                {((!isMobile && docPanelsAvailable) || headerCommentsControl != null) && <button
+                {/* On a document route EditorArea places the workflows menu
+                    among its own controls; the start page and the workflow
+                    pages get it here. Decided by route, not by whether
+                    EditorArea is mounted, so opening or switching documents
+                    never flashes a second menu */}
+                {!onDocRoute && <WorkflowMenu />}
+                {/* Comments and the right sidebar belong to a document route,
+                    or to a page that registers its own comments control
+                    (HtmlEditor, also on mobile — the bottom bar only covers
+                    EditorArea's comment sheet) */}
+                {((!isMobile && onDocRoute) || headerCommentsControl != null) && <button
                   onClick={handleToggleComments}
                   title={commentsTitle}
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"
@@ -616,7 +620,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                     {commentsOpen && <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" fill="currentColor" opacity="0.45" />}
                   </svg>
                 </button>}
-                {!isMobile && docPanelsAvailable && <button
+                {!isMobile && onDocRoute && <button
                   onClick={() => manager.toggle('right-sidebar')}
                   title="Toggle right sidebar"
                   className="cursor-pointer text-gray-400 hover:text-gray-600 transition-colors"

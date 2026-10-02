@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import { workflowAccess, type WorkflowAccess } from '../../lib/app-routes';
 
 interface WorkflowItem {
   label: string;
   description: string;
   path: string;
   icon: 'review' | 'recent' | 'video' | 'article' | 'promote';
+  access: keyof WorkflowAccess;
 }
 
 const WORKFLOWS: WorkflowItem[] = [
@@ -14,12 +17,14 @@ const WORKFLOWS: WorkflowItem[] = [
     label: 'Review Suggestions',
     description: 'Accept or reject proposed edits',
     path: '/review',
+    access: 'review',
     icon: 'review',
   },
   {
     label: 'Recent Changes',
     description: 'Direct AI edits from the last 7 days',
     path: '/recent',
+    access: 'recent',
     icon: 'recent',
   },
   // One importer for everything: it detects YouTube URLs and imports the
@@ -30,12 +35,14 @@ const WORKFLOWS: WorkflowItem[] = [
     label: 'Add Source',
     description: 'Import an article or video into Lens Edu',
     path: '/add-article',
+    access: 'addSource',
     icon: 'article',
   },
   {
     label: 'Promote to Production',
     description: 'Publish selected files to production',
     path: '/promote',
+    access: 'promote',
     icon: 'promote',
   },
 ];
@@ -96,6 +103,8 @@ export function WorkflowMenu() {
   const menuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
+  const access = workflowAccess(useAuth());
+  const workflows = WORKFLOWS.filter(item => access[item.access]);
 
   useEffect(() => {
     if (!open) return;
@@ -163,7 +172,7 @@ export function WorkflowMenu() {
           style={{ top: position.top, left: position.left, width: 'min(280px, calc(100vw - 16px))' }}
         >
           <div className="space-y-0.5">
-            {WORKFLOWS.map(item => {
+            {workflows.map(item => {
               const active = location.pathname === item.path;
               return (
                 <button

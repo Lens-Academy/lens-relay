@@ -6,6 +6,8 @@ import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { WorkflowMenu } from './WorkflowMenu';
+import { AuthProvider, type UserRole } from '../../contexts/AuthContext';
+import { EDU_FOLDER_ID } from '../../lib/constants';
 
 function LocationProbe() {
   const location = useLocation();
@@ -70,5 +72,32 @@ describe('WorkflowMenu', () => {
     await user.keyboard('{Escape}');
 
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  async function openMenuAs(role: UserRole, folderUuid: string | null, isAllFolders: boolean) {
+    const user = userEvent.setup();
+    render(
+      <AuthProvider role={role} folderUuid={folderUuid} isAllFolders={isAllFolders}>
+        <MemoryRouter initialEntries={['/']}>
+          <WorkflowMenu />
+        </MemoryRouter>
+      </AuthProvider>
+    );
+    await user.click(screen.getByRole('button', { name: /open workflows menu/i }));
+    return screen.getAllByRole('menuitem').map(item => item.querySelector('.font-medium')?.textContent);
+  }
+
+  it('offers view and suggest links only the pages they can use', async () => {
+    expect(await openMenuAs('view', null, true)).toEqual(['Recent Changes']);
+    cleanup();
+    expect(await openMenuAs('suggest', EDU_FOLDER_ID, false)).toEqual(['Recent Changes']);
+  });
+
+  it('offers Lens Edu workflows only to edit links that include Lens Edu', async () => {
+    expect(await openMenuAs('edit', 'some-other-folder', false)).toEqual(['Review Suggestions', 'Recent Changes']);
+    cleanup();
+    expect(await openMenuAs('edit', EDU_FOLDER_ID, false)).toEqual([
+      'Review Suggestions', 'Recent Changes', 'Add Source', 'Promote to Production',
+    ]);
   });
 });
