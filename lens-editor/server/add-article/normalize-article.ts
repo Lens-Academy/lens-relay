@@ -130,7 +130,7 @@ const BOLD_RUN = /(?<![\\*])\*\*(?!\*)/g;
  * (`- 2** IAEA Safeguards`, `- Prover Side:**`). A first `**` that sits after
  * text and before a space or the line end can only close, so it renders as
  * literal asterisks. Restore the opener at the start of the item (up to three
- * spaces of indent, so indented code is never touched). PDF bodies
+ * spaces of indent, so indented code is never touched). Datalab PDF bodies
  * only (HTML goes through turndown, which never drops one), and only when the
  * run count is odd and the text before the orphan is plain (no other
  * emphasis, code or link), so the guess cannot over-bold marked-up text.
