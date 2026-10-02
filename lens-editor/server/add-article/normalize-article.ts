@@ -128,9 +128,11 @@ const BOLD_RUN = /(?<![\\*])\*\*(?!\*)/g;
 /**
  * Datalab's PDF Markdown sometimes drops the `**` that opens a list item
  * (`- 2** IAEA Safeguards`, `- Prover Side:**`). A first `**` that sits after
- * text and before a space or the line end can only close, and nothing in the
- * item precedes it, so it renders as literal asterisks. Restore the opener at
- * the start of the item. Lines with an even number of runs are left alone.
+ * text and before a space or the line end can only close, so it renders as
+ * literal asterisks. Restore the opener at the start of the item. PDF bodies
+ * only (HTML goes through turndown, which never drops one), and only when the
+ * run count is odd and the text before the orphan is plain (no other
+ * emphasis, code or link), so the guess cannot over-bold marked-up text.
  */
 function repairListItemBoldOpener(marker: string, rest: string): string {
   const runs = [...rest.matchAll(BOLD_RUN)];
@@ -139,11 +141,16 @@ function repairListItemBoldOpener(marker: string, rest: string): string {
   const before = rest[first - 1];
   const after = rest[first + 2];
   if (!before || /\s/.test(before) || (after !== undefined && !/\s/.test(after))) return marker + rest;
+  if (/[*_`[\]]/.test(rest.slice(0, first))) return marker + rest;
   return `${marker}**${rest}`;
 }
 
 /** Idempotent, syntax-aware, semantics-preserving repairs only. */
-export function normalizeArticleBody(body: string, sourceUrl: string): {
+export function normalizeArticleBody(
+  body: string,
+  sourceUrl: string,
+  opts: { pdf?: boolean } = {},
+): {
   body: string;
   changes: NormalizationChange[];
 } {
@@ -188,7 +195,7 @@ export function normalizeArticleBody(body: string, sourceUrl: string): {
     // `^` also matches where a protected range (code, math) ended mid-line.
     const atLineStart = i === 0 || segments[i - 1].text.endsWith("\n");
     out = out.replace(LIST_ITEM_LINE, (whole: string, marker: string, rest: string, offset: number) => {
-      if (offset === 0 && !atLineStart) return whole;
+      if (!opts.pdf || (offset === 0 && !atLineStart)) return whole;
       const replacement = repairListItemBoldOpener(marker, rest);
       if (replacement === whole) return whole;
       record("normalize.list-item-bold-opener", whole, replacement);

@@ -560,7 +560,9 @@ export async function processArticle(
   };
   if (!isStubOnly) {
     await setStage("normalizing");
-    const normalized = normalizeArticleBody(body, meta.source_url || job.url);
+    const normalized = normalizeArticleBody(body, meta.source_url || job.url, {
+      pdf: ex.via.startsWith("pdf"),
+    });
     body = normalized.body;
     assertRequiredBodyPrefix(body, requiredBodyPrefix);
     const hasDualCandidates = !!(

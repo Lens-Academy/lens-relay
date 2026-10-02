@@ -114,7 +114,7 @@ describe("normalizeArticleBody", () => {
   });
 
   // Prevents: Datalab PDF output `- 2** IAEA Safeguards` rendering literal asterisks.
-  it("restores a list item's missing bold opener", () => {
+  it("restores a list item's missing bold opener in PDF bodies", () => {
     const input = [
       "- 2** IAEA Safeguards: serving nuclear non-proliferation  ",
       "- Prover Side:**",
@@ -123,12 +123,15 @@ describe("normalizeArticleBody", () => {
       "- **Fine** already",
       "- a ** b",
       "- x**y** stays",
+      "- Item _em_ and text** more",
       "Not a list 2** item",
       "```",
       "- code** stays",
       "```",
     ].join("\n");
-    const { body, changes } = normalizeArticleBody(input, "https://example.com/a.pdf");
+    const pdf = { pdf: true };
+    expect(normalizeArticleBody(input, "https://example.com/a").body).toBe(input);
+    const { body, changes } = normalizeArticleBody(input, "https://example.com/a.pdf", pdf);
     expect(body.split("\n")).toEqual([
       "- **2** IAEA Safeguards: serving nuclear non-proliferation  ",
       "- **Prover Side:**",
@@ -137,20 +140,22 @@ describe("normalizeArticleBody", () => {
       "- **Fine** already",
       "- a ** b",
       "- x**y** stays",
+      "- Item _em_ and text** more",
       "Not a list 2** item",
       "```",
       "- code** stays",
       "```",
     ]);
     expect(changes.find((c) => c.code === "normalize.list-item-bold-opener")?.count).toBe(4);
-    expect(normalizeArticleBody(body, "https://example.com/a.pdf").body).toBe(body);
+    expect(normalizeArticleBody(body, "https://example.com/a.pdf", pdf).body).toBe(body);
   });
 
   it("handles CRLF lines, and never treats text after inline code as a line start", () => {
-    expect(normalizeArticleBody("- 7** Why?\r\n", "https://example.com").body).toBe("- **7** Why?\r\n");
+    const pdf = { pdf: true };
+    expect(normalizeArticleBody("- 7** Why?\r\n", "https://example.com", pdf).body).toBe("- **7** Why?\r\n");
     const afterCode = "Use `x`\n- y** z";
-    expect(normalizeArticleBody(afterCode, "https://example.com").body).toBe("Use `x`\n- **y** z");
+    expect(normalizeArticleBody(afterCode, "https://example.com", pdf).body).toBe("Use `x`\n- **y** z");
     const midLine = "`x`- y** z";
-    expect(normalizeArticleBody(midLine, "https://example.com").body).toBe(midLine);
+    expect(normalizeArticleBody(midLine, "https://example.com", pdf).body).toBe(midLine);
   });
 });
