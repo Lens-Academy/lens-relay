@@ -157,5 +157,8 @@ describe("normalizeArticleBody", () => {
     expect(normalizeArticleBody(afterCode, "https://example.com", pdf).body).toBe("Use `x`\n- **y** z");
     const midLine = "`x`- y** z";
     expect(normalizeArticleBody(midLine, "https://example.com", pdf).body).toBe(midLine);
+    for (const untouched of ["- a** b `c` d** e", "Example:\n\n    - x** y", "- ~~x~~ y** z"]) {
+      expect(normalizeArticleBody(untouched, "https://example.com", pdf).body).toBe(untouched);
+    }
   });
 });

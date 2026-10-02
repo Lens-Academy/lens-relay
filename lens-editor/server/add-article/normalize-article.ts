@@ -122,14 +122,15 @@ function sourceSegments(source: string): Segment[] {
   return segments;
 }
 
-const LIST_ITEM_LINE = /^( {0,12}(?:[-*+]|\d{1,9}[.)]) +)(?!\*)(\S[^\r\n]*?)(?=\r?$)/gm;
+const LIST_ITEM_LINE = /^( {0,3}(?:[-*+]|\d{1,9}[.)]) +)(?!\*)(\S[^\r\n]*?)(?=\r?$)/gm;
 const BOLD_RUN = /(?<![\\*])\*\*(?!\*)/g;
 
 /**
  * Datalab's PDF Markdown sometimes drops the `**` that opens a list item
  * (`- 2** IAEA Safeguards`, `- Prover Side:**`). A first `**` that sits after
  * text and before a space or the line end can only close, so it renders as
- * literal asterisks. Restore the opener at the start of the item. PDF bodies
+ * literal asterisks. Restore the opener at the start of the item (up to three
+ * spaces of indent, so indented code is never touched). PDF bodies
  * only (HTML goes through turndown, which never drops one), and only when the
  * run count is odd and the text before the orphan is plain (no other
  * emphasis, code or link), so the guess cannot over-bold marked-up text.
@@ -141,7 +142,7 @@ function repairListItemBoldOpener(marker: string, rest: string): string {
   const before = rest[first - 1];
   const after = rest[first + 2];
   if (!before || /\s/.test(before) || (after !== undefined && !/\s/.test(after))) return marker + rest;
-  if (/[*_`[\]]/.test(rest.slice(0, first))) return marker + rest;
+  if (/[*_`~[\]]/.test(rest.slice(0, first))) return marker + rest;
   return `${marker}**${rest}`;
 }
 
@@ -196,6 +197,8 @@ export function normalizeArticleBody(
     const atLineStart = i === 0 || segments[i - 1].text.endsWith("\n");
     out = out.replace(LIST_ITEM_LINE, (whole: string, marker: string, rest: string, offset: number) => {
       if (!opts.pdf || (offset === 0 && !atLineStart)) return whole;
+      // A line that runs on into a protected range (code, math) is not seen whole.
+      if (offset + whole.length === out.length && i < segments.length - 1) return whole;
       const replacement = repairListItemBoldOpener(marker, rest);
       if (replacement === whole) return whole;
       record("normalize.list-item-bold-opener", whole, replacement);
