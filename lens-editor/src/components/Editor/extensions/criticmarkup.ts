@@ -296,6 +296,30 @@ class BulkAcceptRejectWidget extends WidgetType {
 }
 
 /**
+ * Runs the accept or reject button that `target` is (in) and returns true, or
+ * returns false when it is not one. The change acted on is chosen by the
+ * selection: `savedSelection` (a selection the button's mousedown would have
+ * collapsed) is restored first, or for a merged deletion+addition pair the
+ * selection spans both ranges. Afterwards the selection collapses to the cursor.
+ */
+function runButton(view: EditorView, target: HTMLElement, savedSelection: { from: number; to: number } | null): boolean {
+  const accept = target.closest('.cm-criticmarkup-accept');
+  if (!accept && !target.closest('.cm-criticmarkup-reject')) return false;
+  const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
+  if (savedSelection) {
+    view.dispatch({ selection: { anchor: savedSelection.from, head: savedSelection.to } });
+  } else if (container?.dataset.merged) {
+    const from = parseInt(container.dataset.rangeFrom!, 10);
+    const to = parseInt(container.dataset.rangeTo!, 10);
+    view.dispatch({ selection: { anchor: from, head: to } });
+  }
+  if (accept) acceptChangeAtCursor(view);
+  else rejectChangeAtCursor(view);
+  view.dispatch({ selection: { anchor: view.state.selection.main.head } });
+  return true;
+}
+
+/**
  * ViewPlugin that applies decorations (CSS classes) to CriticMarkup ranges.
  * Decorations are rebuilt when the document changes, viewport changes, or selection changes.
  * Delimiters and metadata are always hidden; accept/reject buttons shown when cursor is inside.
@@ -327,43 +351,10 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       // Event delegation for accept/reject button clicks and comment badge clicks
       view.contentDOM.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
-        if (target.classList.contains('cm-criticmarkup-accept')) {
+        if (runButton(view, target, this.savedSelection)) {
           e.preventDefault();
           e.stopPropagation();
-          if (this.savedSelection) {
-            // Restore the selection so bulk accept works
-            view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
-            this.savedSelection = null;
-          } else {
-            // For merged adjacent pairs, set selection spanning both ranges
-            const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
-            if (container?.dataset.merged) {
-              const from = parseInt(container.dataset.rangeFrom!, 10);
-              const to = parseInt(container.dataset.rangeTo!, 10);
-              view.dispatch({ selection: { anchor: from, head: to } });
-            }
-          }
-          acceptChangeAtCursor(view);
-          // Collapse selection to cursor so no text remains selected after the operation
-          view.dispatch({ selection: { anchor: view.state.selection.main.head } });
-        } else if (target.classList.contains('cm-criticmarkup-reject')) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (this.savedSelection) {
-            view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
-            this.savedSelection = null;
-          } else {
-            // For merged adjacent pairs, set selection spanning both ranges
-            const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
-            if (container?.dataset.merged) {
-              const from = parseInt(container.dataset.rangeFrom!, 10);
-              const to = parseInt(container.dataset.rangeTo!, 10);
-              view.dispatch({ selection: { anchor: from, head: to } });
-            }
-          }
-          rejectChangeAtCursor(view);
-          // Collapse selection to cursor so no text remains selected after the operation
-          view.dispatch({ selection: { anchor: view.state.selection.main.head } });
+          this.savedSelection = null;
         } else if (target.classList.contains('cm-comment-badge')) {
           e.preventDefault();
           e.stopPropagation();
@@ -683,23 +674,10 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
 
       // Event delegation for accept/reject button clicks
       view.contentDOM.addEventListener('click', (e) => {
-        const target = e.target as HTMLElement;
-        if (target.classList.contains('cm-criticmarkup-accept')) {
+        if (runButton(view, e.target as HTMLElement, this.savedSelection)) {
           e.preventDefault();
           e.stopPropagation();
-          if (this.savedSelection) {
-            view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
-            this.savedSelection = null;
-          }
-          acceptChangeAtCursor(view);
-        } else if (target.classList.contains('cm-criticmarkup-reject')) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (this.savedSelection) {
-            view.dispatch({ selection: { anchor: this.savedSelection.from, head: this.savedSelection.to } });
-            this.savedSelection = null;
-          }
-          rejectChangeAtCursor(view);
+          this.savedSelection = null;
         }
       });
     }
@@ -854,8 +832,13 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
           found = { widget, pos: from, start: view.state.selection.main.from };
           return false;
         }
-        if (widget instanceof AcceptRejectWidget && !found) {
-          found = { widget, pos: from, start: widget.rangeFrom };
+        if (widget instanceof AcceptRejectWidget) {
+          // With several cursors, follow the change at the main one: that is
+          // the one accept/reject acts on.
+          const head = view.state.selection.main.head;
+          const atHead = widget.rangeFrom <= head && head <= widget.rangeTo;
+          if (!found || atHead) found = { widget, pos: from, start: widget.rangeFrom };
+          if (atHead) return false;
         }
       });
       return found as { widget: ButtonsWidget; pos: number; start: number } | null;
@@ -954,20 +937,11 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
     }
 
     private click(e: MouseEvent) {
-      const target = e.target as HTMLElement;
-      const accept = target.closest('.cm-criticmarkup-accept');
-      if (!accept && !target.closest('.cm-criticmarkup-reject')) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const view = this.view;
-      const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
-      if (container?.dataset.merged) {
-        // Adjacent deletion+addition pair: act on both ranges.
-        view.dispatch({ selection: { anchor: parseInt(container.dataset.rangeFrom!, 10), head: parseInt(container.dataset.rangeTo!, 10) } });
+      // mousedown is prevented, so the selection is still the one to act on.
+      if (runButton(this.view, e.target as HTMLElement, null)) {
+        e.preventDefault();
+        e.stopPropagation();
       }
-      if (accept) acceptChangeAtCursor(view);
-      else rejectChangeAtCursor(view);
-      view.dispatch({ selection: { anchor: view.state.selection.main.head } });
     }
   },
   {
