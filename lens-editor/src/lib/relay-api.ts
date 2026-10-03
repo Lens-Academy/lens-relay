@@ -5,6 +5,7 @@ import type { FileMetadata } from '../hooks/useFolderMetadata';
 import { getClientToken } from './auth';
 import { RELAY_ID } from './constants';
 import { validateFilePath } from './path-validation';
+import { findTwin, twinPath } from './document-resolver';
 
 // Transaction origin identifier - Obsidian uses this pattern to identify
 // the source of Y.js changes and avoid processing its own updates
@@ -201,12 +202,21 @@ export function writeFileMeta(
   }, LENS_EDITOR_ORIGIN);
 }
 
-/** createDocument refuses a path that already has a filemeta entry. */
+/** createDocument refuses a path that already has a filemeta entry, or whose
+ *  .md/.html twin has one (`existing`). */
 export class PathExistsError extends Error {
-  constructor(public readonly path: string) {
-    super(`A file already exists at ${path}`);
+  constructor(public readonly path: string, public readonly existing: string = path) {
+    super(existing === path
+      ? `A file already exists at ${path}`
+      : `${existing} exists: a .md and a .html file cannot share a name`);
     this.name = 'PathExistsError';
   }
+}
+
+function refuseTakenPath(filemeta: Y.Map<FileMetadata>, path: string): void {
+  if (filemeta.has(path)) throw new PathExistsError(path);
+  const twin = findTwin(path, filemeta.keys());
+  if (twin) throw new PathExistsError(path, twin);
 }
 
 /**
@@ -216,7 +226,7 @@ export class PathExistsError extends Error {
  * 1. Generates a new UUID for the document
  * 2. Creates the document on the Relay server (POST /doc/new)
  * 3. Adds the path -> UUID mapping to filemeta_v0 (throws PathExistsError
- *    if the path is taken, checked before and after step 2)
+ *    if the path or its .md/.html twin is taken, checked before and after step 2)
  * 4. For markdown, writes `initialText` (or "_" when none) as its content
  *
  * Returns the generated document UUID.
@@ -230,7 +240,7 @@ export async function createDocument(
   validateFilePath(path);
   const filemeta = folderDoc.getMap<FileMetadata>('filemeta_v0');
   const legacyDocs = folderDoc.getMap<string>('docs');
-  if (filemeta.has(path)) throw new PathExistsError(path);
+  refuseTakenPath(filemeta, path);
   const id = generateUUID();
   const fullDocId = `${RELAY_ID}-${id}`;
 
@@ -248,7 +258,7 @@ export async function createDocument(
 
   // Another create may have taken the path while we awaited the server:
   // writing now would silently replace that file's entry and orphan it.
-  if (filemeta.has(path)) throw new PathExistsError(path);
+  refuseTakenPath(filemeta, path);
 
   writeFileMeta(folderDoc, path, id, type);
 
@@ -455,6 +465,10 @@ export class RelayApiError extends Error {
 /** User-facing message for a failed move/rename. */
 export function moveErrorMessage(err: unknown, newName?: string): string {
   if (err instanceof RelayApiError && err.status === 409) {
+    // The relay also refuses x.html beside x.md (and the reverse); production
+    // redacts its message, so name both.
+    const twin = newName ? twinPath(newName) : null;
+    if (twin) return `"${newName}" or "${twin}" already exists: a .md and a .html file cannot share a name`;
     return newName
       ? `"${newName}" already exists`
       : 'The destination already exists';

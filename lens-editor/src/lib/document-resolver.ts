@@ -16,6 +16,27 @@ export function isLinkTarget(path: string, meta: Pick<FileMetadata, 'type'>): bo
 }
 
 /**
+ * The other file a link without an extension could mean: x.html for x.md and
+ * x.md for x.html, or null. A folder may not hold both, because [[x]] could
+ * not tell them apart (the relay refuses it too: `twin_path` in link_indexer.rs).
+ */
+export function twinPath(path: string): string | null {
+  if (/\.html$/i.test(path)) return path.slice(0, -'.html'.length) + '.md';
+  if (/\.md$/i.test(path)) return path.slice(0, -'.md'.length) + '.html';
+  return null;
+}
+
+/** The existing path among `paths` that is `path`'s twin, case-insensitively. */
+export function findTwin(path: string, paths: Iterable<string>): string | null {
+  const twin = twinPath(path)?.toLowerCase();
+  if (!twin) return null;
+  for (const candidate of paths) {
+    if (candidate.toLowerCase() === twin) return candidate;
+  }
+  return null;
+}
+
+/**
  * Resolve a pageName relative to the directory containing currentFilePath.
  * Returns an absolute path with .md extension, or with .html when the link
  * names an .html file.

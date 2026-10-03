@@ -112,6 +112,13 @@ describe('generateUntitledName', () => {
     expect(generateUntitledName('/Lens', metadata)).toBe('Untitled.md');
   });
 
+  it('skips a name whose .html twin exists', () => {
+    const metadata: FolderMetadata = {
+      '/Lens/Untitled.html': { id: '1', type: 'file', version: 0 },
+    };
+    expect(generateUntitledName('/Lens', metadata)).toBe('Untitled 1.md');
+  });
+
   it('returns "Untitled 1.md" when "Untitled.md" exists', () => {
     const metadata: FolderMetadata = {
       '/Lens/Untitled.md': { id: '1', type: 'markdown', version: 0 },

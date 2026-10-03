@@ -63,6 +63,49 @@ pub fn is_link_target(path: &str, entry_type: &str) -> bool {
     has_terminal_html(path) || entry_type == "markdown"
 }
 
+/// The other file a link without an extension could mean: `x.html` for
+/// `x.md` and `x.md` for `x.html`. A folder may not hold both, because
+/// `[[x]]` could not tell them apart.
+pub fn twin_path(path: &str) -> Option<String> {
+    if has_terminal_html(path) {
+        Some(format!("{}.md", &path[..path.len() - 5]))
+    } else if without_terminal_md(path).len() != path.len() {
+        Some(format!("{}.html", without_terminal_md(path)))
+    } else {
+        None
+    }
+}
+
+/// The path of an entry in `filemeta` that is `path`'s twin (case-insensitive,
+/// as links resolve), other than the file `except_id` itself (a file moving
+/// from x.md to x.html is not its own twin).
+pub fn find_twin_in_filemeta(
+    filemeta: &MapRef,
+    txn: &impl ReadTxn,
+    path: &str,
+    except_id: Option<&str>,
+) -> Option<String> {
+    let twin = twin_path(path)?.to_lowercase();
+    filemeta.iter(txn).find_map(|(entry_path, value)| {
+        if entry_path.to_lowercase() != twin {
+            return None;
+        }
+        let id = extract_id_from_filemeta_entry(&value, txn);
+        if except_id.is_some() && id.as_deref() == except_id {
+            return None;
+        }
+        Some(entry_path.to_string())
+    })
+}
+
+/// The message for a create or move refused because of a twin.
+pub fn twin_conflict_message(path: &str, twin: &str) -> String {
+    format!(
+        "Cannot use '{}': '{}' exists in the same folder. A .md and a .html file cannot share a name, because a link like [[name]] could not tell them apart.",
+        path, twin
+    )
+}
+
 /// Resolve a page name relative to the directory containing `current_file_path`.
 /// Returns an absolute filemeta path with `.md` extension, or with `.html` when
 /// the page name ends in `.html`.

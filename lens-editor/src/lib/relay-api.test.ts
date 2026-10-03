@@ -13,6 +13,7 @@ import {
   deleteErrorMessage,
   writeFileMeta,
   PathExistsError,
+  moveErrorMessage,
 } from './relay-api';
 import type { FileMetadata } from '../hooks/useFolderMetadata';
 
@@ -106,6 +107,19 @@ describe('relay-api', () => {
       await expect(createDocument(doc, '/Taken.md')).rejects.toBeInstanceOf(PathExistsError);
       expect(mockFetch).not.toHaveBeenCalled();
       expect(filemeta.get('/Taken.md')!.id).toBe('existing');
+    });
+
+    it('refuses x.html next to x.md, and x.md next to x.html', async () => {
+      filemeta.set('/widgets/a.md', { id: 'md', type: 'markdown', version: 0 });
+      filemeta.set('/widgets/b.html', { id: 'html', type: 'file', version: 0 });
+
+      await expect(createDocument(doc, '/widgets/A.html', 'file')).rejects.toThrow(
+        '/widgets/a.md exists: a .md and a .html file cannot share a name',
+      );
+      await expect(createDocument(doc, '/widgets/b.md')).rejects.toBeInstanceOf(PathExistsError);
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(filemeta.has('/widgets/A.html')).toBe(false);
+      expect(filemeta.has('/widgets/b.md')).toBe(false);
     });
 
     it('refuses a path taken while the server call was in flight', async () => {
@@ -516,5 +530,15 @@ describe('relay-api', () => {
 
       doc2.destroy();
     });
+  });
+});
+
+describe('moveErrorMessage', () => {
+  it('names the .md/.html twin on a conflict', () => {
+    const conflict = new RelayApiError('Conflict', 409);
+    expect(moveErrorMessage(conflict, 'rings.html')).toBe(
+      '"rings.html" or "rings.md" already exists: a .md and a .html file cannot share a name',
+    );
+    expect(moveErrorMessage(conflict, 'Notes')).toBe('"Notes" already exists');
   });
 });

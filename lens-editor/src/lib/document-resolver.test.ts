@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolvePageName, resolveRelative, computeRelativePath, generateNewDocPath } from './document-resolver';
+import { resolvePageName, resolveRelative, computeRelativePath, generateNewDocPath, twinPath, findTwin } from './document-resolver';
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 
 describe('resolvePageName', () => {
@@ -380,5 +380,18 @@ describe('Spec Matrix (docs/wikilink-resolution-spec.md)', () => {
   describe('type filtering', () => {
     it('folder entries never resolve', () => expectNull('Notes', '/Relay Folder 1/Welcome.md'));
     it('folder entries never resolve (RF2)', () => expectNull('Resources', '/Relay Folder 2/Course Notes.md'));
+  });
+});
+
+describe('twinPath / findTwin', () => {
+  it('pairs x.md with x.html', () => {
+    expect(twinPath('/w/x.md')).toBe('/w/x.html');
+    expect(twinPath('/w/x.html')).toBe('/w/x.md');
+    expect(twinPath('/w/x.json')).toBeNull();
+  });
+
+  it('finds the twin case-insensitively', () => {
+    expect(findTwin('/w/X.html', ['/w/a.md', '/w/x.md'])).toBe('/w/x.md');
+    expect(findTwin('/w/x.html', ['/other/x.md'])).toBeNull();
   });
 });
