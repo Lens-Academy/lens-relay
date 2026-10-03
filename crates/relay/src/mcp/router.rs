@@ -141,7 +141,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         }
     }
 
@@ -530,7 +530,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         };
 
         let req = make_request(json!(50), "tools/list", None);
@@ -600,7 +600,7 @@ mod tests {
             folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
             folder_name: Some("Lens Edu".to_string()),
             raw_token: None,
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         };
         let sid = server
             .mcp_sessions

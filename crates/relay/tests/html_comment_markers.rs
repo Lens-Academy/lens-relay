@@ -95,7 +95,7 @@ async fn html_comment_markers_round_trip_through_relay() {
         folder_uuid: None,
         folder_name: None,
         raw_token: None,
-        role: None,
+        role: y_sweet_core::share_token::ShareRole::Admin,
     };
     let session_result = dispatch_tool(&server, "create_session", &json!({}), &access).await;
     let session_id = mcp_text(&session_result);

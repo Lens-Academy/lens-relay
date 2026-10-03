@@ -273,7 +273,7 @@ mod tests {
             folder_uuid: Some(FOLDER0_UUID.to_string()),
             folder_name: Some("Lens".to_string()),
             raw_token: None,
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         }
     }
 

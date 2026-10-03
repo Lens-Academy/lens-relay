@@ -29,11 +29,7 @@ pub async fn mcp_auth_middleware(
     match auth_header {
         Some(value) if value.starts_with("Bearer ") => {
             let token = &value["Bearer ".len()..];
-            match decode_mcp_key(
-                token,
-                server.share_token_secret.as_deref(),
-                server.mcp_api_key.as_deref(),
-            ) {
+            match decode_mcp_key(token, server.share_token_secret.as_deref()) {
                 Some(access) => {
                     req.extensions_mut().insert(access);
                     next.run(req).await
@@ -139,14 +135,10 @@ pub async fn handle_mcp_delete() -> Response {
 
 // --- Path-key variants: /mcp/:key validates key from URL path ---
 
-/// Decode the API key from the URL path into McpAccess. Returns Err(401) on failure.
+/// Decode the share token from the URL path into McpAccess. Returns Err(401) on failure.
 fn decode_path_key(server: &Server, key: &str) -> Result<McpAccess, Response> {
-    decode_mcp_key(
-        key,
-        server.share_token_secret.as_deref(),
-        server.mcp_api_key.as_deref(),
-    )
-    .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())
+    decode_mcp_key(key, server.share_token_secret.as_deref())
+        .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())
 }
 
 /// Handle POST /mcp/:key — same as handle_mcp_post but auth via URL path.

@@ -80,13 +80,13 @@ The local CLI reuses the same fetchers, evidence format, and direct-edit LLM rev
 
 ```bash
 cd lens-editor
-RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
+RELAY_URL=https://relay.lensacademy.org ARTICLE_REVIEW_RELAY_TOKEN=... \
   npm run article-review -- prepare --content-root /path/to/lens-edu --all
-RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
+RELAY_URL=https://relay.lensacademy.org ARTICLE_REVIEW_RELAY_TOKEN=... \
   npm run article-review -- prepare --content-root /path/to/lens-edu --manifest articles.json
-RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
+RELAY_URL=https://relay.lensacademy.org ARTICLE_REVIEW_RELAY_TOKEN=... \
   npm run article-review -- execute --run .article-review-cache/<run-id> --article articles/example.md
-RELAY_URL=https://relay.lensacademy.org MCP_API_KEY=... \
+RELAY_URL=https://relay.lensacademy.org ARTICLE_REVIEW_RELAY_TOKEN=... \
   npm run article-review -- execute --run .article-review-cache/<run-id> --all --provider codex
 npm run article-review -- status --run .article-review-cache/<run-id>
 npm run article-review -- prune --days 30
@@ -95,8 +95,9 @@ npm run article-review -- prune --days 30
 Preparation uses the local checkout only to select article paths. It reads each
 `article.md` from Relay through the authenticated, read-only MCP `read` tool, so
 the bundle contains the current accepted CriticMarkup view; source fetching and
-extraction still run locally. `MCP_API_KEY` may instead be supplied as
-`ARTICLE_REVIEW_RELAY_TOKEN`. Each run records batches of at most five articles.
+extraction still run locally. `ARTICLE_REVIEW_RELAY_TOKEN` is a Relay MCP share
+token (the part after `/mcp/` in an MCP URL; `prepare` needs read access, `execute`
+suggest or better). Each run records batches of at most five articles.
 The executor confirms that Relay's accepted view still matches the bundle,
 runs the same reviewer as a live import, validates the clean result, publishes
 the exact diff through Relay MCP, and validates again with

@@ -456,8 +456,9 @@ Follow-ups (not in this change):
   char offsets; they are direct by construction, so no protection applies, but
   they re-mint unchanged text like the old suggestion path did.
 - Reverting a direct edit from `/recent` (must respect the human-text rule).
-- Local dev: `npm run relay:start` does not set `MCP_API_KEY`; export
-  `MCP_API_KEY=test-key-123` first to exercise the MCP path locally.
+- Local dev: `npm run relay:start` sets the dev `SHARE_TOKEN_SECRET`, so a
+  token from `scripts/generate-share-link.ts` works as the MCP credential
+  (the plain `MCP_API_KEY` was removed in October 2026).
 
 ## 9. Post-review hardening plan (2026-08-27, change on top of `yummxqkp`)
 
