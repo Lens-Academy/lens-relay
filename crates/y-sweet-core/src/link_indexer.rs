@@ -840,6 +840,15 @@ pub fn move_document(
     // A move out of `/_trash/` is a restore: the entry stops expiring.
     clear_trashed_at_if_restored(&mut meta_fields, new_path);
 
+    // Moving to `.html` turns the document into an HTML page (converting a
+    // widget keeps its id): type "file" and no legacy "docs" entry, as a page
+    // created with that path gets. The text stays in Y.Text("contents").
+    let becomes_html = has_terminal_html(new_path);
+    let old_type = meta_fields.get("type").cloned();
+    if becomes_html {
+        meta_fields.insert("type".to_string(), Any::String("file".into()));
+    }
+
     // Determine folder names
     let source_folder_name = read_folder_name(source_folder_doc, "");
     let target_folder_name = read_folder_name(target_folder_doc, "");
@@ -862,7 +871,9 @@ pub fn move_document(
             let docs_map = txn.get_or_insert_map("docs");
             ensure_ancestor_folders(&filemeta, &docs_map, &mut txn, new_path);
             filemeta.insert(&mut txn, new_path, Any::Map(meta_fields.clone().into()));
-            docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
+            if !becomes_html {
+                docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
+            }
         }
     } else {
         // Within-folder: remove old, insert new in one transaction
@@ -873,7 +884,9 @@ pub fn move_document(
         filemeta.remove(&mut txn, &old_path);
         filemeta.insert(&mut txn, new_path, Any::Map(meta_fields.clone().into()));
         docs_map.remove(&mut txn, &old_path);
-        docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
+        if !becomes_html {
+            docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
+        }
     }
 
     // 3. Update DocumentResolver
@@ -925,6 +938,9 @@ pub fn move_document(
     for entry in entries.iter_mut() {
         if entry.id == uuid {
             entry.virtual_path = old_virtual_path.clone();
+            if let Some(Any::String(t)) = &old_type {
+                entry.entry_type = t.to_string();
+            }
         }
     }
 
@@ -974,8 +990,9 @@ pub fn move_document(
         }
     }
 
-    // 6b. Rewrite outgoing links in the moved document itself
-    if let Some(content_doc) = content_docs.get(uuid) {
+    // 6b. Rewrite outgoing links in the moved document itself. Not in an HTML
+    // page: `[[` there may be script or data, and its links are not indexed.
+    if let Some(content_doc) = content_docs.get(uuid).filter(|_| !becomes_html) {
         match rewrite_outgoing_links_for_move(
             content_doc,
             &old_virtual_path,
@@ -1015,10 +1032,17 @@ pub fn move_document(
         }
     }
 
-    // 7. Re-index the moved doc's own backlinks (its wikilinks may resolve differently at new location)
+    // 7. Re-index the moved doc's own backlinks (its wikilinks may resolve differently at new location).
+    //    An HTML page links nowhere (see index_document), so drop what it had.
     if let Some(content_doc) = content_docs.get(uuid) {
-        // Re-index using the updated folder docs (filemeta already has new path)
-        let _ = index_content_into_folders(uuid, content_doc, all_folder_docs);
+        if becomes_html {
+            for folder_doc in all_folder_docs {
+                apply_backlink_diff(folder_doc, uuid, &HashSet::new());
+            }
+        } else {
+            // Re-index using the updated folder docs (filemeta already has new path)
+            let _ = index_content_into_folders(uuid, content_doc, all_folder_docs);
+        }
     }
 
     Ok(MoveResult {
@@ -4460,6 +4484,96 @@ mod tests {
                 Some("uuid-photo".to_string()),
                 "UUID should be preserved"
             );
+        }
+
+        // Converting a widget: widgets/x.md -> widgets/x.html keeps the id,
+        // becomes an HTML page, and touches no lens link ([[../widgets/x]]
+        // already finds x.html).
+        #[test]
+        fn move_md_to_html_converts_the_entry_and_keeps_links() {
+            let folder = create_folder_doc(&[
+                ("/widgets/rings.md", "uuid-rings"),
+                ("/lenses/Intro.md", "uuid-intro"),
+            ]);
+            set_folder_name(&folder, "Lens Edu");
+            let f0id = folder0_id();
+            let lens_text = "source:: [[../widgets/rings]]\n![[../widgets/rings|Rings]]";
+            let lens = create_content_doc(lens_text);
+            let widget =
+                create_content_doc("---\ntitle: Rings\n---\n<script>let a = [[1, 2]];</script>");
+            index_content_into_folder("uuid-intro", &lens, &folder).unwrap();
+            index_content_into_folder("uuid-rings", &widget, &folder).unwrap();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-intro".to_string(), &lens as &Doc);
+            content_docs.insert("uuid-rings".to_string(), &widget as &Doc);
+
+            let result = move_document(
+                "uuid-rings",
+                "/widgets/rings.html",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens Edu"],
+                &resolver,
+                &content_docs,
+            )
+            .expect("move should succeed");
+
+            assert_eq!(result.links_rewritten, 0);
+            assert_eq!(read_contents(&lens), lens_text);
+            assert_eq!(
+                read_contents(&widget),
+                "---\ntitle: Rings\n---\n<script>let a = [[1, 2]];</script>"
+            );
+            let txn = folder.transact();
+            let filemeta = txn.get_map("filemeta_v0").unwrap();
+            let entry = filemeta.get(&txn, "/widgets/rings.html").expect("moved");
+            assert_eq!(
+                extract_id_from_filemeta_entry(&entry, &txn).as_deref(),
+                Some("uuid-rings")
+            );
+            assert_eq!(
+                extract_type_from_filemeta_entry(&entry, &txn).as_deref(),
+                Some("file")
+            );
+            let docs_map = txn.get_map("docs").unwrap();
+            assert!(docs_map.get(&txn, "/widgets/rings.html").is_none());
+            assert!(docs_map.get(&txn, "/widgets/rings.md").is_none());
+            drop(txn);
+            assert_eq!(read_backlinks(&folder, "uuid-rings"), vec!["uuid-intro"]);
+        }
+
+        #[test]
+        fn move_md_to_html_in_another_directory_rewrites_links() {
+            let folder = create_folder_doc(&[
+                ("/drafts/rings.md", "uuid-rings"),
+                ("/lenses/Intro.md", "uuid-intro"),
+            ]);
+            set_folder_name(&folder, "Lens Edu");
+            let f0id = folder0_id();
+            let lens = create_content_doc("source:: [[../drafts/rings]]");
+            index_content_into_folder("uuid-intro", &lens, &folder).unwrap();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-intro".to_string(), &lens as &Doc);
+
+            let result = move_document(
+                "uuid-rings",
+                "/widgets/rings.html",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens Edu"],
+                &resolver,
+                &content_docs,
+            )
+            .expect("move should succeed");
+
+            assert_eq!(result.links_rewritten, 1);
+            assert_eq!(read_contents(&lens), "source:: [[../widgets/rings]]");
         }
 
         #[test]

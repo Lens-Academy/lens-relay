@@ -2506,9 +2506,11 @@ impl Server {
                 "new_path must start with '/'".into(),
             ));
         }
-        if !new_path.ends_with(".md") {
+        // A Markdown document may also become an HTML page (a widget converted
+        // from widgets/x.md to widgets/x.html keeps its id); see move_document.
+        if !new_path.ends_with(".md") && !new_path.ends_with(".html") {
             return Err(MoveDocumentError::BadRequest(
-                "new_path must end with '.md'".into(),
+                "new_path must end with '.md' or '.html'".into(),
             ));
         }
 
