@@ -53,6 +53,8 @@ services:
         hard: 524288
     volumes:
       - /root/relay.toml:/app/relay.toml:ro
+    # auth.env must set SHARE_TOKEN_SECRET to the same value lens-editor gets
+    # from .env below: /mcp accepts only share tokens and is off without it.
     env_file:
       - /root/auth.env
 

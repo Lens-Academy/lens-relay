@@ -1138,7 +1138,16 @@ impl Server {
                 (None, None, None)
             };
 
-        let share_token_secret = std::env::var("SHARE_TOKEN_SECRET").ok();
+        // Empty counts as unset: an HMAC key of "" would let anyone sign tokens.
+        let share_token_secret = std::env::var("SHARE_TOKEN_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty());
+        if share_token_secret.as_deref() == Some(y_sweet_core::share_token::DEV_SHARE_TOKEN_SECRET)
+        {
+            tracing::warn!(
+                "SHARE_TOKEN_SECRET is the public dev secret: anyone can mint MCP tokens. Use it only in local dev"
+            );
+        }
         if share_token_secret.is_some() {
             tracing::info!("MCP endpoint enabled (SHARE_TOKEN_SECRET is set)");
         } else {
@@ -4534,7 +4543,11 @@ impl Server {
             .route("/suggestions/apply", post(handle_apply_suggestions));
 
         // Register /mcp if SHARE_TOKEN_SECRET is set (share tokens are the only MCP credential)
-        if self.share_token_secret.is_some() {
+        if self
+            .share_token_secret
+            .as_deref()
+            .is_some_and(|s| !s.is_empty())
+        {
             // Bearer auth: POST/GET/DELETE /mcp (for Claude Code / .mcp.json)
             let bearer_routes = Router::new()
                 .route(
@@ -8720,14 +8733,19 @@ mod test {
     // credential could pass anyway.
     #[tokio::test]
     async fn mcp_routes_absent_without_share_secret() {
-        let server = Server::new_for_test();
-        let (status, _) = mcp_call(
-            &server,
-            "anything",
-            json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        // An empty secret counts as none (`SHARE_TOKEN_SECRET=` in an env file).
+        for server in [
+            Server::new_for_test(),
+            Server::new_for_test_with_share_secret(""),
+        ] {
+            let (status, _) = mcp_call(
+                &server,
+                "anything",
+                json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
     }
 
     async fn post_trash(
