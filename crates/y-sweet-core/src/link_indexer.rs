@@ -303,14 +303,17 @@ pub struct VirtualEntry {
 /// 2. Absolute (fallback): /{link_name}.md, case-insensitive
 ///
 /// At each step a link without an extension finds `{name}.md`, and failing
-/// that `{name}.html`; `[[name.html]]` finds only the HTML page. Only link
+/// that `{name}.html`; `[[name.md]]` and `[[name.html]]` find only that file. Only link
 /// targets (see `is_link_target`) match.
 pub fn resolve_in_virtual_tree<'a>(
     link_name: &str,
     source_virtual_path: Option<&str>,
     entries: &'a [VirtualEntry],
 ) -> Option<&'a VirtualEntry> {
-    let link_name = without_terminal_md(link_name);
+    let stripped = without_terminal_md(link_name);
+    // [[x.md]] names the Markdown file: no .html fallback, as in the content processor
+    let names_md = stripped.len() != link_name.len();
+    let link_name = stripped;
     let relative_path = source_virtual_path.map(|svp| resolve_relative(svp, link_name));
     let absolute_path = if has_terminal_html(link_name) {
         format!("/{}", link_name)
@@ -318,16 +321,18 @@ pub fn resolve_in_virtual_tree<'a>(
         format!("/{}.md", link_name)
     };
 
-    // Candidates in priority order: each .md path is followed by its .html twin.
+    // Candidates in priority order: each .md path is followed by its .html
+    // twin, for a link without an extension.
     let mut candidates: Vec<String> = Vec::with_capacity(4);
     for path in relative_path.iter().chain(std::iter::once(&absolute_path)) {
         let lower = path.to_lowercase();
-        if let Some(stem) = lower.strip_suffix(".md") {
-            let html = format!("{}.html", stem);
-            candidates.push(lower);
-            candidates.push(html);
-        } else {
-            candidates.push(lower);
+        match lower.strip_suffix(".md") {
+            Some(stem) if !names_md => {
+                let html = format!("{}.html", stem);
+                candidates.push(lower);
+                candidates.push(html);
+            }
+            _ => candidates.push(lower),
         }
     }
 
@@ -3360,6 +3365,7 @@ mod tests {
         assert_eq!(id("../widgets/RINGS", intro).as_deref(), Some("rings"));
         assert_eq!(id("../widgets/twin", intro).as_deref(), Some("twin-md"));
         assert_eq!(id("../widgets/twin.md", intro).as_deref(), Some("twin-md"));
+        assert_eq!(id("../widgets/rings.md", intro), None);
         assert_eq!(
             id("../widgets/twin.html", intro).as_deref(),
             Some("twin-html")

@@ -75,7 +75,7 @@ export function computeRelativePath(fromFilePath: string, toFilePath: string): s
  * 3. Fail — return null
  *
  * At each step a link without an extension finds {name}.md, and failing that
- * {name}.html (widgets are HTML pages); [[name.html]] finds only the page.
+ * {name}.html (widgets are HTML pages); [[name.md]] and [[name.html]] find only that file.
  * A #heading anchor and surrounding whitespace are ignored (as in link-extractor),
  * so [[Page#Heading]] resolves to Page and [[#Heading]] resolves to nothing.
  * All matching is case-insensitive.
@@ -88,6 +88,8 @@ export function resolvePageName(
   const anchorIndex = pageName.indexOf('#');
   const page = (anchorIndex === -1 ? pageName : pageName.substring(0, anchorIndex)).trim();
   if (!page) return null;
+  // [[x.md]] names the Markdown file: no .html fallback, as in the content processor
+  const namesMarkdown = /\.md$/i.test(page);
   const canonicalPageName = page.replace(/\.md$/i, '');
   const relativePath = currentFilePath ? resolveRelative(currentFilePath, canonicalPageName) : null;
   const absolutePath = /\.html$/i.test(canonicalPageName)
@@ -99,7 +101,7 @@ export function resolvePageName(
   for (const path of [relativePath, absolutePath]) {
     if (!path) continue;
     candidates.push(path.toLowerCase());
-    if (path.endsWith('.md')) candidates.push(path.slice(0, -3).toLowerCase() + '.html');
+    if (!namesMarkdown && path.endsWith('.md')) candidates.push(path.slice(0, -3).toLowerCase() + '.html');
   }
 
   let best: ResolvedDocument | null = null;

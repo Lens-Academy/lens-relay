@@ -2829,7 +2829,7 @@ impl Server {
                     folder_name, old_sidecar, folder_name
                 )));
             }
-            // move_document rejects a non-.md destination itself.
+            // move_document rejects a destination other than .md or .html itself.
             if let Some(new_sidecar) = timestamps_sidecar_path(new_path) {
                 if new_sidecar != old_sidecar
                     && self.filemeta_has_path(&folder_doc_id, &new_sidecar)

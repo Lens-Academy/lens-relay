@@ -613,8 +613,8 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                 {!onDocRoute && <WorkflowMenu />}
                 {/* Comments and the right sidebar belong to a document route,
                     or to a page that registers its own comments control
-                    (HtmlEditor, also on mobile — the bottom bar only covers
-                    EditorArea's comment sheet) */}
+                    (HtmlEditor on a desktop; on a phone the bottom bar has
+                    the comments button) */}
                 {((!isMobile && onDocRoute) || headerCommentsControl != null) && <button
                   onClick={handleToggleComments}
                   title={commentsTitle}

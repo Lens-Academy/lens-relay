@@ -446,7 +446,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "move",
-            "description": "Move or rename a file or folder. Automatically rewrites wikilinks in other documents that reference moved files. Moving a non-article into Lens Edu/articles is blocked; use import_source instead. Existing articles may be renamed within the articles folder.",
+            "description": "Move or rename a file or folder. Automatically rewrites wikilinks in other documents that reference moved files. Moving a non-article into Lens Edu/articles is blocked; use import_source instead. Existing articles may be renamed within the articles folder. Moving a .md file to a .html path (e.g. 'widgets/x.md' to '/widgets/x.html') makes it an HTML page that keeps its id and its links ([[../widgets/x]] finds x.html), with the text unchanged: rewrite it into the page format yourself (for a widget, its front matter becomes a leading <!--lens-widget ... --> comment).",
             "inputSchema": {
                 "type": "object",
                 "required": ["new_path", "session_id"],

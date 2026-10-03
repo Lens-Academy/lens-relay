@@ -92,6 +92,7 @@ describe('resolveWikilinkToUuid', () => {
     expect(resolveWikilinkToUuid('[[../widgets/rings]]', lens, widgetMetadata)).toBe('rings-html');
     expect(resolveWikilinkToUuid('[[../widgets/twin]]', lens, widgetMetadata)).toBe('twin-md');
     expect(resolveWikilinkToUuid('[[../widgets/twin.html]]', lens, widgetMetadata)).toBe('twin-html');
+    expect(resolveWikilinkToUuid('[[../widgets/rings.md]]', lens, widgetMetadata)).toBeNull();
   });
 
   it('resolves when metadata keys have leading slash', () => {

@@ -69,11 +69,12 @@ export function resolvePathToUuid(
   sourceFile: string,
   metadata: Record<string, { id: string }>
 ): string | null {
+  const namesMarkdown = /\.md$/i.test(linkPath);
   const canonicalPath = linkPath.replace(/\.md$/i, '');
   const resolved = resolveRelativePath(canonicalPath, sourceFile);
 
   // Try all combinations: with/without leading /, with/without .md extension,
-  // then an .html page (widgets are widgets/<name>.html)
+  // then, for a link without an extension, an .html page (widgets/<name>.html)
   const candidates = [
     resolved,
     resolved + '.md',
@@ -81,9 +82,11 @@ export function resolvePathToUuid(
     '/' + resolved + '.md',
     resolved.replace(/^\//, ''),
     resolved.replace(/^\//, '') + '.md',
-    resolved + '.html',
-    '/' + resolved + '.html',
-    resolved.replace(/^\//, '') + '.html',
+    ...(namesMarkdown ? [] : [
+      resolved + '.html',
+      '/' + resolved + '.html',
+      resolved.replace(/^\//, '') + '.html',
+    ]),
   ];
 
   for (const candidate of candidates) {

@@ -37,6 +37,10 @@ describe('resolvePageName', () => {
       expect(resolvePageName('Lens Edu/widgets/rings.html', widgets)!.docId).toBe('doc-rings');
     });
 
+    it('[[name.md]] does not fall back to the .html page', () => {
+      expect(resolvePageName('../widgets/rings.md', widgets, intro)).toBeNull();
+    });
+
     it('a relative .md beats an absolute .html, and relative .html beats absolute .md', () => {
       const meta: FolderMetadata = {
         '/F/sub/a.md': { id: 'rel-md', type: 'markdown', version: 0 },
