@@ -82,6 +82,18 @@ describe('resolveWikilinkToUuid', () => {
     expect(uuid).toBe('ghi-789');
   });
 
+  it('finds an .html widget, preferring an .md twin', () => {
+    const widgetMetadata: Record<string, { id: string }> = {
+      '/Lens Edu/widgets/rings.html': { id: 'rings-html' },
+      '/Lens Edu/widgets/twin.md': { id: 'twin-md' },
+      '/Lens Edu/widgets/twin.html': { id: 'twin-html' },
+    };
+    const lens = '/Lens Edu/lenses/Intro.md';
+    expect(resolveWikilinkToUuid('[[../widgets/rings]]', lens, widgetMetadata)).toBe('rings-html');
+    expect(resolveWikilinkToUuid('[[../widgets/twin]]', lens, widgetMetadata)).toBe('twin-md');
+    expect(resolveWikilinkToUuid('[[../widgets/twin.html]]', lens, widgetMetadata)).toBe('twin-html');
+  });
+
   it('resolves when metadata keys have leading slash', () => {
     const slashMetadata: Record<string, { id: string }> = {
       '/Relay Folder 1/Learning Outcomes/Some LO.md': { id: 'slash-456' },

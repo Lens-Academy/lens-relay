@@ -204,7 +204,8 @@ pub async fn execute_with_platform(
 
 /// Build `{folder-relative-path: content}` for every readable text document
 /// in the folder. Markdown gets the chosen CriticMarkup view; `.json` blobs
-/// (e.g. video timestamp files) are included raw; other binaries are skipped.
+/// (e.g. video timestamp files) and `.html` widgets are included raw; other
+/// files are skipped.
 async fn build_file_map(
     server: &Arc<Server>,
     folder: &str,
@@ -219,7 +220,7 @@ async fn build_file_map(
         };
         let is_md = rel.ends_with(".md");
         let is_json = rel.ends_with(".json");
-        if !is_md && !is_json {
+        if !is_md && !is_json && !is_html_widget(rel) {
             continue;
         }
         let Some(doc_info) = server.doc_resolver().resolve_path(&path) else {
@@ -231,7 +232,8 @@ async fn build_file_map(
             continue;
         };
         // Markdown carries CriticMarkup — resolve it to the requested view.
-        // .json blobs (timestamp files) have none and go through raw.
+        // .json blobs (timestamp files) and HTML pages (edited directly, never
+        // as suggestions) go through raw.
         let content = if is_md {
             let spans = critic_markup::parse(&raw);
             if accept_drafts {
@@ -247,6 +249,13 @@ async fn build_file_map(
     }
 
     files
+}
+
+/// A widget kept as an HTML page, `widgets/<name>.html`. The content processor
+/// reads `.html` files only under the root widgets folder (lens-platform
+/// `isWidgetFile`, and `WIDGET_EXTENSIONS` in core/content/git_fetcher.py).
+fn is_html_widget(rel: &str) -> bool {
+    rel.ends_with(".html") && rel.starts_with("widgets/")
 }
 
 fn client() -> &'static reqwest::Client {
@@ -389,6 +398,42 @@ mod tests {
         assert!(body["files"].get("Lens/Lenses/A.md").is_none());
         assert_eq!(body["course"], "ai-risk");
         assert_eq!(body["category"], "production");
+    }
+
+    // Prevents: a widget kept as widgets/<name>.html missing from validation
+    // (the course would report its link as broken), or other HTML pages,
+    // which the content processor does not read, being sent along
+    #[tokio::test]
+    async fn sends_html_widgets_raw_and_skips_other_html_pages() {
+        let widget = "<!--lens-widget\ntitle: Rings\n-->\n<!doctype html><p>{++as is++}</p>";
+        let server = build_test_server(&[
+            (
+                "/widgets/rings.html",
+                "cccc0000-0000-0000-0000-000000000003",
+                widget,
+            ),
+            (
+                "/Team page.html",
+                "cccc0000-0000-0000-0000-000000000004",
+                "<p>team</p>",
+            ),
+            (
+                "/modules/widgets/x.html",
+                "cccc0000-0000-0000-0000-000000000005",
+                "<p>x</p>",
+            ),
+        ])
+        .await;
+        let (url, mut rx) = mock_platform().await;
+
+        execute_with_platform(&server, &lens_access(), &serde_json::json!({}), &url, "sek")
+            .await
+            .expect("validate should succeed");
+        let (_, _, body) = rx.recv().await.unwrap();
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["files"]["widgets/rings.html"].as_str(), Some(widget));
+        assert!(body["files"].get("Team page.html").is_none());
+        assert!(body["files"].get("modules/widgets/x.html").is_none());
     }
 
     // Prevents: a bogus category silently validating everything

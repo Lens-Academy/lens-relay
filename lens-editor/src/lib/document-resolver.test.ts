@@ -13,6 +13,51 @@ describe('resolvePageName', () => {
     '/RF2/Course Notes.md': { id: 'doc-course', type: 'markdown', version: 0 },
   };
 
+  describe('HTML pages (widgets)', () => {
+    const widgets: FolderMetadata = {
+      '/Lens Edu/lenses/Intro.md': { id: 'doc-intro', type: 'markdown', version: 0 },
+      '/Lens Edu/widgets/rings.html': { id: 'doc-rings', type: 'file', version: 0 },
+      '/Lens Edu/widgets/twin.md': { id: 'doc-twin-md', type: 'markdown', version: 0 },
+      '/Lens Edu/widgets/twin.html': { id: 'doc-twin-html', type: 'file', version: 0 },
+      '/Lens Edu/Map.html': { id: 'doc-map', type: 'file', version: 0 },
+    };
+    const intro = '/Lens Edu/lenses/Intro.md';
+
+    it('an extensionless link finds the .html page', () => {
+      expect(resolvePageName('../widgets/rings', widgets, intro))
+        .toEqual({ docId: 'doc-rings', path: '/Lens Edu/widgets/rings.html' });
+    });
+
+    it('prefers the .md file when both exist', () => {
+      expect(resolvePageName('../widgets/twin', widgets, intro)!.docId).toBe('doc-twin-md');
+    });
+
+    it('[[name.html]] finds only the page', () => {
+      expect(resolvePageName('../widgets/twin.html', widgets, intro)!.docId).toBe('doc-twin-html');
+      expect(resolvePageName('Lens Edu/widgets/rings.html', widgets)!.docId).toBe('doc-rings');
+    });
+
+    it('a relative .md beats an absolute .html, and relative .html beats absolute .md', () => {
+      const meta: FolderMetadata = {
+        '/F/sub/a.md': { id: 'rel-md', type: 'markdown', version: 0 },
+        '/a.html': { id: 'abs-html', type: 'file', version: 0 },
+        '/F/sub/b.html': { id: 'rel-html', type: 'file', version: 0 },
+        '/b.md': { id: 'abs-md', type: 'markdown', version: 0 },
+      };
+      expect(resolvePageName('a', meta, '/F/sub/x.md')!.docId).toBe('rel-md');
+      expect(resolvePageName('b', meta, '/F/sub/x.md')!.docId).toBe('rel-html');
+    });
+
+    it('finds an .html page by absolute path, case-insensitively', () => {
+      expect(resolvePageName('lens edu/map', widgets)!.docId).toBe('doc-map');
+    });
+
+    it('does not resolve other non-Markdown files', () => {
+      const meta: FolderMetadata = { '/data.json': { id: 'j', type: 'file', version: 0 } };
+      expect(resolvePageName('data', meta)).toBeNull();
+    });
+  });
+
   describe('anchors and whitespace', () => {
     it('ignores a #heading anchor', () => {
       const result = resolvePageName('Plan#Milestones', metadata, '/RF1/Projects/Roadmap.md');
@@ -131,6 +176,7 @@ describe('resolvePageName', () => {
 
 describe('resolveRelative', () => {
   it('resolves sibling file', () => {
+    expect(resolveRelative('/RF1/Projects/Roadmap.md', '../Pages/Map.html')).toBe('/RF1/Pages/Map.html');
     expect(resolveRelative('/RF1/Projects/Roadmap.md', 'Plan'))
       .toBe('/RF1/Projects/Plan.md');
   });
@@ -202,6 +248,11 @@ describe('generateNewDocPath', () => {
 });
 
 describe('computeRelativePath', () => {
+  it('drops the .html extension of a page, as widget links do', () => {
+    expect(computeRelativePath('/Lens Edu/lenses/Intro.md', '/Lens Edu/widgets/rings.html'))
+      .toBe('../widgets/rings');
+  });
+
   it('returns basename for sibling file', () => {
     expect(computeRelativePath('/RF1/Projects/Roadmap.md', '/RF1/Projects/Plan.md'))
       .toBe('Plan');

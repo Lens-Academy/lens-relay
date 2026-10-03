@@ -549,6 +549,63 @@ title: "Demo Survey"
 How was the meeting?
 `,
       },
+      // A widget kept as an HTML page: its fields sit in a leading
+      // <!--lens-widget ... --> comment. The lens below links to it without an
+      // extension, so the link indexer, wiki links and backlinks can be tried on .html.
+      {
+        path: '/widgets',
+        id: 'ed000011-0000-4000-8000-0000000000b1',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/widgets/demo-rings.html',
+        id: 'ed000012-0000-4000-8000-0000000000b2',
+        type: 'file',
+        version: 0,
+        content: `<!--lens-widget
+id: 'ed000012-0000-4000-8000-0000000000b2'
+title: Demo rings
+alt: Three nested rings labelled Narrow AI, General AI and Superintelligence.
+summary_for_tutor: A diagram of three nested kinds of AI.
+-->
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; background: #f8fafc; }
+  .ring { border-radius: 50%; display: grid; place-items: center; text-align: center; }
+  .r1 { width: 320px; height: 320px; background: #dbeafe; }
+  .r2 { width: 220px; height: 220px; background: #93c5fd; }
+  .r3 { width: 120px; height: 120px; background: #2563eb; color: white; }
+</style>
+</head>
+<body>
+  <div class="ring r1"><div>Narrow AI<div class="ring r2"><div>General AI<div class="ring r3">Superintelligence</div></div></div></div></div>
+</body>
+</html>
+`,
+      },
+      {
+        path: '/Lenses/Widget Demo Lens.md',
+        id: 'ed000013-0000-4000-8000-0000000000b3',
+        type: 'markdown',
+        version: 0,
+        content: `---
+title: "Widget Demo Lens"
+tldr: "A lens that shows an HTML widget."
+---
+
+#### Text
+content::
+The kinds of AI, from narrow to superintelligent:
+
+#### Widget
+source:: [[../widgets/demo-rings]]
+`,
+      },
       // Templates for "New from template" in the sidebar's create menu:
       // empty and "<...>" ids are filled with fresh UUIDs on create.
       {
@@ -723,8 +780,9 @@ async function populateFolderDoc(folderDocId, folderName, testDocs) {
             type: testDoc.type,
             version: testDoc.version,
           });
-          // Legacy format: path -> guid (required for Obsidian compatibility)
-          if (testDoc.type !== 'folder') {
+          // Legacy format: path -> guid (required for Obsidian compatibility);
+          // like the editor, only for Markdown documents
+          if (testDoc.type === 'markdown') {
             legacyDocs.set(testDoc.path, testDoc.id);
           }
           console.log(`    ✓ Added ${testDoc.path}`);

@@ -16,6 +16,14 @@ describe('resolveCurriculumTarget', () => {
     expect(resolveCurriculumTarget('modules/M.md', 'Lens Edu/articles/A|Alias')).toBe('articles/A.md');
     expect(resolveCurriculumTarget('modules/M.md', '../../outside')).toBeNull();
   });
+
+  it('finds an .html widget for an extension-free link, preferring an .md twin', () => {
+    const paths = new Set(['widgets/rings.html', 'widgets/twin.md', 'widgets/twin.html']);
+    expect(resolveCurriculumTarget('Lenses/L.md', '../widgets/rings', paths)).toBe('widgets/rings.html');
+    expect(resolveCurriculumTarget('Lenses/L.md', '../widgets/twin', paths)).toBe('widgets/twin.md');
+    expect(resolveCurriculumTarget('Lenses/L.md', '../widgets/twin.html', paths)).toBe('widgets/twin.html');
+    expect(resolveCurriculumTarget('Lenses/L.md', '../widgets/missing', paths)).toBe('widgets/missing.md');
+  });
 });
 
 describe('buildPromotionCurriculumIndex', () => {
@@ -49,6 +57,20 @@ describe('buildPromotionCurriculumIndex', () => {
     expect(result.memberships['video_transcripts/Clip.timestamps.json']).toEqual(
       result.memberships['video_transcripts/Clip.md'],
     );
+  });
+
+  it('puts an .html widget in the courses and modules of the lenses that use it', () => {
+    const staging = snapshot({
+      'courses/C.md': '# Module: [[../modules/M]]',
+      'modules/M.md': '# Lens:\nsource:: [[../Lenses/L]]',
+      'Lenses/L.md': '#### Widget\nsource:: [[../widgets/rings]]',
+      'widgets/rings.html': '<!--lens-widget\ntitle: Rings\n-->\n<!doctype html>',
+    });
+    const result = buildPromotionCurriculumIndex(staging, snapshot({}), [change('widgets/rings.html')]);
+    expect(result.memberships['widgets/rings.html']).toEqual({
+      coursePaths: ['courses/C.md'],
+      modulePaths: ['modules/M.md'],
+    });
   });
 
   it('terminates cycles and ignores missing targets', () => {

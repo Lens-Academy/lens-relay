@@ -2,7 +2,7 @@ import { autocompletion } from '@codemirror/autocomplete';
 import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete';
 import type { EditorView } from '@codemirror/view';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
-import { computeRelativePath } from '../../../lib/document-resolver';
+import { computeRelativePath, isLinkTarget } from '../../../lib/document-resolver';
 
 const SEPARATOR = /[\s_-]/;
 
@@ -100,10 +100,10 @@ export function createWikilinkCompletionSource(
     if (cache?.metadata !== metadata || cache.currentFilePath !== currentFilePath) {
       const names: { name: string; text: string }[] = [];
       for (const [path, meta] of Object.entries(metadata)) {
-        if (meta.type !== 'markdown') continue;
+        if (!isLinkTarget(path, meta)) continue;
         const name = currentFilePath
           ? computeRelativePath(currentFilePath, path)
-          : path.slice(1).replace(/\.md$/i, ''); // absolute without leading /
+          : path.slice(1).replace(/\.(md|html)$/i, ''); // absolute without leading /
         names.push({ name, text: normalizeForSearch(name) });
       }
       cache = { metadata, currentFilePath, names };
