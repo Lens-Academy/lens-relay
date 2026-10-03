@@ -29,8 +29,8 @@ describe('nextUntitledHtmlName', () => {
     expect(nextUntitledHtmlName('/Lens', { '/Lens/Notes/Untitled.html': {} })).toBe('Untitled.html');
   });
 
-  it('ignores collisions on differently-suffixed files (e.g. .md)', () => {
-    expect(nextUntitledHtmlName('/Lens', { '/Lens/Untitled.md': {} })).toBe('Untitled.html');
+  it('ignores collisions on other suffixes (e.g. .json)', () => {
+    expect(nextUntitledHtmlName('/Lens', { '/Lens/Untitled.json': {} })).toBe('Untitled.html');
   });
 
   it('handles folderPath with trailing slash', () => {
@@ -39,5 +39,8 @@ describe('nextUntitledHtmlName', () => {
 
   it('returns "Untitled.html" when only "Untitled 1.html" exists (fills lowest gap)', () => {
     expect(nextUntitledHtmlName('/Lens', { '/Lens/Untitled 1.html': {} })).toBe('Untitled.html');
+  });
+  it('skips a name whose .md twin exists', () => {
+    expect(nextUntitledHtmlName('/Lens', { '/Lens/Untitled.md': {} })).toBe('Untitled 1.html');
   });
 });

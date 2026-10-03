@@ -158,9 +158,8 @@ export function HtmlEditor({
 
   // On a phone the desktop comment margin would leave the page a sliver of the
   // screen; comments open in a bottom sheet instead, as in the Markdown editor.
-  const { isMobile, activeDrawer, openDrawer, closeDrawer, toggleDrawer } = useMobile();
+  const { isMobile, activeDrawer, openDrawer, closeDrawer } = useMobile();
   const [pendingCommentAction, setPendingCommentAction] = useState<PendingCommentAction>(null);
-  const toggleCommentsSheet = useCallback(() => toggleDrawer('comments'), [toggleDrawer]);
   const commentsSheetOpen = activeDrawer === 'comments';
   // Remount the sheet for each request so a tap during its close animation
   // (sheet still mounted) is not swallowed.
@@ -173,17 +172,15 @@ export function HtmlEditor({
   // The width toggle is hidden on a phone, where the preview already is phone width.
   const phonePreview = previewWidth === 'phone' && !isMobile;
 
+  // On a phone the bottom bar's Comments button opens the sheet (the page sits
+  // in HtmlDocumentLayout, which shows those buttons), so the header has none.
   const commentsControl = useMemo(() => (isMobile
-    ? {
-      isOpen: commentsSheetOpen,
-      onToggle: toggleCommentsSheet,
-      title: commentsSheetOpen ? 'Hide comments' : 'Show comments',
-    }
+    ? null
     : {
       isOpen: commentsVisible,
       onToggle: handleToggleComments,
       title: commentsVisible ? 'Hide comments' : 'Show comments',
-    }), [commentsSheetOpen, commentsVisible, handleToggleComments, isMobile, toggleCommentsSheet]);
+    }), [commentsVisible, handleToggleComments, isMobile]);
   useHeaderCommentsControl(commentsControl);
 
   // --- sidebar positioning -------------------------------------------

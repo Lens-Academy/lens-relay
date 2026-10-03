@@ -1,4 +1,4 @@
-import type { FolderMetadata } from '../hooks/useFolderMetadata';
+import type { FileMetadata, FolderMetadata } from '../hooks/useFolderMetadata';
 
 export interface ResolvedDocument {
   docId: string;
@@ -6,11 +6,44 @@ export interface ResolvedDocument {
 }
 
 /**
+ * Whether a wiki link can point at this file: a Markdown document, or an HTML
+ * page (widgets are `widgets/<name>.html`). Keep in step with the relay's
+ * `is_link_target` in link_indexer.rs.
+ */
+export function isLinkTarget(path: string, meta: Pick<FileMetadata, 'type'>): boolean {
+  if (/\.html$/i.test(path)) return true;
+  return meta.type === 'markdown';
+}
+
+/**
+ * The other file a link without an extension could mean: x.html for x.md and
+ * x.md for x.html, or null. A folder may not hold both, because [[x]] could
+ * not tell them apart (the relay refuses it too: `twin_path` in link_indexer.rs).
+ */
+export function twinPath(path: string): string | null {
+  if (/\.html$/i.test(path)) return path.slice(0, -'.html'.length) + '.md';
+  if (/\.md$/i.test(path)) return path.slice(0, -'.md'.length) + '.html';
+  return null;
+}
+
+/** The existing path among `paths` that is `path`'s twin, case-insensitively. */
+export function findTwin(path: string, paths: Iterable<string>): string | null {
+  const twin = twinPath(path)?.toLowerCase();
+  if (!twin) return null;
+  for (const candidate of paths) {
+    if (candidate.toLowerCase() === twin) return candidate;
+  }
+  return null;
+}
+
+/**
  * Resolve a pageName relative to the directory containing currentFilePath.
- * Returns an absolute path with .md extension.
+ * Returns an absolute path with .md extension, or with .html when the link
+ * names an .html file.
  */
 export function resolveRelative(currentFilePath: string, pageName: string): string {
-  const canonicalPageName = pageName.replace(/\.md$/i, '');
+  const isHtml = /\.html$/i.test(pageName);
+  const canonicalPageName = pageName.replace(/\.(md|html)$/i, '');
   const lastSlash = currentFilePath.lastIndexOf('/');
   const dir = currentFilePath.substring(0, lastSlash);
   const segments = dir.split('/').filter(s => s !== '');
@@ -23,7 +56,7 @@ export function resolveRelative(currentFilePath: string, pageName: string): stri
     }
   }
 
-  return '/' + segments.join('/') + '.md';
+  return '/' + segments.join('/') + (isHtml ? '.html' : '.md');
 }
 
 /**
@@ -36,7 +69,8 @@ export function computeRelativePath(fromFilePath: string, toFilePath: string): s
 
   fromParts.pop(); // remove filename → directory segments
   const toFileName = toParts.pop()!;
-  const toName = toFileName.replace(/\.md$/i, '');
+  // Links leave out the extension, for HTML pages too: [[x]] finds x.md, then x.html
+  const toName = toFileName.replace(/\.(md|html)$/i, '');
 
   let common = 0;
   while (common < fromParts.length && common < toParts.length
@@ -61,6 +95,8 @@ export function computeRelativePath(fromFilePath: string, toFilePath: string): s
  * 2. Absolute — treat pageName as path from root: /{pageName}.md
  * 3. Fail — return null
  *
+ * At each step a link without an extension finds {name}.md, and failing that
+ * {name}.html (widgets are HTML pages); [[name.md]] and [[name.html]] find only that file.
  * A #heading anchor and surrounding whitespace are ignored (as in link-extractor),
  * so [[Page#Heading]] resolves to Page and [[#Heading]] resolves to nothing.
  * All matching is case-insensitive.
@@ -73,31 +109,35 @@ export function resolvePageName(
   const anchorIndex = pageName.indexOf('#');
   const page = (anchorIndex === -1 ? pageName : pageName.substring(0, anchorIndex)).trim();
   if (!page) return null;
+  // [[x.md]] names the Markdown file: no .html fallback, as in the content processor
+  const namesMarkdown = /\.md$/i.test(page);
   const canonicalPageName = page.replace(/\.md$/i, '');
   const relativePath = currentFilePath ? resolveRelative(currentFilePath, canonicalPageName) : null;
-  const absolutePath = '/' + canonicalPageName + '.md';
+  const absolutePath = /\.html$/i.test(canonicalPageName)
+    ? '/' + canonicalPageName
+    : '/' + canonicalPageName + '.md';
 
-  const lowerRelative = relativePath?.toLowerCase() ?? null;
-  const lowerAbsolute = absolutePath.toLowerCase();
+  // Candidates in priority order: each .md path is followed by its .html twin.
+  const candidates: string[] = [];
+  for (const path of [relativePath, absolutePath]) {
+    if (!path) continue;
+    candidates.push(path.toLowerCase());
+    if (!namesMarkdown && path.endsWith('.md')) candidates.push(path.slice(0, -3).toLowerCase() + '.html');
+  }
 
-  let absoluteMatch: ResolvedDocument | null = null;
-
+  let best: ResolvedDocument | null = null;
+  let bestRank = candidates.length;
   for (const [path, meta] of Object.entries(metadata)) {
-    if (meta.type !== 'markdown') continue;
-    const lowerPath = path.toLowerCase();
-
-    // Priority 1: relative match — return immediately
-    if (lowerRelative && lowerPath === lowerRelative) {
-      return { docId: meta.id, path };
-    }
-
-    // Priority 2: absolute match — save as fallback
-    if (!absoluteMatch && lowerPath === lowerAbsolute) {
-      absoluteMatch = { docId: meta.id, path };
+    if (!isLinkTarget(path, meta)) continue;
+    const rank = candidates.indexOf(path.toLowerCase());
+    if (rank !== -1 && rank < bestRank) {
+      best = { docId: meta.id, path };
+      bestRank = rank;
+      if (rank === 0) break;
     }
   }
 
-  return absoluteMatch;
+  return best;
 }
 
 /**

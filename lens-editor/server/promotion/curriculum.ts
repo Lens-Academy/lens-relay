@@ -21,7 +21,7 @@ interface ScopeGraph {
 }
 
 function displayFilename(filePath: string): string {
-  return path.basename(filePath).replace(/\.md$/i, '');
+  return path.basename(filePath).replace(/\.(?:md|html)$/i, '');
 }
 
 function frontmatterTitle(markdown: string | undefined): string | null {
@@ -37,8 +37,12 @@ function frontmatterTitle(markdown: string | undefined): string | null {
   return value || null;
 }
 
-/** Resolve Relay/Obsidian links into repository-relative paths. */
-export function resolveCurriculumTarget(fromPath: string, rawTarget: string): string | null {
+/**
+ * Resolve Relay/Obsidian links into repository-relative paths. A link without
+ * an extension means `<path>.md`, or `<path>.html` when only that exists in
+ * `paths` (widgets are `widgets/<name>.html`), as the content processor reads it.
+ */
+export function resolveCurriculumTarget(fromPath: string, rawTarget: string, paths?: ReadonlySet<string>): string | null {
   let target = rawTarget.split('|')[0].trim().replace(/\\/g, '/');
   target = target.replace(/^\/+/, '');
   if (/^Lens Edu\//i.test(target)) target = target.slice('Lens Edu/'.length);
@@ -48,8 +52,10 @@ export function resolveCurriculumTarget(fromPath: string, rawTarget: string): st
     ? path.normalize(path.join(path.dirname(fromPath), target))
     : path.normalize(target);
   if (!resolved || resolved === '.' || resolved === '..' || resolved.startsWith('../')) return null;
-  if (/\.(?:md|json)$/i.test(resolved)) return resolved;
-  return `${resolved}.md`;
+  if (/\.(?:md|json|html)$/i.test(resolved)) return resolved;
+  const markdownPath = `${resolved}.md`;
+  if (paths && !paths.has(markdownPath) && paths.has(`${resolved}.html`)) return `${resolved}.html`;
+  return markdownPath;
 }
 
 function addMembership(
@@ -69,7 +75,7 @@ function buildScopeGraph(snapshot: PromotionTreeSnapshot): ScopeGraph {
   for (const [filePath, markdown] of snapshot.markdown) {
     const targets = new Set<string>();
     for (const rawTarget of parseSourceTargets(markdown)) {
-      const target = resolveCurriculumTarget(filePath, rawTarget);
+      const target = resolveCurriculumTarget(filePath, rawTarget, snapshot.paths);
       if (!target || !snapshot.paths.has(target)) continue;
       targets.add(target);
       if (target.startsWith('video_transcripts/') && target.endsWith('.md')) {
@@ -84,7 +90,7 @@ function buildScopeGraph(snapshot: PromotionTreeSnapshot): ScopeGraph {
   for (const [coursePath, markdown] of snapshot.markdown) {
     if (!/^courses\/[^/]+\.md$/i.test(coursePath)) continue;
     const modules = parseModuleLinkEntries(markdown)
-      .map(link => ({ path: resolveCurriculumTarget(coursePath, link.target), alias: link.alias }))
+      .map(link => ({ path: resolveCurriculumTarget(coursePath, link.target, snapshot.paths), alias: link.alias }))
       .filter((entry): entry is { path: string; alias: string | null } => !!entry.path);
     courseModules.set(coursePath, {
       label: frontmatterTitle(markdown) ?? displayFilename(coursePath),

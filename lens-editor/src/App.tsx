@@ -5,6 +5,7 @@ import { RelayProvider } from './providers/RelayProvider';
 import { Sidebar } from './components/Sidebar';
 import { EditorArea } from './components/Layout';
 import { ResizeHandle } from './components/Layout/ResizeHandle';
+import { HtmlDocumentLayout } from './components/Layout/HtmlDocumentLayout';
 import { AwarenessInitializer } from './components/AwarenessInitializer/AwarenessInitializer';
 import { DisconnectionModal } from './components/DisconnectionModal/DisconnectionModal';
 import { NavigationContext, useNavigation } from './contexts/NavigationContext';
@@ -370,7 +371,11 @@ function HtmlEditorMount({ docId }: { docId: string }) {
   const provider = useYjsProvider();
   const { canWrite } = useAuth();
   const ytext = ydoc.getText('contents');
-  return <HtmlEditor ytext={ytext} awareness={provider.awareness} readOnly={!canWrite} storageKey={docId} />;
+  return (
+    <HtmlDocumentLayout docId={docId}>
+      <HtmlEditor ytext={ytext} awareness={provider.awareness} readOnly={!canWrite} storageKey={docId} />
+    </HtmlDocumentLayout>
+  );
 }
 
 function EduEditorView() {
@@ -608,8 +613,8 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                 {!onDocRoute && <WorkflowMenu />}
                 {/* Comments and the right sidebar belong to a document route,
                     or to a page that registers its own comments control
-                    (HtmlEditor, also on mobile — the bottom bar only covers
-                    EditorArea's comment sheet) */}
+                    (HtmlEditor on a desktop; on a phone the bottom bar has
+                    the comments button) */}
                 {((!isMobile && onDocRoute) || headerCommentsControl != null) && <button
                   onClick={handleToggleComments}
                   title={commentsTitle}

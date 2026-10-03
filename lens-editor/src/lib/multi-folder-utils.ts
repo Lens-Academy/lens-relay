@@ -1,5 +1,6 @@
 // src/lib/multi-folder-utils.ts
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
+import { twinPath } from './document-resolver';
 import type * as Y from 'yjs';
 
 export interface FolderInput {
@@ -85,10 +86,12 @@ export function generateUntitledName(
       .map((p) => p.slice(prefix.length).split('/')[0]) // Only direct children
   );
 
-  if (!existing.has('Untitled.md')) return 'Untitled.md';
+  // A name is taken by its .md/.html twin too
+  const taken = (name: string) => existing.has(name) || existing.has(twinPath(name)!);
+  if (!taken('Untitled.md')) return 'Untitled.md';
 
   for (let i = 1; ; i++) {
     const candidate = `Untitled ${i}.md`;
-    if (!existing.has(candidate)) return candidate;
+    if (!taken(candidate)) return candidate;
   }
 }

@@ -506,6 +506,11 @@ where
             }
 
             let new_name = compute_new_name(&occ.name);
+            // Leave a link whose text would not change untouched, e.g. [[x]]
+            // after x.md moved to x.html
+            if new_name == occ.name {
+                return None;
+            }
             Some(TextEdit {
                 offset: occ.name_start,
                 remove_len: occ.name_len,

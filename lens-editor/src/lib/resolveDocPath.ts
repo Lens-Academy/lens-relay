@@ -23,7 +23,7 @@ export function titleFromWikilink(wikilinkText: string): string {
   const match = wikilinkText.match(/\[\[([^\]|]+)/);
   const path = match ? match[1].trim() : wikilinkText;
   const filename = path.split('/').pop() ?? path;
-  const base = filename.replace(/\.md$/, '');
+  const base = filename.replace(/\.(md|html)$/, '');
   return base.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
@@ -69,10 +69,12 @@ export function resolvePathToUuid(
   sourceFile: string,
   metadata: Record<string, { id: string }>
 ): string | null {
+  const namesMarkdown = /\.md$/i.test(linkPath);
   const canonicalPath = linkPath.replace(/\.md$/i, '');
   const resolved = resolveRelativePath(canonicalPath, sourceFile);
 
-  // Try all combinations: with/without leading /, with/without .md extension
+  // Try all combinations: with/without leading /, with/without .md extension,
+  // then, for a link without an extension, an .html page (widgets/<name>.html)
   const candidates = [
     resolved,
     resolved + '.md',
@@ -80,6 +82,11 @@ export function resolvePathToUuid(
     '/' + resolved + '.md',
     resolved.replace(/^\//, ''),
     resolved.replace(/^\//, '') + '.md',
+    ...(namesMarkdown ? [] : [
+      resolved + '.html',
+      '/' + resolved + '.html',
+      resolved.replace(/^\//, '') + '.html',
+    ]),
   ];
 
   for (const candidate of candidates) {

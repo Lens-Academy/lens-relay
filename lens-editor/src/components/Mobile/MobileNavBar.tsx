@@ -36,8 +36,8 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
     return () => document.removeEventListener('keydown', onKey);
   }, [menuOpen]);
 
-  // Comments/outline drawers live in EditorArea — only offer them when it's
-  // mounted (image/blob/html doc routes render other views without drawers)
+  // Comments/outline drawers live in EditorArea and HtmlDocumentLayout — only
+  // offer them when one is mounted (image/blob routes have no drawers)
   const showPanelButtons = isDocRoute(location.pathname) && docPanelsAvailable;
 
   // While the editor keyboard is up, MobileEditToolbar replaces this bar

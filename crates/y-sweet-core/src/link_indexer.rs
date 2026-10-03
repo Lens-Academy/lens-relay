@@ -50,14 +50,76 @@ fn without_terminal_md(path: &str) -> &str {
     }
 }
 
+fn has_terminal_html(path: &str) -> bool {
+    let suffix_start = path.len().saturating_sub(5);
+    path.get(suffix_start..)
+        .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".html"))
+}
+
+/// Whether a wikilink can point at this filemeta entry: a Markdown document,
+/// or an HTML page (widgets are `widgets/<name>.html`, stored as type "file").
+/// Port of the frontend's `isLinkTarget()` in document-resolver.ts.
+pub fn is_link_target(path: &str, entry_type: &str) -> bool {
+    has_terminal_html(path) || entry_type == "markdown"
+}
+
+/// The other file a link without an extension could mean: `x.html` for
+/// `x.md` and `x.md` for `x.html`. A folder may not hold both, because
+/// `[[x]]` could not tell them apart.
+pub fn twin_path(path: &str) -> Option<String> {
+    if has_terminal_html(path) {
+        Some(format!("{}.md", &path[..path.len() - 5]))
+    } else if without_terminal_md(path).len() != path.len() {
+        Some(format!("{}.html", without_terminal_md(path)))
+    } else {
+        None
+    }
+}
+
+/// The path of an entry in `filemeta` that is `path`'s twin (case-insensitive,
+/// as links resolve), other than the file `except_id` itself (a file moving
+/// from x.md to x.html is not its own twin).
+pub fn find_twin_in_filemeta(
+    filemeta: &MapRef,
+    txn: &impl ReadTxn,
+    path: &str,
+    except_id: Option<&str>,
+) -> Option<String> {
+    let twin = twin_path(path)?.to_lowercase();
+    filemeta.iter(txn).find_map(|(entry_path, value)| {
+        if entry_path.to_lowercase() != twin {
+            return None;
+        }
+        let id = extract_id_from_filemeta_entry(&value, txn);
+        if except_id.is_some() && id.as_deref() == except_id {
+            return None;
+        }
+        Some(entry_path.to_string())
+    })
+}
+
+/// The message for a create or move refused because of a twin.
+pub fn twin_conflict_message(path: &str, twin: &str) -> String {
+    format!(
+        "Cannot use '{}': '{}' exists in the same folder. A .md and a .html file cannot share a name, because a link like [[name]] could not tell them apart.",
+        path, twin
+    )
+}
+
 /// Resolve a page name relative to the directory containing `current_file_path`.
-/// Returns an absolute filemeta path with `.md` extension.
+/// Returns an absolute filemeta path with `.md` extension, or with `.html` when
+/// the page name ends in `.html`.
 ///
 /// Port of frontend's `resolveRelative()` in document-resolver.ts.
 ///
 /// Example: `resolve_relative("/Notes/Source.md", "../Ideas")` → `"/Ideas.md"`
 pub fn resolve_relative(current_file_path: &str, page_name: &str) -> String {
     let page_name = without_terminal_md(page_name);
+    let (page_name, extension) = if has_terminal_html(page_name) {
+        (&page_name[..page_name.len() - 5], ".html")
+    } else {
+        (page_name, ".md")
+    };
     let last_slash = current_file_path.rfind('/').unwrap_or(0);
     let dir = &current_file_path[..last_slash];
     let mut segments: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
@@ -74,9 +136,9 @@ pub fn resolve_relative(current_file_path: &str, page_name: &str) -> String {
 
     if segments.is_empty() {
         // Edge case: resolved to root with just a filename
-        format!("/.md")
+        format!("/{}", extension)
     } else {
-        format!("/{}.md", segments.join("/"))
+        format!("/{}{}", segments.join("/"), extension)
     }
 }
 
@@ -280,49 +342,67 @@ pub struct VirtualEntry {
 /// Resolve a wikilink in the virtual filesystem tree.
 ///
 /// Algorithm (matches frontend's `resolvePageName()` exactly):
-/// 1. Relative: resolve link_name from source's directory, case-insensitive, markdown-only
-/// 2. Absolute (fallback): /{link_name}.md, case-insensitive, markdown-only
+/// 1. Relative: resolve link_name from source's directory, case-insensitive
+/// 2. Absolute (fallback): /{link_name}.md, case-insensitive
+///
+/// At each step a link without an extension finds `{name}.md`, and failing
+/// that `{name}.html`; `[[name.md]]` and `[[name.html]]` find only that file. Only link
+/// targets (see `is_link_target`) match.
 pub fn resolve_in_virtual_tree<'a>(
     link_name: &str,
     source_virtual_path: Option<&str>,
     entries: &'a [VirtualEntry],
 ) -> Option<&'a VirtualEntry> {
-    let link_name = without_terminal_md(link_name);
+    let stripped = without_terminal_md(link_name);
+    // [[x.md]] names the Markdown file: no .html fallback, as in the content processor
+    let names_md = stripped.len() != link_name.len();
+    let link_name = stripped;
     let relative_path = source_virtual_path.map(|svp| resolve_relative(svp, link_name));
-    let absolute_path = format!("/{}.md", link_name);
+    let absolute_path = if has_terminal_html(link_name) {
+        format!("/{}", link_name)
+    } else {
+        format!("/{}.md", link_name)
+    };
 
-    let lower_relative = relative_path.as_ref().map(|p| p.to_lowercase());
-    let lower_absolute = absolute_path.to_lowercase();
-
-    let mut absolute_match: Option<&VirtualEntry> = None;
-
-    for entry in entries {
-        if entry.entry_type != "markdown" {
-            continue;
-        }
-
-        let lower_entry = entry.virtual_path.to_lowercase();
-
-        // Priority 1: relative match — return immediately
-        if let Some(ref lr) = lower_relative {
-            if lower_entry == *lr {
-                return Some(entry);
+    // Candidates in priority order: each .md path is followed by its .html
+    // twin, for a link without an extension.
+    let mut candidates: Vec<String> = Vec::with_capacity(4);
+    for path in relative_path.iter().chain(std::iter::once(&absolute_path)) {
+        let lower = path.to_lowercase();
+        match lower.strip_suffix(".md") {
+            Some(stem) if !names_md => {
+                let html = format!("{}.html", stem);
+                candidates.push(lower);
+                candidates.push(html);
             }
-        }
-
-        // Priority 2: absolute match — save as fallback
-        if absolute_match.is_none() && lower_entry == lower_absolute {
-            absolute_match = Some(entry);
+            _ => candidates.push(lower),
         }
     }
 
-    absolute_match
+    let mut best: Option<(usize, &VirtualEntry)> = None;
+    for entry in entries {
+        if !is_link_target(&entry.virtual_path, &entry.entry_type) {
+            continue;
+        }
+        let lower_entry = entry.virtual_path.to_lowercase();
+        if let Some(rank) = candidates.iter().position(|c| *c == lower_entry) {
+            if best.map_or(true, |(best_rank, _)| rank < best_rank) {
+                if rank == 0 {
+                    return Some(entry);
+                }
+                best = Some((rank, entry));
+            }
+        }
+    }
+
+    best.map(|(_, entry)| entry)
 }
 
 /// Compute wikilink text that resolves from `source_virtual_path` to `target_virtual_path`.
 ///
 /// Both paths include folder prefix: "/{folder}/{path}.md"
-/// Returns the page-name portion (no .md extension) for use inside `[[ ]]`.
+/// Returns the page-name portion (no .md or .html extension) for use inside
+/// `[[ ]]`; links to HTML pages leave out the extension too, as widget links do.
 ///
 /// Examples:
 /// - `("/Lens/Getting Started.md", "/Lens/Archive/Welcome.md")` → `"Archive/Welcome"`
@@ -334,9 +414,10 @@ pub fn compute_relative_wikilink(source_virtual_path: &str, target_virtual_path:
     let source_dir = &source_virtual_path[..source_virtual_path.rfind('/').unwrap_or(0)];
     let source_segments: Vec<&str> = source_dir.split('/').filter(|s| !s.is_empty()).collect();
 
-    // Extract target segments: strip .md, split by '/', skip leading empty
+    // Extract target segments: strip .md or .html, split by '/', skip leading empty
     let target_no_ext = target_virtual_path
         .strip_suffix(".md")
+        .or_else(|| target_virtual_path.strip_suffix(".html"))
         .unwrap_or(target_virtual_path);
     let target_segments: Vec<&str> = target_no_ext.split('/').filter(|s| !s.is_empty()).collect();
 
@@ -499,6 +580,18 @@ pub fn apply_backlink_diff(folder_doc: &Doc, source_uuid: &str, new_targets: &Ha
 // ---------------------------------------------------------------------------
 // Folder doc scanning helpers
 // ---------------------------------------------------------------------------
+
+/// The name a wikilink uses for a file: its title, without ".html" for an HTML
+/// page either. Rename detection compares these, so renaming `x.md` to `x.html`
+/// (converting a widget) leaves `[[x]]` links alone, and `x.html` → `y.html`
+/// rewrites `[[x]]` to `[[y]]`.
+fn link_name_from_filemeta_path(path: &str) -> String {
+    let title = title_from_filemeta_path(path);
+    match title.strip_suffix(".html") {
+        Some(stem) => stem.to_string(),
+        None => title,
+    }
+}
 
 /// Derive a display title from a filemeta_v0 path: strip the leading "/",
 /// the trailing ".md", and any directory components.
@@ -795,6 +888,15 @@ pub fn move_document(
     // A move out of `/_trash/` is a restore: the entry stops expiring.
     clear_trashed_at_if_restored(&mut meta_fields, new_path);
 
+    // Moving to `.html` turns the document into an HTML page (converting a
+    // widget keeps its id): type "file" and no legacy "docs" entry, as a page
+    // created with that path gets. The text stays in Y.Text("contents").
+    let becomes_html = has_terminal_html(new_path);
+    let old_type = meta_fields.get("type").cloned();
+    if becomes_html {
+        meta_fields.insert("type".to_string(), Any::String("file".into()));
+    }
+
     // Determine folder names
     let source_folder_name = read_folder_name(source_folder_doc, "");
     let target_folder_name = read_folder_name(target_folder_doc, "");
@@ -817,7 +919,9 @@ pub fn move_document(
             let docs_map = txn.get_or_insert_map("docs");
             ensure_ancestor_folders(&filemeta, &docs_map, &mut txn, new_path);
             filemeta.insert(&mut txn, new_path, Any::Map(meta_fields.clone().into()));
-            docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
+            if !becomes_html {
+                docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
+            }
         }
     } else {
         // Within-folder: remove old, insert new in one transaction
@@ -828,7 +932,9 @@ pub fn move_document(
         filemeta.remove(&mut txn, &old_path);
         filemeta.insert(&mut txn, new_path, Any::Map(meta_fields.clone().into()));
         docs_map.remove(&mut txn, &old_path);
-        docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
+        if !becomes_html {
+            docs_map.insert(&mut txn, new_path, Any::String(uuid.into()));
+        }
     }
 
     // 3. Update DocumentResolver
@@ -880,6 +986,9 @@ pub fn move_document(
     for entry in entries.iter_mut() {
         if entry.id == uuid {
             entry.virtual_path = old_virtual_path.clone();
+            if let Some(Any::String(t)) = &old_type {
+                entry.entry_type = t.to_string();
+            }
         }
     }
 
@@ -929,8 +1038,9 @@ pub fn move_document(
         }
     }
 
-    // 6b. Rewrite outgoing links in the moved document itself
-    if let Some(content_doc) = content_docs.get(uuid) {
+    // 6b. Rewrite outgoing links in the moved document itself. Not in an HTML
+    // page: `[[` there may be script or data, and its links are not indexed.
+    if let Some(content_doc) = content_docs.get(uuid).filter(|_| !becomes_html) {
         match rewrite_outgoing_links_for_move(
             content_doc,
             &old_virtual_path,
@@ -970,10 +1080,17 @@ pub fn move_document(
         }
     }
 
-    // 7. Re-index the moved doc's own backlinks (its wikilinks may resolve differently at new location)
+    // 7. Re-index the moved doc's own backlinks (its wikilinks may resolve differently at new location).
+    //    An HTML page links nowhere (see index_document), so drop what it had.
     if let Some(content_doc) = content_docs.get(uuid) {
-        // Re-index using the updated folder docs (filemeta already has new path)
-        let _ = index_content_into_folders(uuid, content_doc, all_folder_docs);
+        if becomes_html {
+            for folder_doc in all_folder_docs {
+                apply_backlink_diff(folder_doc, uuid, &HashSet::new());
+            }
+        } else {
+            // Re-index using the updated folder docs (filemeta already has new path)
+            let _ = index_content_into_folders(uuid, content_doc, all_folder_docs);
+        }
     }
 
     Ok(MoveResult {
@@ -1440,7 +1557,7 @@ impl LinkIndexer {
             let mut map = HashMap::new();
             for (path, value) in filemeta.iter(&txn) {
                 if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
-                    let basename = title_from_filemeta_path(&path);
+                    let basename = link_name_from_filemeta_path(&path);
                     map.insert(uuid, (basename, path.to_string()));
                 }
             }
@@ -3230,6 +3347,186 @@ mod tests {
         assert_eq!(read_contents(&content), markdown);
     }
 
+    // === HTML pages as link targets (widgets are widgets/<name>.html) ===
+
+    /// Folder doc whose .html entries have type "file", as the editor and MCP
+    /// `create` store them.
+    fn create_folder_doc_with_html(entries: &[(&str, &str)]) -> Doc {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            for (path, uuid) in entries {
+                let entry_type = if path.ends_with(".md") {
+                    "markdown"
+                } else {
+                    "file"
+                };
+                let mut map = HashMap::new();
+                map.insert("id".to_string(), Any::String((*uuid).into()));
+                map.insert("type".to_string(), Any::String(entry_type.into()));
+                map.insert("version".to_string(), Any::Number(0.0));
+                filemeta.insert(&mut txn, *path, Any::Map(map.into()));
+            }
+        }
+        doc
+    }
+
+    fn html_entries() -> Vec<VirtualEntry> {
+        let entry = |path: &str, id: &str| VirtualEntry {
+            virtual_path: path.into(),
+            entry_type: if path.ends_with(".md") {
+                "markdown"
+            } else {
+                "file"
+            }
+            .into(),
+            id: id.into(),
+            folder_idx: 0,
+        };
+        vec![
+            entry("/Lens Edu/lenses/Intro.md", "intro"),
+            entry("/Lens Edu/widgets/rings.html", "rings"),
+            entry("/Lens Edu/widgets/twin.md", "twin-md"),
+            entry("/Lens Edu/widgets/twin.html", "twin-html"),
+            entry("/Lens Edu/sub/a.md", "rel-md"),
+            entry("/a.html", "abs-html"),
+            entry("/Lens Edu/sub/b.html", "rel-html"),
+            entry("/b.md", "abs-md"),
+            entry("/Lens Edu/data.json", "json"),
+        ]
+    }
+
+    #[test]
+    fn extensionless_link_resolves_to_html_page_after_md() {
+        let entries = html_entries();
+        let intro = Some("/Lens Edu/lenses/Intro.md");
+        let id = |link: &str, from: Option<&str>| {
+            resolve_in_virtual_tree(link, from, &entries).map(|e| e.id.clone())
+        };
+        assert_eq!(id("../widgets/rings", intro).as_deref(), Some("rings"));
+        assert_eq!(id("../widgets/RINGS", intro).as_deref(), Some("rings"));
+        assert_eq!(id("../widgets/twin", intro).as_deref(), Some("twin-md"));
+        assert_eq!(id("../widgets/twin.md", intro).as_deref(), Some("twin-md"));
+        assert_eq!(id("../widgets/rings.md", intro), None);
+        assert_eq!(
+            id("../widgets/twin.html", intro).as_deref(),
+            Some("twin-html")
+        );
+        assert_eq!(
+            id("Lens Edu/widgets/rings.html", None).as_deref(),
+            Some("rings")
+        );
+        // Each step tries .md, then .html, before the next step
+        let sub = Some("/Lens Edu/sub/x.md");
+        assert_eq!(id("a", sub).as_deref(), Some("rel-md"));
+        assert_eq!(id("b", sub).as_deref(), Some("rel-html"));
+        // Other non-Markdown files are still not link targets
+        assert_eq!(id("../data", intro), None);
+        assert_eq!(id("../data.json", intro), None);
+    }
+
+    #[test]
+    fn resolve_relative_keeps_an_html_extension() {
+        assert_eq!(
+            resolve_relative("/Lens Edu/lenses/Intro.md", "../widgets/rings.html"),
+            "/Lens Edu/widgets/rings.html"
+        );
+        assert_eq!(
+            resolve_relative("/Lens Edu/lenses/Intro.md", "../widgets/rings"),
+            "/Lens Edu/widgets/rings.md"
+        );
+    }
+
+    #[test]
+    fn relative_wikilink_to_html_page_leaves_out_the_extension() {
+        assert_eq!(
+            compute_relative_wikilink("/Lens Edu/lenses/Intro.md", "/Lens Edu/widgets/rings.html"),
+            "../widgets/rings"
+        );
+    }
+
+    #[test]
+    fn link_to_html_widget_creates_backlink() {
+        let folder = create_folder_doc_with_html(&[
+            ("/lenses/Intro.md", "uuid-intro"),
+            ("/widgets/rings.html", "uuid-rings"),
+        ]);
+        set_folder_name(&folder, "Lens Edu");
+        let content =
+            create_content_doc("#### Widget\nsource:: [[../widgets/rings]]\n![[../widgets/rings]]");
+
+        index_content_into_folders("uuid-intro", &content, &[&folder]).unwrap();
+
+        assert_eq!(read_backlinks(&folder, "uuid-rings"), vec!["uuid-intro"]);
+    }
+
+    #[test]
+    fn converting_a_widget_from_md_to_html_is_not_a_rename() {
+        let (indexer, _rx) = LinkIndexer::new();
+        indexer.detect_changes(
+            "folder-1",
+            &create_folder_doc_with_html(&[("/widgets/x.md", "uuid-1")]),
+        );
+
+        let changes = indexer.detect_changes(
+            "folder-1",
+            &create_folder_doc_with_html(&[("/widgets/x.html", "uuid-1")]),
+        );
+        assert!(
+            changes.renames.is_empty(),
+            "[[../widgets/x]] already finds x.html; a rename would rewrite it to [[../widgets/x.html]]"
+        );
+        assert!(
+            changes.membership_changed,
+            "links must be re-resolved to the .html file"
+        );
+    }
+
+    #[test]
+    fn renaming_an_html_page_renames_extensionless_links() {
+        let (indexer, _rx) = LinkIndexer::new();
+        indexer.detect_changes(
+            "folder-1",
+            &create_folder_doc_with_html(&[("/widgets/x.html", "uuid-1")]),
+        );
+
+        let renames = indexer.detect_renames(
+            "folder-1",
+            &create_folder_doc_with_html(&[("/widgets/y.html", "uuid-1")]),
+        );
+        assert_eq!(renames.len(), 1);
+        assert_eq!(renames[0].old_name, "x");
+        assert_eq!(renames[0].new_name, "y");
+
+        let entries = vec![
+            VirtualEntry {
+                virtual_path: "/Lens Edu/lenses/Intro.md".into(),
+                entry_type: "markdown".into(),
+                id: "uuid-intro".into(),
+                folder_idx: 0,
+            },
+            VirtualEntry {
+                virtual_path: "/Lens Edu/widgets/x.html".into(),
+                entry_type: "file".into(),
+                id: "uuid-1".into(),
+                folder_idx: 0,
+            },
+        ];
+        let content = create_content_doc("source:: [[../widgets/x]]");
+        let count = update_wikilinks_in_doc_resolved(
+            &content,
+            "x",
+            "y",
+            Some("/Lens Edu/lenses/Intro.md"),
+            &entries,
+            "/Lens Edu/widgets/x.html",
+        )
+        .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(read_contents(&content), "source:: [[../widgets/y]]");
+    }
+
     mod virtual_tree_tests {
         use super::super::*;
 
@@ -4236,6 +4533,96 @@ mod tests {
                 Some("uuid-photo".to_string()),
                 "UUID should be preserved"
             );
+        }
+
+        // Converting a widget: widgets/x.md -> widgets/x.html keeps the id,
+        // becomes an HTML page, and touches no lens link ([[../widgets/x]]
+        // already finds x.html).
+        #[test]
+        fn move_md_to_html_converts_the_entry_and_keeps_links() {
+            let folder = create_folder_doc(&[
+                ("/widgets/rings.md", "uuid-rings"),
+                ("/lenses/Intro.md", "uuid-intro"),
+            ]);
+            set_folder_name(&folder, "Lens Edu");
+            let f0id = folder0_id();
+            let lens_text = "source:: [[../widgets/rings]]\n![[../widgets/rings|Rings]]";
+            let lens = create_content_doc(lens_text);
+            let widget =
+                create_content_doc("---\ntitle: Rings\n---\n<script>let a = [[1, 2]];</script>");
+            index_content_into_folder("uuid-intro", &lens, &folder).unwrap();
+            index_content_into_folder("uuid-rings", &widget, &folder).unwrap();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-intro".to_string(), &lens as &Doc);
+            content_docs.insert("uuid-rings".to_string(), &widget as &Doc);
+
+            let result = move_document(
+                "uuid-rings",
+                "/widgets/rings.html",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens Edu"],
+                &resolver,
+                &content_docs,
+            )
+            .expect("move should succeed");
+
+            assert_eq!(result.links_rewritten, 0);
+            assert_eq!(read_contents(&lens), lens_text);
+            assert_eq!(
+                read_contents(&widget),
+                "---\ntitle: Rings\n---\n<script>let a = [[1, 2]];</script>"
+            );
+            let txn = folder.transact();
+            let filemeta = txn.get_map("filemeta_v0").unwrap();
+            let entry = filemeta.get(&txn, "/widgets/rings.html").expect("moved");
+            assert_eq!(
+                extract_id_from_filemeta_entry(&entry, &txn).as_deref(),
+                Some("uuid-rings")
+            );
+            assert_eq!(
+                extract_type_from_filemeta_entry(&entry, &txn).as_deref(),
+                Some("file")
+            );
+            let docs_map = txn.get_map("docs").unwrap();
+            assert!(docs_map.get(&txn, "/widgets/rings.html").is_none());
+            assert!(docs_map.get(&txn, "/widgets/rings.md").is_none());
+            drop(txn);
+            assert_eq!(read_backlinks(&folder, "uuid-rings"), vec!["uuid-intro"]);
+        }
+
+        #[test]
+        fn move_md_to_html_in_another_directory_rewrites_links() {
+            let folder = create_folder_doc(&[
+                ("/drafts/rings.md", "uuid-rings"),
+                ("/lenses/Intro.md", "uuid-intro"),
+            ]);
+            set_folder_name(&folder, "Lens Edu");
+            let f0id = folder0_id();
+            let lens = create_content_doc("source:: [[../drafts/rings]]");
+            index_content_into_folder("uuid-intro", &lens, &folder).unwrap();
+
+            let resolver = build_resolver(&[(&f0id, &folder)]);
+            let mut content_docs = HashMap::new();
+            content_docs.insert("uuid-intro".to_string(), &lens as &Doc);
+
+            let result = move_document(
+                "uuid-rings",
+                "/widgets/rings.html",
+                &folder,
+                &folder,
+                &[&folder],
+                &["Lens Edu"],
+                &resolver,
+                &content_docs,
+            )
+            .expect("move should succeed");
+
+            assert_eq!(result.links_rewritten, 1);
+            assert_eq!(read_contents(&lens), "source:: [[../widgets/rings]]");
         }
 
         #[test]

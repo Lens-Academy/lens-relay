@@ -1592,6 +1592,13 @@ impl Server {
                         in_folder_path, folder_name
                     )));
                 }
+                if let Some(twin) =
+                    link_indexer::find_twin_in_filemeta(&filemeta, &txn, in_folder_path, None)
+                {
+                    return Err(CreateDocumentError::Conflict(
+                        link_indexer::twin_conflict_message(in_folder_path, &twin),
+                    ));
+                }
             }
         }
 
@@ -1839,6 +1846,13 @@ impl Server {
                         "Path '{}' already exists in folder '{}'",
                         in_folder_path, folder_name
                     )));
+                }
+                if let Some(twin) =
+                    link_indexer::find_twin_in_filemeta(&filemeta, &txn, in_folder_path, None)
+                {
+                    return Err(CreateDocumentError::Conflict(
+                        link_indexer::twin_conflict_message(in_folder_path, &twin),
+                    ));
                 }
             }
         }
@@ -2376,6 +2390,13 @@ impl Server {
                         in_folder_path, folder_name
                     )));
                 }
+                if let Some(twin) =
+                    link_indexer::find_twin_in_filemeta(&filemeta, &txn, in_folder_path, None)
+                {
+                    return Err(CreateDocumentError::Conflict(
+                        link_indexer::twin_conflict_message(in_folder_path, &twin),
+                    ));
+                }
             }
         }
 
@@ -2506,9 +2527,11 @@ impl Server {
                 "new_path must start with '/'".into(),
             ));
         }
-        if !new_path.ends_with(".md") {
+        // A Markdown document may also become an HTML page (a widget converted
+        // from widgets/x.md to widgets/x.html keeps its id); see move_document.
+        if !new_path.ends_with(".md") && !new_path.ends_with(".html") {
             return Err(MoveDocumentError::BadRequest(
-                "new_path must end with '.md'".into(),
+                "new_path must end with '.md' or '.html'".into(),
             ));
         }
 
@@ -2597,6 +2620,13 @@ impl Server {
                             "Path '{}' already exists in target folder",
                             new_path
                         )));
+                    }
+                    if let Some(twin) =
+                        link_indexer::find_twin_in_filemeta(&filemeta, &txn, new_path, Some(uuid))
+                    {
+                        return Err(MoveDocumentError::Conflict(
+                            link_indexer::twin_conflict_message(new_path, &twin),
+                        ));
                     }
                 }
             }
@@ -2827,7 +2857,7 @@ impl Server {
                     folder_name, old_sidecar, folder_name
                 )));
             }
-            // move_document rejects a non-.md destination itself.
+            // move_document rejects a destination other than .md or .html itself.
             if let Some(new_sidecar) = timestamps_sidecar_path(new_path) {
                 if new_sidecar != old_sidecar
                     && self.filemeta_has_path(&folder_doc_id, &new_sidecar)
@@ -3144,6 +3174,13 @@ impl Server {
                     "Path '{}' already exists in target folder",
                     new_path
                 )));
+            }
+            if let Some(twin) =
+                link_indexer::find_twin_in_filemeta(&filemeta, &txn, new_path, Some(&info.uuid))
+            {
+                return Err(MoveDocumentError::Conflict(
+                    link_indexer::twin_conflict_message(new_path, &twin),
+                ));
             }
             let mut fields = link_indexer::extract_filemeta_fields(&value, &txn);
             link_indexer::clear_trashed_at_if_restored(&mut fields, new_path);
@@ -8161,6 +8198,101 @@ mod test {
         assert!(matches!(result, Err(MoveDocumentError::BadRequest(_))));
         assert!(filemeta_has(&server, &folder_doc_id, "/Old.md"));
         assert!(!filemeta_has(&server, &folder_doc_id, "/Bad \"Name\".md"));
+    }
+
+    // A folder may not hold x.md and x.html: [[x]] could not tell them apart.
+    #[tokio::test]
+    async fn create_refuses_an_md_html_twin() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                (
+                    "/widgets/a.md",
+                    "11111111-1111-4111-8111-111111111111",
+                    "markdown",
+                ),
+                (
+                    "/widgets/b.html",
+                    "22222222-2222-4222-8222-222222222222",
+                    "file",
+                ),
+            ],
+        )
+        .await;
+
+        let html = server
+            .create_document_direct("Relay Folder 1", "/widgets/A.html", "<p>a</p>", None)
+            .await;
+        assert!(
+            matches!(&html, Err(CreateDocumentError::Conflict(m)) if m.contains("/widgets/a.md")),
+            "{:?}",
+            html.err()
+        );
+        let md = server
+            .create_document("Relay Folder 1", "/widgets/b.md", "b", None)
+            .await;
+        assert!(matches!(md, Err(CreateDocumentError::Conflict(_))));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/widgets/A.html"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/widgets/b.md"));
+
+        // Same name in another folder is fine
+        server
+            .create_document_direct("Relay Folder 1", "/other/a.html", "<p>a</p>", None)
+            .await
+            .expect("no twin in /other");
+    }
+
+    #[tokio::test]
+    async fn move_refuses_an_md_html_twin_but_converts_in_place() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                (
+                    "/drafts/a.md",
+                    "11111111-1111-4111-8111-111111111111",
+                    "markdown",
+                ),
+                (
+                    "/widgets/a.html",
+                    "22222222-2222-4222-8222-222222222222",
+                    "file",
+                ),
+                (
+                    "/widgets/c.md",
+                    "33333333-3333-4333-8333-333333333333",
+                    "markdown",
+                ),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, "11111111-1111-4111-8111-111111111111", "a").await;
+        insert_test_content_doc(&server, "33333333-3333-4333-8333-333333333333", "c").await;
+
+        // x.md next to an existing x.html
+        let result = server
+            .move_path("Relay Folder 1/drafts/a.md", "/widgets/a.md", None)
+            .await;
+        assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/drafts/a.md"));
+
+        // An HTML page renamed onto a Markdown file's name
+        let result = server
+            .move_path("Relay Folder 1/widgets/a.html", "/widgets/c.html", None)
+            .await;
+        assert!(matches!(result, Err(MoveDocumentError::Conflict(_))));
+        assert!(filemeta_has(&server, &folder_doc_id, "/widgets/a.html"));
+
+        // Converting c.md to c.html: the file is not its own twin
+        server
+            .move_path("Relay Folder 1/widgets/c.md", "/widgets/c.html", None)
+            .await
+            .expect("converting a file in place");
+        assert!(filemeta_has(&server, &folder_doc_id, "/widgets/c.html"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/widgets/c.md"));
     }
 
     #[tokio::test]

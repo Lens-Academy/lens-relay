@@ -110,6 +110,13 @@ services in `bridge/page-services.ts`; both are bundled into the bridge by `vite
 hang the preview can be opened with `?view=source`. The author-facing rules are the relay doc
 `Lens/AI Guide/HTML Pages.md`.
 
+HTML pages are wiki-link targets like Markdown: `[[x]]` finds `x.md`, else `x.html` (widgets are
+`widgets/<name>.html`, with their fields in a leading `<!--lens-widget ... -->` comment), here in
+`src/lib/document-resolver.ts` and in the relay's `resolve_in_virtual_tree`. Links leave out the extension, and
+renaming `x.md` to `x.html` rewrites no links. `HtmlDocumentLayout` gives a page the right sidebar with its
+backlinks (outgoing links in an HTML page are not indexed), and promotion and `validate_content` carry
+`widgets/*.html`.
+
 Comments on HTML pages are stored out of band (`comments_v0`, above) and anchored to the rendered page:
 - `anchoring/`: the page's visible-text index, describing a click/selection/element as an anchor, and resolving it
   again (exact quote + context → scope → fuzzy → between old context; `guessed` rather than confidently wrong).
