@@ -43,7 +43,7 @@ pub const WRITE_TOOLS: [&str; 9] = [
 
 /// Return tool definitions for MCP tools/list response.
 /// When `writable` is false, write tools (edit, create, move) are excluded;
-/// `delete` is listed only when `can_delete` (Admin/Edit/legacy key), so a
+/// `delete` is listed only when `can_delete` (Admin/Edit), so a
 /// Suggest token neither sees nor can call it.
 pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
     let article_import_modes = import_source::ARTICLE_IMPORT_MODES;
@@ -724,7 +724,7 @@ mod integration_tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         };
         let sid = server
             .mcp_sessions
@@ -749,23 +749,22 @@ mod integration_tests {
     }
 
     // Prevents: a Suggest token (writable: its edits become suggestions)
-    // slipping through the generic write gate into `delete`, and the legacy
-    // API key / Admin / Edit losing the tool.
+    // slipping through the generic write gate into `delete`, and Admin / Edit
+    // losing the tool.
     #[tokio::test]
-    async fn delete_is_refused_for_suggest_and_view_but_allowed_for_admin_edit_and_legacy() {
+    async fn delete_is_refused_for_suggest_and_view_but_allowed_for_admin_and_edit() {
         use super::delete_doc::tests::build_server;
         use y_sweet_core::share_token::{McpAccess, ShareRole};
 
-        let cases: Vec<(Option<ShareRole>, bool, Option<&str>)> = vec![
-            (Some(ShareRole::View), false, Some("read-only")),
+        let cases: Vec<(ShareRole, bool, Option<&str>)> = vec![
+            (ShareRole::View, false, Some("read-only")),
             (
-                Some(ShareRole::Suggest),
+                ShareRole::Suggest,
                 true,
                 Some("requires an Admin or Edit token"),
             ),
-            (Some(ShareRole::Edit), true, None),
-            (Some(ShareRole::Admin), true, None),
-            (None, true, None),
+            (ShareRole::Edit, true, None),
+            (ShareRole::Admin, true, None),
         ];
         for (role, writable, refusal) in cases {
             let server = build_server(&[(
@@ -828,7 +827,7 @@ mod integration_tests {
             folder_uuid: Some("bbbb0000-0000-0000-0000-000000000000".to_string()),
             folder_name: Some("Lens Edu".to_string()),
             raw_token: None,
-            role: Some(ShareRole::Edit),
+            role: ShareRole::Edit,
         };
         let sid = server
             .mcp_sessions
@@ -900,7 +899,7 @@ mod integration_tests {
             .await;
             let text = res["content"][0]["text"].as_str().unwrap();
             assert!(!text.contains("Unknown tool"), "{name}: {text}");
-            assert!(text.contains("credential type"), "{name}: {text}");
+            assert!(text.contains("no share token"), "{name}: {text}");
         }
     }
 
@@ -1026,7 +1025,7 @@ mod integration_tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         };
 
         // get_url must be advertised even for read-only sessions.

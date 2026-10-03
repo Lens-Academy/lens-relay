@@ -5,8 +5,7 @@
 //! `import_status` proxies `GET /api/add-article/status`. Auth: the session's
 //! own share token (carried on `McpAccess::raw_token`) is forwarded as the
 //! Bearer, so role/folder enforcement stays in lens-editor — the relay adds
-//! no new trust. Legacy API-key sessions have no share token and get a clear
-//! error instead.
+//! no new trust.
 //!
 //! The lens-editor base URL comes from `LENS_EDITOR_URL` (default
 //! `http://lens-editor:3000`, the docker-compose service address).
@@ -33,7 +32,7 @@ pub(super) fn editor_url_from_env() -> String {
 /// session) so a leaked session id never upgrades a weaker token.
 pub(super) fn request_token(access: &McpAccess) -> Result<String, String> {
     access.raw_token.clone().ok_or_else(|| {
-        "Error: Importing is not available for this credential type (requires a share-token MCP URL, not the legacy API key)."
+        "Error: Importing needs a share-token MCP URL, and this request carried no share token."
             .to_string()
     })
 }
@@ -205,7 +204,7 @@ mod tests {
             folder_uuid: None,
             folder_name: Some("Lens Edu".to_string()),
             raw_token: Some(token.to_string()),
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         }
     }
 
@@ -215,7 +214,7 @@ mod tests {
             folder_uuid: None,
             folder_name: None,
             raw_token: None,
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         }
     }
 
@@ -368,10 +367,10 @@ mod tests {
         assert!(body.contains("youtube.com"), "got: {body}");
     }
 
-    // Prevents: legacy API-key sessions failing with an opaque editor 401
-    // instead of a clear explanation
+    // Prevents: an access without a share token to forward failing with an
+    // opaque editor 401 instead of a clear explanation
     #[tokio::test]
-    async fn legacy_key_session_gets_clear_error() {
+    async fn access_without_token_gets_clear_error() {
         let err = execute_with_editor_url(
             &access_without_token(),
             &json!({
@@ -382,7 +381,7 @@ mod tests {
         )
         .await
         .expect_err("no raw token → error");
-        assert!(err.contains("credential type"), "got: {err}");
+        assert!(err.contains("no share token"), "got: {err}");
     }
 
     // Prevents: status tool dropping the forwarded token

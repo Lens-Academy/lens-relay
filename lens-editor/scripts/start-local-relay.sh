@@ -89,6 +89,10 @@ if [ "$RELAY_STORAGE" != "r2" ]; then
     SETUP_PID=$!
 fi
 
+# /mcp accepts only share tokens, and is off without a secret. Default to the
+# dev secret that lens-editor and scripts/generate-share-link.ts sign with, so
+# local share links double as MCP credentials.
 PORT=$RELAY_PORT \
 RELAY_SERVER_URL="http://localhost:$RELAY_PORT" \
+SHARE_TOKEN_SECRET="${SHARE_TOKEN_SECRET:-lens-editor-dev-secret-do-not-use-in-production}" \
 cargo run -p relay -- serve --config "$CONFIG_FILE"

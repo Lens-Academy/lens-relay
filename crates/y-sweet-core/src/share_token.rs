@@ -77,26 +77,22 @@ pub struct McpAccess {
     pub writable: bool,
     pub folder_uuid: Option<String>, // None = all folders
     pub folder_name: Option<String>, // Resolved later, not in token
-    /// The raw credential this access was decoded from. Set for signed share
-    /// tokens only (None for the legacy API key) — used to forward the
-    /// caller's own token to sibling services (e.g. lens-editor importers).
+    /// The share token this access was decoded from, set by
+    /// [`decode_mcp_key`] — used to forward the caller's own token to sibling
+    /// services (e.g. lens-editor importers). `None` only for accesses built
+    /// in code rather than decoded from a request.
     pub raw_token: Option<String>,
-    /// Role carried by the share token. `None` for the legacy API key, which
-    /// is treated as an admin credential. Only the `delete` tool looks at
-    /// this today; every other tool keeps gating on `writable`.
-    pub role: Option<ShareRole>,
+    /// Role carried by the share token. Only the `delete` tool looks at this
+    /// today; every other tool keeps gating on `writable`.
+    pub role: ShareRole,
 }
 
 impl McpAccess {
     /// Whether this credential may move files to the trash (`delete` tool):
-    /// Admin and Edit share tokens, and the legacy API key. Suggest tokens
-    /// are writable (edits become suggestions) but may not delete.
+    /// Admin and Edit share tokens. Suggest tokens are writable (edits become
+    /// suggestions) but may not delete.
     pub fn can_delete(&self) -> bool {
-        self.writable
-            && matches!(
-                self.role,
-                None | Some(ShareRole::Admin) | Some(ShareRole::Edit)
-            )
+        self.writable && matches!(self.role, ShareRole::Admin | ShareRole::Edit)
     }
 }
 
@@ -118,7 +114,7 @@ impl ShareTokenPayload {
             folder_uuid,
             folder_name: None,
             raw_token: None,
-            role: Some(self.role),
+            role: self.role,
         }
     }
 }
@@ -225,43 +221,21 @@ pub fn verify_share_token(token: &str, secret: &str) -> Option<ShareTokenPayload
     Some(payload)
 }
 
-/// Decode an MCP access key. Tries signed share token first, then falls back
-/// to matching a legacy plain-text API key.
+/// Decode an MCP access key. Only a signed share token authenticates; with no
+/// `share_secret` configured nothing does. (The plain-text `MCP_API_KEY`
+/// fallback was removed in October 2026.)
 ///
 /// Only `purpose == Share` tokens grant MCP access: an `add-video` token is
 /// scoped to the video-import bookmarklet endpoint and must not double as a
 /// general MCP credential.
-pub fn decode_mcp_key(
-    token: &str,
-    share_secret: Option<&str>,
-    legacy_api_key: Option<&str>,
-) -> Option<McpAccess> {
-    // Try signed token first
-    if let Some(secret) = share_secret {
-        if let Some(payload) = verify_share_token(token, secret) {
-            if payload.purpose != SharePurpose::Share {
-                return None;
-            }
-            let mut access = payload.to_mcp_access();
-            access.raw_token = Some(token.to_string());
-            return Some(access);
-        }
+pub fn decode_mcp_key(token: &str, share_secret: Option<&str>) -> Option<McpAccess> {
+    let payload = verify_share_token(token, share_secret?)?;
+    if payload.purpose != SharePurpose::Share {
+        return None;
     }
-
-    // Fall back to legacy API key match
-    if let Some(legacy) = legacy_api_key {
-        if !token.is_empty() && token == legacy {
-            return Some(McpAccess {
-                writable: true,
-                folder_uuid: None,
-                folder_name: None,
-                raw_token: None,
-                role: None,
-            });
-        }
-    }
-
-    None
+    let mut access = payload.to_mcp_access();
+    access.raw_token = Some(token.to_string());
+    Some(access)
 }
 
 #[cfg(test)]
@@ -281,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn can_delete_is_admin_edit_or_legacy_key_only() {
+    fn can_delete_is_admin_or_edit_only() {
         for (role, expected) in [
             (ShareRole::Admin, true),
             (ShareRole::Edit, true),
@@ -289,15 +263,12 @@ mod tests {
             (ShareRole::View, false),
         ] {
             let access = make_test_payload(role).to_mcp_access();
-            assert_eq!(access.role, Some(role));
+            assert_eq!(access.role, role);
             assert_eq!(access.can_delete(), expected, "{role:?}");
         }
-        let legacy = decode_mcp_key("legacy-key", None, Some("legacy-key")).unwrap();
-        assert_eq!(legacy.role, None);
-        assert!(legacy.can_delete());
         // A signed Suggest token decoded through the same path.
         let token = sign_share_token(&make_test_payload(ShareRole::Suggest), "secret");
-        let access = decode_mcp_key(&token, Some("secret"), None).unwrap();
+        let access = decode_mcp_key(&token, Some("secret")).unwrap();
         assert!(access.writable);
         assert!(!access.can_delete());
     }
@@ -420,11 +391,10 @@ mod tests {
     }
 
     #[test]
-    fn decode_mcp_key_prefers_signed_token() {
+    fn decode_mcp_key_uses_signed_token_role_and_folder() {
         let payload = make_test_payload(ShareRole::View);
         let token = sign_share_token(&payload, DEV_SECRET);
-        // Even though token matches legacy key, signed token takes priority
-        let access = decode_mcp_key(&token, Some(DEV_SECRET), Some(&token)).expect("should decode");
+        let access = decode_mcp_key(&token, Some(DEV_SECRET)).expect("should decode");
         // Signed token says View = read-only
         assert!(!access.writable);
         assert_eq!(access.folder_uuid, Some(TEST_FOLDER.to_string()));
@@ -434,7 +404,7 @@ mod tests {
     fn decode_mcp_key_sets_raw_token() {
         let payload = make_test_payload(ShareRole::Edit);
         let token = sign_share_token(&payload, DEV_SECRET);
-        let access = decode_mcp_key(&token, Some(DEV_SECRET), None).expect("should decode");
+        let access = decode_mcp_key(&token, Some(DEV_SECRET)).expect("should decode");
         assert_eq!(access.raw_token, Some(token));
     }
 
@@ -445,26 +415,25 @@ mod tests {
             ..make_test_payload(ShareRole::Edit)
         };
         let token = sign_share_token(&payload, DEV_SECRET);
-        // Verifies fine as a token, but must not grant MCP access...
+        // Verifies fine as a token, but must not grant MCP access.
         assert!(verify_share_token(&token, DEV_SECRET).is_some());
-        assert!(decode_mcp_key(&token, Some(DEV_SECRET), None).is_none());
-        // ...even when a legacy key is configured (no fall-through).
-        assert!(decode_mcp_key(&token, Some(DEV_SECRET), Some("legacy-key")).is_none());
+        assert!(decode_mcp_key(&token, Some(DEV_SECRET)).is_none());
+    }
+
+    // Prevents: a plain-text key (the removed MCP_API_KEY fallback, which
+    // granted admin on every folder) authenticating again.
+    #[test]
+    fn decode_mcp_key_refuses_plain_text_keys() {
+        for key in ["my-legacy-api-key", "test-key-123", "unknown", ""] {
+            assert!(decode_mcp_key(key, Some(DEV_SECRET)).is_none(), "{key:?}");
+            assert!(decode_mcp_key(key, None).is_none(), "{key:?}");
+        }
     }
 
     #[test]
-    fn decode_mcp_key_falls_back_to_legacy() {
-        let legacy = "my-legacy-api-key";
-        let access = decode_mcp_key(legacy, Some(DEV_SECRET), Some(legacy)).expect("should decode");
-        assert!(access.writable);
-        assert!(access.folder_uuid.is_none());
-        assert!(access.raw_token.is_none());
-    }
-
-    #[test]
-    fn decode_mcp_key_rejects_unknown() {
-        assert!(decode_mcp_key("unknown", Some(DEV_SECRET), Some("other-key")).is_none());
-        assert!(decode_mcp_key("unknown", None, None).is_none());
+    fn decode_mcp_key_refuses_everything_without_a_secret() {
+        let token = sign_share_token(&make_test_payload(ShareRole::Admin), DEV_SECRET);
+        assert!(decode_mcp_key(&token, None).is_none());
     }
 
     /// Cross-verification: tokens generated by lens-editor's Node.js

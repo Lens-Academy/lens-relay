@@ -115,10 +115,10 @@ async function prepare(): Promise<void> {
   const runId = `${new Date().toISOString().slice(0, 10)}-${randomUUID().slice(0, 8)}`;
   const runDir = path.join(cacheRoot, runId);
   const relayUrl = arg("--relay-url") ?? process.env.RELAY_URL;
-  const relayToken = process.env.ARTICLE_REVIEW_RELAY_TOKEN ?? process.env.MCP_API_KEY;
+  const relayToken = process.env.ARTICLE_REVIEW_RELAY_TOKEN;
   const relayFolder = arg("--relay-folder") ?? "Lens Edu";
   if (!relayUrl) throw new Error("prepare requires --relay-url <url> or RELAY_URL");
-  if (!relayToken) throw new Error("prepare requires ARTICLE_REVIEW_RELAY_TOKEN or MCP_API_KEY");
+  if (!relayToken) throw new Error("prepare requires ARTICLE_REVIEW_RELAY_TOKEN (a Relay MCP share token)");
   // Optional gap between source fetches: mirrors such as greaterwrong.com
   // answer 429 to a burst of requests but are fine with a steady trickle.
   const paceMs = Number(arg("--pace-ms") ?? 0);
@@ -295,8 +295,8 @@ async function execute(): Promise<void> {
     throw new Error("execute requires --article <path> or --all");
   }
   const relayUrl = arg("--relay-url") ?? process.env.RELAY_URL;
-  const relayToken = process.env.ARTICLE_REVIEW_RELAY_TOKEN ?? process.env.MCP_API_KEY;
-  if (!relayUrl || !relayToken) throw new Error("execute requires Relay URL and token");
+  const relayToken = process.env.ARTICLE_REVIEW_RELAY_TOKEN;
+  if (!relayUrl || !relayToken) throw new Error("execute requires --relay-url or RELAY_URL, and ARTICLE_REVIEW_RELAY_TOKEN (a Relay MCP share token)");
   assertArticleValidationConfigured();
   // The post-publish folder validation report is informational, and the relay
   // produces it by calling the platform validator while holding the request —

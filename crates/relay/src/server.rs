@@ -1021,7 +1021,6 @@ pub struct Server {
     recent_changes_ready: Arc<std::sync::atomic::AtomicBool>,
     doc_resolver: Arc<DocumentResolver>,
     pub(crate) mcp_sessions: Arc<crate::mcp::session::SessionManager>,
-    pub(crate) mcp_api_key: Option<String>,
     pub(crate) share_token_secret: Option<String>,
     /// Timestamp (epoch ms) of the most recent dirty signal from any doc.
     last_dirty_signal: Arc<AtomicU64>,
@@ -1139,13 +1138,15 @@ impl Server {
                 (None, None, None)
             };
 
-        let mcp_api_key = std::env::var("MCP_API_KEY").ok();
         let share_token_secret = std::env::var("SHARE_TOKEN_SECRET").ok();
-        if mcp_api_key.is_some() || share_token_secret.is_some() {
-            tracing::info!("MCP endpoint enabled (MCP_API_KEY or SHARE_TOKEN_SECRET is set)");
+        if share_token_secret.is_some() {
+            tracing::info!("MCP endpoint enabled (SHARE_TOKEN_SECRET is set)");
         } else {
-            tracing::info!(
-                "MCP endpoint disabled (neither MCP_API_KEY nor SHARE_TOKEN_SECRET set)"
+            tracing::info!("MCP endpoint disabled (SHARE_TOKEN_SECRET not set)");
+        }
+        if std::env::var_os("MCP_API_KEY").is_some() {
+            tracing::warn!(
+                "MCP_API_KEY is set but no longer used: the MCP endpoint accepts only share tokens"
             );
         }
 
@@ -1173,7 +1174,6 @@ impl Server {
             recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             doc_resolver,
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
-            mcp_api_key,
             share_token_secret,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
@@ -3415,12 +3415,12 @@ impl Server {
         Arc::new(Self::test_server_struct())
     }
 
-    /// Like [`Self::new_for_test`] with the `/mcp` routes enabled through an
-    /// API key.
+    /// Like [`Self::new_for_test`] with the `/mcp` routes enabled: share
+    /// tokens signed with `secret` authenticate.
     #[cfg(test)]
-    pub fn new_for_test_with_mcp_key(key: &str) -> Arc<Self> {
+    pub fn new_for_test_with_share_secret(secret: &str) -> Arc<Self> {
         let mut server = Self::test_server_struct();
-        server.mcp_api_key = Some(key.to_string());
+        server.share_token_secret = Some(secret.to_string());
         Arc::new(server)
     }
 
@@ -3452,7 +3452,6 @@ impl Server {
             recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
-            mcp_api_key: None,
             share_token_secret: None,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
@@ -3490,7 +3489,6 @@ impl Server {
             recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             doc_resolver: Arc::new(DocumentResolver::new()),
             mcp_sessions: Arc::new(crate::mcp::session::SessionManager::new()),
-            mcp_api_key: None,
             share_token_secret: None,
             last_dirty_signal: Arc::new(AtomicU64::new(0)),
             last_successful_persist: Arc::new(AtomicU64::new(0)),
@@ -4535,8 +4533,8 @@ impl Server {
             .route("/recent-changes", get(handle_recent_changes))
             .route("/suggestions/apply", post(handle_apply_suggestions));
 
-        // Register /mcp if MCP_API_KEY or SHARE_TOKEN_SECRET is set
-        if self.mcp_api_key.is_some() || self.share_token_secret.is_some() {
+        // Register /mcp if SHARE_TOKEN_SECRET is set (share tokens are the only MCP credential)
+        if self.share_token_secret.is_some() {
             // Bearer auth: POST/GET/DELETE /mcp (for Claude Code / .mcp.json)
             let bearer_routes = Router::new()
                 .route(
@@ -8502,11 +8500,27 @@ mod test {
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
+    const TEST_SHARE_SECRET: &str = "test-share-secret";
+
+    /// An all-folders Admin share token signed with [`TEST_SHARE_SECRET`].
+    fn admin_mcp_token() -> String {
+        y_sweet_core::share_token::sign_share_token(
+            &y_sweet_core::share_token::ShareTokenPayload {
+                purpose: y_sweet_core::share_token::SharePurpose::Share,
+                role: y_sweet_core::share_token::ShareRole::Admin,
+                folder: "00000000-0000-0000-0000-000000000000".to_string(),
+                expiry: 2_000_000_000,
+            },
+            TEST_SHARE_SECRET,
+        )
+    }
+
     // Prevents: /mcp silently keeping axum's 2 MiB default, which would make
     // every import_attachment call with a real image fail with 413.
     #[tokio::test]
     async fn mcp_routes_accept_bodies_larger_than_axum_default() {
-        let server = Server::new_for_test_with_mcp_key("test-key");
+        let server = Server::new_for_test_with_share_secret(TEST_SHARE_SECRET);
+        let bearer = format!("Bearer {}", admin_mcp_token());
         let padding = "x".repeat(3 * 1024 * 1024);
         let body = format!(
             r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"pad":"{}"}}}}"#,
@@ -8519,7 +8533,7 @@ mod test {
                     .method(Method::POST)
                     .uri("/mcp")
                     .header("content-type", "application/json")
-                    .header("authorization", "Bearer test-key")
+                    .header("authorization", &bearer)
                     .body(Body::from(body))
                     .unwrap(),
             )
@@ -8535,7 +8549,7 @@ mod test {
                     .method(Method::POST)
                     .uri("/mcp")
                     .header("content-type", "application/json")
-                    .header("authorization", "Bearer test-key")
+                    .header("authorization", &bearer)
                     .body(Body::from(too_big))
                     .unwrap(),
             )
@@ -8572,7 +8586,8 @@ mod test {
     // its inbound-link refusal losing the referencing list on the wire.
     #[tokio::test]
     async fn mcp_delete_tool_end_to_end_through_router_and_auth_middleware() {
-        let server = Server::new_for_test_with_mcp_key("test-key");
+        let server = Server::new_for_test_with_share_secret(TEST_SHARE_SECRET);
+        let token = admin_mcp_token();
         let a = "11111111-1111-4111-8111-111111111111";
         let b = "22222222-2222-4222-8222-222222222222";
         insert_test_folder_doc(
@@ -8602,10 +8617,10 @@ mod test {
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-        // tools/list advertises delete for the (writable) API key.
+        // tools/list advertises delete for the Admin token.
         let (status, resp) = mcp_call(
             &server,
-            "test-key",
+            &token,
             json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
         )
         .await;
@@ -8620,7 +8635,7 @@ mod test {
 
         let (_, resp) = mcp_call(
             &server,
-            "test-key",
+            &token,
             json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_session","arguments":{}}}),
         )
         .await;
@@ -8635,7 +8650,7 @@ mod test {
         // Refused: B links to A.
         let (_, resp) = mcp_call(
             &server,
-            "test-key",
+            &token,
             json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"delete","arguments":{"path":"Lens/Notes/A.md","session_id":sid}}}),
         )
         .await;
@@ -8647,7 +8662,7 @@ mod test {
         // Forced: moved, B untouched.
         let (_, resp) = mcp_call(
             &server,
-            "test-key",
+            &token,
             json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"delete","arguments":{"path":"Lens/Notes/A.md","force":true,"session_id":sid}}}),
         )
         .await;
@@ -8661,7 +8676,7 @@ mod test {
         // Already trashed.
         let (_, resp) = mcp_call(
             &server,
-            "test-key",
+            &token,
             json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"delete","arguments":{"path":"Lens/_trash/Notes/A.md","session_id":sid}}}),
         )
         .await;
@@ -8670,6 +8685,49 @@ mod test {
             .as_str()
             .unwrap()
             .contains("already in the trash"));
+    }
+
+    // Prevents: the removed MCP_API_KEY fallback coming back. A plain-text
+    // key used to grant admin on every folder; now only share tokens work,
+    // on both the Bearer route and the /mcp/:key route.
+    #[tokio::test]
+    async fn mcp_refuses_plain_text_keys_on_bearer_and_path_routes() {
+        let server = Server::new_for_test_with_share_secret(TEST_SHARE_SECRET);
+        let list = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
+        for key in ["test-key-123", TEST_SHARE_SECRET] {
+            let (status, _) = mcp_call(&server, key, list.clone()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "Bearer {key}");
+
+            let response = server
+                .routes()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/mcp/{}", key))
+                        .header("content-type", "application/json")
+                        .body(Body::from(list.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "/mcp/{key}");
+        }
+        let (status, _) = mcp_call(&server, &admin_mcp_token(), list).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // Prevents: /mcp being served without SHARE_TOKEN_SECRET, which no
+    // credential could pass anyway.
+    #[tokio::test]
+    async fn mcp_routes_absent_without_share_secret() {
+        let server = Server::new_for_test();
+        let (status, _) = mcp_call(
+            &server,
+            "anything",
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     async fn post_trash(

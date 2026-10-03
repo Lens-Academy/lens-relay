@@ -1,12 +1,14 @@
 #!/bin/bash
 # Generate ~100 CriticMarkup suggestions via MCP edit tool for testing bulk accept.
-# Uses the local relay server's MCP endpoint.
+# Uses the local relay server's MCP endpoint. MCP_TOKEN is a share token; by
+# default an all-folders edit token signed with the dev secret is minted.
 
 set -e
 
-API_KEY="${MCP_API_KEY:-test-key-123}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MCP_TOKEN="${MCP_TOKEN:-$(cd "$SCRIPT_DIR/.." && npx tsx scripts/generate-share-link.ts --role edit --all-folders --expires 1d | sed -n 's/^Token: *\([^ ]*\).*/\1/p')}"
 BASE_URL="${RELAY_URL:-http://localhost:8090}"
-MCP_URL="$BASE_URL/mcp/$API_KEY"
+MCP_URL="$BASE_URL/mcp/$MCP_TOKEN"
 
 echo "=== Initializing MCP session ==="
 SESSION_ID=$(curl -s -X POST "$MCP_URL" \

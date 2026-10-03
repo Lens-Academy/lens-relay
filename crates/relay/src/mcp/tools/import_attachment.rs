@@ -521,7 +521,7 @@ mod tests {
             folder_uuid: None,
             folder_name: folder.map(str::to_string),
             raw_token: token.map(str::to_string),
-            role: None,
+            role: y_sweet_core::share_token::ShareRole::Admin,
         }
     }
 
@@ -925,7 +925,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(err.contains("credential type"), "{err}");
+        assert!(err.contains("no share token"), "{err}");
     }
 
     // Prevents: the generic dispatch scope check letting a file_path in
