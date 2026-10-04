@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
@@ -48,12 +48,15 @@ const modes: Array<{ id: Mode; label: string }> = [
 
 const COMMENTS_VISIBLE_KEY = 'lens-html-editor-comments-visible';
 const PREVIEW_WIDTH_KEY = 'lens-html-editor-preview-width';
-/** Width of the phone preview: a common phone viewport in CSS pixels. */
+/** Size of the phone preview: a common phone viewport in CSS pixels. */
 const PHONE_PREVIEW_WIDTH = 390;
+const PHONE_PREVIEW_HEIGHT = 844;
+/** Grey margin around the phone screen inside the preview pane. */
+const PHONE_PREVIEW_MARGIN = 16;
 
 const widths: Array<{ id: PreviewWidth; label: string; title: string }> = [
   { id: 'desktop', label: 'Desktop', title: 'Preview at full width' },
-  { id: 'phone', label: 'Phone', title: `Preview at phone width (${PHONE_PREVIEW_WIDTH}px)` },
+  { id: 'phone', label: 'Phone', title: `Preview on a phone screen (${PHONE_PREVIEW_WIDTH}×${PHONE_PREVIEW_HEIGHT})` },
 ];
 
 function readPreviewWidth(): PreviewWidth {
@@ -172,6 +175,29 @@ export function HtmlEditor({
   // The width toggle is hidden on a phone, where the preview already is phone width.
   const phonePreview = previewWidth === 'phone' && !isMobile;
 
+  // The phone screen keeps its 390x844 viewport and is scaled down, as a whole,
+  // when the pane is smaller. Positions reported from inside the frame are in
+  // the page's own pixels; multiply them by frameScale for the editor's.
+  const previewWrapperRef = useRef<HTMLDivElement>(null);
+  const phoneScreenRef = useRef<HTMLDivElement>(null);
+  const [phoneScale, setPhoneScale] = useState(1);
+  useEffect(() => {
+    const wrapper = previewWrapperRef.current;
+    if (!phonePreview || !wrapper) return;
+    const fit = () => {
+      const width = (wrapper.clientWidth - 2 * PHONE_PREVIEW_MARGIN) / PHONE_PREVIEW_WIDTH;
+      const height = (wrapper.clientHeight - 2 * PHONE_PREVIEW_MARGIN) / PHONE_PREVIEW_HEIGHT;
+      setPhoneScale(Math.max(0.1, Math.min(1, width, height)));
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [phonePreview, mode]);
+  const frameScale = phonePreview ? phoneScale : 1;
+  const frameScaleRef = useRef(frameScale);
+  useLayoutEffect(() => { frameScaleRef.current = frameScale; }, [frameScale]);
+
   // On a phone the bottom bar's Comments button opens the sheet (the page sits
   // in HtmlDocumentLayout, which shows those buttons), so the header has none.
   const commentsControl = useMemo(() => (isMobile
@@ -185,7 +211,6 @@ export function HtmlEditor({
 
   // --- sidebar positioning -------------------------------------------
   const commentsLayerRef = useRef<CommentsLayerHandle>(null);
-  const previewWrapperRef = useRef<HTMLDivElement>(null);
   const currentScrollYRef = useRef(0);
   const iframeScrollStateRef = useRef<IframeScrollState>({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
   const scrollSource = useMemo(() => makeIframeScrollSource(() => iframeScrollStateRef.current), []);
@@ -198,16 +223,17 @@ export function HtmlEditor({
     const top = frameTop();
     if (key === DRAFT_KEY) {
       const rect = placements.draft?.rect;
-      if (rect) return effectiveY(rect, placements.baselineScrollY, currentScrollYRef.current, top);
-      return draft ? top + draft.rect.y : null;
+      if (rect) return effectiveY(rect, placements.baselineScrollY, currentScrollYRef.current, top, frameScale);
+      return draft ? top + draft.rect.y * frameScale : null;
     }
     const rect = placements.byId.get(key)?.rect;
     if (!rect) return null;
-    return effectiveY(rect, placements.baselineScrollY, currentScrollYRef.current, top);
+    return effectiveY(rect, placements.baselineScrollY, currentScrollYRef.current, top, frameScale);
   };
 
   const getViewportRect = () => {
-    const r = previewWrapperRef.current?.getBoundingClientRect();
+    // On the phone screen, comments line up with what shows on it.
+    const r = (phonePreview ? phoneScreenRef.current : previewWrapperRef.current)?.getBoundingClientRect();
     return { top: r?.top ?? 0, height: r?.height ?? 0 };
   };
 
@@ -329,8 +355,9 @@ export function HtmlEditor({
       setSelectionChip(null);
       return;
     }
-    const left = frame.left - wrapper.left + rect.x + rect.w / 2;
-    const top = frame.top - wrapper.top + rect.y;
+    const scale = frameScaleRef.current;
+    const left = frame.left - wrapper.left + (rect.x + rect.w / 2) * scale;
+    const top = frame.top - wrapper.top + rect.y * scale;
     setSelectionChip({ left: Math.max(40, Math.min(wrapper.width - 40, left)), top: Math.max(4, top - 34) });
   }, []);
   const showSelectionChip = selectionChip && canComment && !commentMode && !draft && mode !== 'source';
@@ -455,7 +482,7 @@ export function HtmlEditor({
             className={[
               'relative min-w-0 flex-1',
               mode === 'split' ? 'border-l border-gray-200' : '',
-              phonePreview ? 'flex justify-center overflow-x-auto bg-gray-100' : '',
+              phonePreview ? 'flex items-start justify-center overflow-hidden bg-gray-100' : '',
             ].join(' ')}
           >
             {problemsOpen && pageProblems.length > 0 && (
@@ -514,11 +541,25 @@ export function HtmlEditor({
               </button>
             )}
             <div
-              className={phonePreview
-                ? 'box-content h-full flex-shrink-0 border-x border-gray-300 bg-white shadow-sm'
-                : 'h-full w-full'}
-              style={phonePreview ? { width: PHONE_PREVIEW_WIDTH } : undefined}
+              ref={phoneScreenRef}
+              className={phonePreview ? 'flex-shrink-0' : 'h-full w-full'}
+              style={phonePreview ? {
+                width: PHONE_PREVIEW_WIDTH * phoneScale,
+                height: PHONE_PREVIEW_HEIGHT * phoneScale,
+                marginTop: PHONE_PREVIEW_MARGIN,
+              } : undefined}
               data-preview-width={phonePreview ? 'phone' : 'desktop'}
+            >
+            <div
+              className={phonePreview
+                ? 'overflow-hidden rounded-[24px] bg-white shadow-[0_0_0_1px_rgb(209_213_219),0_4px_16px_rgb(0_0_0/0.12)]'
+                : 'h-full w-full'}
+              style={phonePreview ? {
+                width: PHONE_PREVIEW_WIDTH,
+                height: PHONE_PREVIEW_HEIGHT,
+                transform: `scale(${phoneScale})`,
+                transformOrigin: 'top left',
+              } : undefined}
             >
               <HtmlPreview
                 ref={previewRef}
@@ -532,9 +573,9 @@ export function HtmlEditor({
                   if (payload.layoutVersion !== placements.layoutVersion) return;
                   currentScrollYRef.current = payload.y;
                   iframeScrollStateRef.current = {
-                    scrollTop: payload.y,
-                    scrollHeight: payload.scrollHeight,
-                    clientHeight: payload.clientHeight,
+                    scrollTop: payload.y * frameScaleRef.current,
+                    scrollHeight: payload.scrollHeight * frameScaleRef.current,
+                    clientHeight: payload.clientHeight * frameScaleRef.current,
                   };
                   scrollSource.notify();
                 }}
@@ -552,6 +593,7 @@ export function HtmlEditor({
                 storageKey={storageKey}
                 onPageProblems={setPageProblems}
               />
+            </div>
             </div>
           </div>
         )}

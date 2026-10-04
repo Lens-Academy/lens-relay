@@ -155,6 +155,28 @@ describe('HtmlEditor', () => {
     expect(sourceBtn.getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('previews on a 390x844 phone screen, scaled down to fit the pane', async () => {
+    // The pane is 600x500: the 844px-tall screen (plus its 16px margins) is scaled to 468/844.
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(500);
+    const { container } = renderWithDoc();
+    await userEvent.click(screen.getByRole('button', { name: /^Phone$/ }));
+
+    const scale = 468 / 844;
+    const box = container.querySelector<HTMLElement>('[data-preview-width="phone"]')!;
+    expect(parseFloat(box.style.width)).toBeCloseTo(390 * scale);
+    expect(parseFloat(box.style.height)).toBeCloseTo(468);
+    const screenEl = box.firstElementChild as HTMLElement;
+    expect(screenEl.style.width).toBe('390px');
+    expect(screenEl.style.height).toBe('844px');
+    expect(screenEl.style.transform).toBe(`scale(${scale})`);
+    expect(screenEl.contains(iframe())).toBe(true);
+
+    await userEvent.click(screen.getByRole('button', { name: /^Desktop$/ }));
+    expect(container.querySelector('[data-preview-width="desktop"]')).not.toBeNull();
+    expect(container.querySelector('[style*="scale"]')).toBeNull();
+  });
+
   it('preview pane is bound to the SAME Y.Text instance the parent owns', async () => {
     vi.useFakeTimers();
     try {
