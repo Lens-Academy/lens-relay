@@ -7,7 +7,7 @@ use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
 
-use super::{blob, create_doc};
+use super::create_doc;
 use crate::mcp::session::UPLOAD_TICKET_TTL;
 
 /// Public base URL of this relay, used to build upload links.
@@ -38,11 +38,11 @@ pub async fn execute(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    if blob::is_image_file(file_path) {
-        return Err(create_doc::IMAGE_CREATE_BLOCK_MESSAGE.to_string());
-    }
     if !(file_path.ends_with(".md") || file_path.ends_with(".html")) {
-        return Err("upload_link takes .md and .html files only.".to_string());
+        return Err(
+            "upload_link takes .md and .html files only (images go through import_attachment)."
+                .to_string(),
+        );
     }
     if !file_path.contains('/') {
         return Err("file_path must include a folder name (e.g. 'Lens/Page.html')".to_string());
@@ -60,10 +60,10 @@ pub async fn execute(
 
     let ticket = server
         .mcp_sessions
-        .issue_upload(session_id, file_path, replace);
+        .issue_upload(session_id, file_path, replace)?;
     let url = upload_url(&public_base_url(), &ticket);
     let action = if exists {
-        "replaces its whole content (as one edit: same rules as the edit tool, so in Markdown, human-written text that changes becomes a pending suggestion)"
+        "replaces its content: the lines that differ go through the edit tool, with its rules (in Markdown, human-written text that changes becomes a pending suggestion)"
     } else {
         "creates it (same rules as the create tool)"
     };
@@ -73,8 +73,9 @@ pub async fn execute(
          curl -sS --fail-with-body -X POST --data-binary @<local-file> '{url}'\n\n\
          Uploading {action}. The response is the same text the create/edit tool would return. \
          If it reports an error, nothing was written and the link stays valid: fix the file and POST again. \
-         This needs a shell with network access (Claude Code, or claude.ai code execution allowed to reach this host); \
-         without one, use create/edit instead.",
+         This needs a shell that can reach this host and has the file on disk: Claude Code, or claude.ai code execution \
+         only if its network settings allow this host and the file is in the sandbox. Writing the file out in a tool call \
+         first gains nothing over create/edit.",
         mins = UPLOAD_TICKET_TTL.as_secs() / 60,
     ))
 }

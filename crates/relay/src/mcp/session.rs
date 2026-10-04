@@ -73,6 +73,9 @@ pub struct UploadTicket {
 /// How long an upload link stays valid.
 pub const UPLOAD_TICKET_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
+/// Live upload links one session may hold at once.
+pub const MAX_UPLOADS_PER_SESSION: usize = 20;
+
 pub struct SessionManager {
     sessions: DashMap<String, McpSession>,
     uploads: DashMap<String, UploadTicket>,
@@ -87,10 +90,28 @@ impl SessionManager {
     }
 
     /// Issue an upload link for `file_path`, valid for [`UPLOAD_TICKET_TTL`].
-    /// Returns the unguessable ticket id that goes in the link.
-    pub fn issue_upload(&self, session_id: &str, file_path: &str, replace: bool) -> String {
+    /// Returns the unguessable ticket id that goes in the link, or an error
+    /// when the session already holds [`MAX_UPLOADS_PER_SESSION`] live links.
+    pub fn issue_upload(
+        &self,
+        session_id: &str,
+        file_path: &str,
+        replace: bool,
+    ) -> Result<String, String> {
         let now = Instant::now();
         self.uploads.retain(|_, t| t.expires_at > now);
+        let live = self
+            .uploads
+            .iter()
+            .filter(|t| t.session_id == session_id)
+            .count();
+        if live >= MAX_UPLOADS_PER_SESSION {
+            return Err(format!(
+                "This session already has {} unused upload links. Use them, or wait until they expire ({} minutes).",
+                live,
+                UPLOAD_TICKET_TTL.as_secs() / 60
+            ));
+        }
         let id = nanoid::nanoid!(32);
         self.uploads.insert(
             id.clone(),
@@ -101,7 +122,7 @@ impl SessionManager {
                 expires_at: now + UPLOAD_TICKET_TTL,
             },
         );
-        id
+        Ok(id)
     }
 
     /// Take the live ticket for `id` out of the store (None if unknown or

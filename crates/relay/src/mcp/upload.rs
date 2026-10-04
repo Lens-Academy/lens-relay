@@ -3,31 +3,39 @@
 //! The ticket in the URL is the credential: it names the MCP session that
 //! asked for it and the one file it may write, and expires after
 //! `UPLOAD_TICKET_TTL`. The body is the file's full text. A new file goes
-//! through the `create` tool, an existing one through `edit` with the whole
-//! current text as `old_string`, so every rule those tools apply (folder
+//! through the `create` tool, an existing one through `edit` with the span
+//! that changed as `old_string`, so every rule those tools apply (folder
 //! scope, read-only tokens, the articles block, the Markdown edit policy,
 //! HTML page checks, provenance and activity) applies to uploads too.
+//!
+//! Errors are JSON (`{"error": ...}`): production's `redact_errors` strips
+//! every other 4xx/5xx body, and the caller needs the reason to retry.
 
 use axum::{
-    body::Bytes,
+    body::Body,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
+    Json,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
 use yrs::{GetString, ReadTxn, Transact};
 
 use super::tools::{self, blob, critic_markup};
-use crate::server::Server;
+use crate::server::{Server, MCP_BODY_LIMIT_BYTES};
 
 pub async fn handle_upload(
     State(server): State<Arc<Server>>,
     Path(ticket): Path<String>,
-    body: Bytes,
+    body: Body,
 ) -> Response {
     let (status, text) = perform_upload(&server, &ticket, body).await;
-    (status, text).into_response()
+    if status.is_success() {
+        (status, text).into_response()
+    } else {
+        (status, Json(json!({ "error": text }))).into_response()
+    }
 }
 
 /// Run one upload. Returns the HTTP status and the text for the caller.
@@ -35,13 +43,12 @@ pub async fn handle_upload(
 pub async fn perform_upload(
     server: &Arc<Server>,
     ticket_id: &str,
-    body: Bytes,
+    body: Body,
 ) -> (StatusCode, String) {
     let Some(ticket) = server.mcp_sessions.take_upload(ticket_id) else {
         return (
             StatusCode::NOT_FOUND,
-            "Upload link unknown, expired or already used. Call upload_link for a new one.\n"
-                .into(),
+            "Upload link unknown, expired or already used. Call upload_link for a new one.".into(),
         );
     };
     let result = upload_with_ticket(server, &ticket, body).await;
@@ -51,7 +58,7 @@ pub async fn perform_upload(
             if status != StatusCode::GONE {
                 server.mcp_sessions.restore_upload(ticket_id, ticket);
             }
-            (status, text + "\n")
+            (status, text)
         }
     }
 }
@@ -59,9 +66,21 @@ pub async fn perform_upload(
 async fn upload_with_ticket(
     server: &Arc<Server>,
     ticket: &crate::mcp::session::UploadTicket,
-    body: Bytes,
+    body: Body,
 ) -> Result<String, (StatusCode, String)> {
-    let content = String::from_utf8(body.to_vec()).map_err(|_| {
+    // Read the body only once the ticket is known to be valid.
+    let bytes = axum::body::to_bytes(body, MCP_BODY_LIMIT_BYTES)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!(
+                    "The body could not be read or is over {} MiB.",
+                    MCP_BODY_LIMIT_BYTES / (1024 * 1024)
+                ),
+            )
+        })?;
+    let content = String::from_utf8(Vec::from(bytes)).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             "The body is not UTF-8 text. Upload the file's raw text (images go through import_attachment).".to_string(),
@@ -78,6 +97,7 @@ async fn upload_with_ticket(
             )
         })?;
     let file_path = ticket.file_path.as_str();
+    let mut marked_read: Option<String> = None;
 
     let (tool, arguments) = match server.doc_resolver().resolve_path(file_path) {
         None => (
@@ -98,7 +118,10 @@ async fn upload_with_ticket(
             if current.is_empty() {
                 return Err((
                     StatusCode::CONFLICT,
-                    format!("{} is empty, so there is nothing to replace; use the edit tool.", file_path),
+                    format!(
+                        "{} is empty, and an edit needs existing text to replace. Delete it, then call upload_link for the same path to upload it as a new file.",
+                        file_path
+                    ),
                 ));
             }
             let Some((old_string, new_string)) = changed_span(&current, &content) else {
@@ -106,9 +129,13 @@ async fn upload_with_ticket(
             };
             // The uploader replaces the whole file on purpose, so it need not
             // have read it first (that would pull it through the model).
-            if let Some(mut session) = server.mcp_sessions.get_session_mut(&ticket.session_id) {
-                session.read_docs.insert(doc_info.doc_id.clone());
-            }
+            // The mark is undone below if the edit fails.
+            marked_read = server
+                .mcp_sessions
+                .get_session_mut(&ticket.session_id)
+                .map(|mut session| session.read_docs.insert(doc_info.doc_id.clone()))
+                .unwrap_or(false)
+                .then_some(doc_info.doc_id.clone());
             (
                 "edit",
                 json!({"session_id": ticket.session_id, "file_path": file_path, "old_string": old_string, "new_string": new_string}),
@@ -119,6 +146,11 @@ async fn upload_with_ticket(
     let result = tools::dispatch_tool(server, tool, &arguments, &access).await;
     let text = result_text(&result);
     if result["isError"] == json!(true) {
+        if let Some(doc_id) = marked_read {
+            if let Some(mut session) = server.mcp_sessions.get_session_mut(&ticket.session_id) {
+                session.read_docs.remove(&doc_id);
+            }
+        }
         Err((StatusCode::UNPROCESSABLE_ENTITY, text))
     } else {
         Ok(text)
@@ -126,10 +158,12 @@ async fn upload_with_ticket(
 }
 
 /// The smallest `(old_string, new_string)` pair that turns `old` into `new`
-/// through `edit`: the lines that differ, widened a line at a time until the
-/// old span occurs once in `old`. Replacing only that span keeps unchanged
-/// text (and its authorship) in place, where a whole-file `old_string`
-/// would rewrite all of it. None when the texts are equal.
+/// through `edit`: the lines that differ, widened on both sides (1, 2, 4, ...
+/// lines, so repetitive text stays O(n log n)) until the old span occurs
+/// exactly once in `old`, overlapping occurrences included. Replacing only
+/// that span keeps the text outside it (and its authorship) in place, where
+/// a whole-file `old_string` would rewrite all of it. Falls back to the whole
+/// file if the span would not reproduce `new`. None when the texts are equal.
 fn changed_span(old: &str, new: &str) -> Option<(String, String)> {
     if old == new {
         return None;
@@ -157,18 +191,26 @@ fn changed_span(old: &str, new: &str) -> Option<(String, String)> {
 
     let line_start = |at: usize| old[..at].rfind('\n').map_or(0, |i| i + 1);
     let line_end = |at: usize| old[at..].find('\n').map_or(old.len(), |i| at + i + 1);
+    let unique = |start: usize, end: usize| {
+        let span = &old[start..end];
+        !span.is_empty() && old.find(span) == Some(start) && old.rfind(span) == Some(start)
+    };
     let mut start = line_start(prefix);
     let mut end = line_end(old.len() - suffix);
-    while start > 0 || end < old.len() {
-        let span = &old[start..end];
-        if !span.is_empty() && old.matches(span).nth(1).is_none() {
-            break;
+    let mut lines = 1;
+    while (start > 0 || end < old.len()) && !unique(start, end) {
+        for _ in 0..lines {
+            start = if start > 0 { line_start(start - 1) } else { 0 };
+            end = line_end(end);
         }
-        start = if start > 0 { line_start(start - 1) } else { 0 };
-        end = if end < old.len() { line_end(end) } else { end };
+        lines *= 2;
     }
     let new_end = new.len() - (old.len() - end);
-    Some((old[start..end].to_string(), new[start..new_end].to_string()))
+    let (o, n) = (&old[start..end], &new[start..new_end]);
+    if old.replacen(o, n, 1) != new {
+        return Some((old.to_string(), new.to_string()));
+    }
+    Some((o.to_string(), n.to_string()))
 }
 
 /// The text `edit` matches `old_string` against: raw for HTML, the accepted
@@ -253,12 +295,12 @@ mod tests {
             "<p>node ✓</p>".repeat(40_000)
         );
 
-        let (status, text) = perform_upload(&server, &ticket, Bytes::from(page.clone())).await;
+        let (status, text) = perform_upload(&server, &ticket, Body::from(page.clone())).await;
         assert_eq!(status, StatusCode::OK, "{text}");
         assert!(text.contains("Created Lens/Map.html"), "{text}");
         assert_eq!(content_of(&server, "Lens/Map.html"), page);
 
-        let (status, _) = perform_upload(&server, &ticket, Bytes::from("x")).await;
+        let (status, _) = perform_upload(&server, &ticket, Body::from("x")).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
@@ -281,7 +323,7 @@ mod tests {
         .await
         .unwrap();
         let page = "<h1>Hi</h1>\n".repeat(50_000);
-        let (status, text) = perform_upload(&server, &ticket, Bytes::from(page.clone())).await;
+        let (status, text) = perform_upload(&server, &ticket, Body::from(page.clone())).await;
         assert_eq!(status, StatusCode::OK, "{text}");
         assert_eq!(content_of(&server, "Lens/Page.html"), page);
     }
@@ -299,7 +341,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let (status, text) = perform_upload(&server, &ticket, Bytes::from("AI text.")).await;
+        let (status, text) = perform_upload(&server, &ticket, Body::from("AI text.")).await;
         assert_eq!(status, StatusCode::OK, "{text}");
         let content = content_of(&server, "Lens/Doc.md");
         assert!(
@@ -316,11 +358,11 @@ mod tests {
         let ticket = issue(&server, &sid, json!({"file_path": "Lens/Doc.md"}))
             .await
             .unwrap();
-        let (status, _) = perform_upload(&server, &ticket, Bytes::from(vec![0xff, 0xfe])).await;
+        let (status, _) = perform_upload(&server, &ticket, Body::from(vec![0xff, 0xfe])).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        let (status, text) = perform_upload(&server, &ticket, Bytes::from("x {++y++} z")).await;
+        let (status, text) = perform_upload(&server, &ticket, Body::from("x {++y++} z")).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
-        let (status, text) = perform_upload(&server, &ticket, Bytes::from("# Hello")).await;
+        let (status, text) = perform_upload(&server, &ticket, Body::from("# Hello")).await;
         assert_eq!(status, StatusCode::OK, "{text}");
         assert_eq!(content_of(&server, "Lens/Doc.md"), "# Hello");
     }
@@ -343,6 +385,11 @@ mod tests {
             ("aaa", "aaa\naaa"),
             ("x\n", ""),
             ("same\nsame\nsame\n", "same\nsame\nsame\nsame\n"),
+            ("a\na\na\n", "a\na\nb\n"),
+            (
+                "<div>\n</div>\n</div>\n</div>\n",
+                "<div>\n</div>\n</div>\n</section>\n",
+            ),
             (
                 "<p>✓</p>\n<p>✓</p>\n<p>end</p>",
                 "<p>✓</p>\n<p>✕</p>\n<p>end</p>",
@@ -350,9 +397,83 @@ mod tests {
         ];
         for (old, new) in pairs {
             let (o, n) = changed_span(old, new).unwrap();
-            assert_eq!(old.matches(o.as_str()).count(), 1, "{old:?} -> {o:?}");
+            assert_eq!(
+                old.find(o.as_str()),
+                old.rfind(o.as_str()),
+                "{old:?} -> {o:?}"
+            );
             assert_eq!(old.replacen(o.as_str(), &n, 1), new, "{old:?} -> {new:?}");
         }
+    }
+
+    // Prevents: an overlapping repeat passing as unique and the edit landing
+    // on the wrong occurrence (review of #127).
+    #[tokio::test]
+    async fn replace_with_overlapping_repeats_stores_exactly_the_upload() {
+        let old = "<div>\n</div>\n</div>\n</div>\n";
+        let server = build_test_server(&[("/Page.html", "uuid-html", old)]).await;
+        let sid = setup_session_no_reads(&server);
+        let ticket = issue(
+            &server,
+            &sid,
+            json!({"file_path": "Lens/Page.html", "replace": true}),
+        )
+        .await
+        .unwrap();
+        let new = "<div>\n</div>\n</div>\n</section>\n";
+        let (status, text) = perform_upload(&server, &ticket, Body::from(new)).await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        assert_eq!(content_of(&server, "Lens/Page.html"), new);
+    }
+
+    // Prevents: widening going quadratic on repetitive pages.
+    #[test]
+    fn changed_span_is_fast_on_repetitive_text() {
+        let old = "<li>same</li>\n".repeat(30_000);
+        let new = format!("{}<li>last</li>\n", &old[..old.len() - 14]);
+        let t = std::time::Instant::now();
+        let (o, n) = changed_span(&old, &new).unwrap();
+        assert_eq!(old.replacen(o.as_str(), &n, 1), new);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            t.elapsed()
+        );
+    }
+
+    // Prevents: a failed replace leaving the file marked as read, which
+    // would let a later plain `edit` skip the read-before-edit rule.
+    #[tokio::test]
+    async fn failed_replace_does_not_mark_the_file_read() {
+        let server = build_test_server(&[("/Doc.md", "uuid-md", "Human text.")]).await;
+        let sid = setup_session_no_reads(&server);
+        let ticket = issue(
+            &server,
+            &sid,
+            json!({"file_path": "Lens/Doc.md", "replace": true}),
+        )
+        .await
+        .unwrap();
+        let (status, _) = perform_upload(&server, &ticket, Body::from("x {++y++} z")).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let session = server.mcp_sessions.get_session(&sid).unwrap();
+        assert!(session.read_docs.is_empty());
+    }
+
+    // Prevents: one session filling memory with links.
+    #[tokio::test]
+    async fn live_links_per_session_are_capped() {
+        let server = build_blob_test_server_with_folder().await;
+        let sid = setup_session_no_reads(&server);
+        for _ in 0..crate::mcp::session::MAX_UPLOADS_PER_SESSION {
+            issue(&server, &sid, json!({"file_path": "Lens/Doc.md"}))
+                .await
+                .unwrap();
+        }
+        let err = issue(&server, &sid, json!({"file_path": "Lens/Doc.md"}))
+            .await
+            .unwrap_err();
+        assert!(err.contains("unused upload links"), "{err}");
     }
 
     // Prevents: an expired link still writing.
@@ -369,7 +490,7 @@ mod tests {
                 expires_at: std::time::Instant::now(),
             },
         );
-        let (status, _) = perform_upload(&server, "old", Bytes::from("# Hello")).await;
+        let (status, _) = perform_upload(&server, "old", Body::from("# Hello")).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(server.doc_resolver().resolve_path("Lens/Doc.md").is_none());
     }

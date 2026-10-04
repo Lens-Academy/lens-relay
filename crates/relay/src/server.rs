@@ -8863,17 +8863,24 @@ mod test {
             None,
             None,
         );
-        let ticket = server.mcp_sessions.issue_upload(&sid, "Lens/Big.md", false);
+        let ticket = server
+            .mcp_sessions
+            .issue_upload(&sid, "Lens/Big.md", false)
+            .unwrap();
         let big = "x".repeat(3 * 1024 * 1024);
+        // Through the production error redaction: the reason must survive.
         let response = server
             .routes()
+            .layer(middleware::from_fn(Server::redact_error_middleware))
             .oneshot(post(format!("/mcp/upload/{ticket}"), Body::from(big)))
             .await
             .unwrap();
         // Past axum's 2 MiB default, so the /mcp limit applies; the test
         // server has no folder, so create itself fails (and keeps the link).
-        assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: JsonValue = serde_json::from_slice(&bytes).unwrap();
+        assert!(body["error"].as_str().is_some_and(|e| !e.is_empty()), "{body}");
     }
 
     // Prevents: the removed MCP_API_KEY fallback coming back. A plain-text
