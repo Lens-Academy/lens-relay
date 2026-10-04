@@ -243,6 +243,7 @@ mod tests {
             "move",
             "read",
             "search",
+            "upload_link",
         ];
         expected.sort_unstable();
         assert_eq!(names, expected);

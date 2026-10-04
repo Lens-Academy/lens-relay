@@ -19,6 +19,7 @@ pub mod search;
 pub mod session_intro;
 #[cfg(test)]
 pub(crate) mod test_helpers;
+pub mod upload_link;
 pub mod validate_content;
 
 use crate::server::Server;
@@ -29,8 +30,9 @@ use y_sweet_core::share_token::McpAccess;
 /// Tools that mutate the knowledge base. Read-only MCP keys are refused these
 /// by name in [`dispatch_tool`], so every new write tool must be listed here.
 /// `import_article` is the hidden alias of `import_source`.
-pub const WRITE_TOOLS: [&str; 9] = [
+pub const WRITE_TOOLS: [&str; 10] = [
     "edit",
+    "upload_link",
     "comments",
     "create",
     "move",
@@ -423,7 +425,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "create",
-            "description": "Create a new document or file at the specified path. New files under Lens Edu/articles are blocked: use import_source (or the Lens Editor Add Article UI) so extraction, validation, mandatory LLM review, evidence, and provenance run. Existing article files remain editable. Images are not created here: use import_attachment. Supports .md (markdown — created directly, logged like a direct edit and visible on the editor's Recent changes page), .html (a self-contained page shown in the Lens Editor's sandboxed preview, like a Claude artifact. Read Lens/AI Guide/HTML Pages.md before writing one. In short: it must work at phone width (390px); scripts load only from esm.sh, esm.run, ga.jspm.io, cdn.jsdelivr.net, cdnjs.cloudflare.com, unpkg.com, cdn.tailwindcss.com and code.jquery.com, stylesheets from Google Fonts, jsDelivr, cdnjs and unpkg; <script type=\"module\"> can import react, react-dom/client, htm/react, recharts, lucide-react, d3, chart.js, three, mathjs and a few more by bare name with no build step (write React with htm, or JSX via the guide's Babel recipe); alert/confirm/prompt/print do nothing, and forms stay in the page. The result ends with a page check listing anything that will not work), and .json (raw content stored as-is). To import an existing local file outside the articles folder, don't retype its content as tokens — POST it to this MCP URL directly: jq -Rs --arg sid <session_id> '{jsonrpc:\"2.0\",id:1,method:\"tools/call\",params:{name:\"create\",arguments:{session_id:$sid,file_path:\"<path>\",content:.}}}' <local-file> | curl -sS -X POST <mcp-url> -H 'Content-Type: application/json' -d @- (the MCP URL is in your MCP client config, e.g. ~/.claude.json).",
+            "description": "Create a new document or file at the specified path. New files under Lens Edu/articles are blocked: use import_source (or the Lens Editor Add Article UI) so extraction, validation, mandatory LLM review, evidence, and provenance run. Existing article files remain editable. Images are not created here: use import_attachment. Supports .md (markdown — created directly, logged like a direct edit and visible on the editor's Recent changes page), .html (a self-contained page shown in the Lens Editor's sandboxed preview, like a Claude artifact. Read Lens/AI Guide/HTML Pages.md before writing one. In short: it must work at phone width (390px); scripts load only from esm.sh, esm.run, ga.jspm.io, cdn.jsdelivr.net, cdnjs.cloudflare.com, unpkg.com, cdn.tailwindcss.com and code.jquery.com, stylesheets from Google Fonts, jsDelivr, cdnjs and unpkg; <script type=\"module\"> can import react, react-dom/client, htm/react, recharts, lucide-react, d3, chart.js, three, mathjs and a few more by bare name with no build step (write React with htm, or JSX via the guide's Babel recipe); alert/confirm/prompt/print do nothing, and forms stay in the page. The result ends with a page check listing anything that will not work), and .json (raw content stored as-is). To import an existing local file, don't retype its content as tokens: call upload_link and POST the file to the link it returns (needs a shell with network access, e.g. Claude Code).",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
@@ -436,6 +438,29 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
                     "content": {
                         "type": "string",
                         "description": "Initial content, stored as-is (markdown creation is applied directly and logged for review, not wrapped as a pending suggestion)."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
+                    }
+                }
+            }
+        }));
+        tools.push(json!({
+            "name": "upload_link",
+            "description": "Get a one-off link to upload a whole .md or .html file, for content too large to pass as create/edit arguments (e.g. a 500 KB page). POST the file's raw text to the link with curl (`curl -sS --fail-with-body -X POST --data-binary @file '<link>'`) from a shell with network access: the bytes never pass through you as tokens. The link is valid for 10 minutes, for this one path, and works once. A new path is created as by create; an existing file is replaced as a whole only with replace: true, as one edit with the edit tool's rules (Markdown human-written text that changes becomes a pending suggestion; HTML applies directly). Without a shell (plain claude.ai chat), use create/edit.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["file_path", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path of the file to create or replace (e.g. 'Lens/Concept Map.html')"
+                    },
+                    "replace": {
+                        "type": "boolean",
+                        "description": "Allow replacing the whole content of an existing file (default false: create only)."
                     },
                     "session_id": {
                         "type": "string",
@@ -633,6 +658,10 @@ pub async fn dispatch_tool(
             Err(msg) => tool_error(&msg),
         },
         "create" => match create_doc::execute(server, session_id, arguments).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
+        "upload_link" => match upload_link::execute(server, session_id, arguments).await {
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },

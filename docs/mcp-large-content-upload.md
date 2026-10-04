@@ -1,5 +1,34 @@
 # MCP: uploading large content without model tokens
 
+## Easiest: `upload_link`
+
+Any MCP connection, including the claude.ai connector used from Claude Code,
+can ask for a one-off upload link and POST the file to it. The model never
+sees the relay URL or token, and the file never becomes tokens:
+
+```
+upload_link(session_id, file_path: "Lens/Concept Map.html")          # new file
+upload_link(session_id, file_path: "Lens/Concept Map.html", replace: true)  # overwrite
+→ https://relay.lensacademy.org/mcp/upload/<ticket>
+
+curl -sS --fail-with-body -X POST --data-binary @concept-map.html '<link>'
+```
+
+- `.md` and `.html` only; the body is the raw UTF-8 text (no JSON, no base64).
+- The link names the MCP session and one path, lasts 10 minutes and works once;
+  after an error nothing is written and the link stays valid for a retry.
+- A new path goes through `create`; with `replace: true` an existing file goes
+  through `edit`, narrowed to the lines that changed (widened until unique), so
+  unchanged text keeps its authorship and every `edit` rule applies (Markdown
+  human text that changes becomes a pending suggestion; HTML applies directly).
+- Needs a shell that can reach the relay: Claude Code, or claude.ai code
+  execution only if the org allows network egress to `relay.lensacademy.org`.
+- The relay builds the link from `RELAY_PUBLIC_URL` (default
+  `https://relay.lensacademy.org`; `start-local-relay.sh` sets it locally).
+  Code: `crates/relay/src/mcp/{upload.rs,tools/upload_link.rs}`.
+
+## Direct JSON-RPC with curl
+
 The MCP endpoint is plain HTTP JSON-RPC. An agent importing an existing local
 file (transcript, article, export) should not regenerate its bytes as tool-call
 tokens — build the request with `jq` and POST it with `curl`:

@@ -59,15 +59,62 @@ pub struct McpSession {
     pub ai_actor: String,
 }
 
+/// A one-off upload link issued by the `upload_link` tool: whoever POSTs to
+/// it writes `file_path` as the session that asked for it (see `mcp/upload.rs`).
+#[derive(Clone, Debug)]
+pub struct UploadTicket {
+    pub session_id: String,
+    pub file_path: String,
+    /// The caller may replace an existing file (otherwise create-only).
+    pub replace: bool,
+    pub expires_at: Instant,
+}
+
+/// How long an upload link stays valid.
+pub const UPLOAD_TICKET_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 pub struct SessionManager {
     sessions: DashMap<String, McpSession>,
+    uploads: DashMap<String, UploadTicket>,
 }
 
 impl SessionManager {
     pub fn new() -> Self {
         Self {
             sessions: DashMap::new(),
+            uploads: DashMap::new(),
         }
+    }
+
+    /// Issue an upload link for `file_path`, valid for [`UPLOAD_TICKET_TTL`].
+    /// Returns the unguessable ticket id that goes in the link.
+    pub fn issue_upload(&self, session_id: &str, file_path: &str, replace: bool) -> String {
+        let now = Instant::now();
+        self.uploads.retain(|_, t| t.expires_at > now);
+        let id = nanoid::nanoid!(32);
+        self.uploads.insert(
+            id.clone(),
+            UploadTicket {
+                session_id: session_id.to_string(),
+                file_path: file_path.to_string(),
+                replace,
+                expires_at: now + UPLOAD_TICKET_TTL,
+            },
+        );
+        id
+    }
+
+    /// Take the live ticket for `id` out of the store (None if unknown or
+    /// expired), so two concurrent uploads cannot both use one link.
+    pub fn take_upload(&self, id: &str) -> Option<UploadTicket> {
+        let (_, ticket) = self.uploads.remove(id)?;
+        (ticket.expires_at > Instant::now()).then_some(ticket)
+    }
+
+    /// Put a ticket back after a failed upload, so the caller can fix the
+    /// file and retry with the same link until it expires.
+    pub fn restore_upload(&self, id: &str, ticket: UploadTicket) {
+        self.uploads.insert(id.to_string(), ticket);
     }
 
     /// Time-to-live applied by periodic cleanup.

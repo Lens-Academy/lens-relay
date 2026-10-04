@@ -4606,10 +4606,16 @@ impl Server {
                     .delete(crate::mcp::transport::handle_mcp_delete_with_key),
             );
 
+            // Upload links from the `upload_link` tool: the ticket in the
+            // path is the credential (see mcp/upload.rs).
+            let upload_routes =
+                Router::new().route("/upload/:ticket", post(crate::mcp::upload::handle_upload));
+
             // axum's default body limit is 2 MiB, too small for a base64
             // image in an import_attachment call (20 MiB hard cap × 4/3).
             let mcp_routes = bearer_routes
                 .merge(path_key_routes)
+                .merge(upload_routes)
                 .layer(DefaultBodyLimit::max(MCP_BODY_LIMIT_BYTES))
                 .with_state(self.clone());
             router = router.nest("/mcp", mcp_routes);
@@ -8830,6 +8836,44 @@ mod test {
             .as_str()
             .unwrap()
             .contains("already in the trash"));
+    }
+
+    // Prevents: upload links being shadowed by the /mcp/:key route (401) or
+    // losing the /mcp body limit, and an unknown ticket writing anything.
+    #[tokio::test]
+    async fn mcp_upload_route_is_registered_and_takes_the_ticket_as_credential() {
+        let server = Server::new_for_test_with_share_secret(TEST_SHARE_SECRET);
+        let post = |uri: String, body: Body| {
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .body(body)
+                .unwrap()
+        };
+        let response = server
+            .routes()
+            .oneshot(post("/mcp/upload/unknown".into(), Body::from("x")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let sid = server.mcp_sessions.create_session(
+            y_sweet_core::share_token::decode_mcp_key(&admin_mcp_token(), Some(TEST_SHARE_SECRET))
+                .unwrap(),
+            None,
+            None,
+        );
+        let ticket = server.mcp_sessions.issue_upload(&sid, "Lens/Big.md", false);
+        let big = "x".repeat(3 * 1024 * 1024);
+        let response = server
+            .routes()
+            .oneshot(post(format!("/mcp/upload/{ticket}"), Body::from(big)))
+            .await
+            .unwrap();
+        // Past axum's 2 MiB default, so the /mcp limit applies; the test
+        // server has no folder, so create itself fails (and keeps the link).
+        assert_ne!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     // Prevents: the removed MCP_API_KEY fallback coming back. A plain-text
