@@ -459,7 +459,7 @@ export function HtmlEditor({
             className={[
               'relative min-w-0 flex-1',
               mode === 'split' ? 'border-l border-gray-200' : '',
-              phonePreview ? 'flex items-start justify-center overflow-x-auto bg-gray-100 p-4' : '',
+              phonePreview ? 'flex items-start justify-center-safe overflow-x-auto bg-gray-100 p-4' : '',
             ].join(' ')}
           >
             {problemsOpen && pageProblems.length > 0 && (
