@@ -155,6 +155,21 @@ describe('HtmlEditor', () => {
     expect(sourceBtn.getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('previews on a full-resolution 390x844 phone screen, no taller than the pane', async () => {
+    const { container } = renderWithDoc();
+    await userEvent.click(screen.getByRole('button', { name: /^Phone$/ }));
+
+    const phone = container.querySelector<HTMLElement>('[data-preview-width="phone"]')!;
+    expect(phone.style.width).toBe('390px');
+    expect(phone.style.height).toBe('844px');
+    expect(phone.className).toContain('max-h-full');
+    expect(phone.style.transform).toBe('');
+    expect(phone.contains(iframe())).toBe(true);
+
+    await userEvent.click(screen.getByRole('button', { name: /^Desktop$/ }));
+    expect(container.querySelector('[data-preview-width="desktop"]')).not.toBeNull();
+  });
+
   it('preview pane is bound to the SAME Y.Text instance the parent owns', async () => {
     vi.useFakeTimers();
     try {

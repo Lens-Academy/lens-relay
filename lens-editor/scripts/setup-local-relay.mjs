@@ -360,6 +360,36 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
 {~~{"author":"AI","timestamp":${T.old}}@@- Advanced CRDT patterns~>- Advanced CRDT patterns and conflict resolution strategies~~}
 `,
       },
+      // An HTML page taller than a phone screen, with a full-screen intro and a
+      // sticky header, to try the preview's Phone mode (height and scrolling).
+      {
+        path: '/Phone Demo.html',
+        id: 'c0000013-0000-4000-8000-000000000013',
+        type: 'file',
+        version: 0,
+        content: `<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; color: #1e293b; }
+  header { position: sticky; top: 0; background: #1e3a8a; color: white; padding: 12px 16px; font-weight: 600; }
+  .intro { min-height: 100vh; display: grid; place-items: center; text-align: center; background: linear-gradient(#dbeafe, #eff6ff); padding: 0 24px; box-sizing: border-box; }
+  .intro p { margin: 8px 0 0; color: #475569; }
+  section { padding: 16px; border-bottom: 1px solid #e2e8f0; }
+  section h2 { margin: 0 0 6px; font-size: 18px; }
+  section p { margin: 0; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <header>Phone demo</header>
+  <div class="intro"><div><h1>Fills one screen</h1><p>This intro is 100vh tall. Scroll down for the sections.</p></div></div>
+  ${Array.from({ length: 8 }, (_, i) => `<section><h2>Section ${i + 1}</h2><p>Each section is a short block of text, so the page is several phone screens long and has to scroll inside the preview.</p></section>`).join('\n  ')}
+  <footer style="padding: 16px; text-align: center; color: #64748b">End of the page</footer>
+</body>
+</html>
+`,
+      },
     ],
   },
   {

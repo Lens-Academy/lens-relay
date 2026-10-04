@@ -104,7 +104,7 @@ See `src/test/fixtures/folder-metadata/production-sample.json` for real producti
 
 ## HTML documents
 
-`.html` files open in `HtmlEditor` (Source / Preview / Split, Desktop / Phone width). The preview's runtime contract
+`.html` files open in `HtmlEditor` (Source / Preview / Split; Desktop, or Phone: a 390x844 screen at full resolution, shortened to fit the pane). The preview's runtime contract
 lives in `src/components/HtmlEditor/runtime/page-runtime.ts` (CSP, import map, `buildSrcDoc`) and the in-frame
 services in `bridge/page-services.ts`; both are bundled into the bridge by `vite-plugin-bridge-bundle.ts`. Pages that
 hang the preview can be opened with `?view=source`. The author-facing rules are the relay doc

@@ -48,12 +48,14 @@ const modes: Array<{ id: Mode; label: string }> = [
 
 const COMMENTS_VISIBLE_KEY = 'lens-html-editor-comments-visible';
 const PREVIEW_WIDTH_KEY = 'lens-html-editor-preview-width';
-/** Width of the phone preview: a common phone viewport in CSS pixels. */
+/** Size of the phone preview: a common phone viewport in CSS pixels. It is
+ *  shown at full resolution, so a shorter pane gives it a shorter screen. */
 const PHONE_PREVIEW_WIDTH = 390;
+const PHONE_PREVIEW_HEIGHT = 844;
 
 const widths: Array<{ id: PreviewWidth; label: string; title: string }> = [
   { id: 'desktop', label: 'Desktop', title: 'Preview at full width' },
-  { id: 'phone', label: 'Phone', title: `Preview at phone width (${PHONE_PREVIEW_WIDTH}px)` },
+  { id: 'phone', label: 'Phone', title: `Preview on a phone screen (${PHONE_PREVIEW_WIDTH}×${PHONE_PREVIEW_HEIGHT})` },
 ];
 
 function readPreviewWidth(): PreviewWidth {
@@ -186,6 +188,7 @@ export function HtmlEditor({
   // --- sidebar positioning -------------------------------------------
   const commentsLayerRef = useRef<CommentsLayerHandle>(null);
   const previewWrapperRef = useRef<HTMLDivElement>(null);
+  const phoneScreenRef = useRef<HTMLDivElement>(null);
   const currentScrollYRef = useRef(0);
   const iframeScrollStateRef = useRef<IframeScrollState>({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
   const scrollSource = useMemo(() => makeIframeScrollSource(() => iframeScrollStateRef.current), []);
@@ -207,7 +210,8 @@ export function HtmlEditor({
   };
 
   const getViewportRect = () => {
-    const r = previewWrapperRef.current?.getBoundingClientRect();
+    // On the phone screen, comments line up with what shows on it.
+    const r = (phonePreview ? phoneScreenRef.current : previewWrapperRef.current)?.getBoundingClientRect();
     return { top: r?.top ?? 0, height: r?.height ?? 0 };
   };
 
@@ -455,7 +459,7 @@ export function HtmlEditor({
             className={[
               'relative min-w-0 flex-1',
               mode === 'split' ? 'border-l border-gray-200' : '',
-              phonePreview ? 'flex justify-center overflow-x-auto bg-gray-100' : '',
+              phonePreview ? 'flex items-start justify-center-safe overflow-x-auto bg-gray-100 p-4' : '',
             ].join(' ')}
           >
             {problemsOpen && pageProblems.length > 0 && (
@@ -514,10 +518,11 @@ export function HtmlEditor({
               </button>
             )}
             <div
+              ref={phoneScreenRef}
               className={phonePreview
-                ? 'box-content h-full flex-shrink-0 border-x border-gray-300 bg-white shadow-sm'
+                ? 'max-h-full flex-shrink-0 overflow-hidden rounded-[24px] bg-white shadow-[0_0_0_1px_rgb(209_213_219),0_4px_16px_rgb(0_0_0/0.12)]'
                 : 'h-full w-full'}
-              style={phonePreview ? { width: PHONE_PREVIEW_WIDTH } : undefined}
+              style={phonePreview ? { width: PHONE_PREVIEW_WIDTH, height: PHONE_PREVIEW_HEIGHT } : undefined}
               data-preview-width={phonePreview ? 'phone' : 'desktop'}
             >
               <HtmlPreview
