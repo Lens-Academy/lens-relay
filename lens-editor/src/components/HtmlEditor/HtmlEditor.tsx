@@ -181,7 +181,8 @@ export function HtmlEditor({
   const previewWrapperRef = useRef<HTMLDivElement>(null);
   const phoneScreenRef = useRef<HTMLDivElement>(null);
   const [phoneScale, setPhoneScale] = useState(1);
-  useEffect(() => {
+  // Fitted before paint, so switching to Phone never shows a full-size frame.
+  useLayoutEffect(() => {
     const wrapper = previewWrapperRef.current;
     if (!phonePreview || !wrapper) return;
     const fit = () => {
@@ -213,8 +214,14 @@ export function HtmlEditor({
   const commentsLayerRef = useRef<CommentsLayerHandle>(null);
   const currentScrollYRef = useRef(0);
   const iframeScrollStateRef = useRef<IframeScrollState>({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
-  const scrollSource = useMemo(() => makeIframeScrollSource(() => iframeScrollStateRef.current), []);
-  useEffect(() => { scrollSource.notify(); }, [placements, scrollSource]);
+  // Kept in page pixels and scaled when read, so a new scale needs no scroll event.
+  const scrollSource = useMemo(() => makeIframeScrollSource(() => {
+    const { scrollTop, scrollHeight, clientHeight } = iframeScrollStateRef.current;
+    const scale = frameScaleRef.current;
+    return { scrollTop: scrollTop * scale, scrollHeight: scrollHeight * scale, clientHeight: clientHeight * scale };
+  }), []);
+  // A new scale moves every anchor on screen without the page reflowing: re-lay out the cards.
+  useEffect(() => { scrollSource.notify(); }, [placements, scrollSource, frameScale]);
 
   const frameTop = () => previewRef.current?.frameElement()?.getBoundingClientRect().top
     ?? previewWrapperRef.current?.getBoundingClientRect().top ?? 0;
@@ -550,50 +557,50 @@ export function HtmlEditor({
               } : undefined}
               data-preview-width={phonePreview ? 'phone' : 'desktop'}
             >
-            <div
-              className={phonePreview
-                ? 'overflow-hidden rounded-[24px] bg-white shadow-[0_0_0_1px_rgb(209_213_219),0_4px_16px_rgb(0_0_0/0.12)]'
-                : 'h-full w-full'}
-              style={phonePreview ? {
-                width: PHONE_PREVIEW_WIDTH,
-                height: PHONE_PREVIEW_HEIGHT,
-                transform: `scale(${phoneScale})`,
-                transformOrigin: 'top left',
-              } : undefined}
-            >
-              <HtmlPreview
-                ref={previewRef}
-                ytext={ytext}
-                threads={comments.marks}
-                draft={draft?.anchor ?? null}
-                focusedThreadId={focusedThreadId}
-                commentMode={commentMode && canComment}
-                onThreadsResolved={comments.onThreadsResolved}
-                onScrollState={(payload) => {
-                  if (payload.layoutVersion !== placements.layoutVersion) return;
-                  currentScrollYRef.current = payload.y;
-                  iframeScrollStateRef.current = {
-                    scrollTop: payload.y * frameScaleRef.current,
-                    scrollHeight: payload.scrollHeight * frameScaleRef.current,
-                    clientHeight: payload.clientHeight * frameScaleRef.current,
-                  };
-                  scrollSource.notify();
-                }}
-                onThreadClicked={focusThread}
-                onAnchorCaptured={handleAnchorCaptured}
-                onCommentModeExit={exitCommentMode}
-                onShortcut={() => {
-                  if (!canComment) return;
-                  if (commentMode) exitCommentMode();
-                  else startCommentMode();
-                }}
-                onSelectionChanged={onSelectionChanged}
-                onLegacyDescribed={comments.onLegacyDescribed}
-                onCurrentDescribed={onCurrentDescribed}
-                storageKey={storageKey}
-                onPageProblems={setPageProblems}
-              />
-            </div>
+              <div
+                className={phonePreview
+                  ? 'overflow-hidden rounded-[24px] bg-white shadow-[0_0_0_1px_rgb(209_213_219),0_4px_16px_rgb(0_0_0/0.12)]'
+                  : 'h-full w-full'}
+                style={phonePreview ? {
+                  width: PHONE_PREVIEW_WIDTH,
+                  height: PHONE_PREVIEW_HEIGHT,
+                  transform: `scale(${phoneScale})`,
+                  transformOrigin: 'top left',
+                } : undefined}
+              >
+                <HtmlPreview
+                  ref={previewRef}
+                  ytext={ytext}
+                  threads={comments.marks}
+                  draft={draft?.anchor ?? null}
+                  focusedThreadId={focusedThreadId}
+                  commentMode={commentMode && canComment}
+                  onThreadsResolved={comments.onThreadsResolved}
+                  onScrollState={(payload) => {
+                    if (payload.layoutVersion !== placements.layoutVersion) return;
+                    currentScrollYRef.current = payload.y;
+                    iframeScrollStateRef.current = {
+                      scrollTop: payload.y,
+                      scrollHeight: payload.scrollHeight,
+                      clientHeight: payload.clientHeight,
+                    };
+                    scrollSource.notify();
+                  }}
+                  onThreadClicked={focusThread}
+                  onAnchorCaptured={handleAnchorCaptured}
+                  onCommentModeExit={exitCommentMode}
+                  onShortcut={() => {
+                    if (!canComment) return;
+                    if (commentMode) exitCommentMode();
+                    else startCommentMode();
+                  }}
+                  onSelectionChanged={onSelectionChanged}
+                  onLegacyDescribed={comments.onLegacyDescribed}
+                  onCurrentDescribed={onCurrentDescribed}
+                  storageKey={storageKey}
+                  onPageProblems={setPageProblems}
+                />
+              </div>
             </div>
           </div>
         )}

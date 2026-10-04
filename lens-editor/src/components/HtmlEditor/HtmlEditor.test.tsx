@@ -177,6 +177,33 @@ describe('HtmlEditor', () => {
     expect(container.querySelector('[style*="scale"]')).toBeNull();
   });
 
+  it('moves comment cards with their anchors when only the phone scale changes', async () => {
+    let paneHeight = 500;
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => paneHeight);
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 600, 500));
+    const resizeCallbacks: Array<() => void> = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) { resizeCallbacks.push(() => callback([])); }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const { doc, ytext, awareness } = createHtmlDoc();
+    createThread(doc, 'test', { id: 't1', anchor, author: 'ann', body: 'A comment', ts: 1 });
+    const { container } = renderEditor(ytext, awareness);
+    await userEvent.click(screen.getByRole('button', { name: /^Phone$/ }));
+    await resolved([{ id: 't1', state: 'anchored', rect: { x: 0, y: 200, w: 10, h: 10 }, textOffset: 10 }]);
+    const cardTop = () => parseFloat(container.querySelector<HTMLElement>('[data-comment-thread="t1"]')!.style.top);
+    expect(cardTop()).toBeCloseTo(200 * (468 / 844));
+
+    // The pane grows: the screen is drawn at full size, though the page did not reflow or scroll.
+    paneHeight = 900;
+    await act(async () => { resizeCallbacks.forEach(callback => callback()); });
+    expect(cardTop()).toBeCloseTo(200);
+    vi.unstubAllGlobals();
+  });
+
   it('preview pane is bound to the SAME Y.Text instance the parent owns', async () => {
     vi.useFakeTimers();
     try {
