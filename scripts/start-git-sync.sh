@@ -37,9 +37,12 @@
 # git blame shows who wrote each line (Lens-Academy/relay-git-sync#8). Without
 # them mounted the container fails at import. log_redaction.py is a new module
 # (Lens-Academy/relay-git-sync#11) that masks the relay API key and GitHub
-# tokens in logs and stdout; app.py, persistence.py, relay_client.py,
-# git_config.py and cli.py all import it, so it must be mounted or the
-# container fails at import. git_config.py and cli.py carry the rest of that PR
+# tokens in logs and stdout; app.py, relay_client.py, git_config.py and cli.py
+# import it, so it must be mounted or the container fails at import (the same
+# PR also moves persistence.py's credential-bearing print()s to the logger so
+# the filter catches them). http_timeout.py, which app.py and cli.py also
+# import, is not mounted because the image already ships it, identical to
+# relay-git-sync main. git_config.py and cli.py carry the rest of that PR
 # (connector-URL credentials registered as exact-match secrets; cli.py installs
 # the log filter for `docker exec ... cli.py` runs, which would otherwise print
 # the key in plain text). The container's import path is /app only - an
