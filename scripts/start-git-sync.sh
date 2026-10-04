@@ -35,7 +35,12 @@
 # authorship.py and yjs_attribution.py are new modules (not in the stock image)
 # that persistence.py imports for per-line authorship: one commit per author so
 # git blame shows who wrote each line (Lens-Academy/relay-git-sync#8). Without
-# them mounted the container fails at import. COMMIT_INTERVAL
+# them mounted the container fails at import. log_redaction.py is a new module
+# (Lens-Academy/relay-git-sync#11) that app.py, persistence.py and
+# relay_client.py import to mask the relay API key and GitHub tokens in logs
+# and stdout; it too must be mounted or the container fails at import.
+# git_config.py carries the matching change from the same PR (registers
+# connector-URL credentials as exact-match secrets). COMMIT_INTERVAL
 # sets the git commit+push cadence in seconds (default 10 upstream; we run 5
 # for snappier GitHub sync). These override files must be present in $DATA_DIR
 # on the box.
@@ -52,7 +57,7 @@ IMAGE=docker.system3.md/relay-git-sync:latest
 
 # A missing override file would make Docker mount an empty directory in its
 # place and crash-loop the container - fail fast instead.
-for override in webhook_handler.py persistence.py app.py sync_engine.py operations_queue.py relay_client.py models.py authorship.py yjs_attribution.py; do
+for override in webhook_handler.py persistence.py app.py sync_engine.py operations_queue.py relay_client.py models.py authorship.py yjs_attribution.py log_redaction.py git_config.py; do
   [[ -f "$DATA_DIR/$override" ]] || { echo "ERROR: override file missing: $DATA_DIR/$override" >&2; exit 1; }
 done
 docker network inspect "$NETWORK" >/dev/null 2>&1 \
@@ -96,6 +101,8 @@ docker run -d \
   -v "$DATA_DIR/models.py:/app/models.py" \
   -v "$DATA_DIR/authorship.py:/app/authorship.py" \
   -v "$DATA_DIR/yjs_attribution.py:/app/yjs_attribution.py" \
+  -v "$DATA_DIR/log_redaction.py:/app/log_redaction.py" \
+  -v "$DATA_DIR/git_config.py:/app/git_config.py" \
   -e RELAY_GIT_DATA_DIR=/data \
   -e RELAY_SERVER_URL=http://relay-server:8080 \
   -e RELAY_SERVER_API_KEY="$RELAY_SERVER_API_KEY" \
