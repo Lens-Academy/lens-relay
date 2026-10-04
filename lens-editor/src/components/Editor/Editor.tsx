@@ -31,6 +31,8 @@ import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '../../lib/ydoc-provider'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment, updateImageEmbedContext } from './extensions/livePreview';
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
+import { videoCutButtons, videoCutCallback, type VideoCutLine } from './extensions/videoCutButtons';
+import { VideoCutDock } from './VideoCutDock';
 import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
@@ -127,6 +129,21 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   const provider = useYjsProvider();
   const { displayName } = useDisplayName();
   const [synced, setSynced] = useState(false);
+  // The video segment whose cut is being tuned (its from::/to:: Tune button)
+  // `anchor` is the segment's heading start, mapped through every change so
+  // the picker keeps writing to its own segment while text moves around it
+  const [cutTarget, setCutTarget] = useState<{
+    view: EditorView;
+    field: VideoCutLine['field'];
+    anchor: number;
+    version: number;
+    /** Changes with each Tune click, so the picker starts afresh. */
+    opened: number;
+  } | null>(null);
+  const cutOpenRef = useRef(false);
+  useEffect(() => {
+    cutOpenRef.current = cutTarget !== null;
+  }, [cutTarget]);
   const [contextMenu, setContextMenu] = useState<{
     items: ContextMenuItem[];
     position: { x: number; y: number };
@@ -383,6 +400,15 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         }),
         livePreview(wikilinkContextRef.current),
         codeBlockCopyButton(),
+        videoCutButtons(),
+        videoCutCallback.of((line, view) =>
+          setCutTarget({ view, field: line.field, anchor: line.sectionFrom, version: 0, opened: Date.now() })),
+        // Only while the cut picker is open: follow its segment and re-render
+        // so its times stay current
+        EditorView.updateListener.of((u) => {
+          if (!u.docChanged || !cutOpenRef.current) return;
+          setCutTarget((t) => t && { ...t, anchor: u.changes.mapPos(t.anchor, 1), version: t.version + 1 });
+        }),
         markdownTableCompartment.of(markdownTableExtension()),
         sourceReadOnlyCompartment.of([]),
         emphasisPersistPlugin,
@@ -502,6 +528,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
 
     // Cleanup on unmount
     return () => {
+      // The cut picker holds this view: close it with the view
+      setCutTarget(null);
       view.destroy();
       viewRef.current = null;
     };
@@ -522,13 +550,29 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   }, [pastePrompt]);
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full flex flex-col">
       {!synced && <LoadingOverlay />}
       <div
         ref={containerRef}
-        className="h-full w-full"
+        className="flex-1 min-h-0 w-full"
         onContextMenu={handleContextMenu}
       />
+      {cutTarget && metadata && currentFilePath && (
+        <VideoCutDock
+          view={cutTarget.view}
+          field={cutTarget.field}
+          anchor={cutTarget.anchor}
+          docVersion={cutTarget.version}
+          opened={cutTarget.opened}
+          metadata={metadata}
+          currentFilePath={currentFilePath}
+          readOnly={!!readOnly}
+          onClose={() => {
+            cutTarget.view.focus();
+            setCutTarget(null);
+          }}
+        />
+      )}
       {contextMenu && (
         <ContextMenu
           items={contextMenu.items}
