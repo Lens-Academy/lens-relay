@@ -53,6 +53,16 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
   const playerRef = useRef<YouTubePlayer | null>(null);
   const runRef = useRef(0);
   const timerRef = useRef<number | null>(null);
+  // The listener's own volume: read when idle, put back after every fade
+  const volumeRef = useRef(100);
+  const restoreTimerRef = useRef<number | null>(null);
+  const resolveRef = useRef<(() => void) | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Take the keys (← → Space) as soon as the picker opens
+  useEffect(() => {
+    rootRef.current?.focus();
+  }, []);
 
   const suggestion = useMemo(
     () => (words && current !== null ? suggestCut(words, current) : null),
@@ -71,7 +81,13 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
           width: '100%',
           height: '100%',
           playerVars: { controls: 1, rel: 0, playsinline: 1, modestbranding: 1 },
-          events: { onReady: () => !cancelled && setReady(true) },
+          events: {
+            onReady: () => {
+              if (cancelled) return;
+              volumeRef.current = playerRef.current?.getVolume() || 100;
+              setReady(true);
+            },
+          },
         });
       })
       .catch((e: Error) => !cancelled && setLoadError(e.message));
@@ -80,16 +96,29 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
       cancelled = true;
       runs.current++;
       if (timerRef.current !== null) window.clearInterval(timerRef.current);
+      if (restoreTimerRef.current !== null) window.clearTimeout(restoreTimerRef.current);
       playerRef.current?.destroy();
       playerRef.current = null;
     };
   }, [videoId]);
 
+  /** Stop whatever plays (a candidate, or Play all) and put the listener's
+   *  volume back. */
   const stop = useCallback(() => {
     runRef.current++;
+    resolveRef.current?.();
+    resolveRef.current = null;
     if (timerRef.current !== null) window.clearInterval(timerRef.current);
     timerRef.current = null;
-    playerRef.current?.pauseVideo();
+    const player = playerRef.current;
+    if (player) {
+      player.pauseVideo();
+      if (restoreTimerRef.current !== null) {
+        window.clearTimeout(restoreTimerRef.current);
+        restoreTimerRef.current = null;
+      }
+      player.setVolume(volumeRef.current);
+    }
     setPlaying(null);
   }, []);
 
@@ -98,31 +127,30 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
     (cut: number): Promise<boolean> => {
       const player = playerRef.current;
       if (!player) return Promise.resolve(false);
+      // Idle and not fading: the player's volume is the listener's choice
+      if (timerRef.current === null && restoreTimerRef.current === null) {
+        volumeRef.current = player.getVolume() || volumeRef.current;
+      }
       stop();
-      const run = runRef.current;
       const startAt = field === 'to' ? Math.max(0, cut - lead) : cut;
       const stopAt = field === 'to' ? cut : cut + lead;
-      const volume = player.getVolume() || 100;
+      const volume = volumeRef.current;
       setPlaying(cut);
-      player.setVolume(volume);
       player.seekTo(startAt, true);
       player.playVideo();
       const startedAt = Date.now();
       let lastShare = 1;
       return new Promise((resolve) => {
+        // stop() ends this run without the poll seeing it: resolve then too
+        resolveRef.current = () => resolve(false);
         const finish = (ok: boolean) => {
+          resolveRef.current = null;
           window.clearInterval(timerRef.current!);
           timerRef.current = null;
           setPlaying(null);
           resolve(ok);
         };
         timerRef.current = window.setInterval(() => {
-          if (runRef.current !== run) {
-            window.clearInterval(timerRef.current!);
-            player.setVolume(volume);
-            resolve(false);
-            return;
-          }
           const t = player.getCurrentTime();
           // Until the seek has landed the player reports the old position
           if (t < startAt - 0.3 || t > stopAt + 1) {
@@ -143,7 +171,10 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
           player.setVolume(0);
           player.pauseVideo();
           // The volume comes back once the pause has surely reached the player
-          window.setTimeout(() => player.setVolume(volume), 250);
+          restoreTimerRef.current = window.setTimeout(() => {
+            restoreTimerRef.current = null;
+            player.setVolume(volumeRef.current);
+          }, 250);
           finish(true);
         }, POLL_MS);
       });
@@ -166,11 +197,23 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
       setSelected(cut);
       const finished = await play(cut);
       if (!finished) return;
+      // A Stop (or any other play) during the gap ends the round
+      const run = runRef.current;
       await new Promise((r) => window.setTimeout(r, GAP_BETWEEN_MS));
+      if (runRef.current !== run) return;
     }
   }, [row, play]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      stop();
+      onClose();
+      return;
+    }
+    // Arrows and Space belong to the picker itself and its candidates;
+    // other controls (selects, buttons) keep their own keys
+    const target = e.target as HTMLElement;
+    if (target !== e.currentTarget && !target.dataset.cut) return;
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       e.preventDefault();
       const dir = e.key === 'ArrowLeft' ? -1 : 1;
@@ -182,9 +225,6 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
       e.preventDefault();
       if (playing !== null) stop();
       else void play(selected);
-    } else if (e.key === 'Escape') {
-      stop();
-      onClose();
     }
   };
 
@@ -207,7 +247,9 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
       className="border-b border-[rgba(184,112,24,0.1)] bg-white/70 px-6 py-4 text-sm outline-none"
       onClick={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
-      tabIndex={0}
+      ref={rootRef}
+      tabIndex={-1}
+      aria-label="Cut picker"
       data-testid="cut-picker"
     >
       <div className="flex flex-wrap items-center gap-3 mb-3">
@@ -261,7 +303,14 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
             ))}
           </select>
         </label>
-        <button onClick={onClose} className="ml-auto text-xs text-gray-400 hover:text-gray-700" aria-label="Close cut picker">
+        <button
+          onClick={() => {
+            stop();
+            onClose();
+          }}
+          className="ml-auto text-xs text-gray-400 hover:text-gray-700"
+          aria-label="Close cut picker"
+        >
           Close
         </button>
       </div>
@@ -274,7 +323,7 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
             {field === 'to'
               ? `Each button plays the ${lead} s before that end time and stops there, as on the platform.`
               : `Each button plays ${lead} s from that start time.`}{' '}
-            ← → move and play, Space replays.
+            ← → move and play, Space replays, Esc closes.
           </div>
           <div className="flex flex-wrap gap-1.5 mb-3">
             {row.map((cut) => {
@@ -284,6 +333,7 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
               return (
                 <button
                   key={cut}
+                  data-cut={cut}
                   disabled={!ready}
                   onClick={() => choose(cut)}
                   aria-pressed={isSelected}
@@ -330,6 +380,8 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
                 onClick={() => {
                   stop();
                   onUse(field, formatTime(selected));
+                  // The button now disables itself: keep the keys in the picker
+                  rootRef.current?.focus();
                 }}
                 className="ml-auto px-3 py-1 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-700 disabled:opacity-40"
               >
@@ -337,7 +389,7 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
               </button>
             ) : (
               <span className="ml-auto text-xs text-gray-500">
-                You can suggest but not edit: set <code>{field}:: {formatTime(selected)}</code> in the segment.
+                View only: you cannot change this file.
               </span>
             )}
           </div>

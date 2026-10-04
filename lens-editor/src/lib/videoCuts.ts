@@ -3,6 +3,7 @@
  * times, suggesting a cut from the transcript's word timings, and the end
  * fade the platform plays, so the cut picker sounds like the platform.
  */
+import { parseTimestamp } from 'lens-content-processor/dist/bundler/video.js';
 
 /** One word of a transcript's `.timestamps.json` sidecar. */
 export interface TimedWord {
@@ -29,19 +30,10 @@ export function clipEndVolume(currentTime: number, end: number): number {
   return left / CLIP_FADE_SECONDS;
 }
 
-/** Seconds from `M:SS`, `M:SS.ss`, `MM:SS` or `H:MM:SS` (the forms the
- *  content processor accepts); null when it is none of them. */
+/** Seconds from a `from::` / `to::` value, read exactly as the content
+ *  processor reads it (quotes allowed); null when it would refuse it. */
 export function parseTime(value: string): number | null {
-  const text = value.trim().replace(/^"(.*)"$/, '$1');
-  const parts = text.split(':');
-  if (parts.length < 2 || parts.length > 3) return null;
-  const last = parts[parts.length - 1];
-  if (!/^\d+(\.\d+)?$/.test(last)) return null;
-  const whole = parts.slice(0, -1);
-  if (!whole.every((p) => /^\d+$/.test(p))) return null;
-  // The content processor allows a fraction only in the two-part form
-  if (parts.length === 3 && last.includes('.')) return null;
-  return whole.reduce((acc, p) => acc * 60 + parseInt(p, 10), 0) * 60 + parseFloat(last);
+  return parseTimestamp(value.trim().replace(/^"(.*)"$/, '$1'));
 }
 
 /** `M:SS` for whole seconds, else `M:SS.ss` (trailing zeros dropped).

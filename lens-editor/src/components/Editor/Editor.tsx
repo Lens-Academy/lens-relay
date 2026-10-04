@@ -130,8 +130,16 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   const { displayName } = useDisplayName();
   const [synced, setSynced] = useState(false);
   // The video segment whose cut is being tuned (its from::/to:: Tune button)
-  const [cutTarget, setCutTarget] = useState<{ line: VideoCutLine; view: EditorView } | null>(null);
-  const [cutDocVersion, setCutDocVersion] = useState(0);
+  // `anchor` is the segment's heading start, mapped through every change so
+  // the picker keeps writing to its own segment while text moves around it
+  const [cutTarget, setCutTarget] = useState<{
+    view: EditorView;
+    field: VideoCutLine['field'];
+    anchor: number;
+    version: number;
+    /** Changes with each Tune click, so the picker starts afresh. */
+    opened: number;
+  } | null>(null);
   const cutOpenRef = useRef(false);
   useEffect(() => {
     cutOpenRef.current = cutTarget !== null;
@@ -393,10 +401,13 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         livePreview(wikilinkContextRef.current),
         codeBlockCopyButton(),
         videoCutButtons(),
-        videoCutCallback.of((line, view) => setCutTarget({ line, view })),
-        // Re-render only while the cut picker is open, to keep its times current
+        videoCutCallback.of((line, view) =>
+          setCutTarget({ view, field: line.field, anchor: line.sectionFrom, version: 0, opened: Date.now() })),
+        // Only while the cut picker is open: follow its segment and re-render
+        // so its times stay current
         EditorView.updateListener.of((u) => {
-          if (u.docChanged && cutOpenRef.current) setCutDocVersion((v) => v + 1);
+          if (!u.docChanged || !cutOpenRef.current) return;
+          setCutTarget((t) => t && { ...t, anchor: u.changes.mapPos(t.anchor, 1), version: t.version + 1 });
         }),
         markdownTableCompartment.of(markdownTableExtension()),
         sourceReadOnlyCompartment.of([]),
@@ -517,6 +528,8 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
 
     // Cleanup on unmount
     return () => {
+      // The cut picker holds this view: close it with the view
+      setCutTarget(null);
       view.destroy();
       viewRef.current = null;
     };
@@ -547,12 +560,17 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
       {cutTarget && metadata && currentFilePath && (
         <VideoCutDock
           view={cutTarget.view}
-          target={cutTarget.line}
-          docVersion={cutDocVersion}
+          field={cutTarget.field}
+          anchor={cutTarget.anchor}
+          docVersion={cutTarget.version}
+          opened={cutTarget.opened}
           metadata={metadata}
           currentFilePath={currentFilePath}
           readOnly={!!readOnly}
-          onClose={() => setCutTarget(null)}
+          onClose={() => {
+            cutTarget.view.focus();
+            setCutTarget(null);
+          }}
         />
       )}
       {contextMenu && (
