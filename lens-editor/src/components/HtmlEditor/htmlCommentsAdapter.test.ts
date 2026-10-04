@@ -13,11 +13,6 @@ describe('effectiveY', () => {
   it('returns iframeTop + rect.y when scroll has not moved', () => {
     expect(effectiveY({ y: 50, x: 0, w: 10, h: 10 }, 0, 0, 100)).toBe(150);
   });
-
-  it('scales page pixels when the frame is drawn scaled', () => {
-    // 200 + (100 - (70 - 50)) * 0.5 = 240
-    expect(effectiveY({ y: 100, x: 0, w: 10, h: 10 }, 50, 70, 200, 0.5)).toBe(240);
-  });
 });
 
 describe('makeIframeScrollSource', () => {

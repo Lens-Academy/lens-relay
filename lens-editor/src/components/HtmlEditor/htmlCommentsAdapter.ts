@@ -11,10 +11,8 @@ export function effectiveY(
   baselineScrollY: number,
   currentScrollY: number,
   iframeTop: number,
-  /** Screen pixels per page pixel, when the frame is drawn scaled. */
-  scale = 1,
 ): number {
-  return iframeTop + (rect.y - (currentScrollY - baselineScrollY)) * scale;
+  return iframeTop + rect.y - (currentScrollY - baselineScrollY);
 }
 
 export interface IframeScrollState {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
@@ -48,11 +48,10 @@ const modes: Array<{ id: Mode; label: string }> = [
 
 const COMMENTS_VISIBLE_KEY = 'lens-html-editor-comments-visible';
 const PREVIEW_WIDTH_KEY = 'lens-html-editor-preview-width';
-/** Size of the phone preview: a common phone viewport in CSS pixels. */
+/** Size of the phone preview: a common phone viewport in CSS pixels. It is
+ *  shown at full resolution, so a shorter pane gives it a shorter screen. */
 const PHONE_PREVIEW_WIDTH = 390;
 const PHONE_PREVIEW_HEIGHT = 844;
-/** Grey margin around the phone screen inside the preview pane. */
-const PHONE_PREVIEW_MARGIN = 16;
 
 const widths: Array<{ id: PreviewWidth; label: string; title: string }> = [
   { id: 'desktop', label: 'Desktop', title: 'Preview at full width' },
@@ -175,30 +174,6 @@ export function HtmlEditor({
   // The width toggle is hidden on a phone, where the preview already is phone width.
   const phonePreview = previewWidth === 'phone' && !isMobile;
 
-  // The phone screen keeps its 390x844 viewport and is scaled down, as a whole,
-  // when the pane is smaller. Positions reported from inside the frame are in
-  // the page's own pixels; multiply them by frameScale for the editor's.
-  const previewWrapperRef = useRef<HTMLDivElement>(null);
-  const phoneScreenRef = useRef<HTMLDivElement>(null);
-  const [phoneScale, setPhoneScale] = useState(1);
-  // Fitted before paint, so switching to Phone never shows a full-size frame.
-  useLayoutEffect(() => {
-    const wrapper = previewWrapperRef.current;
-    if (!phonePreview || !wrapper) return;
-    const fit = () => {
-      const width = (wrapper.clientWidth - 2 * PHONE_PREVIEW_MARGIN) / PHONE_PREVIEW_WIDTH;
-      const height = (wrapper.clientHeight - 2 * PHONE_PREVIEW_MARGIN) / PHONE_PREVIEW_HEIGHT;
-      setPhoneScale(Math.max(0.1, Math.min(1, width, height)));
-    };
-    fit();
-    const observer = new ResizeObserver(fit);
-    observer.observe(wrapper);
-    return () => observer.disconnect();
-  }, [phonePreview, mode]);
-  const frameScale = phonePreview ? phoneScale : 1;
-  const frameScaleRef = useRef(frameScale);
-  useLayoutEffect(() => { frameScaleRef.current = frameScale; }, [frameScale]);
-
   // On a phone the bottom bar's Comments button opens the sheet (the page sits
   // in HtmlDocumentLayout, which shows those buttons), so the header has none.
   const commentsControl = useMemo(() => (isMobile
@@ -212,16 +187,12 @@ export function HtmlEditor({
 
   // --- sidebar positioning -------------------------------------------
   const commentsLayerRef = useRef<CommentsLayerHandle>(null);
+  const previewWrapperRef = useRef<HTMLDivElement>(null);
+  const phoneScreenRef = useRef<HTMLDivElement>(null);
   const currentScrollYRef = useRef(0);
   const iframeScrollStateRef = useRef<IframeScrollState>({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 });
-  // Kept in page pixels and scaled when read, so a new scale needs no scroll event.
-  const scrollSource = useMemo(() => makeIframeScrollSource(() => {
-    const { scrollTop, scrollHeight, clientHeight } = iframeScrollStateRef.current;
-    const scale = frameScaleRef.current;
-    return { scrollTop: scrollTop * scale, scrollHeight: scrollHeight * scale, clientHeight: clientHeight * scale };
-  }), []);
-  // A new scale moves every anchor on screen without the page reflowing: re-lay out the cards.
-  useEffect(() => { scrollSource.notify(); }, [placements, scrollSource, frameScale]);
+  const scrollSource = useMemo(() => makeIframeScrollSource(() => iframeScrollStateRef.current), []);
+  useEffect(() => { scrollSource.notify(); }, [placements, scrollSource]);
 
   const frameTop = () => previewRef.current?.frameElement()?.getBoundingClientRect().top
     ?? previewWrapperRef.current?.getBoundingClientRect().top ?? 0;
@@ -230,12 +201,12 @@ export function HtmlEditor({
     const top = frameTop();
     if (key === DRAFT_KEY) {
       const rect = placements.draft?.rect;
-      if (rect) return effectiveY(rect, placements.baselineScrollY, currentScrollYRef.current, top, frameScale);
-      return draft ? top + draft.rect.y * frameScale : null;
+      if (rect) return effectiveY(rect, placements.baselineScrollY, currentScrollYRef.current, top);
+      return draft ? top + draft.rect.y : null;
     }
     const rect = placements.byId.get(key)?.rect;
     if (!rect) return null;
-    return effectiveY(rect, placements.baselineScrollY, currentScrollYRef.current, top, frameScale);
+    return effectiveY(rect, placements.baselineScrollY, currentScrollYRef.current, top);
   };
 
   const getViewportRect = () => {
@@ -362,9 +333,8 @@ export function HtmlEditor({
       setSelectionChip(null);
       return;
     }
-    const scale = frameScaleRef.current;
-    const left = frame.left - wrapper.left + (rect.x + rect.w / 2) * scale;
-    const top = frame.top - wrapper.top + rect.y * scale;
+    const left = frame.left - wrapper.left + rect.x + rect.w / 2;
+    const top = frame.top - wrapper.top + rect.y;
     setSelectionChip({ left: Math.max(40, Math.min(wrapper.width - 40, left)), top: Math.max(4, top - 34) });
   }, []);
   const showSelectionChip = selectionChip && canComment && !commentMode && !draft && mode !== 'source';
@@ -489,7 +459,7 @@ export function HtmlEditor({
             className={[
               'relative min-w-0 flex-1',
               mode === 'split' ? 'border-l border-gray-200' : '',
-              phonePreview ? 'flex items-start justify-center overflow-hidden bg-gray-100' : '',
+              phonePreview ? 'flex items-start justify-center overflow-x-auto bg-gray-100 p-4' : '',
             ].join(' ')}
           >
             {problemsOpen && pageProblems.length > 0 && (
@@ -549,58 +519,44 @@ export function HtmlEditor({
             )}
             <div
               ref={phoneScreenRef}
-              className={phonePreview ? 'flex-shrink-0' : 'h-full w-full'}
-              style={phonePreview ? {
-                width: PHONE_PREVIEW_WIDTH * phoneScale,
-                height: PHONE_PREVIEW_HEIGHT * phoneScale,
-                marginTop: PHONE_PREVIEW_MARGIN,
-              } : undefined}
+              className={phonePreview
+                ? 'max-h-full flex-shrink-0 overflow-hidden rounded-[24px] bg-white shadow-[0_0_0_1px_rgb(209_213_219),0_4px_16px_rgb(0_0_0/0.12)]'
+                : 'h-full w-full'}
+              style={phonePreview ? { width: PHONE_PREVIEW_WIDTH, height: PHONE_PREVIEW_HEIGHT } : undefined}
               data-preview-width={phonePreview ? 'phone' : 'desktop'}
             >
-              <div
-                className={phonePreview
-                  ? 'overflow-hidden rounded-[24px] bg-white shadow-[0_0_0_1px_rgb(209_213_219),0_4px_16px_rgb(0_0_0/0.12)]'
-                  : 'h-full w-full'}
-                style={phonePreview ? {
-                  width: PHONE_PREVIEW_WIDTH,
-                  height: PHONE_PREVIEW_HEIGHT,
-                  transform: `scale(${phoneScale})`,
-                  transformOrigin: 'top left',
-                } : undefined}
-              >
-                <HtmlPreview
-                  ref={previewRef}
-                  ytext={ytext}
-                  threads={comments.marks}
-                  draft={draft?.anchor ?? null}
-                  focusedThreadId={focusedThreadId}
-                  commentMode={commentMode && canComment}
-                  onThreadsResolved={comments.onThreadsResolved}
-                  onScrollState={(payload) => {
-                    if (payload.layoutVersion !== placements.layoutVersion) return;
-                    currentScrollYRef.current = payload.y;
-                    iframeScrollStateRef.current = {
-                      scrollTop: payload.y,
-                      scrollHeight: payload.scrollHeight,
-                      clientHeight: payload.clientHeight,
-                    };
-                    scrollSource.notify();
-                  }}
-                  onThreadClicked={focusThread}
-                  onAnchorCaptured={handleAnchorCaptured}
-                  onCommentModeExit={exitCommentMode}
-                  onShortcut={() => {
-                    if (!canComment) return;
-                    if (commentMode) exitCommentMode();
-                    else startCommentMode();
-                  }}
-                  onSelectionChanged={onSelectionChanged}
-                  onLegacyDescribed={comments.onLegacyDescribed}
-                  onCurrentDescribed={onCurrentDescribed}
-                  storageKey={storageKey}
-                  onPageProblems={setPageProblems}
-                />
-              </div>
+              <HtmlPreview
+                ref={previewRef}
+                ytext={ytext}
+                threads={comments.marks}
+                draft={draft?.anchor ?? null}
+                focusedThreadId={focusedThreadId}
+                commentMode={commentMode && canComment}
+                onThreadsResolved={comments.onThreadsResolved}
+                onScrollState={(payload) => {
+                  if (payload.layoutVersion !== placements.layoutVersion) return;
+                  currentScrollYRef.current = payload.y;
+                  iframeScrollStateRef.current = {
+                    scrollTop: payload.y,
+                    scrollHeight: payload.scrollHeight,
+                    clientHeight: payload.clientHeight,
+                  };
+                  scrollSource.notify();
+                }}
+                onThreadClicked={focusThread}
+                onAnchorCaptured={handleAnchorCaptured}
+                onCommentModeExit={exitCommentMode}
+                onShortcut={() => {
+                  if (!canComment) return;
+                  if (commentMode) exitCommentMode();
+                  else startCommentMode();
+                }}
+                onSelectionChanged={onSelectionChanged}
+                onLegacyDescribed={comments.onLegacyDescribed}
+                onCurrentDescribed={onCurrentDescribed}
+                storageKey={storageKey}
+                onPageProblems={setPageProblems}
+              />
             </div>
           </div>
         )}

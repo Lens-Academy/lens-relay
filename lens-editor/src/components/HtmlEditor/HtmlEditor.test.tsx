@@ -155,53 +155,19 @@ describe('HtmlEditor', () => {
     expect(sourceBtn.getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('previews on a 390x844 phone screen, scaled down to fit the pane', async () => {
-    // The pane is 600x500: the 844px-tall screen (plus its 16px margins) is scaled to 468/844.
-    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600);
-    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(500);
+  it('previews on a full-resolution 390x844 phone screen, no taller than the pane', async () => {
     const { container } = renderWithDoc();
     await userEvent.click(screen.getByRole('button', { name: /^Phone$/ }));
 
-    const scale = 468 / 844;
-    const box = container.querySelector<HTMLElement>('[data-preview-width="phone"]')!;
-    expect(parseFloat(box.style.width)).toBeCloseTo(390 * scale);
-    expect(parseFloat(box.style.height)).toBeCloseTo(468);
-    const screenEl = box.firstElementChild as HTMLElement;
-    expect(screenEl.style.width).toBe('390px');
-    expect(screenEl.style.height).toBe('844px');
-    expect(screenEl.style.transform).toBe(`scale(${scale})`);
-    expect(screenEl.contains(iframe())).toBe(true);
+    const phone = container.querySelector<HTMLElement>('[data-preview-width="phone"]')!;
+    expect(phone.style.width).toBe('390px');
+    expect(phone.style.height).toBe('844px');
+    expect(phone.className).toContain('max-h-full');
+    expect(phone.style.transform).toBe('');
+    expect(phone.contains(iframe())).toBe(true);
 
     await userEvent.click(screen.getByRole('button', { name: /^Desktop$/ }));
     expect(container.querySelector('[data-preview-width="desktop"]')).not.toBeNull();
-    expect(container.querySelector('[style*="scale"]')).toBeNull();
-  });
-
-  it('moves comment cards with their anchors when only the phone scale changes', async () => {
-    let paneHeight = 500;
-    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600);
-    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => paneHeight);
-    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 600, 500));
-    const resizeCallbacks: Array<() => void> = [];
-    vi.stubGlobal('ResizeObserver', class {
-      constructor(callback: (entries: ResizeObserverEntry[]) => void) { resizeCallbacks.push(() => callback([])); }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    });
-    const { doc, ytext, awareness } = createHtmlDoc();
-    createThread(doc, 'test', { id: 't1', anchor, author: 'ann', body: 'A comment', ts: 1 });
-    const { container } = renderEditor(ytext, awareness);
-    await userEvent.click(screen.getByRole('button', { name: /^Phone$/ }));
-    await resolved([{ id: 't1', state: 'anchored', rect: { x: 0, y: 200, w: 10, h: 10 }, textOffset: 10 }]);
-    const cardTop = () => parseFloat(container.querySelector<HTMLElement>('[data-comment-thread="t1"]')!.style.top);
-    expect(cardTop()).toBeCloseTo(200 * (468 / 844));
-
-    // The pane grows: the screen is drawn at full size, though the page did not reflow or scroll.
-    paneHeight = 900;
-    await act(async () => { resizeCallbacks.forEach(callback => callback()); });
-    expect(cardTop()).toBeCloseTo(200);
-    vi.unstubAllGlobals();
   });
 
   it('preview pane is bound to the SAME Y.Text instance the parent owns', async () => {
