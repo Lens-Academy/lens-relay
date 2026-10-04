@@ -95,7 +95,7 @@ export function VideoCutDock({
 
   return (
     <div
-      className="shrink-0 max-h-[55%] overflow-auto border-t border-gray-200 bg-gray-50 shadow-[0_-2px_6px_rgba(0,0,0,0.04)]"
+      className="shrink-0 max-h-[65%] overflow-auto border-t border-gray-200 bg-gray-50 shadow-[0_-2px_6px_rgba(0,0,0,0.04)]"
       data-testid="video-cut-dock"
     >
       {!segment ? (

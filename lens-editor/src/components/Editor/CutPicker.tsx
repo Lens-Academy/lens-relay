@@ -316,7 +316,7 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
       </div>
 
       <div className="flex gap-4 items-start">
-        <div ref={mountRef} className="w-[240px] aspect-video shrink-0 bg-black rounded overflow-hidden" />
+        <div ref={mountRef} className="w-[420px] max-w-[45%] aspect-video shrink-0 bg-black rounded overflow-hidden" />
         <div className="flex-1 min-w-0">
           {(loadError || playError) && <div className="text-red-600 text-xs mb-2">{loadError ?? playError}</div>}
           <div className="text-xs text-gray-500 mb-2">
@@ -325,7 +325,7 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
               : `Each button plays ${lead} s from that start time.`}{' '}
             ← → move and play, Space replays, Esc closes.
           </div>
-          <div className="flex flex-wrap gap-1.5 mb-3">
+          <div className="grid grid-cols-7 gap-1 mb-3">
             {row.map((cut) => {
               const isSelected = Math.abs(cut - selected) < 0.001;
               const isCurrent = current !== null && Math.abs(cut - current) < 0.001;
@@ -338,7 +338,7 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
                   onClick={() => choose(cut)}
                   aria-pressed={isSelected}
                   title={isSuggested ? 'Suggested from the word timings' : undefined}
-                  className={`relative min-w-[64px] px-2 py-1.5 rounded border text-xs tabular-nums transition-colors disabled:opacity-40 ${
+                  className={`relative min-w-0 px-0.5 py-1.5 rounded border text-xs tabular-nums transition-colors disabled:opacity-40 ${
                     isSelected ? 'border-teal-600 bg-teal-50 text-teal-800' : 'border-gray-200 bg-white text-gray-700 hover:border-teal-400'
                   } ${playing !== null && Math.abs(cut - playing) < 0.001 ? 'ring-2 ring-teal-400' : ''}`}
                 >
@@ -353,25 +353,30 @@ export function CutPicker({ videoId, words, from, to, onUse, onClose, initialFie
           <div className="flex flex-wrap items-center gap-2">
             <button
               disabled={!ready}
+              onClick={() => (playing !== null ? stop() : void play(selected))}
+              className="px-3 py-1 rounded border border-teal-600/50 bg-white text-xs font-medium text-teal-800 hover:bg-teal-50 disabled:opacity-40"
+              title="Space"
+            >
+              {playing !== null ? '■ Stop' : `▶ Play ${formatTime(selected)}`}
+            </button>
+            <button
+              disabled={!ready}
               onClick={() => void playAll()}
               className="px-3 py-1 rounded border border-gray-200 bg-white text-xs hover:border-teal-400 disabled:opacity-40"
             >
               Play all in turn
             </button>
-            {playing !== null && (
-              <button onClick={stop} className="px-3 py-1 rounded border border-gray-200 bg-white text-xs">
-                Stop
-              </button>
-            )}
-            {suggestion && Math.abs(suggestion.time - centre) > 0.001 && (
+            {suggestion && Math.abs(suggestion.time - selected) > 0.001 && (
               <button
+                disabled={!ready}
                 onClick={() => {
                   setCentre(suggestion.time);
                   choose(suggestion.time);
                 }}
-                className="px-3 py-1 rounded border border-gray-200 bg-white text-xs hover:border-teal-400"
+                title="The suggested cut sits just before the first word of the next sentence, from the transcript's word timings. This moves the row of times to it and plays it."
+                className="px-3 py-1 rounded border border-gray-200 bg-white text-xs hover:border-teal-400 disabled:opacity-40"
               >
-                Centre on suggestion ({formatTime(suggestion.time)})
+                ★ Try the suggested cut {formatTime(suggestion.time)}
               </button>
             )}
             {onUse ? (
