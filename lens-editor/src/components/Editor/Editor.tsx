@@ -31,6 +31,8 @@ import * as Y from 'yjs';
 import { useYDoc, useYjsProvider } from '../../lib/ydoc-provider'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment, updateImageEmbedContext } from './extensions/livePreview';
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
+import { videoCutButtons, videoCutCallback, type VideoCutLine } from './extensions/videoCutButtons';
+import { VideoCutDock } from './VideoCutDock';
 import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
 import { headingFlashPlugin } from './extensions/headingFlash';
@@ -127,6 +129,13 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   const provider = useYjsProvider();
   const { displayName } = useDisplayName();
   const [synced, setSynced] = useState(false);
+  // The video segment whose cut is being tuned (its from::/to:: Tune button)
+  const [cutTarget, setCutTarget] = useState<{ line: VideoCutLine; view: EditorView } | null>(null);
+  const [cutDocVersion, setCutDocVersion] = useState(0);
+  const cutOpenRef = useRef(false);
+  useEffect(() => {
+    cutOpenRef.current = cutTarget !== null;
+  }, [cutTarget]);
   const [contextMenu, setContextMenu] = useState<{
     items: ContextMenuItem[];
     position: { x: number; y: number };
@@ -383,6 +392,12 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         }),
         livePreview(wikilinkContextRef.current),
         codeBlockCopyButton(),
+        videoCutButtons(),
+        videoCutCallback.of((line, view) => setCutTarget({ line, view })),
+        // Re-render only while the cut picker is open, to keep its times current
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged && cutOpenRef.current) setCutDocVersion((v) => v + 1);
+        }),
         markdownTableCompartment.of(markdownTableExtension()),
         sourceReadOnlyCompartment.of([]),
         emphasisPersistPlugin,
@@ -522,13 +537,24 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   }, [pastePrompt]);
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full flex flex-col">
       {!synced && <LoadingOverlay />}
       <div
         ref={containerRef}
-        className="h-full w-full"
+        className="flex-1 min-h-0 w-full"
         onContextMenu={handleContextMenu}
       />
+      {cutTarget && metadata && currentFilePath && (
+        <VideoCutDock
+          view={cutTarget.view}
+          target={cutTarget.line}
+          docVersion={cutDocVersion}
+          metadata={metadata}
+          currentFilePath={currentFilePath}
+          readOnly={!!readOnly}
+          onClose={() => setCutTarget(null)}
+        />
+      )}
       {contextMenu && (
         <ContextMenu
           items={contextMenu.items}
