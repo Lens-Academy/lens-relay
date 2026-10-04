@@ -94,5 +94,6 @@ fi
 # local share links double as MCP credentials.
 PORT=$RELAY_PORT \
 RELAY_SERVER_URL="http://localhost:$RELAY_PORT" \
+RELAY_PUBLIC_URL="${RELAY_PUBLIC_URL:-http://localhost:$RELAY_PORT}" \
 SHARE_TOKEN_SECRET="${SHARE_TOKEN_SECRET:-lens-editor-dev-secret-do-not-use-in-production}" \
 cargo run -p relay -- serve --config "$CONFIG_FILE"

@@ -4,6 +4,7 @@ pub mod router;
 pub mod session;
 pub mod tools;
 pub mod transport;
+pub mod upload;
 
 pub use jsonrpc::{JsonRpcMessage, JsonRpcResponse};
 pub use router::{dispatch_request, handle_notification};

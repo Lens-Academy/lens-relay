@@ -220,6 +220,11 @@ soft / 20 MiB hard, `overwrite` keeps the file id), `read` returns image attachm
 MCP image blocks, and `POST /doc/attachment` answers 409 on same-path-different-bytes.
 See the attachments section of `docs/server-ops.md`.
 
+**Large uploads over MCP** (`crates/relay/src/mcp/upload.rs`, `mcp/tools/upload_link.rs`): the
+`upload_link` tool returns a one-off `POST /mcp/upload/<ticket>` link (10 min, one path, single use) that a
+shell can `curl --data-binary` a whole `.md`/`.html` file to, so large content needs neither the token nor
+model tokens; the upload runs through `create`/`edit` with all their rules. See `docs/mcp-large-content-upload.md`.
+
 **Source sync: Google Docs → read-only Relay copies** (`lens-editor/server/source-sync/`): the lens-editor
 server keeps each file named in `SOURCE_SYNC_BINDINGS` (JSON: `source` link → `target` relay path inside an
 `articles/` folder, plus the article `author`) equal to its source, every `SOURCE_SYNC_INTERVAL_MINUTES`
