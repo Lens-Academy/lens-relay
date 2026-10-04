@@ -237,6 +237,7 @@ refuse image paths.
 | `/root/relay-git-sync-data/git_connectors.toml` | Maps shared folders to GitHub repos |
 | `/root/relay-git-sync-data/webhook_handler.py` | Patched webhook handler (mounted volume) |
 | `/root/relay-git-sync-data/persistence.py` | Patched persistence.py for SSH config support |
+| `/root/relay-git-sync-data/*.py` (others) | Further relay-git-sync overrides; the authoritative list of what is mounted into `/app` is `scripts/start-git-sync.sh` |
 | `/root/relay-git-sync-data/ssh/config` | SSH config with host aliases for multiple deploy keys |
 | `/root/relay-git-sync-data/ssh/git_sync_key` | SSH key for lens-relay repo |
 | `/root/relay-git-sync-data/ssh/educational_key` | SSH key for lens-educational-content repo |
@@ -333,6 +334,8 @@ docker logs -f relay-git-sync
 docker restart relay-server
 docker restart cloudflared
 docker restart relay-git-sync   # if the container was removed, recreate it: bash scripts/start-git-sync.sh
+# after changing the set of mounted override files, recreate (restart keeps the old mounts):
+#   bash scripts/start-git-sync.sh
 
 # Check running containers
 docker ps -a
