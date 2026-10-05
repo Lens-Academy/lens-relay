@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { EditorState, Text } from '@codemirror/state';
 import { EditorView, runScopeHandlers } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
-import { cursorFor, embedLinesIn, noteEmbedField, openEmbedAtCursor, updateNoteEmbedContext, type NoteEmbedContext } from './noteEmbed';
+import { embedLinesIn, noteEmbedField, openEmbedAtCursor, updateNoteEmbedContext, type NoteEmbedContext } from './noteEmbed';
 import * as Y from 'yjs';
 import { isLive } from '../../../lib/embed-docs';
 import { __embedDocsTesting, setSnapshot } from '../../../lib/embed-docs';
@@ -26,18 +26,6 @@ describe('findEmbedLines', () => {
     const doc = Text.of(LENS.split('\n'));
     expect(embedLinesIn(doc).map((e) => e.target)).toEqual(['../Questions/Shared', '../Questions/Missing']);
     expect(embedLinesIn(doc)[0].lineTo).toBe(doc.line(2).to);
-  });
-});
-
-describe('cursorFor', () => {
-  const file = '#### Question\nid:: x\ncontent:: Does it hold?\nassessment-instructions:: Score it';
-  it('lands at the end of the line holding the clicked text', () => {
-    expect(cursorFor(file, 'Does it hold?')).toBe(file.indexOf('\nassessment'));
-    expect(cursorFor(file, 'Score it')).toBe(file.length);
-  });
-  it('falls back to the start', () => {
-    expect(cursorFor(file, null)).toBe(0);
-    expect(cursorFor(file, 'rendered differently')).toBe(0);
   });
 });
 
@@ -81,15 +69,18 @@ describe('noteEmbedField cards', () => {
     expect(cards[1].textContent).toContain('No file named');
   });
 
-  it('previews the file from its snapshot, question-shaped', async () => {
+  it('shows the file read-only, rendered like the page', async () => {
     updateNoteEmbedContext(context());
     setSnapshot('relay-shared', '#### Question: Open\nid:: 1\ncontent:: Does this setup hold?\n');
     const v = mount(LENS);
     await new Promise((r) => setTimeout(r, 20));
     const card = v.dom.querySelector('.cm-note-embed')!;
     expect(card.getAttribute('data-state')).toBe('preview');
-    expect(card.querySelector('.cm-note-embed-kind')?.textContent).toBe('Question · Open');
-    expect(card.textContent).toContain('Does this setup hold?');
+    const preview = EditorView.findFromDOM(card.querySelector('.cm-editor') as HTMLElement)!;
+    expect(preview.state.doc.toString()).toBe('#### Question: Open\nid:: 1\ncontent:: Does this setup hold?\n');
+    expect(preview.state.readOnly).toBe(true);
+    // The live-preview look: the heading is styled as a heading
+    expect(card.querySelector('.cm-heading-4')?.textContent).toContain('Question: Open');
     expect(card.querySelector('.cm-note-embed-hint')?.textContent).toBe('Click to edit');
   });
 
@@ -126,7 +117,7 @@ describe('noteEmbedField cards', () => {
     await settle();
     const card = v.dom.querySelector('.cm-note-embed')!;
     expect(card.getAttribute('data-state')).toBe('live');
-    const inner = EditorView.findFromDOM(card.querySelector('.cm-editor') as HTMLElement)!;
+    const inner = EditorView.findFromDOM(card.querySelector('.cm-note-embed-live .cm-editor') as HTMLElement)!;
     runScopeHandlers(inner, new KeyboardEvent('keydown', { key: 'Escape' }), 'editor');
     await settle();
     expect(card.getAttribute('data-state')).toBe('preview');
@@ -175,18 +166,5 @@ describe('noteEmbedField cards', () => {
   it('shows nothing without a context (no metadata yet)', () => {
     const v = mount(LENS);
     expect(v.dom.querySelector('.cm-note-embed')).toBeNull();
-  });
-});
-
-describe('NoteEmbedPreview options', () => {
-  it('lists choice options with the correct ones marked', async () => {
-    const { render } = await import('@testing-library/react');
-    const { NoteEmbedPreview } = await import('../NoteEmbedPreview');
-    const { container } = render(
-      NoteEmbedPreview({ text: '#### Question: Choice\nid:: 1\ncontent:: Pick\noptions::\n- [x] Right\n- [ ] Wrong\n' }),
-    );
-    const items = [...container.querySelectorAll('.cm-note-embed-options li')].map((li) => li.textContent);
-    expect(items).toEqual(['✓ Right', '○ Wrong']);
-    expect(container.querySelector('.cm-note-embed-correct')?.textContent).toBe('✓ Right');
   });
 });

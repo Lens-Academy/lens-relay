@@ -1062,7 +1062,7 @@ const livePreviewTheme = EditorView.theme({});
  *
  * @param context - Optional WikilinkContext for navigation callbacks
  */
-export function livePreview(context?: WikilinkContext) {
+export function livePreview(context?: WikilinkContext, { embeds = true }: { embeds?: boolean } = {}) {
   if (context) {
     wikilinkContext = context;
   }
@@ -1071,7 +1071,8 @@ export function livePreview(context?: WikilinkContext) {
     frontmatterField, // StateField outside compartment (survives source mode toggle)
     obsidianCommentRangesField,
     listHangingIndent, // wrapped list rows align with the item text in both modes
-    livePreviewCompartment.of([livePreviewPlugin, noteEmbeds, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
+    // embeds: false inside an embed card, which never nests another
+    livePreviewCompartment.of([livePreviewPlugin, ...(embeds ? [noteEmbeds] : []), obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];
 }
 

@@ -1,26 +1,27 @@
 /**
  * `![[file]]` embeds of Markdown files (question files above all): a card
- * under the embed line that previews the file read-only, and turns into a
- * live editor of that file, in place, when clicked.
+ * under the embed line that shows the file read-only, rendered like the rest
+ * of the page (the editor's own live preview), and turns into a live editor
+ * of that file, in place, when clicked.
  *
  * The heavy lifting (snapshot reads, the read limit, the one live connection)
  * is in `lib/embed-docs.ts`; this file is the CodeMirror side.
  */
 import { EditorState, Prec, StateField, type Text } from '@codemirror/state';
-import { Decoration, EditorView, WidgetType, drawSelection, keymap, type DecorationSet } from '@codemirror/view';
+import { Decoration, EditorView, WidgetType, keymap, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { HighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language';
-import { tags } from '@lezer/highlight';
+import { defaultHighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language';
+import { Autolink, Table, TaskList } from '@lezer/markdown';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
-import { createElement } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { findEmbedLines } from '../../../../shared/embeds';
 import { cachedSnapshot, closeLive, isLive, onSnapshot, onUnsaved, openLive, readSnapshot } from '../../../lib/embed-docs';
 import { attachProvenanceRegistration } from '../../../lib/provenance';
-import { NoteEmbedPreview } from '../NoteEmbedPreview';
 import { criticMarkupExtension, suggestionModeField, toggleSuggestionMode } from './criticmarkup';
+import { livePreview } from './livePreview';
+import { markdownTableExtension } from './markdownTable';
+import { WikilinkExtension } from './wikilinkParser';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
 
 export interface NoteEmbedContext {
@@ -95,16 +96,27 @@ export const noteEmbeds = [
   Prec.high(keymap.of([{ key: 'Alt-Enter', run: openEmbedAtCursor }])),
 ];
 
-/** Markdown styling of the embedded editor: CodeMirror's default style
- *  underlines headings, which reads as a link here. */
-const embedHighlightStyle = HighlightStyle.define([
-  { tag: tags.heading, fontWeight: 'bold' },
-  { tag: tags.strong, fontWeight: 'bold' },
-  { tag: tags.emphasis, fontStyle: 'italic' },
-  { tag: tags.link, color: '#6366f1' },
-  { tag: tags.monospace, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
-  { tag: tags.processingInstruction, color: '#9ca3af' },
-]);
+/** Longest file a card renders read-only; a longer one is cut (the card is
+ *  capped at 300 px anyway, and "Open" shows all of it). */
+export const MAX_PREVIEW_CHARS = 20_000;
+
+/** How an embedded file is rendered, read-only or live: the main editor's
+ *  Markdown live preview, so it reads as part of the page. */
+function embedViewExtensions(canAcceptReject: boolean) {
+  return [
+    indentUnit.of('\t'),
+    EditorState.tabSize.of(4),
+    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    markdown({ base: markdownLanguage, extensions: [WikilinkExtension, TaskList, Autolink, Table], addKeymap: false }),
+    livePreview(undefined, { embeds: false }),
+    markdownTableExtension(),
+    criticMarkupExtension({ canAcceptReject }),
+    EditorView.lineWrapping,
+    EditorView.theme({
+      '.tok-heading, .cm-line .tok-heading': { textDecoration: 'none !important' },
+    }),
+  ];
+}
 
 const cards = new WeakMap<HTMLElement, EmbedCard>();
 
@@ -146,17 +158,6 @@ class NoteEmbedWidget extends WidgetType {
   }
 }
 
-/** Where the cursor goes when an embed opens: at the end of the line holding
- *  the text that was clicked in the preview, else at the start. */
-export function cursorFor(text: string, clickedText: string | null): number {
-  const probe = clickedText?.trim().slice(0, 40);
-  if (!probe) return 0;
-  const at = text.indexOf(probe);
-  if (at === -1) return 0;
-  const lineEnd = text.indexOf('\n', at);
-  return lineEnd === -1 ? text.length : lineEnd;
-}
-
 function displayName(path: string | null, target: string): string {
   const name = (path ?? target).split('/').pop() ?? target;
   return name.replace(/\.md$/i, '');
@@ -171,7 +172,8 @@ class EmbedCard {
   private readonly previewHost: HTMLElement;
   private readonly liveHost: HTMLElement;
   private readonly more: HTMLButtonElement;
-  private root: Root | null = null;
+  /** The file as last read, rendered read-only. */
+  private previewView: EditorView | null = null;
   private observer: IntersectionObserver | null = null;
   private readonly unsubscribe: Array<() => void> = [];
   private liveView: EditorView | null = null;
@@ -259,11 +261,13 @@ class EmbedCard {
     }
 
     this.dom.addEventListener('mousedown', (e) => {
-      if ((e.target as HTMLElement).closest('button')) return;
+      // Buttons and links in the preview do their own thing
+      if ((e.target as HTMLElement).closest('button, a, .cm-wikilink-widget')) return;
       if (this.liveView || this.state === 'connecting') return;
       e.preventDefault();
-      const clicked = (e.target as HTMLElement).closest('.cm-note-embed-prompt, .cm-note-embed-field dd, .cm-note-embed-markdown p');
-      this.open(clicked?.textContent ?? null);
+      // Edit where the click landed in the rendered file
+      const at = this.previewView?.posAtCoords({ x: e.clientX, y: e.clientY }) ?? null;
+      this.open(at);
     });
 
     const cached = cachedSnapshot(fullDocId);
@@ -336,12 +340,30 @@ class EmbedCard {
     if (this.destroyed) return;
     this.failed = null;
     this.setState('preview');
-    if (!this.root) {
+    const shown = text.length > MAX_PREVIEW_CHARS ? `${text.slice(0, MAX_PREVIEW_CHARS)}…` : text;
+    if (!this.previewView) {
       this.previewHost.textContent = '';
-      this.root = createRoot(this.previewHost);
+      this.previewView = new EditorView({
+        parent: this.previewHost,
+        state: this.previewState(shown),
+      });
+    } else if (this.previewView.state.doc.toString() !== shown) {
+      this.previewView.setState(this.previewState(shown));
     }
-    this.root.render(createElement(NoteEmbedPreview, { text }));
     requestAnimationFrame(() => this.updateMore());
+  }
+
+  private previewState(text: string): EditorState {
+    return EditorState.create({
+      doc: text,
+      // The cursor of a live preview shows its line raw: park it at the end.
+      selection: { anchor: text.length },
+      extensions: [
+        ...embedViewExtensions(false),
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+      ],
+    });
   }
 
   private updateMore(): void {
@@ -352,18 +374,18 @@ class EmbedCard {
   }
 
   /** Edit the file in place (or retry what failed). True when it acted. */
-  open(clickedText: string | null = null): boolean {
+  open(at: number | null = null): boolean {
     if (!this.fullDocId || !context || context.readOnly || this.liveView || this.state === 'connecting') return false;
     if (this.failed === 'read') {
       this.setState('waiting');
       this.load();
       return true;
     }
-    void this.activate(clickedText);
+    void this.activate(at);
     return true;
   }
 
-  private async activate(clickedText: string | null): Promise<void> {
+  private async activate(at: number | null): Promise<void> {
     const ctx = context!;
     this.setState('connecting');
     let opened;
@@ -393,10 +415,7 @@ class EmbedCard {
         // yCollab syncs changes, not the starting text: start from the file as it is.
         doc: ytext.toString(),
         extensions: [
-          indentUnit.of('\t'),
-          EditorState.tabSize.of(4),
-          drawSelection(),
-          syntaxHighlighting(embedHighlightStyle),
+          ...embedViewExtensions(ctx.canAcceptReject),
           keymap.of([
             {
               key: 'Escape',
@@ -409,10 +428,7 @@ class EmbedCard {
             ...yUndoManagerKeymap,
             ...defaultKeymap,
           ]),
-          markdown({ base: markdownLanguage, addKeymap: false }),
           yCollab(ytext, null, { undoManager }),
-          criticMarkupExtension({ canAcceptReject: ctx.canAcceptReject }),
-          EditorView.lineWrapping,
         ],
       }),
     });
@@ -424,8 +440,7 @@ class EmbedCard {
     this.setState('live');
     this.more.hidden = true;
     document.addEventListener('mousedown', this.onOutsideMouseDown, true);
-    const at = cursorFor(ytext.toString(), clickedText);
-    this.liveView.dispatch({ selection: { anchor: at }, scrollIntoView: true });
+    this.liveView.dispatch({ selection: { anchor: Math.min(at ?? 0, ytext.length) }, scrollIntoView: true });
     this.liveView.focus();
     this.host.requestMeasure();
   }
@@ -461,10 +476,7 @@ class EmbedCard {
     closeLive(this);
     this.observer?.disconnect();
     for (const unsubscribe of this.unsubscribe) unsubscribe();
-    const root = this.root;
-    this.root = null;
-    // Unmount after the current CodeMirror update; React refuses to unmount
-    // synchronously while another root may be rendering.
-    if (root) queueMicrotask(() => root.unmount());
+    this.previewView?.destroy();
+    this.previewView = null;
   }
 }
