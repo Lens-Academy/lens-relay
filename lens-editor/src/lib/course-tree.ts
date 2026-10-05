@@ -105,9 +105,9 @@ export function basenameOf(path: string): string {
   return pathToSegments(path).at(-1) ?? path;
 }
 
-/** True for `/<folder>/courses/<file>.md`: the files the tree uses as roots. */
+/** True for `/<folder>/courses/[<group>/]<file>.md`: the files the tree uses as roots. */
 export function isCoursePath(path: string): boolean {
-  return /^\/[^/]+\/courses\/[^/]+\.md$/i.test(path);
+  return /^\/[^/]+\/courses\/.+\.md$/i.test(path);
 }
 
 /** All course files across the shared folders, sorted by name. */

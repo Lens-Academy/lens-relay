@@ -73,6 +73,20 @@ describe('buildPromotionCurriculumIndex', () => {
     });
   });
 
+  it('finds courses grouped in subfolders of courses/', () => {
+    const staging = snapshot({
+      'courses/live/C.md': '---\ntitle: Grouped\n---\n# Module: [[../../modules/M]]',
+      'modules/M.md': '# Lens:\nsource:: [[../Lenses/L]]',
+      'Lenses/L.md': 'Text',
+    });
+    const result = buildPromotionCurriculumIndex(staging, snapshot({}), [change('Lenses/L.md')]);
+    expect(result.courses.map(course => course.label)).toEqual(['Grouped']);
+    expect(result.memberships['Lenses/L.md']).toEqual({
+      coursePaths: ['courses/live/C.md'],
+      modulePaths: ['modules/M.md'],
+    });
+  });
+
   it('terminates cycles and ignores missing targets', () => {
     const staging = snapshot({
       'courses/C.md': '# Module: [[../modules/M]]',
