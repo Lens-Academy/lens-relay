@@ -240,6 +240,8 @@
 .cm-note-embed-field dd { margin: 0; }
 .cm-note-embed-field dd p, .cm-note-embed-prompt p, .cm-note-embed-markdown p { margin: 0 0 4px; }
 .cm-note-embed-empty { color: #9ca3af; font-style: italic; }
+.cm-note-embed-options { margin: 0; padding: 0; list-style: none; }
+.cm-note-embed-correct { color: #15803d; }
 
 /* Image preview widget */
 .cm-image-widget {

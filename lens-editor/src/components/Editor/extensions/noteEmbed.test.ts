@@ -106,3 +106,16 @@ describe('noteEmbedField cards', () => {
     expect(v.dom.querySelector('.cm-note-embed')).toBeNull();
   });
 });
+
+describe('NoteEmbedPreview options', () => {
+  it('lists choice options with the correct ones marked', async () => {
+    const { render } = await import('@testing-library/react');
+    const { NoteEmbedPreview } = await import('../NoteEmbedPreview');
+    const { container } = render(
+      NoteEmbedPreview({ text: '#### Question: Choice\nid:: 1\ncontent:: Pick\noptions::\n- [x] Right\n- [ ] Wrong\n' }),
+    );
+    const items = [...container.querySelectorAll('.cm-note-embed-options li')].map((li) => li.textContent);
+    expect(items).toEqual(['✓ Right', '○ Wrong']);
+    expect(container.querySelector('.cm-note-embed-correct')?.textContent).toBe('✓ Right');
+  });
+});

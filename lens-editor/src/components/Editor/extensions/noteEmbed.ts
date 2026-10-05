@@ -10,7 +10,8 @@ import { EditorState, StateField, type Text } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, drawSelection, keymap, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-import { defaultHighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language';
+import { HighlightStyle, indentUnit, syntaxHighlighting } from '@codemirror/language';
+import { tags } from '@lezer/highlight';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { createElement } from 'react';
@@ -96,6 +97,17 @@ export const noteEmbedField = StateField.define<DecorationSet>({
   },
   provide: (f) => EditorView.decorations.from(f),
 });
+
+/** Markdown styling of the embedded editor: CodeMirror's default style
+ *  underlines headings, which reads as a link here. */
+const embedHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading, fontWeight: 'bold' },
+  { tag: tags.strong, fontWeight: 'bold' },
+  { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.link, color: '#6366f1' },
+  { tag: tags.monospace, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+  { tag: tags.processingInstruction, color: '#9ca3af' },
+]);
 
 const cards = new WeakMap<HTMLElement, EmbedCard>();
 
@@ -333,7 +345,7 @@ class EmbedCard {
           indentUnit.of('\t'),
           EditorState.tabSize.of(4),
           drawSelection(),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          syntaxHighlighting(embedHighlightStyle),
           keymap.of([
             { key: 'Escape', run: () => { closeLive(this); return true; } },
             ...yUndoManagerKeymap,
@@ -343,7 +355,6 @@ class EmbedCard {
           yCollab(ytext, null, { undoManager }),
           criticMarkupExtension({ canAcceptReject: ctx.canAcceptReject }),
           EditorView.lineWrapping,
-          EditorView.theme({ '.tok-heading': { textDecoration: 'none' } }),
         ],
       }),
     });

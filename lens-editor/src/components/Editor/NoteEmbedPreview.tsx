@@ -21,6 +21,25 @@ function clip(text: string): string {
   return text.length > MAX_PREVIEW_CHARS ? `${text.slice(0, MAX_PREVIEW_CHARS)}…` : text;
 }
 
+/** Choice options (`- [x] right`, `- [ ] wrong`) and ranking items as a
+ *  compact list; other values as Markdown. */
+function renderFieldValue(key: string, value: string) {
+  const items = value.split('\n').map((line) => /^\s*[-*]\s+(?:\[([ xX])\]\s*)?(.*)$/.exec(line));
+  if ((key === 'options' || key === 'items') && items.length > 0 && items.every(Boolean)) {
+    return (
+      <ul className="cm-note-embed-options">
+        {items.map((m, i) => (
+          <li key={i} className={m![1]?.toLowerCase() === 'x' ? 'cm-note-embed-correct' : undefined}>
+            {key === 'options' ? (m![1]?.toLowerCase() === 'x' ? '✓ ' : '○ ') : `${i + 1}. `}
+            {m![2]}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+  return renderMarkdownWithCriticMarkup(clip(value));
+}
+
 /** Read-only rendering of an embedded file: question-shaped for a question
  *  file, plain Markdown otherwise. Pending suggestions render inline. */
 export function NoteEmbedPreview({ text }: { text: string }) {
@@ -51,7 +70,7 @@ export function NoteEmbedPreview({ text }: { text: string }) {
           {rest.map((key) => (
             <div key={key} className="cm-note-embed-field">
               <dt>{key}</dt>
-              <dd>{renderMarkdownWithCriticMarkup(clip(question.fields.get(key) ?? ''))}</dd>
+              <dd>{renderFieldValue(key, question.fields.get(key) ?? '')}</dd>
             </div>
           ))}
         </dl>
