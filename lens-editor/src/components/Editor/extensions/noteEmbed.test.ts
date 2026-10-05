@@ -173,6 +173,18 @@ describe('noteEmbedField cards', () => {
     expect(isLive({})).toBe(false);
   });
 
+  it('takes the place of its line, which shows as source while the cursor is on it', () => {
+    updateNoteEmbedContext(context());
+    const v = mount(LENS);
+    const lineTexts = () => [...v.contentDOM.querySelectorAll('.cm-line')].map((l) => l.textContent);
+    v.dispatch({ selection: { anchor: v.state.doc.length } }); // cursor elsewhere
+    expect(lineTexts()).not.toContain('![[../Questions/Shared]]');
+    expect(v.dom.querySelectorAll('.cm-note-embed')).toHaveLength(2);
+    v.dispatch({ selection: { anchor: v.state.doc.line(2).from } }); // onto the embed line
+    expect(lineTexts()).toContain('![[../Questions/Shared]]');
+    expect(v.dom.querySelectorAll('.cm-note-embed')).toHaveLength(2);
+  });
+
   it('shows nothing without a context (no metadata yet)', () => {
     const v = mount(LENS);
     expect(v.dom.querySelector('.cm-note-embed')).toBeNull();

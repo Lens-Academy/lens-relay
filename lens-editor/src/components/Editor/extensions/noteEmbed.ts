@@ -43,39 +43,54 @@ export function updateNoteEmbedContext(next: NoteEmbedContext | undefined): void
 
 /** The embed lines of `doc` (shared/embeds.ts), with where each line ends:
  *  the card sits right under it. */
-export function embedLinesIn(doc: Text): Array<{ lineTo: number; target: string }> {
+export function embedLinesIn(doc: Text): Array<{ lineFrom: number; lineTo: number; target: string }> {
   const lines: string[] = [];
   for (let n = 1; n <= doc.lines; n++) lines.push(doc.line(n).text);
-  return findEmbedLines(lines).map(({ index, target }) => ({ lineTo: doc.line(index + 1).to, target }));
+  return findEmbedLines(lines).map(({ index, target }) => {
+    const line = doc.line(index + 1);
+    return { lineFrom: line.from, lineTo: line.to, target };
+  });
 }
 
-function buildDecorations(state: EditorState): DecorationSet {
+type EmbedLines = ReturnType<typeof embedLinesIn>;
+
+/**
+ * As in Obsidian, the card takes the place of its `![[...]]` line; with the
+ * cursor on that line (arrow onto it, or click the link) the line shows as
+ * source and the card sits under it.
+ */
+function buildDecorations(state: EditorState, lines: EmbedLines): DecorationSet {
   if (!context) return Decoration.none;
   const ranges = [];
-  for (const { lineTo, target } of embedLinesIn(state.doc)) {
+  const { selection } = state;
+  for (const { lineFrom, lineTo, target } of lines) {
     const resolved = context.resolve(target);
     // HTML widgets embedded in articles are rendered by the course, not here.
     if (resolved && /\.html$/i.test(resolved.path)) continue;
+    const widget = new NoteEmbedWidget(target, resolved?.fullDocId ?? null, resolved?.path ?? null, context.readOnly);
+    const editingLine = selection.ranges.some((r) => r.from <= lineTo && r.to >= lineFrom);
     ranges.push(
-      Decoration.widget({
-        widget: new NoteEmbedWidget(target, resolved?.fullDocId ?? null, resolved?.path ?? null, context.readOnly),
-        block: true,
-        side: 1,
-      }).range(lineTo),
+      editingLine
+        ? Decoration.widget({ widget, block: true, side: 1 }).range(lineTo)
+        : Decoration.replace({ widget, block: true }).range(lineFrom, lineTo),
     );
   }
   return Decoration.set(ranges);
 }
 
-export const noteEmbedField = StateField.define<DecorationSet>({
-  create: buildDecorations,
+export const noteEmbedField = StateField.define<{ lines: EmbedLines; decorations: DecorationSet }>({
+  create(state) {
+    const lines = embedLinesIn(state.doc);
+    return { lines, decorations: buildDecorations(state, lines) };
+  },
   update(value, tr) {
-    if (tr.docChanged || tr.effects.some((e) => e.is(wikilinkMetadataChanged))) {
-      return buildDecorations(tr.state);
+    const lines = tr.docChanged ? embedLinesIn(tr.state.doc) : value.lines;
+    if (tr.docChanged || tr.selection || tr.effects.some((e) => e.is(wikilinkMetadataChanged))) {
+      return { lines, decorations: buildDecorations(tr.state, lines) };
     }
     return value;
   },
-  provide: (f) => EditorView.decorations.from(f),
+  provide: (f) => EditorView.decorations.from(f, (value) => value.decorations),
 });
 
 /** Cards on screen, to find the one under the cursor. */
@@ -90,10 +105,31 @@ export function openEmbedAtCursor(view: EditorView): boolean {
   return false;
 }
 
-/** The embed cards plus their keyboard shortcut (in the live-preview set). */
+/** Arrow up/down stop on an embed line rather than jump over its card, so
+ *  the line shows as source (CodeMirror skips a replaced block otherwise). */
+function stepOntoEmbedLine(view: EditorView, forward: boolean): boolean {
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const { doc } = view.state;
+  const here = doc.lineAt(main.head).number;
+  const there = doc.lineAt(view.moveVertically(main, forward).head).number;
+  const between = view.state.field(noteEmbedField).lines
+    .map((l) => doc.lineAt(l.lineFrom).number)
+    .filter((n) => (forward ? n > here && n <= there : n < here && n >= there));
+  if (between.length === 0) return false;
+  const line = doc.line(forward ? Math.min(...between) : Math.max(...between));
+  view.dispatch({ selection: { anchor: forward ? line.from : line.to }, scrollIntoView: true });
+  return true;
+}
+
+/** The embed cards plus their keys (in the live-preview set). */
 export const noteEmbeds = [
   noteEmbedField,
-  Prec.high(keymap.of([{ key: 'Alt-Enter', run: openEmbedAtCursor }])),
+  Prec.high(keymap.of([
+    { key: 'Alt-Enter', run: openEmbedAtCursor },
+    { key: 'ArrowDown', run: (view) => stepOntoEmbedLine(view, true) },
+    { key: 'ArrowUp', run: (view) => stepOntoEmbedLine(view, false) },
+  ])),
 ];
 
 /** Longest file a card renders read-only; a longer one is cut (the card is

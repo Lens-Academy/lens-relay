@@ -637,7 +637,7 @@ source:: [[../widgets/demo-rings]]
 `,
       },
       // Reusable question files: one question per file, embedded in lenses
-      // with ![[...]] under a #### Question header (editor: extensions/noteEmbed.ts).
+      // with a ![[...]] line (editor: extensions/noteEmbed.ts).
       {
         path: '/Questions',
         id: 'ed000014-0000-4000-8000-0000000000b4',
@@ -686,7 +686,6 @@ tldr: "A lens that embeds two question files."
 content::
 Scenario 3: the monitor is an identical copy of the untrusted model.
 
-#### Question
 ![[../Questions/Control property - untrusted monitor]]
 force-feedback:: first
 
@@ -694,11 +693,9 @@ force-feedback:: first
 content::
 Now compare control with alignment.
 
-#### Question
 ![[../Questions/Why control is easier to evaluate]]
 optional:: true
 
-#### Question
 ![[../Questions/Not written yet]]
 `,
       },
