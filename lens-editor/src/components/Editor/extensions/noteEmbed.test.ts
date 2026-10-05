@@ -84,6 +84,16 @@ describe('noteEmbedField cards', () => {
     expect(card.querySelector('.cm-note-embed-hint')?.textContent).toBe('Click to edit');
   });
 
+  it('renders the last line too when the file has no final newline', async () => {
+    updateNoteEmbedContext(context());
+    setSnapshot('relay-shared', '#### Question: Open\ncontent:: Hi\n\n#### Text');
+    const v = mount(LENS);
+    await new Promise((r) => setTimeout(r, 20));
+    const preview = EditorView.findFromDOM(v.dom.querySelector('.cm-note-embed .cm-editor') as HTMLElement)!;
+    expect(preview.state.doc.toString().endsWith('#### Text\n')).toBe(true);
+    expect(preview.state.selection.main.head).toBe(preview.state.doc.length);
+  });
+
   it('offers no editing to read-only viewers', async () => {
     updateNoteEmbedContext(context({ readOnly: true }));
     setSnapshot('relay-shared', '#### Question\ncontent:: Hi\n');

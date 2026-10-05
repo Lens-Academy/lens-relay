@@ -340,7 +340,10 @@ class EmbedCard {
     if (this.destroyed) return;
     this.failed = null;
     this.setState('preview');
-    const shown = text.length > MAX_PREVIEW_CHARS ? `${text.slice(0, MAX_PREVIEW_CHARS)}…` : text;
+    const cut = text.length > MAX_PREVIEW_CHARS ? `${text.slice(0, MAX_PREVIEW_CHARS)}…` : text;
+    // The parked cursor (previewState) sits on a line of its own, so no line of
+    // the file shows as raw Markdown.
+    const shown = cut.endsWith('\n') ? cut : `${cut}\n`;
     if (!this.previewView) {
       this.previewHost.textContent = '';
       this.previewView = new EditorView({
