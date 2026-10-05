@@ -48,6 +48,7 @@ import {
 } from './extensions/paste-classification';
 import {
   classifyPendingPaste,
+  humanActor,
   pasteOriginLabels,
   resolvePendingClassification,
 } from '../../lib/provenance';
@@ -60,6 +61,8 @@ import { openDocInNewTab } from '../../lib/url-utils';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 import { imagePasteExtension } from './extensions/imagePaste';
+import { updateNoteEmbedContext } from './extensions/noteEmbed';
+import { closeLive } from '../../lib/embed-docs';
 
 // List indentation keymap - Tab/Shift+Tab to indent/de-indent
 const listIndentKeymap = keymap.of([
@@ -128,6 +131,10 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   const ydoc = useYDoc();
   const provider = useYjsProvider();
   const { displayName } = useDisplayName();
+  const displayNameRef = useRef(displayName);
+  useEffect(() => { displayNameRef.current = displayName; }, [displayName]);
+  // Leaving the document ends a live embed it holds
+  useEffect(() => () => closeLive(), []);
   const [synced, setSynced] = useState(false);
   // The video segment whose cut is being tuned (its from::/to:: Tune button)
   // `anchor` is the segment's heading start, mapped through every change so
@@ -293,10 +300,20 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   useEffect(() => {
     updateWikilinkContext(wikilinkContextRef.current);
     updateImageEmbedContext(metadata ? { metadata, relayId: RELAY_ID, currentFilePath } : undefined);
+    updateNoteEmbedContext(metadata ? {
+      resolve: (target) => {
+        const resolved = resolvePageName(target, metadata, currentFilePath);
+        return resolved ? { fullDocId: `${RELAY_ID}-${resolved.docId}`, path: resolved.path } : null;
+      },
+      onOpen: (target) => wikilinkContextRef.current?.onClick(target),
+      readOnly: !!readOnly,
+      canAcceptReject: !!canAcceptReject,
+      getActor: () => humanActor(displayNameRef.current ?? ''),
+    } : undefined);
     viewRef.current?.dispatch({
       effects: wikilinkMetadataChanged.of(undefined),
     });
-  }, [metadata, onNavigate, currentFilePath]);
+  }, [metadata, onNavigate, currentFilePath, readOnly, canAcceptReject]);
 
   // Update Harper folder gate when the active file changes
   useEffect(() => {
