@@ -1,8 +1,10 @@
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { EditorState, Text } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
+import { EditorView, runScopeHandlers } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
-import { cursorFor, findEmbedLines, noteEmbedField, updateNoteEmbedContext, type NoteEmbedContext } from './noteEmbed';
+import { cursorFor, embedLinesIn, noteEmbedField, openEmbedAtCursor, updateNoteEmbedContext, type NoteEmbedContext } from './noteEmbed';
+import * as Y from 'yjs';
+import { isLive } from '../../../lib/embed-docs';
 import { __embedDocsTesting, setSnapshot } from '../../../lib/embed-docs';
 
 const LENS = [
@@ -22,8 +24,8 @@ const LENS = [
 describe('findEmbedLines', () => {
   it('finds lines that are only a non-image embed, outside code', () => {
     const doc = Text.of(LENS.split('\n'));
-    expect(findEmbedLines(doc).map((e) => e.target)).toEqual(['../Questions/Shared', '../Questions/Missing']);
-    expect(findEmbedLines(doc)[0].lineTo).toBe(doc.line(2).to);
+    expect(embedLinesIn(doc).map((e) => e.target)).toEqual(['../Questions/Shared', '../Questions/Missing']);
+    expect(embedLinesIn(doc)[0].lineTo).toBe(doc.line(2).to);
   });
 });
 
@@ -99,6 +101,75 @@ describe('noteEmbedField cards', () => {
     const card = v.dom.querySelector('.cm-note-embed')!;
     expect(card.querySelector('.cm-note-embed-hint')?.textContent).toBe('');
     expect(card.querySelector('.cm-note-embed-open')).toBeNull();
+  });
+
+  function liveConnector() {
+    __embedDocsTesting.setConnector(async () => {
+      const doc = new Y.Doc();
+      doc.getText('contents').insert(0, '#### Question\ncontent:: Hi\n');
+      const provider = { hasLocalChanges: false, on() {}, off() {}, disconnect() {}, destroy() {} };
+      return { doc, provider: provider as never };
+    });
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
+  it('Alt-Enter on the embed line opens it; Esc gives the keyboard back to the lens', async () => {
+    updateNoteEmbedContext(context());
+    setSnapshot('relay-shared', '#### Question\ncontent:: Hi\n');
+    liveConnector();
+    const v = mount(LENS);
+    v.dispatch({ selection: { anchor: 3 } });
+    expect(openEmbedAtCursor(v)).toBe(false); // the header line, not the embed
+    const embedLine = v.state.doc.line(2);
+    v.dispatch({ selection: { anchor: embedLine.from } });
+    expect(openEmbedAtCursor(v)).toBe(true);
+    await settle();
+    const card = v.dom.querySelector('.cm-note-embed')!;
+    expect(card.getAttribute('data-state')).toBe('live');
+    const inner = EditorView.findFromDOM(card.querySelector('.cm-editor') as HTMLElement)!;
+    runScopeHandlers(inner, new KeyboardEvent('keydown', { key: 'Escape' }), 'editor');
+    await settle();
+    expect(card.getAttribute('data-state')).toBe('preview');
+    expect(v.state.selection.main.head).toBe(embedLine.to);
+    expect(v.hasFocus).toBe(true);
+  });
+
+  it('retries a failed read on click and shows the file', async () => {
+    updateNoteEmbedContext(context());
+    let fail = true;
+    __embedDocsTesting.setReader(async () => {
+      if (fail) throw new Error('offline');
+      return '#### Question\ncontent:: Back again\n';
+    });
+    // The test DOM never reports cards on screen: read at once instead.
+    vi.stubGlobal('IntersectionObserver', undefined);
+    const v = mount(LENS);
+    vi.unstubAllGlobals();
+    await settle();
+    const card = v.dom.querySelector('.cm-note-embed')!;
+    expect(card.getAttribute('data-state')).toBe('error');
+    expect(card.querySelector('.cm-note-embed-hint')?.textContent).toBe('Could not load · click to retry');
+    fail = false;
+    card.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    await settle();
+    expect(card.getAttribute('data-state')).toBe('preview');
+    expect(card.textContent).toContain('Back again');
+  });
+
+  it('ends a live embed when its card goes away', async () => {
+    updateNoteEmbedContext(context());
+    setSnapshot('relay-shared', '#### Question\ncontent:: Hi\n');
+    liveConnector();
+    const v = mount(LENS);
+    v.dispatch({ selection: { anchor: v.state.doc.line(2).from } });
+    openEmbedAtCursor(v);
+    await settle();
+    // Deleting the embed line removes the card (and its live editor).
+    const line = v.state.doc.line(2);
+    v.dispatch({ changes: { from: line.from, to: line.to + 1 } });
+    await settle();
+    expect(v.dom.querySelector('.cm-note-embed[data-state="live"]')).toBeNull();
+    expect(isLive({})).toBe(false);
   });
 
   it('shows nothing without a context (no metadata yet)', () => {

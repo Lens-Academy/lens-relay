@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { embedLineTarget, parseQuestionFile } from './questionFile';
+import { parseQuestionFile } from './questionFile';
+import { embedLineTarget } from '../../shared/embeds';
 
 describe('parseQuestionFile', () => {
   it('reads the type and fields of the question', () => {

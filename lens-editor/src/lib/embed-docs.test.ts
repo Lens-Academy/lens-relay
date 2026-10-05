@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  FLUSH_WARNING_MS,
   MAX_PARALLEL_READS,
   SNAPSHOT_TTL_MS,
   __embedDocsTesting,
@@ -8,23 +9,41 @@ import {
   closeLive,
   isLive,
   onSnapshot,
+  onUnsaved,
   openLive,
   readSnapshot,
 } from './embed-docs';
-import type { DocConnection } from '../hooks/useDocConnection';
+import { teardownProvider, type DocConnection } from '../hooks/useDocConnection';
 
 vi.mock('../hooks/useDocConnection', () => ({
   connectDoc: vi.fn(),
   teardownProvider: vi.fn(),
 }));
 
-function fakeConnection(text: string): DocConnection {
-  const doc = new Y.Doc();
-  doc.getText('contents').insert(0, text);
-  return { doc, provider: {} as DocConnection['provider'] };
+/** A provider whose unacknowledged edits the test controls. */
+function fakeProvider(pending = false) {
+  const listeners = new Set<(pending: boolean) => void>();
+  return {
+    hasLocalChanges: pending,
+    on: (_: string, fn: (pending: boolean) => void) => listeners.add(fn),
+    off: (_: string, fn: (pending: boolean) => void) => listeners.delete(fn),
+    acknowledge() {
+      this.hasLocalChanges = false;
+      for (const fn of [...listeners]) fn(false);
+    },
+  };
 }
 
-beforeEach(() => __embedDocsTesting.reset());
+function fakeConnection(text: string, provider = fakeProvider()): DocConnection {
+  const doc = new Y.Doc();
+  doc.getText('contents').insert(0, text);
+  return { doc, provider: provider as unknown as DocConnection['provider'] };
+}
+
+beforeEach(() => {
+  __embedDocsTesting.reset();
+  vi.mocked(teardownProvider).mockClear();
+});
 
 describe('readSnapshot', () => {
   it(`runs at most ${MAX_PARALLEL_READS} reads at once`, async () => {
@@ -101,5 +120,52 @@ describe('openLive', () => {
     await openLive('a', owner, () => {});
     closeLive({});
     expect(isLive(owner)).toBe(true);
+  });
+});
+
+describe('closing an embed with unsent edits', () => {
+  it('keeps the connection until the server has every edit', async () => {
+    const provider = fakeProvider(true);
+    __embedDocsTesting.setConnector(async () => fakeConnection('x', provider));
+    const owner = {};
+    await openLive('a', owner, () => {});
+    closeLive(owner);
+    expect(teardownProvider).not.toHaveBeenCalled();
+    expect(__embedDocsTesting.flushing).toEqual(['a']);
+    provider.acknowledge();
+    expect(teardownProvider).toHaveBeenCalledTimes(1);
+    expect(__embedDocsTesting.flushing).toEqual([]);
+  });
+
+  it('says the edits are not saved yet when it takes long, and when they are', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = fakeProvider(true);
+      __embedDocsTesting.setConnector(async () => fakeConnection('x', provider));
+      const seen: boolean[] = [];
+      onUnsaved('a', (u) => seen.push(u));
+      const owner = {};
+      await openLive('a', owner, () => {});
+      closeLive(owner);
+      vi.advanceTimersByTime(FLUSH_WARNING_MS + 1);
+      expect(seen).toEqual([true]);
+      expect(teardownProvider).not.toHaveBeenCalled();
+      provider.acknowledge();
+      expect(seen).toEqual([true, false]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reopening the file reuses the connection that is still sending', async () => {
+    const connector = vi.fn(async () => fakeConnection('x', fakeProvider(true)));
+    __embedDocsTesting.setConnector(connector);
+    const first = {};
+    const a = await openLive('a', first, () => {});
+    closeLive(first);
+    const b = await openLive('a', {}, () => {});
+    expect(connector).toHaveBeenCalledTimes(1);
+    expect(b!.connection).toBe(a!.connection);
+    expect(__embedDocsTesting.flushing).toEqual([]);
   });
 });

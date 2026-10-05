@@ -6,7 +6,7 @@
  * The heavy lifting (snapshot reads, the read limit, the one live connection)
  * is in `lib/embed-docs.ts`; this file is the CodeMirror side.
  */
-import { EditorState, StateField, type Text } from '@codemirror/state';
+import { EditorState, Prec, StateField, type Text } from '@codemirror/state';
 import { Decoration, EditorView, WidgetType, drawSelection, keymap, type DecorationSet } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -16,9 +16,8 @@ import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { embedLineTarget } from '../../../lib/questionFile';
-import { isImageEmbedTarget } from '../../../lib/isImageEmbedTarget';
-import { cachedSnapshot, closeLive, isLive, onSnapshot, openLive, readSnapshot } from '../../../lib/embed-docs';
+import { findEmbedLines } from '../../../../shared/embeds';
+import { cachedSnapshot, closeLive, isLive, onSnapshot, onUnsaved, openLive, readSnapshot } from '../../../lib/embed-docs';
 import { attachProvenanceRegistration } from '../../../lib/provenance';
 import { NoteEmbedPreview } from '../NoteEmbedPreview';
 import { criticMarkupExtension, suggestionModeField, toggleSuggestionMode } from './criticmarkup';
@@ -41,38 +40,18 @@ export function updateNoteEmbedContext(next: NoteEmbedContext | undefined): void
   context = next ?? null;
 }
 
-export interface EmbedLine {
-  /** End of the embed line: the card sits right under it. */
-  lineTo: number;
-  target: string;
-}
-
-const FENCE = /^[ \t]*(```|~~~)/;
-
-/** Lines that are only a `![[...]]` embed of something other than an image,
- *  outside fenced code. */
-export function findEmbedLines(doc: Text): EmbedLine[] {
-  const out: EmbedLine[] = [];
-  let fence: string | null = null;
-  for (let n = 1; n <= doc.lines; n++) {
-    const line = doc.line(n);
-    const fenceMatch = FENCE.exec(line.text);
-    if (fenceMatch) {
-      if (fence === null) fence = fenceMatch[1];
-      else if (fence === fenceMatch[1]) fence = null;
-      continue;
-    }
-    if (fence !== null || !line.text.includes('![[')) continue;
-    const target = embedLineTarget(line.text);
-    if (target && !isImageEmbedTarget(target)) out.push({ lineTo: line.to, target });
-  }
-  return out;
+/** The embed lines of `doc` (shared/embeds.ts), with where each line ends:
+ *  the card sits right under it. */
+export function embedLinesIn(doc: Text): Array<{ lineTo: number; target: string }> {
+  const lines: string[] = [];
+  for (let n = 1; n <= doc.lines; n++) lines.push(doc.line(n).text);
+  return findEmbedLines(lines).map(({ index, target }) => ({ lineTo: doc.line(index + 1).to, target }));
 }
 
 function buildDecorations(state: EditorState): DecorationSet {
   if (!context) return Decoration.none;
   const ranges = [];
-  for (const { lineTo, target } of findEmbedLines(state.doc)) {
+  for (const { lineTo, target } of embedLinesIn(state.doc)) {
     const resolved = context.resolve(target);
     // HTML widgets embedded in articles are rendered by the course, not here.
     if (resolved && /\.html$/i.test(resolved.path)) continue;
@@ -98,6 +77,24 @@ export const noteEmbedField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
+/** Cards on screen, to find the one under the cursor. */
+const mountedCards = new Set<EmbedCard>();
+
+/** Alt-Enter on an embed line opens its embed for editing. */
+export function openEmbedAtCursor(view: EditorView): boolean {
+  const lineTo = view.state.doc.lineAt(view.state.selection.main.head).to;
+  for (const card of mountedCards) {
+    if (card.host === view && card.lineTo() === lineTo) return card.open();
+  }
+  return false;
+}
+
+/** The embed cards plus their keyboard shortcut (in the live-preview set). */
+export const noteEmbeds = [
+  noteEmbedField,
+  Prec.high(keymap.of([{ key: 'Alt-Enter', run: openEmbedAtCursor }])),
+];
+
 /** Markdown styling of the embedded editor: CodeMirror's default style
  *  underlines headings, which reads as a link here. */
 const embedHighlightStyle = HighlightStyle.define([
@@ -121,7 +118,7 @@ class NoteEmbedWidget extends WidgetType {
   }
 
   eq(other: NoteEmbedWidget): boolean {
-    return other.target === this.target && other.fullDocId === this.fullDocId;
+    return other.target === this.target && other.fullDocId === this.fullDocId && other.path === this.path;
   }
 
   get estimatedHeight(): number {
@@ -162,6 +159,8 @@ function displayName(path: string | null, target: string): string {
   return name.replace(/\.md$/i, '');
 }
 
+type CardState = 'waiting' | 'preview' | 'connecting' | 'live' | 'error' | 'missing';
+
 class EmbedCard {
   readonly dom: HTMLElement;
   private readonly hint: HTMLElement;
@@ -171,14 +170,21 @@ class EmbedCard {
   private readonly more: HTMLButtonElement;
   private root: Root | null = null;
   private observer: IntersectionObserver | null = null;
-  private unsubscribe: (() => void) | null = null;
+  private readonly unsubscribe: Array<() => void> = [];
   private liveView: EditorView | null = null;
   private detachProvenance: (() => void) | null = null;
   private destroyed = false;
   private expanded = false;
+  private state: CardState = 'waiting';
+  /** What failed last: reading the snapshot, or opening the file live. */
+  private failed: 'read' | 'open' | null = null;
+  /** Closed edits not yet acknowledged by the server (embed-docs flushes them). */
+  private unsaved = false;
+  /** Escape closed the editor: give the keyboard back to the lens. */
+  private refocusHost = false;
 
   constructor(
-    private readonly host: EditorView,
+    readonly host: EditorView,
     private readonly target: string,
     private readonly fullDocId: string | null,
     path: string | null,
@@ -221,10 +227,10 @@ class EmbedCard {
 
     if (!fullDocId) {
       this.setState('missing');
-      this.hint.textContent = '';
       this.previewHost.textContent = `No file named “${target}”`;
       return;
     }
+    mountedCards.add(this);
 
     if (!context?.readOnly) {
       const open = document.createElement('button');
@@ -237,13 +243,24 @@ class EmbedCard {
         context?.onOpen(target);
       });
       header.append(open);
+      // Keyboard: Tab reaches the card, Enter edits it (Alt-Enter does from
+      // the embed line in the lens).
+      this.dom.tabIndex = 0;
+      this.dom.title = 'Click or press Enter to edit the file here (Alt-Enter from the embed line)';
+      this.dom.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && e.target === this.dom) {
+          e.preventDefault();
+          this.open();
+        }
+      });
     }
 
     this.dom.addEventListener('mousedown', (e) => {
-      if (this.liveView || this.dom.getAttribute('data-state') === 'connecting' || (e.target as HTMLElement).closest('button')) return;
+      if ((e.target as HTMLElement).closest('button')) return;
+      if (this.liveView || this.state === 'connecting') return;
       e.preventDefault();
       const clicked = (e.target as HTMLElement).closest('.cm-note-embed-prompt, .cm-note-embed-field dd, .cm-note-embed-markdown p');
-      this.activate(clicked?.textContent ?? null);
+      this.open(clicked?.textContent ?? null);
     });
 
     const cached = cachedSnapshot(fullDocId);
@@ -252,9 +269,15 @@ class EmbedCard {
       this.setState('waiting');
       this.previewHost.textContent = 'Loading…';
     }
-    this.unsubscribe = onSnapshot(fullDocId, (text) => {
-      if (!this.liveView) this.renderPreview(text);
-    });
+    this.unsubscribe.push(
+      onSnapshot(fullDocId, (text) => {
+        if (!this.liveView) this.renderPreview(text);
+      }),
+      onUnsaved(fullDocId, (unsaved) => {
+        this.unsaved = unsaved;
+        this.setState(this.state);
+      }),
+    );
 
     // Read only once the card is (nearly) on screen.
     if (typeof IntersectionObserver === 'undefined') {
@@ -270,30 +293,45 @@ class EmbedCard {
     }
   }
 
-  private setState(state: 'waiting' | 'preview' | 'connecting' | 'live' | 'error' | 'missing'): void {
+  /** End of the embed line this card sits under. */
+  lineTo(): number {
+    return this.host.state.doc.lineAt(this.host.posAtDOM(this.dom)).to;
+  }
+
+  private setState(state: CardState): void {
+    this.state = state;
     this.dom.setAttribute('data-state', state);
     const readOnly = context?.readOnly ?? true;
     this.hint.textContent =
       state === 'live' ? 'Editing the file · Esc to finish'
       : state === 'connecting' ? 'Opening…'
-      : state === 'error' ? 'Could not load · click to retry'
+      : state === 'error' ? `Could not ${this.failed === 'open' ? 'open' : 'load'} · click to retry`
+      : this.unsaved ? 'Not saved yet · reconnecting'
       : state === 'preview' && !readOnly ? 'Click to edit'
       : '';
   }
 
   private load(): void {
     if (!this.fullDocId || this.liveView || this.destroyed) return;
-    readSnapshot(this.fullDocId).catch(() => {
-      if (this.destroyed || this.liveView) return;
-      if (cachedSnapshot(this.fullDocId!) === undefined) {
-        this.setState('error');
-        this.previewHost.textContent = '';
-      }
-    });
+    readSnapshot(this.fullDocId).then(
+      (text) => {
+        // A fresh cached read fires no snapshot event: render it here.
+        if (!this.destroyed && !this.liveView) this.renderPreview(text);
+      },
+      () => {
+        if (this.destroyed || this.liveView) return;
+        if (cachedSnapshot(this.fullDocId!) === undefined) {
+          this.failed = 'read';
+          this.setState('error');
+          this.previewHost.textContent = '';
+        }
+      },
+    );
   }
 
   private renderPreview(text: string): void {
     if (this.destroyed) return;
+    this.failed = null;
     this.setState('preview');
     if (!this.root) {
       this.previewHost.textContent = '';
@@ -310,25 +348,35 @@ class EmbedCard {
     this.host.requestMeasure();
   }
 
-  private async activate(clickedText: string | null = null): Promise<void> {
-    if (!this.fullDocId || !context || context.readOnly) return;
-    if (this.dom.getAttribute('data-state') === 'error') {
+  /** Edit the file in place (or retry what failed). True when it acted. */
+  open(clickedText: string | null = null): boolean {
+    if (!this.fullDocId || !context || context.readOnly || this.liveView || this.state === 'connecting') return false;
+    if (this.failed === 'read') {
       this.setState('waiting');
       this.load();
-      return;
+      return true;
     }
-    const ctx = context;
+    void this.activate(clickedText);
+    return true;
+  }
+
+  private async activate(clickedText: string | null): Promise<void> {
+    const ctx = context!;
     this.setState('connecting');
     let opened;
     try {
-      opened = await openLive(this.fullDocId, this, () => this.deactivated());
+      opened = await openLive(this.fullDocId!, this, () => this.deactivated());
     } catch {
-      if (!this.destroyed && isLive(this)) closeLive(this);
-      if (!this.destroyed) this.setState('error');
+      if (isLive(this)) closeLive(this);
+      if (!this.destroyed) {
+        this.failed = 'open';
+        this.setState('error');
+      }
       return;
     }
-    if (!opened || this.destroyed) {
-      if (opened) closeLive(this);
+    if (!opened) return; // overtaken by another embed, or closed meanwhile
+    if (this.destroyed) {
+      closeLive(this);
       return;
     }
 
@@ -347,7 +395,14 @@ class EmbedCard {
           drawSelection(),
           syntaxHighlighting(embedHighlightStyle),
           keymap.of([
-            { key: 'Escape', run: () => { closeLive(this); return true; } },
+            {
+              key: 'Escape',
+              run: () => {
+                this.refocusHost = true;
+                closeLive(this);
+                return true;
+              },
+            },
             ...yUndoManagerKeymap,
             ...defaultKeymap,
           ]),
@@ -361,6 +416,7 @@ class EmbedCard {
     if (this.host.state.field(suggestionModeField, false)) {
       this.liveView.dispatch({ effects: toggleSuggestionMode.of(true) });
     }
+    this.failed = null;
     this.previewHost.hidden = true;
     this.setState('live');
     this.more.hidden = true;
@@ -387,14 +443,21 @@ class EmbedCard {
     const text = this.fullDocId ? cachedSnapshot(this.fullDocId) : undefined;
     if (text !== undefined) this.renderPreview(text);
     else this.setState('preview');
+    if (this.refocusHost) {
+      this.refocusHost = false;
+      this.host.dispatch({ selection: { anchor: this.lineTo() } });
+      this.host.focus();
+    }
     this.host.requestMeasure();
   }
 
   destroy(): void {
-    closeLive(this);
+    // First: closing below calls deactivated(), which must not render into a dying card.
     this.destroyed = true;
+    mountedCards.delete(this);
+    closeLive(this);
     this.observer?.disconnect();
-    this.unsubscribe?.();
+    for (const unsubscribe of this.unsubscribe) unsubscribe();
     const root = this.root;
     this.root = null;
     // Unmount after the current CodeMirror update; React refuses to unmount

@@ -32,14 +32,3 @@ export function parseQuestionFile(text: string): QuestionFile | null {
   const segment = next ? rest.slice(0, next.index) : rest;
   return { type: header[1]?.trim() || 'Open', fields: parseFields(segment) };
 }
-
-/** A line that is only an embed: `![[target]]`, `![[target|alias]]`. */
-export const EMBED_LINE = /^[ \t]*!\[\[([^\]\n]+)\]\][ \t]*$/;
-
-/** The link target of an embed line (without `#heading` or `|alias`), or null. */
-export function embedLineTarget(line: string): string | null {
-  const m = EMBED_LINE.exec(line);
-  if (!m) return null;
-  const target = m[1].split('|')[0].split('#')[0].trim();
-  return target || null;
-}

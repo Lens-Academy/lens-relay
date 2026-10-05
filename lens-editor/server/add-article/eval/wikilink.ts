@@ -24,32 +24,6 @@ export function parseSourceTargets(md: string): string[] {
   return out;
 }
 
-/** Targets of every line that is only a `![[...]]` embed (a lens's
- *  `#### Question` embedding a question file, a widget in an article), outside
- *  fenced code; `|alias` and `#heading` stripped, order-preserving, de-duplicated. */
-export function parseEmbedLineTargets(md: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  let fence: string | null = null;
-  for (const line of md.split(/\r?\n/)) {
-    const fenceMatch = /^[ \t]*(```|~~~)/.exec(line);
-    if (fenceMatch) {
-      if (fence === null) fence = fenceMatch[1];
-      else if (fence === fenceMatch[1]) fence = null;
-      continue;
-    }
-    if (fence !== null) continue;
-    const m = /^[ \t]*!\[\[([^\]\n]+)\]\][ \t]*$/.exec(line);
-    if (!m) continue;
-    const target = m[1].split("|")[0].split("#")[0].trim();
-    if (target && !seen.has(target)) {
-      seen.add(target);
-      out.push(target);
-    }
-  }
-  return out;
-}
-
 export interface ModuleLink {
   target: string;
   alias: string | null;

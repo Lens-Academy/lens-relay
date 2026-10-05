@@ -34,7 +34,7 @@ import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateField } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
-import { noteEmbedField } from './noteEmbed';
+import { noteEmbeds } from './noteEmbed';
 import { isImageEmbedTarget } from '../../../lib/isImageEmbedTarget';
 import { parseCalloutHeader, CalloutIconWidget } from './callouts';
 
@@ -1071,7 +1071,7 @@ export function livePreview(context?: WikilinkContext) {
     frontmatterField, // StateField outside compartment (survives source mode toggle)
     obsidianCommentRangesField,
     listHangingIndent, // wrapped list rows align with the item text in both modes
-    livePreviewCompartment.of([livePreviewPlugin, noteEmbedField, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
+    livePreviewCompartment.of([livePreviewPlugin, noteEmbeds, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];
 }
 
@@ -1179,7 +1179,7 @@ export function toggleSourceMode(view: EditorView, sourceMode: boolean) {
   view.dispatch({
     effects: [
       livePreviewCompartment.reconfigure(
-        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, frontmatterSourcePlugin, livePreviewTheme] : [livePreviewPlugin, noteEmbedField, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]
+        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, frontmatterSourcePlugin, livePreviewTheme] : [livePreviewPlugin, noteEmbeds, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]
       ),
       criticMarkupCompartment.reconfigure(
         sourceMode ? criticMarkupSourcePlugin : criticMarkupPlugin
