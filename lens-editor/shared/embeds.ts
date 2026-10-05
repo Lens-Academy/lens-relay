@@ -8,7 +8,17 @@
 
 const EMBED_LINE = /^[ \t]*!\[\[([^\]\n]+)\]\][ \t]*$/;
 const FENCE = /^[ \t]*(```|~~~)/;
-const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|bmp|tiff|avif|heic)$/i;
+const IMAGE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'tiff', 'avif', 'heic',
+]);
+
+/** Whether `![[target]]` embeds an image (shown as the picture, not a card). */
+export function isImageEmbedTarget(target: string): boolean {
+  const path = target.split('|')[0].trim();
+  const dot = path.lastIndexOf('.');
+  if (dot === -1 || dot === path.length - 1) return false;
+  return IMAGE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
+}
 
 /** The link target of an embed line (without `#heading` or `|alias`), or null. */
 export function embedLineTarget(line: string): string | null {
@@ -38,7 +48,7 @@ export function findEmbedLines(lines: readonly string[]): EmbedLine[] {
     }
     if (fence !== null || !line.includes('![[')) return;
     const target = embedLineTarget(line);
-    if (target && !IMAGE_EXTENSIONS.test(target)) out.push({ index, target });
+    if (target && !isImageEmbedTarget(target)) out.push({ index, target });
   });
   return out;
 }

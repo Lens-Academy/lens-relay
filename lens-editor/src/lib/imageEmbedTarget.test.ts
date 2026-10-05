@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isImageEmbedTarget } from './isImageEmbedTarget';
+import { isImageEmbedTarget } from '../../shared/embeds';
 
 describe('isImageEmbedTarget', () => {
   it.each([

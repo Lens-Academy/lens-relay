@@ -35,7 +35,7 @@ import { RangeSetBuilder, Compartment, EditorSelection, StateField } from '@code
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
 import { noteEmbeds } from './noteEmbed';
-import { isImageEmbedTarget } from '../../../lib/isImageEmbedTarget';
+import { isImageEmbedTarget } from '../../../../shared/embeds';
 import { parseCalloutHeader, CalloutIconWidget } from './callouts';
 
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
