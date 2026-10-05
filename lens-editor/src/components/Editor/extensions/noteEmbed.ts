@@ -407,7 +407,9 @@ class EmbedCard {
 
   private updateMore(): void {
     if (this.destroyed) return;
-    const overflows = this.body.scrollHeight > this.body.clientHeight + 1;
+    // The preview ends in an empty line (the parked cursor): cutting only that
+    // hides nothing, so it needs no "Show all".
+    const overflows = this.body.scrollHeight > this.body.clientHeight + 30;
     this.more.hidden = this.liveView !== null || (!overflows && !this.expanded);
     this.host.requestMeasure();
   }
