@@ -57,7 +57,7 @@ function buildDecorations(state: EditorState): DecorationSet {
     if (resolved && /\.html$/i.test(resolved.path)) continue;
     ranges.push(
       Decoration.widget({
-        widget: new NoteEmbedWidget(target, resolved?.fullDocId ?? null, resolved?.path ?? null),
+        widget: new NoteEmbedWidget(target, resolved?.fullDocId ?? null, resolved?.path ?? null, context.readOnly),
         block: true,
         side: 1,
       }).range(lineTo),
@@ -113,12 +113,15 @@ class NoteEmbedWidget extends WidgetType {
     readonly target: string,
     readonly fullDocId: string | null,
     readonly path: string | null,
+    /** Part of the identity: the card's buttons depend on it. */
+    readonly readOnly: boolean,
   ) {
     super();
   }
 
   eq(other: NoteEmbedWidget): boolean {
-    return other.target === this.target && other.fullDocId === this.fullDocId && other.path === this.path;
+    return other.target === this.target && other.fullDocId === this.fullDocId
+      && other.path === this.path && other.readOnly === this.readOnly;
   }
 
   get estimatedHeight(): number {
