@@ -409,7 +409,8 @@ class EmbedCard {
     if (this.destroyed) return;
     // The preview ends in an empty line (the parked cursor): cutting only that
     // hides nothing, so it needs no "Show all".
-    const overflows = this.body.scrollHeight > this.body.clientHeight + 30;
+    const parked = this.previewView?.lineBlockAt(this.previewView.state.doc.length).height ?? 0;
+    const overflows = this.body.scrollHeight > this.body.clientHeight + parked + 1;
     this.more.hidden = this.liveView !== null || (!overflows && !this.expanded);
     this.host.requestMeasure();
   }
