@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
-import { shareTokenFromHeaders, verifyShareToken } from '../share-token.ts';
-import { EDU_FOLDER_NAME, tokenAllowsFolderName } from '../edit-share-auth.ts';
+import { requireEduShareToken } from '../edit-share-auth.ts';
+import { bytesToText, fetchBytesWithTimeout, type FetchBytesResult } from '../fetch-timeout.ts';
 
 /**
  * GET /api/content-status?path=&blob=&drafts= for the editor's content status
@@ -21,7 +21,6 @@ export interface ContentStatusConfig {
   timeoutMs?: number;
   /** First retry delay; later retries wait proportionally longer. */
   retryDelayMs?: number;
-  fetchImpl?: typeof fetch;
 }
 
 export function loadContentStatusConfig(env: NodeJS.ProcessEnv = process.env): ContentStatusConfig {
@@ -36,8 +35,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RETRY_DELAY_MS = 2_000;
 const MAX_ATTEMPTS = 3;
 // Gateway errors mean the edge could not reach the platform (a deploy, a
-// restart); they are worth a retry. Other answers are the platform's own.
-const GATEWAY_ERROR_STATUSES = new Set([502, 503, 504]);
+// restart); they are worth a retry. Other answers are the platform's own,
+// its 503 included: that comes with Retry-After, which the panel waits for.
+const GATEWAY_ERROR_STATUSES = new Set([502, 504]);
 const BLOB_ID = /^[0-9a-f]{40}$/;
 
 export function createContentStatusRoutes(config: ContentStatusConfig = loadContentStatusConfig()): Hono {
@@ -58,19 +58,9 @@ export function createContentStatusRoutes(config: ContentStatusConfig = loadCont
     problem = next;
   };
 
-  app.use('*', async (c, next) => {
-    const token = shareTokenFromHeaders(c.req.header('X-Share-Token'), c.req.header('Authorization'));
-    const payload = token ? verifyShareToken(token) : null;
-    if (!payload) {
-      return c.json({ error: 'Content status authentication required' }, 401);
-    }
-    // Every role may read the status; the folder must be Lens Edu, because
-    // the platform builds only that folder.
-    if (payload.purpose !== 'share' || !tokenAllowsFolderName(payload, EDU_FOLDER_NAME)) {
-      return c.json({ error: 'Access denied: wrong folder scope' }, 403);
-    }
-    await next();
-  });
+  // Every role may read the status; the folder must be Lens Edu, because the
+  // platform builds only that folder.
+  app.use('*', requireEduShareToken({ minRole: 'view' }));
 
   app.get('/', async c => {
     const path = c.req.query('path') ?? '';
@@ -91,9 +81,9 @@ export function createContentStatusRoutes(config: ContentStatusConfig = loadCont
 
     const query = new URLSearchParams({ path, blob, drafts });
     const url = `${config.platformUrl.replace(/\/$/, '')}/api/content/file-status?${query}`;
-    let answer: { status: number; body: string };
+    let answer: FetchBytesResult;
     try {
-      answer = await fetchWithRetries(url, { headers: { 'X-Validation-Key': config.secret } }, config);
+      answer = await fetchWithRetries(url, { 'X-Validation-Key': config.secret }, config);
     } catch (error) {
       // fetch's own message is "fetch failed"; the reason is in its cause.
       const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : '';
@@ -101,16 +91,25 @@ export function createContentStatusRoutes(config: ContentStatusConfig = loadCont
       return c.json({ error: 'The platform did not answer', code: 'unavailable' }, 504);
     }
 
+    const body = bytesToText(answer.bytes);
     if (answer.status === 404) {
       report(null);
       return c.json({ error: 'The platform has no status for this file yet', code: 'not_found' }, 404);
     }
     if (answer.status !== 200) {
-      report(`the platform answered ${answer.status}: ${answer.body.slice(0, 200)}`);
-      return c.json({ error: `The platform answered ${answer.status}`, code: 'unavailable' }, 502);
+      report(`the platform answered ${answer.status}: ${body.slice(0, 200)}`);
+      if (answer.status !== 503) {
+        return c.json({ error: `The platform answered ${answer.status}`, code: 'unavailable' }, 502);
+      }
+      // The platform's own "not now" (a cold build, content not loaded yet),
+      // passed on with the time it asks for.
+      const retryAfter = answer.headers.get('Retry-After');
+      if (retryAfter) c.header('Retry-After', retryAfter);
+      const detail = detailOf(body);
+      return c.json({ error: `The platform is not ready${detail ? `: ${detail}` : ''}`, code: 'unavailable' }, 503);
     }
     try {
-      const status = JSON.parse(answer.body);
+      const status = JSON.parse(body);
       report(null);
       return c.json(status);
     } catch {
@@ -132,46 +131,38 @@ function isContentPath(path: string): boolean {
     && path.split('/').every(part => part !== '' && part !== '.' && part !== '..');
 }
 
+/** The platform's own words: FastAPI answers an error as `{"detail": ...}`. */
+function detailOf(body: string): string | undefined {
+  try {
+    const detail = (JSON.parse(body) as { detail?: unknown } | null)?.detail;
+    return typeof detail === 'string' ? detail : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * GET with up to two retries on network errors and gateway errors, all within
- * one deadline. The controller and its timer are held for the whole call and
- * the body is read before the timer is cleared (see fetch-timeout.ts: a bare
- * AbortSignal.timeout once let a request hang for hours).
+ * GET within one budget, asked again after a gateway error or a network
+ * failure, MAX_ATTEMPTS times at most. Each attempt holds its own timer for
+ * the whole request, the body included (fetch-timeout.ts says why).
  */
 async function fetchWithRetries(
   url: string,
-  init: RequestInit,
+  headers: Record<string, string>,
   config: ContentStatusConfig,
-): Promise<{ status: number; body: string }> {
+): Promise<FetchBytesResult> {
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const retryDelayMs = config.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
-  const fetchImpl = config.fetchImpl ?? fetch;
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(new Error(`No answer from the platform within ${timeoutMs} ms`)),
-    timeoutMs,
-  );
-  try {
-    for (let attempt = 1; ; attempt++) {
-      try {
-        const response = await fetchImpl(url, { ...init, signal: controller.signal });
-        const body = await response.text();
-        if (!GATEWAY_ERROR_STATUSES.has(response.status) || attempt >= MAX_ATTEMPTS) {
-          return { status: response.status, body };
-        }
-      } catch (error) {
-        if (controller.signal.aborted) throw controller.signal.reason;
-        if (attempt >= MAX_ATTEMPTS) throw error;
-      }
-      await new Promise<void>((resolve, reject) => {
-        const wait = setTimeout(resolve, retryDelayMs * attempt);
-        controller.signal.addEventListener('abort', () => {
-          clearTimeout(wait);
-          reject(controller.signal.reason);
-        }, { once: true });
-      });
+  const deadline = Date.now() + timeoutMs;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const answer = await fetchBytesWithTimeout(url, { headers, timeoutMs: deadline - Date.now() });
+      if (!GATEWAY_ERROR_STATUSES.has(answer.status) || attempt >= MAX_ATTEMPTS) return answer;
+    } catch (error) {
+      if (attempt >= MAX_ATTEMPTS) throw error;
     }
-  } finally {
-    clearTimeout(timer);
+    const wait = retryDelayMs * attempt;
+    if (Date.now() + wait >= deadline) throw new Error(`No answer from the platform within ${timeoutMs} ms`);
+    await new Promise(resolve => setTimeout(resolve, wait));
   }
 }

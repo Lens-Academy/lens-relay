@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { Hono } from 'hono';
 import { createContentStatusRoutes, loadContentStatusConfig, type ContentStatusConfig } from './routes';
 import { signShareToken, type ShareTokenPayload } from '../share-token';
@@ -18,19 +18,26 @@ function token(overrides: Partial<ShareTokenPayload> = {}): string {
   });
 }
 
-function mount(config: Partial<ContentStatusConfig> = {}) {
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ path: 'Lenses/X.md', content: true }));
+/** The route, with `platform` as the global fetch it reaches the platform through. */
+function mount(
+  config: Partial<ContentStatusConfig> = {},
+  platform = vi.fn<typeof fetch>(async () => Response.json({ path: 'Lenses/X.md', content: true })),
+) {
+  vi.stubGlobal('fetch', platform);
   const app = new Hono();
   app.route('/api/content-status', createContentStatusRoutes({
     enabled: true,
     platformUrl: 'https://platform.test/',
     secret: 'sek',
     retryDelayMs: 1,
-    fetchImpl,
     ...config,
   }));
-  return { app, fetchImpl: (config.fetchImpl ?? fetchImpl) as ReturnType<typeof vi.fn<typeof fetch>> };
+  return { app, platform };
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function get(app: Hono, query: string, headers: Record<string, string> = { 'X-Share-Token': token() }) {
   return app.request(`/api/content-status?${query}`, { headers });
@@ -44,22 +51,22 @@ describe('content status routes', () => {
     expect(loadContentStatusConfig({ CONTENT_STATUS_ENABLED: 'false' }).enabled).toBe(false);
     expect(loadContentStatusConfig({ CONTENT_STATUS_ENABLED: 'true' }).enabled).toBe(true);
 
-    const { app, fetchImpl } = mount({ enabled: false });
+    const { app, platform } = mount({ enabled: false });
     const resp = await get(app, QUERY);
     expect(resp.status).toBe(404);
     expect(await resp.json()).toEqual({ error: 'Content status is disabled', code: 'disabled' });
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(platform).not.toHaveBeenCalled();
   });
 
   it('forwards to the platform with the validation key and returns its answer', async () => {
-    const { app, fetchImpl } = mount();
+    const { app, platform } = mount();
 
     const resp = await get(app, QUERY);
 
     expect(resp.status).toBe(200);
     expect(await resp.json()).toEqual({ path: 'Lenses/X.md', content: true });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0];
+    expect(platform).toHaveBeenCalledTimes(1);
+    const [url, init] = platform.mock.calls[0];
     expect(url).toBe(`https://platform.test/api/content/file-status?path=Lenses%2FX+%26+Y.md&blob=${BLOB}&drafts=1`);
     expect(init?.headers).toEqual({ 'X-Validation-Key': 'sek' });
   });
@@ -79,14 +86,14 @@ describe('content status routes', () => {
   });
 
   it('refuses malformed paths and blob ids before calling the platform', async () => {
-    const { app, fetchImpl } = mount();
+    const { app, platform } = mount();
     for (const path of ['', '/Lenses/X.md', 'Lenses/../X.md', 'Lenses//X.md', 'a\\b.md']) {
       const resp = await get(app, `path=${encodeURIComponent(path)}&blob=${BLOB}`);
       expect(resp.status, path).toBe(400);
     }
     expect((await get(app, 'path=Lenses/X.md&blob=xyz')).status).toBe(400);
     expect((await get(app, 'path=Lenses/X.md')).status).toBe(400);
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(platform).not.toHaveBeenCalled();
   });
 
   it('says 503 "not_configured" when enabled without a platform URL or key', async () => {
@@ -101,19 +108,36 @@ describe('content status routes', () => {
       .mockResolvedValueOnce(new Response('bad gateway', { status: 502 }))
       .mockRejectedValueOnce(new TypeError('fetch failed'))
       .mockResolvedValueOnce(Response.json({ ok: true }));
-    const { app } = mount({ fetchImpl: flaky });
-    expect((await get(app, QUERY)).status).toBe(200);
+    expect((await get(mount({}, flaky).app, QUERY)).status).toBe(200);
     expect(flaky).toHaveBeenCalledTimes(3);
 
-    const down = vi.fn<typeof fetch>(async () => new Response('unavailable', { status: 503 }));
-    const resp = await get(mount({ fetchImpl: down }).app, QUERY);
+    const down = vi.fn<typeof fetch>(async () => new Response('gateway timeout', { status: 504 }));
+    const resp = await get(mount({}, down).app, QUERY);
     expect(down).toHaveBeenCalledTimes(3);
     expect(resp.status).toBe(502);
     expect(await resp.json()).toMatchObject({ code: 'unavailable' });
 
     const refused = vi.fn<typeof fetch>(async () => new Response('no', { status: 401 }));
-    expect((await get(mount({ fetchImpl: refused }).app, QUERY)).status).toBe(502);
+    expect((await get(mount({}, refused).app, QUERY)).status).toBe(502);
     expect(refused).toHaveBeenCalledTimes(1);
+  });
+
+  // The platform's 503 is its own answer (the content is not loaded yet, a
+  // cold build), not the edge failing to reach it: asking again at once only
+  // adds load, and the panel waits as long as Retry-After says.
+  it('passes a platform 503 and its Retry-After on, without asking again', async () => {
+    const busy = vi.fn<typeof fetch>(async () =>
+      Response.json({ detail: 'The content is not loaded yet' }, { status: 503, headers: { 'Retry-After': '60' } }));
+
+    const resp = await get(mount({}, busy).app, QUERY);
+
+    expect(resp.status).toBe(503);
+    expect(resp.headers.get('Retry-After')).toBe('60');
+    expect(await resp.json()).toEqual({
+      error: 'The platform is not ready: The content is not loaded yet',
+      code: 'unavailable',
+    });
+    expect(busy).toHaveBeenCalledTimes(1);
   });
 
   it('logs a platform problem when it starts and when it ends, not on every request', async () => {
@@ -124,7 +148,7 @@ describe('content status routes', () => {
         .mockResolvedValueOnce(Response.json({ detail: 'Invalid validation key' }, { status: 401 }))
         .mockResolvedValueOnce(Response.json({ detail: 'Invalid validation key' }, { status: 401 }))
         .mockImplementation(async () => Response.json({ path: 'Lenses/X.md', content: true }));
-      const { app } = mount({ fetchImpl: platform });
+      const { app } = mount({}, platform);
 
       for (let i = 0; i < 4; i++) await get(app, QUERY);
 
@@ -138,7 +162,7 @@ describe('content status routes', () => {
 
   it('passes a platform 404 through as "not_found"', async () => {
     const missing = vi.fn<typeof fetch>(async () => Response.json({ detail: 'no build layer' }, { status: 404 }));
-    const resp = await get(mount({ fetchImpl: missing }).app, QUERY);
+    const resp = await get(mount({}, missing).app, QUERY);
     expect(resp.status).toBe(404);
     expect(await resp.json()).toMatchObject({ code: 'not_found' });
   });
@@ -148,7 +172,7 @@ describe('content status routes', () => {
       init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
     }));
     const started = Date.now();
-    const resp = await get(mount({ fetchImpl: hanging, timeoutMs: 50 }).app, QUERY);
+    const resp = await get(mount({ timeoutMs: 50 }, hanging).app, QUERY);
     expect(resp.status).toBe(504);
     expect(Date.now() - started).toBeLessThan(2000);
     expect(hanging).toHaveBeenCalledTimes(1);

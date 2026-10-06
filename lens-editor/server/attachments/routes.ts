@@ -3,7 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import { createHash } from "node:crypto";
 import limits from "../../shared/attachment-limits.json";
 import {
-  requireEduEditShareToken,
+  requireEduShareToken,
   shareTokenPayload,
   tokenAllowsFolderName,
 } from "../edit-share-auth";
@@ -358,7 +358,7 @@ export function createAttachmentRoutes(
   opts: { maxBodyBytes?: number } = {},
 ): Hono {
   const router = new Hono();
-  router.use("/*", requireEduEditShareToken());
+  router.use("/*", requireEduShareToken({ minRole: "edit" }));
   router.use(
     "/*",
     bodyLimit({

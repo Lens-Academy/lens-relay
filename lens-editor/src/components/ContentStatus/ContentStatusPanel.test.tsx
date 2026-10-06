@@ -40,8 +40,8 @@ const card: CauseCard = {
   what_broke: 'The excerpt at line 29 of Lenses/X.md no longer works: its start text now appears twice.',
   lost_content: [{ page: 'lens-x', title: 'X' }, { page: 'module-intro', title: 'Introduction' }],
   changes: [{ file: 'articles/a.md', summary: 'Line 12 added: "The cloud provider must verify"' }],
-  authors: { names: ['Luc'], unknown: false, files_in_sync: 1, editors_in_sync: 1 },
-  certainty: 'this_change',
+  who_text: 'Changed by Luc.',
+  certainty_text: 'Caused by this change.',
 };
 
 function status(extra: Partial<FileStatus> = {}): FileStatus {
@@ -124,31 +124,23 @@ describe('ContentStatusView', () => {
     expect(item).toHaveTextContent('Caused by this change. Since 2 min ago.');
   });
 
-  it('never invents an author', async () => {
+  // The platform writes who made the change and how sure it is, so the panel
+  // and the platform's own pages say the same thing.
+  it('says who and how sure in the platform\'s words, and in no words of its own', async () => {
     const { CauseCardView } = await loadPanel();
-    const authorLine = (authors: CauseCard['authors']) => {
-      const { container, unmount } = render(<ul><CauseCardView card={{ ...card, authors }} /></ul>);
-      const text = Array.from(container.querySelectorAll('p'), p => p.textContent ?? '')
-        .find(line => /^(Changed by|Author unknown)/.test(line));
-      unmount();
-      return text;
-    };
+    const sync = 'Changed by Luc. The same sync changed 2 files by 2 editors.';
+    const { container, unmount } = render(<ul><CauseCardView card={{
+      ...card,
+      who_text: sync,
+      certainty_text: 'Caused by one of these changes.',
+    }} /></ul>);
+    expect(container).toHaveTextContent(sync);
+    expect(container).toHaveTextContent('Caused by one of these changes. Since 2 min ago.');
+    unmount();
 
-    const unknown = { ...card, authors: { names: [], unknown: true, files_in_sync: 4 }, certainty: 'one_of_these' as const };
-    const { container } = render(<ul><CauseCardView card={unknown} /></ul>);
-    expect(container).toHaveTextContent('Author unknown. The same sync changed 4 files.');
-    expect(container).toHaveTextContent('Caused by one of these changes.');
-
-    expect(authorLine(undefined)).toBe('Author unknown.');
-    expect(authorLine({ names: ['Luc', 'ai:opus-5.5:iris'], unknown: false, editors_in_sync: 2 }))
-      .toBe('Changed by Luc and ai:opus-5.5:iris.');
-    // Iris changed another file in the same sync: the line must not say a
-    // second person changed this one.
-    expect(authorLine({ names: ['Luc'], unknown: false, files_in_sync: 2, editors_in_sync: 2 }))
-      .toBe('Changed by Luc. The same sync changed 2 files by 2 editors.');
-    // One change has a known author and another has none: keep the name.
-    expect(authorLine({ names: ['Luc'], unknown: true, files_in_sync: 1, editors_in_sync: 1 }))
-      .toBe('Changed by Luc. Some of the changes have no known author.');
+    const bare = render(<ul><CauseCardView card={{ ...card, who_text: undefined, certainty_text: undefined }} /></ul>);
+    expect(bare.container).not.toHaveTextContent(/Changed by|Author unknown|Caused by|cause is not known/);
+    expect(bare.container).toHaveTextContent('Since 2 min ago.');
   });
 
   it('shows the drafts check when the file has pending suggestions', async () => {
@@ -300,6 +292,83 @@ describe('ContentStatusSection polling', () => {
     expect(requestParams(0).get('blob')).toBe(await gitBlobId(text));
     expect(requestParams(0).get('drafts')).toBe('1');
     await shows('On staging');
+  });
+
+  it('keeps asking after an answer it cannot read', async () => {
+    const { ContentStatusSection, SLOW_POLL_MS } = await loadPanel();
+    const ytext = new Y.Doc().getText('contents');
+    mockFetch
+      .mockImplementationOnce(() => Promise.resolve(new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } })))
+      .mockImplementation(() => answer(status()));
+
+    render(<ContentStatusSection ytext={ytext} path="Lenses/X.md" />);
+    await requestsAfter(1);
+    await shows('Status unavailable: The platform answered in an unknown format');
+
+    await act(() => vi.advanceTimersByTimeAsync(SLOW_POLL_MS));
+    await requestsAfter(2);
+    await shows('On staging');
+  });
+
+  it('waits as long as a busy platform asks before asking again', async () => {
+    const { ContentStatusSection, SLOW_POLL_MS } = await loadPanel();
+    const ytext = new Y.Doc().getText('contents');
+    mockFetch
+      .mockImplementationOnce(() => answer(
+        { error: 'The platform is not ready: The content is not loaded yet', code: 'unavailable' },
+        { status: 503, headers: { 'Retry-After': '60' } },
+      ))
+      .mockImplementation(() => answer(status()));
+
+    render(<ContentStatusSection ytext={ytext} path="Lenses/X.md" />);
+    await requestsAfter(1);
+    await shows('Status unavailable: The platform is not ready: The content is not loaded yet');
+    await act(() => vi.advanceTimersByTimeAsync(SLOW_POLL_MS));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000 - SLOW_POLL_MS));
+    await requestsAfter(2);
+  });
+
+  it('shows an answer that lacks parts', async () => {
+    const { ContentStatusSection } = await loadPanel();
+    const ytext = new Y.Doc().getText('contents');
+    mockFetch.mockImplementation(() => answer({
+      ...status(),
+      processed: { commit: null, commit_time: '', processed_at: '2026-10-05T13:59:57Z' },
+      drafts: { pending: 1 },
+    }));
+
+    render(<ContentStatusSection ytext={ytext} path="Lenses/X.md" />);
+    await requestsAfter(1);
+    await shows('On staging');
+    expect(screen.getByText('Staging has this text. Production gets it when the file is promoted.')).toBeInTheDocument();
+    expect(screen.getByText('1 pending suggestion: if all are accepted')).toBeInTheDocument();
+  });
+
+  // React unmounts the whole tree on an error it cannot hand to a boundary:
+  // one odd answer must not take the editor with it.
+  it('shows a note in place of an answer it cannot show, and the editor stays', async () => {
+    const { ContentStatusSection, SLOW_POLL_MS } = await loadPanel();
+    const ytext = new Y.Doc().getText('contents');
+    const broken = { ...card, changes: 'not a list' as unknown as CauseCard['changes'] };
+    mockFetch
+      .mockImplementationOnce(() => answer(status({ cause_cards: { caused_here: [broken], broken_by: [] } })))
+      .mockImplementation(() => answer(status()));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(<div><p>The editor</p><ContentStatusSection ytext={ytext} path="Lenses/X.md" /></div>);
+      await requestsAfter(1);
+      await shows('Status unavailable: the panel could not show this answer.');
+      expect(screen.getByText('The editor')).toBeInTheDocument();
+
+      // The next answer is shown again.
+      await act(() => vi.advanceTimersByTimeAsync(SLOW_POLL_MS));
+      await requestsAfter(2);
+      await shows('On staging');
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('lets a check wait while the tab is hidden, and makes it when the tab is shown', async () => {

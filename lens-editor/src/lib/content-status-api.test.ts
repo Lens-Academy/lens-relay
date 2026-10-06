@@ -43,7 +43,10 @@ describe('fetchContentStatus', () => {
     mockFetch.mockResolvedValueOnce(Response.json(status));
     const { fetchContentStatus } = await api();
 
-    await expect(fetchContentStatus('Lenses/A & B.md', 'abc', true)).resolves.toEqual({ kind: 'ok', status });
+    await expect(fetchContentStatus('Lenses/A & B.md', 'abc', true)).resolves.toEqual({
+      kind: 'ok',
+      status: { ...status, issues: [], cause_cards: { caused_here: [], broken_by: [] }, used_by: [] },
+    });
 
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toBe('/api/content-status?path=Lenses%2FA+%26+B.md&blob=abc&drafts=1');
@@ -83,5 +86,73 @@ describe('fetchContentStatus', () => {
 
     mockFetch.mockResolvedValueOnce(Response.json({ path: 'Lenses/A.md', content: true }));
     expect((await fetchContentStatus('Lenses/A.md', 'abc', false)).kind).toBe('ok');
+  });
+
+  it('reads a 200 answer that is not a status as an error, so the panel asks again', async () => {
+    const { fetchContentStatus } = await api();
+    for (const body of ['null', '[]', '"ok"', '1', '{"path": 1, "content": true}']) {
+      mockFetch.mockResolvedValueOnce(new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      expect(await fetchContentStatus('Lenses/A.md', 'abc', false), body)
+        .toEqual({ kind: 'error', message: 'The platform answered in an unknown format' });
+    }
+  });
+
+  it('keeps the parts of a status the panel can show, and fills in empty lists', async () => {
+    mockFetch.mockResolvedValueOnce(Response.json({
+      path: 'Lenses/A.md',
+      content: true,
+      processed: { commit: null, commit_time: '', processed_at: '2026-10-05T13:59:57Z' },
+      published: { state: 'nonsense' },
+      issues: null,
+      cause_cards: { caused_here: [null, { id: 'c', what_broke: 'x' }] },
+      used_by: 'x',
+      drafts: { pending: 1 },
+    }));
+    const { fetchContentStatus } = await api();
+
+    expect(await fetchContentStatus('Lenses/A.md', 'abc', true)).toEqual({
+      kind: 'ok',
+      status: {
+        path: 'Lenses/A.md',
+        content: true,
+        issues: [],
+        cause_cards: { caused_here: [{ id: 'c', what_broke: 'x' }], broken_by: [] },
+        used_by: [],
+        drafts: { pending: 1, issues: [], new_elsewhere: [] },
+      },
+    });
+  });
+
+  it('passes on how long a busy platform asks to be left alone', async () => {
+    mockFetch.mockResolvedValueOnce(Response.json(
+      { error: 'The platform is not ready: The content is not loaded yet', code: 'unavailable' },
+      { status: 503, headers: { 'Retry-After': '60' } },
+    ));
+    const { fetchContentStatus } = await api();
+
+    expect(await fetchContentStatus('Lenses/A.md', 'abc', false)).toEqual({
+      kind: 'error',
+      message: 'The platform is not ready: The content is not loaded yet',
+      retryAfterMs: 60_000,
+    });
+  });
+
+  // RFC 9110 allows an HTTP date, and a proxy may send one.
+  it('reads a Retry-After given as an HTTP date', async () => {
+    const { fetchContentStatus } = await api();
+    const busy = (retryAfter: string) => mockFetch.mockResolvedValueOnce(Response.json(
+      { error: 'The platform is not ready', code: 'unavailable' },
+      { status: 503, headers: { 'Retry-After': retryAfter } },
+    ));
+
+    busy(new Date(Date.now() + 45_000).toUTCString());
+    const result = await fetchContentStatus('Lenses/A.md', 'abc', false);
+    const waits = result.kind === 'error' ? result.retryAfterMs : undefined;
+    expect(waits).toBeGreaterThan(43_000);
+    expect(waits).toBeLessThanOrEqual(45_000);
+
+    busy('Wed, 21 Oct 2015 07:28:00 GMT');
+    expect(await fetchContentStatus('Lenses/A.md', 'abc', false))
+      .toEqual({ kind: 'error', message: 'The platform is not ready' });
   });
 });

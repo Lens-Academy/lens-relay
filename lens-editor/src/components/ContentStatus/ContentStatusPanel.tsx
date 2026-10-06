@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Component, useEffect, useMemo, useState } from 'react';
 import type * as Y from 'yjs';
 import { useYDoc } from '../../lib/ydoc-provider';
 import { useSynced } from '../../hooks/useSynced';
@@ -54,9 +54,34 @@ export function ContentStatusSection({ ytext, path, className = '' }: { ytext: Y
       <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Content status</h3>
       {result.kind === 'error'
         ? <p className="text-gray-500">Status unavailable: {result.message}</p>
-        : <ContentStatusView status={result.status} />}
+        : <GuardedStatusView status={result.status} />}
     </section>
   );
+}
+
+type GuardState = { failed: boolean; shown?: FileStatus };
+
+/**
+ * The view of one answer, or a note when it cannot be shown: React unmounts
+ * the whole tree on a render error that no boundary takes, and one odd
+ * answer must not take the editor with it. The next answer is shown again.
+ */
+class GuardedStatusView extends Component<{ status: FileStatus }, GuardState> {
+  state: GuardState = { failed: false };
+
+  static getDerivedStateFromProps({ status }: { status: FileStatus }, { shown }: GuardState) {
+    return status === shown ? null : { failed: false, shown: status };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed
+      ? <p className="text-gray-500">Status unavailable: the panel could not show this answer.</p>
+      : <ContentStatusView status={this.props.status} />;
+  }
 }
 
 /**
@@ -64,7 +89,8 @@ export function ContentStatusSection({ ytext, path, className = '' }: { ytext: Y
  * every FAST_POLL_MS while the platform is behind that text and every
  * SLOW_POLL_MS otherwise. An edit makes the last answer stale, so it brings
  * the next check forward. In a hidden tab a check that falls due waits until
- * the tab is shown again.
+ * the tab is shown again, and no check is made before the time a busy
+ * platform asked for (Retry-After).
  */
 function useContentStatus(ytext: Y.Text, path: string): ContentStatusResult | null {
   const [result, setResult] = useState<ContentStatusResult | null>(null);
@@ -73,6 +99,7 @@ function useContentStatus(ytext: Y.Text, path: string): ContentStatusResult | nu
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let nextAt = 0;
+    let quietUntil = 0;
     let edited = false;
     let paused = false;
     const controller = new AbortController();
@@ -85,6 +112,10 @@ function useContentStatus(ytext: Y.Text, path: string): ContentStatusResult | nu
 
     const poll = async () => {
       timer = undefined;
+      if (Date.now() < quietUntil) {
+        schedule(quietUntil - Date.now());
+        return;
+      }
       if (document.hidden) {
         paused = true;
         return;
@@ -101,6 +132,7 @@ function useContentStatus(ytext: Y.Text, path: string): ContentStatusResult | nu
       if (cancelled) return;
       setResult(next);
       if (next.kind === 'disabled' || (next.kind === 'ok' && !next.status.content)) return;
+      if (next.kind === 'error' && next.retryAfterMs) quietUntil = Date.now() + next.retryAfterMs;
       const state = next.kind === 'ok' ? next.status.published?.state : undefined;
       schedule(edited || state === 'behind' || state === 'pending' ? FAST_POLL_MS : SLOW_POLL_MS);
     };
@@ -132,10 +164,8 @@ function useContentStatus(ytext: Y.Text, path: string): ContentStatusResult | nu
 }
 
 export function ContentStatusView({ status }: { status: FileStatus }) {
-  const issues = status.issues ?? [];
-  const brokenBy = status.cause_cards?.broken_by ?? [];
-  const causedHere = status.cause_cards?.caused_here ?? [];
-  const usedBy = status.used_by ?? [];
+  const { issues, used_by: usedBy } = status;
+  const { broken_by: brokenBy, caused_here: causedHere } = status.cause_cards;
   return (
     <div className="space-y-3">
       <PublishedLine status={status} />
@@ -252,13 +282,11 @@ function CardList({ title, cards }: { title: string; cards: CauseCard[] }) {
   );
 }
 
-const CERTAINTY_TEXT = {
-  this_change: 'Caused by this change.',
-  one_of_these: 'Caused by one of these changes.',
-  unknown: 'The cause is not known.',
-} as const;
-
-/** What broke, which change, what changed, who, and how sure: in that order. */
+/**
+ * What broke, which change, what changed, who, and how sure: in that order.
+ * Who and how sure are the platform's own sentences; a card without them
+ * says nothing about either.
+ */
 export function CauseCardView({ card }: { card: CauseCard }) {
   const lost = card.lost_content ?? [];
   const changes = card.changes ?? [];
@@ -279,30 +307,12 @@ export function CauseCardView({ card }: { card: CauseCard }) {
           ))}
         </ul>
       )}
-      <p className="mt-1 text-xs text-gray-600">{authorText(card.authors, changes.length)}</p>
+      {card.who_text && <p className="mt-1 text-xs text-gray-600">{card.who_text}</p>}
       <p className="text-xs text-gray-500">
-        {CERTAINTY_TEXT[card.certainty] ?? CERTAINTY_TEXT.unknown} Since {ago(card.created_at)}.
+        {card.certainty_text && `${card.certainty_text} `}Since {ago(card.created_at)}.
       </p>
     </li>
   );
-}
-
-/**
- * Who made the card's `changes`, with names exactly as the platform gives
- * them (never a guess). The sync's size is the whole sync, other files and
- * editors included, so it is said apart, and only when it says more.
- */
-function authorText(authors: CauseCard['authors'], changes: number): string {
-  const names = authors?.names ?? [];
-  const joined = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
-  let text = joined ? `Changed by ${joined}.` : 'Author unknown.';
-  if (joined && authors?.unknown) text += ' Some of the changes have no known author.';
-  const files = authors?.files_in_sync ?? 0;
-  const editors = authors?.editors_in_sync ?? 0;
-  if (files > changes || editors > names.length) {
-    text += ` The same sync changed ${plural(files, 'file')}${editors > 0 ? ` by ${plural(editors, 'editor')}` : ''}.`;
-  }
-  return text;
 }
 
 function plural(n: number, word: string): string {

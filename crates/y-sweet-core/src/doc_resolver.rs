@@ -4,6 +4,8 @@ use crate::link_indexer::{
     parse_doc_id,
 };
 use dashmap::DashMap;
+use std::collections::HashMap;
+use std::sync::RwLock;
 use yrs::{Any, Doc, Map, Out, ReadTxn, Transact};
 
 /// Information about a resolved document.
@@ -54,6 +56,10 @@ pub struct DocumentResolver {
     path_to_doc: DashMap<String, DocInfo>,
     /// Reverse map: uuid -> "Lens/Photosynthesis.md"
     uuid_to_path: DashMap<String, String>,
+    /// Held for writing while entries change and for reading by
+    /// [`Self::entries_under`], which so sees no change half applied. Taken
+    /// first, and held across nothing but the two maps' own shard locks.
+    changing: RwLock<()>,
 }
 
 impl DocumentResolver {
@@ -61,62 +67,19 @@ impl DocumentResolver {
         Self {
             path_to_doc: DashMap::new(),
             uuid_to_path: DashMap::new(),
+            changing: RwLock::new(()),
         }
     }
 
-    /// Rebuild both maps from all folder docs in the DashMap.
-    ///
-    /// Clears existing entries, then scans every folder doc's filemeta_v0 to build
-    /// the bidirectional mapping. Called at startup after docs are loaded.
+    /// Rebuild both maps from all folder docs in the DashMap: entries that no
+    /// folder doc holds any more are removed. Called at startup after docs are
+    /// loaded, and after moves and trash operations.
     pub fn rebuild(&self, docs: &DashMap<String, DocWithSyncKv>) {
-        self.path_to_doc.clear();
-        self.uuid_to_path.clear();
-
-        let folder_doc_ids = find_all_folder_docs(docs);
-
-        for folder_doc_id in &folder_doc_ids {
-            if let Some(doc_ref) = docs.get(folder_doc_id) {
-                let awareness = doc_ref.awareness();
-                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                self.rebuild_from_folder_doc(folder_doc_id, &guard.doc);
-            }
-        }
-    }
-
-    /// Core rebuild logic operating on a bare Y.Doc. Testable without DocWithSyncKv.
-    fn rebuild_from_folder_doc(&self, folder_doc_id: &str, doc: &Doc) {
-        let folder_name = read_folder_name(doc, folder_doc_id);
-        let relay_id = parse_doc_id(folder_doc_id)
-            .map(|(r, _)| r.to_string())
-            .unwrap_or_default();
-
-        let txn = doc.transact();
-        let Some(filemeta) = txn.get_map("filemeta_v0") else {
-            return;
-        };
-
-        for (path, value) in filemeta.iter(&txn) {
-            if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
-                let hash = extract_hash_from_filemeta_entry(&value, &txn);
-                // Strip leading "/" from filemeta path, prepend folder name
-                let path_str: &str = &path;
-                let stripped = path_str.strip_prefix('/').unwrap_or(path_str);
-                let full_path = format!("{}/{}", folder_name, stripped);
-                let doc_id = format!("{}-{}", relay_id, uuid);
-
-                let info = DocInfo {
-                    uuid: uuid.clone(),
-                    relay_id: relay_id.clone(),
-                    folder_doc_id: folder_doc_id.to_string(),
-                    folder_name: folder_name.to_string(),
-                    doc_id,
-                    hash,
-                };
-
-                self.uuid_to_path.insert(uuid, full_path.clone());
-                self.path_to_doc.insert(full_path, info);
-            }
-        }
+        let entries = find_all_folder_docs(docs)
+            .iter()
+            .flat_map(|folder_doc_id| loaded_folder_entries(folder_doc_id, docs))
+            .collect();
+        self.replace(|_| true, entries);
     }
 
     /// Resolve a user-facing path to a DocInfo.
@@ -154,38 +117,62 @@ impl DocumentResolver {
         self.path_to_doc.iter().map(|r| r.key().clone()).collect()
     }
 
-    /// Remove all entries associated with a given folder_doc_id from both maps.
-    fn remove_folder_entries(&self, folder_doc_id: &str) {
-        let paths_to_remove: Vec<String> = self
-            .path_to_doc
+    /// Every entry whose path starts with `prefix`, read in one go: no folder
+    /// update, move or removal is half applied in it.
+    pub fn entries_under(&self, prefix: &str) -> Vec<(String, DocInfo)> {
+        let _reading = self.changing.read().unwrap_or_else(|e| e.into_inner());
+        self.path_to_doc
             .iter()
-            .filter(|r| r.value().folder_doc_id == folder_doc_id)
-            .map(|r| r.key().clone())
-            .collect();
-
-        for path in &paths_to_remove {
-            if let Some((_, info)) = self.path_to_doc.remove(path) {
-                self.uuid_to_path.remove(&info.uuid);
-            }
-        }
+            .filter(|r| r.key().starts_with(prefix))
+            .map(|r| (r.key().clone(), r.value().clone()))
+            .collect()
     }
 
-    /// Update maps for a single folder doc. Removes all entries associated with
-    /// the given folder_doc_id, then re-adds from current filemeta_v0.
+    /// Update maps for a single folder doc from its current filemeta_v0; a
+    /// folder doc that is not loaded loses its entries.
     pub fn update_folder(&self, folder_doc_id: &str, docs: &DashMap<String, DocWithSyncKv>) {
-        self.remove_folder_entries(folder_doc_id);
-
-        if let Some(doc_ref) = docs.get(folder_doc_id) {
-            let awareness = doc_ref.awareness();
-            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            self.rebuild_from_folder_doc(folder_doc_id, &guard.doc);
-        }
+        let entries = loaded_folder_entries(folder_doc_id, docs);
+        self.replace(|info| info.folder_doc_id == folder_doc_id, entries);
     }
 
     /// Update maps for a single folder using a bare Y.Doc (testable without DocWithSyncKv).
     pub fn update_folder_from_doc(&self, folder_doc_id: &str, doc: &Doc) {
-        self.remove_folder_entries(folder_doc_id);
-        self.rebuild_from_folder_doc(folder_doc_id, doc);
+        let entries = folder_entries(folder_doc_id, doc);
+        self.replace(|info| info.folder_doc_id == folder_doc_id, entries);
+    }
+
+    /// Make `entries` the entries that `scope` selects. New and changed
+    /// entries go in before the old ones go out, so a path that stays never
+    /// goes missing: the link indexer updates a folder on every change of its
+    /// folder doc, and a lookup during the update used to find no file.
+    fn replace(&self, scope: impl Fn(&DocInfo) -> bool, entries: Vec<(String, DocInfo)>) {
+        let _changing = self.changing.write().unwrap_or_else(|e| e.into_inner());
+        let new: HashMap<&str, &str> = entries
+            .iter()
+            .map(|(path, info)| (path.as_str(), info.uuid.as_str()))
+            .collect();
+        // (path, uuid, whether the path goes) of each old entry that changes.
+        let stale: Vec<(String, String, bool)> = self
+            .path_to_doc
+            .iter()
+            .filter(|r| scope(r.value()))
+            .filter_map(|r| match new.get(r.key().as_str()) {
+                Some(uuid) if *uuid == r.value().uuid => None,
+                kept => Some((r.key().clone(), r.value().uuid.clone(), kept.is_none())),
+            })
+            .collect();
+        drop(new);
+        for (path, info) in entries {
+            self.uuid_to_path.insert(info.uuid.clone(), path.clone());
+            self.path_to_doc.insert(path, info);
+        }
+        for (path, uuid, path_goes) in stale {
+            if path_goes {
+                self.path_to_doc.remove(&path);
+            }
+            // A doc that moved already names its new path.
+            self.uuid_to_path.remove_if(&uuid, |_, at| *at == path);
+        }
     }
 
     /// Insert or update a single document in both maps.
@@ -194,6 +181,7 @@ impl DocumentResolver {
     /// idempotent call. If the uuid already exists with a different path, the
     /// old path entry is removed first.
     pub fn upsert_doc(&self, uuid: &str, path: &str, info: DocInfo) {
+        let _changing = self.changing.write().unwrap_or_else(|e| e.into_inner());
         // If uuid already exists, remove the OLD path from path_to_doc
         if let Some(old_path) = self.uuid_to_path.get(uuid) {
             if old_path.value() != path {
@@ -211,6 +199,7 @@ impl DocumentResolver {
 
     /// Update the hash for a blob document at the given path.
     pub fn update_hash(&self, path: &str, new_hash: &str) {
+        let _changing = self.changing.write().unwrap_or_else(|e| e.into_inner());
         if let Some(mut info) = self.path_to_doc.get_mut(path) {
             info.hash = Some(new_hash.to_string());
         }
@@ -220,10 +209,56 @@ impl DocumentResolver {
     ///
     /// Idempotent: if the uuid is not found, this is a no-op.
     pub fn remove_doc(&self, uuid: &str) {
+        let _changing = self.changing.write().unwrap_or_else(|e| e.into_inner());
         if let Some((_, path)) = self.uuid_to_path.remove(uuid) {
             self.path_to_doc.remove(&path);
         }
     }
+}
+
+/// A loaded folder doc's entries ([`folder_entries`]); none when it is not
+/// loaded. The awareness comes out of the docs map first: a docs shard must
+/// never be held across an awareness lock (AGENTS.md, "Known Issues").
+fn loaded_folder_entries(
+    folder_doc_id: &str,
+    docs: &DashMap<String, DocWithSyncKv>,
+) -> Vec<(String, DocInfo)> {
+    let Some(awareness) = docs.get(folder_doc_id).map(|doc| doc.awareness()) else {
+        return Vec::new();
+    };
+    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+    folder_entries(folder_doc_id, &guard.doc)
+}
+
+/// A folder doc's files from its filemeta_v0, as ("Folder/path.md", DocInfo).
+fn folder_entries(folder_doc_id: &str, doc: &Doc) -> Vec<(String, DocInfo)> {
+    let folder_name = read_folder_name(doc, folder_doc_id);
+    let relay_id = parse_doc_id(folder_doc_id)
+        .map(|(r, _)| r.to_string())
+        .unwrap_or_default();
+
+    let txn = doc.transact();
+    let Some(filemeta) = txn.get_map("filemeta_v0") else {
+        return Vec::new();
+    };
+    filemeta
+        .iter(&txn)
+        .filter_map(|(path, value)| {
+            let uuid = extract_id_from_filemeta_entry(&value, &txn)?;
+            let hash = extract_hash_from_filemeta_entry(&value, &txn);
+            // Strip leading "/" from filemeta path, prepend folder name
+            let stripped = path.strip_prefix('/').unwrap_or(path);
+            let info = DocInfo {
+                doc_id: format!("{}-{}", relay_id, uuid),
+                uuid,
+                relay_id: relay_id.clone(),
+                folder_doc_id: folder_doc_id.to_string(),
+                folder_name: folder_name.clone(),
+                hash,
+            };
+            Some((format!("{}/{}", folder_name, stripped), info))
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +307,7 @@ mod tests {
     fn build_resolver(folder_specs: &[(&str, &Doc)]) -> DocumentResolver {
         let resolver = DocumentResolver::new();
         for (doc_id, doc) in folder_specs {
-            resolver.rebuild_from_folder_doc(doc_id, doc);
+            resolver.update_folder_from_doc(doc_id, doc);
         }
         resolver
     }
@@ -653,32 +688,44 @@ mod tests {
         assert_eq!(resolver.folder_uuid_for_doc("nonexistent"), None);
     }
 
+    // Prevents: a folder update leaving a reverse entry behind for a file
+    // that moved, or for a file that another one replaced at the same path
+    // (updates replace entries in place instead of clearing the folder).
     #[test]
-    fn rebuild_clears_stale_entries() {
+    fn update_folder_tracks_moves_and_replacements() {
         let folder0 = create_folder_doc(&[
             ("/Photosynthesis.md", "uuid-photo"),
-            ("/OldDoc.md", "uuid-old"),
+            ("/Old.md", "uuid-old"),
+            ("/Gone.md", "uuid-gone"),
         ]);
         set_folder_name(&folder0, "Lens");
         let f0id = folder0_id();
-
         let resolver = build_resolver(&[(&f0id, &folder0)]);
-        assert_eq!(resolver.all_paths().len(), 2);
 
-        // Modify the folder doc to have only 1 entry
-        {
-            let mut txn = folder0.transact_mut();
-            let filemeta = txn.get_or_insert_map("filemeta_v0");
-            filemeta.remove(&mut txn, "/OldDoc.md");
-        }
+        // Old.md moves to New.md; another doc takes the path Gone.md.
+        let folder0 = create_folder_doc(&[
+            ("/Photosynthesis.md", "uuid-photo"),
+            ("/New.md", "uuid-old"),
+            ("/Gone.md", "uuid-other"),
+        ]);
+        set_folder_name(&folder0, "Lens");
+        resolver.update_folder_from_doc(&f0id, &folder0);
 
-        // Full rebuild (clear + re-add)
-        resolver.path_to_doc.clear();
-        resolver.uuid_to_path.clear();
-        resolver.rebuild_from_folder_doc(&f0id, &folder0);
-
-        assert_eq!(resolver.all_paths().len(), 1);
-        assert!(resolver.resolve_path("Lens/OldDoc.md").is_none());
-        assert!(resolver.path_for_uuid("uuid-old").is_none());
+        let mut paths = resolver.all_paths();
+        paths.sort();
+        assert_eq!(
+            paths,
+            ["Lens/Gone.md", "Lens/New.md", "Lens/Photosynthesis.md"]
+        );
+        assert_eq!(
+            resolver.path_for_uuid("uuid-old").as_deref(),
+            Some("Lens/New.md")
+        );
+        assert_eq!(
+            resolver.resolve_path("Lens/Gone.md").unwrap().uuid,
+            "uuid-other"
+        );
+        assert_eq!(resolver.path_for_uuid("uuid-gone"), None);
+        assert_eq!(resolver.entries_under("Lens/").len(), 3);
     }
 }

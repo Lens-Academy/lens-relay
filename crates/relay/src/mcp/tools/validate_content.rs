@@ -36,6 +36,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use y_sweet_core::doc_resolver::DocInfo;
 use y_sweet_core::share_token::McpAccess;
 
 const DEFAULT_PLATFORM_URL: &str = "https://staging.lensacademy.org";
@@ -63,12 +64,20 @@ const MAP_BUILD_TIMEOUT: Duration = Duration::from_secs(60);
 // entry). Enforced on the serialized JSON, which is what the platform
 // bounds; JSON escaping makes it larger than the raw text.
 const MAX_PAYLOAD_BYTES: usize = 128 * 1024 * 1024;
-/// How long the `edit` reply waits for its check before it says "skipped".
+/// How long the `edit` reply waits for its check before it says "skipped":
+/// reading the folder, every round and the reads between rounds.
 pub const EDIT_CHECK_BUDGET: Duration = Duration::from_secs(10);
 /// How long edit checks leave a busy platform alone when it gave no
 /// `Retry-After`, and the longest `Retry-After` they honour.
 const BUSY_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
+/// How long edit checks leave the platform alone after a check they stopped
+/// waiting for. The platform stops a brief check it has not finished within
+/// its own 10 s and answers 503 with `Retry-After: 10` (lens-platform
+/// `checks.BRIEF_WAIT_S`, `jobs.AGENT_CHECK.retry_after_s`), but the relay's
+/// budget started earlier and ends first; so the relay waits what the
+/// platform would have asked.
+const NO_ANSWER_BACKOFF: Duration = Duration::from_secs(10);
 /// Lines a check adds to an `edit` reply, summary line included.
 const EDIT_CHECK_MAX_LINES: usize = 6;
 /// The platform caps each list at this length when `brief` is set.
@@ -145,7 +154,10 @@ impl View {
 struct Check<'a> {
     target: Option<&'a str>,
     view: View,
-    brief: bool,
+    /// The budget of an edit reply's brief check: the platform caps its
+    /// lists, and the whole check ends within it. `None` for a full check,
+    /// whose folder read and requests each have their own limit.
+    brief: Option<Duration>,
     course: Option<&'a str>,
     category: Option<&'a str>,
 }
@@ -153,9 +165,13 @@ struct Check<'a> {
 enum CheckError {
     /// The platform has no `/api/content/check` (a deploy from before it).
     Unsupported,
-    /// No answer (a timeout or a connection error), or the platform said it
-    /// is overloaded or not ready: the reason, and `Retry-After` in seconds.
+    /// No connection, or the platform said it is overloaded or not ready:
+    /// the reason, and `Retry-After` in seconds.
     Busy(String, Option<u64>),
+    /// The platform did not answer within the time the request had.
+    NoAnswer(Duration),
+    /// 400: the platform refused the request, in its own words.
+    Refused(String),
     /// Anything else, as a reason a person can read.
     Failed(String),
 }
@@ -167,14 +183,38 @@ impl CheckError {
             CheckError::Busy(reason, Some(seconds)) => {
                 format!("{}; retry in {} s", reason, seconds)
             }
+            CheckError::NoAnswer(waited) => format!("no answer within {} s", secs(*waited)),
+            CheckError::Refused(detail) => format!("the platform answered 400: {}", detail),
             CheckError::Busy(reason, None) | CheckError::Failed(reason) => reason.clone(),
+        }
+    }
+
+    /// How long edit checks leave the platform alone after this failure;
+    /// `None` when the next edit may ask at once.
+    fn pause(&self) -> Option<Duration> {
+        match self {
+            CheckError::Busy(_, retry_after) => {
+                Some(retry_after.map_or(BUSY_BACKOFF, |s| Duration::from_secs(s).min(MAX_BACKOFF)))
+            }
+            CheckError::NoAnswer(_) => Some(NO_ANSWER_BACKOFF),
+            _ => None,
         }
     }
 }
 
-/// A `done` answer, and the folder-relative paths the relay could not read:
-/// the platform checked those files as committed.
-type Checked = (Value, Vec<String>);
+/// A duration in whole seconds, rounded up, to name a limit in a reply.
+fn secs(duration: Duration) -> u64 {
+    duration.as_secs_f32().ceil() as u64
+}
+
+/// A `done` answer, and what it leaves out: the folder-relative paths the
+/// relay could not read (the platform checked those files as committed), and
+/// the platform's words when it refused the relay's deletions.
+struct Checked {
+    answer: Value,
+    unread: Vec<String>,
+    deletions_refused: Option<String>,
+}
 
 /// Execute the `validate_content` tool.
 pub async fn execute(
@@ -220,7 +260,11 @@ pub async fn execute_with_platform(
             CONTENT_FOLDER, token_folder
         ));
     }
-    let target = match arguments.get("file_path").and_then(|v| v.as_str()) {
+    let file_path = arguments
+        .get("file_path")
+        .and_then(|v| v.as_str())
+        .map(|path| resolved_path(server, path));
+    let target = match file_path.as_deref() {
         None => None,
         Some(path) => Some(content_path(path).ok_or_else(|| {
             format!(
@@ -233,12 +277,12 @@ pub async fn execute_with_platform(
     let check = Check {
         target,
         view,
-        brief: false,
+        brief: None,
         course,
         category,
     };
     match run_check(server, platform, &check).await {
-        Ok((answer, unread)) => Ok(format_report(&answer, &unread, &check, platform)),
+        Ok(checked) => Ok(format_report(&checked, &check, platform)),
         Err(CheckError::Unsupported) => {
             validate_adhoc(server, platform, view, course, category).await
         }
@@ -274,19 +318,14 @@ pub async fn edit_check(
     let check = Check {
         target: Some(rel),
         view,
-        brief: true,
+        brief: Some(budget),
         course: None,
         category: None,
     };
-    let outcome = tokio::time::timeout(budget, run_check(server, platform, &check))
-        .await
-        .unwrap_or_else(|_| {
-            let reason = format!("no answer within {} s", budget.as_secs_f32().ceil() as u64);
-            Err(CheckError::Busy(reason, None))
-        });
+    let outcome = run_check(server, platform, &check).await;
     note_outcome(platform, &outcome);
     Some(match outcome {
-        Ok((answer, unread)) => format_brief(&answer, &unread, view),
+        Ok(checked) => format_brief(&checked, view),
         // No advice to run validate_content: on this platform it falls back
         // to the slow whole-folder run.
         Err(CheckError::Unsupported) => {
@@ -300,9 +339,10 @@ pub async fn edit_check(
 }
 
 /// What edit checks have learnt about a platform in this process. After a
-/// timeout, a connection error, 429 or 503 they leave it alone until
-/// `busy_until`: while a platform hangs, every edit would otherwise wait its
-/// whole budget, for every agent and for the length of the incident.
+/// timeout, a connection error, 429, 503 or 504 they leave it alone until
+/// `busy_until` ([`CheckError::pause`]): while a platform hangs, every edit
+/// would otherwise wait its whole budget, for every agent and for the length
+/// of the incident.
 /// `failure` is the last check's failure, so that the log says when checks
 /// start failing and when they work again, not once per edit. Kept per
 /// platform URL, so that tests with their own mock platforms do not share it.
@@ -335,15 +375,14 @@ fn busy_until(platform: &Platform) -> Option<String> {
     Some(format!("{:02}:{:02}:{:02} UTC", h, m, s))
 }
 
-/// Record how an edit check ended: back off from a busy platform, and log
-/// only a change of failure (or the end of one).
+/// Record how an edit check ended: leave the platform alone for the pause
+/// its failure asks for, and log only a change of failure (or its end).
 fn note_outcome(platform: &Platform, outcome: &Result<Checked, CheckError>) {
-    let failure = outcome.as_ref().err().map(CheckError::reason);
+    let error = outcome.as_ref().err();
+    let failure = error.map(CheckError::reason);
     with_health(platform, |health| {
-        if let Err(CheckError::Busy(_, retry_after)) = outcome {
-            let wait =
-                retry_after.map_or(BUSY_BACKOFF, |s| Duration::from_secs(s).min(MAX_BACKOFF));
-            health.busy_until = Some(Instant::now() + wait);
+        if let Some(pause) = error.and_then(CheckError::pause) {
+            health.busy_until = Some(Instant::now() + pause);
         }
         if health.failure != failure {
             match &failure {
@@ -360,6 +399,16 @@ fn note_outcome(platform: &Platform, outcome: &Result<Checked, CheckError>) {
             health.failure = failure;
         }
     });
+}
+
+/// The file `path` names, as read and edit resolve it: `Lens Edu/Lenses/A`
+/// is `Lens Edu/Lenses/A.md`. `path` itself when it names no file.
+fn resolved_path(server: &Arc<Server>, path: &str) -> String {
+    let resolver = server.doc_resolver();
+    resolver
+        .resolve_path(path)
+        .and_then(|info| resolver.path_for_uuid(&info.uuid))
+        .unwrap_or_else(|| path.to_string())
 }
 
 /// `Lens Edu/Lenses/X.md` → `Lenses/X.md`; `None` outside the course folder.
@@ -388,41 +437,79 @@ async fn run_check(
     platform: &Platform,
     check: &Check<'_>,
 ) -> Result<Checked, CheckError> {
-    let request_timeout = if check.brief {
-        EDIT_CHECK_BUDGET
-    } else {
-        REQUEST_TIMEOUT
+    // The time left for a step, at most `cap`. A brief check has one budget
+    // for every step, so each step can say what ran out of time: a slow read
+    // of the relay's own folder is not a slow platform. A step that runs out
+    // names the check's limit (`named`), not the time the step had left.
+    let until = check.brief.map(|budget| Instant::now() + budget);
+    let left = |cap: Duration| {
+        until.map_or(cap, |until| {
+            until.saturating_duration_since(Instant::now()).min(cap)
+        })
     };
+    let named = |cap: Duration| check.brief.map_or(cap, |budget| budget.min(cap));
     let FolderSnapshot {
         mut blobs,
         docs,
-        complete,
+        mut complete,
         mut files,
         unread,
-    } = tokio::time::timeout(MAP_BUILD_TIMEOUT, snapshot_folder(server, check.target))
-        .await
-        .map_err(|_| {
-            CheckError::Failed(format!(
-                "timed out reading the '{}' folder after {} s (docs may still be loading from storage); try again",
-                CONTENT_FOLDER,
-                MAP_BUILD_TIMEOUT.as_secs()
-            ))
-        })??;
+    } = tokio::time::timeout(
+        left(MAP_BUILD_TIMEOUT),
+        snapshot_folder(server, check.target),
+    )
+    .await
+    .map_err(|_| {
+        let folder = format!("the '{}' folder", CONTENT_FOLDER);
+        slow_read(&folder, named(MAP_BUILD_TIMEOUT))
+    })??;
 
+    let mut deletions_refused = None;
     for _ in 0..MAX_ROUNDS {
-        let body = json!({
-            "view": check.view.as_str(),
-            "target": check.target,
-            "blobs": &blobs,
-            "complete": complete,
-            "files": &files,
-            "course": check.course,
-            "category": check.category,
-            "brief": check.brief,
-        });
-        let answer = post_check(platform, body, request_timeout).await?;
+        let answer = loop {
+            let body = json!({
+                "view": check.view.as_str(),
+                "target": check.target,
+                "blobs": &blobs,
+                "complete": complete,
+                "files": &files,
+                "course": check.course,
+                "category": check.category,
+                "brief": check.brief.is_some(),
+            });
+            match post_check(platform, body, left(REQUEST_TIMEOUT)).await {
+                // Most likely more committed files are missing from `blobs`
+                // than the platform deletes in one check: a move that
+                // relay-git-sync has not pushed yet. Asked again without
+                // `complete`, it checks them as committed, instead of
+                // failing every check until the sync catches up.
+                Err(CheckError::Refused(detail)) if complete => {
+                    complete = false;
+                    deletions_refused = Some(detail);
+                }
+                Err(CheckError::NoAnswer(_)) => {
+                    return Err(CheckError::NoAnswer(named(REQUEST_TIMEOUT)))
+                }
+                answer => break answer?,
+            }
+        };
         match answer.get("status").and_then(|v| v.as_str()) {
-            Some("done") => return Ok((answer, unread)),
+            Some("done") if has_result(&answer, check.target) => {
+                return Ok(Checked {
+                    answer,
+                    unread,
+                    deletions_refused,
+                })
+            }
+            Some("done") => {
+                return Err(CheckError::Failed(format!(
+                    "the platform's answer has no {}",
+                    match check.target {
+                        Some(_) => "result for the file",
+                        None => "issue list",
+                    }
+                )))
+            }
             Some("need_files") => {}
             other => {
                 return Err(CheckError::Failed(format!(
@@ -436,12 +523,17 @@ async fn run_check(
             .and_then(|v| v.as_array())
             .map(|need| need.iter().filter_map(|p| p.as_str()).collect())
             .unwrap_or_default();
-        let wanted: Vec<(String, String, String)> = need
+        if need.is_empty() {
+            return Err(CheckError::Failed(
+                "the platform asked for files but named none".to_string(),
+            ));
+        }
+        let wanted: Vec<(String, String, DocInfo)> = need
             .iter()
             .filter(|rel| !files.contains_key(**rel))
             .filter_map(|rel| {
-                let (path, doc_id) = docs.get(*rel)?;
-                Some((rel.to_string(), path.clone(), doc_id.clone()))
+                let (path, info) = docs.get(*rel)?;
+                Some((rel.to_string(), path.clone(), info.clone()))
             })
             .collect();
         if wanted.is_empty() {
@@ -450,7 +542,10 @@ async fn run_check(
                 need.join(", ")
             )));
         }
-        for (rel, path, text) in read_texts(server, wanted).await {
+        let texts = tokio::time::timeout(left(MAP_BUILD_TIMEOUT), read_texts(server, wanted))
+            .await
+            .map_err(|_| slow_read("the files the platform asked for", named(MAP_BUILD_TIMEOUT)))?;
+        for (rel, path, text) in texts {
             let text =
                 text.ok_or_else(|| CheckError::Failed(format!("could not read {}", path)))?;
             // The text may be newer than the blob id sent so far; the two
@@ -465,12 +560,34 @@ async fn run_check(
     )))
 }
 
+/// Whether a `done` answer holds what the reply reports: the target's issues
+/// (or that it is not content), or for the whole folder its issue list.
+/// Without them the reply would say "no issues".
+fn has_result(answer: &Value, target: Option<&str>) -> bool {
+    match target {
+        Some(_) => {
+            answer["target"]["content"] == json!(false) || answer["target"]["issues"].is_array()
+        }
+        None => answer["issues"].is_array(),
+    }
+}
+
+/// A read of the relay's own that outlasted its limit. It is no fault of
+/// the platform, so edit checks do not pause for it.
+fn slow_read(what: &str, limit: Duration) -> CheckError {
+    CheckError::Failed(format!(
+        "the relay did not finish reading {} within {} s (docs may still be loading from storage); try again",
+        what,
+        secs(limit)
+    ))
+}
+
 /// One read of the course folder for a check.
 struct FolderSnapshot {
     /// Folder-relative path → Git blob id of the raw text.
     blobs: BTreeMap<String, String>,
-    /// Folder-relative path → (relay path, doc id), to read a file again.
-    docs: HashMap<String, (String, String)>,
+    /// Folder-relative path → (relay path, doc), to read a file again.
+    docs: HashMap<String, (String, DocInfo)>,
     /// True when the relay knows every file: its startup index is built and
     /// every file was read. Only then may the platform count a committed path
     /// that `blobs` lacks as deleted.
@@ -486,45 +603,31 @@ async fn snapshot_folder(
     server: &Arc<Server>,
     target: Option<&str>,
 ) -> Result<FolderSnapshot, CheckError> {
-    let prefix = format!("{}/", CONTENT_FOLDER);
-    let resolver = server.doc_resolver();
-    let docs: HashMap<String, (String, String)> = resolver
-        .all_paths()
-        .into_iter()
-        .filter_map(|path| {
-            let rel = path.strip_prefix(&prefix)?.to_string();
-            if !is_content_candidate(&rel) {
-                return None;
-            }
-            let doc_id = resolver.resolve_path(&path)?.doc_id;
-            Some((rel, (path, doc_id)))
-        })
-        .collect();
-
+    let docs = content_docs(server);
     let mut files = BTreeMap::new();
     if let Some(target) = target {
-        let Some((path, doc_id)) = docs.get(target) else {
+        let Some((path, info)) = docs.get(target) else {
             return Err(CheckError::Failed(format!(
                 "no file {}/{} in the relay (validate_content checks .md, .json and widgets/*.html files)",
                 CONTENT_FOLDER, target
             )));
         };
-        let text = super::grep::read_doc_content(server, doc_id, path)
+        let text = read_text(server, path, info)
             .await
             .ok_or_else(|| CheckError::Failed(format!("could not read {}", path)))?;
         files.insert(target.to_string(), text);
     }
 
     // Owned first: a stream of futures that borrow locals is not `Send`.
-    let others: Vec<(String, String, String)> = docs
+    let others: Vec<(String, String, DocInfo)> = docs
         .iter()
         .filter(|(rel, _)| !files.contains_key(*rel))
-        .map(|(rel, (path, doc_id))| (rel.clone(), path.clone(), doc_id.clone()))
+        .map(|(rel, (path, info))| (rel.clone(), path.clone(), info.clone()))
         .collect();
-    let lookups = others.into_iter().map(|(rel, path, doc_id)| {
+    let lookups = others.into_iter().map(|(rel, path, info)| {
         let server = Arc::clone(server);
         async move {
-            let id = blob_id(&server, &path, &doc_id).await;
+            let id = blob_id(&server, &path, &info).await;
             (rel, path, id)
         }
     });
@@ -560,15 +663,36 @@ async fn snapshot_folder(
     })
 }
 
+/// The course folder's files the platform may read, by folder-relative path:
+/// (relay path, doc). Read from the resolver in one go, so that a folder
+/// update running meanwhile cannot make files look deleted.
+fn content_docs(server: &Arc<Server>) -> HashMap<String, (String, DocInfo)> {
+    let prefix = format!("{}/", CONTENT_FOLDER);
+    server
+        .doc_resolver()
+        .entries_under(&prefix)
+        .into_iter()
+        .filter_map(|(path, info)| {
+            let rel = path[prefix.len()..].to_string();
+            is_content_candidate(&rel).then_some((rel, (path, info)))
+        })
+        .collect()
+}
+
 /// Git blob id of a file's raw text, from a cache when possible, so a check
 /// of the whole folder loads only docs edited since their id was taken.
 /// `None` for a file that cannot be read.
-async fn blob_id(server: &Arc<Server>, path: &str, doc_id: &str) -> Option<String> {
+async fn blob_id(server: &Arc<Server>, path: &str, info: &DocInfo) -> Option<String> {
     use yrs::{GetString, ReadTxn, Transact};
-    if blob::is_blob_file(path) {
-        let hash = server.doc_resolver().get_file_hash(path)?;
-        return blob::stored_git_blob_id(server, doc_id, &hash).await.ok();
+    if let Some(hash) = &info.hash {
+        return blob::stored_git_blob_id(server, &info.doc_id, hash)
+            .await
+            .ok();
     }
+    if blob::is_blob_file(path) {
+        return None; // JSON whose filemeta entry has no hash
+    }
+    let doc_id = info.doc_id.as_str();
     if let Some(id) = server.text_blob_ids().get(doc_id) {
         return Some(id.clone());
     }
@@ -593,16 +717,29 @@ async fn blob_id(server: &Arc<Server>, path: &str, doc_id: &str) -> Option<Strin
     Some(id)
 }
 
-/// Read `(rel, relay path, doc id)` files [`READ_CONCURRENCY`] at a time;
-/// `None` for a file that cannot be read.
+/// A file's raw text: the stored bytes of a file kept in the store (its
+/// filemeta entry has a hash: JSON timestamps, or an uploaded widget page),
+/// else the doc's text. `None` for a file that cannot be read.
+async fn read_text(server: &Arc<Server>, path: &str, info: &DocInfo) -> Option<String> {
+    match &info.hash {
+        Some(hash) => {
+            let bytes = blob::read_blob(server, &info.doc_id, hash).await.ok()?;
+            String::from_utf8(bytes).ok()
+        }
+        None => super::grep::read_doc_content(server, &info.doc_id, path).await,
+    }
+}
+
+/// Read `(rel, relay path, doc)` files [`READ_CONCURRENCY`] at a time; `None`
+/// for a file that cannot be read.
 async fn read_texts(
     server: &Arc<Server>,
-    files: Vec<(String, String, String)>,
+    files: Vec<(String, String, DocInfo)>,
 ) -> Vec<(String, String, Option<String>)> {
-    let reads = files.into_iter().map(|(rel, path, doc_id)| {
+    let reads = files.into_iter().map(|(rel, path, info)| {
         let server = Arc::clone(server);
         async move {
-            let text = super::grep::read_doc_content(&server, &doc_id, &path).await;
+            let text = read_text(&server, &path, &info).await;
             (rel, path, text)
         }
     });
@@ -623,9 +760,15 @@ async fn post_check(
     let detail = serde_json::from_str::<Value>(&text)
         .ok()
         .and_then(|v| v["detail"].as_str().map(str::to_string));
+    let said = || {
+        detail
+            .clone()
+            .unwrap_or_else(|| text.chars().take(300).collect())
+    };
     match status {
         200 => serde_json::from_str(&text)
             .map_err(|e| CheckError::Failed(format!("the platform's answer is not JSON ({})", e))),
+        400 => Err(CheckError::Refused(said())),
         404 => Err(CheckError::Unsupported),
         401 => Err(CheckError::Failed(
             "the platform refused the relay's validation key (401)".to_string(),
@@ -648,14 +791,15 @@ async fn post_check(
         _ => Err(CheckError::Failed(format!(
             "the platform answered {}: {}",
             status,
-            detail.unwrap_or_else(|| text.chars().take(300).collect())
+            said()
         ))),
     }
 }
 
-/// POST `body` as gzipped JSON; returns (status, Retry-After seconds, body).
-/// A request the relay cannot build fails; one the platform does not answer
-/// is `Busy`. Serializing and compressing run on the blocking pool: the
+/// POST `body` as gzipped JSON within `timeout`; returns (status, Retry-After
+/// seconds, body). A request the relay cannot build in time fails; one the
+/// platform does not answer in time is `NoAnswer`, and one that does not
+/// reach it `Busy`. Serializing and compressing run on the blocking pool: the
 /// fallback body is tens of megabytes, and prod is a 2-vCPU box where
 /// blocking an async worker starves the relay's runtime (see AGENTS.md).
 async fn post_json(
@@ -664,7 +808,8 @@ async fn post_json(
     body: Value,
     timeout: Duration,
 ) -> Result<(u16, Option<u64>, String), CheckError> {
-    let gzipped = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+    let started = Instant::now();
+    let encoding = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         let raw = serde_json::to_vec(&body)
             .map_err(|e| format!("could not serialize the validation request: {}", e))?;
         if raw.len() > MAX_PAYLOAD_BYTES {
@@ -676,13 +821,29 @@ async fn post_json(
         }
         tracing::debug!("validate_content: payload {} bytes", raw.len());
         Ok(gzip(&raw))
-    })
-    .await
-    .map_err(|e| format!("encoding the validation request failed: {}", e))
-    .and_then(|encoded| encoded)
-    .map_err(CheckError::Failed)?;
+    });
+    let unprepared =
+        || CheckError::Failed("the relay ran out of time preparing its request".into());
+    let gzipped = tokio::time::timeout(timeout, encoding)
+        .await
+        .map_err(|_| unprepared())?
+        .map_err(|e| format!("encoding the validation request failed: {}", e))
+        .and_then(|encoded| encoded)
+        .map_err(CheckError::Failed)?;
+    // The request gets the time the encoding left.
+    let timeout = timeout
+        .checked_sub(started.elapsed())
+        .filter(|left| !left.is_zero())
+        .ok_or_else(unprepared)?;
 
     let url = platform.endpoint(path);
+    let failed = |e: reqwest::Error, reason: String| {
+        if e.is_timeout() {
+            CheckError::NoAnswer(timeout)
+        } else {
+            CheckError::Busy(format!("{}: {}", reason, e), None)
+        }
+    };
     let resp = client()
         .post(&url)
         .timeout(timeout)
@@ -693,20 +854,35 @@ async fn post_json(
         .send()
         .await
         .map_err(|e| {
-            let reason = format!("could not reach the validation service at {}: {}", url, e);
-            CheckError::Busy(reason, None)
+            failed(
+                e,
+                format!("could not reach the validation service at {}", url),
+            )
         })?;
     let status = resp.status().as_u16();
     let retry_after = resp
         .headers()
         .get("retry-after")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse().ok());
+        .and_then(retry_after_secs);
     let text = resp.text().await.map_err(|e| {
-        let reason = format!("failed to read the validation service's answer: {}", e);
-        CheckError::Busy(reason, None)
+        failed(
+            e,
+            "failed to read the validation service's answer".to_string(),
+        )
     })?;
     Ok((status, retry_after, text))
+}
+
+/// A `Retry-After` value in seconds: a number of seconds, or an HTTP date
+/// (RFC 9110), counted from now and rounded up; a date already past is 0.
+fn retry_after_secs(value: &str) -> Option<u64> {
+    let value = value.trim();
+    value.parse().ok().or_else(|| {
+        let at = httpdate::parse_http_date(value).ok()?;
+        let left = at.duration_since(SystemTime::now()).unwrap_or_default();
+        Some(secs(left))
+    })
 }
 
 fn gzip(raw: &[u8]) -> Vec<u8> {
@@ -723,6 +899,8 @@ fn gzip(raw: &[u8]) -> Vec<u8> {
 
 /// The older whole-folder validation (`validate-adhoc`), for a platform that
 /// has no `/api/content/check` yet. Remove it once every platform has one.
+/// Markdown goes in the chosen CriticMarkup view; JSON timestamps and widget
+/// pages go as they are.
 async fn validate_adhoc(
     server: &Arc<Server>,
     platform: &Platform,
@@ -730,32 +908,39 @@ async fn validate_adhoc(
     course: Option<&str>,
     category: Option<&str>,
 ) -> Result<String, String> {
-    let files = tokio::time::timeout(MAP_BUILD_TIMEOUT, build_file_map(server, view))
+    let docs = content_docs(server)
+        .into_iter()
+        .map(|(rel, (path, info))| (rel, path, info))
+        .collect();
+    let texts = tokio::time::timeout(MAP_BUILD_TIMEOUT, read_texts(server, docs))
         .await
         .map_err(|_| {
-            format!(
-                "Error: timed out collecting documents from '{}' after {}s — try again (docs may still be loading from storage)",
-                CONTENT_FOLDER,
-                MAP_BUILD_TIMEOUT.as_secs()
-            )
+            let folder = format!("the '{}' folder", CONTENT_FOLDER);
+            format!("Error: {}", slow_read(&folder, MAP_BUILD_TIMEOUT).reason())
         })?;
+    let files: serde_json::Map<String, Value> = texts
+        .into_iter()
+        .filter_map(|(rel, path, text)| {
+            let Some(raw) = text else {
+                tracing::warn!("validate_content: skipping unreadable {}", path);
+                return None;
+            };
+            let content = if rel.ends_with(".md") {
+                let spans = critic_markup::parse(&raw);
+                match view {
+                    View::Drafts => critic_markup::accepted_view(&spans),
+                    View::Approved => critic_markup::base_view(&spans),
+                }
+            } else {
+                raw
+            };
+            Some((rel, Value::String(content)))
+        })
+        .collect();
     if files.is_empty() {
         return Err(format!(
             "Error: no readable documents found in folder '{}'",
             CONTENT_FOLDER
-        ));
-    }
-    // Cheap pre-check on unescaped bytes, so nothing absurd is serialized;
-    // the real gate is on the serialized JSON in post_json.
-    let payload_bytes: usize = files
-        .iter()
-        .map(|(k, v)| k.len() + v.as_str().map(str::len).unwrap_or(0))
-        .sum();
-    if payload_bytes > MAX_PAYLOAD_BYTES {
-        return Err(format!(
-            "Error: folder content too large to validate ({} MB, max {} MB)",
-            payload_bytes / (1024 * 1024),
-            MAX_PAYLOAD_BYTES / (1024 * 1024)
         ));
     }
 
@@ -775,42 +960,6 @@ async fn validate_adhoc(
             status, text
         ))
     }
-}
-
-/// `{folder-relative path: content}` for every readable text document in the
-/// folder, for the validate-adhoc fallback. Markdown gets the chosen
-/// CriticMarkup view; `.json` blobs and `.html` widgets go through raw.
-async fn build_file_map(server: &Arc<Server>, view: View) -> serde_json::Map<String, Value> {
-    let prefix = format!("{}/", CONTENT_FOLDER);
-    let mut files = serde_json::Map::new();
-
-    for path in server.doc_resolver().all_paths() {
-        let Some(rel) = path.strip_prefix(&prefix) else {
-            continue;
-        };
-        if !is_content_candidate(rel) {
-            continue;
-        }
-        let Some(doc_info) = server.doc_resolver().resolve_path(&path) else {
-            continue;
-        };
-        let Some(raw) = super::grep::read_doc_content(server, &doc_info.doc_id, &path).await else {
-            tracing::warn!("validate_content: skipping unreadable {}", path);
-            continue;
-        };
-        let content = if rel.ends_with(".md") {
-            let spans = critic_markup::parse(&raw);
-            match view {
-                View::Drafts => critic_markup::accepted_view(&spans),
-                View::Approved => critic_markup::base_view(&spans),
-            }
-        } else {
-            raw
-        };
-        files.insert(rel.to_string(), Value::String(content));
-    }
-
-    files
 }
 
 fn client() -> &'static reqwest::Client {
@@ -925,12 +1074,12 @@ fn page_names(answer: &Value) -> String {
 }
 
 /// The tool's reply: what was checked against which commit, then the issues.
-fn format_report(
-    answer: &Value,
-    unread: &[String],
-    check: &Check<'_>,
-    platform: &Platform,
-) -> String {
+fn format_report(checked: &Checked, check: &Check<'_>, platform: &Platform) -> String {
+    let Checked {
+        answer,
+        unread,
+        deletions_refused,
+    } = checked;
     let subject = match check.target {
         Some(target) => format!("{}/{}", CONTENT_FOLDER, target),
         None => format!("the {} folder", CONTENT_FOLDER),
@@ -974,6 +1123,12 @@ fn format_report(
             "Unreadable in the relay, so checked as committed: {} ({}).",
             unread.len(),
             name_list(unread.iter().map(String::as_str), 5)
+        ));
+    }
+    if let Some(detail) = deletions_refused {
+        out.push(format!(
+            "Deletions not applied, so those files were checked as committed: {}.",
+            detail.trim_end_matches('.')
         ));
     }
 
@@ -1032,7 +1187,8 @@ fn format_report(
 /// The `edit` reply's check: one summary line, then the most important
 /// issues (errors before warnings, this file before others), in at most
 /// [`EDIT_CHECK_MAX_LINES`] lines.
-fn format_brief(answer: &Value, unread: &[String], view: View) -> String {
+fn format_brief(checked: &Checked, view: View) -> String {
+    let answer = &checked.answer;
     let target = &answer["target"];
     if target["content"] == json!(false) {
         return "Check: this file is not course content, so the platform does not check it."
@@ -1070,11 +1226,14 @@ fn format_brief(answer: &Value, unread: &[String], view: View) -> String {
             page_names(answer)
         ));
     }
-    if !unread.is_empty() {
+    if !checked.unread.is_empty() {
         parts.push(format!(
             "{} unreadable, checked as committed",
-            plural(unread.len(), "file")
+            plural(checked.unread.len(), "file")
         ));
+    }
+    if checked.deletions_refused.is_some() {
+        parts.push("deletions not applied, checked as committed".to_string());
     }
     let overlaid = list(&answer["overlaid"]).len();
     let mut lines = vec![format!(
@@ -1144,6 +1303,16 @@ mod tests {
             answer[k] = v.clone();
         }
         answer
+    }
+
+    /// A `done` answer as a check returns it: every file read, no deletion
+    /// refused.
+    fn checked(answer: Value) -> Checked {
+        Checked {
+            answer,
+            unread: Vec::new(),
+            deletions_refused: None,
+        }
     }
 
     fn issue(file: &str, line: u64, severity: &str, message: &str) -> Value {
@@ -1655,7 +1824,7 @@ mod tests {
             ],
             "pages_changed": [{"id": "module:m", "title": "Module M"}],
         }));
-        let brief = format_brief(&answer, &[], View::Approved);
+        let brief = format_brief(&checked(answer), View::Approved);
         let lines: Vec<&str> = brief.lines().collect();
         assert_eq!(lines.len(), EDIT_CHECK_MAX_LINES, "{brief}");
         assert_eq!(
@@ -1672,8 +1841,12 @@ mod tests {
         );
 
         let clean = format_brief(
-            &done(json!({"target": {"path": "Lenses/A.md", "content": true, "issues": []}})),
-            &["v.timestamps.json".to_string()],
+            &Checked {
+                unread: vec!["v.timestamps.json".to_string()],
+                ..checked(done(
+                    json!({"target": {"path": "Lenses/A.md", "content": true, "issues": []}}),
+                ))
+            },
             View::Drafts,
         );
         assert_eq!(
@@ -1694,7 +1867,7 @@ mod tests {
             "summary": {"production": {"errors": 13, "warnings": 7}},
             "truncated": true,
         }));
-        let brief = format_brief(&answer, &[], View::Approved);
+        let brief = format_brief(&checked(answer), View::Approved);
         let lines: Vec<&str> = brief.lines().collect();
         assert!(
             lines[0].ends_with(": this file has 13 errors, 7 warnings."),
@@ -1746,9 +1919,11 @@ mod tests {
     }
 
     // Prevents: a hung or overloaded platform adding its whole budget to
-    // every edit for the length of an incident. After a timeout or a 429
-    // (Retry-After honoured), edit checks leave the platform alone until a
-    // stated time; a refused key is not "busy" and is asked again.
+    // every edit for the length of an incident. After a timeout, 429 or 503,
+    // edit checks leave the platform alone until a stated time: as long as
+    // its Retry-After says, and after a check the relay stopped waiting for
+    // as long as the platform asks after a brief check it could not finish
+    // (503, Retry-After: 10). A refused key is not "busy" and is asked again.
     #[tokio::test]
     async fn edit_checks_back_off_from_a_busy_platform() {
         let server = build_test_server_in(
@@ -1757,23 +1932,28 @@ mod tests {
         )
         .await;
         let slow = MockReply::ok(done(json!({}))).delay(Duration::from_secs(5));
-        for (reply, first, backs_off) in [
-            (slow, "Check skipped: no answer within 1 s.", true),
+        for (reply, first, pause) in [
+            (slow, "Check skipped: no answer within 1 s.", Some(10)),
             (
                 MockReply::status(429).retry_after(30),
                 "Check skipped: the platform's check queue is full (429); retry in 30 s.",
-                true,
+                Some(30),
             ),
             // In the platform's words, not a guess at the cause.
             (
                 MockReply::status(503),
                 "Check skipped: the platform is not ready (503: mock).",
-                true,
+                Some(30),
+            ),
+            (
+                MockReply::status(503).retry_after(10),
+                "Check skipped: the platform is not ready (503: mock); retry in 10 s.",
+                Some(10),
             ),
             (
                 MockReply::status(401),
                 "Check skipped: the platform refused the relay's validation key (401).",
-                false,
+                None,
             ),
         ] {
             let mock = mock_platform(vec![reply]).await;
@@ -1790,8 +1970,11 @@ mod tests {
 
             let line = check().await.unwrap();
             assert!(line.starts_with(first), "{line}");
-            let line = check().await.unwrap();
-            if !backs_off {
+            let left = with_health(&platform, |h| h.busy_until)
+                .map(|until| until.saturating_duration_since(Instant::now()));
+            let Some(pause) = pause else {
+                assert_eq!(left, None, "{first}");
+                let line = check().await.unwrap();
                 assert!(line.starts_with(first), "{line}");
                 assert_eq!(mock.requests().len(), 2);
                 // Kept so that the log names it once, not on every edit.
@@ -1800,7 +1983,13 @@ mod tests {
                     Some("the platform refused the relay's validation key (401)")
                 );
                 continue;
-            }
+            };
+            let left = left.expect("paused");
+            assert!(
+                left <= Duration::from_secs(pause) && left > Duration::from_secs(pause - 2),
+                "{left:?} after {first}"
+            );
+            let line = check().await.unwrap();
             let until = line
                 .strip_prefix("Check skipped: the platform is busy (retrying after ")
                 .unwrap_or_else(|| panic!("{line}"));
@@ -1821,6 +2010,378 @@ mod tests {
             with_health(&platform, |h| h.busy_until = Some(Instant::now()));
             check().await.unwrap();
             assert_eq!(mock.requests().len(), 2);
+        }
+    }
+
+    // Prevents: a check that lists the folder while the link indexer updates
+    // it (on every change of the folder doc) sending a partial file list
+    // marked complete, which the platform reads as deletions or refuses, and
+    // saying that a file that exists is not in the relay.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_folder_update_never_hides_files_from_a_check() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        const FILES: usize = 300;
+        let files: Vec<(String, String)> = (0..FILES)
+            .map(|i| {
+                (
+                    format!("/Lenses/L{i}.md"),
+                    format!("cccc0000-0000-0000-0001-{:012x}", i),
+                )
+            })
+            .collect();
+        let entries: Vec<(&str, &str, &str)> = files
+            .iter()
+            .map(|(path, uuid)| (path.as_str(), uuid.as_str(), "text"))
+            .collect();
+        let server = build_test_server_in(EDU, &entries).await;
+        server.startup_reindex(&[]).await.unwrap(); // the index is built
+        let stop = Arc::new(AtomicBool::new(false));
+        let updater = {
+            let (server, stop, files) = (server.clone(), stop.clone(), files.clone());
+            std::thread::spawn(move || {
+                let pairs: Vec<(&str, &str)> = files
+                    .iter()
+                    .map(|(path, uuid)| (path.as_str(), uuid.as_str()))
+                    .collect();
+                let folder_doc = create_folder_doc(&pairs);
+                set_folder_name(&folder_doc, EDU);
+                while !stop.load(Ordering::Relaxed) {
+                    server
+                        .doc_resolver()
+                        .update_folder_from_doc(&folder0_id(), &folder_doc);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            })
+        };
+
+        let mut partial = 0;
+        for i in 0..200 {
+            let target = format!("Lenses/L{}.md", i % FILES);
+            match snapshot_folder(&server, Some(&target)).await {
+                Ok(snapshot) if snapshot.blobs.len() == FILES && snapshot.complete => {}
+                _ => partial += 1,
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        updater.join().unwrap();
+        assert_eq!(partial, 0, "checks that saw part of the folder");
+    }
+
+    // Prevents: every check failing with 400 after a move of more than 50
+    // files until relay-git-sync pushes it. The platform refuses that many
+    // deletions in one check, so the relay asks once more without
+    // `complete`, and the reply says the deletions were not applied.
+    #[tokio::test]
+    async fn refused_deletions_are_asked_again_without_complete() {
+        let server = build_test_server_in(
+            EDU,
+            &[("/Lenses/A.md", "cccc0000-0000-0000-0000-000000000014", "a")],
+        )
+        .await;
+        server.startup_reindex(&[]).await.unwrap(); // the index is built
+        let refusal = "60 committed files are missing from blobs (max 50 deletions in one check), for example Lenses/old/L0.md";
+        let refused = || MockReply::status(400).body(json!({ "detail": refusal }));
+        let answer = || {
+            MockReply::ok(done(json!({
+                "target": {"path": "Lenses/A.md", "content": true, "issues": []},
+            })))
+        };
+        let file = json!({"file_path": "Lens Edu/Lenses/A.md"});
+
+        let mock = mock_platform(vec![refused(), answer()]).await;
+        let reply = execute_with_platform(&server, &edu_access(), &file, &mock.platform())
+            .await
+            .expect("the second request is answered");
+        let complete: Vec<Value> = mock
+            .requests()
+            .iter()
+            .map(|r| r.body["complete"].clone())
+            .collect();
+        assert_eq!(complete, [json!(true), json!(false)]);
+        assert!(
+            reply.contains(&format!(
+                "\nDeletions not applied, so those files were checked as committed: {refusal}.\n"
+            )),
+            "{reply}"
+        );
+
+        let mock = mock_platform(vec![refused(), answer()]).await;
+        let line = edit_check(
+            &server,
+            "Lens Edu/Lenses/A.md",
+            View::Approved,
+            Some(&mock.platform()),
+            EDIT_CHECK_BUDGET,
+        )
+        .await
+        .unwrap();
+        assert!(
+            line.ends_with("this file has no issues; deletions not applied, checked as committed."),
+            "{line}"
+        );
+
+        // Refused again without `complete`: the platform's answer stands.
+        let mock = mock_platform(vec![refused()]).await;
+        let err = execute_with_platform(&server, &edu_access(), &file, &mock.platform())
+            .await
+            .expect_err("refused twice");
+        assert_eq!(err, format!("Error: the platform answered 400: {refusal}"));
+        assert_eq!(mock.requests().len(), 2);
+    }
+
+    // Prevents: a `done` answer that lacks the file's result (or, for the
+    // whole folder, the issue list) reading as "no issues".
+    #[tokio::test]
+    async fn a_done_answer_without_the_result_is_malformed() {
+        let server = build_test_server_in(
+            EDU,
+            &[("/Lenses/A.md", "cccc0000-0000-0000-0000-000000000015", "a")],
+        )
+        .await;
+        for answer in [
+            json!({"status": "done", "commit": "abc1234"}),
+            json!({"status": "done", "commit": "abc1234", "target": null}),
+            json!({"status": "done", "commit": "abc1234", "target": {"path": "Lenses/A.md"}}),
+            json!({"status": "done", "commit": "abc1234",
+                   "target": {"path": "Lenses/A.md", "content": true, "issues": "3 errors"}}),
+        ] {
+            let mock = mock_platform(vec![MockReply::ok(answer.clone())]).await;
+            let line = edit_check(
+                &server,
+                "Lens Edu/Lenses/A.md",
+                View::Approved,
+                Some(&mock.platform()),
+                EDIT_CHECK_BUDGET,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                line,
+                "Check skipped: the platform's answer has no result for the file. The edit stands; run validate_content later.",
+                "{answer}"
+            );
+        }
+
+        let mock = mock_platform(vec![MockReply::ok(
+            json!({"status": "done", "commit": "abc1234"}),
+        )])
+        .await;
+        let err = execute_with_platform(&server, &edu_access(), &json!({}), &mock.platform())
+            .await
+            .expect_err("malformed");
+        assert_eq!(err, "Error: the platform's answer has no issue list");
+    }
+
+    // Prevents: a widget page kept in the store (an upload: its filemeta
+    // entry has a hash) reaching the platform as an empty text with the
+    // empty blob's id, which emptied the widget in every check.
+    #[tokio::test]
+    async fn widget_pages_kept_in_the_store_are_sent_as_stored() {
+        let html = "<html><body>widget</body></html>\n";
+        let server = build_blob_test_server_with_bytes(
+            "/widgets/w.html",
+            "cccc0000-0000-0000-0000-000000000016",
+            html.as_bytes(),
+            "text/html",
+        )
+        .await;
+        rename_folder0(&server, EDU);
+        let mock = mock_platform(vec![
+            MockReply::ok(
+                json!({"status": "need_files", "commit": "c", "need": ["widgets/w.html"]}),
+            ),
+            MockReply::ok(done(json!({}))),
+        ])
+        .await;
+
+        execute_with_platform(&server, &edu_access(), &json!({}), &mock.platform())
+            .await
+            .expect("check should succeed");
+
+        let requests = mock.requests();
+        assert_eq!(
+            requests[0].body["blobs"]["widgets/w.html"],
+            blob::git_blob_id(html.as_bytes())
+        );
+        assert_eq!(requests[1].body["files"]["widgets/w.html"], html);
+    }
+
+    // Prevents: a slow read of the relay's own folder (a store that answers
+    // slowly, as R2 can after a restart) being reported as the platform's
+    // silence, and pausing edit checks against a platform never asked.
+    #[tokio::test]
+    async fn a_slow_folder_read_is_the_relays_not_the_platforms() {
+        let server = build_slow_blob_test_server(
+            &[(
+                "/Lenses/A.md",
+                "cccc0000-0000-0000-0000-000000000017",
+                b"a",
+                "text/markdown",
+            )],
+            Duration::from_secs(2),
+        )
+        .await;
+        rename_folder0(&server, EDU);
+        let mock = mock_platform(vec![MockReply::ok(done(json!({})))]).await;
+        let platform = mock.platform();
+
+        let line = edit_check(
+            &server,
+            "Lens Edu/Lenses/A.md",
+            View::Approved,
+            Some(&platform),
+            Duration::from_millis(300),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            line,
+            "Check skipped: the relay did not finish reading the 'Lens Edu' folder within 1 s (docs may still be loading from storage); try again. The edit stands; run validate_content later."
+        );
+        assert!(mock.requests().is_empty());
+        assert_eq!(with_health(&platform, |h| h.busy_until), None);
+    }
+
+    // Prevents: the HTTP client's own timeout reading as a connection
+    // failure ("could not reach the validation service"): it is the
+    // platform's silence. A brief check names its whole budget, not what
+    // its last round had left.
+    #[tokio::test]
+    async fn a_request_that_times_out_had_no_answer() {
+        let mock = mock_platform(vec![
+            MockReply::ok(done(json!({}))).delay(Duration::from_secs(5))
+        ])
+        .await;
+        let error = post_check(&mock.platform(), json!({}), Duration::from_millis(300))
+            .await
+            .expect_err("the request times out");
+        assert_eq!(error.reason(), "no answer within 1 s");
+
+        let server = build_test_server_in(
+            EDU,
+            &[
+                ("/Lenses/A.md", "cccc0000-0000-0000-0000-000000000018", "a"),
+                ("/Lenses/B.md", "cccc0000-0000-0000-0000-000000000019", "b"),
+            ],
+        )
+        .await;
+        let mock = mock_platform(vec![
+            MockReply::ok(json!({"status": "need_files", "commit": "c", "need": ["Lenses/B.md"]}))
+                .delay(Duration::from_millis(1_200)),
+            MockReply::ok(done(json!({}))).delay(Duration::from_secs(5)),
+        ])
+        .await;
+        let line = edit_check(
+            &server,
+            "Lens Edu/Lenses/A.md",
+            View::Approved,
+            Some(&mock.platform()),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
+        assert!(
+            line.starts_with("Check skipped: no answer within 2 s."),
+            "{line}"
+        );
+        assert_eq!(mock.requests().len(), 2);
+    }
+    // Prevents: a need_files answer that names no file reading as "the
+    // platform asked for files the relay cannot send: ." (an empty list).
+    #[tokio::test]
+    async fn a_need_files_answer_naming_no_file_is_malformed() {
+        let server = build_test_server_in(
+            EDU,
+            &[("/Lenses/A.md", "cccc0000-0000-0000-0000-00000000001a", "a")],
+        )
+        .await;
+        for answer in [
+            json!({"status": "need_files", "commit": "c", "need": []}),
+            json!({"status": "need_files", "commit": "c"}),
+        ] {
+            let mock = mock_platform(vec![MockReply::ok(answer.clone())]).await;
+            let line = edit_check(
+                &server,
+                "Lens Edu/Lenses/A.md",
+                View::Approved,
+                Some(&mock.platform()),
+                EDIT_CHECK_BUDGET,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                line,
+                "Check skipped: the platform asked for files but named none. The edit stands; run validate_content later.",
+                "{answer}"
+            );
+            assert_eq!(mock.requests().len(), 1);
+        }
+    }
+
+    // Prevents: `file_path` without ".md", which read and edit accept,
+    // failing with "no file … in the relay" for a file that exists.
+    #[tokio::test]
+    async fn a_file_path_without_md_names_the_markdown_file() {
+        let server = build_test_server_in(
+            EDU,
+            &[("/Lenses/A.md", "cccc0000-0000-0000-0000-00000000001b", "a")],
+        )
+        .await;
+        let mock = mock_platform(vec![MockReply::ok(done(json!({
+            "target": {"path": "Lenses/A.md", "content": true, "issues": []},
+        })))])
+        .await;
+
+        let reply = execute_with_platform(
+            &server,
+            &edu_access(),
+            &json!({"file_path": "Lens Edu/Lenses/A"}),
+            &mock.platform(),
+        )
+        .await
+        .expect("the file exists");
+
+        assert_eq!(mock.requests()[0].body["target"], "Lenses/A.md");
+        assert!(
+            reply.starts_with("Checked Lens Edu/Lenses/A.md against commit"),
+            "{reply}"
+        );
+    }
+
+    // Prevents: a Retry-After given as an HTTP date (RFC 9110 allows it, and
+    // a proxy may send one) being ignored for the 30 s default.
+    #[tokio::test]
+    async fn a_retry_after_date_is_honoured() {
+        let server = build_test_server_in(
+            EDU,
+            &[("/Lenses/A.md", "cccc0000-0000-0000-0000-00000000001c", "a")],
+        )
+        .await;
+        let in_20_s = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(20));
+        let past = "Wed, 21 Oct 2015 07:28:00 GMT";
+        for (retry_after, seconds) in [(in_20_s.as_str(), [19, 20]), (past, [0, 0])] {
+            let mock = mock_platform(vec![MockReply::status(429).retry_after(retry_after)]).await;
+            let platform = mock.platform();
+            let line = edit_check(
+                &server,
+                "Lens Edu/Lenses/A.md",
+                View::Approved,
+                Some(&platform),
+                EDIT_CHECK_BUDGET,
+            )
+            .await
+            .unwrap();
+            let said = line
+                .strip_prefix("Check skipped: the platform's check queue is full (429); retry in ")
+                .and_then(|rest| rest.split(' ').next())
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or_else(|| panic!("{line}"));
+            assert!(seconds.contains(&said), "{line}");
+            let left = with_health(&platform, |h| h.busy_until)
+                .expect("paused")
+                .saturating_duration_since(Instant::now());
+            assert!(left <= Duration::from_secs(said), "{left:?} after {line}");
         }
     }
 }

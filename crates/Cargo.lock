@@ -2139,6 +2139,7 @@ dependencies = [
  "headers",
  "hex",
  "http",
+ "httpdate",
  "lib0",
  "nanoid",
  "p256",
