@@ -6,6 +6,7 @@ use yrs::{GetString, ReadTxn, Text, Transact};
 use super::blob;
 use super::critic_markup;
 use super::edit_policy::{self, SuggestReason};
+use super::validate_content;
 use y_sweet_core::activity::{self, ActivityEvent};
 
 /// Requested edit mode. `Auto` lets the server decide (direct when safe,
@@ -135,6 +136,26 @@ pub async fn execute(
     server: &Arc<Server>,
     session_id: &str,
     arguments: &Value,
+) -> Result<String, String> {
+    let platform = validate_content::Platform::from_env().ok();
+    execute_checked(
+        server,
+        session_id,
+        arguments,
+        platform.as_ref(),
+        validate_content::EDIT_CHECK_BUDGET,
+    )
+    .await
+}
+
+/// [`execute`] with the platform and the time budget of the post-edit check
+/// given explicitly (tests point them at a mock platform).
+pub(crate) async fn execute_checked(
+    server: &Arc<Server>,
+    session_id: &str,
+    arguments: &Value,
+    platform: Option<&validate_content::Platform>,
+    check_budget: std::time::Duration,
 ) -> Result<String, String> {
     // 1. Parse parameters
     let file_path = arguments
@@ -504,8 +525,22 @@ pub async fn execute(
         }
     }
 
-    // 10. Return success
-    Ok(match outcome {
+    // 10. Check the edited file (course Markdown only): the approved view
+    // after a direct edit, the drafts view after a suggestion. This runs
+    // after the persist and with no lock held; it never fails the edit.
+    let view = match outcome {
+        EditOutcome::Direct { .. } => validate_content::View::Approved,
+        EditOutcome::Suggested(_) => validate_content::View::Drafts,
+    };
+    let canonical_path = server
+        .doc_resolver()
+        .path_for_uuid(&doc_info.uuid)
+        .unwrap_or_else(|| file_path.to_string());
+    let check =
+        validate_content::edit_check(server, &canonical_path, view, platform, check_budget).await;
+
+    // 11. Return success
+    let reply = match outcome {
         EditOutcome::Direct {
             deleted, inserted, ..
         } => format!(
@@ -528,6 +563,10 @@ pub async fn execute(
             reason.describe(),
             effective_old.chars().count()
         ),
+    };
+    Ok(match check {
+        Some(check) => format!("{}\n{}", reply, check),
+        None => reply,
     })
 }
 
@@ -2500,5 +2539,169 @@ mod blob_edit_tests {
         .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found"));
+    }
+}
+
+/// The validator check that ends a Markdown edit's reply in the course folder.
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+    use crate::mcp::tools::test_helpers::*;
+    use serde_json::json;
+
+    const EDU_DOC: &str = "0d1a0000-0000-4000-8000-0000000000e1";
+    const INSERTION: (&str, &str) = ("Intro.\n\nEnd.", "Intro.\n\nAI text.\n\nEnd.");
+
+    async fn edu_server(text: &str) -> (Arc<Server>, String, String) {
+        let server = build_test_server_in("Lens Edu", &[("/Lenses/A.md", EDU_DOC, text)]).await;
+        let doc_id = format!("{}-{}", RELAY_ID, EDU_DOC);
+        let sid = setup_session_with_read(&server, &doc_id);
+        (server, sid, doc_id)
+    }
+
+    fn edu_edit(old: &str, new: &str) -> Value {
+        json!({"file_path": "Lens Edu/Lenses/A.md", "old_string": old, "new_string": new})
+    }
+
+    fn check_answer() -> Value {
+        json!({"status": "done", "commit": "4d37677ba", "overlaid": ["Lenses/A.md"],
+               "target": {"path": "Lenses/A.md", "content": true, "issues": [
+                   {"file": "Lenses/A.md", "line": 3, "severity": "error",
+                    "category": "production", "message": "Broken"}]},
+               "new_elsewhere": [], "gone_elsewhere": [], "pages_changed": []})
+    }
+
+    // Prevents: a direct edit to course content going out at the next sync
+    // unchecked, or being checked before the edit (old text) or in the
+    // drafts view.
+    #[tokio::test]
+    async fn direct_course_edit_reply_carries_an_approved_view_check() {
+        let (server, sid, _) = edu_server(INSERTION.0).await;
+        let mock = mock_platform(vec![MockReply::ok(check_answer())]).await;
+
+        let reply = execute_checked(
+            &server,
+            &sid,
+            &edu_edit(INSERTION.0, INSERTION.1),
+            Some(&mock.platform()),
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+        let lines: Vec<&str> = reply.lines().collect();
+        assert!(
+            lines[0].starts_with("Made the changes to Lens Edu/Lenses/A.md"),
+            "{reply}"
+        );
+        assert_eq!(
+            lines[1..],
+            [
+                "Check (approved view, commit 4d37677 + 1 relay file): this file has 1 error.",
+                "- error Lenses/A.md:3: Broken",
+            ]
+        );
+        let body = &mock.requests()[0].body;
+        assert_eq!(body["view"], "approved");
+        assert_eq!(body["brief"], true);
+        assert_eq!(body["target"], "Lenses/A.md");
+        assert_eq!(body["files"]["Lenses/A.md"], INSERTION.1);
+    }
+
+    // Prevents: a pending suggestion going unchecked until a person accepts
+    // it (D5): it is checked as if accepted.
+    #[tokio::test]
+    async fn suggested_course_edit_is_checked_in_the_drafts_view() {
+        let (server, sid, _) = edu_server("old human words").await;
+        let mock = mock_platform(vec![MockReply::ok(check_answer())]).await;
+
+        let reply = execute_checked(
+            &server,
+            &sid,
+            &edu_edit("human", "machine"),
+            Some(&mock.platform()),
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+        assert!(reply.starts_with("Made pending changes"), "{reply}");
+        assert!(reply.contains("\nCheck (drafts view"), "{reply}");
+        let body = &mock.requests()[0].body;
+        assert_eq!(body["view"], "drafts");
+        // The raw text, markup and all: the platform accepts the suggestion.
+        assert!(body["files"]["Lenses/A.md"]
+            .as_str()
+            .unwrap()
+            .contains("{++"));
+    }
+
+    // Prevents: a slow, overloaded or older platform stalling or failing an
+    // edit that has already been applied, and an edit on a platform without
+    // /check paying for the whole-folder fallback (or being told to).
+    #[tokio::test]
+    async fn slow_busy_or_older_platform_skips_the_check_and_keeps_the_edit() {
+        let cases = [
+            (
+                MockReply::ok(check_answer()).delay(std::time::Duration::from_secs(5)),
+                "\nCheck skipped: no answer within 1 s. The edit stands; run validate_content later.",
+            ),
+            (
+                MockReply::status(429).retry_after(30),
+                "\nCheck skipped: the platform's check queue is full (429); retry in 30 s. The edit stands; run validate_content later.",
+            ),
+            (
+                MockReply::status(404),
+                "\nNot checked: the quick check is not available on this platform yet.",
+            ),
+        ];
+        for (answer, expected) in cases {
+            let (server, sid, doc_id) = edu_server(INSERTION.0).await;
+            let mock = mock_platform(vec![answer]).await;
+            let started = std::time::Instant::now();
+
+            let reply = execute_checked(
+                &server,
+                &sid,
+                &edu_edit(INSERTION.0, INSERTION.1),
+                Some(&mock.platform()),
+                std::time::Duration::from_millis(300),
+            )
+            .await
+            .expect("the edit itself succeeds");
+
+            assert!(started.elapsed() < std::time::Duration::from_secs(3));
+            assert!(reply.starts_with("Made the changes"), "{reply}");
+            assert!(reply.ends_with(expected), "{reply}");
+            assert_eq!(read_doc_content(&server, &doc_id), INSERTION.1);
+            let paths: Vec<String> = mock.requests().into_iter().map(|r| r.path).collect();
+            assert_eq!(
+                paths,
+                ["/api/content/check"],
+                "one quick check, no fallback"
+            );
+        }
+    }
+
+    // Prevents: edits outside the course folder paying for a check, or
+    // changing their reply.
+    #[tokio::test]
+    async fn edits_outside_the_course_folder_are_not_checked() {
+        let server = build_test_server(&[("/Lenses/A.md", EDU_DOC, INSERTION.0)]).await;
+        let sid = setup_session_with_read(&server, &format!("{}-{}", RELAY_ID, EDU_DOC));
+        let mock = mock_platform(vec![MockReply::ok(check_answer())]).await;
+
+        let reply = execute_checked(
+            &server,
+            &sid,
+            &json!({"file_path": "Lens/Lenses/A.md", "old_string": INSERTION.0, "new_string": INSERTION.1}),
+            Some(&mock.platform()),
+            std::time::Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+        assert!(!reply.contains("Check"), "{reply}");
+        assert!(mock.requests().is_empty());
     }
 }

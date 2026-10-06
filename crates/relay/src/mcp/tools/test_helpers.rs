@@ -47,6 +47,14 @@ pub(crate) fn create_folder_doc(entries: &[(&str, &str)]) -> Doc {
 
 /// Create a test server with docs and a session with the doc marked as read.
 pub(crate) async fn build_test_server(entries: &[(&str, &str, &str)]) -> Arc<Server> {
+    build_test_server_in("Lens", entries).await
+}
+
+/// [`build_test_server`] with the folder named `folder` (e.g. "Lens Edu").
+pub(crate) async fn build_test_server_in(
+    folder: &str,
+    entries: &[(&str, &str, &str)],
+) -> Arc<Server> {
     let server = Server::new_for_test();
 
     let filemeta_entries: Vec<(&str, &str)> = entries
@@ -54,7 +62,7 @@ pub(crate) async fn build_test_server(entries: &[(&str, &str, &str)]) -> Arc<Ser
         .map(|(path, uuid, _)| (*path, *uuid))
         .collect();
     let folder_doc = create_folder_doc(&filemeta_entries);
-    set_folder_name(&folder_doc, "Lens");
+    set_folder_name(&folder_doc, folder);
 
     let resolver = server.doc_resolver();
     resolver.update_folder_from_doc(&folder0_id(), &folder_doc);
@@ -322,6 +330,187 @@ pub(crate) async fn build_blob_test_server_with_folder() -> Arc<Server> {
     }
 
     server
+}
+
+/// Rename folder 0 (its `folder_config.name`) and rebuild its resolver paths,
+/// for servers whose builder names the folder "Lens".
+pub(crate) fn rename_folder0(server: &Arc<Server>, name: &str) {
+    let awareness = server
+        .docs()
+        .get(&folder0_id())
+        .expect("folder doc should be loaded")
+        .awareness();
+    {
+        let guard = awareness.write().unwrap();
+        set_folder_name(&guard.doc, name);
+    }
+    server
+        .doc_resolver()
+        .update_folder(&folder0_id(), server.docs());
+}
+
+/// One scripted answer of [`mock_platform`]'s `/api/content/check`.
+#[derive(Clone)]
+pub(crate) struct MockReply {
+    status: u16,
+    body: serde_json::Value,
+    retry_after: Option<u64>,
+    delay: std::time::Duration,
+}
+
+impl MockReply {
+    pub(crate) fn ok(body: serde_json::Value) -> Self {
+        Self {
+            status: 200,
+            body,
+            retry_after: None,
+            delay: std::time::Duration::ZERO,
+        }
+    }
+
+    pub(crate) fn status(status: u16) -> Self {
+        Self {
+            status,
+            body: serde_json::json!({"detail": "mock"}),
+            ..Self::ok(serde_json::Value::Null)
+        }
+    }
+
+    pub(crate) fn retry_after(mut self, seconds: u64) -> Self {
+        self.retry_after = Some(seconds);
+        self
+    }
+
+    pub(crate) fn delay(mut self, delay: std::time::Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+}
+
+/// A request [`mock_platform`] received, with its body un-gzipped and parsed.
+#[derive(Clone, Debug)]
+pub(crate) struct MockRequest {
+    pub path: String,
+    pub key: String,
+    pub encoding: String,
+    pub body: serde_json::Value,
+}
+
+pub(crate) struct MockPlatform {
+    url: String,
+    requests: Arc<std::sync::Mutex<Vec<MockRequest>>>,
+}
+
+impl MockPlatform {
+    /// The platform config that reaches this mock, with key "sek".
+    pub(crate) fn platform(&self) -> super::validate_content::Platform {
+        super::validate_content::Platform {
+            url: self.url.clone(),
+            secret: "sek".to_string(),
+        }
+    }
+
+    pub(crate) fn requests(&self) -> Vec<MockRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+/// A stand-in for lens-platform's validator endpoints. `POST
+/// /api/content/check` answers `replies` in order (the last one repeats);
+/// `POST /api/content/validate-adhoc` answers an empty result.
+pub(crate) async fn mock_platform(replies: Vec<MockReply>) -> MockPlatform {
+    use axum::extract::Request;
+    use axum::response::IntoResponse;
+    use axum::routing::post;
+
+    async fn record(req: Request) -> MockRequest {
+        use std::io::Read;
+        let (path, key, encoding) = {
+            let header = |name: &str| {
+                req.headers()
+                    .get(name)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let path = req.uri().path().to_string();
+            (path, header("x-validation-key"), header("content-encoding"))
+        };
+        let bytes = axum::body::to_bytes(req.into_body(), 256 << 20)
+            .await
+            .unwrap();
+        let mut raw = Vec::new();
+        if encoding == "gzip" {
+            flate2::read::GzDecoder::new(&bytes[..])
+                .read_to_end(&mut raw)
+                .unwrap();
+        } else {
+            raw = bytes.to_vec();
+        }
+        MockRequest {
+            path,
+            key,
+            encoding,
+            body: serde_json::from_slice(&raw).unwrap_or(serde_json::Value::Null),
+        }
+    }
+
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let replies = Arc::new(std::sync::Mutex::new(
+        replies
+            .into_iter()
+            .collect::<std::collections::VecDeque<_>>(),
+    ));
+    let check_requests = requests.clone();
+    let adhoc_requests = requests.clone();
+    let app = axum::Router::new()
+        .route(
+            "/api/content/check",
+            post(move |req: Request| {
+                let requests = check_requests.clone();
+                let replies = replies.clone();
+                async move {
+                    let recorded = record(req).await;
+                    requests.lock().unwrap().push(recorded);
+                    let reply = {
+                        let mut queue = replies.lock().unwrap();
+                        if queue.len() > 1 {
+                            queue.pop_front()
+                        } else {
+                            queue.front().cloned()
+                        }
+                    }
+                    .expect("mock platform needs at least one reply");
+                    tokio::time::sleep(reply.delay).await;
+                    let mut response = axum::Json(reply.body).into_response();
+                    *response.status_mut() =
+                        axum::http::StatusCode::from_u16(reply.status).unwrap();
+                    if let Some(seconds) = reply.retry_after {
+                        response
+                            .headers_mut()
+                            .insert("retry-after", seconds.to_string().parse().unwrap());
+                    }
+                    response
+                }
+            }),
+        )
+        .route(
+            "/api/content/validate-adhoc",
+            post(move |req: Request| {
+                let requests = adhoc_requests.clone();
+                async move {
+                    let recorded = record(req).await;
+                    requests.lock().unwrap().push(recorded);
+                    axum::Json(serde_json::json!({"summary": {}, "issues": [], "counts": {}}))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    MockPlatform { url, requests }
 }
 
 /// Read the Y.Doc content back for verification.

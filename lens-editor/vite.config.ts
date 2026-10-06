@@ -298,6 +298,22 @@ export default defineConfig(() => {
   }
 
   /**
+   * Dev /api/content-status (the content status panel's proxy), so the panel
+   * gets the router's JSON 404 instead of Vite's SPA fallback when the
+   * setting is off. The router reads CONTENT_STATUS_ENABLED itself.
+   */
+  function contentStatusPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'content-status-api',
+      path: '/api/content-status',
+      loadApp: async () => {
+        const { createContentStatusRoutes } = await import('./server/content-status/routes.ts');
+        return createContentStatusRoutes();
+      },
+    });
+  }
+
+  /**
    * Dev-only plugin to proxy blob downloads from presigned R2 URLs server-side,
    * mirroring the prod-server /api/blob-fetch endpoint. Needed for dev:local:r2.
    */
@@ -410,7 +426,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,
