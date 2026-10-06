@@ -1016,6 +1016,13 @@ pub struct Server {
     search_tx: Option<tokio::sync::mpsc::Sender<String>>,
     search_pending: Option<Arc<DashMap<String, link_indexer::PendingEntry>>>,
     suggestions_index: Arc<SuggestionsIndex>,
+    /// Git blob id of each content doc's text, by doc id, so
+    /// `validate_content` can describe a whole folder without loading evicted
+    /// docs. An id is stored only while the doc's awareness read guard is
+    /// held, so no update lands between reading the text and storing its id,
+    /// and the doc's update callback removes it on every update. An evicted
+    /// doc keeps its entry: it cannot change until it is loaded again.
+    text_blob_ids: Arc<DashMap<String, String>>,
     suggestions_ready: Arc<std::sync::atomic::AtomicBool>,
     recent_changes_index: Arc<RecentChangesIndex>,
     recent_changes_ready: Arc<std::sync::atomic::AtomicBool>,
@@ -1178,6 +1185,7 @@ impl Server {
             search_tx: search_tx_final,
             search_pending: search_pending_final,
             suggestions_index: Arc::new(SuggestionsIndex::new()),
+            text_blob_ids: Arc::new(DashMap::new()),
             suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             recent_changes_index: Arc::new(RecentChangesIndex::new()),
             recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1462,6 +1470,11 @@ impl Server {
     /// Get the DashMap of all loaded documents.
     pub(crate) fn recent_changes_index(&self) -> &Arc<RecentChangesIndex> {
         &self.recent_changes_index
+    }
+
+    /// Content docs' Git blob ids (see the field).
+    pub(crate) fn text_blob_ids(&self) -> &Arc<DashMap<String, String>> {
+        &self.text_blob_ids
     }
 
     pub fn docs(&self) -> &Arc<DashMap<String, DocWithSyncKv>> {
@@ -3493,6 +3506,7 @@ impl Server {
             search_tx: None,
             search_pending: None,
             suggestions_index: Arc::new(SuggestionsIndex::new()),
+            text_blob_ids: Arc::new(DashMap::new()),
             suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             recent_changes_index: Arc::new(RecentChangesIndex::new()),
             recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -3530,6 +3544,7 @@ impl Server {
             search_tx: None,
             search_pending: None,
             suggestions_index: Arc::new(SuggestionsIndex::new()),
+            text_blob_ids: Arc::new(DashMap::new()),
             suggestions_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             recent_changes_index: Arc::new(RecentChangesIndex::new()),
             recent_changes_ready: Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -3672,6 +3687,7 @@ impl Server {
             let docs = self.docs.clone();
             let indexing_lease_for_callback = indexing_lease.clone();
             let doc_id_for_callback = doc_id.to_string();
+            let text_blob_ids = self.text_blob_ids.clone();
             // Capture parent awareness to keep it alive (prevents GC while subdoc exists)
             let _parent_awareness = parent_awareness_guard;
 
@@ -3680,6 +3696,11 @@ impl Server {
                     move |mut event: DocumentUpdatedEvent, suppress_derived_index: bool| {
                         // Keep parent awareness alive by referencing it in the closure
                         let _ = &_parent_awareness;
+
+                        // The text may have changed, so its blob id is stale.
+                        // Only a DashMap removal: allowed under this
+                        // awareness write lock (see the lock-order note below).
+                        text_blob_ids.remove(&doc_id_for_callback);
 
                         // Update parent's subdoc state vector index
                         if routing_channel_for_callback != doc_id_for_callback {
@@ -4021,7 +4042,8 @@ impl Server {
     }
 
     /// Scan every loaded content doc for CriticMarkup and (re)build the
-    /// suggestions index, then mark it ready. Called from `startup_reindex`
+    /// suggestions index, then mark it ready; record each text's Git blob id
+    /// on the way (`text_blob_ids`). Called from `startup_reindex`
     /// while all docs are in memory; incremental updates afterwards come from
     /// the search worker.
     pub(crate) fn rebuild_suggestions_index(&self) {
@@ -4049,6 +4071,11 @@ impl Server {
                     // Folder docs and blobs have no "contents" text
                     None => continue,
                 };
+                // Stored under the read guard, as the field requires.
+                self.text_blob_ids.insert(
+                    doc_id.clone(),
+                    crate::mcp::tools::blob::git_blob_id(content.as_bytes()),
+                );
                 let (events, excerpts) = activity_snapshot(&txn, &content);
                 (content, events, excerpts)
             };

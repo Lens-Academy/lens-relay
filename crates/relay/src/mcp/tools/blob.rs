@@ -10,6 +10,17 @@ pub fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Git's blob id for `data`, as `git hash-object` prints it: SHA-1 over
+/// `"blob <byte length>\0"` followed by the bytes. relay-git-sync commits the
+/// raw text unchanged, so this is the id the file has in the content repo,
+/// and the platform can tell from it alone whether a commit holds this text.
+pub fn git_blob_id(data: &[u8]) -> String {
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(format!("blob {}\0", data.len()).as_bytes());
+    hasher.update(data);
+    format!("{:x}", hasher.finalize())
+}
+
 /// In-memory cache of blob bodies, keyed by their store key.
 ///
 /// Store keys embed the SHA-256 of the content (`files/{doc_id}/{hash}`), so a
@@ -96,6 +107,30 @@ pub async fn read_blob(
 
     cache_put(&key, Arc::new(data.clone()));
     Ok(data)
+}
+
+/// Git blob id of the stored blob whose SHA-256 is `file_hash`. Both ids name
+/// the same immutable bytes, so the answer is kept for each SHA-256 and never
+/// goes stale; a check of the whole folder then reads no JSON blob twice.
+pub async fn stored_git_blob_id(
+    server: &Arc<Server>,
+    doc_id: &str,
+    file_hash: &str,
+) -> Result<String, String> {
+    // Far more than the folder's JSON files; only a guard against growth.
+    const MAX_ENTRIES: usize = 100_000;
+    static IDS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    let ids = IDS.get_or_init(Default::default);
+    if let Some(id) = ids.lock().unwrap_or_else(|e| e.into_inner()).get(file_hash) {
+        return Ok(id.clone());
+    }
+    let id = git_blob_id(&read_blob(server, doc_id, file_hash).await?);
+    let mut ids = ids.lock().unwrap_or_else(|e| e.into_inner());
+    if ids.len() >= MAX_ENTRIES {
+        ids.clear();
+    }
+    ids.insert(file_hash.to_string(), id.clone());
+    Ok(id)
 }
 
 /// Write a blob to the store at key `files/{doc_id}/{hash}`, returning the SHA-256 hex hash.
@@ -277,6 +312,34 @@ mod tests {
             hash,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
+    }
+
+    // Prevents: a blob id that differs from Git's for the same bytes, which
+    // would make the platform ask for (or overlay) every file on every check.
+    // Expected values are `printf '…' | git hash-object --stdin`.
+    #[test]
+    fn git_blob_id_matches_git_hash_object() {
+        let cases: [(&str, &str); 5] = [
+            ("", "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"),
+            ("hello\n", "ce013625030ba8dba906f756967f9e9ca394464a"),
+            // The length in the header counts UTF-8 bytes, not characters.
+            (
+                "café — ünïcödé ✓\n",
+                "1078fabbd368c02ce3ef72f69678569a583bbe90",
+            ),
+            // Line ends are hashed as they are (no CRLF normalising).
+            (
+                "line one\r\nline two\r\n",
+                "cf9b2a85b62bc2fd67c5ed43a1d0009df848ac8a",
+            ),
+            (
+                "---\ntitle: X\n---\n{++new++} text",
+                "2641129443d84899212def96cd690caecf54b2a1",
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(git_blob_id(text.as_bytes()), expected, "{text:?}");
+        }
     }
 
     #[test]

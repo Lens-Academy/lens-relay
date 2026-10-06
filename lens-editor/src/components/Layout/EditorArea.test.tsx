@@ -98,6 +98,10 @@ vi.mock('../BacklinksPanel', () => ({
   BacklinksPanel: () => <div data-testid="mock-backlinks-panel" className="backlinks-panel">Backlinks</div>,
 }));
 
+vi.mock('../ContentStatus/ContentStatusPanel', () => ({
+  ContentStatusPanel: () => <div data-testid="mock-content-status-panel" />,
+}));
+
 vi.mock('../DiscussionPanel', () => ({
   ConnectedDiscussionPanel: () => null,
 }));

@@ -230,24 +230,28 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }),
         json!({
             "name": "validate_content",
-            "description": "Validate the folder's course content with the platform content validator (same engine as staging.lensacademy.org/validate) and return errors/warnings. accept_drafts=false validates only human-approved content; accept_drafts=true validates as if all pending suggestions were accepted — use it to check your own drafts before handing them to a reviewer. Filter by course slug ('__orphaned__' for files no course reaches) and category ('production' blocks releases, 'wip' is draft-only); both trim the reported issues after the whole folder has been validated, so neither makes the call cheaper. The call validates every file in the folder and takes tens of seconds. Run this after making suggestions and fix production-category errors in files you touched.",
+            "description": "Check course content in the Lens Edu folder with the platform content validator (same engine as staging.lensacademy.org/validate). With file_path, checks that file and returns its errors and warnings, the errors its unsynced changes cause or fix in other files, and the pages those changes alter. Without file_path, checks the whole folder. The relay sends the platform only the files that differ from the platform's latest commit, so a call takes seconds. accept_drafts=false checks the approved text (pending suggestions left out: what learners get); accept_drafts=true checks it as if all pending suggestions were accepted — use it to check your own drafts before handing them to a reviewer. Filter by course slug ('__orphaned__' for files no course reaches) and category ('production' blocks releases, 'wip' is draft-only); both trim the reported issues only. A Markdown edit in Lens Edu already ends with a short check of the edited file; run this for the full list, and fix production-category errors in files you touched.",
             "inputSchema": {
                 "type": "object",
                 "required": ["session_id"],
                 "additionalProperties": false,
                 "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "File to check (e.g. 'Lens Edu/Lenses/Photosynthesis.md'). Omit to check the whole folder."
+                    },
                     "accept_drafts": {
                         "type": "boolean",
                         "description": "Validate with all pending suggestions applied (default false)"
                     },
                     "course": {
                         "type": "string",
-                        "description": "Report only issues in files reachable from this course slug; '__orphaned__' for files no course reaches. Trims the report; the whole folder is validated either way"
+                        "description": "Report only issues in files reachable from this course slug; '__orphaned__' for files no course reaches. Trims the report only"
                     },
                     "category": {
                         "type": "string",
                         "enum": ["production", "wip"],
-                        "description": "Report only issues of this category. Trims the report; the whole folder is validated either way"
+                        "description": "Report only issues of this category. Trims the report only"
                     },
                     "session_id": {
                         "type": "string",
@@ -354,7 +358,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "edit",
-            "description": "Edit a document by replacing old_string with new_string. Read and match the clean document text, never CriticMarkup syntax. For markdown the server decides how the edit lands: it is applied directly when it only adds text or changes text the AI itself wrote, and it becomes a pending change (shown to the user for review) when it would replace or delete human-written or unattributed text, or touches existing pending changes or comments. Either way just edit — the result tells you which happened ('Made the changes' vs 'Made pending changes'); relay that briefly and do not apologize for or explain the mechanism unless asked. Direct changes are logged for seven days and visible to the user on the editor's Recent changes page. Pass mode: 'suggest' only when the user explicitly wants a proposal to review before it lands. You may call edit repeatedly, including over the same range; pending changes are merged and superseded automatically. For JSON and HTML: exact text replacement applied directly (no pending changes; mode 'suggest' is refused for HTML). HTML comments live beside the page (see the comments tool), so edits never break them; the result warns when an edit removes text an open comment quotes, and ends with a page check listing problems the edit introduced for the editor preview. You must read the document first.",
+            "description": "Edit a document by replacing old_string with new_string. Read and match the clean document text, never CriticMarkup syntax. For markdown the server decides how the edit lands: it is applied directly when it only adds text or changes text the AI itself wrote, and it becomes a pending change (shown to the user for review) when it would replace or delete human-written or unattributed text, or touches existing pending changes or comments. Either way just edit — the result tells you which happened ('Made the changes' vs 'Made pending changes'); relay that briefly and do not apologize for or explain the mechanism unless asked. For Markdown in Lens Edu the result ends with a short validator check of the file (approved text after a direct change, drafts after a pending change); fix the errors it lists, and treat 'Check skipped' and 'Not checked' as not checked yet. Direct changes are logged for seven days and visible to the user on the editor's Recent changes page. Pass mode: 'suggest' only when the user explicitly wants a proposal to review before it lands. You may call edit repeatedly, including over the same range; pending changes are merged and superseded automatically. For JSON and HTML: exact text replacement applied directly (no pending changes; mode 'suggest' is refused for HTML). HTML comments live beside the page (see the comments tool), so edits never break them; the result warns when an edit removes text an open comment quotes, and ends with a page check listing problems the edit introduced for the editor preview. You must read the document first.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "old_string", "new_string", "session_id"],

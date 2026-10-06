@@ -208,8 +208,9 @@ pub(super) async fn read_doc_content(
 
     // Markdown: read Y.Text (existing behavior)
     server.ensure_doc_loaded(doc_id).await.ok()?;
-    let doc_ref = server.docs().get(doc_id)?;
-    let awareness = doc_ref.awareness();
+    // Arc out of the docs map first: never hold a `docs` shard across an
+    // awareness lock (AGENTS.md, "Known Issues").
+    let awareness = server.docs().get(doc_id).map(|doc| doc.awareness())?;
     let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
     let txn = guard.doc.transact();
     match txn.get_text("contents") {

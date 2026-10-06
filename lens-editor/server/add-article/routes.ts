@@ -4,7 +4,7 @@ import {
   isArticleImportMode,
   type ArticleImportMode,
 } from "../../shared/article-import-contract";
-import { requireEduEditShareToken, EDU_FOLDER } from "../edit-share-auth";
+import { requireEduShareToken, EDU_FOLDER } from "../edit-share-auth";
 import { normalizeUrlForDedup } from "./url-normalize";
 import { extractVideoInput, isYouTubeUrl } from "../add-video/video-url";
 
@@ -37,7 +37,7 @@ function validateUrl(raw: string): string | null {
 export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
   const router = new Hono();
 
-  router.use("/*", requireEduEditShareToken());
+  router.use("/*", requireEduShareToken({ minRole: "edit" }));
 
   router.post("/", async (c) => {
     const body = await c.req

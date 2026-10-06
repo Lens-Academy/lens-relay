@@ -123,6 +123,14 @@ export function verifyShareToken(token: string): ShareTokenPayload | null {
 }
 
 /**
+ * The share token a request carries: the X-Share-Token header, else an
+ * `Authorization: Bearer <token>` header.
+ */
+export function shareTokenFromHeaders(shareToken: string | undefined, authorization: string | undefined): string | null {
+  return shareToken?.trim() || authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || null;
+}
+
+/**
  * Decode token payload WITHOUT verifying signature.
  * Used by frontend to extract role for UI purposes.
  */
