@@ -292,6 +292,28 @@ describe("ArticleJobQueue — a real queue", () => {
     expect(second.summary().queued).toBe(0);
   });
 
+  // Prevents: "cancelled: true" for a job whose article is already written.
+  it("refuses to cancel a job that already succeeded and is closing its report", async () => {
+    let finishReport!: () => void;
+    const queue = new ArticleJobQueue({
+      stateFile: null,
+      processJob: async () => {},
+      reporterFactory: async (job) => ({
+        id: `r-${job.id}`,
+        persistent: false,
+        finish: () => new Promise<void>((r) => { finishReport = r; }),
+        summary: () => undefined,
+      }) as never,
+    });
+    const job = queue.add("https://example.com/a", "article");
+    await flushMicrotasks();
+    expect(queue.get(job.id)?.status).toBe("processing");
+    expect(queue.cancel(job.id)).toBe(false);
+    finishReport();
+    await flushMicrotasks();
+    expect(queue.get(job.id)?.status).toBe("done");
+  });
+
   it("lists unreviewed imports in the summary", async () => {
     const queue = new ArticleJobQueue({
       stateFile: null,

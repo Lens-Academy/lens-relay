@@ -106,6 +106,8 @@ export class ArticleJobQueue {
   private pending: string[] = [];
   private controllers: Map<string, AbortController> = new Map();
   private running = 0;
+  /** Jobs whose import succeeded and that are only closing their report. */
+  private finishing = new Set<string>();
   private durationsMs: number[] = [];
   private persistenceError: string | undefined;
   private processJob: QueueOptions["processJob"];
@@ -263,6 +265,7 @@ export class ArticleJobQueue {
     if (!job || (job.status !== "queued" && job.status !== "processing")) {
       return false;
     }
+    if (this.finishing.has(id)) return false;
     const pendingIdx = this.pending.indexOf(id);
     if (pendingIdx !== -1) this.pending.splice(pendingIdx, 1);
     // Saved before the abort settles, so a restart in between does not
@@ -422,12 +425,17 @@ export class ArticleJobQueue {
         { once: true },
       );
     });
+    // An abort during reporter creation (before the race below observes this
+    // promise) must not become an unhandled rejection: that kills Node.
+    aborted.catch(() => {});
     let reporter: ArticleReviewReporter | undefined;
     try {
       reporter = await this.reporterFactory(job);
       job.report_id = reporter.id;
       job.report_persistence = reporter.persistent ? "persisted" : "pending";
       await Promise.race([this.processJob(job, ctrl.signal, reporter), aborted]);
+      // The import is written; a cancel from here on would be a lie.
+      this.finishing.add(job.id);
       await reporter.finish("done", { finalPath: job.relay_path });
       job.status = "done";
       job.report_summary = reporter.summary();
@@ -480,6 +488,7 @@ export class ArticleJobQueue {
     } finally {
       clearTimeout(timer);
       this.controllers.delete(job.id);
+      this.finishing.delete(job.id);
     }
     job.stage = undefined;
     job.updated_at = new Date().toISOString();

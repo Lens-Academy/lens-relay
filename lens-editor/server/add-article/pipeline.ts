@@ -578,6 +578,7 @@ export async function processArticle(
   // Why the LLM review did not complete (content filter, no PASS/REJECT).
   // Set: the article is still written, flagged `review-status: unreviewed`.
   let needsCheck: string | undefined;
+  const NO_DECISION = "the review gave no PASS/REJECT";
   // A pass that fell back to another model after a refusal keeps that model
   // for the repair rounds, and provenance names the model that made the last pass.
   let reviewer = resolveArticleReviewerConfig();
@@ -760,7 +761,7 @@ export async function processArticle(
       console.warn(`[add-article] job=${job.id} importing unreviewed: ${error.message}`);
     }
     if (outcome) {
-      if (outcome.review.unconfirmed) needsCheck ??= "the review gave no PASS/REJECT";
+      if (outcome.review.unconfirmed) needsCheck ??= NO_DECISION;
       meta = outcome.meta;
       body = await reviewedBody(outcome.markdown);
       assertRequiredBodyPrefix(body, requiredBodyPrefix);
@@ -798,7 +799,12 @@ export async function processArticle(
             pendingRevertNotice,
           );
           trackReviewModel(outcome.model);
-          if (outcome.review.unconfirmed) needsCheck ??= "the review gave no PASS/REJECT";
+          if (outcome.review.unconfirmed) {
+            needsCheck ??= NO_DECISION;
+          } else if (needsCheck === NO_DECISION) {
+            // A later pass reviewed the whole article and gave a verdict.
+            needsCheck = undefined;
+          }
           await reporter.llm(
             repairRound,
             outcome.review,

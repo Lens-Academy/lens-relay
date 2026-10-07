@@ -155,6 +155,37 @@ describe("processArticle when the review cannot give a verdict", () => {
     expect(written()).toContain("review-status:");
   });
 
+  // Prevents: a stale flag after a later pass did give a verdict.
+  it("drops the no-decision flag when a later round gives a verdict", async () => {
+    reviewMocks.reviewArticle
+      .mockImplementationOnce(async (_dir, markdown, reviewMeta) => ({
+        review: { decision: "pass", reason: "", unconfirmed: true },
+        markdown: markdown + "\n\nBROKEN",
+        meta: reviewMeta,
+        reverted: [],
+        model: "opus",
+      }))
+      .mockImplementationOnce(async (_dir, markdown, reviewMeta) => ({
+        review: { decision: "pass", reason: "" },
+        markdown: markdown.replace("BROKEN", "Fixed."),
+        meta: reviewMeta,
+        reverted: [],
+        model: "opus",
+      }));
+    reviewMocks.validateArticleDraft.mockImplementation(async (_path: string, draft: string) =>
+      draft.includes("BROKEN")
+        ? { valid: false, issues: [{ severity: "error", path: "x", message: "broken" }], truncated: false, counts: { errors: 1, warnings: 0 } }
+        : valid,
+    );
+    const j = job();
+    await processArticle(j);
+    expect(reviewMocks.reviewArticle).toHaveBeenCalledTimes(2);
+    expect(written()).toContain("Fixed.");
+    expect(written()).toContain("llm-review:");
+    expect(written()).not.toContain("review-status:");
+    expect(j.review_status).toBeUndefined();
+  });
+
   it("writes no flag for a normal reviewed import", async () => {
     reviewMocks.reviewArticle.mockImplementation(async (_dir, markdown, reviewMeta) => ({
       review: { decision: "pass", reason: "" },

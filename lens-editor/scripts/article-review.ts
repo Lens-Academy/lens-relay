@@ -370,6 +370,11 @@ async function execute(): Promise<void> {
             revertNotice,
           );
           if (reviewed.model !== itemReviewer.model) itemReviewer = { ...itemReviewer, model: reviewed.model };
+          // The online importer flags such an article; this script stamps
+          // llm-review provenance, so a pass with no verdict must fail here.
+          if (reviewed.review.unconfirmed) {
+            throw new Error(`review pass ${round + 1} gave no PASS/REJECT, even after the retries`);
+          }
           metric.outcome = reviewed.review.decision;
           return reviewed;
         } catch (error) {
