@@ -25,9 +25,11 @@
 //!
 //! After a Markdown edit in the folder, the `edit` tool adds a brief check of
 //! the edited file to its reply ([`edit_check`]); it never fails the edit.
+//! `course_checks::after_write` runs it at the same time as the course checks.
 //!
 //! Config: `LENS_PLATFORM_URL` (default `https://staging.lensacademy.org`)
-//! and `ADHOC_VALIDATION_SECRET` (shared with lens-platform).
+//! and `ADHOC_VALIDATION_SECRET` (shared with lens-platform);
+//! `ENABLE_COURSE_CHECKS` turns on the course checks (`course_checks`).
 
 use super::{blob, critic_markup};
 use crate::server::Server;
@@ -90,12 +92,14 @@ pub fn platform_url_from_env() -> String {
         .unwrap_or_else(|| DEFAULT_PLATFORM_URL.to_string())
 }
 
-/// Where the platform is, and the key its validator endpoints check
-/// (`X-Validation-Key`).
+/// Where the platform is, the key its endpoints check (`X-Validation-Key`),
+/// and whether `edit` and `create` ask its course checks too (see
+/// `course_checks`).
 #[derive(Clone, Debug)]
 pub struct Platform {
     pub url: String,
     pub secret: String,
+    pub course_checks: bool,
 }
 
 impl Platform {
@@ -107,9 +111,11 @@ impl Platform {
                 "Error: validate_content is not configured on this relay (ADHOC_VALIDATION_SECRET unset)."
                     .to_string()
             })?;
+        let switch = std::env::var("ENABLE_COURSE_CHECKS").unwrap_or_default();
         Ok(Self {
             url: platform_url_from_env(),
             secret,
+            course_checks: super::course_checks::switched_on(&switch),
         })
     }
 
@@ -162,7 +168,7 @@ struct Check<'a> {
     category: Option<&'a str>,
 }
 
-enum CheckError {
+pub(super) enum CheckError {
     /// The platform has no `/api/content/check` (a deploy from before it).
     Unsupported,
     /// No connection, or the platform said it is overloaded or not ready:
@@ -189,8 +195,8 @@ impl CheckError {
         }
     }
 
-    /// How long edit checks leave the platform alone after this failure;
-    /// `None` when the next edit may ask at once.
+    /// How long the kind of check that met this failure leaves the platform
+    /// alone; `None` when the next edit may ask at once.
     fn pause(&self) -> Option<Duration> {
         match self {
             CheckError::Busy(_, retry_after) => {
@@ -309,7 +315,7 @@ pub async fn edit_check(
     let Some(platform) = platform else {
         return Some("Not checked: this relay has no ADHOC_VALIDATION_SECRET.".to_string());
     };
-    if let Some(until) = busy_until(platform) {
+    if let Some(until) = busy_until(platform, EDIT_CHECKS) {
         return Some(format!(
             "Check skipped: the platform is busy (retrying after {}). The edit stands; run validate_content later.",
             until
@@ -323,7 +329,7 @@ pub async fn edit_check(
         category: None,
     };
     let outcome = run_check(server, platform, &check).await;
-    note_outcome(platform, &outcome);
+    note_outcome(platform, EDIT_CHECKS, outcome.as_ref().err());
     Some(match outcome {
         Ok(checked) => format_brief(&checked, view),
         // No advice to run validate_content: on this platform it falls back
@@ -338,11 +344,17 @@ pub async fn edit_check(
     })
 }
 
-/// What edit checks have learnt about a platform in this process. After a
-/// timeout, a connection error, 429, 503 or 504 they leave it alone until
-/// `busy_until` ([`CheckError::pause`]): while a platform hangs, every edit
-/// would otherwise wait its whole budget, for every agent and for the length
-/// of the incident.
+/// The kind of check whose health `edit_check` keeps; `course_checks` keeps
+/// its own, under its own name.
+pub(super) const EDIT_CHECKS: &str = "edit checks";
+
+/// What one kind of check (`EDIT_CHECKS`, `course_checks`) has learnt about a
+/// platform in this process. After a timeout, a connection error, 429, 503 or
+/// 504 it leaves the platform alone until `busy_until`
+/// ([`CheckError::pause`]): while a platform hangs, every edit would otherwise
+/// wait its whole budget, for every agent and for the length of the incident.
+/// Each kind keeps its own, so a hung course-checks endpoint never skips an
+/// edit's validator check.
 /// `failure` is the last check's failure, so that the log says when checks
 /// start failing and when they work again, not once per edit. Kept per
 /// platform URL, so that tests with their own mock platforms do not share it.
@@ -352,19 +364,23 @@ struct Health {
     failure: Option<String>,
 }
 
-fn with_health<R>(platform: &Platform, f: impl FnOnce(&mut Health) -> R) -> R {
-    static HEALTH: OnceLock<Mutex<HashMap<String, Health>>> = OnceLock::new();
+fn with_health<R>(
+    platform: &Platform,
+    checks: &'static str,
+    f: impl FnOnce(&mut Health) -> R,
+) -> R {
+    static HEALTH: OnceLock<Mutex<HashMap<(String, &'static str), Health>>> = OnceLock::new();
     let mut all = HEALTH
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    f(all.entry(platform.url.clone()).or_default())
+    f(all.entry((platform.url.clone(), checks)).or_default())
 }
 
-/// The time of day (UTC) until which edit checks leave `platform` alone, or
-/// `None` when they may ask it.
-fn busy_until(platform: &Platform) -> Option<String> {
-    let left = with_health(platform, |h| h.busy_until)?
+/// The time of day (UTC) until which checks of the kind `checks` leave
+/// `platform` alone, or `None` when they may ask it.
+pub(super) fn busy_until(platform: &Platform, checks: &'static str) -> Option<String> {
+    let left = with_health(platform, checks, |h| h.busy_until)?
         .checked_duration_since(Instant::now())
         .filter(|left| !left.is_zero())?;
     let secs = (SystemTime::now() + left)
@@ -375,24 +391,26 @@ fn busy_until(platform: &Platform) -> Option<String> {
     Some(format!("{:02}:{:02}:{:02} UTC", h, m, s))
 }
 
-/// Record how an edit check ended: leave the platform alone for the pause
-/// its failure asks for, and log only a change of failure (or its end).
-fn note_outcome(platform: &Platform, outcome: &Result<Checked, CheckError>) {
-    let error = outcome.as_ref().err();
+/// Record how a check of the kind `checks` ended: leave the platform alone,
+/// for that kind only, for the pause its failure asks for, and log only a
+/// change of failure (or its end).
+pub(super) fn note_outcome(platform: &Platform, checks: &'static str, error: Option<&CheckError>) {
     let failure = error.map(CheckError::reason);
-    with_health(platform, |health| {
+    with_health(platform, checks, |health| {
         if let Some(pause) = error.and_then(CheckError::pause) {
             health.busy_until = Some(Instant::now() + pause);
         }
         if health.failure != failure {
             match &failure {
                 Some(reason) => tracing::warn!(
-                    "validate_content: edit checks against {} fail: {}",
+                    "validate_content: {} against {} fail: {}",
+                    checks,
                     platform.host(),
                     reason
                 ),
                 None => tracing::info!(
-                    "validate_content: edit checks against {} work again",
+                    "validate_content: {} against {} work again",
+                    checks,
                     platform.host()
                 ),
             }
@@ -412,7 +430,7 @@ fn resolved_path(server: &Arc<Server>, path: &str) -> String {
 }
 
 /// `Lens Edu/Lenses/X.md` → `Lenses/X.md`; `None` outside the course folder.
-fn content_path(path: &str) -> Option<&str> {
+pub(super) fn content_path(path: &str) -> Option<&str> {
     path.strip_prefix(CONTENT_FOLDER)?
         .strip_prefix('/')
         .filter(|rel| !rel.is_empty())
@@ -802,7 +820,7 @@ async fn post_check(
 /// reach it `Busy`. Serializing and compressing run on the blocking pool: the
 /// fallback body is tens of megabytes, and prod is a 2-vCPU box where
 /// blocking an async worker starves the relay's runtime (see AGENTS.md).
-async fn post_json(
+pub(super) async fn post_json(
     platform: &Platform,
     path: &str,
     body: Value,
@@ -1745,6 +1763,7 @@ mod tests {
         let platform = Platform {
             url: "http://127.0.0.1:1".to_string(),
             secret: "sek".to_string(),
+            course_checks: false,
         };
         let lens = McpAccess {
             folder_name: Some("Lens".to_string()),
@@ -1887,6 +1906,7 @@ mod tests {
         let platform = Platform {
             url: "http://127.0.0.1:1".to_string(),
             secret: "sek".to_string(),
+            course_checks: false,
         };
         for path in [
             "Lens/Lenses/A.md",
@@ -1970,7 +1990,7 @@ mod tests {
 
             let line = check().await.unwrap();
             assert!(line.starts_with(first), "{line}");
-            let left = with_health(&platform, |h| h.busy_until)
+            let left = with_health(&platform, EDIT_CHECKS, |h| h.busy_until)
                 .map(|until| until.saturating_duration_since(Instant::now()));
             let Some(pause) = pause else {
                 assert_eq!(left, None, "{first}");
@@ -1979,7 +1999,7 @@ mod tests {
                 assert_eq!(mock.requests().len(), 2);
                 // Kept so that the log names it once, not on every edit.
                 assert_eq!(
-                    with_health(&platform, |h| h.failure.clone()).as_deref(),
+                    with_health(&platform, EDIT_CHECKS, |h| h.failure.clone()).as_deref(),
                     Some("the platform refused the relay's validation key (401)")
                 );
                 continue;
@@ -2007,7 +2027,9 @@ mod tests {
             assert_eq!(mock.requests().len(), 1, "the second edit does not ask");
 
             // Once that time has passed, the next edit asks again.
-            with_health(&platform, |h| h.busy_until = Some(Instant::now()));
+            with_health(&platform, EDIT_CHECKS, |h| {
+                h.busy_until = Some(Instant::now())
+            });
             check().await.unwrap();
             assert_eq!(mock.requests().len(), 2);
         }
@@ -2240,7 +2262,7 @@ mod tests {
             "Check skipped: the relay did not finish reading the 'Lens Edu' folder within 1 s (docs may still be loading from storage); try again. The edit stands; run validate_content later."
         );
         assert!(mock.requests().is_empty());
-        assert_eq!(with_health(&platform, |h| h.busy_until), None);
+        assert_eq!(with_health(&platform, EDIT_CHECKS, |h| h.busy_until), None);
     }
 
     // Prevents: the HTTP client's own timeout reading as a connection
@@ -2378,7 +2400,7 @@ mod tests {
                 .and_then(|n| n.parse::<u64>().ok())
                 .unwrap_or_else(|| panic!("{line}"));
             assert!(seconds.contains(&said), "{line}");
-            let left = with_health(&platform, |h| h.busy_until)
+            let left = with_health(&platform, EDIT_CHECKS, |h| h.busy_until)
                 .expect("paused")
                 .saturating_duration_since(Instant::now());
             assert!(left <= Duration::from_secs(said), "{left:?} after {line}");

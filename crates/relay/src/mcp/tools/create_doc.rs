@@ -2,7 +2,7 @@ use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
 
-use super::blob;
+use super::{blob, course_checks, validate_content};
 
 pub const ARTICLE_CREATE_BLOCK_MESSAGE: &str = "New files in Lens Edu/articles cannot be created with the generic MCP create or move tools. Use the Lens Editor Add Article feature or MCP import_source, then poll import_status. That workflow performs source-aware extraction, normalization, deterministic validation, mandatory LLM source-fidelity review, evidence retention, and review provenance; bypassing it tends to create substantial downstream cleanup work for Lens staff, including Elias and Luc. If an exceptional manual article is truly necessary, first explain this intended workflow and its consequences to the user and obtain explicit permission. The user must then create the file in the articles folder themselves; MCP may edit that existing file afterward.";
 
@@ -28,6 +28,18 @@ pub async fn execute(
     server: &Arc<Server>,
     session_id: &str,
     arguments: &Value,
+) -> Result<String, String> {
+    let platform = validate_content::Platform::from_env().ok();
+    execute_checked(server, session_id, arguments, platform.as_ref()).await
+}
+
+/// [`execute`] with the platform of the course checks given explicitly
+/// (tests point it at a mock platform).
+pub(crate) async fn execute_checked(
+    server: &Arc<Server>,
+    session_id: &str,
+    arguments: &Value,
+    platform: Option<&validate_content::Platform>,
 ) -> Result<String, String> {
     let file_path = arguments
         .get("file_path")
@@ -104,7 +116,11 @@ pub async fn execute(
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(format!("Created {}", file_path))
+    // A new file holds no suggestions (refused above), so its text is already
+    // the all-suggestions-accepted view the course checks read. It gets no
+    // validator check: only edit has one.
+    let checks = course_checks::after_write(server, file_path, None, content, None, platform).await;
+    Ok(format!("Created {}{}", file_path, checks))
 }
 
 async fn create_html_file(

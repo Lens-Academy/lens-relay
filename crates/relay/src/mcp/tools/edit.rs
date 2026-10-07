@@ -4,6 +4,7 @@ use std::sync::Arc;
 use yrs::{GetString, ReadTxn, Text, Transact};
 
 use super::blob;
+use super::course_checks;
 use super::critic_markup;
 use super::edit_policy::{self, SuggestReason};
 use super::validate_content;
@@ -525,9 +526,12 @@ pub(crate) async fn execute_checked(
         }
     }
 
-    // 10. Check the edited file (course Markdown only): the approved view
-    // after a direct edit, the drafts view after a suggestion. This runs
-    // after the persist and with no lock held; it never fails the edit.
+    // 10. Check the edited file (course Markdown only). This runs after the
+    // persist and with no lock held; it never fails the edit. The validator
+    // checks the approved view after a direct edit, the drafts view after a
+    // suggestion. The course checks read the accepted text the agent matched
+    // against, before and after its replacement: one snapshot, so a
+    // collaborator typing elsewhere in the file is never checked.
     let view = match outcome {
         EditOutcome::Direct { .. } => validate_content::View::Approved,
         EditOutcome::Suggested(_) => validate_content::View::Drafts,
@@ -536,8 +540,21 @@ pub(crate) async fn execute_checked(
         .doc_resolver()
         .path_for_uuid(&doc_info.uuid)
         .unwrap_or_else(|| file_path.to_string());
-    let check =
-        validate_content::edit_check(server, &canonical_path, view, platform, check_budget).await;
+    let after = format!(
+        "{}{}{}",
+        &accepted[..match_start],
+        new_string,
+        &accepted[match_start + effective_old.len()..]
+    );
+    let checks = course_checks::after_write(
+        server,
+        &canonical_path,
+        Some(&accepted),
+        &after,
+        Some((view, check_budget)),
+        platform,
+    )
+    .await;
 
     // 11. Return success
     let reply = match outcome {
@@ -564,10 +581,7 @@ pub(crate) async fn execute_checked(
             effective_old.chars().count()
         ),
     };
-    Ok(match check {
-        Some(check) => format!("{}\n{}", reply, check),
-        None => reply,
-    })
+    Ok(format!("{}{}", reply, checks))
 }
 
 /// Up to `CONTEXT_CHARS` chars of accepted-view text on either side of
