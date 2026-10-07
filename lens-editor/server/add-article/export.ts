@@ -28,6 +28,9 @@ export function generateArticleMarkdown(
     discussionBlocks?: string;
     extraTags?: string[];
     review?: ArticleReviewProvenance;
+    /** Written as `review-status:` when the LLM review did not complete
+     *  (e.g. "unreviewed: needs a Claude check (reason)"). */
+    reviewStatus?: string;
   } = {},
 ): string {
   const lines = ["---", `title: ${yamlQuote(meta.title)}`];
@@ -45,6 +48,9 @@ export function generateArticleMarkdown(
   lines.push(meta.published ? `published: ${meta.published}` : "published:");
   lines.push(`created: ${createdDate}`);
   lines.push(`accessed: ${createdDate}`);
+  if (options.reviewStatus) {
+    lines.push(`review-status: ${yamlQuote(options.reviewStatus)}`);
+  }
   if (options.review) {
     lines.push("llm-review:");
     lines.push(`  date: ${options.review.reviewed}`);

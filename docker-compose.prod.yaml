@@ -71,6 +71,8 @@ services:
       - ${PROMOTION_REPO_HOST_DIR:-/root/lens-editor-promotion-data/repositories}:/data/lens-editor/promotion-repos
       - ${PROMOTION_SSH_DIR:-/root/lens-editor-promotion-data/ssh}:/data/lens-editor-promotion-ssh:ro
       - ${ARTICLE_REVIEW_REPORT_HOST_DIR:-/root/lens-editor-data/article-review-reports}:/data/lens-editor/article-review-reports
+      # The article import queue survives restarts and deploys (queue.json).
+      - ${ARTICLE_IMPORT_QUEUE_HOST_DIR:-/root/lens-editor-data/article-import-queue}:/data/lens-editor/article-import-queue
     environment:
       - RELAY_URL=http://relay-server:8080
       - RELAY_SERVER_TOKEN=${RELAY_SERVER_TOKEN}
@@ -97,6 +99,11 @@ services:
       - ARTICLE_REVIEW_REPORT_DIR=/data/lens-editor/article-review-reports
       - CLAUDE_REVIEW_TIMEOUT_MINUTES=${CLAUDE_REVIEW_TIMEOUT_MINUTES:-}
       - ARTICLE_JOB_TIMEOUT_MS=${ARTICLE_JOB_TIMEOUT_MS:-}
+      - ARTICLE_IMPORT_QUEUE_FILE=/data/lens-editor/article-import-queue/queue.json
+      # Imports run at once (default 3). Keep CLAUDE_SESSION_POOL_SIZE (default
+      # 3, ~300 MB per Claude process) at least as large.
+      - ARTICLE_IMPORT_WORKERS=${ARTICLE_IMPORT_WORKERS:-}
+      - CLAUDE_SESSION_POOL_SIZE=${CLAUDE_SESSION_POOL_SIZE:-}
       - ARTICLE_REVIEW_REPORT_RETENTION_DAYS=${ARTICLE_REVIEW_REPORT_RETENTION_DAYS:-90}
       - ARTICLE_REVIEW_EVIDENCE_RETENTION_DAYS=${ARTICLE_REVIEW_EVIDENCE_RETENTION_DAYS:-30}
       - PROMOTION_ENABLED=${PROMOTION_ENABLED:-false}

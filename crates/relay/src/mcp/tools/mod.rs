@@ -30,7 +30,7 @@ use y_sweet_core::share_token::McpAccess;
 /// Tools that mutate the knowledge base. Read-only MCP keys are refused these
 /// by name in [`dispatch_tool`], so every new write tool must be listed here.
 /// `import_article` is the hidden alias of `import_source`.
-pub const WRITE_TOOLS: [&str; 10] = [
+pub const WRITE_TOOLS: [&str; 11] = [
     "edit",
     "upload_link",
     "comments",
@@ -40,6 +40,7 @@ pub const WRITE_TOOLS: [&str; 10] = [
     "import_source",
     "import_article",
     "import_status",
+    "import_cancel",
     "import_attachment",
 ];
 
@@ -265,7 +266,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
     if writable {
         tools.push(json!({
             "name": "import_source",
-            "description": "Import a source that needs processing — a webpage/article URL, a PDF, or a YouTube video — into the knowledge base via the importer. Choose whether to create only an article stub, a full article, or a full article plus lens. YouTube video URLs import the video's transcript (with word timestamps) instead of an article; video jobs take several minutes and don't support stub mode. A video that is already imported is skipped with a link to its transcript; pass replace_existing:true to re-import it in place instead (same path and document; replaces the text and timings, so hand edits to that transcript are lost; videos only). Jobs run in the background (asynchronous): poll import_status until each is done/failed. Prefer this over hand-writing article files. For a plain image file use import_attachment instead (synchronous).",
+            "description": "Import a source that needs processing — a webpage/article URL, a PDF, or a YouTube video — into the knowledge base via the importer. Choose whether to create only an article stub, a full article, or a full article plus lens. YouTube video URLs import the video's transcript (with word timestamps) instead of an article; video jobs take several minutes and don't support stub mode. A video that is already imported is skipped with a link to its transcript; pass replace_existing:true to re-import it in place instead (same path and document; replaces the text and timings, so hand edits to that transcript are lost; videos only). Jobs go into one import queue that runs a few at a time (each import spawns a Claude review): a batch of dozens takes hours, and the reply gives each job's queue_position and eta_minutes plus a queue summary. Queued jobs never time out or fail for waiting, so submit the whole batch once and do not resubmit; poll import_status every few minutes until each is done/failed/skipped, and use import_cancel to take jobs out. A job that is done with review_status \"unreviewed\" was imported without a completed Claude review (the content filter blocked it, or the review gave no verdict); its article carries `review-status: \"unreviewed: needs a Claude check\"` in the frontmatter. Prefer this over hand-writing article files. For a plain image file use import_attachment instead (synchronous).",
             "inputSchema": {
                 "type": "object",
                 "required": ["urls", "import_mode", "session_id"],
@@ -293,8 +294,28 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
             }
         }));
         tools.push(json!({
+            "name": "import_cancel",
+            "description": "Remove jobs from the import queue: a queued job leaves the queue before it starts, a running one is stopped. Pass the job_ids from import_source or import_status. Returns per-id results (a job that already finished is reported, not an error) and the updated queue summary. Nothing already written to the knowledge base is deleted.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["job_ids", "session_id"],
+                "additionalProperties": false,
+                "properties": {
+                    "job_ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Ids of the jobs to remove (from import_source or import_status)"
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID returned by create_session. Required."
+                    }
+                }
+            }
+        }));
+        tools.push(json!({
             "name": "import_status",
-            "description": "Check the status of import jobs started with import_source (queued / processing / done / failed, with document paths and errors). Pass job_ids (the ids import_source returned) and/or urls to get only those jobs; without them every job on the server is listed.",
+            "description": "Check the import queue and the jobs started with import_source (queued / processing / done / skipped / cancelled / failed, with document paths and errors). The `queue` object says how many are importing and waiting, the rough minutes until the queue is through, and lists articles imported unreviewed (review_status \"unreviewed\": they need a Claude check). Queued jobs show queue_position (0 = starting now, 1 = next) and eta_minutes. Pass job_ids (the ids import_source returned) and/or urls to get only those jobs; without them every job on the server is listed.",
             "inputSchema": {
                 "type": "object",
                 "required": ["session_id"],
@@ -692,6 +713,10 @@ pub async fn dispatch_tool(
             Ok(text) => tool_success(&text),
             Err(msg) => tool_error(&msg),
         },
+        "import_cancel" => match import_source::cancel(access, arguments).await {
+            Ok(text) => tool_success(&text),
+            Err(msg) => tool_error(&msg),
+        },
         "import_attachment" => {
             match import_attachment::execute(server, session_id, access, arguments).await {
                 Ok(text) => tool_success(&text),
@@ -1018,6 +1043,10 @@ mod integration_tests {
         };
         assert!(desc("import_source").contains("import_attachment"));
         assert!(desc("import_source").contains("import_status"));
+        assert!(desc("import_source").contains("import_cancel"));
+        assert!(desc("import_source").contains("queue"));
+        assert!(desc("import_status").contains("unreviewed"));
+        assert!(desc("import_cancel").contains("queue"));
         assert!(desc("import_attachment").contains("import_source"));
         assert!(desc("import_attachment").contains("content_base64"));
         assert!(desc("import_attachment").contains("5 minutes"));

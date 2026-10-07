@@ -47,7 +47,7 @@ describe("production app (createApp)", () => {
       headers: { Authorization: `Bearer ${shareToken()}` },
     });
     expect(resp.status).toBe(200);
-    expect(await resp.json()).toEqual({ jobs: [] });
+    expect(await resp.json()).toMatchObject({ jobs: [], queue: { queued: 0, processing: 0 } });
   });
 
   it("rejects /api/add-article without auth", async () => {
