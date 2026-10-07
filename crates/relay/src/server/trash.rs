@@ -758,6 +758,9 @@ impl Server {
 
         let folders = self.purge_blocking(|s| s.folder_names_by_doc_id()).await;
         for (folder_doc_id, folder_name) in folders {
+            // Dry run: paths this folder doc would purge (names can repeat
+            // across folders, so this is per doc, not per folder name).
+            let mut assume_removed: HashSet<String> = HashSet::new();
             let handles = {
                 let id = folder_doc_id.clone();
                 self.purge_blocking(move |s| s.docs.get(&id).map(|d| (d.sync_kv(), d.awareness())))
@@ -808,6 +811,7 @@ impl Server {
                         trashed_at = entry.trashed_at.unwrap_or_default(),
                         "Trash purge dry run: would purge entry"
                     );
+                    assume_removed.insert(entry.path.clone());
                     report.would_purge.push(PurgedEntry {
                         folder_name: folder_name.clone(),
                         path: entry.path.clone(),
@@ -845,12 +849,7 @@ impl Server {
                 let folder_name = folder_name.clone();
                 // A dry run purged nothing, so count the folders that would
                 // be empty once the entries it listed are gone.
-                let assume_removed: HashSet<String> = report
-                    .would_purge
-                    .iter()
-                    .filter(|p| p.folder_name == folder_name)
-                    .map(|p| p.path.clone())
-                    .collect();
+                let assume_removed = std::mem::take(&mut assume_removed);
                 self.purge_blocking(move |_| {
                     remove_empty_trash_folders(&awareness, &folder_name, !dry_run, &assume_removed)
                 })

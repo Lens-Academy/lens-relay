@@ -443,9 +443,16 @@ impl S3Store {
             })?;
             files.extend(parsed.contents.iter().filter_map(file_info_from_list_item));
 
+            // Stop on a missing, empty or repeated token so a misbehaving
+            // endpoint cannot make this loop re-request the same page forever.
             match parsed.next_continuation_token {
-                Some(token) => continuation_token = Some(token),
-                None => break,
+                Some(token)
+                    if !token.is_empty()
+                        && continuation_token.as_deref() != Some(token.as_str()) =>
+                {
+                    continuation_token = Some(token)
+                }
+                _ => break,
             }
         }
 
