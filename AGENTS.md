@@ -284,6 +284,12 @@ resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anc
   and its in-file "Highlight recent changes" overlay. Page excerpts are built server-side
   (`crates/relay/src/recent_excerpts.rs`) on every index refresh.
 
+**Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
+`edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's
+Jev writing checks on the paragraphs it changed (`POST /api/content/course-checks`), after the
+edit's validator lines; the two run at once. Off until `ENABLE_COURSE_CHECKS` is true; the
+platform has a switch of the same name, so each side can be turned on separately.
+
 ## Git Sync
 
 Two shared folders are synced to GitHub:

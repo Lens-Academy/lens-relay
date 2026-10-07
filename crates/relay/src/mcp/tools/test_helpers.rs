@@ -325,7 +325,7 @@ pub(crate) fn rename_folder0(server: &Arc<Server>, name: &str) {
         .update_folder(&folder0_id(), server.docs());
 }
 
-/// One scripted answer of [`mock_platform`]'s `/api/content/check`.
+/// One scripted answer of a [`mock_platform`] route.
 #[derive(Clone)]
 pub(crate) struct MockReply {
     status: u16,
@@ -385,11 +385,13 @@ pub(crate) struct MockPlatform {
 }
 
 impl MockPlatform {
-    /// The platform config that reaches this mock, with key "sek".
+    /// The platform config that reaches this mock, with key "sek" and the
+    /// course checks off.
     pub(crate) fn platform(&self) -> super::validate_content::Platform {
         super::validate_content::Platform {
             url: self.url.clone(),
             secret: "sek".to_string(),
+            course_checks: false,
         }
     }
 
@@ -398,13 +400,49 @@ impl MockPlatform {
     }
 }
 
-/// A stand-in for lens-platform's validator endpoints. `POST
-/// /api/content/check` answers `replies` in order (the last one repeats);
-/// `POST /api/content/validate-adhoc` answers an empty result.
+/// A stand-in for lens-platform's content endpoints. `POST
+/// /api/content/check` answers `replies` in order (the last one repeats),
+/// `POST /api/content/course-checks` an empty summary, and `POST
+/// /api/content/validate-adhoc` an empty result.
 pub(crate) async fn mock_platform(replies: Vec<MockReply>) -> MockPlatform {
+    let no_summary = MockReply::ok(serde_json::json!({"summary": ""}));
+    mock_platform_with(replies, vec![no_summary]).await
+}
+
+/// [`mock_platform`] whose `POST /api/content/course-checks` answers
+/// `course_checks` in order (the last one repeats).
+pub(crate) async fn mock_platform_with(
+    replies: Vec<MockReply>,
+    course_checks: Vec<MockReply>,
+) -> MockPlatform {
+    let requests = Arc::default();
+    let empty_report = serde_json::json!({"summary": {}, "issues": [], "counts": {}});
+    let app = axum::Router::new()
+        .route("/api/content/check", scripted(replies, &requests))
+        .route(
+            "/api/content/course-checks",
+            scripted(course_checks, &requests),
+        )
+        .route(
+            "/api/content/validate-adhoc",
+            scripted(vec![MockReply::ok(empty_report)], &requests),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    MockPlatform { url, requests }
+}
+
+/// A route of the mock platform: it records each request in `requests`, then
+/// answers `replies` in order (the last one repeats).
+fn scripted(
+    replies: Vec<MockReply>,
+    requests: &Arc<std::sync::Mutex<Vec<MockRequest>>>,
+) -> axum::routing::MethodRouter {
     use axum::extract::Request;
     use axum::response::IntoResponse;
-    use axum::routing::post;
 
     async fn record(req: Request) -> MockRequest {
         use std::io::Read;
@@ -438,62 +476,35 @@ pub(crate) async fn mock_platform(replies: Vec<MockReply>) -> MockPlatform {
         }
     }
 
-    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let replies = Arc::new(std::sync::Mutex::new(
-        replies
-            .into_iter()
-            .collect::<std::collections::VecDeque<_>>(),
-    ));
-    let check_requests = requests.clone();
-    let adhoc_requests = requests.clone();
-    let app = axum::Router::new()
-        .route(
-            "/api/content/check",
-            post(move |req: Request| {
-                let requests = check_requests.clone();
-                let replies = replies.clone();
-                async move {
-                    let recorded = record(req).await;
-                    requests.lock().unwrap().push(recorded);
-                    let reply = {
-                        let mut queue = replies.lock().unwrap();
-                        if queue.len() > 1 {
-                            queue.pop_front()
-                        } else {
-                            queue.front().cloned()
-                        }
-                    }
-                    .expect("mock platform needs at least one reply");
-                    tokio::time::sleep(reply.delay).await;
-                    let mut response = axum::Json(reply.body).into_response();
-                    *response.status_mut() =
-                        axum::http::StatusCode::from_u16(reply.status).unwrap();
-                    if let Some(value) = reply.retry_after {
-                        response
-                            .headers_mut()
-                            .insert("retry-after", value.parse().unwrap());
-                    }
-                    response
+    let requests = requests.clone();
+    let replies = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from(
+        replies,
+    )));
+    axum::routing::post(move |req: Request| {
+        let (requests, replies) = (requests.clone(), replies.clone());
+        async move {
+            let recorded = record(req).await;
+            requests.lock().unwrap().push(recorded);
+            let reply = {
+                let mut queue = replies.lock().unwrap();
+                if queue.len() > 1 {
+                    queue.pop_front()
+                } else {
+                    queue.front().cloned()
                 }
-            }),
-        )
-        .route(
-            "/api/content/validate-adhoc",
-            post(move |req: Request| {
-                let requests = adhoc_requests.clone();
-                async move {
-                    let recorded = record(req).await;
-                    requests.lock().unwrap().push(recorded);
-                    axum::Json(serde_json::json!({"summary": {}, "issues": [], "counts": {}}))
-                }
-            }),
-        );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    MockPlatform { url, requests }
+            }
+            .expect("mock platform needs at least one reply");
+            tokio::time::sleep(reply.delay).await;
+            let mut response = axum::Json(reply.body).into_response();
+            *response.status_mut() = axum::http::StatusCode::from_u16(reply.status).unwrap();
+            if let Some(value) = reply.retry_after {
+                response
+                    .headers_mut()
+                    .insert("retry-after", value.parse().unwrap());
+            }
+            response
+        }
+    })
 }
 
 /// Read the Y.Doc content back for verification.
