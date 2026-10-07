@@ -237,6 +237,7 @@ mod tests {
             "glob",
             "grep",
             "import_attachment",
+            "import_cancel",
             "import_source",
             "import_status",
             "validate_content",

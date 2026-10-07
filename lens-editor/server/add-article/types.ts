@@ -53,6 +53,21 @@ export interface ArticleJob {
     llm_findings_unrepaired: number;
   };
   retry_of?: string;
+  /** Set when the article was written without a completed LLM review (the
+   *  content filter blocked it, or it never answered PASS/REJECT). The
+   *  article carries `review-status: "unreviewed: needs a Claude check"`. */
+  review_status?: "unreviewed";
+  /** Why the review did not complete. */
+  review_note?: string;
+  /** When a worker picked the job up (the job deadline runs from here). */
+  started_at?: string;
+  /** Set on a job that was queued or running when the editor restarted and
+   *  was put back in the queue from the saved queue file. */
+  requeued_after_restart?: boolean;
+  /** How many restarts in a row interrupted this job. */
+  restart_requeues?: number;
+  /** import_cancel was called while the job ran (kept across a restart). */
+  cancel_requested?: boolean;
   /** What the importer should write. */
   importMode: ArticleImportMode;
   /** Set when the URL is a single YouTube video — classified once at enqueue so

@@ -55,8 +55,13 @@ export async function spawnClaude(
   argsOverride?: string[],
   signal?: AbortSignal,
   envOverride?: NodeJS.ProcessEnv,
+  options: {
+    /** How long to wait for a pool slot before failing. Default: the pool's
+     *  leaked-slot backstop. Infinity: wait as long as `signal` allows. */
+    acquireTimeoutMs?: number;
+  } = {},
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  await claudeSessionPool.acquire(undefined, signal);
+  await claudeSessionPool.acquire(options.acquireTimeoutMs, signal);
   // Cancellation while queued is final: do not turn a newly available slot
   // into a Claude process after the owning job has already failed.
   signal?.throwIfAborted();
