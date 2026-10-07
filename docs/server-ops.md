@@ -228,6 +228,53 @@ best effort: the next content re-index of that doc replaces it.
 image content block and `.svg` attachments as their XML text; `create`/`edit`
 refuse image paths.
 
+### Backups
+
+`scripts/r2-backup.sh` runs hourly from root's crontab and snapshots
+`lens-relay-storage` into a separate bucket, `lens-relay-backups` (location
+hint WEUR, Standard storage class, private):
+
+```
+0 * * * * nice -n 10 /root/lens-relay/scripts/r2-backup.sh >> /var/log/r2-backup.log 2>&1
+```
+
+| Tier | Prefix | Made | Kept |
+|------|--------|------|------|
+| Hourly | `hourly/YYYY-MM-DD-HH/` | every hour | 24 |
+| Daily | `daily/YYYY-MM-DD/` | first hourly of the day | 22 days |
+| Weekly | `weekly/YYYY-WW/` | once a week, from the oldest daily | ~26 weeks |
+
+Every snapshot is a full copy of the bucket. Source and destination use the
+same rclone remote (`r2bk`), so each copy is a server-side `CopyObject`
+inside Cloudflare and no data passes through prod; a run takes a few minutes
+at low priority. Expiry goes by the date in the snapshot name, not object
+age. A failed copy is removed so the next run starts clean. Cost is mostly
+requests: ~8k objects per snapshot is ~6M Class A operations a month (about
+$23); storage is ~30 GB.
+
+- **Credentials:** R2 API token `relay-backup-job` (Object Read & Write on
+  `lens-relay-storage` and `lens-relay-backups` only), configured as the
+  rclone remote `r2bk` in `/root/.config/rclone/rclone.conf`. The relay's own
+  key (`/root/auth.env`) cannot see the backup bucket.
+- **`r2bk` needs `no_head = true`.** Ubuntu's rclone (1.60) checks each upload
+  with `HEAD ?versionId=…`, which R2 answers with `501 Not Implemented` even
+  though the upload succeeded. `no_head` skips that check; Content-MD5 still
+  verifies the bytes.
+- **History:** until October 2026 snapshots were downloaded to
+  `/root/backups/r2` on prod, which filled the disk. Those snapshots were
+  uploaded into the bucket under their original names, so they expire on
+  their original schedule.
+
+**Restoring.** Copying back writes into the live bucket, and the relay keeps
+loaded documents in memory and saves them over the store, so make sure the
+document is not loaded (or stop the relay) before copying:
+
+```bash
+rclone lsf --dirs-only r2bk:lens-relay-backups/hourly                 # list snapshots
+rclone copy r2bk:lens-relay-backups/hourly/<snapshot>/<doc> /tmp/restore/<doc>   # inspect first
+rclone copy r2bk:lens-relay-backups/hourly/<snapshot>/<doc> r2bk:lens-relay-storage/<doc>
+```
+
 ## Key Files
 
 | File | Purpose |
