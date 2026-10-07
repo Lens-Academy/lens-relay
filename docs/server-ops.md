@@ -211,7 +211,17 @@ the search, suggestions, recent-changes, resolver and backlink index
 entries. Empty folders left under `_trash/` are removed. Each purge logs
 `Purged trashed entry` at info with the path, doc id and `trashed_at`; a
 failing entry is logged, counted and retried next sweep; a doc with an open
-connection is deferred. Purge is final on the relay (git history in the
+connection is deferred.
+
+**Dry run (default).** `[server] trash_purge_dry_run` (also
+`RELAY_SERVER_TRASH_PURGE_DRY_RUN`) defaults to `true`: the sweep then only
+logs `Trash purge dry run: would purge entry` (and `would stamp` / `would
+remove empty trash folder`) and changes nothing. Read those lines, then set
+it to `false` to let the sweep delete. Each store call of the sweep is
+bounded (60 s), and its lock-taking steps run on the blocking pool so a
+contended lock can never park a tokio worker.
+
+Purge is final on the relay (git history in the
 synced repo is the backstop, since relay-git-sync exports `_trash/` like any
 other folder and drops the file once purged).
 

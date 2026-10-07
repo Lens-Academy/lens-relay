@@ -1038,6 +1038,9 @@ pub struct Server {
     /// Purge window for `<folder>/_trash/` entries; `None` disables the
     /// hourly sweep (see `server/trash.rs`).
     trash_retention: Option<Duration>,
+    /// The hourly sweep only logs what it would purge (default on; see
+    /// `[server] trash_purge_dry_run`).
+    trash_purge_dry_run: bool,
 }
 
 /// Holds channel receivers for background workers.
@@ -1196,6 +1199,7 @@ impl Server {
             last_successful_persist: Arc::new(AtomicU64::new(0)),
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: trash::retention_from_days(10.0),
+            trash_purge_dry_run: true,
         };
 
         let receivers = WorkerReceivers {
@@ -3517,6 +3521,7 @@ impl Server {
             last_successful_persist: Arc::new(AtomicU64::new(0)),
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: None,
+            trash_purge_dry_run: true,
         }
     }
 
@@ -3555,6 +3560,7 @@ impl Server {
             last_successful_persist: Arc::new(AtomicU64::new(0)),
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: None,
+            trash_purge_dry_run: true,
         });
         server
     }
