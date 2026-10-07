@@ -205,7 +205,13 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
       if (!job) return { id, cancelled: false, error: "No such job" };
       const before = job.status;
       if (!queue.cancel(id)) {
-        return { id, cancelled: false, error: `Already finished (${job.status})` };
+        return {
+          id,
+          cancelled: false,
+          error: job.status === "processing"
+            ? "Already imported; the job is closing its report"
+            : `Already finished (${job.status})`,
+        };
       }
       return { id, cancelled: true, was: before };
     });
