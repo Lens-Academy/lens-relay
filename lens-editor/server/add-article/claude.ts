@@ -308,10 +308,14 @@ export function claudeSessionId(cliStdout: string): string | undefined {
   }
 }
 
-/** Article review passes wait for a Claude slot as long as the job's own
- *  deadline allows: the import queue already bounds how many run at once,
- *  and the job deadline only starts once the queue starts the job. */
-const ARTICLE_POOL_WAIT = { acquireTimeoutMs: Infinity };
+/** Article review passes inside an import job wait for a Claude slot as
+ *  long as the job's own deadline (its signal) allows: the import queue
+ *  bounds how many run at once, and the deadline starts once the queue
+ *  starts the job. Without a signal (batch scripts, evals) the pool's
+ *  leaked-slot backstop stays. */
+function articlePoolWait(signal?: AbortSignal): { acquireTimeoutMs?: number } {
+  return signal ? { acquireTimeoutMs: Infinity } : {};
+}
 
 export function buildVerifyArgs(
   workDir: string,
@@ -371,7 +375,7 @@ export async function runArticleVerify(
     ),
     signal,
     selectorEnv,
-    ARTICLE_POOL_WAIT,
+    articlePoolWait(signal),
   );
 }
 
@@ -504,7 +508,7 @@ export async function reviewArticle(
           ),
           signal,
           selectorEnv,
-          ARTICLE_POOL_WAIT,
+          articlePoolWait(signal),
         );
     } finally {
       if (privateValidationDir) {
@@ -569,12 +573,21 @@ export async function reviewArticle(
           buildDecisionOnlyArgs(sessionId, model),
           signal,
           undefined,
-          ARTICLE_POOL_WAIT,
+          articlePoolWait(signal),
         );
-        if (decision.exitCode === 0 && !isUnparseableClaudeReview(decision)) {
-          // Same work, now with a verdict: parse the short reply instead.
-          result = decision;
-          decided = true;
+        // Only a reply that actually parses counts; an error result (budget,
+        // refusal) or another summary leaves the pass unconfirmed.
+        if (decision.exitCode === 0) {
+          try {
+            parseReviewStatus(decision.stdout);
+            result = decision;
+            decided = true;
+          } catch {
+            console.warn(
+              `[add-article] decision-only retry gave no PASS/REJECT either: ` +
+              JSON.stringify(claudeReplyTail(decision.stdout, 200)),
+            );
+          }
         }
       } catch (error) {
         if (signal?.aborted) throw error;

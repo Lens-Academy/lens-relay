@@ -315,7 +315,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "import_status",
-            "description": "Check the import queue and the jobs started with import_source (queued / processing / done / skipped / cancelled / failed, with document paths and errors). The `queue` object says how many are importing and waiting, the rough minutes until the queue is through, and lists articles imported unreviewed (review_status \"unreviewed\": they need a Claude check). Queued jobs show queue_position (1 = next) and eta_minutes. Pass job_ids (the ids import_source returned) and/or urls to get only those jobs; without them every job on the server is listed.",
+            "description": "Check the import queue and the jobs started with import_source (queued / processing / done / skipped / cancelled / failed, with document paths and errors). The `queue` object says how many are importing and waiting, the rough minutes until the queue is through, and lists articles imported unreviewed (review_status \"unreviewed\": they need a Claude check). Queued jobs show queue_position (0 = starting now, 1 = next) and eta_minutes. Pass job_ids (the ids import_source returned) and/or urls to get only those jobs; without them every job on the server is listed.",
             "inputSchema": {
                 "type": "object",
                 "required": ["session_id"],

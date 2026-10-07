@@ -64,6 +64,8 @@ export interface ArticleJob {
   /** Set on a job that was queued or running when the editor restarted and
    *  was put back in the queue from the saved queue file. */
   requeued_after_restart?: boolean;
+  /** import_cancel was called while the job ran (kept across a restart). */
+  cancel_requested?: boolean;
   /** What the importer should write. */
   importMode: ArticleImportMode;
   /** Set when the URL is a single YouTube video — classified once at enqueue so

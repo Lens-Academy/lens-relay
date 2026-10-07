@@ -241,7 +241,7 @@ describe("reviewArticle refusal fallback", () => {
       .mockResolvedValueOnce({ exitCode: 0, stdout: summary("s-sonnet"), stderr: "" })
       .mockResolvedValueOnce({ exitCode: 0, stdout: summary("s-opus"), stderr: "" })
       .mockResolvedValueOnce({ exitCode: 0, stdout: passStdout, stderr: "" });
-    const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
+    const outcome = await reviewArticle(workDir, article, {} as never, [], 1, new AbortController().signal);
     expect(outcome.review).toEqual({ decision: "pass", reason: "" });
     expect(outcome.model).toBe("opus");
     const calls = spawnMocks.spawnClaude.mock.calls;
@@ -251,9 +251,17 @@ describe("reviewArticle refusal fallback", () => {
     expect(argValue(decisionArgs, "--model")).toBe("opus");
     expect(argValue(decisionArgs, "--tools")).toBe("");
     expect(argValue(decisionArgs, "--max-turns")).toBe("1");
-    // Every article pass waits for a pool slot without the 30-min backstop.
+    // Inside a job (a signal), every pass waits for a pool slot without the
+    // 30-min backstop; the job deadline bounds it.
     for (const call of calls) expect(call[5]).toEqual({ acquireTimeoutMs: Infinity });
     warn.mockRestore();
+  });
+
+  // Prevents: a batch script without a signal hanging forever on a leaked slot.
+  it("keeps the pool backstop when there is no job signal", async () => {
+    spawnMocks.spawnClaude.mockResolvedValue({ exitCode: 0, stdout: passStdout, stderr: "" });
+    await reviewArticle(workDir, article, {} as never, [], 1);
+    expect(spawnMocks.spawnClaude.mock.calls[0][5]).toEqual({});
   });
 
   it("honours a REJECT given in the decision-only retry", async () => {
@@ -285,6 +293,22 @@ describe("reviewArticle refusal fallback", () => {
     const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
     expect(outcome.review).toEqual({ decision: "pass", reason: "", unconfirmed: true });
     expect(spawnMocks.spawnClaude).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
+  });
+
+  it("leaves the pass unconfirmed when the decision-only retry errors out", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const summary = JSON.stringify({ is_error: false, session_id: "s1", result: "Done." });
+    spawnMocks.spawnClaude
+      .mockResolvedValueOnce({ exitCode: 0, stdout: summary, stderr: "" })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: summary, stderr: "" })
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify({ is_error: true, result: "Error: budget exceeded" }),
+        stderr: "",
+      });
+    const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
+    expect(outcome.review.unconfirmed).toBe(true);
     warn.mockRestore();
   });
 

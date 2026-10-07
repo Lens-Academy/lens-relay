@@ -183,6 +183,8 @@ export class ArticleJobQueue {
   }
 
   status(): ArticleJob[] {
+    // The list now outlives deploys, so it is pruned on reads too.
+    evictFinishedJobs(this.jobs, FINISHED_JOB_TTL_MS);
     return Array.from(this.jobs.values());
   }
 
@@ -192,12 +194,19 @@ export class ArticleJobQueue {
     return Math.max(1, Math.round(mean / 60_000));
   }
 
-  /** The job with its queue position and a rough ETA. */
+  /** Workers the (deferred) drain will fill without waiting for a job. */
+  private freeWorkers(): number {
+    return Math.max(0, this.workers - this.running);
+  }
+
+  /** The job with its queue position and a rough ETA. Position 0 = starting
+   *  now (a worker is free; drain runs on the next tick), 1 = next to start. */
   view(job: ArticleJob): ArticleJobView {
     const avg = this.avgJobMinutes();
     if (job.status === "queued") {
-      const position = this.pending.indexOf(job.id) + 1;
-      if (position > 0) {
+      const index = this.pending.indexOf(job.id);
+      if (index !== -1) {
+        const position = Math.max(0, index + 1 - this.freeWorkers());
         return {
           ...job,
           queue_position: position,
@@ -214,8 +223,10 @@ export class ArticleJobQueue {
 
   summary(): ArticleQueueSummary {
     const avg = this.avgJobMinutes();
-    const queued = this.pending.length;
-    const processing = this.running;
+    // Jobs a free worker is about to start count as importing, not waiting.
+    const starting = Math.min(this.pending.length, this.freeWorkers());
+    const queued = this.pending.length - starting;
+    const processing = this.running + starting;
     const toEmpty = queued + processing === 0
       ? 0
       : (Math.ceil(queued / this.workers) + (processing > 0 ? 1 : 0)) * avg;
@@ -227,7 +238,7 @@ export class ArticleJobQueue {
         "Queued jobs do not time out or fail for waiting; they start in order. " +
         "Poll import_status every few minutes; import_cancel removes a job.";
     const unreviewed = this.status()
-      .filter((job) => job.review_status === "unreviewed")
+      .filter((job) => job.status === "done" && job.review_status === "unreviewed")
       .map((job) => ({ id: job.id, url: job.url, relay_path: job.relay_path, reason: job.review_note }));
     return {
       workers: this.workers,
@@ -254,6 +265,9 @@ export class ArticleJobQueue {
     }
     const pendingIdx = this.pending.indexOf(id);
     if (pendingIdx !== -1) this.pending.splice(pendingIdx, 1);
+    // Saved before the abort settles, so a restart in between does not
+    // requeue a job that was cancelled while running.
+    job.cancel_requested = true;
     this.controllers.get(id)?.abort(new Error(CANCELLED));
     // A queued job has no controller yet — settle it directly.
     if (job.status === "queued") {
@@ -261,7 +275,6 @@ export class ArticleJobQueue {
       job.error = CANCELLED;
       job.stage = undefined;
       job.updated_at = new Date().toISOString();
-      this.persist();
       void this.reporterFactory(job).then(async (reporter) => {
         job.report_id = reporter.id;
         await reporter.finish("failed", { error: job.error });
@@ -272,6 +285,7 @@ export class ArticleJobQueue {
         job.error = `${job.error}; report persistence failed: ${error}`;
       });
     }
+    this.persist();
     return true;
   }
 
@@ -287,7 +301,9 @@ export class ArticleJobQueue {
       this.running++;
       void this.runJob(job).finally(() => {
         this.running--;
-        if (job.started_at && (job.status === "done" || job.status === "failed")) {
+        // Only completed imports: a fetch that fails in 2 s says nothing
+        // about how long the next real import takes.
+        if (job.started_at && job.status === "done") {
           this.durationsMs.push(Date.now() - Date.parse(job.started_at));
           if (this.durationsMs.length > DURATION_SAMPLE) this.durationsMs.shift();
         }
@@ -352,7 +368,12 @@ export class ArticleJobQueue {
     const interrupted: ArticleJob[] = [];
     for (const job of snapshot.jobs) {
       if (!job || typeof job.id !== "string" || typeof job.url !== "string") continue;
-      if (job.status === "processing") {
+      if (job.status === "processing" && job.cancel_requested) {
+        // Cancelled while running; the restart came before it settled.
+        job.status = "cancelled";
+        job.error = CANCELLED;
+        job.stage = undefined;
+      } else if (job.status === "processing") {
         job.status = "queued";
         job.stage = undefined;
         job.started_at = undefined;

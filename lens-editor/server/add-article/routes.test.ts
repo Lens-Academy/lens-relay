@@ -475,10 +475,11 @@ describe("the import queue through the routes", () => {
     });
     expect(resp.status).toBe(200);
     const data = await resp.json();
-    expect(data.results.map((r: { queue_position?: number }) => r.queue_position)).toEqual([1, 2, 3, 4]);
+    // One worker: the first starts on the next tick, the rest wait.
+    expect(data.results.map((r: { queue_position?: number }) => r.queue_position)).toEqual([0, 1, 2, 3]);
     expect(data.results.every((r: { eta_minutes?: number }) => typeof r.eta_minutes === "number")).toBe(true);
-    expect(data.queue).toMatchObject({ workers: 1, queued: 4 });
-    expect(data.queue.message).toMatch(/4 waiting in the queue/);
+    expect(data.queue).toMatchObject({ workers: 1, processing: 1, queued: 3 });
+    expect(data.queue.message).toMatch(/1 importing now, 3 waiting in the queue/);
   });
 
   it("shows positions and the summary in status, and cancels in bulk", async () => {

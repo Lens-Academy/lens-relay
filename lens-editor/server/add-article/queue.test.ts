@@ -260,6 +260,38 @@ describe("ArticleJobQueue — a real queue", () => {
     expect(queue.get(a.id)?.status).toBe("processing");
   });
 
+  // Prevents: fast failures dragging the ETA down to minutes for hours of work.
+  it("bases the ETA on completed imports only", async () => {
+    let n = 0;
+    const queue = new ArticleJobQueue({
+      workers: 1,
+      stateFile: null,
+      processJob: async () => { if (++n <= 3) throw new Error("fetch failed"); },
+    });
+    for (const x of ["a", "b", "c"]) queue.add(`https://example.com/${x}`, "article");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(queue.summary().avg_job_minutes).toBe(8);
+  });
+
+  it("does not requeue a job cancelled while running when the editor restarts", async () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "article-queue-")), "queue.json");
+    const first = new ArticleJobQueue({
+      workers: 1,
+      stateFile: file,
+      // Ignores the abort, like a stage that never checks its signal.
+      processJob: () => new Promise<void>(() => {}),
+      reporterFactory: () => new Promise(() => {}),
+    });
+    const job = first.add("https://example.com/a", "article");
+    await flushMicrotasks();
+    expect(first.get(job.id)?.status).toBe("processing");
+    first.cancel(job.id);
+    // Restart before the cancelled run settled.
+    const second = new ArticleJobQueue({ workers: 1, stateFile: file, processJob: vi.fn(async () => {}) });
+    expect(second.get(job.id)?.status).toBe("cancelled");
+    expect(second.summary().queued).toBe(0);
+  });
+
   it("lists unreviewed imports in the summary", async () => {
     const queue = new ArticleJobQueue({
       stateFile: null,
@@ -271,6 +303,7 @@ describe("ArticleJobQueue — a real queue", () => {
     });
     const job = queue.add("https://example.com/x", "article");
     await flushMicrotasks();
+    expect(queue.get(job.id)?.status).toBe("done");
     expect(queue.summary().unreviewed).toEqual([{
       id: job.id,
       url: "https://example.com/x",
