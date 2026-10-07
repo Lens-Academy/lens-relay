@@ -7,6 +7,8 @@ const spawnMocks = vi.hoisted(() => ({ spawnClaude: vi.fn() }));
 vi.mock("../add-video/claude", () => spawnMocks);
 
 import {
+  ArticleReviewRejectedError,
+  ArticleReviewUnavailableError,
   claudeReplyTail,
   isClaudeRefusal,
   isUnparseableClaudeReview,
@@ -55,6 +57,18 @@ describe("isClaudeRefusal", () => {
   it("recognises a usage-policy refusal in CLI JSON", () => {
     expect(isClaudeRefusal(refusalStdout)).toBe(true);
     expect(isClaudeRefusal(JSON.stringify({ stop_reason: "refusal", result: "" }))).toBe(true);
+  });
+
+  it("recognises the API output content filter", () => {
+    expect(isClaudeRefusal(JSON.stringify({
+      is_error: true,
+      result: "API Error: Output blocked by content filtering policy",
+    }))).toBe(true);
+    // Only as an error result, not when a successful review quotes it.
+    expect(isClaudeRefusal(JSON.stringify({
+      is_error: false,
+      result: "The source mentions an output blocked by content filtering policy. PASS",
+    }))).toBe(false);
   });
 
   it("does not treat other failures as refusals", () => {
@@ -133,10 +147,15 @@ describe("reviewArticle refusal fallback", () => {
     expect(spawnMocks.spawnClaude).toHaveBeenCalledOnce();
   });
 
-  it("fails when the fallback model also refuses", async () => {
+  // Prevents: a refusal on both models failing the import; it must surface
+  // as "review unavailable" so the pipeline imports the article flagged.
+  it("reports the review unavailable when the fallback model also refuses", async () => {
     spawnMocks.spawnClaude.mockResolvedValue({ exitCode: 1, stdout: refusalStdout, stderr: "" });
-    await expect(reviewArticle(workDir, article, {} as never, [], 1))
-      .rejects.toThrow(/can't help with this/);
+    const error = await reviewArticle(workDir, article, {} as never, [], 1).catch((e) => e);
+    expect(error).toBeInstanceOf(ArticleReviewUnavailableError);
+    expect(error.kind).toBe("refused");
+    expect(error.message).toMatch(/can't help with this/);
+    // A refusal gets no decision-only retry.
     expect(spawnMocks.spawnClaude).toHaveBeenCalledTimes(2);
   });
 
@@ -213,16 +232,116 @@ describe("reviewArticle refusal fallback", () => {
     warn.mockRestore();
   });
 
-  it("names the model and the reply tail when the fallback is unparseable too", async () => {
+  // Prevents: a reviewer that did its work but closed with a summary
+  // failing the import (8 of ready-30's sources, 4-6 Oct).
+  it("asks the same session for the decision line alone after the opus retry", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const summary = (id: string) => JSON.stringify({ is_error: false, session_id: id, result: "Done with the edits." });
+    spawnMocks.spawnClaude
+      .mockResolvedValueOnce({ exitCode: 0, stdout: summary("s-sonnet"), stderr: "" })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: summary("s-opus"), stderr: "" })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: passStdout, stderr: "" });
+    const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
+    expect(outcome.review).toEqual({ decision: "pass", reason: "" });
+    expect(outcome.model).toBe("opus");
+    const calls = spawnMocks.spawnClaude.mock.calls;
+    expect(calls).toHaveLength(3);
+    const decisionArgs = calls[2][2] as string[];
+    expect(argValue(decisionArgs, "--resume")).toBe("s-opus");
+    expect(argValue(decisionArgs, "--model")).toBe("opus");
+    expect(argValue(decisionArgs, "--tools")).toBe("");
+    expect(argValue(decisionArgs, "--max-turns")).toBe("1");
+    // Every article pass waits for a pool slot without the 30-min backstop.
+    for (const call of calls) expect(call[5]).toEqual({ acquireTimeoutMs: Infinity });
+    warn.mockRestore();
+  });
+
+  it("honours a REJECT given in the decision-only retry", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const summary = JSON.stringify({ is_error: false, session_id: "s1", result: "Done." });
+    spawnMocks.spawnClaude
+      .mockResolvedValueOnce({ exitCode: 0, stdout: summary, stderr: "" })
+      .mockResolvedValueOnce({ exitCode: 0, stdout: summary, stderr: "" })
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify({ is_error: false, result: "REJECT: only an abstract" }),
+        stderr: "",
+      });
+    const error = await reviewArticle(workDir, article, {} as never, [], 1).catch((e) => e);
+    expect(error).toBeInstanceOf(ArticleReviewRejectedError);
+    expect(error.reason).toBe("only an abstract");
+    warn.mockRestore();
+  });
+
+  // Prevents: an import failing because no reply ever said PASS/REJECT; the
+  // pass's edits are kept and the article is flagged instead.
+  it("returns an unconfirmed pass when no retry yields a decision", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    spawnMocks.spawnClaude.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: false, session_id: "s1", result: "Done with the edits." }),
+      stderr: "",
+    });
+    const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
+    expect(outcome.review).toEqual({ decision: "pass", reason: "", unconfirmed: true });
+    expect(spawnMocks.spawnClaude).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
+  });
+
+  it("skips the decision-only retry when the reply carries no session id", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     spawnMocks.spawnClaude.mockResolvedValue({
       exitCode: 0,
       stdout: JSON.stringify({ is_error: false, result: "Done with the edits." }),
       stderr: "",
     });
-    await expect(reviewArticle(workDir, article, {} as never, [], 1))
-      .rejects.toThrow(/exactly PASS or REJECT.*opus; reply tail: "Done with the edits\."/);
+    const outcome = await reviewArticle(workDir, article, {} as never, [], 1);
+    expect(outcome.review.unconfirmed).toBe(true);
     expect(spawnMocks.spawnClaude).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  // Prevents: an unconfirmed base-selection pass writing an article whose
+  // base was never chosen; it must fall back to the unreviewed import.
+  it("reports no-decision when an unconfirmed base-selection pass chose no base", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    spawnMocks.spawnClaude.mockResolvedValue({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: false, result: "Done with the edits." }),
+      stderr: "",
+    });
+    const error = await reviewArticle(
+      workDir,
+      article,
+      {} as never,
+      [],
+      0,
+      undefined,
+      undefined,
+      { rendered: article, unrendered: article, validation: { rendered: [], unrendered: [] } },
+    ).catch((e) => e);
+    expect(error).toBeInstanceOf(ArticleReviewUnavailableError);
+    expect(error.kind).toBe("no-decision");
+    warn.mockRestore();
+  });
+
+  // Prevents: the API's output filter (exit 1, "Output blocked by content
+  // filtering policy") being treated as an ordinary crash with no fallback.
+  it("treats the API content filter as a refusal: opus retry, then unavailable", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const blocked = JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: null,
+      result: "API Error: Output blocked by content filtering policy",
+    });
+    spawnMocks.spawnClaude.mockResolvedValue({ exitCode: 1, stdout: blocked, stderr: "" });
+    const error = await reviewArticle(workDir, article, {} as never, [], 1).catch((e) => e);
+    expect(error).toBeInstanceOf(ArticleReviewUnavailableError);
+    expect(error.flagReason).toBe("Claude's content filter blocked the review");
+    const models = spawnMocks.spawnClaude.mock.calls.map((call) => argValue(call[2], "--model"));
+    expect(models).toEqual(["sonnet", "opus"]);
     warn.mockRestore();
   });
 });

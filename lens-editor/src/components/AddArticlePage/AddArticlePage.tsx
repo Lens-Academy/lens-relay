@@ -22,6 +22,10 @@ interface ArticleJob {
   video?: unknown;
   /** The job re-imports a video over its existing transcript. */
   replaceExisting?: boolean;
+  /** Queued jobs: 1 = next to start. */
+  queue_position?: number;
+  /** Set when the article was written without a completed review. */
+  review_status?: "unreviewed";
   created_at: string;
   updated_at: string;
 }
@@ -41,6 +45,7 @@ const STATUS_COLORS: Record<ArticleJob["status"], string> = {
   done: "#4ec96e",
   // Already in the library: a no-op, not an error. Deliberately not red.
   skipped: "#8d97b5",
+  cancelled: "#8d97b5",
   failed: "#e04e4e",
 };
 
@@ -479,6 +484,16 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                 }}
               >
                 {job.status}
+                {job.status === "queued" && job.queue_position !== undefined && (
+                  <span style={{ fontWeight: 400 }}> #{job.queue_position}</span>
+                )}
+                {job.status === "done" && job.review_status === "unreviewed" && (
+                  <span
+                    style={{ display: "block", color: "#f0ad4e", fontWeight: 400, textTransform: "none" }}
+                  >
+                    unreviewed: needs a Claude check
+                  </span>
+                )}
                 {job.status === "processing" && job.stage && (
                   <span
                     style={{
@@ -528,7 +543,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                   <div
                     style={{
                       fontSize: 12,
-                      color: job.status === "skipped" ? "#9aa3bf" : "#e04e4e",
+                      color: job.status === "skipped" || job.status === "cancelled" ? "#9aa3bf" : "#e04e4e",
                     }}
                   >
                     {job.status === "skipped" ? (
@@ -604,7 +619,7 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                   Re-import
                 </button>
               )}
-              {job.status === "failed" && (
+              {(job.status === "failed" || job.status === "cancelled") && (
                 <button
                   onClick={() => retryJob(job.id)}
                   title="Queue this URL again"

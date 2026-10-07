@@ -4,6 +4,15 @@ import { createAddArticleRoutes, EDU_FOLDER } from "./routes";
 import { signShareToken } from "../share-token";
 import type { ShareTokenPayload } from "../share-token";
 
+/** The queue's read-side methods the routes call besides add/status/findActive. */
+function queueViewMocks() {
+  return {
+    get: vi.fn(() => undefined),
+    view: vi.fn((job: object) => job),
+    summary: vi.fn(() => ({ workers: 3, processing: 0, queued: 0, message: "The import queue is empty.", unreviewed: [] })),
+  };
+}
+
 const OTHER_FOLDER = "fbd5eb54-73cc-41b0-ac28-2b93d3b4244e";
 
 function makeToken(overrides: Partial<ShareTokenPayload> = {}): string {
@@ -22,7 +31,7 @@ describe("POST /api/add-article", () => {
     add: ReturnType<typeof vi.fn>;
     status: ReturnType<typeof vi.fn>;
     findActive: ReturnType<typeof vi.fn>;
-  };
+  } & ReturnType<typeof queueViewMocks>;
 
   beforeEach(() => {
     let counter = 0;
@@ -34,6 +43,7 @@ describe("POST /api/add-article", () => {
       })),
       status: vi.fn(() => []),
       findActive: vi.fn(() => undefined),
+      ...queueViewMocks(),
     };
     app = new Hono();
     app.route("/api/add-article", createAddArticleRoutes(mockQueue as never));
@@ -302,6 +312,7 @@ describe("GET /api/add-article/status", () => {
       status: vi.fn(() => [
         { id: "j1", url: "https://example.com", status: "done" },
       ]),
+      ...queueViewMocks(),
     };
     const app = new Hono();
     app.route("/api/add-article", createAddArticleRoutes(mockQueue as never));
@@ -325,7 +336,7 @@ describe("GET /api/add-article/status filters", () => {
     const app = new Hono();
     app.route(
       "/api/add-article",
-      createAddArticleRoutes({ add: vi.fn(), findActive: vi.fn(), status: vi.fn(() => jobs) } as never),
+      createAddArticleRoutes({ add: vi.fn(), findActive: vi.fn(), status: vi.fn(() => jobs), ...queueViewMocks() } as never),
     );
     const resp = await app.request(`/api/add-article/status${query}`, {
       headers: { Authorization: `Bearer ${makeToken()}` },
@@ -433,5 +444,93 @@ describe("DELETE /api/add-article/:id and POST /:id/retry", () => {
   it("requires auth like every other route", async () => {
     const res = await app.request("/api/add-article/job1", { method: "DELETE" });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("the import queue through the routes", () => {
+  // A real queue, one worker, jobs that never finish: everything after the
+  // first waits in the queue.
+  async function setup() {
+    const { ArticleJobQueue } = await import("./queue");
+    const queue = new ArticleJobQueue({
+      workers: 1,
+      stateFile: null,
+      processJob: () => new Promise<void>(() => {}),
+    });
+    const app = new Hono();
+    app.route("/api/add-article", createAddArticleRoutes(queue));
+    const auth = { Authorization: `Bearer ${makeToken()}`, "Content-Type": "application/json" };
+    return { queue, app, auth };
+  }
+
+  // Prevents: an agent seeing "queued" for 60 jobs with no hint that they
+  // will take hours, and resubmitting or giving up.
+  it("answers a submission with each job's position and the queue's size", async () => {
+    const { app, auth } = await setup();
+    const urls = ["a", "b", "c", "d"].map((x) => `https://example.com/${x}`);
+    const resp = await app.request("/api/add-article", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ urls, importMode: "article" }),
+    });
+    expect(resp.status).toBe(200);
+    const data = await resp.json();
+    expect(data.results.map((r: { queue_position?: number }) => r.queue_position)).toEqual([1, 2, 3, 4]);
+    expect(data.results.every((r: { eta_minutes?: number }) => typeof r.eta_minutes === "number")).toBe(true);
+    expect(data.queue).toMatchObject({ workers: 1, queued: 4 });
+    expect(data.queue.message).toMatch(/4 waiting in the queue/);
+  });
+
+  it("shows positions and the summary in status, and cancels in bulk", async () => {
+    const { app, auth } = await setup();
+    const submit = await app.request("/api/add-article", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ urls: ["https://example.com/a", "https://example.com/b", "https://example.com/c"], importMode: "article" }),
+    });
+    const ids: string[] = (await submit.json()).results.map((r: { id: string }) => r.id);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const status = await (await app.request("/api/add-article/status", { headers: auth })).json();
+    expect(status.queue).toMatchObject({ processing: 1, queued: 2 });
+    const byId = new Map(status.jobs.map((j: { id: string }) => [j.id, j]));
+    expect(byId.get(ids[0])).toMatchObject({ status: "processing" });
+    expect(byId.get(ids[2])).toMatchObject({ status: "queued", queue_position: 2 });
+
+    const cancel = await app.request("/api/add-article/cancel", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ ids: [ids[1], "nope"] }),
+    });
+    expect(cancel.status).toBe(200);
+    const cancelled = await cancel.json();
+    expect(cancelled.results).toEqual([
+      { id: ids[1], cancelled: true, was: "queued" },
+      { id: "nope", cancelled: false, error: "No such job" },
+    ]);
+    expect(cancelled.queue.queued).toBe(1);
+
+    const again = await (await app.request("/api/add-article/cancel", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ ids: [ids[1]] }),
+    })).json();
+    expect(again.results[0]).toEqual({ id: ids[1], cancelled: false, error: "Already finished (cancelled)" });
+
+    // A cancelled job can be queued again.
+    const retry = await app.request(`/api/add-article/${ids[1]}/retry`, { method: "POST", headers: auth });
+    expect(retry.status).toBe(200);
+  });
+
+  it("rejects a cancel without ids", async () => {
+    const { app, auth } = await setup();
+    for (const body of [{}, { ids: [] }, { ids: [1] }]) {
+      const resp = await app.request("/api/add-article/cancel", {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify(body),
+      });
+      expect(resp.status).toBe(400);
+    }
   });
 });

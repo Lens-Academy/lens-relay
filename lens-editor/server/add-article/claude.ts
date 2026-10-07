@@ -28,6 +28,8 @@ export const MAX_REVIEW_BUDGET_USD = 60;
  *  on the article: AI-safety papers about dangerous-capability evals trip it.
  *  Retry the pass once on this model before failing the import. */
 export const REFUSAL_FALLBACK_MODEL = "opus";
+/** The decision-only retry answers one line from a resumed session. */
+export const DECISION_TIMEOUT_MS = 3 * 60_000;
 
 export function scaledReviewBudgetUsd(chars: number): number {
   const scaled = Math.ceil(Math.max(chars, 1) / 50_000) * REVIEW_BUDGET_USD_PER_50K_CHARS;
@@ -35,9 +37,12 @@ export function scaledReviewBudgetUsd(chars: number): number {
 }
 
 /** True when the Claude CLI ended because the model refused (usage-policy
- *  block), e.g. result "API Error: Sonnet 5 can't help with this. ...". */
+ *  block), e.g. result "API Error: Sonnet 5 can't help with this. ...", or
+ *  the API's output filter stopped it ("API Error: Output blocked by content
+ *  filtering policy", exit 1; Ryan & Deci 2000, Kasser 2016 and others,
+ *  4-6 Oct). */
 export function isClaudeRefusal(cliOutput: string): boolean {
-  const refusal = /can(?:'|\u2019)t help with this|anthropic\.com\/legal\/aup/i;
+  const refusal = /can(?:'|\u2019)t help with this|anthropic\.com\/legal\/aup|output blocked by content filtering policy/i;
   try {
     const outer = JSON.parse(cliOutput) as { result?: unknown; stop_reason?: unknown; is_error?: unknown };
     if (outer.stop_reason === "refusal") return true;
@@ -106,6 +111,38 @@ type ReviewDecision = "pass" | "reject";
 export interface DirectArticleReview {
   decision: ReviewDecision;
   reason: string;
+  /** Set when no reply ever carried a PASS/REJECT line, even after the
+   *  retries: the pass's edits are kept, but nobody confirmed the article,
+   *  so it is imported flagged for a Claude check. */
+  unconfirmed?: true;
+}
+
+/** Frontmatter value marking an article the importer wrote without a
+ *  completed LLM review. */
+export const UNREVIEWED_STATUS = "unreviewed: needs a Claude check";
+
+/** The LLM review could not give a verdict (the content filter blocked it,
+ *  or it never answered PASS/REJECT and its edits cannot be used). Not a
+ *  verdict on the article: the pipeline imports it flagged unreviewed. */
+export class ArticleReviewUnavailableError extends Error {
+  constructor(
+    public readonly kind: "refused" | "no-decision",
+    detail: string,
+  ) {
+    super(
+      kind === "refused"
+        ? `Claude's content filter blocked the review: ${detail}`
+        : `The review gave no PASS/REJECT: ${detail}`,
+    );
+    this.name = "ArticleReviewUnavailableError";
+  }
+
+  /** Short reason for the frontmatter flag and import_status. */
+  get flagReason(): string {
+    return this.kind === "refused"
+      ? "Claude's content filter blocked the review"
+      : "the review gave no PASS/REJECT";
+  }
 }
 
 export interface ReviewOutcome {
@@ -230,6 +267,52 @@ REJECT: concise reason
 Use PASS only after article.md is complete and source-faithful. Large or extensive repairs are never a reason to reject. Use REJECT only when the source is inaccessible or not an article, substantive content is unavailable, or article boundaries cannot be reasonably determined.`;
 }
 
+/** The prompt of the decision-only retry: the reviewer already did its work
+ *  in the resumed session and only forgot the closing line. */
+export const DECISION_ONLY_PROMPT = `Your review reply did not end with the required decision line, so the importer could not read it. Do not edit or re-check anything. Based on the review you just finished, reply with exactly one line and nothing else:
+PASS
+or
+REJECT: concise reason`;
+
+/** Decision-only retry: resume the reviewer's own session (its edits are
+ *  already on disk) and ask for the PASS/REJECT line alone. No tools, one
+ *  turn, a small budget: this is minutes and cents, not another review. */
+export function buildDecisionOnlyArgs(sessionId: string, model: string): string[] {
+  return [
+    "-p",
+    DECISION_ONLY_PROMPT,
+    "--resume",
+    sessionId,
+    "--tools",
+    "",
+    "--disallowedTools",
+    "Agent,Bash,Edit,Write",
+    "--max-turns",
+    "1",
+    "--max-budget-usd",
+    "2",
+    "--model",
+    model,
+    "--output-format",
+    "json",
+  ];
+}
+
+/** The CLI session id from a `--output-format json` reply, if any. */
+export function claudeSessionId(cliStdout: string): string | undefined {
+  try {
+    const id = (JSON.parse(cliStdout) as { session_id?: unknown }).session_id;
+    return typeof id === "string" && /^[A-Za-z0-9-]+$/.test(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Article review passes wait for a Claude slot as long as the job's own
+ *  deadline allows: the import queue already bounds how many run at once,
+ *  and the job deadline only starts once the queue starts the job. */
+const ARTICLE_POOL_WAIT = { acquireTimeoutMs: Infinity };
+
 export function buildVerifyArgs(
   workDir: string,
   repairRound = 0,
@@ -288,6 +371,7 @@ export async function runArticleVerify(
     ),
     signal,
     selectorEnv,
+    ARTICLE_POOL_WAIT,
   );
 }
 
@@ -420,6 +504,7 @@ export async function reviewArticle(
           ),
           signal,
           selectorEnv,
+          ARTICLE_POOL_WAIT,
         );
     } finally {
       if (privateValidationDir) {
@@ -429,25 +514,79 @@ export async function reviewArticle(
   };
   let model = reviewer.model;
   let result = await runPass(model);
+  const refusedResult = (r: typeof result) => {
+    const onStdout = isClaudeRefusal(r.stdout);
+    const onStderr = !onStdout && r.exitCode !== 0 && isClaudeRefusal(r.stderr);
+    return { refused: onStdout || onStderr, onStderr };
+  };
   // The CLI can report a policy block with exit 0 (is_error in the JSON),
   // and on either stream: check both, whatever the exit code. A reply that
   // ends in neither PASS nor REJECT (an in-band decline) gets the same retry.
   // The retried pass starts from the same input as this one: in a repair
   // round that is the previous pass's article, so earlier work is kept.
   if (reviewer.provider === "claude" && model !== REFUSAL_FALLBACK_MODEL) {
-    const refusedOnStdout = isClaudeRefusal(result.stdout);
-    const refusedOnStderr = !refusedOnStdout && result.exitCode !== 0 && isClaudeRefusal(result.stderr);
-    const refused = refusedOnStdout || refusedOnStderr;
+    const { refused, onStderr } = refusedResult(result);
     const unparseable = !refused && isUnparseableClaudeReview(result);
     if (refused || unparseable) {
       signal?.throwIfAborted();
       console.warn(
         `[add-article] review pass ${repairRound + 1} on ${model} ` +
         `${refused ? "was refused" : "ended without PASS/REJECT"}; retrying on ${REFUSAL_FALLBACK_MODEL}. ` +
-        `Reply tail: ${JSON.stringify(claudeReplyTail(refusedOnStderr ? result.stderr : result.stdout))}`,
+        `Reply tail: ${JSON.stringify(claudeReplyTail(onStderr ? result.stderr : result.stdout))}`,
       );
       model = REFUSAL_FALLBACK_MODEL;
       result = await runPass(model);
+    }
+  }
+  if (reviewer.provider === "claude") {
+    // Still refused after the fallback model: the content filter, not the
+    // article. No further retry; the pipeline imports it flagged.
+    const { refused, onStderr } = refusedResult(result);
+    if (refused) {
+      throw new ArticleReviewUnavailableError(
+        "refused",
+        `${model}; ${JSON.stringify(claudeReplyTail(onStderr ? result.stderr : result.stdout, 200))}`,
+      );
+    }
+  }
+  let unconfirmed = false;
+  if (reviewer.provider === "claude" && isUnparseableClaudeReview(result)) {
+    // The reviewer did the work but closed with a summary instead of the
+    // decision line. Ask the same session for the line alone.
+    signal?.throwIfAborted();
+    const tail = claudeReplyTail(result.stdout);
+    const sessionId = claudeSessionId(result.stdout);
+    let decided = false;
+    if (sessionId) {
+      console.warn(
+        `[add-article] review pass ${repairRound + 1} on ${model} ended without PASS/REJECT; ` +
+        `asking the same session for the decision line only. Reply tail: ${JSON.stringify(tail)}`,
+      );
+      try {
+        const decision = await spawnClaude(
+          workDir,
+          DECISION_TIMEOUT_MS,
+          buildDecisionOnlyArgs(sessionId, model),
+          signal,
+          undefined,
+          ARTICLE_POOL_WAIT,
+        );
+        if (decision.exitCode === 0 && !isUnparseableClaudeReview(decision)) {
+          // Same work, now with a verdict: parse the short reply instead.
+          result = decision;
+          decided = true;
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        console.warn(`[add-article] decision-only retry failed: ${error}`);
+      }
+    }
+    if (!decided) {
+      console.warn(
+        `[add-article] review pass ${repairRound + 1} on ${model}: no PASS/REJECT after the retries; ` +
+        "keeping its edits and flagging the article unreviewed",
+      );
+      unconfirmed = true;
     }
   }
   if (result.exitCode !== 0) {
@@ -457,18 +596,31 @@ export async function reviewArticle(
     );
   }
   let review: DirectArticleReview;
-  try {
-    review = reviewer.provider === "codex"
-      ? parsePlainReviewStatus(result.stdout)
-      : parseReviewStatus(result.stdout);
-  } catch (error) {
-    const tail = reviewer.provider === "codex"
-      ? result.stdout.trim().slice(-400)
-      : claudeReplyTail(result.stdout);
-    throw new Error(`${(error as Error).message} (${model}; reply tail: ${JSON.stringify(tail)})`);
+  if (unconfirmed) {
+    review = { decision: "pass", reason: "", unconfirmed: true };
+  } else {
+    try {
+      review = reviewer.provider === "codex"
+        ? parsePlainReviewStatus(result.stdout)
+        : parseReviewStatus(result.stdout);
+    } catch (error) {
+      const tail = reviewer.provider === "codex"
+        ? result.stdout.trim().slice(-400)
+        : claudeReplyTail(result.stdout);
+      throw new Error(`${(error as Error).message} (${model}; reply tail: ${JSON.stringify(tail)})`);
+    }
   }
   if (review.decision === "reject") throw new ArticleReviewRejectedError(review.reason);
-  const selectedBase = requiresBaseSelection ? await readBaseSelection(workDir) : undefined;
+  let selectedBase: ArticleReviewBase | undefined;
+  if (requiresBaseSelection) {
+    try {
+      selectedBase = await readBaseSelection(workDir);
+    } catch (error) {
+      // An unconfirmed pass that never picked a base has nothing usable.
+      if (unconfirmed) throw new ArticleReviewUnavailableError("no-decision", String(error));
+      throw error;
+    }
+  }
   if (requiresBaseSelection) {
     const [
       rendered,

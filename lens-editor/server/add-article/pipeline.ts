@@ -8,7 +8,9 @@ import { hostRemoteImages, newImageBudget, type HostImagesResult } from "./image
 import { attachmentPublicUrl } from "../attachments/public-url";
 import {
   ArticleReviewRejectedError,
+  ArticleReviewUnavailableError,
   MAX_REVIEW_ROUNDS,
+  UNREVIEWED_STATUS,
   REVIEW_VERSION,
   buildRevertNotice,
   resolveArticleReviewerConfig,
@@ -573,6 +575,9 @@ export async function processArticle(
   // warnings and errors are review evidence; hybrid errors are repairable by
   // Claude for up to three review rounds, while final validation is the hard gate.
   let reviewed = false;
+  // Why the LLM review did not complete (content filter, no PASS/REJECT).
+  // Set: the article is still written, flagged `review-status: unreviewed`.
+  let needsCheck: string | undefined;
   // A pass that fell back to another model after a refusal keeps that model
   // for the repair rounds, and provenance names the model that made the last pass.
   let reviewer = resolveArticleReviewerConfig();
@@ -675,7 +680,7 @@ export async function processArticle(
     await setStage("source-review");
     let reviewStarted = Date.now();
     let metaBeforeReview = meta;
-    let outcome: ReviewOutcome;
+    let outcome: ReviewOutcome | undefined;
     try {
       outcome = await reviewArticle(
         workDir,
@@ -724,6 +729,11 @@ export async function processArticle(
     } catch (error) {
       if (signal?.aborted) throw error;
       if (reviewCandidates) {
+        // No base was chosen: what gets written (if anything) is the
+        // rendered candidate, the single-candidate default.
+        if (error instanceof ArticleReviewUnavailableError && candidateNormalizationChanges) {
+          await reportNormalizationChanges(reporter, candidateNormalizationChanges.rendered);
+        }
         await reporter.validation("initial", validation, initialValidationDuration);
         await reporter.originalDocument(draft);
       }
@@ -743,98 +753,111 @@ export async function processArticle(
           validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
         );
       }
-      throw error;
+      if (!(error instanceof ArticleReviewUnavailableError)) throw error;
+      // The review could not give a verdict; that is no verdict on the
+      // article. Write the deterministic draft, flagged for a Claude check.
+      needsCheck = error.flagReason;
+      console.warn(`[add-article] job=${job.id} importing unreviewed: ${error.message}`);
     }
-    meta = outcome.meta;
-    body = await reviewedBody(outcome.markdown);
-    assertRequiredBodyPrefix(body, requiredBodyPrefix);
-    filenameBase = generateArticleFilenameBase(meta.author, meta.title);
-    draft = generateArticleMarkdown(meta, body, createdDate);
-
-    await setStage("validating-repair");
-    validationStarted = Date.now();
-    validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
-    await reporter.validation("post-review", validation, Date.now() - validationStarted);
-    // A pass whose protected-content edits were reverted must be followed by a
-    // confirmation pass: an LLM checks that the reverted article is still
-    // coherent (the reviewer may have made compensating edits elsewhere) and
-    // can REJECT if it cannot stand. The notice rides on the repair loop.
-    let pendingRevertNotice = outcome.reverted.length > 0 ? buildRevertNotice(outcome.reverted) : "";
-    for (
-      let repairRound = 1;
-      (!validation.valid || pendingRevertNotice) && repairRound < MAX_REVIEW_ROUNDS;
-      repairRound++
-    ) {
-      await setStage(repairRound === 1 ? "repair-review" : `repair-review-${repairRound + 1}`);
-      reviewStarted = Date.now();
-      const metaBeforeRepair = meta;
-      const draftBeforeRepair = draft;
-      try {
-        outcome = await reviewArticle(
-          workDir,
-          draft,
-          meta,
-          validation.issues,
-          repairRound,
-          signal,
-          reviewer,
-          undefined,
-          pendingRevertNotice,
-        );
-        trackReviewModel(outcome.model);
-        await reporter.llm(
-          repairRound,
-          outcome.review,
-          validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
-          metaBeforeRepair,
-          outcome.meta,
-          draftBeforeRepair,
-          outcome.markdown,
-          Date.now() - reviewStarted,
-        );
-        if (outcome.reverted.length > 0) {
-          await reporter.protectedReverts(repairRound, outcome.reverted);
-          pendingRevertNotice = buildRevertNotice(outcome.reverted);
-        } else {
-          pendingRevertNotice = "";
-        }
-      } catch (error) {
-        if (signal?.aborted) throw error;
-        if (error instanceof ArticleReviewRejectedError) {
-          await reporter.llmRejected(
-            repairRound,
-            { decision: "reject", reason: error.reason },
-            validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
-            metaBeforeRepair,
-            Date.now() - reviewStarted,
-          );
-        } else {
-          await reporter.llmFailure(
-            repairRound,
-            error,
-            Date.now() - reviewStarted,
-            validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
-          );
-        }
-        throw error;
-      }
+    if (outcome) {
+      if (outcome.review.unconfirmed) needsCheck ??= "the review gave no PASS/REJECT";
       meta = outcome.meta;
       body = await reviewedBody(outcome.markdown);
       assertRequiredBodyPrefix(body, requiredBodyPrefix);
       filenameBase = generateArticleFilenameBase(meta.author, meta.title);
       draft = generateArticleMarkdown(meta, body, createdDate);
+
+      await setStage("validating-repair");
       validationStarted = Date.now();
       validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
-      await reporter.validation(
-        repairRound === 1 ? "post-repair-review" : `post-repair-review-${repairRound + 1}`,
-        validation,
-        Date.now() - validationStarted,
-      );
-    }
-    if (pendingRevertNotice) {
-      throw new Error(
-        "protected-content edits were reverted in the final review round and no round remained to confirm the result",
-      );
+      await reporter.validation("post-review", validation, Date.now() - validationStarted);
+      // A pass whose protected-content edits were reverted must be followed by a
+      // confirmation pass: an LLM checks that the reverted article is still
+      // coherent (the reviewer may have made compensating edits elsewhere) and
+      // can REJECT if it cannot stand. The notice rides on the repair loop.
+      let pendingRevertNotice = outcome.reverted.length > 0 ? buildRevertNotice(outcome.reverted) : "";
+      for (
+        let repairRound = 1;
+        (!validation.valid || pendingRevertNotice) && repairRound < MAX_REVIEW_ROUNDS;
+        repairRound++
+      ) {
+        await setStage(repairRound === 1 ? "repair-review" : `repair-review-${repairRound + 1}`);
+        reviewStarted = Date.now();
+        const metaBeforeRepair = meta;
+        const draftBeforeRepair = draft;
+        try {
+          outcome = await reviewArticle(
+            workDir,
+            draft,
+            meta,
+            validation.issues,
+            repairRound,
+            signal,
+            reviewer,
+            undefined,
+            pendingRevertNotice,
+          );
+          trackReviewModel(outcome.model);
+          if (outcome.review.unconfirmed) needsCheck ??= "the review gave no PASS/REJECT";
+          await reporter.llm(
+            repairRound,
+            outcome.review,
+            validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+            metaBeforeRepair,
+            outcome.meta,
+            draftBeforeRepair,
+            outcome.markdown,
+            Date.now() - reviewStarted,
+          );
+          if (outcome.reverted.length > 0) {
+            await reporter.protectedReverts(repairRound, outcome.reverted);
+            pendingRevertNotice = buildRevertNotice(outcome.reverted);
+          } else {
+            pendingRevertNotice = "";
+          }
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          if (error instanceof ArticleReviewRejectedError) {
+            await reporter.llmRejected(
+              repairRound,
+              { decision: "reject", reason: error.reason },
+              validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+              metaBeforeRepair,
+              Date.now() - reviewStarted,
+            );
+          } else {
+            await reporter.llmFailure(
+              repairRound,
+              error,
+              Date.now() - reviewStarted,
+              validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+            );
+          }
+          if (!(error instanceof ArticleReviewUnavailableError)) throw error;
+          // Keep the last reviewed draft; nobody confirmed what follows.
+          needsCheck ??= error.flagReason;
+          pendingRevertNotice = "";
+          console.warn(`[add-article] job=${job.id} repair round ${repairRound + 1} unavailable, importing flagged: ${error.message}`);
+          break;
+        }
+        meta = outcome.meta;
+        body = await reviewedBody(outcome.markdown);
+        assertRequiredBodyPrefix(body, requiredBodyPrefix);
+        filenameBase = generateArticleFilenameBase(meta.author, meta.title);
+        draft = generateArticleMarkdown(meta, body, createdDate);
+        validationStarted = Date.now();
+        validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
+        await reporter.validation(
+          repairRound === 1 ? "post-repair-review" : `post-repair-review-${repairRound + 1}`,
+          validation,
+          Date.now() - validationStarted,
+        );
+      }
+      if (pendingRevertNotice) {
+        throw new Error(
+          "protected-content edits were reverted in the final review round and no round remained to confirm the result",
+        );
+      }
     }
     // A miscounted table row must not discard a whole paper. When the review
     // rounds are spent and table rows are the only errors left, make the
@@ -858,7 +881,11 @@ export async function processArticle(
       }
     }
     assertArticleValid(validation);
-    reviewed = true;
+    reviewed = !needsCheck;
+    if (needsCheck) {
+      job.review_status = "unreviewed";
+      job.review_note = needsCheck;
+    }
     job.title = meta.title;
   }
 
@@ -867,6 +894,7 @@ export async function processArticle(
   //    serialized so two concurrent imports can't pick the same name and
   //    overwrite each other.
   await setStage("writing");
+  const reviewStatus = needsCheck ? `${UNREVIEWED_STATUS} (${needsCheck})` : undefined;
   const candidatePaths = articleFilenameCandidates(
     filenameBase,
     meta.source_url || job.url,
@@ -911,7 +939,13 @@ export async function processArticle(
               sourceKind: evidence.manifest.source_kind,
             },
           })
-        : promotedBase;
+        : reviewStatus
+          ? generateArticleMarkdown(meta, body, parsed.created || createdDate, {
+              discussionBlocks: parsed.discussionBlocks,
+              extraTags: parsed.extraTags,
+              reviewStatus,
+            })
+          : promotedBase;
       const finalValidationStarted = Date.now();
       const finalValidation = await validateArticleDraft(refreshed.path.replace(/^\//, ""), promotedMd, { signal });
       await reporter.validation("final", finalValidation, Date.now() - finalValidationStarted);
@@ -939,8 +973,10 @@ export async function processArticle(
             sourceKind: evidence.manifest.source_kind,
           },
         })
-      : baseMarkdown;
-    if (reviewed) {
+      : reviewStatus
+        ? generateArticleMarkdown(meta, body, createdDate, { reviewStatus })
+        : baseMarkdown;
+    if (reviewed || reviewStatus) {
       const finalValidationStarted = Date.now();
       const finalValidation = await validateArticleDraft(chosen.replace(`${topFolder}/`, ""), markdown, { signal });
       await reporter.validation("final", finalValidation, Date.now() - finalValidationStarted);
