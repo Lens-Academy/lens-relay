@@ -381,6 +381,38 @@ describe("ArticleJobQueue — survives a restart", () => {
     expect(saved.jobs.map((j: { status: string }) => j.status).sort()).toEqual(["cancelled", "done", "done"]);
   });
 
+  // Prevents: an import that crashes the editor being retried forever at
+  // the front of the queue, blocking every other job.
+  it("fails a job interrupted by restarts three times instead of requeueing it", () => {
+    const file = tmpFile();
+    const now = new Date().toISOString();
+    const job = { id: "j1", url: "https://example.com/a", status: "processing", importMode: "article", created_at: now, updated_at: now };
+    fs.writeFileSync(file, JSON.stringify({ version: 1, saved_at: now, pending: [], jobs: [job], durations_ms: [] }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const never = () => new Promise<void>(() => {});
+    for (let restart = 1; restart <= 2; restart++) {
+      const q = new ArticleJobQueue({ stateFile: file, processJob: never });
+      expect(q.get("j1")).toMatchObject({ status: "queued", restart_requeues: restart });
+      // Simulate it running again when the next restart comes.
+      const saved = JSON.parse(fs.readFileSync(file, "utf-8"));
+      saved.jobs[0].status = "processing";
+      fs.writeFileSync(file, JSON.stringify(saved));
+    }
+    const last = new ArticleJobQueue({ stateFile: file, processJob: never });
+    expect(last.get("j1")?.status).toBe("failed");
+    expect(last.get("j1")?.error).toMatch(/restarted while this import ran/);
+    error.mockRestore();
+  });
+
+  it("skips malformed jobs in a saved queue instead of crashing", () => {
+    const file = tmpFile();
+    fs.writeFileSync(file, JSON.stringify({ version: 1, saved_at: "x", pending: ["j1"], jobs: [{ id: "j1", url: "https://example.com/a", status: "processing" }], durations_ms: [] }));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const queue = new ArticleJobQueue({ stateFile: file, processJob: async () => {} });
+    expect(queue.status()).toEqual([]);
+    log.mockRestore();
+  });
+
   it("moves an unreadable queue file aside and starts empty, saying so", () => {
     const file = tmpFile();
     fs.writeFileSync(file, "{not json");

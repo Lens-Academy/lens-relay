@@ -64,6 +64,8 @@ export interface ArticleJob {
   /** Set on a job that was queued or running when the editor restarted and
    *  was put back in the queue from the saved queue file. */
   requeued_after_restart?: boolean;
+  /** How many restarts in a row interrupted this job. */
+  restart_requeues?: number;
   /** import_cancel was called while the job ran (kept across a restart). */
   cancel_requested?: boolean;
   /** What the importer should write. */

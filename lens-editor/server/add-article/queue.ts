@@ -41,6 +41,9 @@ const DEFAULT_JOB_MINUTES = 8;
 /** Recent job durations kept for the ETA. */
 const DURATION_SAMPLE = 20;
 const CANCELLED = "Cancelled by user";
+/** A job running during this many restarts in a row is failed, not requeued:
+ *  it may be what crashes the editor, and it would block the queue. */
+const MAX_RESTART_REQUEUES = 2;
 
 interface QueueOptions {
   processJob: (job: ArticleJob, signal: AbortSignal, reporter: ArticleReviewReporter) => Promise<void>;
@@ -121,9 +124,10 @@ export class ArticleJobQueue {
       ? async (job) => createMemoryArticleReviewReporter(job)
       : createArticleReviewReporter);
     this.workers = options.workers ?? articleImportWorkers();
+    // Tests never touch a real queue file, even with the variable exported.
     this.stateFile = options.stateFile !== undefined
       ? options.stateFile
-      : process.env.ARTICLE_IMPORT_QUEUE_FILE || null;
+      : process.env.NODE_ENV === "test" ? null : process.env.ARTICLE_IMPORT_QUEUE_FILE || null;
     if (this.stateFile) {
       this.restore();
       if (this.pending.length > 0) void Promise.resolve().then(() => this.drain());
@@ -370,17 +374,27 @@ export class ArticleJobQueue {
     }
     const interrupted: ArticleJob[] = [];
     for (const job of snapshot.jobs) {
-      if (!job || typeof job.id !== "string" || typeof job.url !== "string") continue;
+      if (
+        !job || typeof job.id !== "string" || typeof job.url !== "string" ||
+        typeof job.created_at !== "string" || typeof job.updated_at !== "string"
+      ) continue;
       if (job.status === "processing" && job.cancel_requested) {
         // Cancelled while running; the restart came before it settled.
         job.status = "cancelled";
         job.error = CANCELLED;
         job.stage = undefined;
+      } else if (job.status === "processing" && (job.restart_requeues ?? 0) >= MAX_RESTART_REQUEUES) {
+        job.status = "failed";
+        job.error = `The editor restarted while this import ran, ${MAX_RESTART_REQUEUES + 1} times in a row; ` +
+          "not retried automatically (it may be what crashes the editor). Retry it once the queue is through.";
+        job.stage = undefined;
+        console.error(`[add-article] job=${job.id} ${job.error}`);
       } else if (job.status === "processing") {
         job.status = "queued";
         job.stage = undefined;
         job.started_at = undefined;
         job.requeued_after_restart = true;
+        job.restart_requeues = (job.restart_requeues ?? 0) + 1;
         job.updated_at = new Date().toISOString();
         interrupted.push(job);
       }
@@ -396,6 +410,8 @@ export class ArticleJobQueue {
     this.durationsMs = Array.isArray(snapshot.durations_ms)
       ? snapshot.durations_ms.filter((n) => typeof n === "number" && n > 0).slice(-DURATION_SAMPLE)
       : [];
+    // Save the restart count at once: a crash right after boot must still count.
+    this.persist();
     console.log(
       `[add-article] restored the import queue from ${file}: ${this.pending.length} to run ` +
       `(${interrupted.length} interrupted by the restart), ${this.jobs.size} jobs in total`,

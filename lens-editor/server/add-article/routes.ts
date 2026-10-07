@@ -10,6 +10,7 @@ import { extractVideoInput, isYouTubeUrl } from "../add-video/video-url";
 
 export { EDU_FOLDER };
 const MAX_URLS_PER_REQUEST = 20;
+const MAX_CANCEL_IDS = 200;
 
 /** Dedup key: the video id for YouTube videos (youtu.be / watch / shorts
  *  spellings of one video must collapse to one job -- they'd all write the
@@ -195,6 +196,9 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
     const ids = body?.ids;
     if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === "string")) {
       return c.json({ error: "ids must be a non-empty array of job ids" }, 400);
+    }
+    if (ids.length > MAX_CANCEL_IDS) {
+      return c.json({ error: `At most ${MAX_CANCEL_IDS} ids per request` }, 400);
     }
     const results = (ids as string[]).map((id) => {
       const job = queue.get(id);
