@@ -738,7 +738,11 @@ impl Server {
         let server = Arc::clone(self);
         tokio::task::spawn_blocking(move || f(&server))
             .await
-            .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
+            .unwrap_or_else(|e| match e.try_into_panic() {
+                Ok(panic) => std::panic::resume_unwind(panic),
+                // Cancelled: only on runtime shutdown, which ends the sweep too.
+                Err(e) => panic!("trash purge blocking step cancelled: {e}"),
+            })
     }
 
     async fn run_trash_sweep(self: &Arc<Self>, now_ms: u64, dry_run: bool) -> PurgeReport {
@@ -754,11 +758,12 @@ impl Server {
 
         let folders = self.purge_blocking(|s| s.folder_names_by_doc_id()).await;
         for (folder_doc_id, folder_name) in folders {
-            let Some((sync_kv, awareness)) = self
-                .docs
-                .get(&folder_doc_id)
-                .map(|d| (d.sync_kv(), d.awareness()))
-            else {
+            let handles = {
+                let id = folder_doc_id.clone();
+                self.purge_blocking(move |s| s.docs.get(&id).map(|d| (d.sync_kv(), d.awareness())))
+                    .await
+            };
+            let Some((sync_kv, awareness)) = handles else {
                 continue;
             };
 
@@ -776,6 +781,25 @@ impl Server {
 
             for entry in select_expired(&entries, now_ms, retention_ms) {
                 if dry_run {
+                    let content_id = content_doc_id(&folder_doc_id, &entry.uuid);
+                    let in_use = !content_id.is_empty()
+                        && self
+                            .purge_blocking(move |s| {
+                                s.docs
+                                    .get(&content_id)
+                                    .map(|d| d.has_external_refs())
+                                    .unwrap_or(false)
+                            })
+                            .await;
+                    if in_use {
+                        report.skipped_in_use += 1;
+                        tracing::info!(
+                            folder = %folder_name,
+                            path = %entry.path,
+                            "Trash purge dry run: would defer entry (doc has an open connection)"
+                        );
+                        continue;
+                    }
                     tracing::info!(
                         folder = %folder_name,
                         path = %entry.path,
@@ -819,8 +843,16 @@ impl Server {
             let folders_removed = {
                 let awareness = awareness.clone();
                 let folder_name = folder_name.clone();
+                // A dry run purged nothing, so count the folders that would
+                // be empty once the entries it listed are gone.
+                let assume_removed: HashSet<String> = report
+                    .would_purge
+                    .iter()
+                    .filter(|p| p.folder_name == folder_name)
+                    .map(|p| p.path.clone())
+                    .collect();
                 self.purge_blocking(move |_| {
-                    remove_empty_trash_folders(&awareness, &folder_name, !dry_run)
+                    remove_empty_trash_folders(&awareness, &folder_name, !dry_run, &assume_removed)
                 })
                 .await
             };
@@ -831,10 +863,16 @@ impl Server {
                 match tokio::time::timeout(PURGE_STORE_CALL_TIMEOUT, sync_kv.persist()).await {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => tracing::error!(?e, "Failed to persist folder doc after purge"),
-                    Err(_) => tracing::error!(
-                        folder = %folder_name,
-                        "Timed out persisting folder doc after purge"
-                    ),
+                    Err(_) => {
+                        // persist() cleared `dirty` before its write; the
+                        // abandoned write may never land, so hand it back to
+                        // the persistence worker.
+                        sync_kv.mark_dirty();
+                        tracing::error!(
+                            folder = %folder_name,
+                            "Timed out persisting folder doc after purge; left dirty for retry"
+                        );
+                    }
                 }
                 let folder_doc_id = folder_doc_id.clone();
                 self.purge_blocking(move |s| {
@@ -875,14 +913,7 @@ impl Server {
         folder_awareness: &Arc<std::sync::RwLock<y_sweet_core::sync::awareness::Awareness>>,
         entry: &TrashEntry,
     ) -> anyhow::Result<Option<PurgedEntry>> {
-        let relay_id = link_indexer::parse_doc_id(folder_doc_id)
-            .map(|(r, _)| r.to_string())
-            .unwrap_or_default();
-        let content_id = if entry.uuid.is_empty() {
-            String::new()
-        } else {
-            format!("{}-{}", relay_id, entry.uuid)
-        };
+        let content_id = content_doc_id(folder_doc_id, &entry.uuid);
 
         if !content_id.is_empty() {
             // 1. Evict the in-memory doc unless someone has it open. One
@@ -918,6 +949,7 @@ impl Server {
                         .await
                         .is_err()
                     {
+                        // The doc is being deleted; nothing to retry.
                         tracing::warn!(doc_id = %content_id, "Timed out flushing evicted doc");
                     }
                     sync_kv.shutdown();
@@ -1069,7 +1101,18 @@ impl Server {
     }
 }
 
-/// Recent-changes entry for a trashed entry (in-memory only, kind `trash`).
+/// Content doc id (`<relay>-<uuid>`) of an entry in `folder_doc_id`; empty
+/// when the entry has no uuid.
+fn content_doc_id(folder_doc_id: &str, uuid: &str) -> String {
+    if uuid.is_empty() {
+        return String::new();
+    }
+    let relay_id = link_indexer::parse_doc_id(folder_doc_id)
+        .map(|(r, _)| r.to_string())
+        .unwrap_or_default();
+    format!("{}-{}", relay_id, uuid)
+}
+
 /// Outcome of evicting a trashed content doc from memory.
 enum Eviction {
     Evicted(y_sweet_core::doc_sync::DocWithSyncKv),
@@ -1165,11 +1208,13 @@ fn snapshot_trash_entries(
 }
 
 /// Blocking: remove (when `apply`, else only log) the empty folders left
-/// under `/_trash/` of one folder doc. Returns how many there were.
+/// under `/_trash/` of one folder doc, treating `assume_removed` paths as
+/// already gone (dry run). Returns how many there were.
 fn remove_empty_trash_folders(
     awareness: &Arc<std::sync::RwLock<y_sweet_core::sync::awareness::Awareness>>,
     folder_name: &str,
     apply: bool,
+    assume_removed: &HashSet<String>,
 ) -> usize {
     let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
     let mut txn = guard
@@ -1179,6 +1224,7 @@ fn remove_empty_trash_folders(
     let docs_map = txn.get_or_insert_map("docs");
     let all: Vec<(String, String)> = filemeta
         .iter(&txn)
+        .filter(|(p, _)| !assume_removed.contains(*p))
         .map(|(p, v)| {
             (
                 p.to_string(),
@@ -1203,6 +1249,7 @@ fn remove_empty_trash_folders(
     empty.len()
 }
 
+/// Recent-changes entry for a trashed entry (in-memory only, kind `trash`).
 fn trash_activity_event(ts: u64, old_path: &str, new_path: &str) -> ActivityEvent {
     static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1873,6 +1920,7 @@ mod tests {
         let would: Vec<&str> = report.would_purge.iter().map(|p| p.path.as_str()).collect();
         assert_eq!(would, vec!["/_trash/Old/A.md", "/_trash/pic.png"]);
         assert_eq!(report.stamped, 1, "Un.md would be stamped");
+        assert_eq!(report.folders_removed, 1, "/_trash/Old would be empty");
         assert_eq!(folder_paths(&server), before, "file tree untouched");
         assert!(dir.path().join(cid(OLD)).join("data.ysweet").exists());
         assert!(server.docs().contains_key(&cid(OLD)), "doc not evicted");
@@ -1884,6 +1932,24 @@ mod tests {
         assert!(!report.dry_run);
         let purged: Vec<&str> = report.purged.iter().map(|p| p.path.as_str()).collect();
         assert_eq!(purged, would);
+        assert_eq!(report.folders_removed, 1, "matches the preview");
+    }
+
+    #[tokio::test]
+    async fn preview_defers_docs_with_open_connections_like_the_real_sweep() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileSystemStore::new(dir.path().to_path_buf()).unwrap();
+        let server = server_with_store(Box::new(store), 10.0).await;
+        let now = 100 * DAY_MS;
+        seed(&server, now).await;
+        let held = server.docs().get(&cid(OLD)).unwrap().awareness();
+
+        let report = server.preview_trash_purge(now).await;
+        assert_eq!(report.skipped_in_use, 1);
+        let would: Vec<&str> = report.would_purge.iter().map(|p| p.path.as_str()).collect();
+        assert_eq!(would, vec!["/_trash/pic.png"]);
+        assert_eq!(report.folders_removed, 0, "/_trash/Old keeps A.md");
+        drop(held);
     }
 
     #[tokio::test]
