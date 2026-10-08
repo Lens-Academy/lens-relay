@@ -73,6 +73,24 @@ describe('buildPromotionCurriculumIndex', () => {
     });
   });
 
+  it('puts an embedded question file in the courses and modules of the lenses that embed it', () => {
+    const staging = snapshot({
+      'courses/C.md': '# Module: [[../modules/M]]\n# Module: [[../modules/N]]',
+      'modules/M.md': '# Lens:\nsource:: [[../Lenses/A]]',
+      'modules/N.md': '# Lens:\nsource:: [[../Lenses/B]]',
+      'Lenses/A.md': '#### Question\n![[../Questions/Shared]]\nforce-feedback:: first',
+      'Lenses/B.md': '#### Question\n![[../Questions/Shared|alias]]\n```\n![[../Questions/InCode]]\n```',
+      'Questions/Shared.md': '#### Question\nid:: 1\ncontent:: Why?',
+      'Questions/InCode.md': '#### Question\nid:: 2\ncontent:: No',
+    });
+    const result = buildPromotionCurriculumIndex(staging, snapshot({}), [change('Questions/Shared.md'), change('Questions/InCode.md')]);
+    expect(result.memberships['Questions/Shared.md']).toEqual({
+      coursePaths: ['courses/C.md'],
+      modulePaths: ['modules/M.md', 'modules/N.md'],
+    });
+    expect(result.memberships['Questions/InCode.md']).toBeUndefined();
+  });
+
   it('terminates cycles and ignores missing targets', () => {
     const staging = snapshot({
       'courses/C.md': '# Module: [[../modules/M]]',

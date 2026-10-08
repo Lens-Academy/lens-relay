@@ -31,9 +31,11 @@ import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontm
 import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
-import { RangeSetBuilder, Compartment, EditorSelection, StateEffect, StateField } from '@codemirror/state';
+import { RangeSetBuilder, Compartment, EditorSelection, StateField } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
-import { isImageEmbedTarget } from '../../../lib/isImageEmbedTarget';
+import { wikilinkMetadataChanged } from './wikilinkEffects';
+import { noteEmbeds } from './noteEmbed';
+import { isImageEmbedTarget } from '../../../../shared/embeds';
 import { parseCalloutHeader, CalloutIconWidget } from './callouts';
 
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
@@ -111,11 +113,7 @@ export function updateImageEmbedContext(context: ImageEmbedContext | undefined) 
   imageEmbedContext = context ?? null;
 }
 
-/**
- * StateEffect dispatched when wikilink metadata changes (e.g., file renames).
- * Triggers decoration rebuild so widget resolution state updates.
- */
-export const wikilinkMetadataChanged = StateEffect.define<void>();
+export { wikilinkMetadataChanged } from './wikilinkEffects';
 
 /**
  * WikilinkWidget - Renders wikilinks as clickable internal links
@@ -1064,7 +1062,7 @@ const livePreviewTheme = EditorView.theme({});
  *
  * @param context - Optional WikilinkContext for navigation callbacks
  */
-export function livePreview(context?: WikilinkContext) {
+export function livePreview(context?: WikilinkContext, { embeds = true }: { embeds?: boolean } = {}) {
   if (context) {
     wikilinkContext = context;
   }
@@ -1073,7 +1071,8 @@ export function livePreview(context?: WikilinkContext) {
     frontmatterField, // StateField outside compartment (survives source mode toggle)
     obsidianCommentRangesField,
     listHangingIndent, // wrapped list rows align with the item text in both modes
-    livePreviewCompartment.of([livePreviewPlugin, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
+    // embeds: false inside an embed card, which never nests another
+    livePreviewCompartment.of([livePreviewPlugin, ...(embeds ? [noteEmbeds] : []), obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
   ];
 }
 
@@ -1181,7 +1180,7 @@ export function toggleSourceMode(view: EditorView, sourceMode: boolean) {
   view.dispatch({
     effects: [
       livePreviewCompartment.reconfigure(
-        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, frontmatterSourcePlugin, livePreviewTheme] : [livePreviewPlugin, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]
+        sourceMode ? [sourceHeadingPlugin, obsidianCommentPlugin, frontmatterSourcePlugin, livePreviewTheme] : [livePreviewPlugin, noteEmbeds, obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]
       ),
       criticMarkupCompartment.reconfigure(
         sourceMode ? criticMarkupSourcePlugin : criticMarkupPlugin

@@ -636,6 +636,69 @@ The kinds of AI, from narrow to superintelligent:
 source:: [[../widgets/demo-rings]]
 `,
       },
+      // Reusable question files: one question per file, embedded in lenses
+      // with a ![[...]] line (editor: extensions/noteEmbed.ts).
+      {
+        path: '/Questions',
+        id: 'ed000014-0000-4000-8000-0000000000b4',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Questions/Control property - untrusted monitor.md',
+        id: 'ed000015-0000-4000-8000-0000000000b5',
+        type: 'markdown',
+        version: 0,
+        content: `#### Question: Open
+id:: 0983cfd6-876e-4c73-8e81-58318c1abedf
+content:: Does this setup hold the control property? What does that depend on?
+assessment-instructions:: Score out of 100. 55: the failure mode and verdict: U′ can collude with U, giving U's malicious edits low suspicion scores so they never reach H. 45: why that must be assumed: U′ is an identical copy of U, so if U is scheming U′ is scheming too.
+feedback-instructions:: In at most six sentences, say what the learner's answer got right and the most important thing missing, then name the protocol: untrusted monitoring.
+`,
+      },
+      {
+        path: '/Questions/Why control is easier to evaluate.md',
+        id: 'ed000016-0000-4000-8000-0000000000b6',
+        type: 'markdown',
+        version: 0,
+        content: `#### Question: Choice
+id:: 7264e7a9-7257-450e-b10e-63a3fca46872
+content:: Why is control more tractable to evaluate than alignment?
+options::
+- [x] It reduces to a capability question we can test with red teams
+- [ ] Control protocols never fail
+- [ ] Alignment cannot be measured at all
+explanation:: A control evaluation asks whether the red team can get past the protocol, which is something we can run.
+`,
+      },
+      {
+        path: '/Lenses/Shared Questions Demo.md',
+        id: 'ed000017-0000-4000-8000-0000000000b7',
+        type: 'markdown',
+        version: 0,
+        content: `---
+title: "Shared Questions Demo"
+tldr: "A lens that embeds two question files."
+---
+
+#### Text
+content::
+Scenario 3: the monitor is an identical copy of the untrusted model.
+
+![[../Questions/Control property - untrusted monitor]]
+force-feedback:: first
+
+#### Text
+content::
+Now compare control with alignment.
+
+![[../Questions/Why control is easier to evaluate]]
+optional:: true
+
+![[../Questions/Not written yet]]
+`,
+      },
       // Templates for "New from template" in the sidebar's create menu:
       // empty and "<...>" ids are filled with fresh UUIDs on create.
       {
