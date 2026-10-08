@@ -9,6 +9,7 @@ import {
 } from './protocol';
 import { installPageServices } from './page-services';
 import { installCommentLayer } from './comment-layer';
+import { installTtsLayer } from './tts-layer';
 import { readAnchor } from '../anchoring/types';
 
 // Bumped whenever comment placements are re-measured; scroll-state messages
@@ -95,6 +96,12 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     post: message => { if (nonce !== null) postToParent(message); },
     layoutVersion: () => layoutVersion,
     bumpLayoutVersion: () => { layoutVersion++; },
+  });
+
+  let commentMode = false;
+  const tts = installTtsLayer(win, {
+    post: message => { if (nonce !== null) postToParent(message); },
+    commentMode: () => commentMode,
   });
 
   postToParent({ type: 'ready', payload: {} });
@@ -212,7 +219,29 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       }
       case 'set-comment-mode':
         if (!isObject(msg.payload)) return;
-        comments.setCommentMode(msg.payload.on === true);
+        commentMode = msg.payload.on === true;
+        comments.setCommentMode(commentMode);
+        break;
+      case 'tts-state':
+        if (!isObject(msg.payload)) return;
+        tts.setState({ enabled: msg.payload.enabled === true, playing: msg.payload.playing === true });
+        break;
+      case 'tts-highlight': {
+        if (!isObject(msg.payload)) return;
+        const { unit, word } = msg.payload;
+        const range = isObject(word) && Number.isInteger(word.start) && Number.isInteger(word.end)
+          ? { start: word.start as number, end: word.end as number }
+          : null;
+        tts.setHighlight({
+          unit: Number.isInteger(unit) ? unit as number : null,
+          word: range,
+          follow: msg.payload.follow === true,
+        });
+        break;
+      }
+      case 'tts-request-units':
+        if (!isObject(msg.payload)) return;
+        tts.sendUnits(msg.payload.start === true);
         break;
       case 'capture-selection':
         comments.captureSelection();
@@ -273,6 +302,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       restoreFrame = null;
     }
     comments.cleanup();
+    tts.cleanup();
     pageServices.cleanup();
     if (bridgeWin[BRIDGE_STATE_KEY]?.cleanup === cleanup) {
       delete bridgeWin[BRIDGE_STATE_KEY];

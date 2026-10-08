@@ -16,6 +16,9 @@ import { DocumentTitle } from '../DocumentTitle';
 import { SourceModeToggle } from '../SourceModeToggle/SourceModeToggle';
 import { AuthorshipModeToggle } from '../AuthorshipModeToggle/AuthorshipModeToggle';
 import { SpellcheckToggle } from '../SpellcheckToggle/SpellcheckToggle';
+import { ListenButton } from '../ReadAloud/ListenButton';
+import { ReadAloudBar } from '../ReadAloud/ReadAloudBar';
+import { getReadAloud } from '../Editor/extensions/readAloud';
 import { SuggestionModeToggle } from '../SuggestionModeToggle/SuggestionModeToggle';
 import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
@@ -254,6 +257,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     setStateVersion(v => v + 1);
   }, []);
 
+  // Read-aloud lives on the editor view (extensions/readAloud.ts).
+  const readAloudEngine = getReadAloud(editorView)?.engine ?? null;
+  const startReadAloud = useCallback(() => getReadAloud(editorView)?.start(), [editorView]);
+
   // Callback for document changes
   const handleDocChange = useCallback(() => {
     setStateVersion(v => v + 1);
@@ -442,6 +449,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <AuthorshipModeToggle view={editorView} />
               <SpellcheckToggle view={editorView} />
+              <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
@@ -465,6 +473,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <AuthorshipModeToggle view={editorView} />
               <SpellcheckToggle view={editorView} iconOnly={headerStage !== 'full'} />
+              <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
@@ -512,7 +521,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           {isSourceMode && isSuggestionMode && (
             <SourceSuggestionBanner />
           )}
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 relative">
+            <ReadAloudBar engine={readAloudEngine} />
             <Editor
               readOnly={!canWrite}
               canAcceptReject={canEdit}

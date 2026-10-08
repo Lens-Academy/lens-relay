@@ -15,7 +15,9 @@ import {
   type PreviewUiState,
   type ThreadMark,
   type ThreadsResolvedPayload,
+  type TtsUnit,
 } from './bridge/protocol';
+import type { ReadAloudEngine } from '../../lib/read-aloud/engine';
 import { buildSrcDoc } from './runtime/page-runtime';
 import { readAnchor, type HtmlAnchor } from './anchoring/types';
 import { withoutLegacyTextAnchors } from './comments/legacy';
@@ -45,6 +47,10 @@ export interface HtmlPreviewProps {
   storageKey?: string;
   /** Problems reported by the currently shown page (errors, blocked resources). */
   onPageProblems?: (problems: PageProblem[]) => void;
+  /** Read-aloud: the engine that plays the page's sentences, and whether the
+   *  server offers it (the page then shows its hover play buttons). */
+  readAloud?: ReadAloudEngine | null;
+  readAloudEnabled?: boolean;
 }
 
 export interface HtmlPreviewHandle {
@@ -58,6 +64,8 @@ export interface HtmlPreviewHandle {
   revealThread(id: string): void;
   /** The visible frame, for mapping its viewport coordinates. */
   frameElement(): HTMLIFrameElement | null;
+  /** Read the page aloud from the first sentence in view. */
+  startReadAloud(): void;
 }
 
 type PreviewScroll = { x: number; y: number };
@@ -315,6 +323,31 @@ function readAnchorCapture(value: unknown): AnchorCapture | null {
   };
 }
 
+/** The page can forge tts-units, so bound what reaches the engine (and Speechify). */
+function readTtsUnits(value: unknown): TtsUnit[] | null {
+  if (!Array.isArray(value) || value.length > 5000) return null;
+  const units: TtsUnit[] = [];
+  for (const u of value) {
+    if (!isObject(u) || typeof u.text !== 'string') return null;
+    const pause = typeof u.pauseBefore === 'number' && Number.isFinite(u.pauseBefore) ? u.pauseBefore : 0;
+    units.push({ text: u.text.slice(0, 2000), pauseBefore: Math.max(0, Math.min(1, pause)) });
+  }
+  return units;
+}
+
+/** The index in `units` of the sentence `text`, nearest to `near`. */
+function findUnit(units: TtsUnit[], text: string | undefined, near: number): number | null {
+  if (text === undefined) return null;
+  for (let d = 0; d < units.length; d++) {
+    if (units[near + d]?.text === text) return near + d;
+    if (d > 0 && units[near - d]?.text === text) return near - d;
+  }
+  return null;
+}
+
+/** A page may ask to play (its hover button, a click while listening) at most this often. */
+const PAGE_PLAY_INTERVAL_MS = 400;
+
 function hasDetailsElementMarkup(source: string): boolean {
   return /<details\b/i.test(source);
 }
@@ -337,6 +370,8 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
   onCurrentDescribed,
   storageKey,
   onPageProblems,
+  readAloud = null,
+  readAloudEnabled = false,
 }, handleRef) {
   const [content, setContent] = useState(() => ytext.toString());
   const [debounced, setDebounced] = useState(content);
@@ -400,7 +435,13 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
 
   // Replies the page may send only because we asked. The page can forge any
   // bridge message, so an unrequested capture or description is ignored.
-  const pendingRef = useRef({ selectionAt: 0, legacyAt: 0, current: new Set<string>() });
+  const pendingRef = useRef({ selectionAt: 0, legacyAt: 0, current: new Set<string>(), ttsStartAt: 0, ttsPlayAt: 0 });
+
+  // Read-aloud: the units the visible page sent last, and what the frames were told.
+  const readAloudRef = useRef(readAloud);
+  useEffect(() => { readAloudRef.current = readAloud; }, [readAloud]);
+  const ttsUnitsRef = useRef<TtsUnit[]>([]);
+  const ttsStateRef = useRef({ enabled: readAloudEnabled, playing: false });
 
   useImperativeHandle(handleRef, () => ({
     captureSelection: () => {
@@ -417,6 +458,11 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
     },
     revealThread: id => postToActiveFrame({ type: 'set-focused-thread', payload: { id, reveal: true } }),
     frameElement: () => frameRefs.current.get(activeFrameIdRef.current) ?? null,
+    startReadAloud: () => {
+      pendingRef.current.ttsStartAt = Date.now();
+      readAloudRef.current?.open();
+      postToActiveFrame({ type: 'tts-request-units', payload: { start: true } });
+    },
   }), [postToActiveFrame]);
 
   const restoreFrameLayout = useCallback((frame: PreviewFrame): void => {
@@ -645,6 +691,7 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
     postToFrame(frame.id, { type: 'set-draft', payload: { anchor: draftRef.current } });
     postToFrame(frame.id, { type: 'set-focused-thread', payload: { id: focusedRef.current, reveal: false } });
     postToFrame(frame.id, { type: 'set-comment-mode', payload: { on: commentModeRef.current } });
+    postToFrame(frame.id, { type: 'tts-state', payload: ttsStateRef.current });
     if (frame.state === 'loading' && pendingUiStateCaptureRef.current) {
       deferredRestoreFrameIdRef.current = frame.id;
       return;
@@ -740,6 +787,33 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
       if (frame.state !== 'active') return;
 
       switch (message.type) {
+        case 'tts-units': {
+          const engine = readAloudRef.current;
+          if (!engine || !isObject(message.payload)) return;
+          const units = readTtsUnits(message.payload.units);
+          if (!units) return;
+          const play = message.payload.play;
+          const pending = pendingRef.current;
+          const previous = ttsUnitsRef.current;
+          ttsUnitsRef.current = units;
+          if (typeof play === 'number' && Number.isInteger(play) && play >= 0 && play < units.length) {
+            // Listen asked for these, or the page relays a click on its play
+            // button: a page cannot tell us which, so it is rate-limited.
+            const requested = Date.now() - pending.ttsStartAt < REPLY_WINDOW_MS;
+            if (!requested && Date.now() - pending.ttsPlayAt < PAGE_PLAY_INTERVAL_MS) return;
+            pending.ttsStartAt = 0;
+            pending.ttsPlayAt = Date.now();
+            engine.setUnits(units);
+            engine.play(play);
+          } else {
+            const cur = engine.getSnapshot().current;
+            engine.setUnits(units, cur === null ? null : findUnit(units, previous[cur]?.text, cur));
+          }
+          break;
+        }
+        case 'tts-user-scrolled':
+          if (readAloudRef.current?.isPlaying) readAloudRef.current.setAutoScrollPaused(true);
+          break;
         case 'thread-clicked':
           if (!isObject(message.payload) || typeof message.payload.id !== 'string') return;
           callbacks.onThreadClicked?.(message.payload.id);
@@ -828,6 +902,48 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
     focusedRef.current = focusedThreadId;
     postToAllFrames({ type: 'set-focused-thread', payload: { id: focusedThreadId, reveal: false } });
   }, [focusedThreadId, postToAllFrames]);
+
+  // Read-aloud: tell the frames whether the page is being read, send them the
+  // heard sentence and word, and ask a newly shown page for its sentences.
+  useEffect(() => {
+    if (!readAloud) return;
+    let lastPaused = readAloud.getSnapshot().autoScrollPaused;
+    let lastHighlight: { unit: number | null; word: { start: number; end: number } | null } = { unit: null, word: null };
+    const postState = () => {
+      const next = { enabled: readAloudEnabled, playing: readAloud.isPlaying };
+      const prev = ttsStateRef.current;
+      if (prev.enabled === next.enabled && prev.playing === next.playing) return;
+      ttsStateRef.current = next;
+      postToAllFrames({ type: 'tts-state', payload: next });
+    };
+    postState();
+    const unsubscribeHighlight = readAloud.onHighlight(h => {
+      lastHighlight = { unit: h?.unit ?? null, word: h?.word ?? null };
+      postToAllFrames({
+        type: 'tts-highlight',
+        payload: { ...lastHighlight, follow: !readAloud.getSnapshot().autoScrollPaused },
+      });
+    });
+    const unsubscribe = readAloud.subscribe(() => {
+      postState();
+      const paused = readAloud.getSnapshot().autoScrollPaused;
+      // "Back to current sentence": scroll there now.
+      if (lastPaused && !paused) postToAllFrames({ type: 'tts-highlight', payload: { ...lastHighlight, follow: true } });
+      lastPaused = paused;
+    });
+    return () => {
+      unsubscribe();
+      unsubscribeHighlight();
+      // No preview, nothing to follow along with.
+      readAloud.stop();
+    };
+  }, [readAloud, readAloudEnabled, postToAllFrames]);
+
+  const activeFrameId = frames.find(frame => frame.state === 'active')?.id;
+  useEffect(() => {
+    if (activeFrameId === undefined || !readAloudRef.current?.isActive) return;
+    postToFrame(activeFrameId, { type: 'tts-request-units', payload: { start: false } });
+  }, [activeFrameId, postToFrame]);
 
   useEffect(() => {
     commentModeRef.current = commentMode;

@@ -55,6 +55,15 @@ const PART_ICONS: Record<string, IconPart[]> = {
   zap: [path('M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z')],
   list: [path('M3 6h.01'), path('M3 12h.01'), path('M3 18h.01'), path('M8 6h13'), path('M8 12h13'), path('M8 18h13')],
   quote: [path('M17 6H3'), path('M21 12H8'), path('M21 18H8'), path('M3 12v6')],
+  // Read-aloud controls (src/components/ReadAloud), as on the platform's reader bar.
+  play: [['polygon', { points: '6 3 20 12 6 21 6 3' }]],
+  pause: [['rect', { x: '14', y: '4', width: '4', height: '16', rx: '1' }], ['rect', { x: '6', y: '4', width: '4', height: '16', rx: '1' }]],
+  'skip-back': [['polygon', { points: '19 20 9 12 19 4 19 20' }], ['line', { x1: '5', y1: '19', x2: '5', y2: '5' }]],
+  'skip-forward': [['polygon', { points: '5 4 15 12 5 20 5 4' }], ['line', { x1: '19', y1: '5', x2: '19', y2: '19' }]],
+  settings: [path('M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z'), ['circle', { cx: '12', cy: '12', r: '3' }]],
+  loader: [path('M21 12a9 9 0 1 1-6.219-8.56')],
+  'locate-fixed': [['line', { x1: '2', y1: '12', x2: '5', y2: '12' }], ['line', { x1: '19', y1: '12', x2: '22', y2: '12' }], ['line', { x1: '12', y1: '2', x2: '12', y2: '5' }], ['line', { x1: '12', y1: '19', x2: '12', y2: '22' }], ['circle', { cx: '12', cy: '12', r: '7' }], ['circle', { cx: '12', cy: '12', r: '3' }]],
+  headphones: [path('M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3')],
 };
 for (const [name, parts] of Object.entries(PART_ICONS)) {
   ICON_BUILDERS[name] = () => parts.map(([tag, attrs]) => {

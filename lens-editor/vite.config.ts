@@ -247,6 +247,18 @@ export default defineConfig(() => {
     };
   }
 
+  /** Dev /api/tts endpoints (read-aloud's Speechify proxy). */
+  function ttsPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'tts-api',
+      path: '/api/tts',
+      loadApp: async () => {
+        const { createTtsRoutes } = await import('./server/tts/routes.ts');
+        return createTtsRoutes();
+      },
+    });
+  }
+
   /** Dev /api/attachments endpoints (relay MCP import_attachment backend). */
   function attachmentsPlugin(): Plugin {
     return honoDevPlugin({
@@ -426,7 +438,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

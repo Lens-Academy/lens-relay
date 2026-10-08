@@ -14,6 +14,7 @@ import { createGitHubPromotionService } from './promotion/github.ts';
 import { validatePromotionPaths } from './promotion/path-validation.ts';
 import { createPromotionRoutes, type PromotionRouteService } from './promotion/routes.ts';
 import { createContentStatusRoutes } from './content-status/routes.ts';
+import { createTtsRoutes } from './tts/routes.ts';
 import type {
   PromotionChangesResponse,
   PromotionPrResponse,
@@ -160,6 +161,9 @@ export function createApp(config: AppConfig): Hono {
   // The content status panel's proxy to the platform. It answers 404 to
   // everything unless CONTENT_STATUS_ENABLED=true, and the panel then hides.
   app.route('/api/content-status', createContentStatusRoutes());
+
+  // Read-aloud: a Speechify proxy for any share link (503 without a key).
+  app.route('/api/tts', createTtsRoutes());
 
   // The SPA shell (index.html) references content-hashed asset filenames that
   // change on every deploy, so it must never be cached hard. Serving it

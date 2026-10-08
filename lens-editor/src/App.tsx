@@ -599,7 +599,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   </svg>
                 </button>}
                 {(headerStage === 'full' || headerStage === 'compact-toggles') && (
-                  <h1 className="text-lg font-semibold text-gray-900">Lens Editor</h1>
+                  <h1 className="whitespace-nowrap text-lg font-semibold text-gray-900">Lens Editor</h1>
                 )}
                 <div id="header-breadcrumb" />
               </div>
