@@ -1,6 +1,10 @@
 /**
  * Sonic speech player AudioWorklet.
  *
+ * Copied from lens-platform (web_frontend/src/hooks), unchanged but for this note. The editor
+ * synthesizes every speed at Speechify, so only its 1x passthrough runs here
+ * (PcmPlayer); the stretcher would serve a client-side speed share.
+ *
  * This is a JavaScript port of the streaming Sonic/PICOLA speech speed
  * algorithm used by Android/ExoPlayer, adapted to run inside an AudioWorklet.
  *

@@ -24,6 +24,7 @@ import {
   type MarkdownReading,
 } from '../../../lib/read-aloud/markdown-reading';
 import { iconNode } from '../../../lib/icons';
+import { readAloudAvailable } from '../../../lib/read-aloud/api';
 
 interface Marks {
   sentence: { from: number; to: number } | null;
@@ -68,6 +69,10 @@ const CLICK_SLOP_PX = 4;
 export class ReadAloudController {
   readonly engine = new ReadAloudEngine();
   private reading: MarkdownReading | null = null;
+  /** Whether `reading` was built from a fully parsed document. */
+  private readingComplete = false;
+  /** The server offers read-aloud (it has a Speechify key); until then no hover button. */
+  private available = false;
   /** Document position of the heard sentence, mapped through edits. */
   private anchor: number | null = null;
   private rebuildTimer: ReturnType<typeof setTimeout> | null = null;
@@ -81,6 +86,7 @@ export class ReadAloudController {
 
   constructor(private readonly view: EditorView) {
     this.unsubscribeHighlight = this.engine.onHighlight(h => this.highlight(h));
+    void readAloudAvailable().then(ok => { this.available = ok; });
 
     this.button = document.createElement('button');
     this.button.type = 'button';
@@ -138,6 +144,7 @@ export class ReadAloudController {
     if (!u.docChanged) return;
     if (this.anchor != null) this.anchor = u.changes.mapPos(this.anchor, 1);
     this.reading = null;
+    this.readingComplete = false;
     if (this.engine.isActive) {
       if (this.rebuildTimer) clearTimeout(this.rebuildTimer);
       this.rebuildTimer = setTimeout(() => {
@@ -164,8 +171,12 @@ export class ReadAloudController {
     window.removeEventListener('mouseup', this.onMouseUp, true);
   }
 
-  private ensureReading(): MarkdownReading {
-    this.reading ??= buildMarkdownReading(this.view.state);
+  /** The sentences; `complete: false` accepts a partly parsed document (hovering). */
+  private ensureReading(complete = true): MarkdownReading {
+    if (!this.reading || (complete && !this.readingComplete)) {
+      this.reading = buildMarkdownReading(this.view.state, complete);
+      this.readingComplete = complete;
+    }
     return this.reading;
   }
 
@@ -207,10 +218,10 @@ export class ReadAloudController {
   };
 
   private onMouseMove = (e: MouseEvent) => {
-    if (e.buttons) return;
+    if (e.buttons || !this.available) return;
     const view = this.view;
     const block = view.lineBlockAtHeight(e.clientY - view.documentTop);
-    const reading = this.ensureReading();
+    const reading = this.ensureReading(this.engine.isActive);
     const unit = unitForLine(reading, block.from, block.to);
     this.placeButton(unit, block.from);
     // While playing, preview which sentence a click would jump to.

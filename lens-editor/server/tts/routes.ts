@@ -35,10 +35,10 @@ export interface TtsConfig {
 }
 
 export const MAX_TEXT_CHARS = 2000;
-// About four hours of listening at 1x (~54k characters an hour), so a team
-// sharing one link never meets it, but a script looping on a leaked link
-// costs at most a few dollars an hour.
-const DEFAULT_CHARS_PER_HOUR = 250_000;
+// One listener uses ~54k characters an hour at 1x and ~243k at 4.5x, so this
+// lets two people on one link listen at top speed, while a script looping on
+// a leaked link costs at most about $3 an hour.
+const DEFAULT_CHARS_PER_HOUR = 500_000;
 const VOICES_TTL_MS = 3600_000;
 
 export function loadTtsConfig(env: NodeJS.ProcessEnv = process.env): TtsConfig {

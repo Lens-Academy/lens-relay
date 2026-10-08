@@ -43,7 +43,7 @@ describe('TTS routes', () => {
 
   it('reads the key and the hourly budget from the environment', () => {
     expect(loadTtsConfig({ SPEECHIFY_API_KEY: ' k ', TTS_CHARS_PER_HOUR: '500' })).toEqual({ apiKey: 'k', charsPerHour: 500 });
-    expect(loadTtsConfig({})).toMatchObject({ apiKey: undefined, charsPerHour: 250_000 });
+    expect(loadTtsConfig({})).toMatchObject({ apiKey: undefined, charsPerHour: 500_000 });
   });
 
   it('requires a valid share token, any folder, any role', async () => {

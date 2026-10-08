@@ -345,8 +345,13 @@ function findUnit(units: TtsUnit[], text: string | undefined, near: number): num
   return null;
 }
 
-/** A page may ask to play (its hover button, a click while listening) at most this often. */
-const PAGE_PLAY_INTERVAL_MS = 400;
+/** Whether the viewer just clicked or typed, here or inside the preview frame
+ *  (activation propagates to ancestor frames). Browsers without the API only
+ *  have the request window. */
+function hasUserActivation(): boolean {
+  const activation = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+  return activation?.isActive ?? false;
+}
 
 function hasDetailsElementMarkup(source: string): boolean {
   return /<details\b/i.test(source);
@@ -435,7 +440,7 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
 
   // Replies the page may send only because we asked. The page can forge any
   // bridge message, so an unrequested capture or description is ignored.
-  const pendingRef = useRef({ selectionAt: 0, legacyAt: 0, current: new Set<string>(), ttsStartAt: 0, ttsPlayAt: 0 });
+  const pendingRef = useRef({ selectionAt: 0, legacyAt: 0, current: new Set<string>(), ttsStartAt: 0 });
 
   // Read-aloud: the units the visible page sent last, and what the frames were told.
   const readAloudRef = useRef(readAloud);
@@ -798,11 +803,11 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
           ttsUnitsRef.current = units;
           if (typeof play === 'number' && Number.isInteger(play) && play >= 0 && play < units.length) {
             // Listen asked for these, or the page relays a click on its play
-            // button: a page cannot tell us which, so it is rate-limited.
+            // button. A page can send this unprompted, so it is honoured only
+            // right after a real click (activation in the frame reaches us too).
             const requested = Date.now() - pending.ttsStartAt < REPLY_WINDOW_MS;
-            if (!requested && Date.now() - pending.ttsPlayAt < PAGE_PLAY_INTERVAL_MS) return;
+            if (!requested && !hasUserActivation()) return;
             pending.ttsStartAt = 0;
-            pending.ttsPlayAt = Date.now();
             engine.setUnits(units);
             engine.play(play);
           } else {

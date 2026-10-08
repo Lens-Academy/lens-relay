@@ -225,7 +225,8 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
       // While listening, keep the parent's sentences in step with the page.
       if (playing) scheduleUnits();
     });
-    observer.observe(doc.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden', 'class', 'style'] });
+    // Not class or style: animated pages change those constantly, and the walk is the whole page.
+    observer.observe(doc.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden'] });
   }
 
   function scheduleUnits() {

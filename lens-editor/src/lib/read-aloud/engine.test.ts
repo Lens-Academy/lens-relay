@@ -146,8 +146,9 @@ describe('ReadAloudEngine', () => {
     await flush();
     expect(player.queued).toEqual([48000]);
 
-    const refused = setup(async function* () {
-      throw new TtsUnavailableError('Read-aloud limit reached', 'limit');
+    const refused = setup(async function* (text) {
+      if (text) throw new TtsUnavailableError('Read-aloud limit reached', 'limit');
+      yield* sentence(text);
     });
     refused.engine.setUnits([{ text: 'X x' }]);
     refused.engine.play(0);

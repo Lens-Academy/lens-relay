@@ -47,9 +47,14 @@ const READ_BLOCKS = /^(Paragraph|ATXHeading\d|SetextHeading\d)$/;
 /** Silence before the first sentence of a block. */
 const BLOCK_PAUSE_S = 0.3;
 
-export function buildMarkdownReading(state: EditorState): MarkdownReading {
+/**
+ * `complete` parses the whole document first (up to 500 ms), as playback
+ * needs; without it the tree CodeMirror already has is used, which covers at
+ * least what is in view (enough for the hover button).
+ */
+export function buildMarkdownReading(state: EditorState, complete = true): MarkdownReading {
   const doc = state.doc.toString();
-  const tree = ensureSyntaxTree(state, state.doc.length, 500) ?? syntaxTree(state);
+  const tree = (complete ? ensureSyntaxTree(state, state.doc.length, 500) : null) ?? syntaxTree(state);
   const hidden = new Uint8Array(doc.length);
   const hide = (start: number, end: number) => {
     if (end > start) hidden.fill(1, start, end);
