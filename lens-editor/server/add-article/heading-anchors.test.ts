@@ -56,6 +56,13 @@ describe("applyHeadingAnchors — block IDs", () => {
 });
 
 describe("applyHeadingAnchors — link rewriting", () => {
+  it("rewrites a fragment link that carries a title (LaTeXML cross-references)", () => {
+    const { body } = applyHeadingAnchors(
+      'In section [4](#construction "4 Construction ‣ Logical Induction") we build one.\n\n## Construction\n',
+    );
+    expect(body).toBe("In section [[#^construction|4]] we build one.\n\n## Construction ^construction\n");
+  });
+
   it("rewrites a heading-slug fragment link to a block-ID link", () => {
     const { body } = applyHeadingAnchors(
       "See [the argument](#the-core-argument).\n\n## The core argument\n",

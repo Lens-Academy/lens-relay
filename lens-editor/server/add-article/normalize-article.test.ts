@@ -161,4 +161,23 @@ describe("normalizeArticleBody", () => {
       expect(normalizeArticleBody(untouched, "https://example.com", pdf).body).toBe(untouched);
     }
   });
+
+  describe("display math fences", () => {
+    const fence = (body: string) => normalizeArticleBody(body, "https://example.com").body;
+
+    it("fences a one-line display formula that is a block of its own", () => {
+      expect(fence("Text.\n\n$$x^2 + y^2$$\n\nMore.")).toBe("Text.\n\n$$\nx^2 + y^2\n$$\n\nMore.");
+    });
+
+    it("keeps the container prefix in a blockquote and on multi-line TeX in a list", () => {
+      expect(fence("> Quote.\n>\n> $$a = b$$\n")).toContain("> $$\n> a = b\n> $$");
+      expect(fence("-   Item.\n\n    $$\\liminf_n a_n =\n        b$$\n")).toContain("    $$\n    \\liminf_n a_n =\n        b\n    $$");
+    });
+
+    it("leaves display math inside a paragraph, and a literal dollar before inline math, alone", () => {
+      expect(fence("We get $$x$$ here.")).toBe("We get $$x$$ here.");
+      expect(fence("Text\n$$x$$\n")).toBe("Text\n$$x$$\n");
+      expect(fence("Bet \\$$t$ now.")).toBe("Bet \\$$t$ now.");
+    });
+  });
 });

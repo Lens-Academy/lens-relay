@@ -235,9 +235,11 @@ export function applyHeadingAnchors(body: string): HeadingAnchorResult {
         },
       );
 
-      // `[label](#fragment)` and empty `[label](#)`.
+      // `[label](#fragment)` and empty `[label](#)`, with or without a link
+      // title (`[4](#4-construction "4 Construction ‣ Logical Induction")`:
+      // LaTeXML gives every cross-reference one, and turndown keeps it).
       out = out.replace(
-        /(!?)\[([^\]\n]*)\]\(#([^)\s]*)\)/g,
+        /(!?)\[([^\]\n]*)\]\(#([^)\s]*)(?:\s+"[^"\n]*")?\)/g,
         (whole, bang: string, label: string, fragment: string) => {
           if (bang) return whole;
           if (!fragment) return plainText(label) || whole;

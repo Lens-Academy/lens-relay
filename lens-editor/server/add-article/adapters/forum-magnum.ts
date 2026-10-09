@@ -1,5 +1,5 @@
 import type { AdapterContext, AdapterExtract, SiteAdapter } from "./types";
-import { cleanAuthorName, stripSiteSuffix } from "./util";
+import { cleanAuthorName, markLiteralDollars, stripSiteSuffix } from "./util";
 
 /**
  * ForumMagnum platform: LessWrong, the AI Alignment Forum, the EA Forum — and
@@ -10,6 +10,8 @@ import { cleanAuthorName, stripSiteSuffix } from "./util";
  * read the publish date from the header <time>. For GreaterWrong we use its
  * own classes and also recover the canonical ForumMagnum URL from the page's
  * "LW link", so a mirror import cites (and dedups against) the real post.
+ * LessWrong and Alignment Forum posts and wiki pages are read through the
+ * forum's GraphQL API first (see `forumGraphqlUrl`), which keeps their math.
  * MathJax + footnote recovery happens in the shared converter.
  */
 
@@ -69,6 +71,110 @@ export function canonicalizeMirrorLinks(root: Element, baseUrl: string): void {
     }
     a.setAttribute("href", u.href);
   });
+}
+
+/**
+ * ForumMagnum's GraphQL API (LessWrong, the Alignment Forum). The rendered
+ * page draws math client-side and its wiki pages keep the text outside the
+ * post container, so page scraping loses equations; the API answers with the
+ * post's stored HTML, every formula carrying its TeX. Fetched with GET (the
+ * API accepts it), so it is an ordinary fetch candidate.
+ */
+const FORUM_API_HOSTS: Record<string, string> = {
+  "lesswrong.com": "https://www.lesswrong.com/graphql",
+  "alignmentforum.org": "https://www.alignmentforum.org/graphql",
+};
+
+/** Marker the converted API answer is recognised by in `extract`. */
+export const FORUM_GRAPHQL_MARKER = "lens-forum-graphql";
+
+/** GET URL of the API query for a post or wiki page URL ("" if not one). */
+export function forumGraphqlUrl(url: string): string {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return "";
+  }
+  const endpoint = FORUM_API_HOSTS[u.hostname.replace(/^www\./, "").toLowerCase()];
+  if (!endpoint) return "";
+  // Ids and slugs are [A-Za-z0-9_-]; anything else is not a page we know,
+  // and nothing else may reach the query text.
+  const post = u.pathname.match(/^\/(?:posts|s\/[\w-]+\/p)\/([A-Za-z0-9]{8,32})(?:\/[\w-]*)?\/?$/);
+  const wiki = u.pathname.match(/^\/(?:w|tag)\/([\w-]+)\/?$/);
+  let query: string;
+  if (post) {
+    query =
+      `{ post(selector: {_id: "${post[1]}"}) { result { title postedAt ` +
+      "user { displayName } coauthors { displayName } contents { html } } } }";
+  } else if (wiki) {
+    query =
+      `{ tags(selector: {tagBySlug: {slug: "${wiki[1]}"}}, limit: 1) ` +
+      "{ results { name description { html } } } }";
+  } else return "";
+  return `${endpoint}?query=${encodeURIComponent(query)}`;
+}
+
+/** Whether `url` is one of the forum API endpoints. */
+function isForumApiUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.pathname === "/graphql" && !!FORUM_API_HOSTS[u.hostname.replace(/^www\./, "").toLowerCase()];
+  } catch {
+    return false;
+  }
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+}
+
+interface ForumApiAnswer {
+  data?: {
+    post?: { result?: ForumApiPost | null } | null;
+    tags?: { results?: ForumApiTag[] | null } | null;
+  };
+}
+interface ForumApiPost {
+  title?: string;
+  postedAt?: string;
+  user?: { displayName?: string } | null;
+  coauthors?: { displayName?: string }[] | null;
+  contents?: { html?: string } | null;
+}
+interface ForumApiTag {
+  name?: string;
+  description?: { html?: string } | null;
+}
+
+/**
+ * The API's JSON answer as an HTML document for `extract`. Throws when the
+ * answer holds no article (unknown id, an error, an empty body), so the next
+ * candidate (the page itself, then GreaterWrong) is tried.
+ */
+export function forumApiAnswerToHtml(json: string): string {
+  const answer = JSON.parse(json) as ForumApiAnswer;
+  const post = answer.data?.post?.result;
+  const tag = answer.data?.tags?.results?.[0];
+  const title = post?.title ?? tag?.name ?? "";
+  const body = post?.contents?.html ?? tag?.description?.html ?? "";
+  if (!title || !body.trim()) throw new Error("forum API answer holds no article");
+  const authors = post
+    ? [post.user?.displayName, ...(post.coauthors ?? []).map((c) => c.displayName)].filter(
+        (name): name is string => !!name,
+      )
+    : [];
+  return [
+    "<!doctype html><html><head>",
+    `<meta name="generator" content="${FORUM_GRAPHQL_MARKER}">`,
+    `<title>${escapeHtml(title)}</title>`,
+    "</head><body>",
+    `<h1 class="lens-forum-title">${escapeHtml(title)}</h1>`,
+    ...authors.map((name) => `<span class="lens-forum-author">${escapeHtml(name)}</span>`),
+    post?.postedAt ? `<time class="lens-forum-posted" datetime="${escapeHtml(post.postedAt)}"></time>` : "",
+    `<div class="lens-forum-body">${body}</div>`,
+    "</body></html>",
+  ].join("\n");
 }
 
 /** GreaterWrong branch: mirror pages are server-rendered with their own DOM. */
@@ -163,16 +269,60 @@ export const forumMagnumAdapter: SiteAdapter = {
    * direct LW/AF/EAF import) or the mirror page's own "LW link".
    */
   resolveFetchUrls(ctx: AdapterContext): string[] {
+    const api = forumGraphqlUrl(ctx.url);
     const mirror = greaterWrongMirrorUrl(ctx.url);
-    return mirror ? [ctx.url, mirror] : [ctx.url];
+    return [api, ctx.url, mirror].filter(Boolean);
+  },
+
+  fetchAccept(candidateUrl: string): string | undefined {
+    return isForumApiUrl(candidateUrl) ? "application/json" : undefined;
+  },
+
+  async convertFetched(response) {
+    if (!isForumApiUrl(response.finalUrl)) return null;
+    return { html: forumApiAnswerToHtml(new TextDecoder("utf-8").decode(response.bytes)) };
   },
 
   extract(doc: Document, ctx: AdapterContext): AdapterExtract | null {
+    if (doc.querySelector(`meta[name="generator"][content="${FORUM_GRAPHQL_MARKER}"]`)) {
+      const body = doc.querySelector(".lens-forum-body");
+      if (!body || !body.innerHTML.trim()) return null;
+      // The API's HTML is final: every formula is MathJax markup, so a `$`
+      // in the prose is a dollar sign ("$100 one week from now").
+      markLiteralDollars(body);
+      return {
+        bodyHtml: body.innerHTML,
+        title: (doc.querySelector(".lens-forum-title")?.textContent || "").trim(),
+        author: Array.from(doc.querySelectorAll(".lens-forum-author"))
+          .map((a) => cleanAuthorName(a.textContent || ""))
+          .filter(Boolean),
+        published: (doc.querySelector(".lens-forum-posted")?.getAttribute("datetime") || "").slice(0, 10),
+      };
+    }
+
     // GreaterWrong first — its host can also be reached via the ForumMagnum
     // fallback path below when a LW fetch fell back to the mirror.
     if (/(^|\.)greaterwrong\.com$/.test(ctx.host) || doc.querySelector(".body-text.post-body")) {
       const gw = extractGreaterWrong(doc, ctx);
       if (gw) return gw;
+    }
+
+    // Wiki/tag pages (lesswrong.com/w/<slug>) have no post body: their text
+    // is the tag body under the page title. Without this branch they fell to
+    // the generic extractors, which drop MathJax, so every equation was lost.
+    if (doc.querySelector(".LWTagPage-title")) {
+      const wikiBody =
+        doc.querySelector(".LWTagPage-wikiSection .ContentStyles-tagBody") ||
+        doc.querySelector(".ContentStyles-tagBody");
+      if (wikiBody && wikiBody.innerHTML.trim()) {
+        return {
+          bodyHtml: wikiBody.innerHTML,
+          title: stripSiteSuffix(doc.querySelector(".LWTagPage-title")?.textContent || ""),
+          // A wiki page has contributors, not a byline; let the pipeline fall back.
+          author: [],
+          published: "",
+        };
+      }
     }
 
     const bodyEl =

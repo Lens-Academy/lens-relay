@@ -10,6 +10,8 @@ import { normalizeArticleDom, isIntraWord } from "./normalize-dom";
 import { escapeTagOpeners } from "./escape";
 import { convertSidenotes } from "./sidenotes";
 import { arxivAbsUrl } from "./adapters/arxiv";
+import { LITERAL_DOLLAR_ATTR } from "./adapters/util";
+import { SOURCE_IMAGE_SCHEME } from "./arxiv-latex";
 import {
   stripSiteSuffix,
   splitAuthors,
@@ -47,7 +49,7 @@ export interface ExtractResult {
   linkedOut: boolean;
   /** Deterministic extraction-quality assessment (confidence + signals + flags). */
   assessment: Assessment;
-  /** PDF figure images (PDF path only) — uploaded + embedded by the pipeline,
+  /** Figure images (PDF path, or a converted source's figures) — uploaded + embedded by the pipeline,
    *  replacing `![[__pdfimg_N__]]` placeholders in the body. */
   images?: PdfPageImage[];
   /** Adapter-authored prefix that must survive normalization and LLM review. */
@@ -191,6 +193,15 @@ function makeTurndown(baseUrl: string): TurndownService {
   const baseEscape = td.escape.bind(td);
   td.escape = (text: string) => escapeTagOpeners(baseEscape(text));
 
+  // A literal dollar sign an adapter marked in prose (`markLiteralDollars`).
+  // Emitted as `\$` so it can never open or close a math span; a rule's
+  // replacement bypasses escape(), which would double the backslash.
+  td.addRule("literalDollar", {
+    filter: (node: HTMLElement) =>
+      node.nodeName === "SPAN" && node.hasAttribute?.(LITERAL_DOLLAR_ATTR),
+    replacement: () => "\\$",
+  });
+
   // MathJax v2 CommonHTML: LaTeX source lives in .mjx-math[aria-label].
   td.addRule("mathjax", {
     filter: (node: HTMLElement) =>
@@ -284,7 +295,8 @@ function makeTurndown(baseUrl: string): TurndownService {
       const tex = (el.getAttribute("alttext") || "").trim();
       if (!tex) return content;
       const display = (el.getAttribute("display") || "").toLowerCase() === "block";
-      return display ? `\n\n$$${tex}$$\n\n` : `$${tex}$`;
+      // Inline math is one line in Markdown: a newline inside `$…$` ends it.
+      return display ? `\n\n$$${tex}$$\n\n` : `$${tex.replace(/\s*\n\s*/g, " ")}$`;
     },
   });
 
@@ -393,6 +405,12 @@ function makeTurndown(baseUrl: string): TurndownService {
         n.getAttribute("src") ||
         "";
       if (!src || src.startsWith("data:")) return "";
+      // A figure an adapter carries as bytes (`ConvertedSource.images`): the
+      // pipeline uploads it and replaces the placeholder, as for PDF figures.
+      if (src.startsWith(SOURCE_IMAGE_SCHEME)) {
+        const index = src.slice(SOURCE_IMAGE_SCHEME.length);
+        return /^\d+$/.test(index) ? `\n\n![[__pdfimg_${index}__]]\n\n` : "";
+      }
       try {
         src = new URL(src, baseUrl).href;
       } catch {
@@ -493,6 +511,9 @@ export async function extractArticle(
     sourceUrl?: string;
     /** Fetcher for an adapter's `bodyMarkdownUrl`; injectable for tests. */
     fetchText?: (u: string) => Promise<string>;
+    /** Figures of a converted structured source (`ConvertedSource.images`),
+     *  referenced from the HTML as `lens-source-image:N`. */
+    sourceImages?: PdfPageImage[];
   } = {},
 ): Promise<ExtractResult> {
   // `url` is where the HTML came from (used for adapter matching, base URL for
@@ -778,5 +799,6 @@ export async function extractArticle(
     linkedOut: onArxiv ? false : looksLikeLinkOut(body),
     assessment,
     requiredBodyPrefixMarkdown: chosen.requiredBodyPrefixMarkdown,
+    images: opts.sourceImages && body.includes("![[__pdfimg_") ? opts.sourceImages : undefined,
   };
 }

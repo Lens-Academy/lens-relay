@@ -28,6 +28,17 @@ function jobTimeoutMs(job: ArticleJob): number {
   return Number.isFinite(v) && v > 0 ? v : DEFAULT_JOB_TIMEOUT_MS;
 }
 
+/** Extra time a job gets once its article turns out long: its review passes
+ *  are scaled the same way (`scaledVerifyTimeoutMs`), and a fixed deadline
+ *  sized for essays cut book-length papers off mid-review (Logical Induction
+ *  timed out at 75 minutes). Up to three passes of the extra per-pass time,
+ *  capped at two hours. */
+export function jobDeadlineExtensionMs(sourceChars: number | undefined): number {
+  if (!sourceChars || sourceChars <= 100_000) return 0;
+  const perPass = Math.ceil(sourceChars / 100_000 - 1) * 10 * 60_000;
+  return Math.min(120 * 60_000, perPass * 3);
+}
+
 /** How many imports run at once: ARTICLE_IMPORT_WORKERS, default 3 (the
  *  Claude session pool's size; more workers than pool slots only makes jobs
  *  wait for a slot inside their deadline, so raise both together). */
@@ -422,15 +433,24 @@ export class ArticleJobQueue {
     const ctrl = new AbortController();
     this.controllers.set(job.id, ctrl);
     const timeoutMs = jobTimeoutMs(job);
-    const timer = setTimeout(
-      () =>
-        ctrl.abort(
-          new Error(
-            `Import timed out after ${Math.round(timeoutMs / 60_000)} minutes`,
-          ),
+    // The deadline is re-armed once if the pipeline has meanwhile found the
+    // article long (`job.source_chars`), so the extension needs no plumbing
+    // into the pipeline beyond that one field.
+    let granted = 0;
+    const onDeadline = () => {
+      const extra = job.video ? 0 : jobDeadlineExtensionMs(job.source_chars) - granted;
+      if (extra > 0) {
+        granted += extra;
+        timer = setTimeout(onDeadline, extra);
+        return;
+      }
+      ctrl.abort(
+        new Error(
+          `Import timed out after ${Math.round((timeoutMs + granted) / 60_000)} minutes`,
         ),
-      timeoutMs,
-    );
+      );
+    };
+    let timer = setTimeout(onDeadline, timeoutMs);
     // Settles when the job is aborted (deadline or cancel) — raced against the
     // pipeline so the job's status ALWAYS resolves, even if some pipeline stage
     // ignores the signal and never returns.

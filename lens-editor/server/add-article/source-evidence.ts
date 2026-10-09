@@ -10,8 +10,17 @@ import {
   looksLikeBotWall,
   looksLikePdf,
   MIN_ARTICLE_CHARS,
+  visibleText,
 } from "./fetch";
-import { acceptsFetchedUrl, adapterContext, resolveFetchUrls } from "./adapters";
+import {
+  acceptsFetchedHtml,
+  acceptsFetchedUrl,
+  adapterContext,
+  convertFetched,
+  fetchAcceptFor,
+  resolveFetchUrls,
+} from "./adapters";
+import type { PdfPageImage } from "./pdf-images";
 import { extractPdfSmart } from "./pdf";
 
 const REVIEW_HTML_MAX_LINE_CHARS = 8_000;
@@ -71,6 +80,11 @@ export async function buildSourceEvidence(
   let renderedHtml: string | undefined;
   let nativeMarkdown: string | undefined;
   let pdf: Buffer | undefined;
+  // Set when an adapter built the page from a structured source (an arXiv
+  // e-print's LaTeX, a forum API answer): that page is the source itself, and
+  // Jina rendering the API endpoint or archive would only add a broken twin.
+  let structured = false;
+  let sourceImages: PdfPageImage[] | undefined;
   let fetchedUrl = sourceUrl;
   let mediaType: "html" | "pdf" = "html";
   const fetchContext = adapterContext(sourceUrl, "");
@@ -91,13 +105,25 @@ export async function buildSourceEvidence(
   const botWalled: string[] = [];
   for (const candidate of candidates) {
     try {
-      const result = await fetchRawBytes(candidate, signal);
+      const accept = fetchAcceptFor(fetchContext, candidate);
+      const result = accept
+        ? await fetchRawBytes(candidate, signal, { accept })
+        : await fetchRawBytes(candidate, signal);
       if (!acceptsFetchedUrl(fetchContext, result.finalUrl)) {
         rawError = new Error(`${candidate} redirected to ${result.finalUrl}`);
         continue;
       }
+      const converted = await convertFetched(fetchContext, result, signal);
       fetchedUrl = result.finalUrl;
-      if (looksLikePdf(result.contentType, result.bytes)) {
+      if (converted) {
+        if (visibleText(converted.html).length < MIN_ARTICLE_CHARS) {
+          rawError = new Error(`${candidate} converted to an empty page`);
+          continue;
+        }
+        rawHtml = converted.html;
+        sourceImages = converted.images?.length ? converted.images : undefined;
+        structured = true;
+      } else if (looksLikePdf(result.contentType, result.bytes)) {
         mediaType = "pdf";
         // Buffer.from(ArrayBuffer) is only a view. pdf.js takes ownership of and
         // detaches its input, which used to turn the retained evidence into an
@@ -111,6 +137,10 @@ export async function buildSourceEvidence(
         if (looksLikeBotWall(html)) {
           botWalled.push(candidate);
           rawError = new BotWallError([candidate]);
+          continue;
+        }
+        if (!acceptsFetchedHtml(fetchContext, html)) {
+          rawError = new Error(`${candidate} returned an incomplete page`);
           continue;
         }
         rawHtml = html;
@@ -133,21 +163,24 @@ export async function buildSourceEvidence(
         htmlCandidates.unrendered = await extractArticle(rawHtml, fetchedUrl, {
           sourceUrl,
           fetchText: fetchAuxiliaryText,
+          sourceImages,
         });
       } catch (error) {
         unrenderedError = error;
         if (signal?.aborted) throw error;
       }
     }
-    try {
-      renderedHtml = await fetchRenderedHtml(rawHtml !== undefined ? fetchedUrl : sourceUrl, signal);
-      htmlCandidates.rendered = await extractArticle(renderedHtml, fetchedUrl, {
-        sourceUrl,
-        fetchText: fetchAuxiliaryText,
-      });
-    } catch (error) {
-      renderedError = error;
-      if (signal?.aborted) throw error;
+    if (!structured) {
+      try {
+        renderedHtml = await fetchRenderedHtml(rawHtml !== undefined ? fetchedUrl : sourceUrl, signal);
+        htmlCandidates.rendered = await extractArticle(renderedHtml, fetchedUrl, {
+          sourceUrl,
+          fetchText: fetchAuxiliaryText,
+        });
+      } catch (error) {
+        renderedError = error;
+        if (signal?.aborted) throw error;
+      }
     }
     extraction = htmlCandidates.rendered ?? htmlCandidates.unrendered ?? null;
     // Every direct fetch was walled and the renderer answered no better: say

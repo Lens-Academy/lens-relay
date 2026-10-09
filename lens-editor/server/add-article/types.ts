@@ -53,6 +53,9 @@ export interface ArticleJob {
     llm_findings_unrepaired: number;
   };
   retry_of?: string;
+  /** Length of the extracted article, set once the source is read. The queue
+   *  grants long articles extra time (`jobDeadlineExtensionMs`). */
+  source_chars?: number;
   /** Set when the article was written without a completed LLM review (the
    *  content filter blocked it, or it never answered PASS/REJECT). The
    *  article carries `review-status: "unreviewed: needs a Claude check"`. */

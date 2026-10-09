@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ArticleJobQueue, articleImportWorkers } from "./queue";
+import { ArticleJobQueue, articleImportWorkers, jobDeadlineExtensionMs } from "./queue";
 
 function flushMicrotasks() {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -107,6 +107,36 @@ describe("ArticleJobQueue — deadline, cancel, signal", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("grants a long article extra time once the pipeline has measured it", async () => {
+    vi.stubEnv("ARTICLE_JOB_TIMEOUT_MS", "40");
+    vi.useFakeTimers();
+    try {
+      const queue = new ArticleJobQueue({
+        processJob: (job) => {
+          job.source_chars = 497_000; // Logical Induction
+          return new Promise<void>(() => {});
+        },
+      });
+      const job = queue.add("https://arxiv.org/abs/1609.03543", "article-and-lens");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(queue.get(job.id)?.status).toBe("processing");
+      await vi.advanceTimersByTimeAsync(jobDeadlineExtensionMs(497_000));
+      expect(queue.get(job.id)?.status).toBe("failed");
+      expect(queue.get(job.id)?.error).toBe("Import timed out after 120 minutes");
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("sizes the extension by length: none for essays, capped at two hours", () => {
+    const min = 60_000;
+    expect(jobDeadlineExtensionMs(undefined)).toBe(0);
+    expect(jobDeadlineExtensionMs(80_000)).toBe(0);
+    expect(jobDeadlineExtensionMs(150_000)).toBe(30 * min);
+    expect(jobDeadlineExtensionMs(497_000)).toBe(120 * min);
   });
 
   it("passes an AbortSignal that fires on cancel", async () => {

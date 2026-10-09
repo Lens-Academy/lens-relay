@@ -1,3 +1,5 @@
+import type { PdfPageImage } from "../pdf-images";
+
 /**
  * Site-specific extraction adapters.
  *
@@ -24,6 +26,22 @@ export interface AdapterContext {
   pathname: string;
   /** Raw HTML of the fetched page (for cheap structural sniffing in `matches`). */
   html: string;
+}
+
+/** A fetch candidate's response, as `convertFetched` receives it. */
+export interface FetchedResponse {
+  bytes: ArrayBuffer;
+  contentType: string;
+  /** Where the fetch landed after redirects. */
+  finalUrl: string;
+}
+
+/** A structured source turned into an HTML document for `extract`. */
+export interface ConvertedSource {
+  html: string;
+  /** Figures carried as bytes; the HTML points at them as
+   *  `<img src="lens-source-image:N">` and the pipeline hosts them. */
+  images?: PdfPageImage[];
 }
 
 /** What an adapter returns once it has isolated the article in a parsed DOM. */
@@ -77,6 +95,13 @@ export interface SiteAdapter {
    */
   resolveFetchUrls?(ctx: AdapterContext): string[];
   /**
+   * Optional: the Accept header to fetch one of `resolveFetchUrls`' candidates
+   * with, when the default (HTML first) is wrong for it: a GraphQL endpoint
+   * answers a browser-like Accept with its playground page, not JSON.
+   * Pure & synchronous — no network.
+   */
+  fetchAccept?(candidateUrl: string, ctx: AdapterContext): string | undefined;
+  /**
    * Optional: veto the page a fetch candidate actually landed on after
    * redirects. Some mirrors answer 200 with a useless page instead of failing
    * (ar5iv redirects papers it has no HTML for back to the arXiv abstract), so
@@ -84,6 +109,27 @@ export interface SiteAdapter {
    * the fetch had failed. Pure & synchronous — no network.
    */
   acceptsFetchedUrl?(finalUrl: string, ctx: AdapterContext): boolean;
+  /**
+   * Optional: veto a fetched HTML page by its content, for mirrors that answer
+   * 200 with a damaged page (a LaTeXML conversion that died part-way). `false`
+   * moves the pipeline on to the next candidate as if the fetch had failed.
+   * Pure & synchronous — no network.
+   */
+  acceptsFetchedHtml?(html: string, ctx: AdapterContext): boolean;
+  /**
+   * Optional: turn a candidate's response that is the article in a structured
+   * form (an arXiv e-print's LaTeX, a forum API's JSON) into an HTML document
+   * this adapter's `extract` reads. Resolve `null` to treat the response as
+   * fetched (HTML or PDF); a throw fails the candidate. Unlike the other hooks
+   * this may do work (it may run a converter); it never fetches. Pages built
+   * this way are the source itself, so the pipeline does not also render the
+   * candidate through Jina.
+   */
+  convertFetched?(
+    response: FetchedResponse,
+    ctx: AdapterContext,
+    signal?: AbortSignal,
+  ): Promise<ConvertedSource | null>;
   /**
    * Isolate and clean the article inside `doc`. The `doc` is a throwaway JSDOM
    * document, so adapters may mutate it freely (e.g. remove chrome nodes).

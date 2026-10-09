@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { acceptsFetchedUrl, findAdapter, adapterContext, resolveFetchUrls } from "./index";
+import { acceptsFetchedHtml, acceptsFetchedUrl, findAdapter, adapterContext, resolveFetchUrls } from "./index";
 
 const route = (url: string, html = "") =>
   findAdapter(adapterContext(url, html))?.id ?? null;
@@ -39,17 +39,50 @@ describe("adapter registry — findAdapter routing", () => {
 });
 
 describe("adapter registry — resolveFetchUrls", () => {
-  it("redirects arXiv abstract/pdf URLs to full-text HTML (arxiv.org/html, then ar5iv), then the PDF", () => {
+  it("redirects arXiv abstract/pdf URLs to the e-print LaTeX, then full-text HTML (arxiv.org/html, then ar5iv), then the PDF", () => {
     expect(fetchUrls("https://arxiv.org/abs/1805.00899v2")).toEqual([
+      "https://arxiv.org/e-print/1805.00899",
       "https://arxiv.org/html/1805.00899",
       "https://ar5iv.labs.arxiv.org/html/1805.00899",
       "https://arxiv.org/pdf/1805.00899",
     ]);
     expect(fetchUrls("https://arxiv.org/pdf/0706.3639.pdf")).toEqual([
+      "https://arxiv.org/e-print/0706.3639",
       "https://arxiv.org/html/0706.3639",
       "https://ar5iv.labs.arxiv.org/html/0706.3639",
       "https://arxiv.org/pdf/0706.3639",
     ]);
+  });
+
+  it("vetoes LaTeXML pages that died part-way or never converted", () => {
+    const ctx = adapterContext("https://arxiv.org/abs/1710.05060", "");
+    // FDT on ar5iv: the paper up to section 5, then this banner.
+    const truncated = `<html><body><article><p>${"text ".repeat(500)}</p></article><div class="ltx_page_logo">Conversion to HTML had a Fatal error and exited abruptly. This document may be truncated or damaged.</div></body></html>`;
+    // Compact Proofs on ar5iv: HTTP 200, no paper.
+    const empty = `<html><body>\n    <div class="ltx_page_main">\n No content available \n</div></body></html>`;
+    expect(acceptsFetchedHtml(ctx, truncated)).toBe(false);
+    expect(acceptsFetchedHtml(ctx, empty)).toBe(false);
+    expect(acceptsFetchedHtml(ctx, `<html><body><article>${"whole paper ".repeat(100)}</article></body></html>`)).toBe(true);
+    expect(acceptsFetchedHtml(adapterContext("https://example.org/post", ""), truncated)).toBe(true);
+  });
+
+  it("reads LessWrong and Alignment Forum posts and wiki pages through the GraphQL API first", () => {
+    const post = "https://www.lesswrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we-safely-pass-the-buck-to-ai";
+    const urls = fetchUrls(post);
+    expect(urls).toHaveLength(3);
+    expect(urls[0]).toMatch(/^https:\/\/www\.lesswrong\.com\/graphql\?query=/);
+    expect(decodeURIComponent(urls[0])).toContain('post(selector: {_id: "TTFsKxQThrqgWeXYJ"})');
+    expect(urls.slice(1)).toEqual([post, "https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we-safely-pass-the-buck-to-ai"]);
+    const wiki = fetchUrls("https://www.lesswrong.com/w/updateless-decision-theory");
+    expect(decodeURIComponent(wiki[0])).toContain('tagBySlug: {slug: "updateless-decision-theory"}');
+    expect(wiki[1]).toBe("https://www.lesswrong.com/w/updateless-decision-theory");
+    expect(fetchUrls("https://www.alignmentforum.org/posts/abcdEFGH12345678/x")[0]).toMatch(
+      /^https:\/\/www\.alignmentforum\.org\/graphql\?query=/,
+    );
+    // The EA Forum's API has another schema: page fetch and mirror only.
+    expect(fetchUrls("https://forum.effectivealtruism.org/posts/abcdEFGH12345678/x")[0]).toBe(
+      "https://forum.effectivealtruism.org/posts/abcdEFGH12345678/x",
+    );
   });
 
   it("vetoes an arXiv HTML candidate that redirected to the abstract landing page", () => {

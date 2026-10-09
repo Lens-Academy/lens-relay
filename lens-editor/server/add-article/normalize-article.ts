@@ -104,7 +104,8 @@ function sourceSegments(source: string): Segment[] {
       continue;
     }
 
-    if (source.startsWith("$$", index)) {
+    // `\$$x$` is a literal dollar followed by inline math, not a display opener.
+    if (source.startsWith("$$", index) && source[index - 1] !== "\\") {
       const close = source.indexOf("$$", index + 2);
       protect(close < 0 ? source.length : close + 2);
       continue;
@@ -147,6 +148,40 @@ function repairListItemBoldOpener(marker: string, rest: string): string {
   return `${marker}**${rest}`;
 }
 
+/** What may precede a block on its line: indentation and blockquote markers. */
+const BLOCK_PREFIX = /^(?:[ \t]*>)*[ \t]*$/;
+
+/**
+ * Lens wants an article's display math fenced, `$$` alone on the lines above
+ * and below the TeX (platform validator: article.math-display-delimiter-placement).
+ * The HTML converter writes `$$tex$$` on one line, so a paper with hundreds of
+ * equations reached the reviewer with hundreds of errors to fix by hand.
+ * Rewrites a `$$…$$` math segment only when it is a block of its own (nothing
+ * but indentation or `>` before it on its line, nothing after it), keeping the
+ * prefix on the new lines. Display math inside a paragraph or a table row is
+ * left alone: moving it would change the text around it.
+ */
+function fenceDisplayMath(math: string, before: string | undefined, after: string | undefined): string {
+  const m = /^\$\$([\s\S]*)\$\$$/.exec(math);
+  if (!m) return math;
+  const tex = m[1].trim();
+  // Adjacent opaque ranges are merged into one segment; never split those.
+  if (!tex || tex.includes("$$")) return math;
+  const lines = (before ?? "").split("\n");
+  const prefix = lines[lines.length - 1];
+  if (!BLOCK_PREFIX.test(prefix)) return math;
+  // A block of its own: a blank line (or the document edge) on both sides,
+  // so the rewrite never pulls an equation out of a paragraph.
+  if (lines.length > 1 && !BLOCK_PREFIX.test(lines[lines.length - 2])) return math;
+  if (after !== undefined && !/^[ \t]*(?:\r?\n(?:[ \t>]*(?:\r?\n|$))|$)/.test(after)) return math;
+  // Inside a blockquote or list, continuation lines of multi-line TeX already
+  // carry the container prefix (the converter indents every line); only the
+  // first line needs it. If any continuation line lacks it, leave the math be.
+  const [first, ...rest] = tex.split("\n");
+  if (prefix && rest.some((line) => !line.startsWith(prefix.replace(/[ \t]+$/, "")))) return math;
+  return `$$\n${prefix}${first}${rest.length ? `\n${rest.join("\n")}` : ""}\n${prefix}$$`;
+}
+
 /** Idempotent, syntax-aware, semantics-preserving repairs only. */
 export function normalizeArticleBody(
   body: string,
@@ -167,6 +202,13 @@ export function normalizeArticleBody(
   };
 
   const segments = sourceSegments(body);
+  // Offsets into `body`, so a segment's surroundings can be read whole (an
+  // inline-math segment right before a display segment must count as text).
+  const starts: number[] = [];
+  segments.reduce((offset, segment) => {
+    starts.push(offset);
+    return offset + segment.text.length;
+  }, 0);
   const transformed = segments.map((segment, i) => {
     if (!segment.eligible) {
       // Empty escaped inline math is the one math construct known to be pure
@@ -175,7 +217,15 @@ export function normalizeArticleBody(
         record("normalize.empty-inline-math", segment.text, "");
         return "";
       }
-      return segment.text;
+      const start = starts[i];
+      const end = start + segment.text.length;
+      const fenced = fenceDisplayMath(
+        segment.text,
+        i > 0 ? body.slice(Math.max(0, start - 2_000), start) : undefined,
+        i < segments.length - 1 ? body.slice(end, end + 2_000) : undefined,
+      );
+      if (fenced !== segment.text) record("normalize.display-math-fences", segment.text, fenced);
+      return fenced;
     }
     let out = segment.text;
     out = out.replace(

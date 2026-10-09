@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   fetchRawHtml: vi.fn(),
   fetchRenderedHtml: vi.fn(),
   extractPdfSmart: vi.fn(),
+  arxivSourceToHtml: vi.fn(),
 }));
 
 vi.mock("./fetch", async () => {
@@ -25,6 +26,11 @@ vi.mock("./fetch", async () => {
 vi.mock("./pdf", () => ({
   extractPdfSmart: mocks.extractPdfSmart,
 }));
+
+vi.mock("./arxiv-latex", async () => {
+  const actual = await vi.importActual<typeof import("./arxiv-latex")>("./arxiv-latex");
+  return { ...actual, arxivSourceToHtml: mocks.arxivSourceToHtml };
+});
 
 import { buildSourceEvidence, formatHtmlForReview, writeSourceEvidence } from "./source-evidence";
 
@@ -131,18 +137,21 @@ describe("HTML source evidence retention", () => {
   it("renders the adapter-selected HTML URL", async () => {
     const selectedUrl = "https://arxiv.org/html/2401.00001";
     const renderedHtml = `<html><body><article><h1 class="ltx_title_document">Rendered Paper</h1><div class="ltx_authors">Ada Author</div><div class="ltx_abstract">${"rendered paper body ".repeat(200)}</div></article></body></html>`;
-    mocks.fetchRawBytes.mockResolvedValue({
-      bytes: new TextEncoder().encode(`<html><body>${"unrendered arXiv response ".repeat(20)}</body></html>`).buffer,
-      contentType: "text/html",
-      finalUrl: selectedUrl,
+    mocks.fetchRawBytes.mockImplementation(async (url: string) => {
+      if (url.includes("/e-print/")) throw new Error("Fetch failed: 404 Not Found");
+      return {
+        bytes: new TextEncoder().encode(`<html><body>${"unrendered arXiv response ".repeat(20)}</body></html>`).buffer,
+        contentType: "text/html",
+        finalUrl: selectedUrl,
+      };
     });
     mocks.fetchRenderedHtml.mockResolvedValue(renderedHtml);
     mocks.fetchRawHtml.mockResolvedValue(`<html><head><meta property="og:title" content="Rendered Paper"><meta name="citation_author" content="Ada Author"><meta name="citation_date" content="2024-01-02"></head></html>`);
 
     const evidence = await buildSourceEvidence("https://arxiv.org/abs/2401.00001");
 
-    expect(mocks.fetchRawBytes).toHaveBeenCalledTimes(1);
-    expect(mocks.fetchRawBytes).toHaveBeenCalledWith(selectedUrl, undefined);
+    expect(mocks.fetchRawBytes).toHaveBeenCalledTimes(2);
+    expect(mocks.fetchRawBytes).toHaveBeenLastCalledWith(selectedUrl, undefined);
     expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith(selectedUrl, undefined);
     expect(evidence.manifest.fetched_url).toBe(selectedUrl);
     expect(evidence.extraction.body).toContain("rendered paper body");
@@ -160,7 +169,9 @@ describe("HTML source evidence retention", () => {
       }
       // arxiv.org/html 404s for the paper; ar5iv answers 200 with a redirect to
       // the abstract landing page instead of failing.
-      if (url.startsWith("https://arxiv.org/html/")) throw new Error("Fetch failed: 404 Not Found");
+      if (url.startsWith("https://arxiv.org/html/") || url.includes("/e-print/")) {
+        throw new Error("Fetch failed: 404 Not Found");
+      }
       return {
         bytes: new TextEncoder().encode("<html><body>abstract only</body></html>").buffer,
         contentType: "text/html",
@@ -180,6 +191,7 @@ describe("HTML source evidence retention", () => {
     const evidence = await buildSourceEvidence(abstractPage);
 
     expect(mocks.fetchRawBytes.mock.calls.map(([url]) => url)).toEqual([
+      "https://arxiv.org/e-print/2401.00002",
       "https://arxiv.org/html/2401.00002",
       "https://ar5iv.labs.arxiv.org/html/2401.00002",
       "https://arxiv.org/pdf/2401.00002",
@@ -189,6 +201,116 @@ describe("HTML source evidence retention", () => {
     expect(evidence.manifest.fetched_url).toBe("https://arxiv.org/pdf/2401.00002v1");
     expect(evidence.extraction.body).toContain("recovered from the PDF");
     expect(evidence.pdf?.toString("latin1")).toContain("%PDF-");
+  });
+
+  it("skips a LaTeXML page that died part-way (FDT) and the empty ar5iv page (Compact Proofs) for the PDF", async () => {
+    const abs = "https://arxiv.org/abs/1710.05060";
+    const fatal = `<html><body><article><h1 class="ltx_title_document">FDT</h1><p>${"sections one to five ".repeat(100)}</p></article><div>Conversion to HTML had a Fatal error and exited abruptly. This document may be truncated or damaged.</div></body></html>`;
+    const empty = `<html><body>\n<div class="ltx_page_main">\n No content available \n</div></body></html>`;
+    mocks.fetchRawBytes.mockImplementation(async (url: string) => {
+      if (url.includes("/e-print/")) throw new Error("Fetch failed: 404 Not Found");
+      if (url.startsWith("https://arxiv.org/html/")) return { bytes: new TextEncoder().encode(fatal).buffer, contentType: "text/html", finalUrl: url };
+      if (url.includes("ar5iv")) return { bytes: new TextEncoder().encode(empty).buffer, contentType: "text/html", finalUrl: url };
+      return { bytes: new TextEncoder().encode("%PDF-1.4 whole paper").buffer, contentType: "application/pdf", finalUrl: url };
+    });
+    mocks.extractPdfSmart.mockResolvedValue({
+      body: "The whole paper, sections one to nine, from the PDF.",
+      meta: { title: "FDT", author: [], source_url: abs, published: "", description: "" },
+      siteName: "arXiv",
+      via: "pdf",
+      linkedOut: false,
+      assessment: { score: 1, flags: [] },
+      images: [],
+    });
+
+    const evidence = await buildSourceEvidence(abs);
+    expect(evidence.manifest.media_type).toBe("pdf");
+    expect(evidence.manifest.fetched_url).toBe("https://arxiv.org/pdf/1710.05060");
+    expect(evidence.rawHtml).toBeUndefined();
+  });
+
+  it("uses the converted arXiv e-print as the only candidate, with its figures, and renders nothing", async () => {
+    const abs = "https://arxiv.org/abs/1609.03543";
+    const converted = `<html><head><meta name="generator" content="lens-arxiv-latex"></head><body>
+      <header id="title-block-header"><h1 class="title">Logical Induction</h1></header>
+      <h1>Introduction</h1><p>${"Every theorem has a price ".repeat(40)}<span class="math inline">\\(\\mathbb{P}_n(\\phi)\\)</span>.</p>
+      <figure><img src="lens-source-image:0" alt=""><figcaption>A market.</figcaption></figure></body></html>`;
+    const figure = { png: Buffer.from("png"), mime: "image/png", yTop: 0, width: 0, height: 0 };
+    mocks.fetchRawBytes.mockImplementation(async (url: string) => ({
+      bytes: new TextEncoder().encode("gzip bytes").buffer,
+      contentType: "application/x-eprint-tar",
+      finalUrl: url.replace("/e-print/", "/src/"),
+    }));
+    mocks.arxivSourceToHtml.mockResolvedValue({ html: converted, images: [figure] });
+    mocks.fetchRawHtml.mockResolvedValue(`<html><head><meta property="og:title" content="Logical Induction"><meta name="citation_author" content="Garrabrant, Scott"></head></html>`);
+
+    const evidence = await buildSourceEvidence(abs);
+
+    expect(mocks.fetchRawBytes).toHaveBeenCalledTimes(1);
+    expect(mocks.fetchRenderedHtml).not.toHaveBeenCalled();
+    expect(evidence.manifest.fetched_url).toBe("https://arxiv.org/src/1609.03543");
+    expect(evidence.htmlCandidates?.rendered).toBeUndefined();
+    expect(evidence.rawHtml).toBe(converted);
+    expect(evidence.extraction.via).toBe("arxiv");
+    expect(evidence.extraction.body).toContain("$\\mathbb{P}_n(\\phi)$");
+    expect(evidence.extraction.body).toContain("![[__pdfimg_0__]]");
+    expect(evidence.extraction.images).toEqual([figure]);
+  });
+
+  it("moves on from an e-print pandoc cannot convert", async () => {
+    const abs = "https://arxiv.org/abs/2406.11779";
+    mocks.fetchRawBytes.mockImplementation(async (url: string) => {
+      if (url.includes("/e-print/")) return { bytes: new TextEncoder().encode("gzip").buffer, contentType: "application/gzip", finalUrl: url };
+      if (url.includes("/pdf/")) return { bytes: new TextEncoder().encode("%PDF-1.4 paper").buffer, contentType: "application/pdf", finalUrl: url };
+      throw new Error("Fetch failed: 404 Not Found");
+    });
+    mocks.arxivSourceToHtml.mockRejectedValue(new Error("pandoc exited 64: unexpected end of input"));
+    mocks.extractPdfSmart.mockResolvedValue({
+      body: "Compact proofs, the whole paper from the PDF.",
+      meta: { title: "Compact Proofs", author: [], source_url: abs, published: "", description: "" },
+      siteName: "arXiv",
+      via: "pdf",
+      linkedOut: false,
+      assessment: { score: 1, flags: [] },
+      images: [],
+    });
+
+    const evidence = await buildSourceEvidence(abs);
+    expect(evidence.manifest.media_type).toBe("pdf");
+    expect(evidence.extraction.body).toContain("whole paper from the PDF");
+  });
+
+  it("reads a LessWrong wiki page from the GraphQL API as JSON and keeps its math", async () => {
+    const wikiUrl = "https://www.lesswrong.com/w/updateless-decision-theory";
+    const answer = {
+      data: {
+        tags: {
+          results: [{
+            name: "Updateless Decision Theory",
+            description: {
+              html: `<p>${"UDT chooses a policy. ".repeat(30)}Let <span class="math-tex"><span class="mjpage"><span class="mjx-chtml"><span class="mjx-math" aria-label="O"><span class="mjx-mi">O</span></span></span></span></span> be the observations; getting $100 now is as good as $200 later.</p>`,
+            },
+          }],
+        },
+      },
+    };
+    mocks.fetchRawBytes.mockImplementation(async (url: string) => ({
+      bytes: new TextEncoder().encode(JSON.stringify(answer)).buffer,
+      contentType: "application/json",
+      finalUrl: url,
+    }));
+
+    const evidence = await buildSourceEvidence(wikiUrl);
+
+    const [apiUrl, , opts] = mocks.fetchRawBytes.mock.calls[0];
+    expect(apiUrl).toMatch(/^https:\/\/www\.lesswrong\.com\/graphql\?query=/);
+    expect(opts).toEqual({ accept: "application/json" });
+    expect(mocks.fetchRenderedHtml).not.toHaveBeenCalled();
+    expect(evidence.extraction.via).toBe("forum-adapter");
+    expect(evidence.extraction.meta.title).toBe("Updateless Decision Theory");
+    expect(evidence.extraction.meta.source_url).toBe(wikiUrl);
+    expect(evidence.extraction.body).toContain("Let $O$ be the observations");
+    expect(evidence.extraction.body).toContain("getting \\$100 now is as good as \\$200 later");
   });
 
   describe("bot-walled candidates", () => {
@@ -208,14 +330,15 @@ describe("HTML source evidence retention", () => {
     });
 
     it("skips a 200 bot-wall page and falls through to the GreaterWrong mirror", async () => {
-      mocks.fetchRawBytes.mockImplementation(async (url: string) =>
-        url === lwUrl ? html(botWall, lwUrl) : html(mirrorPage, gwUrl),
-      );
+      mocks.fetchRawBytes.mockImplementation(async (url: string) => {
+        if (url.includes("/graphql")) throw new Error("Fetch failed: 429 Too Many Requests");
+        return url === lwUrl ? html(botWall, lwUrl) : html(mirrorPage, gwUrl);
+      });
       mocks.fetchRenderedHtml.mockImplementation(async (url: string) => (url === gwUrl ? mirrorPage : botWall));
 
       const evidence = await buildSourceEvidence(lwUrl);
 
-      expect(mocks.fetchRawBytes.mock.calls.map(([url]) => url)).toEqual([lwUrl, gwUrl]);
+      expect(mocks.fetchRawBytes.mock.calls.map(([url]) => url).slice(1)).toEqual([lwUrl, gwUrl]);
       expect(mocks.fetchRenderedHtml).toHaveBeenCalledWith(gwUrl, undefined);
       expect(evidence.manifest.fetched_url).toBe(gwUrl);
       expect(evidence.extraction.body).toContain("The mirror serves the full post body.");

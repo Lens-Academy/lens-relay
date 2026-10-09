@@ -14,6 +14,7 @@ import {
   isUnparseableClaudeReview,
   reviewArticle,
   scaledReviewBudgetUsd,
+  scaledVerifyTimeoutMs,
 } from "./claude";
 
 const refusalStdout = JSON.stringify({
@@ -115,6 +116,20 @@ describe("scaledReviewBudgetUsd", () => {
     expect(scaledReviewBudgetUsd(50_001)).toBe(40);
     expect(scaledReviewBudgetUsd(120_000)).toBe(60);
     expect(scaledReviewBudgetUsd(1_000_000)).toBe(60);
+  });
+});
+
+describe("scaledVerifyTimeoutMs", () => {
+  it("adds 10 minutes per started 100k chars beyond the first, up to an hour", () => {
+    const min = 60_000;
+    expect(scaledVerifyTimeoutMs(0, 20 * min)).toBe(20 * min);
+    expect(scaledVerifyTimeoutMs(100_000, 20 * min)).toBe(20 * min);
+    expect(scaledVerifyTimeoutMs(100_001, 20 * min)).toBe(30 * min);
+    // Logical Induction from its LaTeX: ~500k chars.
+    expect(scaledVerifyTimeoutMs(497_000, 20 * min)).toBe(60 * min);
+    expect(scaledVerifyTimeoutMs(2_000_000, 20 * min)).toBe(60 * min);
+    // An operator's longer base is never shortened.
+    expect(scaledVerifyTimeoutMs(0, 90 * min)).toBe(90 * min);
   });
 });
 
