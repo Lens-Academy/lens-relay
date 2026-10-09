@@ -33,8 +33,6 @@ const MAX_FLAT_TEX_CHARS = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGES = 200;
 const PANDOC_TIMEOUT_MS = 3 * 60_000;
-/** Placeholder <title> for documents without \title (pandoc -s insists on one). */
-const PANDOC_PAGETITLE = "lens-untitled-arxiv-source";
 /** pandoc's heap cap (its manual's advice for untrusted input): a runaway
  *  macro expansion fails fast instead of eating the server's memory. */
 const PANDOC_HEAP = process.env.PANDOC_MAX_HEAP || "2048m";
@@ -637,7 +635,7 @@ export function runPandoc(tex: string, signal?: AbortSignal): Promise<string> {
       process.env.PANDOC_PATH || "pandoc",
       ["+RTS", `-M${PANDOC_HEAP}`, "-RTS", "--sandbox", "-f", "latex", "-t", "html5", "-s", "--mathjax", "--wrap=none",
         // \section becomes ##, under the title, as in every other import.
-        "--shift-heading-level-by=1", "--metadata", `pagetitle=${PANDOC_PAGETITLE}`],
+        "--shift-heading-level-by=1"],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
     const chunks: Buffer[] = [];
@@ -792,37 +790,69 @@ export async function attachFigures(
   return { html: html.replace(/<(?:img|embed)\b[^>]*?\bsrc="([^"]*)"[^>]*>/g, (tag) => replacements.get(tag) ?? ""), images };
 }
 
+/**
+ * Split a multi-row display environment's body at its own `\\` row breaks,
+ * not those of a nested matrix, `cases` or `split`, nor inside braces.
+ */
+export function topLevelRows(body: string): string[] {
+  const rows: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch === "\\") {
+      if (body[i + 1] === "\\") {
+        if (depth === 0) {
+          rows.push(body.slice(start, i));
+          // Keep an optional spacing argument (`\\[2pt]`) with the break.
+          const spacing = /^\[[^\]]*\]/.exec(body.slice(i + 2));
+          start = i + 2 + (spacing ? spacing[0].length : 0);
+          i = start - 1;
+        } else i += 1;
+        continue;
+      }
+      if (body.startsWith("begin", i + 1) && !/[A-Za-z]/.test(body[i + 6] ?? "")) depth += 1;
+      else if (body.startsWith("end", i + 1) && !/[A-Za-z]/.test(body[i + 4] ?? "")) depth -= 1;
+      i += 1;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") depth -= 1;
+  }
+  rows.push(body.slice(start));
+  return rows;
+}
+
 const NUMBERED_MATH_RE =
-  /\\begin\s*\{(equation|multline|align|gather|eqnarray|flalign|alignat)\}([\s\S]*?)\\end\s*\{\1\}/g;
+  /\\begin\s*\{(equation|multline|align|gather|eqnarray|flalign|alignat)\}(\{[^{}]*\})?([\s\S]*?)\\end\s*\{\1\}/g;
 
 /**
  * Number display equations as LaTeX does and resolve `\ref`/`\eqref` to them:
  * pandoc resolves references to sections, figures and tables, but prints an
- * equation reference as its raw label ("see [eq:main]"). Single equations
- * also get a `\tag{n}` so the number shows. Papers that number per section
- * (\numberwithin) are left as they are rather than misnumbered.
+ * equation reference as its raw label ("see [eq:main]"). The number is shown
+ * too: `\tag{n}` on a single equation, `\qquad\text{(n)}` at the end of each
+ * numbered row of an align or gather (KaTeX takes one \tag per formula).
+ * Papers that number per section (\numberwithin) are left as they are.
  */
 export function numberEquations(tex: string, numbers = new Map<string, string>()): string {
   if (/\\(?:numberwithin|counterwithin)\b/.test(tex)) return tex;
   let n = 0;
-  const out = tex.replace(NUMBERED_MATH_RE, (whole, env: string, body: string) => {
+  const out = tex.replace(NUMBERED_MATH_RE, (whole, env: string, arg: string | undefined, body: string) => {
     const single = env === "equation" || env === "multline";
-    const rows = single ? [body] : body.split(/\\\\(?![a-zA-Z])/);
-    let tagged = false;
-    for (const row of rows) {
+    const rows = single ? [body] : topLevelRows(body);
+    const shown = rows.map((row) => {
       const tag = /\\tag\*?\s*\{([^{}]*)\}/.exec(row)?.[1];
       const unnumbered = /\\(?:nonumber|notag)\b/.test(row) || (!single && !row.trim());
       const label = /\\label\s*\{([^{}]*)\}/.exec(row)?.[1];
-      let number = tag;
-      if (!tag && !unnumbered) {
-        n += 1;
-        number = String(n);
-        tagged = single;
+      if (tag || unnumbered) {
+        if (label && tag) numbers.set(label.trim(), tag);
+        return row;
       }
-      if (label && number) numbers.set(label.trim(), number);
-    }
-    if (!tagged) return whole;
-    return whole.replace(/\\end\s*\{(?:equation|multline)\}$/, (end) => `\\tag{${n}}${end}`);
+      n += 1;
+      if (label) numbers.set(label.trim(), String(n));
+      return single ? `${row}\\tag{${n}}` : `${row.replace(/\s+$/, "")}\\qquad\\text{(${n})}`;
+    });
+    return `\\begin{${env}}${arg ?? ""}${shown.join("\\\\")}\\end{${env}}`;
   });
   if (numbers.size === 0) return out;
   return out.replace(/\\(eqref|ref)\s*\{([^{}]*)\}/g, (whole, cmd: string, label: string) => {
@@ -867,9 +897,9 @@ export async function arxivSourceToHtml(bytes: Uint8Array, signal?: AbortSignal)
   const dir = path.posix.dirname(main) === "." ? "" : path.posix.dirname(main);
   const converted = await attachFigures(html, files, dir, rasterizePdfFigure, signal, graphicsPathDirs(tex));
   converted.html = converted.html
-    // pandoc's <title> is only the --metadata placeholder when it found no
-    // \title; an empty one lets the abstract page's title win instead.
-    .replace(/<title>[^<]*<\/title>/i, (t) => (t === `<title>${PANDOC_PAGETITLE}</title>` ? "<title></title>" : t))
+    // Without \title pandoc names the page after its input ("-"): blank it so
+    // the abstract page's title wins instead.
+    .replace(/<title>\s*-?\s*<\/title>/i, "<title></title>")
     .replace(/<head>/i, `<head>\n<meta name="generator" content="${ARXIV_LATEX_MARKER}">`);
   return converted;
 }

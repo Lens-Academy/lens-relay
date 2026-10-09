@@ -151,7 +151,7 @@ describe("flattenArxivSource", () => {
 });
 
 describe("numberEquations", () => {
-  it("numbers equations like LaTeX and resolves references to them", () => {
+  it("numbers equations like LaTeX, shows the numbers and resolves references to them", () => {
     const tex = [
       "\\begin{equation}a\\label{eq:a}\\end{equation}",
       "\\begin{equation*}u\\end{equation*}",
@@ -161,8 +161,21 @@ describe("numberEquations", () => {
     ].join("\n");
     const out = numberEquations(tex);
     expect(out).toContain("\\begin{equation}a\\label{eq:a}\\tag{1}\\end{equation}");
+    expect(out).toContain("\\begin{align}b \\label{eq:b}\\qquad\\text{(2)}\\\\ c \\nonumber\\\\ d \\label{eq:d}\\qquad\\text{(3)}\\end{align}");
     expect(out).toContain("See (1), 3, ($\\star$) and \\ref{sec:x}.");
     expect(numberEquations("\\numberwithin{equation}{section}" + tex)).toBe("\\numberwithin{equation}{section}" + tex);
+  });
+
+  it("counts only an environment's own rows, not those of a nested matrix, and compact row breaks too", () => {
+    const tex = [
+      "\\begin{align}A &= \\begin{bmatrix} a \\\\ b \\end{bmatrix}\\label{eq:m}\\end{align}",
+      "\\begin{align}p\\label{eq:p}\\\\q\\label{eq:q}\\end{align}",
+      "\\begin{equation}z=1\\label{eq:z}\\end{equation}",
+      "We cite \\eqref{eq:m}, \\eqref{eq:p}, \\eqref{eq:q} and \\eqref{eq:z}.",
+    ].join("\n");
+    const out = numberEquations(tex);
+    expect(out).toContain("We cite (1), (2), (3) and (4).");
+    expect(out).toContain("z=1\\label{eq:z}\\tag{4}");
   });
 
   it("resolves equation links pandoc met only through a macro", () => {
@@ -375,6 +388,9 @@ describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
     const body = `\\documentclass{article}\n\\begin{document}\n${"Plain paper text without a title block. ".repeat(20)}\n\\end{document}`;
     const converted = (await arxivSourceToHtml(zlib.gzipSync(body)))!;
     expect(converted.html).toContain("<title></title>");
+    // A titled paper keeps its <title> for the generic extractors.
+    const titled = (await arxivSourceToHtml(zlib.gzipSync(body.replace("\\begin{document}", "\\title{Deep Paper}\n\\begin{document}"))))!;
+    expect(titled.html).toContain("<title>Deep Paper</title>");
     const ex = await extractArticle(converted.html, "https://arxiv.org/src/2210.10760", { sourceUrl: "https://arxiv.org/abs/2210.10760" });
     expect(ex.meta.title).not.toMatch(/arxiv|untitled/i);
   });
