@@ -573,13 +573,20 @@ function referencesSection(entries: BibEntry[], style: CiteStyle): string {
 // --- the whole document ------------------------------------------------------------
 
 /** One self-contained LaTeX document pandoc can convert on its own. */
-export function flattenArxivSource(files: Map<string, Buffer>, main: string): string {
+export function flattenArxivSource(
+  files: Map<string, Buffer>,
+  main: string,
+  /** Filled with equation label -> number, for references pandoc meets
+   *  only after expanding a macro (`\eq{x}` -> `\eqref{eq:x}`). */
+  equationNumbers = new Map<string, string>(),
+): string {
   const dir = path.posix.dirname(main) === "." ? "" : path.posix.dirname(main);
   let tex = stripComments(files.get(main)!.toString("utf8"));
   tex = inlineInputs(files, tex, dir, 0, new Set([main]));
   tex = tex.replace(/\\begin\s*\{comment\}[\s\S]*?\\end\s*\{comment\}/g, "");
   tex = expandRestatable(tex);
   tex = keepXspaceSpaces(tex);
+  tex = numberEquations(tex, equationNumbers);
   // amsmath's \text works in prose too (papers define `\Var{x}` as
   // `\text{\textsc{x}}` and use it in both), but pandoc drops it outside math.
   // \textnormal means the same in both modes to pandoc and to KaTeX.
@@ -613,7 +620,8 @@ export function flattenArxivSource(files: Map<string, Buffer>, main: string): st
     return refs;
   });
   tex = tex.replace(/\\(?:bibliographystyle|addbibresource)\s*(?:\[[^\]]*\])?\s*\{[^}]*\}/g, "");
-  if (!placed && refs) tex = tex.replace(/\\end\s*\{document\}/, `${refs}\n\\end{document}`);
+  // A function, not a string: `$'` or `` $` `` in a reference must stay text.
+  if (!placed && refs) tex = tex.replace(/\\end\s*\{document\}/, () => `${refs}\n\\end{document}`);
   if (tex.length > MAX_FLAT_TEX_CHARS) throw new Error(`arXiv source too large (${tex.length} chars)`);
   return tex;
 }
@@ -627,7 +635,9 @@ export function runPandoc(tex: string, signal?: AbortSignal): Promise<string> {
     }
     const child = spawn(
       process.env.PANDOC_PATH || "pandoc",
-      ["+RTS", `-M${PANDOC_HEAP}`, "-RTS", "--sandbox", "-f", "latex", "-t", "html5", "-s", "--mathjax", "--wrap=none", "--metadata", `pagetitle=${PANDOC_PAGETITLE}`],
+      ["+RTS", `-M${PANDOC_HEAP}`, "-RTS", "--sandbox", "-f", "latex", "-t", "html5", "-s", "--mathjax", "--wrap=none",
+        // \section becomes ##, under the title, as in every other import.
+        "--shift-heading-level-by=1", "--metadata", `pagetitle=${PANDOC_PAGETITLE}`],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
     const chunks: Buffer[] = [];
@@ -782,6 +792,59 @@ export async function attachFigures(
   return { html: html.replace(/<(?:img|embed)\b[^>]*?\bsrc="([^"]*)"[^>]*>/g, (tag) => replacements.get(tag) ?? ""), images };
 }
 
+const NUMBERED_MATH_RE =
+  /\\begin\s*\{(equation|multline|align|gather|eqnarray|flalign|alignat)\}([\s\S]*?)\\end\s*\{\1\}/g;
+
+/**
+ * Number display equations as LaTeX does and resolve `\ref`/`\eqref` to them:
+ * pandoc resolves references to sections, figures and tables, but prints an
+ * equation reference as its raw label ("see [eq:main]"). Single equations
+ * also get a `\tag{n}` so the number shows. Papers that number per section
+ * (\numberwithin) are left as they are rather than misnumbered.
+ */
+export function numberEquations(tex: string, numbers = new Map<string, string>()): string {
+  if (/\\(?:numberwithin|counterwithin)\b/.test(tex)) return tex;
+  let n = 0;
+  const out = tex.replace(NUMBERED_MATH_RE, (whole, env: string, body: string) => {
+    const single = env === "equation" || env === "multline";
+    const rows = single ? [body] : body.split(/\\\\(?![a-zA-Z])/);
+    let tagged = false;
+    for (const row of rows) {
+      const tag = /\\tag\*?\s*\{([^{}]*)\}/.exec(row)?.[1];
+      const unnumbered = /\\(?:nonumber|notag)\b/.test(row) || (!single && !row.trim());
+      const label = /\\label\s*\{([^{}]*)\}/.exec(row)?.[1];
+      let number = tag;
+      if (!tag && !unnumbered) {
+        n += 1;
+        number = String(n);
+        tagged = single;
+      }
+      if (label && number) numbers.set(label.trim(), number);
+    }
+    if (!tagged) return whole;
+    return whole.replace(/\\end\s*\{(?:equation|multline)\}$/, (end) => `\\tag{${n}}${end}`);
+  });
+  if (numbers.size === 0) return out;
+  return out.replace(/\\(eqref|ref)\s*\{([^{}]*)\}/g, (whole, cmd: string, label: string) => {
+    const number = numbers.get(label.trim());
+    if (!number) return whole;
+    return cmd === "eqref" ? `(${number})` : number;
+  });
+}
+
+/** pandoc's unresolved reference links (`[eq:main]`) to numbered equations. */
+export function resolveEquationLinks(html: string, numbers: Map<string, string>): string {
+  if (numbers.size === 0) return html;
+  return html.replace(
+    /<a\b[^>]*\bdata-reference-type="(eqref|ref|autoref)"[^>]*\bdata-reference="([^"]*)"[^>]*>\[[^<]*\]<\/a>/g,
+    (whole, type: string, label: string) => {
+      const number = numbers.get(label);
+      if (!number) return whole;
+      return type === "eqref" ? `(${number})` : type === "autoref" ? `Equation ${number}` : number;
+    },
+  );
+}
+
 /** The directories `\graphicspath{{figures/}{img/}}` adds to figure lookup. */
 export function graphicsPathDirs(tex: string): string[] {
   const arg = /\\graphicspath\s*\{((?:\{[^{}]*\}\s*)*)\}/.exec(tex)?.[1] ?? "";
@@ -798,8 +861,9 @@ export async function arxivSourceToHtml(bytes: Uint8Array, signal?: AbortSignal)
   if (!files) return null;
   const main = findMainTex(files);
   if (!main) throw new Error("arXiv source has no main .tex file");
-  const tex = flattenArxivSource(files, main);
-  const html = await runPandoc(tex, signal);
+  const equationNumbers = new Map<string, string>();
+  const tex = flattenArxivSource(files, main, equationNumbers);
+  const html = resolveEquationLinks(await runPandoc(tex, signal), equationNumbers);
   const dir = path.posix.dirname(main) === "." ? "" : path.posix.dirname(main);
   const converted = await attachFigures(html, files, dir, rasterizePdfFigure, signal, graphicsPathDirs(tex));
   converted.html = converted.html

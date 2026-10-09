@@ -10,6 +10,8 @@ import {
   flattenArxivSource,
   harvestMacroDefinitions,
   keepXspaceSpaces,
+  numberEquations,
+  resolveEquationLinks,
   parseBiblatexBbl,
   parseBibitemBbl,
   rasterizePdfFigure,
@@ -145,6 +147,39 @@ describe("flattenArxivSource", () => {
     expect(tex).toContain("\\section*{References}");
     expect(tex).toContain("\\item {}Allan Gibbard and William Harper.");
     expect(tex).not.toContain("\\bibliographystyle");
+  });
+});
+
+describe("numberEquations", () => {
+  it("numbers equations like LaTeX and resolves references to them", () => {
+    const tex = [
+      "\\begin{equation}a\\label{eq:a}\\end{equation}",
+      "\\begin{equation*}u\\end{equation*}",
+      "\\begin{align}b \\label{eq:b}\\\\ c \\nonumber\\\\ d \\label{eq:d}\\end{align}",
+      "\\begin{equation}e\\tag{$\\star$}\\label{eq:e}\\end{equation}",
+      "See \\eqref{eq:a}, \\ref{eq:d}, \\eqref{eq:e} and \\ref{sec:x}.",
+    ].join("\n");
+    const out = numberEquations(tex);
+    expect(out).toContain("\\begin{equation}a\\label{eq:a}\\tag{1}\\end{equation}");
+    expect(out).toContain("See (1), 3, ($\\star$) and \\ref{sec:x}.");
+    expect(numberEquations("\\numberwithin{equation}{section}" + tex)).toBe("\\numberwithin{equation}{section}" + tex);
+  });
+
+  it("resolves equation links pandoc met only through a macro", () => {
+    const html = 'see <a href="#eq:edt" data-reference-type="eqref" data-reference="eq:edt">[eq:edt]</a> and <a href="#x" data-reference-type="ref" data-reference="x">[x]</a>';
+    expect(resolveEquationLinks(html, new Map([["eq:edt", "2"]]))).toBe(
+      'see (2) and <a href="#x" data-reference-type="ref" data-reference="x">[x]</a>',
+    );
+  });
+
+  it("keeps $ sequences in references literal", () => {
+    const files = filesOf({
+      "main.tex": "\\documentclass{article}\\begin{document}Body \\citep{a}.\n\\end{document}",
+      "main.bbl": "\\begin{thebibliography}{1}\n\\bibitem[Ann(2001)]{a} Ann, B. \\newblock \\emph{On $f$'s complexity and $`x$}.\n\\end{thebibliography}",
+    });
+    const tex = flattenArxivSource(files, "main.tex");
+    expect(tex).toContain("\\emph{On $f$'s complexity and $`x$}.");
+    expect(tex.match(/\\documentclass/g)).toHaveLength(1);
   });
 });
 
@@ -404,12 +439,13 @@ describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
     expect(ex.images).toBe(converted.images);
     const body = normalizeArticleBody(ex.body, "https://arxiv.org/abs/1609.03543").body;
     expect(body).toContain("## Abstract");
+    expect(body).toMatch(/^## Introduction/m);
     expect(body).toContain("We present a computable algorithm.");
     expect(body).toContain("A market $\\mathbb{P}$ prices sentences; a trader who pays \\$1 per share profits (Aaronson 2013).");
     // Two adjacent formulas become one, never `$…$$…$`.
     expect(body).toContain("$\\mathbb{P}_n(\\phi)\\in[0,1] \\phi$");
     // Display math is fenced and loses its \label.
-    expect(body).toMatch(/\n\$\$\n\\lim_\{n\\to\\infty\} \\mathbb\{P\}_n\(\\phi\) = 1\n\$\$\n/);
+    expect(body).toMatch(/\n\$\$\n\\lim_\{n\\to\\infty\} \\mathbb\{P\}_n\(\\phi\) = 1\n\\tag\{1\}\n\$\$\n/);
     expect(body).not.toContain("\\label");
     expect(body).toContain("![[__pdfimg_0__]]");
     expect(body).toContain("A market.");
