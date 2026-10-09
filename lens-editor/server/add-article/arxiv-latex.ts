@@ -290,6 +290,21 @@ const MACRO_SHIMS = [
   "\\providecommand{\\And}{\\and}",
   "\\providecommand{\\AND}{\\and}",
   "\\providecommand{\\icmltitle}[1]{\\title{#1}}",
+  // Text symbols pandoc drops without a trace ("50\\textcent{}" -> "50").
+  "\\providecommand{\\textcent}{\\textnormal{¢}}",
+  "\\providecommand{\\textdegree}{\\textnormal{°}}",
+  "\\providecommand{\\textpm}{\\textnormal{±}}",
+  "\\providecommand{\\texteuro}{\\textnormal{€}}",
+  "\\providecommand{\\textmu}{\\textnormal{µ}}",
+  "\\providecommand{\\textregistered}{\\textnormal{®}}",
+  "\\providecommand{\\texttrademark}{\\textnormal{™}}",
+  "\\providecommand{\\textbullet}{\\textnormal{•}}",
+  "\\providecommand{\\textendash}{\\textnormal{–}}",
+  "\\providecommand{\\textemdash}{\\textnormal{—}}",
+  "\\providecommand{\\textperthousand}{\\textnormal{‰}}",
+  "\\providecommand{\\texttimes}{\\textnormal{×}}",
+  "\\providecommand{\\textsterling}{\\textnormal{£}}",
+  "\\providecommand{\\textyen}{\\textnormal{¥}}",
 ].join("\n");
 
 // --- flattening ------------------------------------------------------------------

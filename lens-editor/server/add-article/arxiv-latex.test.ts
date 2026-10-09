@@ -439,6 +439,7 @@ describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
       "\\begin{abstract}We present a computable algorithm.\\end{abstract}",
       "\\section{Introduction}\\label{sec:intro}",
       "A market $\\PP$ prices sentences; a trader who pays \\$1 per share profits \\citep{aaronson}.",
+      "A share sells for 50\\textcent{} at 5\\textdegree, give or take 2\\textpm1.",
       "Prices satisfy $\\PP_n(\\phi)\\in[0,1]$$\\phi$ for all $n$.",
       "\\begin{equation}\\label{eq:main}",
       "  \\lim_{n\\to\\infty} \\PP_n(\\phi) = 1",
@@ -473,6 +474,7 @@ describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
     expect(ex.images).toBe(converted.images);
     const body = normalizeArticleBody(ex.body, "https://arxiv.org/abs/1609.03543").body;
     expect(body).toContain("## Abstract");
+    expect(body).toContain("A share sells for 50¢ at 5°, give or take 2±1");
     expect(body).toMatch(/^## Introduction/m);
     expect(body).toContain("We present a computable algorithm.");
     expect(body).toContain("A market $\\mathbb{P}$ prices sentences; a trader who pays \\$1 per share profits (Aaronson 2013).");

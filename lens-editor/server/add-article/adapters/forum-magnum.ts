@@ -160,7 +160,12 @@ export function forumApiAnswerToHtml(json: string, canonicalUrl = ""): string {
   // Page metadata tags in the post's own HTML (a canonical link, citation_*
   // meta) would be read as the article's: the metadata scan covers the whole
   // document. Post bodies never need them.
-  const body = (post?.contents?.html ?? tag?.description?.html ?? "").replace(/<(?:meta|link)\b[^>]*>/gi, "");
+  let body = post?.contents?.html ?? tag?.description?.html ?? "";
+  // Until stable: removing one tag must not splice the halves of another.
+  for (let prev = ""; prev !== body; ) {
+    prev = body;
+    body = body.replace(/<(?:meta|link)\b[^>]*>/gi, "");
+  }
   if (!title || !body.trim()) throw new Error("forum API answer holds no article");
   const authors = post
     ? [post.user?.displayName, ...(post.coauthors ?? []).map((c) => c.displayName)].filter(

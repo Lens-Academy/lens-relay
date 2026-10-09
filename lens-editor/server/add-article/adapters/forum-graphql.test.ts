@@ -82,7 +82,7 @@ describe("forum API answers", () => {
           results: [{
             name: "UDT",
             description: {
-              html: `<link rel="canonical" href="https://www.lesswrong.com/posts/VICTIMID1234567/x"><meta name="citation_author" content="Eliezer Yudkowsky"><meta name="citation_date" content="1999-01-01"><p>${"Wiki text. ".repeat(80)}</p>`,
+              html: `<link rel="canonical" href="https://www.lesswrong.com/posts/VICTIMID1234567/x"><meta name="citation_author" content="Eliezer Yudkowsky"><meta name="citation_date" content="1999-01-01"><met<meta name="a" content="b">a name="citation_author" content="Forged"><p>${"Wiki text. ".repeat(80)}</p>`,
             },
           }],
         },
@@ -93,6 +93,7 @@ describe("forum API answers", () => {
     const ex = await extractArticle(html, "https://www.lesswrong.com/graphql?query=x", { sourceUrl: wiki });
     expect(ex.meta.source_url).toBe(wiki);
     expect(ex.meta.author).not.toContain("Eliezer Yudkowsky");
+    expect(ex.meta.author).not.toContain("Forged");
     expect(ex.meta.published).not.toBe("1999-01-01");
   });
 
