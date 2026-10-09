@@ -75,6 +75,17 @@ describe("forum API answers", () => {
     expect(ex.meta.title).toBe("Real title");
   });
 
+  it("never leaves a figure placeholder for an image nobody supplied", async () => {
+    const answer = JSON.stringify({
+      data: { post: { result: { title: "T", user: { displayName: "A" }, contents: { html: `<p>${"Text. ".repeat(100)}</p><img src="lens-source-image:0">` } } } },
+    });
+    const ex = await extractArticle(forumApiAnswerToHtml(answer), "https://www.lesswrong.com/graphql?query=x", {
+      sourceUrl: "https://www.lesswrong.com/posts/abcdEFGH12345678/x",
+    });
+    expect(ex.body).not.toContain("__pdfimg_");
+    expect(ex.images).toBeUndefined();
+  });
+
   it("refuses an answer with no article, so the next candidate is tried", () => {
     expect(() => forumApiAnswerToHtml(JSON.stringify({ data: { post: { result: null } } }))).toThrow(/no article/);
     expect(() => forumApiAnswerToHtml(JSON.stringify({ data: { tags: { results: [] } } }))).toThrow(/no article/);

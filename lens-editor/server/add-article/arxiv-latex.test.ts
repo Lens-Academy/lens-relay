@@ -166,6 +166,18 @@ describe("numberEquations", () => {
     expect(numberEquations("\\numberwithin{equation}{section}" + tex)).toBe("\\numberwithin{equation}{section}" + tex);
   });
 
+  it("keeps row spacing and leaves listings alone", () => {
+    expect(numberEquations("\\begin{align} a &= b \\\\[6pt] c &= d \\end{align}")).toBe(
+      "\\begin{align} a &= b\\qquad\\text{(1)}\\\\[6pt] c &= d\\qquad\\text{(2)}\\end{align}",
+    );
+    const files = filesOf({
+      "main.tex": "\\documentclass{article}\\begin{document}\n\\begin{lstlisting}\n\\begin{equation}E=mc^2\\end{equation} \\text{x}\n\\end{lstlisting}\n\\begin{equation}a\\label{eq:a}\\end{equation}\nSee \\eqref{eq:a}.\n\\end{document}",
+    });
+    const tex = flattenArxivSource(files, "main.tex");
+    expect(tex).toContain("\\begin{equation}E=mc^2\\end{equation} \\text{x}");
+    expect(tex).toContain("See (1).");
+  });
+
   it("counts only an environment's own rows, not those of a nested matrix, and compact row breaks too", () => {
     const tex = [
       "\\begin{align}A &= \\begin{bmatrix} a \\\\ b \\end{bmatrix}\\label{eq:m}\\end{align}",
@@ -299,6 +311,7 @@ describe("LaTeX preprocessing", () => {
       "\\newcommand{\\PP}{\\mathbb{P}}",
       "\\newcommand\\EE[1][]{\\mathbb{E}_{#1}}",
       "\\def\\NN{\\mathbb{N}}",
+      "\\def\\myvec#1{\\mathbf{#1}}",
       "\\def\\@maketitle{\\vbox{}}",
       "\\newcommand{\\squelch}[1]{\\BeginAccSupp{x}#1\\EndAccSupp{}}",
       "\\renewcommand{\\section}{\\@startsection}",
@@ -307,6 +320,7 @@ describe("LaTeX preprocessing", () => {
       "\\newcommand{\\PP}{\\mathbb{P}}",
       "\\newcommand\\EE[1][]{\\mathbb{E}_{#1}}",
       "\\providecommand{\\NN}{\\mathbb{N}}",
+      "\\def\\myvec#1{\\mathbf{#1}}",
     ]);
   });
 });

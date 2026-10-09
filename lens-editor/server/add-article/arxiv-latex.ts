@@ -143,6 +143,8 @@ export function findMainTex(files: Map<string, Buffer>): string | null {
 const VERBATIM_RE =
   /\\begin\s*\{(verbatim\*?|lstlisting|minted|Verbatim)\}[\s\S]*?\\end\s*\{\1\}|\\(?:url|href)\s*\{[^{}\n]*\}/g;
 
+const VERBATIM_ENV_RE = /\\begin\s*\{(verbatim\*?|lstlisting|minted|Verbatim)\}[\s\S]*?\\end\s*\{\1\}/g;
+
 /** Remove `%` comments (an escaped `\%`, verbatim text and URLs stay). */
 export function stripComments(tex: string): string {
   // TeX's `%` also eats the line break and the next line's indentation, so a
@@ -263,7 +265,7 @@ export function harvestMacroDefinitions(sty: string): string {
     if (!/^[A-Za-z]+$/.test(name) || RESERVED_NAMES.has(name)) continue;
     const bodyText = def.slice(def.indexOf(name) + name.length);
     if (MACHINERY_RE.test(bodyText)) continue;
-    out.push(def.replace(/^\\def\\([A-Za-z]+)(?!#)/, "\\providecommand{\\$1}"));
+    out.push(def.replace(/^\\def\\([A-Za-z]+)(?![A-Za-z#])/, "\\providecommand{\\$1}"));
   }
   return out.join("\n");
 }
@@ -582,6 +584,10 @@ export function flattenArxivSource(
   let tex = stripComments(files.get(main)!.toString("utf8"));
   tex = inlineInputs(files, tex, dir, 0, new Set([main]));
   tex = tex.replace(/\\begin\s*\{comment\}[\s\S]*?\\end\s*\{comment\}/g, "");
+  // Verbatim blocks are shown code: no rewrite below may touch them (an
+  // example \begin{equation} in a listing must not be numbered or tagged).
+  const verbatim: string[] = [];
+  tex = tex.replace(VERBATIM_ENV_RE, (block) => `\uE000${verbatim.push(block) - 1}\uE000`);
   tex = expandRestatable(tex);
   tex = keepXspaceSpaces(tex);
   tex = numberEquations(tex, equationNumbers);
@@ -620,6 +626,7 @@ export function flattenArxivSource(
   tex = tex.replace(/\\(?:bibliographystyle|addbibresource)\s*(?:\[[^\]]*\])?\s*\{[^}]*\}/g, "");
   // A function, not a string: `$'` or `` $` `` in a reference must stay text.
   if (!placed && refs) tex = tex.replace(/\\end\s*\{document\}/, () => `${refs}\n\\end{document}`);
+  tex = tex.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => verbatim[Number(i)]);
   if (tex.length > MAX_FLAT_TEX_CHARS) throw new Error(`arXiv source too large (${tex.length} chars)`);
   return tex;
 }
@@ -793,9 +800,11 @@ export async function attachFigures(
 /**
  * Split a multi-row display environment's body at its own `\\` row breaks,
  * not those of a nested matrix, `cases` or `split`, nor inside braces.
+ * `breaks[i]` is the break after `rows[i]`, spacing argument (`\\[2pt]`) kept.
  */
-export function topLevelRows(body: string): string[] {
+export function topLevelRows(body: string): { rows: string[]; breaks: string[] } {
   const rows: string[] = [];
+  const breaks: string[] = [];
   let depth = 0;
   let start = 0;
   for (let i = 0; i < body.length; i += 1) {
@@ -804,10 +813,11 @@ export function topLevelRows(body: string): string[] {
       if (body[i + 1] === "\\") {
         if (depth === 0) {
           rows.push(body.slice(start, i));
-          // Keep an optional spacing argument (`\\[2pt]`) with the break.
-          const spacing = /^\[[^\]]*\]/.exec(body.slice(i + 2));
-          start = i + 2 + (spacing ? spacing[0].length : 0);
-          i = start - 1;
+          const spacing = /^\*?\[[^\]]*\]/.exec(body.slice(i + 2));
+          const end = i + 2 + (spacing ? spacing[0].length : 0);
+          breaks.push(body.slice(i, end));
+          start = end;
+          i = end - 1;
         } else i += 1;
         continue;
       }
@@ -820,7 +830,7 @@ export function topLevelRows(body: string): string[] {
     else if (ch === "}") depth -= 1;
   }
   rows.push(body.slice(start));
-  return rows;
+  return { rows, breaks };
 }
 
 const NUMBERED_MATH_RE =
@@ -839,7 +849,7 @@ export function numberEquations(tex: string, numbers = new Map<string, string>()
   let n = 0;
   const out = tex.replace(NUMBERED_MATH_RE, (whole, env: string, arg: string | undefined, body: string) => {
     const single = env === "equation" || env === "multline";
-    const rows = single ? [body] : topLevelRows(body);
+    const { rows, breaks } = single ? { rows: [body], breaks: [] as string[] } : topLevelRows(body);
     const shown = rows.map((row) => {
       const tag = /\\tag\*?\s*\{([^{}]*)\}/.exec(row)?.[1];
       const unnumbered = /\\(?:nonumber|notag)\b/.test(row) || (!single && !row.trim());
@@ -852,7 +862,8 @@ export function numberEquations(tex: string, numbers = new Map<string, string>()
       if (label) numbers.set(label.trim(), String(n));
       return single ? `${row}\\tag{${n}}` : `${row.replace(/\s+$/, "")}\\qquad\\text{(${n})}`;
     });
-    return `\\begin{${env}}${arg ?? ""}${shown.join("\\\\")}\\end{${env}}`;
+    const rebuilt = shown.map((row, i) => row + (breaks[i] ?? "")).join("");
+    return `\\begin{${env}}${arg ?? ""}${rebuilt}\\end{${env}}`;
   });
   if (numbers.size === 0) return out;
   return out.replace(/\\(eqref|ref)\s*\{([^{}]*)\}/g, (whole, cmd: string, label: string) => {

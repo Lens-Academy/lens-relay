@@ -776,6 +776,13 @@ export async function extractArticle(
     description: htmlMeta.description,
   };
 
+  // Figure placeholders exist only for images the caller supplied; any other
+  // (a page that happens to use the scheme) would become a dead embed.
+  const sourceImages = opts.sourceImages?.length && body.includes("![[__pdfimg_") ? opts.sourceImages : undefined;
+  body = body.replace(/!\[\[__pdfimg_(\d+)__\]\]/g, (whole, i: string) =>
+    sourceImages && Number(i) < sourceImages.length ? whole : "",
+  );
+
   const assessment = assessExtraction({
     chosenBody: body,
     defuddleBody: defuddleMd,
@@ -799,6 +806,6 @@ export async function extractArticle(
     linkedOut: onArxiv ? false : looksLikeLinkOut(body),
     assessment,
     requiredBodyPrefixMarkdown: chosen.requiredBodyPrefixMarkdown,
-    images: opts.sourceImages && body.includes("![[__pdfimg_") ? opts.sourceImages : undefined,
+    images: sourceImages,
   };
 }

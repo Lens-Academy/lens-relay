@@ -23,6 +23,8 @@ import {
 import { extractPdfSmart } from "./pdf";
 
 const REVIEW_HTML_MAX_LINE_CHARS = 8_000;
+/** `ExtractResult.via` of the fallbacks used when no adapter took the page. */
+const GENERIC_EXTRACTORS = new Set(["defuddle", "readability"]);
 
 export interface SourceEvidenceManifest {
   source_url: string;
@@ -131,6 +133,17 @@ export async function buildSourceEvidence(
         } catch (error) {
           if (signal?.aborted) throw error;
           rawError = error;
+          continue;
+        }
+        // A conversion that kept almost nothing (a class pandoc cannot read
+        // past the title block), so that the adapter declined it and a generic
+        // extractor scraped the leftovers, is no better than a failed one.
+        if (
+          structuredExtraction.body.length < MIN_ARTICLE_CHARS ||
+          GENERIC_EXTRACTORS.has(structuredExtraction.via)
+        ) {
+          structuredExtraction = undefined;
+          rawError = new Error(`${candidate} converted to an empty article`);
           continue;
         }
         rawHtml = converted.html;
