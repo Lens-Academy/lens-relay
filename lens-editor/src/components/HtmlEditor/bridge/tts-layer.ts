@@ -381,13 +381,17 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
     return button;
   }
 
+  /** Page coordinates of the shown button's row: from the button to the block's right edge. */
+  let buttonRow: { left: number; right: number; top: number; bottom: number } | null = null;
+
   function hideButton() {
     buttonUnit = null;
+    buttonRow = null;
     if (button) button.style.display = 'none';
   }
 
   /** Show the play button before the block under (x, y). */
-  function placeButton(y: number, target: Element | null) {
+  function placeButton(x: number, y: number, target: Element | null) {
     if (!enabled || options.commentMode() || !target || target.closest(`[${HOST_ATTRIBUTE}]`)) {
       if (!target?.closest(`[${HOST_ATTRIBUTE}]`)) hideButton();
       return;
@@ -398,7 +402,12 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
     let span: { start: number; end: number } | undefined;
     while (el && !(span = r.blocks.get(el))) el = el.parentElement;
     if (!el || !span) {
-      hideButton();
+      // On the way from the text to the button the pointer crosses margin
+      // that belongs to no block: keep the button while it stays in the row.
+      const px = x + win.scrollX;
+      const py = y + win.scrollY;
+      const row = buttonRow;
+      if (!row || px < row.left || px > row.right || py < row.top || py > row.bottom) hideButton();
       return;
     }
     const unit = unitAt(r, span.start, false);
@@ -418,6 +427,12 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
     b.style.left = `${left + win.scrollX}px`;
     b.style.top = `${(rect.top + rect.bottom) / 2 - 11 + win.scrollY}px`;
     b.style.display = 'flex';
+    buttonRow = {
+      left: left + win.scrollX - 4,
+      right: box.right + win.scrollX,
+      top: box.top + win.scrollY,
+      bottom: box.bottom + win.scrollY,
+    };
   }
 
   // ---- events ------------------------------------------------------------
@@ -434,7 +449,7 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
       if (!pointer || !enabled) return;
       const { x, y } = pointer;
       const target = doc.elementFromPoint(x, y);
-      placeButton(y, target);
+      placeButton(x, y, target);
       if (playing && !options.commentMode()) {
         const unit = target?.closest(INTERACTIVE) ? null : unitAtPoint(x, y);
         doc.documentElement.classList.toggle('lens-tts-over-text', unit !== null);

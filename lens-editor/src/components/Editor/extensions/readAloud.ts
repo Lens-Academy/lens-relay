@@ -254,13 +254,14 @@ export class ReadAloudController {
     }
     const scroller = this.view.scrollDOM.getBoundingClientRect();
     const content = this.view.contentDOM.getBoundingClientRect();
-    // Left of the text, clear of the authorship gutter bars in the padding.
+    // Between the authorship strip (line box - 14px, 3px wide) and the text
+    // (line box + 6px): the line box starts at the content's padding edge.
     const padLeft = parseFloat(getComputedStyle(this.view.contentDOM).paddingLeft) || 0;
-    const size = 20;
+    const size = 14;
     const lineMid = (coords.top + coords.bottom) / 2;
     this.button.style.display = '';
     this.button.style.top = `${lineMid - size / 2 - scroller.top + this.view.scrollDOM.scrollTop}px`;
-    this.button.style.left = `${Math.max(0, content.left + padLeft - size - 16 - scroller.left + this.view.scrollDOM.scrollLeft)}px`;
+    this.button.style.left = `${Math.max(0, content.left + padLeft - 10 - scroller.left + this.view.scrollDOM.scrollLeft)}px`;
   }
 
   private onMouseDown = (e: MouseEvent) => {
@@ -316,9 +317,9 @@ const readAloudTheme = EditorView.baseTheme({
   '.cm-read-aloud-line-play': {
     position: 'absolute',
     zIndex: '5',
-    width: '20px',
-    height: '20px',
-    padding: '4px',
+    width: '14px',
+    height: '14px',
+    padding: '0',
     border: 'none',
     borderRadius: '9999px',
     background: 'transparent',
@@ -329,7 +330,7 @@ const readAloudTheme = EditorView.baseTheme({
     justifyContent: 'center',
   },
   '.cm-read-aloud-line-play:hover': { color: '#b87018', backgroundColor: '#fde6c8' },
-  '.cm-read-aloud-line-play svg': { width: '12px', height: '12px', fill: 'currentColor' },
+  '.cm-read-aloud-line-play svg': { width: '9px', height: '9px', fill: 'currentColor' },
 });
 
 export function readAloud(): Extension {
