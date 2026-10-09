@@ -148,6 +148,33 @@ describe("flattenArxivSource", () => {
   });
 });
 
+describe("inline bibliographies and fan-out", () => {
+  it("reads a thebibliography written out in the document when there is no .bbl", () => {
+    const files = filesOf({
+      "main.tex": [
+        "\\documentclass{article}\n\\begin{document}",
+        "As \\citet{gibbard} argue, see also \\citep{lewis}.",
+        "\\begin{thebibliography}{2}",
+        "\\bibitem[{Gibbard and Harper}(1978)]{gibbard} Allan Gibbard. Counterfactuals. 1978.",
+        "\\bibitem[{Lewis}(1979)]{lewis} David Lewis. Prisoners. 1979.",
+        "\\end{thebibliography}",
+        "\\end{document}",
+      ].join("\n"),
+    });
+    const tex = flattenArxivSource(files, "main.tex");
+    expect(tex).toContain("As Gibbard and Harper (1978) argue, see also (Lewis 1979).");
+    expect(tex).toContain("\\item {}Allan Gibbard. Counterfactuals. 1978.");
+    expect(tex).not.toContain("thebibliography");
+  });
+
+  it("refuses an \\input fan-out bomb instead of expanding it", () => {
+    const record: Record<string, string> = { "main.tex": "\\documentclass{article}\\begin{document}\\input{f0}\\end{document}" };
+    for (let i = 0; i < 20; i += 1) record[`f${i}.tex`] = `${"x".repeat(1000)}\\input{f${i + 1}}\\input{f${i + 1}}`;
+    record["f20.tex"] = "leaf";
+    expect(() => flattenArxivSource(filesOf(record), "main.tex")).toThrow(/too (large|many)/);
+  });
+});
+
 describe("bibliography parsing", () => {
   it("reads biblatex .bbl entries (Logical Induction, FDT)", () => {
     const bbl = [
@@ -198,6 +225,8 @@ describe("bibliography parsing", () => {
 describe("LaTeX preprocessing", () => {
   it("strips comments but keeps escaped percent signs, URLs and verbatim text", () => {
     expect(stripComments("50\\% done % a note\nnext")).toBe("50\\% done next");
+    // A comment before a blank line keeps the paragraph break.
+    expect(stripComments("First paragraph ends here. % note\n\nSecond paragraph.")).toBe("First paragraph ends here. \n\nSecond paragraph.");
     // A comment-only line inside a paragraph keeps it one paragraph.
     expect(stripComments("First half,\n% TODO cite\nand the second half.")).toBe("First half,\nand the second half.");
     expect(stripComments("See \\url{http://a.com/x%20y} for data. % note")).toBe("See \\url{http://a.com/x%20y} for data. ");

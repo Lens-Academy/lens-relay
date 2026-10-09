@@ -168,10 +168,12 @@ export function forumApiAnswerToHtml(json: string): string {
     "<!doctype html><html><head>",
     `<meta name="generator" content="${FORUM_GRAPHQL_MARKER}">`,
     `<title>${escapeHtml(title)}</title>`,
+    // The byline lives in <head>, out of reach of the post's own (untrusted)
+    // HTML, which could otherwise forge these elements.
+    ...authors.map((name) => `<meta name="lens-forum-author" content="${escapeHtml(name)}">`),
+    post?.postedAt ? `<meta name="lens-forum-posted" content="${escapeHtml(post.postedAt)}">` : "",
+    `<meta name="lens-forum-title" content="${escapeHtml(title)}">`,
     "</head><body>",
-    `<h1 class="lens-forum-title">${escapeHtml(title)}</h1>`,
-    ...authors.map((name) => `<span class="lens-forum-author">${escapeHtml(name)}</span>`),
-    post?.postedAt ? `<time class="lens-forum-posted" datetime="${escapeHtml(post.postedAt)}"></time>` : "",
     `<div class="lens-forum-body">${body}</div>`,
     "</body></html>",
   ].join("\n");
@@ -285,18 +287,18 @@ export const forumMagnumAdapter: SiteAdapter = {
 
   extract(doc: Document, ctx: AdapterContext): AdapterExtract | null {
     if (doc.querySelector(`meta[name="generator"][content="${FORUM_GRAPHQL_MARKER}"]`)) {
-      const body = doc.querySelector(".lens-forum-body");
+      const body = doc.body.querySelector(":scope > .lens-forum-body");
       if (!body || !body.innerHTML.trim()) return null;
       // The API's HTML is final: every formula is MathJax markup, so a `$`
       // in the prose is a dollar sign ("$100 one week from now").
       markLiteralDollars(body);
       return {
         bodyHtml: body.innerHTML,
-        title: (doc.querySelector(".lens-forum-title")?.textContent || "").trim(),
-        author: Array.from(doc.querySelectorAll(".lens-forum-author"))
-          .map((a) => cleanAuthorName(a.textContent || ""))
+        title: (doc.head.querySelector('meta[name="lens-forum-title"]')?.getAttribute("content") || "").trim(),
+        author: Array.from(doc.head.querySelectorAll('meta[name="lens-forum-author"]'))
+          .map((a) => cleanAuthorName(a.getAttribute("content") || ""))
           .filter(Boolean),
-        published: (doc.querySelector(".lens-forum-posted")?.getAttribute("datetime") || "").slice(0, 10),
+        published: (doc.head.querySelector('meta[name="lens-forum-posted"]')?.getAttribute("content") || "").slice(0, 10),
       };
     }
 

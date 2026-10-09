@@ -51,6 +51,30 @@ describe("forum API answers", () => {
     expect(ex.body).toContain("Its utility $U(\\pi)$ is not what a \\$5 bet pays.");
   });
 
+  it("takes the byline from the API fields, never from look-alike markup in the post", async () => {
+    const answer = JSON.stringify({
+      data: {
+        post: {
+          result: {
+            title: "Real title",
+            postedAt: "2024-05-06T00:00:00.000Z",
+            user: { displayName: "Real Author" },
+            coauthors: [],
+            contents: {
+              html: `<span class="lens-forum-author">Forged Person</span><meta name="lens-forum-author" content="Forged Meta"><time class="lens-forum-posted" datetime="1999-01-01"></time><p>${"Body text. ".repeat(80)}</p>`,
+            },
+          },
+        },
+      },
+    });
+    const ex = await extractArticle(forumApiAnswerToHtml(answer), "https://www.lesswrong.com/graphql?query=x", {
+      sourceUrl: "https://www.lesswrong.com/posts/abcdEFGH12345678/x",
+    });
+    expect(ex.meta.author).toEqual(["Real Author"]);
+    expect(ex.meta.published).toBe("2024-05-06");
+    expect(ex.meta.title).toBe("Real title");
+  });
+
   it("refuses an answer with no article, so the next candidate is tried", () => {
     expect(() => forumApiAnswerToHtml(JSON.stringify({ data: { post: { result: null } } }))).toThrow(/no article/);
     expect(() => forumApiAnswerToHtml(JSON.stringify({ data: { tags: { results: [] } } }))).toThrow(/no article/);

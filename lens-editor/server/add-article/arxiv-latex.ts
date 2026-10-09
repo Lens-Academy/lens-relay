@@ -148,8 +148,9 @@ const VERBATIM_RE =
 /** Remove `%` comments (an escaped `\%`, verbatim text and URLs stay). */
 export function stripComments(tex: string): string {
   // TeX's `%` also eats the line break and the next line's indentation, so a
-  // comment-only line inside a paragraph does not split it into two.
-  const strip = (part: string) => part.replace(/(^|[^\\])((?:\\\\)*)%[^\n]*(?:\n[ \t]*)?/g, "$1$2");
+  // comment-only line inside a paragraph does not split it into two. Before a
+  // blank line the break stays: that blank line still ends the paragraph.
+  const strip = (part: string) => part.replace(/(^|[^\\])((?:\\\\)*)%[^\n]*(?:\n[ \t]*(?=\S))?/g, "$1$2");
   let out = "";
   let last = 0;
   for (const m of tex.matchAll(VERBATIM_RE)) {
@@ -314,16 +315,30 @@ function resolveMember(
 
 const INPUT_RE = /\\(input|include|subfile)\s*\{([^{}]+)\}|\\input\s+([^\s{}\\]+)/g;
 
-function inlineInputs(files: Map<string, Buffer>, tex: string, dir: string, depth: number, seen: Set<string>): string {
+/** Most \input inlinings one document may take (a fan-out bomb stops here). */
+const MAX_INLINED_FILES = 2_000;
+
+function inlineInputs(
+  files: Map<string, Buffer>,
+  tex: string,
+  dir: string,
+  depth: number,
+  seen: Set<string>,
+  budget = { files: 0, chars: tex.length },
+): string {
   if (depth > 20) return tex;
   return tex.replace(INPUT_RE, (whole, _cmd: string, braced: string | undefined, bare: string | undefined) => {
     const member = resolveMember(files, dir, braced ?? bare ?? "", [".tex"]);
     if (!member || !/\.tex$/i.test(member) || seen.has(member)) return "";
+    budget.files += 1;
+    if (budget.files > MAX_INLINED_FILES) throw new Error("arXiv source inlines too many files");
     seen.add(member);
     const inner = stripComments(files.get(member)!.toString("utf8"));
     // `\subfile`d documents carry their own preamble; keep only the body.
     const body = /\\begin\s*\{document\}([\s\S]*)\\end\s*\{document\}/.exec(inner)?.[1] ?? inner;
-    const out = inlineInputs(files, body, dir, depth + 1, seen);
+    budget.chars += body.length;
+    if (budget.chars > MAX_FLAT_TEX_CHARS) throw new Error("arXiv source too large");
+    const out = inlineInputs(files, body, dir, depth + 1, seen, budget);
     seen.delete(member);
     return `\n${out}\n`;
   });
@@ -579,7 +594,13 @@ export function flattenArxivSource(files: Map<string, Buffer>, main: string): st
     (bibName ? resolveMember(files, dir, bibName, [".bbl"]) : null) ||
     [...files.keys()].find((name) => /\.bbl$/i.test(name)) ||
     null;
-  const bbl = bblMember ? files.get(bblMember)!.toString("utf8") : "";
+  let bbl = bblMember ? files.get(bblMember)!.toString("utf8") : "";
+  // No .bbl: the bibliography may be written out in the document itself.
+  const inlineBib = /\\begin\s*\{thebibliography\}[\s\S]*?\\end\s*\{thebibliography\}/.exec(tex);
+  if (!bbl && inlineBib) {
+    bbl = inlineBib[0];
+    tex = tex.replace(inlineBib[0], "\\printbibliography");
+  }
   const kind = /\\entry\{/.test(bbl) ? "biblatex" : "bibitem";
   const entries = kind === "biblatex" ? parseBiblatexBbl(bbl) : parseBibitemBbl(bbl);
   const style = citeStyle(tex, kind, entries);

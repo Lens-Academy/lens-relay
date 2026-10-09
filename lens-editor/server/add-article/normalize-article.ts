@@ -180,7 +180,10 @@ function fenceDisplayMath(math: string, before: string | undefined, after: strin
   // carry the container prefix (the converter indents every line); only the
   // first line needs it. If any continuation line lacks it, leave the math be.
   const [first, ...rest] = tex.split("\n");
-  if (prefix && rest.some((line) => !line.startsWith(prefix.replace(/[ \t]+$/, "")))) return math;
+  // An indentation-only prefix (a list item) must be there whole; a quote
+  // prefix may lose its trailing space ("> " vs ">").
+  const need = /^[ \t]+$/.test(prefix) ? prefix : prefix.replace(/[ \t]+$/, "");
+  if (prefix && rest.some((line) => !line.startsWith(need))) return math;
   return `$$\n${prefix}${first}${rest.length ? `\n${rest.join("\n")}` : ""}\n${prefix}$$`;
 }
 

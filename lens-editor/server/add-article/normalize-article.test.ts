@@ -176,6 +176,8 @@ describe("normalizeArticleBody", () => {
         expect(fence(fence(body))).toBe(fence(body));
       }
       expect(fence("> Quote.\n>\n> $$\n> a = b\n> $$\n")).toBe("> Quote.\n>\n> $$\n> a = b\n> $$\n");
+      // A continuation line without the list indentation: leave it alone.
+      expect(fence("-   Item.\n\n    $$a =\nb$$\n\nAfter.")).toBe("-   Item.\n\n    $$a =\nb$$\n\nAfter.");
       expect(fence("-   Item.\n\n    $$\\liminf_n a_n =\n        b$$\n")).toContain("    $$\n    \\liminf_n a_n =\n        b\n    $$");
     });
 
