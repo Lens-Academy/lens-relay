@@ -75,6 +75,27 @@ describe("forum API answers", () => {
     expect(ex.meta.title).toBe("Real title");
   });
 
+  it("ignores page metadata tags inside the post body", async () => {
+    const answer = JSON.stringify({
+      data: {
+        tags: {
+          results: [{
+            name: "UDT",
+            description: {
+              html: `<link rel="canonical" href="https://www.lesswrong.com/posts/VICTIMID1234567/x"><meta name="citation_author" content="Eliezer Yudkowsky"><meta name="citation_date" content="1999-01-01"><p>${"Wiki text. ".repeat(80)}</p>`,
+            },
+          }],
+        },
+      },
+    });
+    const wiki = "https://www.lesswrong.com/w/updateless-decision-theory";
+    const html = forumApiAnswerToHtml(answer, wiki);
+    const ex = await extractArticle(html, "https://www.lesswrong.com/graphql?query=x", { sourceUrl: wiki });
+    expect(ex.meta.source_url).toBe(wiki);
+    expect(ex.meta.author).not.toContain("Eliezer Yudkowsky");
+    expect(ex.meta.published).not.toBe("1999-01-01");
+  });
+
   it("never leaves a figure placeholder for an image nobody supplied", async () => {
     const answer = JSON.stringify({
       data: { post: { result: { title: "T", user: { displayName: "A" }, contents: { html: `<p>${"Text. ".repeat(100)}</p><img src="lens-source-image:0">` } } } },

@@ -152,12 +152,15 @@ interface ForumApiTag {
  * answer holds no article (unknown id, an error, an empty body), so the next
  * candidate (the page itself, then GreaterWrong) is tried.
  */
-export function forumApiAnswerToHtml(json: string): string {
+export function forumApiAnswerToHtml(json: string, canonicalUrl = ""): string {
   const answer = JSON.parse(json) as ForumApiAnswer;
   const post = answer.data?.post?.result;
   const tag = answer.data?.tags?.results?.[0];
   const title = post?.title ?? tag?.name ?? "";
-  const body = post?.contents?.html ?? tag?.description?.html ?? "";
+  // Page metadata tags in the post's own HTML (a canonical link, citation_*
+  // meta) would be read as the article's: the metadata scan covers the whole
+  // document. Post bodies never need them.
+  const body = (post?.contents?.html ?? tag?.description?.html ?? "").replace(/<(?:meta|link)\b[^>]*>/gi, "");
   if (!title || !body.trim()) throw new Error("forum API answer holds no article");
   const authors = post
     ? [post.user?.displayName, ...(post.coauthors ?? []).map((c) => c.displayName)].filter(
@@ -168,6 +171,7 @@ export function forumApiAnswerToHtml(json: string): string {
     "<!doctype html><html><head>",
     `<meta name="generator" content="${FORUM_GRAPHQL_MARKER}">`,
     `<title>${escapeHtml(title)}</title>`,
+    canonicalUrl ? `<link rel="canonical" href="${escapeHtml(canonicalUrl)}">` : "",
     // The byline lives in <head>, out of reach of the post's own (untrusted)
     // HTML, which could otherwise forge these elements.
     ...authors.map((name) => `<meta name="lens-forum-author" content="${escapeHtml(name)}">`),
@@ -280,9 +284,9 @@ export const forumMagnumAdapter: SiteAdapter = {
     return isForumApiUrl(candidateUrl) ? "application/json" : undefined;
   },
 
-  async convertFetched(response) {
+  async convertFetched(response, ctx) {
     if (!isForumApiUrl(response.finalUrl)) return null;
-    return { html: forumApiAnswerToHtml(new TextDecoder("utf-8").decode(response.bytes)) };
+    return { html: forumApiAnswerToHtml(new TextDecoder("utf-8").decode(response.bytes), ctx.url) };
   },
 
   extract(doc: Document, ctx: AdapterContext): AdapterExtract | null {

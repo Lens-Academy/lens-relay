@@ -150,7 +150,7 @@ export function stripComments(tex: string): string {
   // TeX's `%` also eats the line break and the next line's indentation, so a
   // comment-only line inside a paragraph does not split it into two. Before a
   // blank line the break stays: that blank line still ends the paragraph.
-  const strip = (part: string) => part.replace(/(^|[^\\])((?:\\\\)*)%[^\n]*(?:\n[ \t]*(?=\S))?/g, "$1$2");
+  const strip = (part: string) => part.replace(/(?<!\\)((?:\\\\)*)%[^\n]*(?:\n[ \t]*(?=\S))?/g, "$1");
   let out = "";
   let last = 0;
   for (const m of tex.matchAll(VERBATIM_RE)) {

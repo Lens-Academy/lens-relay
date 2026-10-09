@@ -287,6 +287,10 @@ describe("LaTeX preprocessing", () => {
     expect(stripComments("50\\% done % a note\nnext")).toBe("50\\% done next");
     // A comment before a blank line keeps the paragraph break.
     expect(stripComments("First paragraph ends here. % note\n\nSecond paragraph.")).toBe("First paragraph ends here. \n\nSecond paragraph.");
+    // Runs of comment lines go whole, so nothing commented out comes back.
+    expect(stripComments("a\n%c1\n%c2\n%c3\nb\n")).toBe("a\nb\n");
+    expect(stripComments("One.\n% TODO\n% \\input{olddraft}\nTwo.")).toBe("One.\nTwo.");
+    expect(stripComments("x \\\\% c\ny")).toBe("x \\\\y");
     // A comment-only line inside a paragraph keeps it one paragraph.
     expect(stripComments("First half,\n% TODO cite\nand the second half.")).toBe("First half,\nand the second half.");
     expect(stripComments("See \\url{http://a.com/x%20y} for data. % note")).toBe("See \\url{http://a.com/x%20y} for data. ");
