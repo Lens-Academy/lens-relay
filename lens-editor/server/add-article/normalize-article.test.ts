@@ -171,6 +171,11 @@ describe("normalizeArticleBody", () => {
 
     it("keeps the container prefix in a blockquote and on multi-line TeX in a list", () => {
       expect(fence("> Quote.\n>\n> $$a = b$$\n")).toContain("> $$\n> a = b\n> $$");
+      // Idempotent: already fenced math, quoted or not, is left as it is.
+      for (const body of ["> Quote.\n>\n> $$a = b$$\n", "Text.\n\n$$x$$\n", "-   Item.\n\n    $$\\liminf_n a_n =\n        b$$\n"]) {
+        expect(fence(fence(body))).toBe(fence(body));
+      }
+      expect(fence("> Quote.\n>\n> $$\n> a = b\n> $$\n")).toBe("> Quote.\n>\n> $$\n> a = b\n> $$\n");
       expect(fence("-   Item.\n\n    $$\\liminf_n a_n =\n        b$$\n")).toContain("    $$\n    \\liminf_n a_n =\n        b\n    $$");
     });
 

@@ -62,6 +62,8 @@ describe("unpackArxivSource", () => {
 
     expect(unpackArxivSource(Buffer.from("%PDF-1.5 paper"))).toBeNull();
     expect(unpackArxivSource(zlib.gzipSync("%PDF-1.5 paper"))).toBeNull();
+    // An old PostScript submission is neither: the candidate fails.
+    expect(() => unpackArxivSource(zlib.gzipSync("%!PS-Adobe-2.0 %%Title: Old Paper"))).toThrow(/neither LaTeX nor a PDF/);
   });
 
   it("drops archive members that point outside the archive", () => {
@@ -140,7 +142,7 @@ describe("flattenArxivSource", () => {
     const tex = flattenArxivSource(files, "main.tex");
     expect(tex).toContain("As Gibbard and Harper (1978) argue, and others agree (see Gibbard and Harper 1978; Lewis 1979, p.~3).");
     expect(tex).toContain("\\section*{References}");
-    expect(tex).toContain("\\item Allan Gibbard and William Harper.");
+    expect(tex).toContain("\\item {}Allan Gibbard and William Harper.");
     expect(tex).not.toContain("\\bibliographystyle");
   });
 });
@@ -173,6 +175,17 @@ describe("bibliography parsing", () => {
     expect(entries[0].reference).toBe(
       "Aaronson, Scott. 2013. \\emph{Why philosophers should care about computational complexity}. Computability.",
     );
+  });
+
+  it.skipIf(!hasPandoc)("keeps the numbers of a numeric reference list through pandoc", async () => {
+    const files = filesOf({
+      "main.tex": "\\documentclass{article}\n\\begin{document}\nAs shown \\cite{a} and \\cite{b}.\n\\bibliography{refs}\n\\end{document}",
+      "main.bbl": "\\begin{thebibliography}{2}\n\\bibitem{a} Alice Author. First paper. 2001.\n\\bibitem{b} Bob Builder. Second paper. 2002.\n\\end{thebibliography}",
+    });
+    const html = await runPandoc(flattenArxivSource(files, "main.tex"));
+    expect(html).toContain("As shown [1] and [2].");
+    expect(html).toContain("[1] Alice Author. First paper. 2001.");
+    expect(html).toContain("[2] Bob Builder. Second paper. 2002.");
   });
 
   it("numbers citations for numeric bibliographies", () => {

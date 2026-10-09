@@ -103,7 +103,8 @@ export function parseTar(buf: Buffer): Map<string, Buffer> {
 
 /**
  * Files of an arXiv e-print. Null when the e-print is a PDF (a PDF-only
- * submission) or nothing recognisable.
+ * submission: the caller extracts it as one). Throws for anything else that
+ * is not LaTeX (old PostScript submissions), so the next candidate is tried.
  */
 export function unpackArxivSource(bytes: Uint8Array): Map<string, Buffer> | null {
   if (isPdf(bytes)) return null;
@@ -115,7 +116,7 @@ export function unpackArxivSource(bytes: Uint8Array): Map<string, Buffer> | null
   if (isTar(raw)) return parseTar(raw);
   const text = raw.toString("utf8");
   if (/\\documentclass|\\begin\{document\}/.test(text)) return new Map([["main.tex", raw]]);
-  return null;
+  throw new Error("arXiv e-print is neither LaTeX nor a PDF");
 }
 
 /** The .tex file that holds `\documentclass` and the document body. */
@@ -515,7 +516,8 @@ export function replaceCitations(tex: string, entries: BibEntry[], style: CiteSt
 
 function referencesSection(entries: BibEntry[], style: CiteStyle): string {
   if (entries.length === 0) return "";
-  const items = entries.map((e, i) => `\\item ${style === "numeric" ? `[${i + 1}] ` : ""}${e.reference}`).join("\n");
+  // `{}` first: a `[n]` right after \item is its optional label, which pandoc drops.
+  const items = entries.map((e, i) => `\\item {}${style === "numeric" ? `[${i + 1}] ` : ""}${e.reference}`).join("\n");
   return `\n\\section*{References}\n\\begin{itemize}\n${items}\n\\end{itemize}\n`;
 }
 

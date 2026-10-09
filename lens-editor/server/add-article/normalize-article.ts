@@ -164,6 +164,8 @@ const BLOCK_PREFIX = /^(?:[ \t]*>)*[ \t]*$/;
 function fenceDisplayMath(math: string, before: string | undefined, after: string | undefined): string {
   const m = /^\$\$([\s\S]*)\$\$$/.exec(math);
   if (!m) return math;
+  // Already fenced (`$$` alone on its lines): leave it, prefixes and all.
+  if (/^[ \t]*\r?\n[\s\S]*\n[ \t>]*$/.test(m[1])) return math;
   const tex = m[1].trim();
   // Adjacent opaque ranges are merged into one segment; never split those.
   if (!tex || tex.includes("$$")) return math;
