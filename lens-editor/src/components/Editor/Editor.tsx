@@ -32,6 +32,7 @@ import { useYDoc, useYjsProvider } from '../../lib/ydoc-provider'
 import { livePreview, updateWikilinkContext, wikilinkMetadataChanged, sourceReadOnlyCompartment, updateImageEmbedContext } from './extensions/livePreview';
 import { codeBlockCopyButton } from './extensions/codeBlockCopyButton';
 import { videoCutButtons, videoCutCallback, type VideoCutLine } from './extensions/videoCutButtons';
+import { readAloud } from './extensions/readAloud';
 import { VideoCutDock } from './VideoCutDock';
 import { markdownTableCompartment, markdownTableExtension } from './extensions/markdownTable';
 import { emphasisPersistPlugin } from './extensions/emphasisPersist';
@@ -401,6 +402,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         livePreview(wikilinkContextRef.current),
         codeBlockCopyButton(),
         videoCutButtons(),
+        readAloud(),
         videoCutCallback.of((line, view) =>
           setCutTarget({ view, field: line.field, anchor: line.sectionFrom, version: 0, opened: Date.now() })),
         // Only while the cut picker is open: follow its segment and re-render

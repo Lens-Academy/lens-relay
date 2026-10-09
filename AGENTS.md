@@ -271,6 +271,15 @@ page's DOM is never touched. MCP: `read` of an `.html` lists open threads, the `
 resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anchoring changes with
 `lens-editor/scripts/anchor-bench/run.ts` (real pages, ground-truth markers, edit scenarios).
 
+**Read-aloud in the editor** (`lens-editor/src/lib/read-aloud/`, `server/tts/`): a Listen button on Markdown and HTML
+pages plays the page through Speechify (simba-3.2, the platform's model and voice), sentence by sentence with word
+highlighting, after lens-platform's immersion reader but without its audio cache. The editor server proxies
+`POST /api/tts/stream` (any valid share link; `SPEECHIFY_API_KEY`, per-link hourly character cap
+`TTS_CHARS_PER_HOUR`); without the key the button hides. Markdown: `Editor/extensions/readAloud.ts` maps sentences to
+source positions (`markdown-reading.ts`), so it works with CodeMirror's virtualised DOM. HTML: the preview frame's
+`bridge/tts-layer.ts` sends the page's sentences to the parent and draws highlights and hover play buttons inside the
+frame. While audio plays a click jumps to the sentence; otherwise clicks behave as usual.
+
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change
   text attributed (via the doc's `users` provenance map) to an `ai:` actor; edits that would
