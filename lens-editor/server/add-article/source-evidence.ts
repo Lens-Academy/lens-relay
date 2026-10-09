@@ -20,7 +20,6 @@ import {
   fetchAcceptFor,
   resolveFetchUrls,
 } from "./adapters";
-import type { PdfPageImage } from "./pdf-images";
 import { extractPdfSmart } from "./pdf";
 
 const REVIEW_HTML_MAX_LINE_CHARS = 8_000;
@@ -84,7 +83,7 @@ export async function buildSourceEvidence(
   // e-print's LaTeX, a forum API answer): that page is the source itself, and
   // Jina rendering the API endpoint or archive would only add a broken twin.
   let structured = false;
-  let sourceImages: PdfPageImage[] | undefined;
+  let structuredExtraction: ExtractResult | undefined;
   let fetchedUrl = sourceUrl;
   let mediaType: "html" | "pdf" = "html";
   const fetchContext = adapterContext(sourceUrl, "");
@@ -120,8 +119,21 @@ export async function buildSourceEvidence(
           rawError = new Error(`${candidate} converted to an empty page`);
           continue;
         }
+        // Extract here, not after the loop: a converted page that will not
+        // extract must fail its candidate so the fallbacks still get a turn.
+        const images = converted.images?.length ? converted.images : undefined;
+        try {
+          structuredExtraction = await extractArticle(converted.html, result.finalUrl, {
+            sourceUrl,
+            fetchText: fetchAuxiliaryText,
+            sourceImages: images,
+          });
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          rawError = error;
+          continue;
+        }
         rawHtml = converted.html;
-        sourceImages = converted.images?.length ? converted.images : undefined;
         structured = true;
       } else if (looksLikePdf(result.contentType, result.bytes)) {
         mediaType = "pdf";
@@ -158,12 +170,13 @@ export async function buildSourceEvidence(
   // Preserve both interpretations. The reviewer chooses the editing base after
   // seeing both Markdown candidates; neither fetch path is globally superior.
   if (mediaType !== "pdf") {
-    if (rawHtml !== undefined) {
+    if (structuredExtraction) {
+      htmlCandidates.unrendered = structuredExtraction;
+    } else if (rawHtml !== undefined) {
       try {
         htmlCandidates.unrendered = await extractArticle(rawHtml, fetchedUrl, {
           sourceUrl,
           fetchText: fetchAuxiliaryText,
-          sourceImages,
         });
       } catch (error) {
         unrenderedError = error;

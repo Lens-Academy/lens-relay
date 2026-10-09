@@ -172,9 +172,15 @@ function extractPandoc(doc: Document): AdapterExtract | null {
   if (!body) return null;
   const header = body.querySelector("#title-block-header");
   const title = (header?.querySelector(".title")?.textContent || "").replace(/\s+/g, " ").trim();
+  // One .author per author (\and, \And); the name is its first line, the
+  // lines after it are affiliation and address. Thanks markers are dropped.
   const authors = Array.from(header?.querySelectorAll(".author") ?? [])
-    .flatMap((el) => (el.textContent || "").split(/\s{2,}|,|\band\b/))
-    .map(cleanAuthorName)
+    .map((el) => {
+      el.querySelectorAll("sup, a.footnote-ref").forEach((e) => e.remove());
+      return (el.innerHTML.split(/<br\s*\/?>/i)[0] || "").replace(/<[^>]*>/g, "");
+    })
+    .flatMap((name) => name.split(/,|\band\b/))
+    .map((name) => cleanAuthorName(name.replace(/&amp;/g, "&").replace(/\s+/g, " ")))
     .filter(Boolean);
   // The abstract sits in the title block; keep it, drop the rest of the block.
   const abstract = header?.querySelector(".abstract");
@@ -188,6 +194,14 @@ function extractPandoc(doc: Document): AdapterExtract | null {
   }
   // The rule pandoc draws above the endnotes would be left dangling at the end.
   body.querySelectorAll("script, style, nav, .footnotes > hr").forEach((e) => e.remove());
+  // A table caption inside <table> runs into the first row in Markdown and
+  // swallows the pipe table; give it its own paragraph above the table.
+  body.querySelectorAll("table > caption").forEach((caption) => {
+    const p = doc.createElement("p");
+    p.innerHTML = caption.innerHTML;
+    caption.closest("table")!.before(p);
+    caption.remove();
+  });
   // pandoc --mathjax writes math as \(…\) / \[…\] text in span.math.
   body.querySelectorAll("span.math").forEach((span) => {
     const display = span.classList.contains("display");

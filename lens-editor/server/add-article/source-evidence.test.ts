@@ -280,6 +280,31 @@ describe("HTML source evidence retention", () => {
     expect(evidence.extraction.body).toContain("whole paper from the PDF");
   });
 
+  it("moves on when a converted e-print will not extract", async () => {
+    const abs = "https://arxiv.org/abs/2401.00003";
+    // Extracts to a block page, which extractArticle refuses.
+    const converted = `<html><head><meta name="generator" content="lens-arxiv-latex"></head><body><h1>Paper</h1><p>Access denied. ${"x ".repeat(150)}</p></body></html>`;
+    mocks.fetchRawBytes.mockImplementation(async (url: string) => {
+      if (url.includes("/e-print/")) return { bytes: new TextEncoder().encode("gzip").buffer, contentType: "application/gzip", finalUrl: url };
+      if (url.includes("/pdf/")) return { bytes: new TextEncoder().encode("%PDF-1.4 paper").buffer, contentType: "application/pdf", finalUrl: url };
+      throw new Error("Fetch failed: 404 Not Found");
+    });
+    mocks.arxivSourceToHtml.mockResolvedValue({ html: converted, images: [] });
+    mocks.extractPdfSmart.mockResolvedValue({
+      body: "The paper from the PDF.",
+      meta: { title: "Paper", author: [], source_url: abs, published: "", description: "" },
+      siteName: "arXiv",
+      via: "pdf",
+      linkedOut: false,
+      assessment: { score: 1, flags: [] },
+      images: [],
+    });
+
+    const evidence = await buildSourceEvidence(abs);
+    expect(evidence.manifest.media_type).toBe("pdf");
+    expect(evidence.rawHtml).toBeUndefined();
+  });
+
   it("reads a LessWrong wiki page from the GraphQL API as JSON and keeps its math", async () => {
     const wikiUrl = "https://www.lesswrong.com/w/updateless-decision-theory";
     const answer = {

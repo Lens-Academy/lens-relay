@@ -33,6 +33,8 @@ const MAX_FLAT_TEX_CHARS = 8 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGES = 200;
 const PANDOC_TIMEOUT_MS = 3 * 60_000;
+/** Placeholder <title> for documents without \title (pandoc -s insists on one). */
+const PANDOC_PAGETITLE = "lens-untitled-arxiv-source";
 /** pandoc's heap cap (its manual's advice for untrusted input): a runaway
  *  macro expansion fails fast instead of eating the server's memory. */
 const PANDOC_HEAP = process.env.PANDOC_MAX_HEAP || "2048m";
@@ -137,9 +139,24 @@ export function findMainTex(files: Map<string, Buffer>): string | null {
 
 // --- LaTeX text helpers ----------------------------------------------------------
 
-/** Remove `%` comments (an escaped `\%` stays). */
+/** Where `%` is not a comment: verbatim environments and URL arguments. */
+const VERBATIM_RE =
+  /\\begin\s*\{(verbatim\*?|lstlisting|minted|Verbatim)\}[\s\S]*?\\end\s*\{\1\}|\\(?:url|href)\s*\{[^{}\n]*\}/g;
+
+/** Remove `%` comments (an escaped `\%`, verbatim text and URLs stay). */
 export function stripComments(tex: string): string {
-  return tex.replace(/(^|[^\\])((?:\\\\)*)%[^\n]*/g, "$1$2");
+  const strip = (part: string) => part.replace(/(^|[^\\])((?:\\\\)*)%[^\n]*/g, "$1$2");
+  let out = "";
+  let last = 0;
+  for (const m of tex.matchAll(VERBATIM_RE)) {
+    const before = tex.slice(last, m.index);
+    // A `%` earlier on the same line comments the "verbatim" text out too.
+    const lineStart = before.lastIndexOf("\n") + 1;
+    if (/(^|[^\\])(?:\\\\)*%/.test(before.slice(lineStart))) continue;
+    out += strip(before) + m[0];
+    last = m.index + m[0].length;
+  }
+  return out + strip(tex.slice(last));
 }
 
 /** Index just past the brace group opening at `open` (`tex[open] === "{"`). */
@@ -263,14 +280,27 @@ const MACRO_SHIMS = [
   "\\providecommand{\\vref}[1]{\\ref{#1}}",
   "\\providecommand{\\cpageref}[1]{\\ref{#1}}",
   "\\providecommand{\\Cpageref}[1]{\\ref{#1}}",
+  // Conference-style title blocks: pandoc splits authors only on \and, and
+  // sees the title only through \title.
+  "\\providecommand{\\And}{\\and}",
+  "\\providecommand{\\AND}{\\and}",
+  "\\providecommand{\\icmltitle}[1]{\\title{#1}}",
 ].join("\n");
 
 // --- flattening ------------------------------------------------------------------
 
-function resolveMember(files: Map<string, Buffer>, dir: string, name: string, exts: string[]): string | null {
+function resolveMember(
+  files: Map<string, Buffer>,
+  dir: string,
+  name: string,
+  exts: string[],
+  searchDirs: string[] = [],
+): string | null {
   const clean = name.trim().replace(/^"|"$/g, "");
   for (const ext of ["", ...exts]) {
-    for (const base of [path.posix.join(dir, clean + ext), clean + ext]) {
+    const bases = [path.posix.join(dir, clean + ext), clean + ext];
+    for (const extra of searchDirs) bases.push(path.posix.join(dir, extra, clean + ext), path.posix.join(extra, clean + ext));
+    for (const base of bases) {
       const member = safeMemberPath(base);
       if (member && files.has(member)) return member;
     }
@@ -572,7 +602,7 @@ export function runPandoc(tex: string, signal?: AbortSignal): Promise<string> {
     }
     const child = spawn(
       process.env.PANDOC_PATH || "pandoc",
-      ["+RTS", `-M${PANDOC_HEAP}`, "-RTS", "--sandbox", "-f", "latex", "-t", "html5", "-s", "--mathjax", "--wrap=none", "--metadata", "pagetitle=arXiv"],
+      ["+RTS", `-M${PANDOC_HEAP}`, "-RTS", "--sandbox", "-f", "latex", "-t", "html5", "-s", "--mathjax", "--wrap=none", "--metadata", `pagetitle=${PANDOC_PAGETITLE}`],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
     const chunks: Buffer[] = [];
@@ -688,6 +718,7 @@ export async function attachFigures(
   dir: string,
   rasterize: (pdf: Buffer, signal?: AbortSignal) => Promise<Buffer | null> = rasterizePdfFigure,
   signal?: AbortSignal,
+  graphicsDirs: string[] = [],
 ): Promise<ConvertedSource> {
   const images: PdfPageImage[] = [];
   const byMember = new Map<string, number | null>();
@@ -701,7 +732,7 @@ export async function attachFigures(
     } catch {
       /* keep */
     }
-    const member = resolveMember(files, dir, name, [".png", ".jpg", ".jpeg", ".gif", ".pdf"]);
+    const member = resolveMember(files, dir, name, [".png", ".jpg", ".jpeg", ".gif", ".pdf"], graphicsDirs);
     let index: number | null | undefined = member ? byMember.get(member) : null;
     if (member && index === undefined) {
       index = null;
@@ -726,6 +757,12 @@ export async function attachFigures(
   return { html: html.replace(/<(?:img|embed)\b[^>]*?\bsrc="([^"]*)"[^>]*>/g, (tag) => replacements.get(tag) ?? ""), images };
 }
 
+/** The directories `\graphicspath{{figures/}{img/}}` adds to figure lookup. */
+export function graphicsPathDirs(tex: string): string[] {
+  const arg = /\\graphicspath\s*\{((?:\{[^{}]*\}\s*)*)\}/.exec(tex)?.[1] ?? "";
+  return [...arg.matchAll(/\{([^{}]*)\}/g)].map((m) => m[1].trim()).filter(Boolean);
+}
+
 /**
  * Convert an arXiv e-print to an HTML document for the arXiv adapter. Null
  * when the e-print is not LaTeX (a PDF-only submission: the caller extracts
@@ -739,10 +776,11 @@ export async function arxivSourceToHtml(bytes: Uint8Array, signal?: AbortSignal)
   const tex = flattenArxivSource(files, main);
   const html = await runPandoc(tex, signal);
   const dir = path.posix.dirname(main) === "." ? "" : path.posix.dirname(main);
-  const converted = await attachFigures(html, files, dir, rasterizePdfFigure, signal);
-  converted.html = converted.html.replace(
-    /<head>/i,
-    `<head>\n<meta name="generator" content="${ARXIV_LATEX_MARKER}">`,
-  );
+  const converted = await attachFigures(html, files, dir, rasterizePdfFigure, signal, graphicsPathDirs(tex));
+  converted.html = converted.html
+    // pandoc's <title> is only the --metadata placeholder when it found no
+    // \title; an empty one lets the abstract page's title win instead.
+    .replace(/<title>[^<]*<\/title>/i, (t) => (t === `<title>${PANDOC_PAGETITLE}</title>` ? "<title></title>" : t))
+    .replace(/<head>/i, `<head>\n<meta name="generator" content="${ARXIV_LATEX_MARKER}">`);
   return converted;
 }

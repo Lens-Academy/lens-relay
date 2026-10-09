@@ -6,6 +6,7 @@ import {
   attachFigures,
   expandRestatable,
   findMainTex,
+  graphicsPathDirs,
   flattenArxivSource,
   harvestMacroDefinitions,
   keepXspaceSpaces,
@@ -195,8 +196,11 @@ describe("bibliography parsing", () => {
 });
 
 describe("LaTeX preprocessing", () => {
-  it("strips comments but keeps escaped percent signs", () => {
+  it("strips comments but keeps escaped percent signs, URLs and verbatim text", () => {
     expect(stripComments("50\\% done % a note\nnext")).toBe("50\\% done \nnext");
+    expect(stripComments("See \\url{http://a.com/x%20y} for data. % note")).toBe("See \\url{http://a.com/x%20y} for data. ");
+    expect(stripComments("\\begin{verbatim}\nx = 100 % 7\n\\end{verbatim}")).toBe("\\begin{verbatim}\nx = 100 % 7\n\\end{verbatim}");
+    expect(stripComments("% \\url{http://a.com/%}\nkept")).toBe("\nkept");
   });
 
   it("rewrites thm-restate theorems into plain theorem environments, restatements included", () => {
@@ -277,6 +281,16 @@ describe("attachFigures", () => {
   });
 });
 
+describe("graphicsPathDirs", () => {
+  it("finds figures in the \\graphicspath directories", async () => {
+    expect(graphicsPathDirs("\\graphicspath{{figures/}{img/}}")).toEqual(["figures/", "img/"]);
+    const files = new Map([["figures/plot.png", Buffer.from("png")]]);
+    const out = await attachFigures('<img src="plot">', files, "", async () => null, undefined, ["figures/"]);
+    expect(out.images).toHaveLength(1);
+    expect(out.html).toBe('<img src="lens-source-image:0" alt="">');
+  });
+});
+
 const hasPdftoppm = spawnSync(process.env.PDFTOPPM_PATH || "pdftoppm", ["-v"]).status === 0;
 
 describe.skipIf(!hasPdftoppm)("rasterizePdfFigure", () => {
@@ -291,6 +305,22 @@ describe.skipIf(!hasPdftoppm)("rasterizePdfFigure", () => {
 });
 
 describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
+  it("leaves the title empty, not a placeholder, when pandoc sees no \\title", async () => {
+    const body = `\\documentclass{article}\n\\begin{document}\n${"Plain paper text without a title block. ".repeat(20)}\n\\end{document}`;
+    const converted = (await arxivSourceToHtml(zlib.gzipSync(body)))!;
+    expect(converted.html).toContain("<title></title>");
+    const ex = await extractArticle(converted.html, "https://arxiv.org/src/2210.10760", { sourceUrl: "https://arxiv.org/abs/2210.10760" });
+    expect(ex.meta.title).not.toMatch(/arxiv|untitled/i);
+  });
+
+  it("reads ICML-style titles and \\And-separated authors", async () => {
+    const body = `\\documentclass{article}\n\\icmltitle{Scaling Laws for Reward Model Overoptimization}\n\\author{Leo Gao\\\\OpenAI \\And John Schulman\\\\OpenAI}\n\\begin{document}\n\\maketitle\n${"Body text. ".repeat(80)}\n\\end{document}`;
+    const converted = (await arxivSourceToHtml(zlib.gzipSync(body)))!;
+    const ex = await extractArticle(converted.html, "https://arxiv.org/src/2210.10760", { sourceUrl: "https://arxiv.org/abs/2210.10760" });
+    expect(ex.meta.title).toBe("Scaling Laws for Reward Model Overoptimization");
+    expect(ex.meta.author).toEqual(["Leo Gao", "John Schulman"]);
+  });
+
   it("reads nothing outside the document it is given (--sandbox)", async () => {
     const html = await runPandoc("\\documentclass{article}\\begin{document}A \\input{/etc/hostname} B\\end{document}");
     const host = spawnSync("cat", ["/etc/hostname"]).stdout.toString().trim();
@@ -303,7 +333,7 @@ describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
       "\\documentclass{article}",
       "\\usepackage{mathnotation}",
       "\\title{Logical Induction}",
-      "\\author{Scott Garrabrant \\and Tsvi Benson-Tilsen}",
+      "\\author{Scott Garrabrant\\thanks{MIRI}\\\\Machine Intelligence Research Institute \\And Tsvi Benson-Tilsen\\\\MIRI}",
       "\\begin{document}",
       "\\maketitle",
       "\\begin{abstract}We present a computable algorithm.\\end{abstract}",
@@ -316,6 +346,7 @@ describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
       "As shown in Section~\\ref{sec:intro}.",
       "\\begin{figure}\\includegraphics{market}\\caption{A market.}\\end{figure}",
       `${"Logical inductors learn to predict patterns long before they can prove them. ".repeat(8)}`,
+      "\\begin{table}\\caption{Prices by day.}\\begin{tabular}{ll}Day & Price\\\\\\hline 1 & 0.5\\end{tabular}\\end{table}",
       "\\section{Conclusion}",
       "Done.\\footnote{A note.}",
       "\\bibliography{refs}",
@@ -338,6 +369,7 @@ describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
     });
     expect(ex.via).toBe("arxiv");
     expect(ex.meta.title).toBe("Logical Induction");
+    expect(ex.meta.author).toEqual(["Scott Garrabrant", "Tsvi Benson-Tilsen"]);
     expect(ex.images).toBe(converted.images);
     const body = normalizeArticleBody(ex.body, "https://arxiv.org/abs/1609.03543").body;
     expect(body).toContain("## Abstract");
@@ -350,6 +382,8 @@ describe.skipIf(!hasPandoc)("arXiv e-print to article (pandoc)", () => {
     expect(body).not.toContain("\\label");
     expect(body).toContain("![[__pdfimg_0__]]");
     expect(body).toContain("A market.");
+    // The caption is its own paragraph, so the pipe table after it survives.
+    expect(body).toMatch(/Prices by day\.\n\n\| Day \| Price \|/);
     expect(body).toMatch(/\[\^[\w-]+\]: A note\./);
     expect(body).toContain("Scott Aaronson. Why philosophers should care. 2013.");
   });
