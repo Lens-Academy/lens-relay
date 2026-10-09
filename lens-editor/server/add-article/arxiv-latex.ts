@@ -114,7 +114,9 @@ export function unpackArxivSource(bytes: Uint8Array): Map<string, Buffer> | null
   if (raw[0] === 0x1f && raw[1] === 0x8b) {
     raw = zlib.gunzipSync(raw, { maxOutputLength: MAX_UNPACKED_BYTES });
   }
-  if (isPdf(raw)) return null;
+  // A gzipped PDF: the caller only sees the gzip bytes, so fail the candidate
+  // and let the arxiv.org/pdf candidate bring the PDF itself.
+  if (isPdf(raw)) throw new Error("arXiv e-print is a gzipped PDF");
   if (isTar(raw)) return parseTar(raw);
   const text = raw.toString("utf8");
   if (/\\documentclass|\\begin\{document\}/.test(text)) return new Map([["main.tex", raw]]);
@@ -145,7 +147,9 @@ const VERBATIM_RE =
 
 /** Remove `%` comments (an escaped `\%`, verbatim text and URLs stay). */
 export function stripComments(tex: string): string {
-  const strip = (part: string) => part.replace(/(^|[^\\])((?:\\\\)*)%[^\n]*/g, "$1$2");
+  // TeX's `%` also eats the line break and the next line's indentation, so a
+  // comment-only line inside a paragraph does not split it into two.
+  const strip = (part: string) => part.replace(/(^|[^\\])((?:\\\\)*)%[^\n]*(?:\n[ \t]*)?/g, "$1$2");
   let out = "";
   let last = 0;
   for (const m of tex.matchAll(VERBATIM_RE)) {

@@ -167,16 +167,21 @@ export function markLiteralDollars(root: Element): void {
     // move it into the TeX. Written as `\$$t/2$` the Lens validator
     // reads `$$` as a display opener and misparses the rest of the page.
     const next = t.nextSibling as Element | null;
-    if (
-      t.data.endsWith("$") &&
-      next?.nodeName.toLowerCase() === "math" &&
-      next.getAttribute("alttext") &&
-      (next.getAttribute("display") || "").toLowerCase() !== "block"
-    ) {
+    // The element holding the next inline formula's TeX: LaTeXML's
+    // <math alttext>, or a forum's MathJax .mjx-math[aria-label].
+    let texEl: Element | null = null;
+    let texAttr = "alttext";
+    if (next?.nodeName.toLowerCase() === "math") {
+      if ((next.getAttribute("display") || "").toLowerCase() !== "block") texEl = next;
+    } else if (next?.nodeType === 1 && next.matches(".math-tex, .mjpage") && !next.querySelector(".mjpage__block, .MJXc-display")) {
+      texEl = next.querySelector(".mjx-math[aria-label]");
+      texAttr = "aria-label";
+    }
+    if (t.data.endsWith("$") && texEl?.getAttribute(texAttr)) {
       t.data = t.data.slice(0, -1);
       // \textdollar, not `\$`: Lens pairs `$` delimiters before reading TeX
       // escapes, so `$\$t/2$` would end the formula at the escaped dollar.
-      next.setAttribute("alttext", `\\text{\\textdollar}${next.getAttribute("alttext")}`);
+      texEl.setAttribute(texAttr, `\\text{\\textdollar}${texEl.getAttribute(texAttr)}`);
       if (!t.data.includes("$")) continue;
     }
     const frag = doc.createDocumentFragment();

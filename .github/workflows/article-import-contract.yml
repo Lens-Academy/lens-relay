@@ -40,6 +40,7 @@ jobs:
           server/add-article/arxiv-latex.test.ts
           server/add-article/source-evidence.test.ts
           server/add-article/normalize-article.test.ts
+          server/add-article/heading-anchors.test.ts
           server/add-article/adapters/forum-graphql.test.ts
           server/add-article/adapters/registry.test.ts
           server/add-article/adapters/util.test.ts

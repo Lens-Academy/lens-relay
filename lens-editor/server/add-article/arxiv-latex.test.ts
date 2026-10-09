@@ -62,7 +62,7 @@ describe("unpackArxivSource", () => {
     expect([...single.keys()]).toEqual(["main.tex"]);
 
     expect(unpackArxivSource(Buffer.from("%PDF-1.5 paper"))).toBeNull();
-    expect(unpackArxivSource(zlib.gzipSync("%PDF-1.5 paper"))).toBeNull();
+    expect(() => unpackArxivSource(zlib.gzipSync("%PDF-1.5 paper"))).toThrow(/gzipped PDF/);
     // An old PostScript submission is neither: the candidate fails.
     expect(() => unpackArxivSource(zlib.gzipSync("%!PS-Adobe-2.0 %%Title: Old Paper"))).toThrow(/neither LaTeX nor a PDF/);
   });
@@ -197,10 +197,12 @@ describe("bibliography parsing", () => {
 
 describe("LaTeX preprocessing", () => {
   it("strips comments but keeps escaped percent signs, URLs and verbatim text", () => {
-    expect(stripComments("50\\% done % a note\nnext")).toBe("50\\% done \nnext");
+    expect(stripComments("50\\% done % a note\nnext")).toBe("50\\% done next");
+    // A comment-only line inside a paragraph keeps it one paragraph.
+    expect(stripComments("First half,\n% TODO cite\nand the second half.")).toBe("First half,\nand the second half.");
     expect(stripComments("See \\url{http://a.com/x%20y} for data. % note")).toBe("See \\url{http://a.com/x%20y} for data. ");
     expect(stripComments("\\begin{verbatim}\nx = 100 % 7\n\\end{verbatim}")).toBe("\\begin{verbatim}\nx = 100 % 7\n\\end{verbatim}");
-    expect(stripComments("% \\url{http://a.com/%}\nkept")).toBe("\nkept");
+    expect(stripComments("% \\url{http://a.com/%}\nkept")).toBe("kept");
   });
 
   it("rewrites thm-restate theorems into plain theorem environments, restatements included", () => {

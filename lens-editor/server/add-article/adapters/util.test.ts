@@ -20,6 +20,10 @@ describe("markLiteralDollars", () => {
     expect(run("risked more than $<math alttext=\"t/2\"></math>")).toBe(
       'risked more than <math alttext="\\text{\\textdollar}t/2"></math>',
     );
+    // The same before a forum's MathJax formula.
+    expect(run('The prize is $<span class="math-tex"><span class="mjpage"><span class="mjx-math" aria-label="t/2">t</span></span></span> dollars.')).toBe(
+      'The prize is <span class="math-tex"><span class="mjpage"><span class="mjx-math" aria-label="\\text{\\textdollar}t/2">t</span></span></span> dollars.',
+    );
   });
 });
 
