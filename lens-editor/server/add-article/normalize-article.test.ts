@@ -183,6 +183,10 @@ describe("normalizeArticleBody", () => {
     for (const untouched of [
       "See value $x$ ![figure](_page_3_Picture_1.jpeg) here.",
       "between $0$ .5 and $1$",
+      "between $0$ ,5 and $1$ ,000",
+      ">     a = f( $x$ );",
+      "-     $K$",
+      "1.     a = f( $x$ );",
       "Code:\n\n    foo( $x$ );\n    bar( $y$ );",
     ]) {
       expect(normalizeArticleBody(untouched, "https://example.com/a.pdf", pdf).body).toBe(untouched);

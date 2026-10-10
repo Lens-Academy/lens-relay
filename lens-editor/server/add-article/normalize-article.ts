@@ -174,9 +174,9 @@ function trimInlineMathPadding(
   let out = text;
   if (mathBefore) {
     // "$K$ , x" -> "$K$, x"; "$K$  be" -> "$K$ be".
-    // Not before an image (`![`), and not `$0$ .5`, where the space may be
-    // all that keeps "0 .5" from reading as 0.5.
-    out = out.replace(/^ +(?=[,;:?)\]]|\.(?!\d)|!(?!\[))/, "").replace(/^ {2,}(?=\S)/, " ");
+    // Not before an image (`![`), and not `$0$ .5` or `$1$ ,000`, where the
+    // space may be all that keeps a number from reading differently.
+    out = out.replace(/^ +(?=[;:?)\]]|[.,](?!\d)|!(?!\[))/, "").replace(/^ {2,}(?=\S)/, " ");
   }
   if (mathAfter) {
     // "Max-of- $K$" -> "Max-of-$K$"; "( $x$" -> "($x$"; "Let  $M$" -> "Let $M$".
@@ -276,9 +276,12 @@ export function normalizeArticleBody(
     }
     let out = segment.text;
     if (opts.pdf) {
-      // Indented code is not protected by sourceSegments; leave its lines alone.
+      // Indented code is not protected by sourceSegments; leave its lines alone,
+      // also behind blockquote and list markers ("-     a = f( $x$ )").
       const indented = (offset: number) =>
-        /^(?: {4}|\t)/.test(body.slice(body.lastIndexOf("\n", offset - 1) + 1));
+        /^(?:[ \t]*>)*(?:[ \t]*(?:[-*+]|\d{1,9}[.)]))?(?: {4}|\t)/.test(
+          body.slice(body.lastIndexOf("\n", offset - 1) + 1),
+        );
       const end = starts[i] + out.length;
       const trimmed = trimInlineMathPadding(
         out,
