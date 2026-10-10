@@ -148,6 +148,46 @@ function repairListItemBoldOpener(marker: string, rest: string): string {
   return `${marker}**${rest}`;
 }
 
+/** A protected segment that starts with inline math (`$x$`, not `$$`). */
+function startsWithInlineMath(segment: Segment | undefined): boolean {
+  return !!segment && !segment.eligible && /^\$(?!\$)/.test(segment.text);
+}
+
+/** A protected segment that ends with inline math (`$x$`, not `$$` or `\$`). */
+function endsWithInlineMath(segment: Segment | undefined): boolean {
+  return !!segment && !segment.eligible && /(?<![$\\])\$$/.test(segment.text);
+}
+
+/**
+ * Datalab's PDF Markdown pads inline math with spaces: "Let  $M$  be",
+ * "Max-of- $K$ , validation". The doubled spaces collapse in HTML, but a space
+ * glued to a hyphen, an opening bracket or closing punctuation shows ("Max-of-
+ * K , validation"). Trim the padding where the PDF had none, for the text on
+ * each side of an inline formula. Prose spacing elsewhere is untouched, and a
+ * single space between words and math stays.
+ */
+function trimInlineMathPadding(
+  text: string,
+  mathBefore: boolean,
+  mathAfter: boolean,
+): string {
+  let out = text;
+  if (mathBefore) {
+    // "$K$ , x" -> "$K$, x"; "$K$  be" -> "$K$ be".
+    out = out.replace(/^ +(?=[,.;:!?)\]])/, "").replace(/^ {2,}(?=\S)/, " ");
+  }
+  if (mathAfter) {
+    // "Max-of- $K$" -> "Max-of-$K$"; "( $x$" -> "($x$"; "Let  $M$" -> "Let $M$".
+    out = out
+      .replace(/(?<=\w-) +$/, "")
+      .replace(/(?<=[([]) +$/, "")
+      .replace(/(?<=\S) {2,}$/, " ");
+  }
+  // Only spaces between two formulas: "$a$  $b$" -> "$a$ $b$".
+  if (mathBefore && mathAfter && /^ {2,}$/.test(text)) out = " ";
+  return out;
+}
+
 /** What may precede a block on its line: indentation and blockquote markers. */
 const BLOCK_PREFIX = /^(?:[ \t]*>)*[ \t]*$/;
 
@@ -233,6 +273,17 @@ export function normalizeArticleBody(
       return fenced;
     }
     let out = segment.text;
+    if (opts.pdf) {
+      const trimmed = trimInlineMathPadding(
+        out,
+        endsWithInlineMath(segments[i - 1]),
+        startsWithInlineMath(segments[i + 1]),
+      );
+      if (trimmed !== out) {
+        record("normalize.pdf-inline-math-padding", out, trimmed);
+        out = trimmed;
+      }
+    }
     out = out.replace(
       /(!?\[[^\]\r\n]*\]\()\/(?!\/)([^)\s]+)(\))/g,
       (whole, open: string, destination: string, close: string) => {
