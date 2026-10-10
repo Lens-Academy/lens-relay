@@ -88,7 +88,7 @@ function buildScopeGraph(snapshot: PromotionTreeSnapshot): ScopeGraph {
 
   const courseModules = new Map<string, { label: string; modules: Array<{ path: string; alias: string | null }> }>();
   for (const [coursePath, markdown] of snapshot.markdown) {
-    if (!/^courses\/[^/]+\.md$/i.test(coursePath)) continue;
+    if (!/^courses\/.+\.md$/i.test(coursePath)) continue;
     const modules = parseModuleLinkEntries(markdown)
       .map(link => ({ path: resolveCurriculumTarget(coursePath, link.target, snapshot.paths), alias: link.alias }))
       .filter((entry): entry is { path: string; alias: string | null } => !!entry.path);

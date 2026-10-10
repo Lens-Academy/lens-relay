@@ -73,6 +73,20 @@ describe('buildPromotionCurriculumIndex', () => {
     });
   });
 
+  it('finds courses grouped in subfolders of courses/', () => {
+    const staging = snapshot({
+      'courses/live/C.md': '---\ntitle: Grouped\n---\n# Module: [[../../modules/M]]',
+      'modules/M.md': '# Lens:\nsource:: [[../Lenses/L]]',
+      'Lenses/L.md': 'Text',
+    });
+    const result = buildPromotionCurriculumIndex(staging, snapshot({}), [change('Lenses/L.md')]);
+    expect(result.courses.map(course => course.label)).toEqual(['Grouped']);
+    expect(result.memberships['Lenses/L.md']).toEqual({
+      coursePaths: ['courses/live/C.md'],
+      modulePaths: ['modules/M.md'],
+    });
+  });
+
   it('terminates cycles and ignores missing targets', () => {
     const staging = snapshot({
       'courses/C.md': '# Module: [[../modules/M]]',
@@ -125,6 +139,28 @@ describe('buildPromotionCurriculumIndex', () => {
     expect(result.memberships['Lenses/L.md']).toEqual({
       coursePaths: ['courses/New Course.md'],
       modulePaths: ['modules/New Module.md'],
+    });
+  });
+
+  it('treats a course moved into a group folder as one course', () => {
+    const production = snapshot({
+      'courses/C.md': '# Module: [[../modules/M]]',
+      'modules/M.md': 'source:: [[../Lenses/L]]',
+      'Lenses/L.md': 'lens',
+    });
+    const staging = snapshot({
+      'courses/live/C.md': '# Module: [[../../modules/M]]',
+      'modules/M.md': 'source:: [[../Lenses/L]]',
+      'Lenses/L.md': 'lens',
+    });
+    const result = buildPromotionCurriculumIndex(staging, production, [
+      change('courses/live/C.md', 'renamed', 'courses/C.md'),
+      change('Lenses/L.md'),
+    ]);
+    expect(result.courses.map(course => course.path)).toEqual(['courses/live/C.md']);
+    expect(result.memberships['Lenses/L.md']).toEqual({
+      coursePaths: ['courses/live/C.md'],
+      modulePaths: ['modules/M.md'],
     });
   });
 });
