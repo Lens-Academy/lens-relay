@@ -174,7 +174,9 @@ function trimInlineMathPadding(
   let out = text;
   if (mathBefore) {
     // "$K$ , x" -> "$K$, x"; "$K$  be" -> "$K$ be".
-    out = out.replace(/^ +(?=[,.;:!?)\]])/, "").replace(/^ {2,}(?=\S)/, " ");
+    // Not before an image (`![`), and not `$0$ .5`, where the space may be
+    // all that keeps "0 .5" from reading as 0.5.
+    out = out.replace(/^ +(?=[,;:?)\]]|\.(?!\d)|!(?!\[))/, "").replace(/^ {2,}(?=\S)/, " ");
   }
   if (mathAfter) {
     // "Max-of- $K$" -> "Max-of-$K$"; "( $x$" -> "($x$"; "Let  $M$" -> "Let $M$".
@@ -274,10 +276,14 @@ export function normalizeArticleBody(
     }
     let out = segment.text;
     if (opts.pdf) {
+      // Indented code is not protected by sourceSegments; leave its lines alone.
+      const indented = (offset: number) =>
+        /^(?: {4}|\t)/.test(body.slice(body.lastIndexOf("\n", offset - 1) + 1));
+      const end = starts[i] + out.length;
       const trimmed = trimInlineMathPadding(
         out,
-        endsWithInlineMath(segments[i - 1]),
-        startsWithInlineMath(segments[i + 1]),
+        endsWithInlineMath(segments[i - 1]) && !indented(starts[i]),
+        startsWithInlineMath(segments[i + 1]) && !indented(end),
       );
       if (trimmed !== out) {
         record("normalize.pdf-inline-math-padding", out, trimmed);

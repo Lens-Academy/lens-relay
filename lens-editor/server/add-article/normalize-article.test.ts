@@ -180,6 +180,13 @@ describe("normalizeArticleBody", () => {
     ]);
     expect(changes.find((c) => c.code === "normalize.pdf-inline-math-padding")?.count).toBeGreaterThan(0);
     expect(normalizeArticleBody(body, "https://example.com/a.pdf", pdf).body).toBe(body);
+    for (const untouched of [
+      "See value $x$ ![figure](_page_3_Picture_1.jpeg) here.",
+      "between $0$ .5 and $1$",
+      "Code:\n\n    foo( $x$ );\n    bar( $y$ );",
+    ]) {
+      expect(normalizeArticleBody(untouched, "https://example.com/a.pdf", pdf).body).toBe(untouched);
+    }
   });
 
   describe("display math fences", () => {
