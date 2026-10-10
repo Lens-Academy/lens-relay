@@ -679,6 +679,7 @@ async fn main() -> Result<()> {
             let redact_errors = config.server.redact_errors;
             let mut server = server;
             server.set_trash_retention_days(config.server.trash_retention_days);
+            server.set_trash_purge_dry_run(config.server.trash_purge_dry_run);
             let server = Arc::new(server);
 
             if let Err(e) = server.startup_reindex(&config.folders).await {

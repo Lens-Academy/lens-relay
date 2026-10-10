@@ -176,7 +176,10 @@ impl SyncKv {
         })
     }
 
-    fn mark_dirty(&self) {
+    /// Mark the doc dirty and wake the persistence worker (no-op after
+    /// shutdown). Callers that abandon an in-flight `persist()` (e.g. on a
+    /// timeout) use this to keep the "unsaved changes stay dirty" invariant.
+    pub fn mark_dirty(&self) {
         if self.shutdown.load(Ordering::SeqCst) {
             return;
         }

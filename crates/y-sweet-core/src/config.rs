@@ -89,6 +89,24 @@ static ENV_OVERRIDES: &[EnvOverride] = &[
         },
     },
     EnvOverride {
+        env_var: "RELAY_SERVER_TRASH_PURGE_DRY_RUN",
+        config_path: "server.trash_purge_dry_run",
+        apply: |config, value| {
+            let dry_run = match value.to_lowercase().as_str() {
+                "true" | "1" | "yes" => true,
+                "false" | "0" | "no" => false,
+                _ => {
+                    return Err(ConfigError::InvalidConfiguration(format!(
+                        "Invalid trash_purge_dry_run value: {}",
+                        value
+                    )))
+                }
+            };
+            config.server.trash_purge_dry_run = dry_run;
+            Ok(())
+        },
+    },
+    EnvOverride {
         env_var: "RELAY_SERVER_DOC_GC",
         config_path: "server.doc_gc",
         apply: |config, value| {
@@ -323,6 +341,12 @@ pub struct ServerConfig {
     /// values are accepted (useful for local testing).
     #[serde(default = "default_trash_retention_days")]
     pub trash_retention_days: f64,
+
+    /// When true (the default) the hourly purge sweep is a dry run: it logs
+    /// every trashed entry it would delete and deletes nothing. Set to false
+    /// to let it purge for good.
+    #[serde(default = "default_trash_purge_dry_run")]
+    pub trash_purge_dry_run: bool,
 
     #[serde(default = "default_redact_errors")]
     pub redact_errors: bool,
@@ -593,6 +617,10 @@ fn default_trash_retention_days() -> f64 {
     10.0
 }
 
+fn default_trash_purge_dry_run() -> bool {
+    true
+}
+
 fn default_redact_errors() -> bool {
     true
 }
@@ -627,6 +655,7 @@ impl Default for ServerConfig {
             checkpoint_freq_seconds: default_checkpoint_freq_seconds(),
             doc_gc: default_doc_gc(),
             trash_retention_days: default_trash_retention_days(),
+            trash_purge_dry_run: default_trash_purge_dry_run(),
             redact_errors: default_redact_errors(),
         }
     }

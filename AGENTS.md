@@ -248,7 +248,9 @@ and the editor's Delete (`POST /doc/trash`) move files and folders to
 `<shared folder>/_trash/` with the relative path preserved and a `trashed_at` stamp,
 refusing while other documents link into them unless `force`; a `move` out of `_trash/`
 restores. An hourly sweep purges entries older than `[server] trash_retention_days`
-(default 10) from the file tree, the store (doc + blobs) and every index. See the
+(default 10) from the file tree, the store (doc + blobs) and every index; while
+`[server] trash_purge_dry_run` is `true` (the default) it only logs what it would
+purge, so trash is kept until an operator sets it to `false`. See the
 "Deleting" section of `docs/server-ops.md`.
 
 **HTML pages, modelled on Claude artifacts** (`lens-editor/src/components/HtmlEditor/runtime/page-runtime.ts`,
