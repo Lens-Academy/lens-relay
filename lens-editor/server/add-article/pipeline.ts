@@ -370,6 +370,8 @@ export async function processArticle(
     ? Object.values(evidence.htmlCandidates).filter((candidate): candidate is typeof evidence.extraction => !!candidate)
     : [evidence.extraction];
   let ex = evidence.extraction;
+  // Lets the queue grant a long article more time before its deadline.
+  job.source_chars = Math.max(...availableExtractions.map((candidate) => candidate.body.length));
   if (!ex.meta.title) {
     const titledCandidate = availableExtractions.find((candidate) => !!candidate.meta.title);
     if (titledCandidate) {

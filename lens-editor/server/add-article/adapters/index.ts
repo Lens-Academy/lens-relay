@@ -4,7 +4,9 @@ import { wikipediaAdapter } from "./wikipedia";
 import { aiSafetyAtlasAdapter } from "./ai-safety-atlas";
 import { arxivAdapter } from "./arxiv";
 
-export type { AdapterContext, AdapterExtract, SiteAdapter } from "./types";
+import type { ConvertedSource, FetchedResponse } from "./types";
+
+export type { AdapterContext, AdapterExtract, ConvertedSource, FetchedResponse, SiteAdapter } from "./types";
 
 /**
  * Registered site adapters, tried in order. To support a new site, add its
@@ -49,7 +51,27 @@ export function resolveFetchUrls(ctx: AdapterContext): string[] {
   return alt && alt.length > 0 ? alt : [ctx.url];
 }
 
+/** The Accept header the adapter wants a candidate fetched with, if not the default. */
+export function fetchAcceptFor(ctx: AdapterContext, candidateUrl: string): string | undefined {
+  return findAdapter(ctx)?.fetchAccept?.(candidateUrl, ctx);
+}
+
 /** Whether the adapter for `ctx` accepts the page a candidate fetch landed on. */
 export function acceptsFetchedUrl(ctx: AdapterContext, finalUrl: string): boolean {
   return findAdapter(ctx)?.acceptsFetchedUrl?.(finalUrl, ctx) ?? true;
+}
+
+/** Whether the adapter for `ctx` accepts the HTML a candidate fetch returned. */
+export function acceptsFetchedHtml(ctx: AdapterContext, html: string): boolean {
+  return findAdapter(ctx)?.acceptsFetchedHtml?.(html, ctx) ?? true;
+}
+
+/** The adapter's structured-source conversion of a candidate's response, or
+ *  null when it has none (the response is used as fetched). */
+export async function convertFetched(
+  ctx: AdapterContext,
+  response: FetchedResponse,
+  signal?: AbortSignal,
+): Promise<ConvertedSource | null> {
+  return (await findAdapter(ctx)?.convertFetched?.(response, ctx, signal)) ?? null;
 }

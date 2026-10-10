@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import fm from "front-matter";
 import { spawnClaude } from "../add-video/claude";
 import { revertProtectedEdits } from "./protected-edits";
 import type { ProtectedRevert } from "./protected-edits";
@@ -30,6 +29,17 @@ export const MAX_REVIEW_BUDGET_USD = 60;
 export const REFUSAL_FALLBACK_MODEL = "opus";
 /** The decision-only retry answers one line from a resumed session. */
 export const DECISION_TIMEOUT_MS = 3 * 60_000;
+
+/** A pass over a book-length paper (Logical Induction: ~500k chars) reads
+ *  for longer than one over an essay: add this much per 100k chars beyond the
+ *  first, up to MAX_VERIFY_TIMEOUT_MS. */
+export const VERIFY_TIMEOUT_MS_PER_100K_CHARS = 10 * 60_000;
+export const MAX_VERIFY_TIMEOUT_MS = 60 * 60_000;
+
+export function scaledVerifyTimeoutMs(chars: number, base: number = VERIFY_TIMEOUT_MS): number {
+  const extra = Math.max(0, Math.ceil(chars / 100_000) - 1) * VERIFY_TIMEOUT_MS_PER_100K_CHARS;
+  return Math.max(base, Math.min(MAX_VERIFY_TIMEOUT_MS, base + extra));
+}
 
 export function scaledReviewBudgetUsd(chars: number): number {
   const scaled = Math.ceil(Math.max(chars, 1) / 50_000) * REVIEW_BUDGET_USD_PER_50K_CHARS;
@@ -481,7 +491,7 @@ export async function reviewArticle(
       await fs.rm(path.join(workDir, "validation.json"), { force: true });
       await fs.writeFile(path.join(workDir, "validation.json"), JSON.stringify(validationIssues, null, 2));
     }
-    const timeoutMs = reviewer.timeoutMs ?? VERIFY_TIMEOUT_MS;
+    const timeoutMs = reviewer.timeoutMs ?? scaledVerifyTimeoutMs(reviewChars);
     try {
       return reviewer.provider === "codex"
         ? await import("./codex").then(({ runCodexArticleVerify }) =>

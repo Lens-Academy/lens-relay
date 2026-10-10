@@ -8,7 +8,9 @@ RUN npx vite build
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-RUN apk add --no-cache bash git openssh-client
+# pandoc converts arXiv e-print LaTeX and pdftoppm (poppler-utils) draws its PDF
+# figures, for the article importer (server/add-article/arxiv-latex.ts).
+RUN apk add --no-cache bash git openssh-client pandoc-cli poppler-utils
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 RUN npm install -g @anthropic-ai/claude-code

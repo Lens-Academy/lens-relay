@@ -139,3 +139,61 @@ export function videoEmbedMarker(src: string): string {
   const u = parseEmbedUrl(src);
   return u ? `__lensvideo:${u.href}__` : "";
 }
+
+export const LITERAL_DOLLAR_ATTR = "data-lens-literal-dollar";
+
+/**
+ * Mark every `$` in the prose of `root` as a literal dollar sign, for sources
+ * whose math lives only in elements (LaTeXML `<math alttext>`, the MathJax
+ * markup of a forum API answer): there a `$` in
+ * a text node is always currency or a literal symbol ("pay out $1"), yet
+ * unescaped it pairs with the next `$` and swallows the prose between them as
+ * math. Text inside math, code and preformatted blocks is left alone. Only
+ * adapters that know their markup call this; pages that carry raw `$tex$` in
+ * their text for client-side rendering must not.
+ */
+export function markLiteralDollars(root: Element): void {
+  const doc = root.ownerDocument;
+  const walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+  const hits: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    const t = n as Text;
+    if (!t.data.includes("$")) continue;
+    if (t.parentElement?.closest("math, code, pre, script, style, .mjpage, .math-tex")) continue;
+    hits.push(t);
+  }
+  for (const t of hits) {
+    // "$" glued to the inline formula after it ("risked more than $t/2"):
+    // move it into the TeX. Written as `\$$t/2$` the Lens validator
+    // reads `$$` as a display opener and misparses the rest of the page.
+    const next = t.nextSibling as Element | null;
+    // The element holding the next inline formula's TeX: LaTeXML's
+    // <math alttext>, or a forum's MathJax .mjx-math[aria-label].
+    let texEl: Element | null = null;
+    let texAttr = "alttext";
+    if (next?.nodeName.toLowerCase() === "math") {
+      if ((next.getAttribute("display") || "").toLowerCase() !== "block") texEl = next;
+    } else if (next?.nodeType === 1 && next.matches(".math-tex, .mjpage") && !next.querySelector(".mjpage__block, .MJXc-display")) {
+      texEl = next.querySelector(".mjx-math[aria-label]");
+      texAttr = "aria-label";
+    }
+    if (t.data.endsWith("$") && texEl?.getAttribute(texAttr)) {
+      t.data = t.data.slice(0, -1);
+      // \textdollar, not `\$`: Lens pairs `$` delimiters before reading TeX
+      // escapes, so `$\$t/2$` would end the formula at the escaped dollar.
+      texEl.setAttribute(texAttr, `\\text{\\textdollar}${texEl.getAttribute(texAttr)}`);
+      if (!t.data.includes("$")) continue;
+    }
+    const frag = doc.createDocumentFragment();
+    t.data.split("$").forEach((part, i) => {
+      if (i > 0) {
+        const span = doc.createElement("span");
+        span.setAttribute(LITERAL_DOLLAR_ATTR, "");
+        span.textContent = "$";
+        frag.appendChild(span);
+      }
+      if (part) frag.appendChild(doc.createTextNode(part));
+    });
+    t.replaceWith(frag);
+  }
+}

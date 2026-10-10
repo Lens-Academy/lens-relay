@@ -32,8 +32,18 @@ jobs:
           cache: npm
           cache-dependency-path: lens-editor/package-lock.json
       - run: npm ci
+      # The arXiv e-print path converts with pandoc and draws PDF figures with
+      # pdftoppm; without them its tests skip.
+      - run: sudo apt-get update && sudo apt-get install -y pandoc poppler-utils
       - run: >-
           npx vitest run
+          server/add-article/arxiv-latex.test.ts
+          server/add-article/source-evidence.test.ts
+          server/add-article/normalize-article.test.ts
+          server/add-article/heading-anchors.test.ts
+          server/add-article/adapters/forum-graphql.test.ts
+          server/add-article/adapters/registry.test.ts
+          server/add-article/adapters/util.test.ts
           server/add-article/routes.test.ts
           server/add-article/queue.test.ts
           server/add-article/pipeline-mode.test.ts
