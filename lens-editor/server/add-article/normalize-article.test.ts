@@ -186,6 +186,8 @@ describe("normalizeArticleBody", () => {
       "between $0$ ,5 and $1$ ,000",
       ">     a = f( $x$ );",
       "-     $K$",
+      "We need $x$ != 0.",
+      "Code:\n\n  \tf( $x$ ) = 1;",
       "1.     a = f( $x$ );",
       "Code:\n\n    foo( $x$ );\n    bar( $y$ );",
     ]) {

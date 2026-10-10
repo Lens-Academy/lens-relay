@@ -174,9 +174,9 @@ function trimInlineMathPadding(
   let out = text;
   if (mathBefore) {
     // "$K$ , x" -> "$K$, x"; "$K$  be" -> "$K$ be".
-    // Not before an image (`![`), and not `$0$ .5` or `$1$ ,000`, where the
+    // Not before `!` (an image, or `!=`), and not `$0$ .5` or `$1$ ,000`, where the
     // space may be all that keeps a number from reading differently.
-    out = out.replace(/^ +(?=[;:?)\]]|[.,](?!\d)|!(?!\[))/, "").replace(/^ {2,}(?=\S)/, " ");
+    out = out.replace(/^ +(?=[;:?)\]]|[.,](?!\d))/, "").replace(/^ {2,}(?=\S)/, " ");
   }
   if (mathAfter) {
     // "Max-of- $K$" -> "Max-of-$K$"; "( $x$" -> "($x$"; "Let  $M$" -> "Let $M$".
@@ -279,7 +279,7 @@ export function normalizeArticleBody(
       // Indented code is not protected by sourceSegments; leave its lines alone,
       // also behind blockquote and list markers ("-     a = f( $x$ )").
       const indented = (offset: number) =>
-        /^(?:[ \t]*>)*(?:[ \t]*(?:[-*+]|\d{1,9}[.)]))?(?: {4}|\t)/.test(
+        /^(?:[ \t]*>)*(?:[ \t]*(?:[-*+]|\d{1,9}[.)]))?(?: {4}| {0,3}\t)/.test(
           body.slice(body.lastIndexOf("\n", offset - 1) + 1),
         );
       const end = starts[i] + out.length;
