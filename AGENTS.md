@@ -58,6 +58,7 @@ docs/                 # Operational documentation
 - **Relay server URL:** https://relay.lensacademy.org
 - **Production server:** Hetzner VPS (46.224.127.155), Docker containers
 - **Storage:** Cloudflare R2 bucket `lens-relay-storage`
+- **Backups:** hourly/daily/weekly snapshots in R2 bucket `lens-relay-backups`, copied inside Cloudflare by `scripts/r2-backup.sh`; see the Backups section of `docs/server-ops.md`
 - **Tunnel:** Cloudflare Tunnel (no inbound ports needed)
 - **Relay ID:** `cb696037-0f72-4e93-8717-4e433129d789`
 - **Relay watchdog:** Detects when `relay-server` is running but unresponsive and automatically restarts it; see `docs/relay-watchdog.md`.
@@ -272,6 +273,15 @@ page's DOM is never touched. MCP: `read` of an `.html` lists open threads, the `
 resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anchoring changes with
 `lens-editor/scripts/anchor-bench/run.ts` (real pages, ground-truth markers, edit scenarios).
 
+**Read-aloud in the editor** (`lens-editor/src/lib/read-aloud/`, `server/tts/`): a Listen button on Markdown and HTML
+pages plays the page through Speechify (simba-3.2, the platform's model and voice), sentence by sentence with word
+highlighting, after lens-platform's immersion reader but without its audio cache. The editor server proxies
+`POST /api/tts/stream` (any valid share link; `SPEECHIFY_API_KEY`, per-link hourly character cap
+`TTS_CHARS_PER_HOUR`); without the key the button hides. Markdown: `Editor/extensions/readAloud.ts` maps sentences to
+source positions (`markdown-reading.ts`), so it works with CodeMirror's virtualised DOM. HTML: the preview frame's
+`bridge/tts-layer.ts` sends the page's sentences to the parent and draws highlights and hover play buttons inside the
+frame. While audio plays a click jumps to the sentence; otherwise clicks behave as usual.
+
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change
   text attributed (via the doc's `users` provenance map) to an `ai:` actor; edits that would
@@ -284,6 +294,12 @@ resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anc
   limit, `old`/`new` cut to `preview` chars, `truncated` flag) for the editor's `/recent` page
   and its in-file "Highlight recent changes" overlay. Page excerpts are built server-side
   (`crates/relay/src/recent_excerpts.rs`) on every index refresh.
+
+**Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
+`edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's
+Jev writing checks on the paragraphs it changed (`POST /api/content/course-checks`), after the
+edit's validator lines; the two run at once. Off until `ENABLE_COURSE_CHECKS` is true; the
+platform has a switch of the same name, so each side can be turned on separately.
 
 ## Git Sync
 

@@ -10,6 +10,7 @@ import { extractVideoInput, isYouTubeUrl } from "../add-video/video-url";
 
 export { EDU_FOLDER };
 const MAX_URLS_PER_REQUEST = 20;
+const MAX_CANCEL_IDS = 200;
 
 /** Dedup key: the video id for YouTube videos (youtu.be / watch / shorts
  *  spellings of one video must collapse to one job -- they'd all write the
@@ -86,6 +87,8 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
       status: "queued" | "invalid" | "already_queued";
       id?: string;
       error?: string;
+      queue_position?: number;
+      eta_minutes?: number;
     }> = [];
 
     const seen = new Set<string>();
@@ -150,7 +153,15 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
       results.push({ url, status: "queued", id: job.id });
     }
 
-    return c.json({ results });
+    // Positions once every job of this request is in, so they are final.
+    for (const result of results) {
+      const job = result.id ? queue.get(result.id) : undefined;
+      if (!job) continue;
+      const view = queue.view(job);
+      if (view.queue_position !== undefined) result.queue_position = view.queue_position;
+      if (view.eta_minutes !== undefined) result.eta_minutes = view.eta_minutes;
+    }
+    return c.json({ results, queue: queue.summary() });
   });
 
   // Optional filter: repeat `id` and/or `url` to get only those jobs (a job
@@ -174,11 +185,41 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
         (job) => ids.has(job.id) || urlKeys.has(normalizeImportKey(job.url)),
       );
     }
-    return c.json({ jobs });
+    return c.json({ queue: queue.summary(), jobs: jobs.map((job) => queue.view(job)) });
+  });
+
+  // Remove several jobs at once (the import_cancel MCP tool): queued jobs
+  // leave the queue, running ones are stopped. Per-id results, never a 404
+  // for the whole batch because one id was already finished.
+  router.post("/cancel", async (c) => {
+    const body = await c.req.json<{ ids?: unknown }>().catch(() => null);
+    const ids = body?.ids;
+    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === "string")) {
+      return c.json({ error: "ids must be a non-empty array of job ids" }, 400);
+    }
+    if (ids.length > MAX_CANCEL_IDS) {
+      return c.json({ error: `At most ${MAX_CANCEL_IDS} ids per request` }, 400);
+    }
+    const results = (ids as string[]).map((id) => {
+      const job = queue.get(id);
+      if (!job) return { id, cancelled: false, error: "No such job" };
+      const before = job.status;
+      if (!queue.cancel(id)) {
+        return {
+          id,
+          cancelled: false,
+          error: job.status === "processing"
+            ? "Already imported; the job is closing its report"
+            : `Already finished (${job.status})`,
+        };
+      }
+      return { id, cancelled: true, was: before };
+    });
+    return c.json({ results, queue: queue.summary() });
   });
 
   // Cancel a queued/processing job. Aborts in-flight work; the job shows as
-  // failed with "Cancelled by user". Stuck jobs no longer need a container
+  // "cancelled". Stuck jobs no longer need a container
   // restart to clear.
   router.delete("/:id", (c) => {
     const ok = queue.cancel(c.req.param("id"));
@@ -192,8 +233,8 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
   router.post("/:id/retry", (c) => {
     const job = queue.get(c.req.param("id"));
     if (!job) return c.json({ error: "Job not found" }, 404);
-    if (job.status !== "failed") {
-      return c.json({ error: "Only failed jobs can be retried" }, 400);
+    if (job.status !== "failed" && job.status !== "cancelled") {
+      return c.json({ error: "Only failed or cancelled jobs can be retried" }, 400);
     }
     const active = queue.findActive(job.url, normalizeImportKey);
     if (active) {

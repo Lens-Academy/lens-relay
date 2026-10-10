@@ -101,6 +101,12 @@ export interface AnchorCapture {
   warning?: string;
 }
 
+/** One sentence of the page for read-aloud (src/lib/read-aloud/engine.ts ReadingUnit). */
+export interface TtsUnit {
+  text: string;
+  pauseBefore: number;
+}
+
 export type ParentToBridge =
   | { type: 'init'; payload: Record<string, never> }
   | { type: 'set-threads'; payload: { threads: ThreadMark[] } }
@@ -113,7 +119,10 @@ export type ParentToBridge =
   | { type: 'restore-scroll'; payload: PreviewScroll }
   | { type: 'restore-scroll-ratio'; payload: PreviewScrollRatio }
   | { type: 'capture-ui-state'; payload: Record<string, never> }
-  | { type: 'restore-ui-state'; payload: PreviewUiState };
+  | { type: 'restore-ui-state'; payload: PreviewUiState }
+  | { type: 'tts-state'; payload: { enabled: boolean; playing: boolean } }
+  | { type: 'tts-highlight'; payload: { unit: number | null; word: { start: number; end: number } | null; follow: boolean } }
+  | { type: 'tts-request-units'; payload: { start: boolean } };
 
 export type BridgeToParent =
   | { type: 'ready'; payload: Record<string, never> }
@@ -128,7 +137,10 @@ export type BridgeToParent =
   | { type: 'legacy-described'; payload: { anchors: Record<string, HtmlAnchor | null> } }
   | { type: 'current-described'; payload: { id: string; anchor: HtmlAnchor | null } }
   | { type: 'page-problems'; payload: { problems: PageProblem[] } }
-  | { type: 'storage-ops'; payload: { ops: StorageOp[] } };
+  | { type: 'storage-ops'; payload: { ops: StorageOp[] } }
+  /** The page's sentences; with `play`, a request to play from that one. */
+  | { type: 'tts-units'; payload: { units: TtsUnit[]; play?: number } }
+  | { type: 'tts-user-scrolled'; payload: Record<string, never> };
 
 export interface Envelope<M> {
   nonce: string;
