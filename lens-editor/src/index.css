@@ -282,18 +282,20 @@
 .cm-content .cm-line.cm-blockquote.cm-list-line {
   padding-left: calc(12px + var(--list-hang)) !important;
 }
-/* text-indent is inherited, and an inline-block / inline-flex widget (comment
-   badge, accept/reject buttons) applies it to its own content: its text would
-   shift left out of its box by --list-hang. Only the line itself hangs. */
-.cm-content .cm-line.cm-list-line * {
+/* A line's hanging indent (list lines here, frontmatter values in
+   frontmatter.ts) is for its own first row, never for widgets inside it.
+   text-indent is inherited, and an inline-block / inline-flex widget (comment
+   badge, accept/reject buttons) would apply it to its own content and shift
+   its text left out of its box. */
+.cm-content .cm-line * {
   text-indent: 0;
 }
-/* Leading tabs of a list line. inline-block + text-indent: 0 gives the tabs
-   their own tab stops, so their width no longer depends on the line's
-   negative text-indent (which would otherwise make the measurement unstable). */
+/* Leading tabs of a list line. inline-block (with the text-indent reset above)
+   gives the tabs their own tab stops, so their width no longer depends on the
+   line's negative text-indent (which would otherwise make the measurement
+   unstable). */
 .cm-list-indent {
   display: inline-block;
-  text-indent: 0;
   white-space: pre;
 }
 
