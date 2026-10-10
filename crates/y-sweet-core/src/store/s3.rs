@@ -230,37 +230,9 @@ impl S3Store {
             }
         };
 
-        match response.status() {
-            StatusCode::OK => {
-                record("ok");
-                Ok(response)
-            }
-            StatusCode::NOT_FOUND => {
-                record("not_found");
-                Err(StoreError::DoesNotExist(
-                    "Received NOT_FOUND from S3-compatible API.".to_string(),
-                ))
-            }
-            StatusCode::FORBIDDEN => {
-                record("forbidden");
-                Err(StoreError::NotAuthorized(
-                    "Received FORBIDDEN from S3-compatible API.".to_string(),
-                ))
-            }
-            StatusCode::UNAUTHORIZED => {
-                record("unauthorized");
-                Err(StoreError::NotAuthorized(
-                    "Received UNAUTHORIZED from S3-compatible API.".to_string(),
-                ))
-            }
-            _ => {
-                record("other_error");
-                Err(StoreError::ConnectionError(format!(
-                    "Received {} from S3-compatible API.",
-                    response.status()
-                )))
-            }
-        }
+        let (outcome, result) = classify_status(response.status());
+        record(outcome);
+        result.map(|()| response)
     }
 
     async fn read_response_bytes(response: Response) -> Result<Bytes> {
@@ -730,6 +702,40 @@ impl Store for S3Store {
     }
 }
 
+/// Maps an S3 response status to a metrics label and a result.
+/// Any 2xx is success: Cloudflare R2 answers DeleteObject with 204 No Content,
+/// and treating only 200 as success made every delete fail there.
+fn classify_status(status: StatusCode) -> (&'static str, Result<()>) {
+    match status {
+        s if s.is_success() => ("ok", Ok(())),
+        StatusCode::NOT_FOUND => (
+            "not_found",
+            Err(StoreError::DoesNotExist(
+                "Received NOT_FOUND from S3-compatible API.".to_string(),
+            )),
+        ),
+        StatusCode::FORBIDDEN => (
+            "forbidden",
+            Err(StoreError::NotAuthorized(
+                "Received FORBIDDEN from S3-compatible API.".to_string(),
+            )),
+        ),
+        StatusCode::UNAUTHORIZED => (
+            "unauthorized",
+            Err(StoreError::NotAuthorized(
+                "Received UNAUTHORIZED from S3-compatible API.".to_string(),
+            )),
+        ),
+        other => (
+            "other_error",
+            Err(StoreError::ConnectionError(format!(
+                "Received {} from S3-compatible API.",
+                other
+            ))),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -946,6 +952,48 @@ mod tests {
         // An unparsable date keeps the object (purge must still delete it).
         assert_eq!(files[2].key, "ghi789");
         assert_eq!(files[2].last_modified, 0);
+    }
+
+    #[test]
+    fn classify_status_accepts_every_2xx() {
+        use super::{classify_status, StoreError};
+        use reqwest::StatusCode;
+
+        // R2 returns 204 for DeleteObject; S3 may return 206 for ranged GETs.
+        for code in [
+            StatusCode::OK,
+            StatusCode::NO_CONTENT,
+            StatusCode::PARTIAL_CONTENT,
+        ] {
+            let (label, result) = classify_status(code);
+            assert_eq!(label, "ok", "{code}");
+            assert!(result.is_ok(), "{code} should be success");
+        }
+
+        let (label, result) = classify_status(StatusCode::NOT_FOUND);
+        assert_eq!(label, "not_found");
+        assert!(matches!(result, Err(StoreError::DoesNotExist(_))));
+
+        for code in [StatusCode::FORBIDDEN, StatusCode::UNAUTHORIZED] {
+            let (_, result) = classify_status(code);
+            assert!(
+                matches!(result, Err(StoreError::NotAuthorized(_))),
+                "{code}"
+            );
+        }
+
+        for code in [
+            StatusCode::MOVED_PERMANENTLY,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let (label, result) = classify_status(code);
+            assert_eq!(label, "other_error", "{code}");
+            assert!(
+                matches!(result, Err(StoreError::ConnectionError(_))),
+                "{code}"
+            );
+        }
     }
 }
 
