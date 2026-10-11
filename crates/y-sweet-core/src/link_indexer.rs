@@ -1447,6 +1447,14 @@ pub struct LinkIndexer {
     pending: Arc<DashMap<String, PendingEntry>>,
     index_tx: mpsc::Sender<String>,
     filemeta_cache: Arc<DashMap<String, HashMap<String, (String, String)>>>, // folder_doc_id -> (uuid -> (basename, path))
+    /// Serializes the startup reindex's per-doc steps with the worker's
+    /// per-item steps (content index, folder rename/requeue). The reindex
+    /// runs while the worker is live; without this, a reindex step could
+    /// read a doc's content before a worker rename rewrote its wikilinks and
+    /// write after filemeta moved, dropping a real backlink, or write a
+    /// stale snapshot over the worker's fresher one. Always taken before any
+    /// DashMap shard or awareness lock.
+    step_lock: std::sync::Mutex<()>,
 }
 
 impl LinkIndexer {
@@ -1461,6 +1469,7 @@ impl LinkIndexer {
                 pending: Arc::new(DashMap::new()),
                 index_tx,
                 filemeta_cache: Arc::new(DashMap::new()),
+                step_lock: std::sync::Mutex::new(()),
             },
             index_rx,
         )
@@ -1831,64 +1840,71 @@ impl LinkIndexer {
             // needed one per doc, which multiplied under backlog.
             let folder_doc_ids = find_all_folder_docs(&docs);
             for (doc_id, queued) in ready {
-                // Re-check folder status (need fresh content UUIDs).
-                if let Some(content_uuids) = is_folder_doc(&doc_id, &docs) {
-                    // Folder doc — process immediately (no debounce)
+                {
+                    // One step at a time against the startup reindex (see
+                    // `step_lock`). No await inside this block.
+                    let _step = self.step_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    // Re-check folder status (need fresh content UUIDs).
+                    if let Some(content_uuids) = is_folder_doc(&doc_id, &docs) {
+                        // Folder doc — process immediately (no debounce)
 
-                    // 1. Detect renames BEFORE re-queuing content docs
-                    let changes = self.apply_rename_updates(&doc_id, &docs);
+                        // 1. Detect renames BEFORE re-queuing content docs
+                        let changes = self.apply_rename_updates(&doc_id, &docs);
 
-                    // 2. Re-queue loaded content docs — but ONLY when folder
-                    //    membership actually changed (add/remove/move), and
-                    //    SKIP when renames were processed. The rename system
-                    //    already updated wikilinks in backlinker content docs;
-                    //    re-queuing them would race the next rename (resolve
-                    //    the OLD name against NEW metadata, fail, clear
-                    //    backlinks). Metadata-only folder writes (hash/mtime)
-                    //    re-queue nothing — the blanket re-queue used to put
-                    //    every loaded content doc (2k+) back on the queue on
-                    //    each folder touch and starved the whole pipeline.
-                    if !changes.renames.is_empty() {
-                        tracing::info!(
-                            "Folder doc {}: skipping content re-queue after rename (avoids stale backlink race)",
-                            doc_id
-                        );
-                    } else if changes.membership_changed {
-                        tracing::info!(
-                            "Folder doc {} has {} content docs, re-queuing loaded ones",
-                            doc_id,
-                            content_uuids.len()
-                        );
-                        let relay_id = parse_doc_id(&doc_id)
-                            .map(|(r, _)| r)
-                            .unwrap_or(&doc_id[..36.min(doc_id.len())]);
-                        for uuid in content_uuids {
-                            let content_id = format!("{}-{}", relay_id, uuid);
-                            if let Some(lease) = docs.get(&content_id).map(|doc| doc.awareness()) {
-                                tracing::info!("Re-queuing content doc: {}", content_id);
-                                self.queue_document_update_with_lease(&content_id, Some(lease));
+                        // 2. Re-queue loaded content docs — but ONLY when folder
+                        //    membership actually changed (add/remove/move), and
+                        //    SKIP when renames were processed. The rename system
+                        //    already updated wikilinks in backlinker content docs;
+                        //    re-queuing them would race the next rename (resolve
+                        //    the OLD name against NEW metadata, fail, clear
+                        //    backlinks). Metadata-only folder writes (hash/mtime)
+                        //    re-queue nothing — the blanket re-queue used to put
+                        //    every loaded content doc (2k+) back on the queue on
+                        //    each folder touch and starved the whole pipeline.
+                        if !changes.renames.is_empty() {
+                            tracing::info!(
+                                "Folder doc {}: skipping content re-queue after rename (avoids stale backlink race)",
+                                doc_id
+                            );
+                        } else if changes.membership_changed {
+                            tracing::info!(
+                                "Folder doc {} has {} content docs, re-queuing loaded ones",
+                                doc_id,
+                                content_uuids.len()
+                            );
+                            let relay_id = parse_doc_id(&doc_id)
+                                .map(|(r, _)| r)
+                                .unwrap_or(&doc_id[..36.min(doc_id.len())]);
+                            for uuid in content_uuids {
+                                let content_id = format!("{}-{}", relay_id, uuid);
+                                if let Some(lease) =
+                                    docs.get(&content_id).map(|doc| doc.awareness())
+                                {
+                                    tracing::info!("Re-queuing content doc: {}", content_id);
+                                    self.queue_document_update_with_lease(&content_id, Some(lease));
+                                }
                             }
+                        } else {
+                            tracing::debug!(
+                                "Folder doc {}: metadata-only update, no content re-queue",
+                                doc_id
+                            );
                         }
-                    } else {
-                        tracing::debug!(
-                            "Folder doc {}: metadata-only update, no content re-queue",
-                            doc_id
-                        );
-                    }
 
-                    // Update DocumentResolver so MCP tools see current paths
-                    doc_resolver.update_folder(&doc_id, &docs);
-                } else {
-                    // Content doc — index it
-                    tracing::info!("Indexing content doc: {}", doc_id);
-                    match self.index_document(&doc_id, &docs, &folder_doc_ids) {
-                        Ok(()) => tracing::info!("Successfully indexed: {}", doc_id),
-                        Err(e) => tracing::error!("Failed to index {}: {:?}", doc_id, e),
+                        // Update DocumentResolver so MCP tools see current paths
+                        doc_resolver.update_folder(&doc_id, &docs);
+                    } else {
+                        // Content doc — index it
+                        tracing::info!("Indexing content doc: {}", doc_id);
+                        match self.index_document(&doc_id, &docs, &folder_doc_ids) {
+                            Ok(()) => tracing::info!("Successfully indexed: {}", doc_id),
+                            Err(e) => tracing::error!("Failed to index {}: {:?}", doc_id, e),
+                        }
                     }
+                    // A concurrent update increments the generation. In that case
+                    // keep the entry queued so the newer state gets another pass.
+                    self.mark_indexed(&doc_id, queued.generation);
                 }
-                // A concurrent update increments the generation. In that case
-                // keep the entry queued so the newer state gets another pass.
-                self.mark_indexed(&doc_id, queued.generation);
                 // Yield to tokio scheduler between batch items to prevent
                 // monopolizing a worker thread during large batches.
                 tokio::task::yield_now().await;
@@ -2094,7 +2110,11 @@ impl LinkIndexer {
                 progress.finish(ReindexState::Cancelled, started.elapsed());
                 return;
             }
-            match self.index_document(doc_id, docs, &folder_doc_ids) {
+            let result = {
+                let _step = self.step_lock.lock().unwrap_or_else(|e| e.into_inner());
+                self.index_document(doc_id, docs, &folder_doc_ids)
+            };
+            match result {
                 Ok(()) => indexed += 1,
                 Err(_) => skipped += 1, // Not all docs are content docs
             }
@@ -2123,6 +2143,8 @@ pub enum ReindexState {
     Ready = 2,
     /// Stopped by shutdown before finishing.
     Cancelled = 3,
+    /// The reindex panicked; backlinks stay as persisted before the restart.
+    Failed = 4,
 }
 
 impl ReindexState {
@@ -2132,6 +2154,7 @@ impl ReindexState {
             ReindexState::Indexing => "indexing",
             ReindexState::Ready => "ready",
             ReindexState::Cancelled => "cancelled",
+            ReindexState::Failed => "failed",
         }
     }
 }
@@ -2157,6 +2180,7 @@ impl ReindexProgress {
             1 => ReindexState::Indexing,
             2 => ReindexState::Ready,
             3 => ReindexState::Cancelled,
+            4 => ReindexState::Failed,
             _ => ReindexState::Pending,
         }
     }

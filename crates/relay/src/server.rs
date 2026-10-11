@@ -4142,7 +4142,10 @@ impl Server {
     /// alongside; both take each awareness lock for one step only, and the
     /// filemeta cache was seeded in `startup_load`). /ready reports the
     /// progress under `backlinks`. Shutdown (the cancellation token) stops
-    /// it between docs.
+    /// it between docs. Each reindex doc-step and each worker step is
+    /// serialized by the indexer's `step_lock`, so a worker rename or edit
+    /// is never interleaved with a reindex step on stale data. A panic is
+    /// logged and reported as `failed`.
     pub fn spawn_backlink_reindex(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let server = self.clone();
         tokio::task::spawn_blocking(move || {
@@ -4150,7 +4153,20 @@ impl Server {
             match (&server.store, &server.link_indexer) {
                 (Some(_), Some(indexer)) => {
                     let token = server.cancellation_token.clone();
-                    indexer.reindex_backlinks(&server.docs, progress, || token.is_cancelled());
+                    let run = std::panic::AssertUnwindSafe(|| {
+                        indexer.reindex_backlinks(&server.docs, progress, || token.is_cancelled())
+                    });
+                    // Nobody awaits this in serve: a panic must not leave
+                    // /ready saying "indexing" forever without a trace.
+                    if let Err(panic) = std::panic::catch_unwind(run) {
+                        let msg = panic
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| panic.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic".into());
+                        tracing::error!("Backlink reindex panicked: {msg}");
+                        progress.finish(link_indexer::ReindexState::Failed, Duration::ZERO);
+                    }
                 }
                 _ => progress.finish(link_indexer::ReindexState::Ready, Duration::ZERO),
             }
@@ -5311,7 +5327,8 @@ struct ReadyResponse {
 /// persisted before the restart) while it runs.
 #[derive(serde::Serialize)]
 struct BacklinkReadiness {
-    /// "pending" (docs still loading), "indexing", "ready" or "cancelled".
+    /// "pending" (docs still loading), "indexing", "ready", "cancelled" or
+    /// "failed" (panicked; logged as an error).
     state: &'static str,
     indexed: usize,
     total: usize,
