@@ -611,7 +611,7 @@ describe('git promotion service', () => {
   });
 
   it('kills a timed out command and its children even if they ignore SIGTERM', async () => {
-    process.env.PROMOTION_GIT_TIMEOUT_MS = '1000';
+    process.env.PROMOTION_GIT_TIMEOUT_MS = '2000';
     process.env.PROMOTION_GIT_KILL_AFTER_MS = '50';
     const fixture = await createFixture();
     const pidsPath = path.join(fixture.root, 'pids.json');
@@ -636,10 +636,44 @@ describe('git promotion service', () => {
       code: 'git_timeout',
     });
 
-    const pids: number[] = JSON.parse(await fs.readFile(pidsPath, 'utf8'));
+    const pids: number[] = JSON.parse(
+      await fs.readFile(pidsPath, 'utf8').catch(() => {
+        throw new Error('the child never got ready before the timeout; the runner may be too slow');
+      }),
+    );
     expect(pids).toHaveLength(2);
     for (const pid of pids) {
       expect(await waitUntilGone(pid), `process ${pid} survived the timeout`).toBe(true);
+    }
+  });
+
+  it('fails a timed out command whose output a helper outside its process group keeps open', async () => {
+    process.env.PROMOTION_GIT_TIMEOUT_MS = '300';
+    process.env.PROMOTION_GIT_KILL_AFTER_MS = '50';
+    const fixture = await createFixture();
+    const pidPath = path.join(fixture.root, 'helper.pid');
+    // The command exits at once, leaving a helper in a new session that holds its stdout.
+    const script = `
+      const { spawn } = require('node:child_process');
+      const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: ['ignore', 'inherit', 'ignore'] });
+      require('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(helper.pid));
+      process.exit(0);
+    `;
+
+    try {
+      await expect(spawnFile(process.execPath, ['-e', script], { cwd: fixture.root })).rejects.toMatchObject({
+        status: 504,
+        code: 'git_timeout',
+      });
+    } finally {
+      const helperPid = Number(await fs.readFile(pidPath, 'utf8').catch(() => '0'));
+      if (helperPid > 0) {
+        try {
+          process.kill(helperPid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
     }
   });
 
