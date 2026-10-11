@@ -162,6 +162,39 @@ describe("normalizeArticleBody", () => {
     }
   });
 
+  it("trims Datalab's padding around inline math in PDF bodies only", () => {
+    // From "Compact Proofs of Model Performance via Mechanistic
+    // Interpretability" (arXiv 2406.11779), imported through the PDF path.
+    const input = [
+      "A small transformer trained on Max-of- $K$ , validating proof transfer.",
+      "Let  $\\mathcal{M} : X \\rightarrow Y$  be a model, ( $l, t$ ) a pair, and  $a$  $b$  two values.",
+      "Keep x - $y$ and $z$ -dimensional, `code  $x$  here`, $$a$$  then.",
+    ].join("\n");
+    expect(normalizeArticleBody(input, "https://example.com/a").body).toBe(input);
+    const pdf = { pdf: true };
+    const { body, changes } = normalizeArticleBody(input, "https://example.com/a.pdf", pdf);
+    expect(body.split("\n")).toEqual([
+      "A small transformer trained on Max-of-$K$, validating proof transfer.",
+      "Let $\\mathcal{M} : X \\rightarrow Y$ be a model, ($l, t$) a pair, and $a$ $b$ two values.",
+      "Keep x - $y$ and $z$ -dimensional, `code  $x$  here`, $$a$$  then.",
+    ]);
+    expect(changes.find((c) => c.code === "normalize.pdf-inline-math-padding")?.count).toBeGreaterThan(0);
+    expect(normalizeArticleBody(body, "https://example.com/a.pdf", pdf).body).toBe(body);
+    for (const untouched of [
+      "See value $x$ ![figure](_page_3_Picture_1.jpeg) here.",
+      "between $0$ .5 and $1$",
+      "between $0$ ,5 and $1$ ,000",
+      ">     a = f( $x$ );",
+      "-     $K$",
+      "We need $x$ != 0.",
+      "Code:\n\n  \tf( $x$ ) = 1;",
+      "1.     a = f( $x$ );",
+      "Code:\n\n    foo( $x$ );\n    bar( $y$ );",
+    ]) {
+      expect(normalizeArticleBody(untouched, "https://example.com/a.pdf", pdf).body).toBe(untouched);
+    }
+  });
+
   describe("display math fences", () => {
     const fence = (body: string) => normalizeArticleBody(body, "https://example.com").body;
 
