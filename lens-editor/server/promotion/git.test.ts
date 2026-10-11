@@ -610,20 +610,57 @@ describe('git promotion service', () => {
     expect(calls.filter(call => call === 'diff')).toHaveLength(3);
   });
 
-  it('rejects timed out child processes even if SIGTERM is ignored', async () => {
-    process.env.PROMOTION_GIT_TIMEOUT_MS = '25';
-    process.env.PROMOTION_GIT_KILL_AFTER_MS = '25';
+  it('kills a timed out command and its children even if they ignore SIGTERM', async () => {
+    process.env.PROMOTION_GIT_TIMEOUT_MS = '1000';
+    process.env.PROMOTION_GIT_KILL_AFTER_MS = '50';
     const fixture = await createFixture();
+    const pidsPath = path.join(fixture.root, 'pids.json');
+    // The child starts a grandchild (like git starting git-remote-https), and both
+    // write their pid only once SIGTERM is ignored, so the test proves SIGKILL ran.
+    const ignoreTerm = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
+    const script = `
+      const { spawn } = require('node:child_process');
+      const fs = require('node:fs');
+      process.on('SIGTERM', () => {});
+      const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(ignoreTerm)} + "require('node:fs').writeFileSync(process.argv[1], '')", ${JSON.stringify(pidsPath + '.ready')}], { stdio: 'ignore' });
+      const wait = setInterval(() => {
+        if (!fs.existsSync(${JSON.stringify(pidsPath + '.ready')})) return;
+        clearInterval(wait);
+        fs.writeFileSync(${JSON.stringify(pidsPath)}, JSON.stringify([process.pid, grandchild.pid]));
+        setInterval(() => {}, 1000);
+      }, 10);
+    `;
 
-    await expect(
-      spawnFile(
-        process.execPath,
-        ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
-        { cwd: fixture.root },
-      ),
-    ).rejects.toMatchObject({
+    await expect(spawnFile(process.execPath, ['-e', script], { cwd: fixture.root })).rejects.toMatchObject({
       status: 504,
       code: 'git_timeout',
     });
+
+    const pids: number[] = JSON.parse(await fs.readFile(pidsPath, 'utf8'));
+    expect(pids).toHaveLength(2);
+    for (const pid of pids) {
+      expect(await waitUntilGone(pid), `process ${pid} survived the timeout`).toBe(true);
+    }
   });
+
 });
+
+async function waitUntilGone(pid: number): Promise<boolean> {
+  // The grandchild is reaped by init, not by us, so it may linger as a zombie for a moment.
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (!(await isRunning(pid))) return true;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  return false;
+}
+
+async function isRunning(pid: number): Promise<boolean> {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8').catch(() => null);
+  if (stat === null) return true;
+  return stat.slice(stat.lastIndexOf(')') + 2)[0] !== 'Z';
+}

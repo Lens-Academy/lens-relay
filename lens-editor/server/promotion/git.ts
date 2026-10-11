@@ -71,31 +71,40 @@ export function spawnFile(command: string, args: string[], options: { cwd: strin
         GCM_INTERACTIVE: 'Never',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Own process group, so a timeout kills git's helpers (remote-https, ssh) too.
+      detached: process.platform !== 'win32',
     });
 
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timedOut = false;
     let killTimer: NodeJS.Timeout | null = null;
 
-    function rejectOnce(error: Error): void {
+    function settle(error: Error | null, value?: { stdout: string; stderr: string }): void {
       if (settled) return;
       settled = true;
-      reject(error);
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      if (error) reject(error);
+      else resolve(value!);
     }
 
-    function resolveOnce(value: { stdout: string; stderr: string }): void {
-      if (settled) return;
-      settled = true;
-      resolve(value);
+    function killTree(signal: NodeJS.Signals): void {
+      try {
+        if (child.pid !== undefined && process.platform !== 'win32') process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // Already gone.
+      }
     }
 
+    // On timeout, settle only once the process has exited: callers hold the repo's
+    // git lock until then, and a git still dying may hold index.lock.
     const timeout = setTimeout(() => {
-      rejectOnce(new PromotionError(504, `Command timed out: ${command}`, 'git_timeout'));
-      child.kill('SIGTERM');
-      killTimer = setTimeout(() => {
-        child.kill('SIGKILL');
-      }, gitKillAfterTimeoutMs());
+      timedOut = true;
+      killTree('SIGTERM');
+      killTimer = setTimeout(() => killTree('SIGKILL'), gitKillAfterTimeoutMs());
     }, gitTimeoutMs());
 
     child.stdout.setEncoding('utf8');
@@ -107,19 +116,20 @@ export function spawnFile(command: string, args: string[], options: { cwd: strin
       stderr += chunk;
     });
     child.on('error', error => {
-      clearTimeout(timeout);
-      if (killTimer) clearTimeout(killTimer);
-      rejectOnce(error);
+      settle(error);
+    });
+    child.on('exit', () => {
+      if (!timedOut) return;
+      // A helper that ignored SIGTERM must not outlive its parent.
+      killTree('SIGKILL');
+      settle(new PromotionError(504, `Command timed out: ${command}`, 'git_timeout'));
     });
     child.on('close', code => {
-      clearTimeout(timeout);
-      if (killTimer) clearTimeout(killTimer);
-      if (settled) return;
       if (code !== 0) {
-        rejectOnce(new PromotionError(500, stderr.trim() || `Command failed: ${command} ${args.join(' ')}`, 'git_failed'));
+        settle(new PromotionError(500, stderr.trim() || `Command failed: ${command} ${args.join(' ')}`, 'git_failed'));
         return;
       }
-      resolveOnce({ stdout, stderr });
+      settle(null, { stdout, stderr });
     });
   });
 }
