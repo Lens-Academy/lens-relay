@@ -682,12 +682,19 @@ async fn main() -> Result<()> {
             server.set_trash_purge_dry_run(config.server.trash_purge_dry_run);
             let server = Arc::new(server);
 
-            if let Err(e) = server.startup_reindex(&config.folders).await {
-                tracing::warn!("Startup reindex failed: {:?}", e);
+            if let Err(e) = server.startup_load(&config.folders).await {
+                tracing::warn!("Startup load failed: {:?}", e);
             }
 
-            // Spawn workers AFTER startup_reindex to avoid race conditions
+            // Spawn workers AFTER startup_load to avoid race conditions
             server.spawn_workers(worker_receivers);
+
+            // The backlink reindex takes minutes at several thousand docs;
+            // run it in the background so the server listens (and /ready
+            // answers) as soon as the docs are loaded. Requests meanwhile see
+            // the backlinks persisted before the restart; /ready reports
+            // progress. Not awaited: shutdown cancels it via the token.
+            let _backlink_reindex = server.spawn_backlink_reindex();
 
             let main_handle = tokio::spawn({
                 let server = server.clone();

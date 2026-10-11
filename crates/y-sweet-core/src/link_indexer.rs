@@ -1963,7 +1963,7 @@ impl LinkIndexer {
         };
 
         let link_names = extract_wikilinks(&markdown);
-        tracing::info!(
+        tracing::debug!(
             "Doc {}: content length={}, wikilinks={:?}",
             doc_uuid,
             markdown.len(),
@@ -1990,7 +1990,7 @@ impl LinkIndexer {
         let targets_per_folder =
             compute_backlink_targets(doc_uuid, &link_names, &entries, folder_doc_ids.len());
 
-        tracing::info!(
+        tracing::debug!(
             "Doc {}: resolved {} links across {} folders",
             doc_uuid,
             link_names.len(),
@@ -2018,38 +2018,28 @@ impl LinkIndexer {
 
     /// Reindex all backlinks by scanning every loaded document.
     ///
-    /// Iterates all docs in the DashMap, indexes each content doc's wikilinks,
-    /// and updates backlinks_v0 in the corresponding folder doc(s).
-    /// Call after loading docs from storage on startup.
+    /// Seeds the filemeta cache, then indexes every content doc's wikilinks
+    /// into backlinks_v0 of the folder doc(s). Kept for callers that want the
+    /// whole thing in one blocking call; the relay's startup runs the two
+    /// halves separately (seed before serving, reindex in the background).
     pub fn reindex_all_backlinks(
         &self,
         docs: &DashMap<String, DocWithSyncKv>,
     ) -> anyhow::Result<()> {
-        tracing::info!("Reindexing all backlinks...");
-        let mut indexed = 0;
-        let mut skipped = 0;
+        self.seed_filemeta_cache(docs);
+        self.reindex_backlinks(docs, &ReindexProgress::new(), || false);
+        Ok(())
+    }
 
-        // Pre-compute folder doc IDs once (avoids re-scanning on every iteration).
+    /// Seed the filemeta cache for all folder docs.
+    ///
+    /// This prevents false (or missed) renames on the first folder doc update
+    /// after startup: without a cached snapshot, detect_renames has no baseline
+    /// to diff against. Must run before the link indexer worker starts and
+    /// before clients can edit, and must not be repeated while the worker runs
+    /// (re-seeding would overwrite a baseline the worker has not diffed yet).
+    pub fn seed_filemeta_cache(&self, docs: &DashMap<String, DocWithSyncKv>) {
         let folder_doc_ids = find_all_folder_docs(docs);
-        tracing::info!("Found {} folder docs for indexing", folder_doc_ids.len());
-
-        let doc_ids: Vec<String> = docs.iter().map(|e| e.key().clone()).collect();
-        for doc_id in &doc_ids {
-            match self.index_document(doc_id, docs, &folder_doc_ids) {
-                Ok(()) => indexed += 1,
-                Err(_) => skipped += 1, // Not all docs are content docs
-            }
-        }
-
-        tracing::info!(
-            "Backlink reindexing complete: {} content docs indexed, {} skipped",
-            indexed,
-            skipped
-        );
-
-        // Seed filemeta cache for all folder docs.
-        // This prevents false renames on the first folder doc update after startup
-        // (without a cached snapshot, detect_renames would have no baseline to diff against).
         for folder_doc_id in &folder_doc_ids {
             // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
             let awareness = match docs.get(folder_doc_id) {
@@ -2064,8 +2054,145 @@ impl LinkIndexer {
             "Seeded filemeta cache for {} folder docs",
             folder_doc_ids.len()
         );
+    }
 
-        Ok(())
+    /// Index every loaded content doc's wikilinks into backlinks_v0.
+    ///
+    /// Blocking and CPU-heavy (minutes at several thousand docs): call it via
+    /// spawn_blocking from async context. Takes each awareness lock only for
+    /// one doc/folder step (same discipline as `index_document` in the
+    /// worker), so it can run while the server serves requests and while the
+    /// link indexer worker runs. `progress` is updated as it goes;
+    /// `cancelled` is polled between docs so shutdown does not wait for it.
+    pub fn reindex_backlinks(
+        &self,
+        docs: &DashMap<String, DocWithSyncKv>,
+        progress: &ReindexProgress,
+        cancelled: impl Fn() -> bool,
+    ) {
+        let started = std::time::Instant::now();
+        let mut indexed = 0;
+        let mut skipped = 0;
+
+        let doc_ids: Vec<String> = docs.iter().map(|e| e.key().clone()).collect();
+        progress.start(doc_ids.len());
+        // Pre-compute folder doc IDs once (avoids re-scanning on every iteration).
+        let folder_doc_ids = find_all_folder_docs(docs);
+        tracing::info!(
+            "Reindexing backlinks: {} docs against {} folder docs...",
+            doc_ids.len(),
+            folder_doc_ids.len()
+        );
+
+        for doc_id in &doc_ids {
+            if cancelled() {
+                tracing::info!(
+                    "Backlink reindexing cancelled after {} of {} docs",
+                    indexed + skipped,
+                    doc_ids.len()
+                );
+                progress.finish(ReindexState::Cancelled, started.elapsed());
+                return;
+            }
+            match self.index_document(doc_id, docs, &folder_doc_ids) {
+                Ok(()) => indexed += 1,
+                Err(_) => skipped += 1, // Not all docs are content docs
+            }
+            progress.advance();
+        }
+
+        progress.finish(ReindexState::Ready, started.elapsed());
+        tracing::info!(
+            "Backlink reindexing complete: {} content docs indexed, {} skipped, in {:.1}s",
+            indexed,
+            skipped,
+            started.elapsed().as_secs_f64()
+        );
+    }
+}
+
+/// State of the startup backlink reindex (see [`ReindexProgress`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReindexState {
+    /// Not started yet (docs still loading).
+    Pending = 0,
+    /// Running: backlinks_v0 holds the state persisted before the restart,
+    /// refreshed doc by doc.
+    Indexing = 1,
+    /// Finished.
+    Ready = 2,
+    /// Stopped by shutdown before finishing.
+    Cancelled = 3,
+}
+
+impl ReindexState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReindexState::Pending => "pending",
+            ReindexState::Indexing => "indexing",
+            ReindexState::Ready => "ready",
+            ReindexState::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// Lock-free progress of the startup backlink reindex, readable from request
+/// handlers (/ready) while the reindex runs on a blocking thread.
+#[derive(Debug, Default)]
+pub struct ReindexProgress {
+    state: std::sync::atomic::AtomicU8,
+    done: std::sync::atomic::AtomicUsize,
+    total: std::sync::atomic::AtomicUsize,
+    duration_ms: std::sync::atomic::AtomicU64,
+}
+
+impl ReindexProgress {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn state(&self) -> ReindexState {
+        use std::sync::atomic::Ordering;
+        match self.state.load(Ordering::Acquire) {
+            1 => ReindexState::Indexing,
+            2 => ReindexState::Ready,
+            3 => ReindexState::Cancelled,
+            _ => ReindexState::Pending,
+        }
+    }
+
+    /// Docs processed so far, and the total to process.
+    pub fn counts(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering;
+        (
+            self.done.load(Ordering::Relaxed),
+            self.total.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Wall time of the finished reindex, in milliseconds (0 until finished).
+    pub fn duration_ms(&self) -> u64 {
+        self.duration_ms.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn start(&self, total: usize) {
+        use std::sync::atomic::Ordering;
+        self.done.store(0, Ordering::Relaxed);
+        self.total.store(total, Ordering::Relaxed);
+        self.state
+            .store(ReindexState::Indexing as u8, Ordering::Release);
+    }
+
+    fn advance(&self) {
+        self.done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Mark finished. Also used when there is nothing to reindex.
+    pub fn finish(&self, state: ReindexState, elapsed: std::time::Duration) {
+        use std::sync::atomic::Ordering;
+        self.duration_ms
+            .store(elapsed.as_millis() as u64, Ordering::Relaxed);
+        self.state.store(state as u8, Ordering::Release);
     }
 }
 

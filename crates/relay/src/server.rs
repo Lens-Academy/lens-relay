@@ -1041,6 +1041,9 @@ pub struct Server {
     /// The hourly sweep only logs what it would purge (default on; see
     /// `[server] trash_purge_dry_run`).
     trash_purge_dry_run: bool,
+    /// Progress of the startup backlink reindex, which runs in the
+    /// background after the server starts listening (reported by /ready).
+    pub(crate) backlink_reindex: Arc<link_indexer::ReindexProgress>,
 }
 
 /// Holds channel receivers for background workers.
@@ -1200,6 +1203,7 @@ impl Server {
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: trash::retention_from_days(10.0),
             trash_purge_dry_run: true,
+            backlink_reindex: Arc::new(link_indexer::ReindexProgress::new()),
         };
 
         let receivers = WorkerReceivers {
@@ -1211,8 +1215,10 @@ impl Server {
     }
 
     /// Spawn background workers for link indexing and search index updates.
-    /// Must be called after `startup_reindex` to avoid race conditions where
-    /// workers process notifications while startup is still writing to Y.Docs.
+    /// Must be called after `startup_load` to avoid race conditions where
+    /// workers process notifications while startup is still writing to Y.Docs
+    /// (and before the filemeta cache is seeded). The background backlink
+    /// reindex (`spawn_backlink_reindex`) may run alongside the workers.
     pub fn spawn_workers(self: &Arc<Self>, receivers: WorkerReceivers) {
         let WorkerReceivers {
             mut index_rx,
@@ -1221,7 +1227,7 @@ impl Server {
 
         // The channels are only wakeup signals; the pending MAPS are the
         // work lists, and they are deliberately NOT cleared here. Entries
-        // queued while startup_reindex ran (a webhook edit, an MCP accept)
+        // queued while startup_load ran (a webhook edit, an MCP accept)
         // represent real work; wiping them permanently lost those refreshes
         // — a doc edited mid-startup kept stale suggestions until its next
         // edit. Redundant re-scans of already-reindexed docs are bounded by
@@ -3522,6 +3528,7 @@ impl Server {
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: None,
             trash_purge_dry_run: true,
+            backlink_reindex: Arc::new(link_indexer::ReindexProgress::new()),
         }
     }
 
@@ -3561,6 +3568,7 @@ impl Server {
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: None,
             trash_purge_dry_run: true,
+            backlink_reindex: Arc::new(link_indexer::ReindexProgress::new()),
         });
         server
     }
@@ -4107,14 +4115,57 @@ impl Server {
         );
     }
 
-    /// Load all documents from storage and reindex all backlinks.
-    ///
-    /// Called once on startup, before accepting connections.
+    /// Load all documents from storage, then reindex all backlinks, in one
+    /// blocking call (tests and tools; the relay's `serve` uses
+    /// `startup_load` + `spawn_backlink_reindex` so it listens before the
+    /// reindex finishes).
     /// No-op if no store is configured (in-memory mode).
     pub async fn startup_reindex(
-        &self,
+        self: &Arc<Self>,
         folders: &[y_sweet_core::config::FolderConfig],
     ) -> Result<()> {
+        self.startup_load(folders).await?;
+        self.spawn_backlink_reindex()
+            .await
+            .map_err(|e| anyhow!("backlink reindex task failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Run the startup backlink reindex on a blocking thread and return its
+    /// handle. Call after `startup_load` and `spawn_workers`; the server can
+    /// serve meanwhile.
+    ///
+    /// While it runs, readers of backlinks_v0 (get_links, delete/trash
+    /// checks, rename link rewriting) see the backlinks persisted before the
+    /// restart, refreshed doc by doc; nothing waits or 503s. Edits made
+    /// meanwhile are indexed by the link indexer worker as usual (it runs
+    /// alongside; both take each awareness lock for one step only, and the
+    /// filemeta cache was seeded in `startup_load`). /ready reports the
+    /// progress under `backlinks`. Shutdown (the cancellation token) stops
+    /// it between docs.
+    pub fn spawn_backlink_reindex(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let progress = &server.backlink_reindex;
+            match (&server.store, &server.link_indexer) {
+                (Some(_), Some(indexer)) => {
+                    let token = server.cancellation_token.clone();
+                    indexer.reindex_backlinks(&server.docs, progress, || token.is_cancelled());
+                }
+                _ => progress.finish(link_indexer::ReindexState::Ready, Duration::ZERO),
+            }
+        })
+    }
+
+    /// Load all documents from storage and build everything requests need
+    /// before the server listens: folder names, the filemeta (rename) cache,
+    /// the document resolver, and the suggestions, recent-changes and search
+    /// indexes. The slow backlink reindex is NOT part of this; see
+    /// `spawn_backlink_reindex`.
+    ///
+    /// Called once on startup, before accepting connections and before
+    /// `spawn_workers`. No-op if no store is configured (in-memory mode).
+    pub async fn startup_load(&self, folders: &[y_sweet_core::config::FolderConfig]) -> Result<()> {
         if self.store.is_none() {
             tracing::info!("No store configured, skipping startup reindex");
             // Even without a store, mark search as ready (empty index)
@@ -4128,13 +4179,15 @@ impl Server {
         }
 
         let loaded = self.load_all_docs().await?;
-        tracing::info!("Loaded {} documents, now reindexing backlinks...", loaded);
+        tracing::info!("Loaded {} documents", loaded);
 
-        // Apply folder names from config before reindexing
+        // Apply folder names from config before indexing
         self.apply_folder_names(folders).await?;
 
+        // Baseline for rename detection; must exist before the link indexer
+        // worker processes its first folder update.
         if let Some(ref indexer) = self.link_indexer {
-            indexer.reindex_all_backlinks(&self.docs)?;
+            indexer.seed_filemeta_cache(&self.docs);
         }
 
         // Build document resolver (bidirectional path <-> UUID mapping)
@@ -5250,6 +5303,19 @@ async fn check_store_deprecated(
 struct ReadyResponse {
     ok: bool,
     workers: Vec<WorkerReadiness>,
+    backlinks: BacklinkReadiness,
+}
+
+/// Startup backlink reindex progress. Informational: it does not affect
+/// `ok` or the status code, because the server serves (with the backlinks
+/// persisted before the restart) while it runs.
+#[derive(serde::Serialize)]
+struct BacklinkReadiness {
+    /// "pending" (docs still loading), "indexing", "ready" or "cancelled".
+    state: &'static str,
+    indexed: usize,
+    total: usize,
+    duration_ms: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -5263,6 +5329,8 @@ struct WorkerReadiness {
 /// reports per-worker liveness so operators can distinguish "process up
 /// but a worker has died" from "fully healthy". `ok` is true iff every
 /// registered worker is still alive; an empty worker set is vacuously OK.
+/// The server listens once docs are loaded, so this answers while the
+/// startup backlink reindex still runs; `backlinks` shows its progress.
 async fn ready(State(server): State<Arc<Server>>) -> Json<ReadyResponse> {
     let workers: Vec<WorkerReadiness> = server
         .worker_status
@@ -5275,7 +5343,19 @@ async fn ready(State(server): State<Arc<Server>>) -> Json<ReadyResponse> {
         })
         .collect();
     let ok = workers.iter().all(|w| w.alive);
-    Json(ReadyResponse { ok, workers })
+    let progress = &server.backlink_reindex;
+    let (indexed, total) = progress.counts();
+    let backlinks = BacklinkReadiness {
+        state: progress.state().as_str(),
+        indexed,
+        total,
+        duration_ms: progress.duration_ms(),
+    };
+    Json(ReadyResponse {
+        ok,
+        workers,
+        backlinks,
+    })
 }
 
 async fn handle_open_by_path(
@@ -8913,7 +8993,10 @@ mod test {
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: JsonValue = serde_json::from_slice(&bytes).unwrap();
-        assert!(body["error"].as_str().is_some_and(|e| !e.is_empty()), "{body}");
+        assert!(
+            body["error"].as_str().is_some_and(|e| !e.is_empty()),
+            "{body}"
+        );
     }
 
     // Prevents: the removed MCP_API_KEY fallback coming back. A plain-text
@@ -11154,6 +11237,91 @@ mod test {
 
         assert_eq!(json["ok"], true);
         assert_eq!(json["workers"].as_array().unwrap().len(), 0);
+    }
+
+    // Prevents: the 2026-10-11 outage. The relay only listened after the
+    // backlink reindex (~4m20s at 6444 docs), so /ready 502'd and the box
+    // watchdog restarted it mid-startup in a loop. The reindex now runs in
+    // the background: /ready must answer while it is still running, and the
+    // backlinks must still be built once it finishes.
+    #[tokio::test]
+    async fn ready_answers_while_backlink_reindex_is_running() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000001";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000001";
+        const B_UUID: &str = "b0b0b0b0-0000-4000-8000-000000000001";
+        let server = attachment_test_server("Lens").await; // has a store
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/A.md", A_UUID, "markdown"), ("/B.md", B_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "See [[B]].").await;
+        insert_test_content_doc(&server, B_UUID, "No links.").await;
+
+        let (status, body) = get_json(&server, "/ready").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["backlinks"]["state"], "pending");
+
+        // Stand-in for a slow reindex: hold a folder doc's write lock so the
+        // reindex blocks on its first folder read.
+        let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+        let held = folder_awareness.write().unwrap();
+        let reindex = server.spawn_backlink_reindex();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while server.backlink_reindex.state() != link_indexer::ReindexState::Indexing {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("reindex should start");
+
+        let (status, body) = get_json(&server, "/ready").await;
+        assert_eq!(status, StatusCode::OK, "/ready must answer mid-reindex");
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["backlinks"]["state"], "indexing");
+        let total = body["backlinks"]["total"].as_u64().unwrap();
+        assert!(total >= 4, "two folders and two content docs: {body}");
+        assert!(body["backlinks"]["indexed"].as_u64().unwrap() < total);
+        assert!(!reindex.is_finished());
+
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("reindex should finish once unblocked")
+            .unwrap();
+
+        let (status, body) = get_json(&server, "/ready").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["backlinks"]["state"], "ready");
+        assert_eq!(body["backlinks"]["indexed"], body["backlinks"]["total"]);
+
+        // The reindex did its job: B is backlinked from A.
+        let guard = folder_awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        let backlinks = txn.get_map("backlinks_v0").expect("backlinks_v0");
+        let from_b = backlinks.get(&txn, B_UUID).expect("B has backlinks");
+        assert!(
+            format!("{from_b:?}").contains(A_UUID),
+            "B's backlinks should list A: {from_b:?}"
+        );
+    }
+
+    // Shutdown during the background reindex must not wait for it.
+    #[tokio::test]
+    async fn backlink_reindex_stops_on_cancellation() {
+        let server = attachment_test_server("Lens").await;
+        insert_test_content_doc(&server, "c0c0c0c0-0000-4000-8000-000000000001", "x").await;
+        server.cancellation_token.cancel();
+        tokio::time::timeout(Duration::from_secs(5), server.spawn_backlink_reindex())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            server.backlink_reindex.state(),
+            link_indexer::ReindexState::Cancelled
+        );
     }
 
     async fn get_suggestions(server: &Arc<Server>, folder_id: &str) -> (StatusCode, JsonValue) {
