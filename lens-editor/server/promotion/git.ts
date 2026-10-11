@@ -61,7 +61,16 @@ interface GitPromotionService {
   ): Promise<{ branch: string; mainSha: string; sourceStagingSha: string }>;
 }
 
-export function spawnFile(command: string, args: string[], options: { cwd: string }): Promise<{ stdout: string; stderr: string }> {
+export async function spawnFile(command: string, args: string[], options: { cwd: string }): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await runCommand(command, args, options);
+  return { stdout: stdout.toString('utf8'), stderr };
+}
+
+function runCommand(
+  command: string,
+  args: string[],
+  options: { cwd: string; input?: string },
+): Promise<{ stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -70,57 +79,81 @@ export function spawnFile(command: string, args: string[], options: { cwd: strin
         GIT_TERMINAL_PROMPT: '0',
         GCM_INTERACTIVE: 'Never',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // Own session and process group, so a timeout kills git's helpers (remote-https, ssh) too.
+      detached: process.platform !== 'win32',
     });
 
-    let stdout = '';
+    const stdoutChunks: Buffer[] = [];
     let stderr = '';
     let settled = false;
+    let timedOut = false;
     let killTimer: NodeJS.Timeout | null = null;
+    const timeoutError = () => new PromotionError(504, `Command timed out: ${command} ${args.join(' ')}`, 'git_timeout');
 
-    function rejectOnce(error: Error): void {
+    function settle(error: Error | null, value?: { stdout: Buffer; stderr: string }): void {
       if (settled) return;
       settled = true;
-      reject(error);
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      if (error) reject(error);
+      else resolve(value!);
     }
 
-    function resolveOnce(value: { stdout: string; stderr: string }): void {
-      if (settled) return;
-      settled = true;
-      resolve(value);
+    function killTree(signal: NodeJS.Signals): void {
+      try {
+        if (child.pid !== undefined && process.platform !== 'win32') process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // Already gone.
+      }
     }
 
+    // On timeout, settle only once the command has exited: callers hold the repo's
+    // git lock until then, and a git still dying may hold index.lock.
     const timeout = setTimeout(() => {
-      rejectOnce(new PromotionError(504, `Command timed out: ${command}`, 'git_timeout'));
-      child.kill('SIGTERM');
+      timedOut = true;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        // Exited, but something that left the group still holds its output open.
+        killTree('SIGKILL');
+        settle(timeoutError());
+        return;
+      }
+      killTree('SIGTERM');
       killTimer = setTimeout(() => {
-        child.kill('SIGKILL');
+        killTree('SIGKILL');
+        // Last resort for a process SIGKILL cannot end at once (uninterruptible I/O).
+        killTimer = setTimeout(() => settle(timeoutError()), gitKillAfterTimeoutMs());
       }, gitKillAfterTimeoutMs());
     }, gitTimeoutMs());
 
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', chunk => {
-      stdout += chunk;
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
     });
+    child.stderr.setEncoding('utf8');
     child.stderr.on('data', chunk => {
       stderr += chunk;
     });
     child.on('error', error => {
-      clearTimeout(timeout);
-      if (killTimer) clearTimeout(killTimer);
-      rejectOnce(error);
+      settle(error);
+    });
+    child.on('exit', () => {
+      if (!timedOut) return;
+      // A helper that ignored SIGTERM must not outlive its parent.
+      killTree('SIGKILL');
+      settle(timeoutError());
     });
     child.on('close', code => {
-      clearTimeout(timeout);
-      if (killTimer) clearTimeout(killTimer);
-      if (settled) return;
       if (code !== 0) {
-        rejectOnce(new PromotionError(500, stderr.trim() || `Command failed: ${command} ${args.join(' ')}`, 'git_failed'));
+        settle(new PromotionError(500, stderr.trim() || `Command failed: ${command} ${args.join(' ')}`, 'git_failed'));
         return;
       }
-      resolveOnce({ stdout, stderr });
+      settle(null, { stdout: Buffer.concat(stdoutChunks), stderr });
     });
+
+    // A command that exits early closes stdin; its exit status reports the failure.
+    child.stdin.on('error', () => {});
+    child.stdin.end(options.input ?? '');
   });
 }
 
@@ -167,53 +200,10 @@ export function createGitPromotionService(config: PromotionConfig): GitPromotion
 
   async function readBlobsBatch(ref: string, filePaths: string[]): Promise<Map<string, string>> {
     if (filePaths.length === 0) return new Map();
-    const child = spawn('git', ['cat-file', '--batch'], {
+    const { stdout: output } = await runCommand('git', ['cat-file', '--batch'], {
       cwd: config.repoDir,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-        GCM_INTERACTIVE: 'Never',
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      input: filePaths.map(filePath => `${ref}:${filePath}\n`).join(''),
     });
-    const stdoutChunks: Buffer[] = [];
-    let stderr = '';
-    child.stdout.on('data', chunk => stdoutChunks.push(Buffer.from(chunk)));
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', chunk => { stderr += chunk; });
-
-    const completed = new Promise<Buffer>((resolve, reject) => {
-      let settled = false;
-      let killTimer: NodeJS.Timeout | null = null;
-      const timeout = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new PromotionError(504, 'Command timed out: git cat-file --batch', 'git_timeout'));
-        child.kill('SIGTERM');
-        killTimer = setTimeout(() => child.kill('SIGKILL'), gitKillAfterTimeoutMs());
-      }, gitTimeoutMs());
-      child.on('error', error => {
-        clearTimeout(timeout);
-        if (killTimer) clearTimeout(killTimer);
-        if (settled) return;
-        settled = true;
-        reject(error);
-      });
-      child.on('close', code => {
-        clearTimeout(timeout);
-        if (killTimer) clearTimeout(killTimer);
-        if (settled) return;
-        settled = true;
-        if (code !== 0) {
-          reject(new PromotionError(500, stderr.trim() || 'git cat-file --batch failed', 'git_failed'));
-        } else {
-          resolve(Buffer.concat(stdoutChunks));
-        }
-      });
-    });
-
-    child.stdin.end(filePaths.map(filePath => `${ref}:${filePath}\n`).join(''));
-    const output = await completed;
     const result = new Map<string, string>();
     let offset = 0;
     for (const filePath of filePaths) {
