@@ -1,9 +1,9 @@
 /**
  * The read-aloud player bar, after lens-platform's ImmersionBar: back, play /
- * pause and forward by sentence, a settings popover (highlight, speed,
- * voice) and close; a "Back to current sentence" pill when the listener has
- * scrolled away. Space, [ / ] and the arrow keys work while focus is not in
- * the editor or a field.
+ * pause and forward by sentence, an always-visible speed slider, a settings
+ * popover (highlight, voice) and close; a "Back to current sentence" pill when
+ * the listener has scrolled away. Space, [ / ], the arrow keys and < / > (speed,
+ * as on YouTube) work while focus is not in the editor or a field.
  *
  * Shown at the bottom centre of its (relatively positioned) container.
  */
@@ -13,7 +13,7 @@ import { useReadAloudSnapshot } from './useReadAloudSnapshot';
 import { Icon } from '../Icon';
 import type { ReadAloudEngine } from '../../lib/read-aloud/engine';
 import { loadVoices, type Voice } from '../../lib/read-aloud/api';
-import { MAX_SPEAKING_RATE, MIN_SPEAKING_RATE, SPEAKING_RATE_STEP } from '../../lib/read-aloud/prefs';
+import { MAX_SPEAKING_RATE, MIN_SPEAKING_RATE, SPEAKING_RATE_STEP, normalizeSpeakingRate } from '../../lib/read-aloud/prefs';
 
 
 export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
@@ -65,6 +65,11 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
       } else if (e.key === '[' || e.key === 'ArrowLeft') {
         e.preventDefault();
         engine.skip(-1);
+      } else if (e.key === '<' || e.key === '>') {
+        e.preventDefault();
+        const step = e.key === '>' ? SPEAKING_RATE_STEP : -SPEAKING_RATE_STEP;
+        const rate = normalizeSpeakingRate(engine.getSnapshot().prefs.speakingRate + step);
+        if (rate !== null) engine.setPrefs({ speakingRate: rate });
       }
     };
     window.addEventListener('keydown', onKey);
@@ -117,7 +122,22 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
           <Icon name="skip-forward" className="h-[18px] w-[18px]" />
         </button>
 
-        <div ref={settingsRef} className="relative ml-3">
+        <label className="ml-2 flex items-center gap-2 rounded-md px-1.5 py-1" title="Speed (< slower, > faster)">
+          <input
+            type="range"
+            min={MIN_SPEAKING_RATE}
+            max={MAX_SPEAKING_RATE}
+            step={SPEAKING_RATE_STEP}
+            value={snap.prefs.speakingRate}
+            onChange={e => engine.setPrefs({ speakingRate: Number(e.target.value) })}
+            aria-label="Playback speed"
+            aria-valuetext={`${snap.prefs.speakingRate}×`}
+            className="w-24 accent-[#b87018] cursor-pointer"
+          />
+          <span className="w-9 text-right text-sm font-medium tabular-nums text-gray-700">{snap.prefs.speakingRate}×</span>
+        </label>
+
+        <div ref={settingsRef} className="relative">
           <button
             type="button"
             aria-label="Reading settings"
@@ -151,27 +171,6 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
                       </button>
                     );
                   })}
-                </div>
-              </div>
-
-              <div className="mb-3">
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Speed</span>
-                  <span className="text-xs font-medium tabular-nums text-gray-900">{snap.prefs.speakingRate}×</span>
-                </div>
-                <input
-                  type="range"
-                  min={MIN_SPEAKING_RATE}
-                  max={MAX_SPEAKING_RATE}
-                  step={SPEAKING_RATE_STEP}
-                  value={snap.prefs.speakingRate}
-                  onChange={e => engine.setPrefs({ speakingRate: Number(e.target.value) })}
-                  aria-label="Playback speed"
-                  className="w-full accent-[#b87018]"
-                />
-                <div className="flex justify-between text-[10px] tabular-nums text-gray-400">
-                  <span>{MIN_SPEAKING_RATE}×</span>
-                  <span>{MAX_SPEAKING_RATE}×</span>
                 </div>
               </div>
 
