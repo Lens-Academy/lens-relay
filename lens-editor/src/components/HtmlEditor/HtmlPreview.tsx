@@ -18,6 +18,7 @@ import {
   type TtsUnit,
 } from './bridge/protocol';
 import type { ReadAloudEngine } from '../../lib/read-aloud/engine';
+import { applyReadAloudKey, isReadAloudKey } from '../../lib/read-aloud/keys';
 import { buildSrcDoc } from './runtime/page-runtime';
 import { readAnchor, type HtmlAnchor } from './anchoring/types';
 import { withoutLegacyTextAnchors } from './comments/legacy';
@@ -446,7 +447,7 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
   const readAloudRef = useRef(readAloud);
   useEffect(() => { readAloudRef.current = readAloud; }, [readAloud]);
   const ttsUnitsRef = useRef<TtsUnit[]>([]);
-  const ttsStateRef = useRef({ enabled: readAloudEnabled, playing: false });
+  const ttsStateRef = useRef({ enabled: readAloudEnabled, open: false, playing: false });
 
   useImperativeHandle(handleRef, () => ({
     captureSelection: () => {
@@ -816,6 +817,16 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
           }
           break;
         }
+        case 'tts-key': {
+          // The page can forge this too: honour it only with the player open
+          // and right after a real key press (activation in the frame reaches us).
+          const engine = readAloudRef.current;
+          const key = isObject(message.payload) ? message.payload.key : null;
+          if (!engine?.getSnapshot().open || !isReadAloudKey(key)) return;
+          if (!hasUserActivation()) return;
+          applyReadAloudKey(engine, key);
+          break;
+        }
         case 'tts-user-scrolled':
           if (readAloudRef.current?.isPlaying) readAloudRef.current.setAutoScrollPaused(true);
           break;
@@ -915,9 +926,9 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
     let lastPaused = readAloud.getSnapshot().autoScrollPaused;
     let lastHighlight: { unit: number | null; word: { start: number; end: number } | null } = { unit: null, word: null };
     const postState = () => {
-      const next = { enabled: readAloudEnabled, playing: readAloud.isPlaying };
+      const next = { enabled: readAloudEnabled, open: readAloud.getSnapshot().open, playing: readAloud.isPlaying };
       const prev = ttsStateRef.current;
-      if (prev.enabled === next.enabled && prev.playing === next.playing) return;
+      if (prev.enabled === next.enabled && prev.open === next.open && prev.playing === next.playing) return;
       ttsStateRef.current = next;
       postToAllFrames({ type: 'tts-state', payload: next });
     };
