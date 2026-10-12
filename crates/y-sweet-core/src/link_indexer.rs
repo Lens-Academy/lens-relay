@@ -606,6 +606,21 @@ pub fn title_from_filemeta_path(path: &str) -> String {
         .to_string()
 }
 
+/// A folder's files as the link indexer tracks them: uuid -> (link name, path).
+/// None when the doc has no filemeta_v0.
+fn read_filemeta_names(folder_doc: &Doc) -> Option<HashMap<String, (String, String)>> {
+    let txn = folder_doc.transact();
+    let filemeta = txn.get_map("filemeta_v0")?;
+    let mut map = HashMap::new();
+    for (path, value) in filemeta.iter(&txn) {
+        if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
+            let basename = link_name_from_filemeta_path(&path);
+            map.insert(uuid, (basename, path.to_string()));
+        }
+    }
+    Some(map)
+}
+
 /// Find all loaded folder docs (docs with non-empty filemeta_v0).
 /// Returns doc_ids of all folder docs.
 pub fn find_all_folder_docs(docs: &DashMap<String, DocWithSyncKv>) -> Vec<String> {
@@ -1311,6 +1326,13 @@ fn rewrite_outgoing_links_for_move(
 
 const DEBOUNCE_DURATION: Duration = Duration::from_secs(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// How often the startup reindex looks again while it waits for the worker to
+/// process a folder change.
+const FOLDER_CHANGE_POLL: Duration = Duration::from_millis(20);
+/// Default for `LinkIndexer::folder_change_stall`. The worker handles a folder
+/// change within one pass, so this long without a single worker step means it
+/// is dead or stuck.
+const FOLDER_CHANGE_STALL: Duration = Duration::from_secs(30);
 
 /// A rename event detected by diffing filemeta snapshots.
 ///
@@ -1448,12 +1470,16 @@ pub struct LinkIndexer {
     index_tx: mpsc::Sender<String>,
     filemeta_cache: Arc<DashMap<String, HashMap<String, (String, String)>>>, // folder_doc_id -> (uuid -> (basename, path))
     /// Serializes the startup reindex's per-doc steps with the worker's
-    /// per-item steps (content index, folder rename/requeue). The reindex
-    /// runs while the worker is live; without this, a reindex step could
-    /// read a doc's content before a worker rename rewrote its wikilinks and
-    /// write after filemeta moved, dropping a real backlink, or write a
-    /// stale snapshot over the worker's fresher one. Always taken before any
-    /// DashMap shard or awareness lock.
+    /// per-item steps (content index, folder rename/requeue) and with
+    /// server-side moves (`lock_step`). The reindex runs while the worker is
+    /// live; without this, a reindex step could interleave with a worker
+    /// rename half-way through, or write a stale snapshot over the worker's
+    /// fresher one. Always taken before any DashMap shard or awareness lock.
+    ///
+    /// It does not cover a client's own filemeta change, which is applied
+    /// outside any step: for that the reindex checks, inside its step, that
+    /// no folder change is still waiting for the worker
+    /// (`folder_change_unprocessed`).
     ///
     /// A tokio mutex, not a std one, for two reasons. The worker waits for it
     /// with `.await`, so a reindex step in progress never parks one of the
@@ -1462,6 +1488,12 @@ pub struct LinkIndexer {
     /// mutex's waiter; here the release hands the lock to the waiting worker,
     /// so an edit made during the reindex waits for one reindex step at most.
     step_lock: tokio::sync::Mutex<()>,
+    /// Items the worker has processed. The reindex watches it while it waits
+    /// for a folder change, to tell a busy worker from a dead one.
+    worker_steps: std::sync::atomic::AtomicU64,
+    /// How long the reindex waits for a folder change without the worker
+    /// processing anything before it stops waiting for the worker at all.
+    folder_change_stall: Duration,
     /// Test hook: called inside each reindex step, with `step_lock` held.
     #[cfg(test)]
     reindex_step_hook: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
@@ -1480,6 +1512,8 @@ impl LinkIndexer {
                 index_tx,
                 filemeta_cache: Arc::new(DashMap::new()),
                 step_lock: tokio::sync::Mutex::new(()),
+                worker_steps: std::sync::atomic::AtomicU64::new(0),
+                folder_change_stall: FOLDER_CHANGE_STALL,
                 #[cfg(test)]
                 reindex_step_hook: std::sync::Mutex::new(None),
             },
@@ -1569,20 +1603,8 @@ impl LinkIndexer {
 
     pub(crate) fn detect_changes(&self, folder_doc_id: &str, folder_doc: &Doc) -> FolderChanges {
         // 1. Read filemeta_v0 and build uuid -> (basename, path) map
-        let current: HashMap<String, (String, String)> = {
-            let txn = folder_doc.transact();
-            let Some(filemeta) = txn.get_map("filemeta_v0") else {
-                return FolderChanges::default();
-            };
-
-            let mut map = HashMap::new();
-            for (path, value) in filemeta.iter(&txn) {
-                if let Some(uuid) = extract_id_from_filemeta_entry(&value, &txn) {
-                    let basename = link_name_from_filemeta_path(&path);
-                    map.insert(uuid, (basename, path.to_string()));
-                }
-            }
-            map
+        let Some(current) = read_filemeta_names(folder_doc) else {
+            return FolderChanges::default();
         };
 
         // 2. Get old snapshot from cache
@@ -1916,12 +1938,65 @@ impl LinkIndexer {
                     // A concurrent update increments the generation. In that case
                     // keep the entry queued so the newer state gets another pass.
                     self.mark_indexed(&doc_id, queued.generation);
+                    self.worker_steps
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 // Yield to tokio scheduler between batch items to prevent
                 // monopolizing a worker thread during large batches.
                 tokio::task::yield_now().await;
             }
         }
+    }
+
+    /// Take the step lock for a change that rewrites filemeta, wikilinks
+    /// and backlinks together outside the worker (a server-side move), so no
+    /// reindex or worker step sees it half-applied. Take it before any
+    /// DashMap shard or awareness lock.
+    pub async fn lock_step(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.step_lock.lock().await
+    }
+
+    /// Whether `folder_doc` shows a file added, removed, moved or renamed
+    /// that the worker has not processed yet: the folder is queued, and its
+    /// filemeta no longer matches the worker's baseline.
+    ///
+    /// Call it with the folder's awareness lock held and `step_lock` taken.
+    /// A client's update callback queues the folder before the new filemeta
+    /// can be read, and the worker only clears the entry (inside its own
+    /// step) once its baseline has caught up. So `false` means the names
+    /// just read are ones the worker has already acted on: wikilinks that a
+    /// rename had to rewrite are rewritten.
+    fn folder_change_unprocessed(&self, folder_doc_id: &str, folder_doc: &Doc) -> bool {
+        if !self.pending.contains_key(folder_doc_id) {
+            return false;
+        }
+        // No baseline yet (a folder first seen after startup): the worker's
+        // first pass only seeds it, so there is nothing to wait for.
+        let Some(baseline) = self.filemeta_cache.get(folder_doc_id) else {
+            return false;
+        };
+        read_filemeta_names(folder_doc).is_some_and(|current| current != *baseline)
+    }
+
+    /// `folder_change_unprocessed` for any folder, taking each folder's
+    /// awareness lock itself. The reindex's cheap look before it takes the
+    /// step lock; the check that counts is the one inside the step.
+    fn any_folder_change_unprocessed(
+        &self,
+        docs: &DashMap<String, DocWithSyncKv>,
+        folder_doc_ids: &[String],
+    ) -> bool {
+        folder_doc_ids.iter().any(|fid| {
+            if !self.pending.contains_key(fid) {
+                return false;
+            }
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let Some(awareness) = docs.get(fid).map(|doc_ref| doc_ref.awareness()) else {
+                return false;
+            };
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            self.folder_change_unprocessed(fid, &guard.doc)
+        })
     }
 
     /// Server glue: unwraps DocWithSyncKv, delegates to core function.
@@ -1932,6 +2007,21 @@ impl LinkIndexer {
         docs: &DashMap<String, DocWithSyncKv>,
         folder_doc_ids: &[String],
     ) -> anyhow::Result<()> {
+        self.index_document_step(doc_id, docs, folder_doc_ids, false)
+            .map(|_| ())
+    }
+
+    /// `index_document`, optionally giving way to folder changes the worker
+    /// has not processed (the startup reindex): with `yield_to_folder_changes`
+    /// it writes nothing and returns `FolderChangePending` if any folder it
+    /// snapshots has one.
+    fn index_document_step(
+        &self,
+        doc_id: &str,
+        docs: &DashMap<String, DocWithSyncKv>,
+        folder_doc_ids: &[String],
+        yield_to_folder_changes: bool,
+    ) -> anyhow::Result<IndexStep> {
         let (_relay_id, doc_uuid) = parse_doc_id(doc_id)
             .ok_or_else(|| anyhow::anyhow!("Invalid doc_id format: {}", doc_id))?;
 
@@ -1970,7 +2060,7 @@ impl LinkIndexer {
                 let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
                 apply_backlink_diff(&guard.doc, doc_uuid, &empty_targets);
             }
-            return Ok(());
+            return Ok(IndexStep::Done);
         }
 
         // Phase 1: Extract content text under a short-lived read lock.
@@ -1986,7 +2076,7 @@ impl LinkIndexer {
             if let Some(contents) = txn.get_text("contents") {
                 contents.get_string(&txn)
             } else {
-                return Ok(()); // No content, nothing to index
+                return Ok(IndexStep::Done); // No content, nothing to index
             }
         };
 
@@ -2010,6 +2100,11 @@ impl LinkIndexer {
             };
             // Shard lock released; safe to acquire awareness lock.
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            // Checked under the same lock as the snapshot, so the names
+            // resolved against below are ones the worker has acted on.
+            if yield_to_folder_changes && self.folder_change_unprocessed(fid, &guard.doc) {
+                return Ok(IndexStep::FolderChangePending);
+            }
             let (_name, folder_entries) = snapshot_folder_entries(&guard.doc, fid, fi);
             entries.extend(folder_entries);
         }
@@ -2041,7 +2136,7 @@ impl LinkIndexer {
             apply_backlink_diff(&guard.doc, doc_uuid, &targets_per_folder[fi]);
         }
 
-        Ok(())
+        Ok(IndexStep::Done)
     }
 
     #[cfg(test)]
@@ -2105,36 +2200,124 @@ impl LinkIndexer {
             folder_doc_ids.len()
         );
 
+        // Docs whose backlinks were left as persisted because a folder change
+        // never got processed (see `WorkerStall`).
+        let mut left = 0;
+        let mut stall = WorkerStall::new(self.folder_change_stall);
+
         for doc_id in &doc_ids {
-            if cancelled() {
-                tracing::info!(
-                    "Backlink reindexing cancelled after {} of {} docs",
-                    indexed + skipped,
-                    doc_ids.len()
-                );
-                progress.finish(ReindexState::Cancelled, started.elapsed());
-                return;
-            }
-            let result = {
-                let _step = self.step_lock.blocking_lock();
-                #[cfg(test)]
-                self.run_reindex_step_hook();
-                self.index_document(doc_id, docs, &folder_doc_ids)
+            let result = loop {
+                if cancelled() {
+                    tracing::info!(
+                        "Backlink reindexing cancelled after {} of {} docs",
+                        indexed + skipped + left,
+                        doc_ids.len()
+                    );
+                    progress.finish(ReindexState::Cancelled, started.elapsed());
+                    return;
+                }
+                // A rename the worker has not applied yet: the doc's text
+                // still has the old link while filemeta has the new name, so
+                // indexing now would drop a real backlink, and the worker's
+                // rename (which finds the docs to rewrite through backlinks)
+                // would then miss this doc. Let the worker go first.
+                if !self.any_folder_change_unprocessed(docs, &folder_doc_ids) {
+                    let step = {
+                        let _step = self.step_lock.blocking_lock();
+                        #[cfg(test)]
+                        self.run_reindex_step_hook();
+                        self.index_document_step(doc_id, docs, &folder_doc_ids, true)
+                    };
+                    match step {
+                        Ok(IndexStep::Done) => break Some(Ok(())),
+                        Err(e) => break Some(Err(e)),
+                        // One landed during the step; wait for it too.
+                        Ok(IndexStep::FolderChangePending) => {}
+                    }
+                }
+                let worker_steps = self.worker_steps.load(std::sync::atomic::Ordering::Relaxed);
+                if stall.worker_gone(worker_steps) {
+                    break None;
+                }
+                std::thread::sleep(FOLDER_CHANGE_POLL);
             };
             match result {
-                Ok(()) => indexed += 1,
-                Err(_) => skipped += 1, // Not all docs are content docs
+                Some(Ok(())) => {
+                    indexed += 1;
+                    stall.reset();
+                }
+                Some(Err(_)) => skipped += 1, // Not all docs are content docs
+                None => left += 1,
             }
             progress.advance();
         }
 
         progress.finish(ReindexState::Ready, started.elapsed());
         tracing::info!(
-            "Backlink reindexing complete: {} content docs indexed, {} skipped, in {:.1}s",
+            "Backlink reindexing complete: {} content docs indexed, {} skipped, {} left as persisted, in {:.1}s",
             indexed,
             skipped,
+            left,
             started.elapsed().as_secs_f64()
         );
+    }
+}
+
+/// What one `index_document_step` did.
+#[derive(Debug, PartialEq, Eq)]
+enum IndexStep {
+    /// Indexed, or nothing to index.
+    Done,
+    /// Wrote nothing: a folder change is waiting for the worker.
+    FolderChangePending,
+}
+
+/// The reindex's patience while it waits for the worker to process a folder
+/// change. A busy worker keeps taking steps, and the reindex waits for it
+/// however long its batch is. A worker that takes none for `limit` is dead or
+/// stuck: from then on the reindex stops waiting, and leaves any doc it would
+/// have had to wait for with the backlinks it had before the restart.
+struct WorkerStall {
+    limit: Duration,
+    /// When the current wait began, and the worker's step count then.
+    waiting: Option<(std::time::Instant, u64)>,
+    gone: bool,
+}
+
+impl WorkerStall {
+    fn new(limit: Duration) -> Self {
+        Self {
+            limit,
+            waiting: None,
+            gone: false,
+        }
+    }
+
+    /// Called each time the reindex finds a folder change still waiting.
+    fn worker_gone(&mut self, worker_steps: u64) -> bool {
+        if self.gone {
+            return true;
+        }
+        match self.waiting {
+            Some((since, seen)) if seen == worker_steps => {
+                if since.elapsed() >= self.limit {
+                    tracing::error!(
+                        "Backlink reindex: a folder change has waited {:?} with no link indexer worker \
+                         activity; leaving the backlinks of docs that would have to wait as they \
+                         were before the restart",
+                        self.limit
+                    );
+                    self.gone = true;
+                }
+            }
+            _ => self.waiting = Some((std::time::Instant::now(), worker_steps)),
+        }
+        self.gone
+    }
+
+    /// The reindex got a step in: the next wait starts from scratch.
+    fn reset(&mut self) {
+        self.waiting = None;
     }
 }
 
@@ -5838,6 +6021,243 @@ mod tests {
             "the waiting worker goes before the reindex's next step"
         );
         worker.abort();
+    }
+
+    // --- The startup reindex against folder changes the worker has not processed ---
+
+    const RX_RELAY: &str = "cb696037-0f72-4e93-8717-4e433129d789";
+    const RX_TARGET: &str = "a0000001-0000-4000-8000-000000000001";
+    const RX_SOURCE: &str = "a0000002-0000-4000-8000-000000000002";
+
+    /// A folder "Lens" with `/Old.md` (the target) and `/X.md`, whose text is
+    /// "See [[Old]].", with the backlink Old <- X already indexed and the
+    /// filemeta baseline seeded: the state right after a restart.
+    /// Returns (docs, indexer, worker receiver, folder id, X's doc id).
+    async fn reindex_fixture() -> (
+        Arc<DashMap<String, DocWithSyncKv>>,
+        LinkIndexer,
+        mpsc::Receiver<String>,
+        String,
+        String,
+    ) {
+        let folder_id = format!("{RX_RELAY}-b0000001-0000-4000-8000-000000000001");
+        let source_id = format!("{RX_RELAY}-{RX_SOURCE}");
+        let docs: Arc<DashMap<String, DocWithSyncKv>> = Arc::new(DashMap::new());
+
+        let folder = DocWithSyncKv::new(&folder_id, None, || {}, None)
+            .await
+            .unwrap();
+        {
+            let awareness = folder.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            for (path, uuid) in [("/Old.md", RX_TARGET), ("/X.md", RX_SOURCE)] {
+                let mut meta = HashMap::new();
+                meta.insert("id".to_string(), Any::String(uuid.into()));
+                meta.insert("type".to_string(), Any::String("markdown".into()));
+                filemeta.insert(&mut txn, path, Any::Map(meta.into()));
+            }
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Lens".into()));
+        }
+        docs.insert(folder_id.clone(), folder);
+        for (uuid, text) in [(RX_TARGET, "The target."), (RX_SOURCE, "See [[Old]].")] {
+            let id = format!("{RX_RELAY}-{uuid}");
+            let doc = DocWithSyncKv::new(&id, None, || {}, None).await.unwrap();
+            {
+                let awareness = doc.awareness();
+                let guard = awareness.write().unwrap();
+                let mut txn = guard.doc.transact_mut();
+                let contents = txn.get_or_insert_text("contents");
+                contents.insert(&mut txn, 0, text);
+            }
+            docs.insert(id, doc);
+        }
+
+        let (indexer, rx) = LinkIndexer::new();
+        indexer.seed_filemeta_cache(&docs);
+        indexer
+            .index_document(&source_id, &docs, &find_all_folder_docs(&docs))
+            .unwrap();
+        (docs, indexer, rx, folder_id, source_id)
+    }
+
+    /// What a client's rename of the target syncs: same uuid, new path. The
+    /// update callback queues the folder under the same write lock.
+    fn rename_target(
+        docs: &DashMap<String, DocWithSyncKv>,
+        indexer: &LinkIndexer,
+        folder_id: &str,
+        to: &str,
+    ) {
+        let awareness = docs.get(folder_id).unwrap().awareness();
+        let guard = awareness.write().unwrap();
+        let mut txn = guard.doc.transact_mut();
+        let filemeta = txn.get_or_insert_map("filemeta_v0");
+        let from = filemeta
+            .iter(&txn)
+            .find(|(_, value)| {
+                extract_id_from_filemeta_entry(value, &txn).as_deref() == Some(RX_TARGET)
+            })
+            .map(|(path, _)| path.to_string())
+            .unwrap();
+        filemeta.remove(&mut txn, &from);
+        let mut meta = HashMap::new();
+        meta.insert("id".to_string(), Any::String(RX_TARGET.into()));
+        meta.insert("type".to_string(), Any::String("markdown".into()));
+        filemeta.insert(&mut txn, to, Any::Map(meta.into()));
+        drop(txn);
+        indexer.queue_document_update_with_lease(folder_id, None);
+    }
+
+    /// (X's text, the target's backlinks)
+    fn source_text_and_target_backlinks(
+        docs: &DashMap<String, DocWithSyncKv>,
+        folder_id: &str,
+        source_id: &str,
+    ) -> (String, Vec<String>) {
+        let text = {
+            let awareness = docs.get(source_id).unwrap().awareness();
+            let guard = awareness.read().unwrap();
+            read_contents(&guard.doc)
+        };
+        let awareness = docs.get(folder_id).unwrap().awareness();
+        let guard = awareness.read().unwrap();
+        (text, read_backlinks(&guard.doc, RX_TARGET))
+    }
+
+    // Prevents: a rename that lands while the startup reindex runs losing a
+    // backlink for good. The reindex read X's text ("[[Old]]") against
+    // filemeta that already said "New", found no target and removed X from
+    // the target's backlinks; the worker's rename then looked up the docs to
+    // rewrite in those backlinks, missed X, and X kept a dead link.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rename_landing_during_the_reindex_keeps_the_backlink_and_rewrites_the_link() {
+        use crate::doc_resolver::DocumentResolver;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (docs, indexer, mut rx, folder_id, source_id) = reindex_fixture().await;
+        let indexer = Arc::new(indexer);
+        let worker = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            tokio::spawn(async move {
+                indexer
+                    .run_worker(&mut rx, docs, Arc::new(DocumentResolver::new()))
+                    .await
+            })
+        };
+
+        // The rename lands inside the reindex's step for X (the reindex walks
+        // the docs in map order): after the step lock is taken, before X's
+        // text is read.
+        let source_step = docs.iter().position(|e| e.key() == &source_id).unwrap();
+        {
+            let steps = AtomicUsize::new(0);
+            let (docs, folder_id) = (docs.clone(), folder_id.clone());
+            let weak = Arc::downgrade(&indexer);
+            *indexer.reindex_step_hook.lock().unwrap() = Some(Box::new(move || {
+                if steps.fetch_add(1, Ordering::SeqCst) == source_step {
+                    rename_target(&docs, &weak.upgrade().unwrap(), &folder_id, "/New.md");
+                }
+            }));
+        }
+        let reindex = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            tokio::task::spawn_blocking(move || {
+                indexer.reindex_backlinks(&docs, &ReindexProgress::new(), || false)
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("the reindex should finish once the worker has applied the rename")
+            .unwrap();
+        worker.abort();
+
+        let (text, backlinks) = source_text_and_target_backlinks(&docs, &folder_id, &source_id);
+        assert_eq!(text, "See [[New]].", "the worker rewrote the link");
+        assert_eq!(
+            backlinks,
+            vec![RX_SOURCE],
+            "the backlink survived the reindex"
+        );
+    }
+
+    // If the worker is dead, nothing will ever apply the rename. The reindex
+    // must neither wait forever nor index against the half-applied state: it
+    // leaves the backlinks as they were before the restart.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reindex_stops_waiting_for_a_dead_worker_and_leaves_backlinks_alone() {
+        let (docs, mut indexer, _rx, folder_id, source_id) = reindex_fixture().await;
+        indexer.folder_change_stall = Duration::from_millis(100);
+        let indexer = Arc::new(indexer);
+        rename_target(&docs, &indexer, &folder_id, "/New.md");
+
+        let progress = Arc::new(ReindexProgress::new());
+        let reindex = {
+            let (indexer, docs, progress) = (indexer.clone(), docs.clone(), progress.clone());
+            tokio::task::spawn_blocking(move || {
+                indexer.reindex_backlinks(&docs, &progress, || false)
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("the reindex must not wait forever for a worker that is gone")
+            .unwrap();
+
+        assert_eq!(progress.state(), ReindexState::Ready);
+        let (text, backlinks) = source_text_and_target_backlinks(&docs, &folder_id, &source_id);
+        assert_eq!(text, "See [[Old]].");
+        assert_eq!(backlinks, vec![RX_SOURCE], "the backlink was not dropped");
+    }
+
+    // A queued folder whose file names have not changed (the hash/mtime
+    // writes every save makes) is nothing to wait for, worker or no worker.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reindex_does_not_wait_for_a_folder_update_that_changed_no_names() {
+        let (docs, indexer, _rx, folder_id, source_id) = reindex_fixture().await;
+        let indexer = Arc::new(indexer);
+        // Undo the fixture's indexing so the reindex has something to build.
+        {
+            let awareness = docs.get(&folder_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            apply_backlink_diff(&guard.doc, RX_SOURCE, &HashSet::new());
+        }
+        indexer.queue_document_update_with_lease(&folder_id, None);
+
+        let started = std::time::Instant::now();
+        let reindex = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            tokio::task::spawn_blocking(move || {
+                indexer.reindex_backlinks(&docs, &ReindexProgress::new(), || false)
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("the reindex should finish")
+            .unwrap();
+        assert!(
+            started.elapsed() < FOLDER_CHANGE_STALL,
+            "it did not sit out the stall limit"
+        );
+        let (_, backlinks) = source_text_and_target_backlinks(&docs, &folder_id, &source_id);
+        assert_eq!(backlinks, vec![RX_SOURCE], "the backlink was built");
+    }
+
+    #[test]
+    fn worker_stall_gives_up_on_an_idle_worker_but_not_a_busy_one() {
+        let mut stall = WorkerStall::new(Duration::from_millis(30));
+        // A busy worker: its step count moves between looks.
+        for steps in 0..5 {
+            assert!(!stall.worker_gone(steps));
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        // Then it stops.
+        assert!(!stall.worker_gone(5));
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(stall.worker_gone(5));
+        // And stays written off, even if the count moves later.
+        assert!(stall.worker_gone(6));
     }
 
     #[tokio::test]

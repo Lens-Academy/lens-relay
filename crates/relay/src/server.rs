@@ -2754,6 +2754,15 @@ impl Server {
             )
         }; // All DashMap shard locks released
 
+        // A move rewrites filemeta, backlinkers' wikilinks and backlinks in
+        // one go. Without the indexer's step lock, a link indexer or startup
+        // reindex step could read a backlinker's old text before the move
+        // and the new filemeta after it, and drop a real backlink.
+        let step = match &self.link_indexer {
+            Some(indexer) => Some(indexer.lock_step().await),
+            None => None,
+        };
+
         // Phase 2: Acquire awareness write locks (no DashMap guards held).
         let result = {
             let doc_resolver = self.doc_resolver.clone();
@@ -2811,6 +2820,7 @@ impl Server {
             )
             .map_err(|e| MoveDocumentError::Internal(e.to_string()))?
         }; // All awareness write guards dropped here
+        drop(step);
 
         // Persist all mutated folder docs and content docs
         for sync_kv in &folder_sync_kvs {
@@ -4115,10 +4125,10 @@ impl Server {
         );
     }
 
-    /// Load all documents from storage, then reindex all backlinks, in one
-    /// blocking call (tests and tools; the relay's `serve` uses
-    /// `startup_load` + `spawn_backlink_reindex` so it listens before the
-    /// reindex finishes).
+    /// Load all documents from storage, then reindex all backlinks, and
+    /// wait for both (tests; the relay itself uses `startup_load` +
+    /// `serve_with_background_reindex` so it listens before the reindex
+    /// finishes).
     /// No-op if no store is configured (in-memory mode).
     pub async fn startup_reindex(
         self: &Arc<Self>,
@@ -4142,10 +4152,11 @@ impl Server {
     /// alongside; both take each awareness lock for one step only, and the
     /// filemeta cache was seeded in `startup_load`). /ready reports the
     /// progress under `backlinks`. Shutdown (the cancellation token) stops
-    /// it between docs. Each reindex doc-step and each worker step is
-    /// serialized by the indexer's `step_lock`, so a worker rename or edit
-    /// is never interleaved with a reindex step on stale data. A panic is
-    /// logged and reported as `failed`.
+    /// it between docs. Reindex steps, worker steps and server-side moves
+    /// exclude each other through the indexer's `step_lock`, and the reindex
+    /// waits out any rename, move, add or remove in a folder that the worker
+    /// has not processed yet, so it never indexes a doc's old text against
+    /// new file names. A panic is logged and reported as `failed`.
     pub fn spawn_backlink_reindex(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let server = self.clone();
         tokio::task::spawn_blocking(move || {
@@ -4171,6 +4182,38 @@ impl Server {
                 _ => progress.finish(link_indexer::ReindexState::Ready, Duration::ZERO),
             }
         })
+    }
+
+    /// Start answering requests on `listener`, and the startup backlink
+    /// reindex alongside it. Returns (server task, reindex task) at once.
+    ///
+    /// Serving must never wait for the reindex: it takes minutes at several
+    /// thousand docs, and on 2026-10-11 a relay that only listened once it
+    /// was done got restarted by the box watchdog in a loop. Call after
+    /// `startup_load` and `spawn_workers`. Shutdown (the cancellation token)
+    /// ends both.
+    pub fn serve_with_background_reindex(
+        self: &Arc<Self>,
+        listener: TcpListener,
+        redact_errors: bool,
+    ) -> (tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>) {
+        let reindex = self.spawn_backlink_reindex();
+        let server = self.clone();
+        let serve = tokio::spawn(async move {
+            let token = server.cancellation_token.clone();
+            let routes = server.routes_with_metrics();
+            let app = routes.layer(middleware::from_fn(Self::version_header_middleware));
+            let app = if redact_errors {
+                app.layer(middleware::from_fn(Self::redact_error_middleware))
+            } else {
+                app
+            };
+            axum::serve(listener, app.into_make_service())
+                .with_graceful_shutdown(async move { token.cancelled().await })
+                .await
+                .unwrap();
+        });
+        (serve, reindex)
     }
 
     /// Load all documents from storage and build everything requests need
@@ -11339,6 +11382,136 @@ mod test {
             server.backlink_reindex.state(),
             link_indexer::ReindexState::Cancelled
         );
+    }
+
+    // Prevents: the 2026-10-11 outage coming back through the startup order.
+    // `main` starts serving and the reindex with this one call; if it ever
+    // waited for the reindex before listening, no request would be answered
+    // here and the watchdog would be restarting the relay mid-startup again.
+    #[tokio::test]
+    async fn serving_starts_while_the_backlink_reindex_is_still_running() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000002";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000002";
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/A.md", A_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "No links.").await;
+
+        // Stand-in for a slow reindex: it blocks on this folder doc.
+        let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+        let held = folder_awareness.write().unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/ready", listener.local_addr().unwrap());
+        let (serve, reindex) = server.serve_with_background_reindex(listener, false);
+
+        // Real requests over the socket, answered while the reindex is stuck.
+        let state = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let body: JsonValue = reqwest::get(&url).await.unwrap().json().await.unwrap();
+                if body["backlinks"]["state"] != "pending" {
+                    break body["backlinks"]["state"].clone();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the server must answer while the reindex is still running");
+        assert_eq!(state, "indexing");
+        assert!(!reindex.is_finished());
+
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("the reindex should finish once unblocked")
+            .unwrap();
+        let body: JsonValue = reqwest::get(&url).await.unwrap().json().await.unwrap();
+        assert_eq!(body["backlinks"]["state"], "ready");
+
+        server.cancellation_token.cancel();
+        tokio::time::timeout(Duration::from_secs(10), serve)
+            .await
+            .expect("the server should stop on cancellation")
+            .unwrap();
+    }
+
+    // Nobody awaits the background reindex, so a panic in it must end up in
+    // /ready (and the log), not leave "indexing" there forever.
+    #[tokio::test]
+    async fn backlink_reindex_panic_is_reported_as_failed() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000003";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000003";
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/A.md", A_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "No links.").await;
+
+        // yrs panics on a read of a doc that has a write transaction open.
+        let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+        let guard = folder_awareness.read().unwrap();
+        let open_write = guard.doc.transact_mut();
+
+        tokio::time::timeout(Duration::from_secs(10), server.spawn_backlink_reindex())
+            .await
+            .expect("the reindex task should end")
+            .expect("the panic is caught inside the task");
+        drop(open_write);
+        drop(guard);
+
+        assert_eq!(
+            server.backlink_reindex.state(),
+            link_indexer::ReindexState::Failed
+        );
+        let (status, body) = get_json(&server, "/ready").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["backlinks"]["state"], "failed");
+    }
+
+    // Prevents: a server-side move interleaving with a link indexer or
+    // startup reindex step, which would read a backlinker's old text, then
+    // the move's new filemeta, and drop a real backlink.
+    #[tokio::test]
+    async fn move_document_waits_for_the_link_indexer_step_lock() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000004";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000004";
+        let server = attachment_test_server("Lens").await;
+        insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/Old.md", A_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "No links.").await;
+        server.doc_resolver().rebuild(server.docs());
+
+        let indexer = server.link_indexer().clone().expect("link indexer");
+        let step = indexer.lock_step().await;
+        let moving = {
+            let server = server.clone();
+            tokio::spawn(async move { server.move_document(A_UUID, "/New.md", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!moving.is_finished(), "the move must wait for the step");
+        assert!(server.doc_resolver().resolve_path("Notes/Old.md").is_some());
+
+        drop(step);
+        let result = tokio::time::timeout(Duration::from_secs(10), moving)
+            .await
+            .expect("the move should go through once the step is over")
+            .unwrap()
+            .expect("move");
+        assert_eq!(result.new_path, "/New.md");
     }
 
     async fn get_suggestions(server: &Arc<Server>, folder_id: &str) -> (StatusCode, JsonValue) {

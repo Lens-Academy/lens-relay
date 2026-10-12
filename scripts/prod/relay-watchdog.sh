@@ -169,7 +169,8 @@ container_running_state() {
 # The relay answers /ready only once startup has loaded every doc, which can
 # outlast the failure budget; restarting it then only starts the load again.
 # So failures do not count until the container has answered once since its
-# current start, for at most STARTUP_GRACE_SECONDS.
+# current start, for at most STARTUP_GRACE_SECONDS. A start time in the future
+# (the clock was set back) gets no grace, or the grace would have no end.
 in_startup_grace() {
   local started_epoch
   startup_age=""
@@ -184,6 +185,10 @@ in_startup_grace() {
     return 1
   fi
   startup_age=$(( $(date -u +%s) - started_epoch ))
+  if (( startup_age < 0 )); then
+    log_info "container StartedAt='$container_started_at' is in the future; startup grace not applied"
+    return 1
+  fi
   (( startup_age < STARTUP_GRACE_SECONDS ))
 }
 
@@ -219,7 +224,8 @@ else
   esac
 
   if in_startup_grace; then
-    log_info "probe failed during startup grace: url=$PROBE_URL started=${startup_age}s ago grace=${STARTUP_GRACE_SECONDS}s; not counted"
+    docker_restarts="$(docker inspect -f '{{.RestartCount}}' "$CONTAINER" 2>/dev/null || true)"
+    log_info "probe failed during startup grace: url=$PROBE_URL started=${startup_age}s ago grace=${STARTUP_GRACE_SECONDS}s docker_restarts=${docker_restarts:-unknown}; not counted"
     write_state 0 "$total_restarts" "$last_restart_at" "$ready_started_at"
     exit 0
   fi

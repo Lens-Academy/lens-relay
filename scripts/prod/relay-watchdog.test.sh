@@ -17,6 +17,7 @@ case "$1" in
     case "$3" in
       *State.Running*) cat "$d/running" ;;
       *State.StartedAt*) cat "$d/started_at" ;;
+      *RestartCount*) cat "$d/docker_restarts" ;;
       *.Id*) echo "cid" ;;
     esac ;;
   network | image) exit 0 ;;
@@ -43,6 +44,7 @@ setup() {
   echo true > "$T/stub/running"
   : > "$T/stub/restarts"
   : > "$T/stub/log"
+  echo 0 > "$T/stub/docker_restarts"
   ago "$1" > "$T/stub/started_at"
   echo "$2" > "$T/stub/probe_rc"
 }
@@ -106,6 +108,20 @@ setup 60 28
 echo garbage > "$T/stub/started_at"
 run 3
 expect "unreadable start time: no grace, restarted" "$(restarts)" 1
+
+setup 60 28
+date -u -d "1 hour" +%Y-%m-%dT%H:%M:%S.%NZ > "$T/stub/started_at"
+run 3
+expect "start time in the future (clock set back): no grace, restarted" "$(restarts)" 1
+
+# Docker's restart policy restarting a crashing container renews the grace each
+# time, so the watchdog stays out of it; the journal shows Docker's counter.
+setup 5 28
+echo 7 > "$T/stub/docker_restarts"
+run 3
+expect "crash loop under Docker's restart policy: no watchdog restart" "$(restarts)" 0
+expect "crash loop under Docker's restart policy: counter logged" \
+  "$(grep -c 'docker_restarts=7; not counted' "$T/stub/log")" 3
 
 setup 172800 0
 run 1
