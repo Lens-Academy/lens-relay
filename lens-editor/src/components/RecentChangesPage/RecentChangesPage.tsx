@@ -20,7 +20,7 @@ const PRESETS = TIME_QUICK_PRESETS.map(p => (p.mode === 'all' ? { ...p, label: '
 function usePageTitle() {
   useEffect(() => {
     const prev = document.title;
-    document.title = 'Recent changes — Lens Editor';
+    document.title = 'Recent changes — Lens Relay Editor';
     return () => { document.title = prev; };
   }, []);
 }

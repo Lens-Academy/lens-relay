@@ -254,6 +254,30 @@ describe('installBridge comment layer', () => {
     expect(sent.some(e => e.message.type === 'shortcut')).toBe(false);
   });
 
+  it('forwards Ctrl/Cmd+O for the quick switcher, unless the page took it', () => {
+    setupBody('<p id="p">text</p><input id="i">');
+    cleanup = installBridge(window);
+    send({ type: 'init', payload: {} });
+    const press = (target: Element, init: KeyboardEventInit) => {
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+      target.dispatchEvent(e);
+      return e;
+    };
+    const quickSwitch = () => sent.filter(e => e.message.type === 'shortcut' && e.message.payload.key === 'o');
+
+    // Prevented at once, so the browser does not offer to open a file; also from a field.
+    expect(press(document.getElementById('p')!, { key: 'o', ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(press(document.getElementById('i')!, { key: 'o', metaKey: true }).defaultPrevented).toBe(true);
+    expect(quickSwitch()).toHaveLength(2);
+
+    sent = [];
+    press(document.getElementById('p')!, { key: 'o' });
+    press(document.getElementById('p')!, { key: 'O', ctrlKey: true, shiftKey: true });
+    document.getElementById('p')!.addEventListener('keydown', e => e.preventDefault(), { once: true });
+    press(document.getElementById('p')!, { key: 'o', ctrlKey: true });
+    expect(quickSwitch()).toHaveLength(0);
+  });
+
   it('describes legacy inline comments from where their markers render', () => {
     setupBody('<p>Intro text.</p><!--lens-comment {"id":"old1","author":"a","ts":"t","body":"x"}--><p>The commented paragraph.</p>');
     cleanup = installBridge(window);

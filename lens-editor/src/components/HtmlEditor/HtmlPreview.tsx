@@ -39,6 +39,8 @@ export interface HtmlPreviewProps {
   onCommentModeExit?: () => void;
   /** The Comment-mode shortcut (C) pressed while focus was inside the page. */
   onShortcut?: () => void;
+  /** Ctrl/Cmd+O pressed while focus was inside the page: open the quick switcher. */
+  onQuickSwitcher?: () => void;
   /** A text selection in the page (viewport rect of the frame), or null when cleared. */
   onSelectionChanged?: (rect: Rect | null) => void;
   onLegacyDescribed?: (anchors: Record<string, HtmlAnchor | null>) => void;
@@ -371,6 +373,7 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
   onAnchorCaptured,
   onCommentModeExit,
   onShortcut,
+  onQuickSwitcher,
   onSelectionChanged,
   onLegacyDescribed,
   onCurrentDescribed,
@@ -706,13 +709,13 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
   }, [postToFrame, restoreFrameLayout]);
 
   const callbacksRef = useRef({
-    onScrollState, onThreadClicked, onAnchorCaptured, onCommentModeExit, onShortcut, onSelectionChanged,
-    onLegacyDescribed, onCurrentDescribed,
+    onScrollState, onThreadClicked, onAnchorCaptured, onCommentModeExit, onShortcut, onQuickSwitcher,
+    onSelectionChanged, onLegacyDescribed, onCurrentDescribed,
   });
   useEffect(() => {
     callbacksRef.current = {
-      onScrollState, onThreadClicked, onAnchorCaptured, onCommentModeExit, onShortcut, onSelectionChanged,
-      onLegacyDescribed, onCurrentDescribed,
+      onScrollState, onThreadClicked, onAnchorCaptured, onCommentModeExit, onShortcut, onQuickSwitcher,
+      onSelectionChanged, onLegacyDescribed, onCurrentDescribed,
     };
   });
 
@@ -849,9 +852,17 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
         case 'comment-mode-exit':
           callbacks.onCommentModeExit?.();
           break;
-        case 'shortcut':
-          callbacks.onShortcut?.();
+        case 'shortcut': {
+          const key = isObject(message.payload) ? message.payload.key : null;
+          if (key === 'o') {
+            // The page can forge this too: open the switcher only right after
+            // a real key press (activation in the frame reaches us).
+            if (hasUserActivation()) callbacks.onQuickSwitcher?.();
+          } else {
+            callbacks.onShortcut?.();
+          }
           break;
+        }
         case 'selection-changed':
           if (!isObject(message.payload)) return;
           callbacks.onSelectionChanged?.(isRect(message.payload.rect) ? message.payload.rect : null);
