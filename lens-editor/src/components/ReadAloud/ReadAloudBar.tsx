@@ -57,7 +57,7 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
       const key = readAloudKeyFor(e);
       if (!key) return;
       e.preventDefault();
-      applyReadAloudKey(engine, key);
+      if (key !== 'swallow') applyReadAloudKey(engine, key);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

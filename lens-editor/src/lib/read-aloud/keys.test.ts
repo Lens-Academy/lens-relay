@@ -14,9 +14,27 @@ describe('readAloudKeyFor', () => {
     expect(key({ key: 'a' })).toBeNull();
   });
 
-  it('ignores modifiers and a held Space', () => {
+  it('ignores modifiers, and swallows a held Space without toggling', () => {
     expect(key({ key: ']', metaKey: true })).toBeNull();
-    expect(key({ code: 'Space', key: ' ', repeat: true })).toBeNull();
+    expect(key({ code: 'Space', key: ' ', repeat: true })).toBe('swallow');
+  });
+
+  it('leaves text fields alone, but not a focused slider (arrows excepted)', () => {
+    const on = (el: HTMLElement, init: KeyboardEventInit) => {
+      document.body.appendChild(el);
+      const event = new KeyboardEvent('keydown', { bubbles: true, ...init });
+      let result: ReturnType<typeof readAloudKeyFor> = null;
+      el.addEventListener('keydown', e => { result = readAloudKeyFor(e); }, { once: true });
+      el.dispatchEvent(event);
+      el.remove();
+      return result;
+    };
+    const text = document.createElement('input');
+    const slider = Object.assign(document.createElement('input'), { type: 'range' });
+    expect(on(text, { code: 'Space', key: ' ' })).toBeNull();
+    expect(on(slider, { code: 'Space', key: ' ' })).toBe('toggle');
+    expect(on(slider, { key: '>' })).toBe('faster');
+    expect(on(slider, { key: 'ArrowRight' })).toBeNull();
   });
 });
 

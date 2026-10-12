@@ -18,7 +18,7 @@ import {
   type TtsUnit,
 } from './bridge/protocol';
 import type { ReadAloudEngine } from '../../lib/read-aloud/engine';
-import { READ_ALOUD_KEYS, applyReadAloudKey, type ReadAloudKey } from '../../lib/read-aloud/keys';
+import { applyReadAloudKey, isReadAloudKey } from '../../lib/read-aloud/keys';
 import { buildSrcDoc } from './runtime/page-runtime';
 import { readAnchor, type HtmlAnchor } from './anchoring/types';
 import { withoutLegacyTextAnchors } from './comments/legacy';
@@ -822,9 +822,9 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
           // and right after a real key press (activation in the frame reaches us).
           const engine = readAloudRef.current;
           const key = isObject(message.payload) ? message.payload.key : null;
-          if (!engine?.getSnapshot().open || !READ_ALOUD_KEYS.includes(key as ReadAloudKey)) return;
+          if (!engine?.getSnapshot().open || !isReadAloudKey(key)) return;
           if (!hasUserActivation()) return;
-          applyReadAloudKey(engine, key as ReadAloudKey);
+          applyReadAloudKey(engine, key);
           break;
         }
         case 'tts-user-scrolled':

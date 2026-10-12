@@ -506,7 +506,7 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
     const key = readAloudKeyFor(event);
     if (!key) return;
     event.preventDefault();
-    options.post({ type: 'tts-key', payload: { key } });
+    if (key !== 'swallow') options.post({ type: 'tts-key', payload: { key } });
   }
 
   function onUserScroll() {
