@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { useHeaderCommentsControl } from '../../contexts/HeaderActionsContext';
 import { useMobile } from '../../contexts/MobileContext';
+import { NavigationContext } from '../../contexts/NavigationContext';
 import { MobileDrawer } from '../Mobile/MobileDrawer';
 import { MobileCommentsSheet, type PendingCommentAction } from '../Mobile/MobileCommentsSheet';
 import { HtmlSourceEditor } from './HtmlSourceEditor';
@@ -116,6 +117,7 @@ export function HtmlEditor({
   storageKey,
 }: HtmlEditorProps) {
   const { displayName } = useDisplayName();
+  const openQuickSwitcher = useContext(NavigationContext)?.openQuickSwitcher;
   const currentUser = currentUserProp ?? displayName ?? 'Anonymous';
   const [mode, setMode] = useState<Mode>(initialMode);
   const [commentsVisible, setCommentsVisible] = useState(readCommentsVisible);
@@ -567,6 +569,7 @@ export function HtmlEditor({
                   if (commentMode) exitCommentMode();
                   else startCommentMode();
                 }}
+                onQuickSwitcher={openQuickSwitcher}
                 onSelectionChanged={onSelectionChanged}
                 onLegacyDescribed={comments.onLegacyDescribed}
                 onCurrentDescribed={onCurrentDescribed}

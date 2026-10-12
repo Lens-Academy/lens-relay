@@ -6,6 +6,7 @@ import * as Y from 'yjs';
 import { Awareness } from 'y-protocols/awareness';
 import { HtmlEditor } from './HtmlEditor';
 import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
+import { NavigationContext } from '../../contexts/NavigationContext';
 import type { BridgeToParent, Envelope, ThreadPlacement } from './bridge/protocol';
 import { createThread, readThreads, recordSeen, setThreadStatus } from './comments/thread-store';
 import type { TextAnchor } from './anchoring/types';
@@ -265,6 +266,33 @@ describe('HtmlEditor', () => {
     renderEditor(ytext, awareness);
     await fromBridge({ type: 'shortcut', payload: { key: 'c' } });
     expect(screen.getByRole('button', { name: 'Commenting…' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('opens the quick switcher when Ctrl+O is pressed inside the page, only after a real key press', async () => {
+    const { ytext, awareness } = createHtmlDoc();
+    const openQuickSwitcher = vi.fn();
+    const nav = { openQuickSwitcher } as unknown as React.ContextType<typeof NavigationContext>;
+    render(
+      <NavigationContext.Provider value={nav}>
+        <DisplayNameProvider>
+          <HtmlEditor ytext={ytext} awareness={awareness} currentUser="me@x" />
+        </DisplayNameProvider>
+      </NavigationContext.Provider>,
+    );
+    const activation = { isActive: false };
+    vi.stubGlobal('navigator', Object.assign(Object.create(navigator), { userActivation: activation }));
+    try {
+      await fromBridge({ type: 'shortcut', payload: { key: 'o' } });
+      expect(openQuickSwitcher).not.toHaveBeenCalled();
+      activation.isActive = true;
+      await fromBridge({ type: 'shortcut', payload: { key: 'o' } });
+      expect(openQuickSwitcher).toHaveBeenCalledTimes(1);
+      // Neither it nor an unknown key is taken for the Comment-mode shortcut.
+      await fromBridge({ type: 'shortcut', payload: { key: 'x' } } as unknown as BridgeToParent);
+      expect(screen.getByRole('button', { name: /^Comment$/ })).toHaveAttribute('aria-pressed', 'false');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('numbers comments in creation order, whatever their place on the page', async () => {

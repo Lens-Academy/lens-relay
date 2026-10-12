@@ -106,6 +106,20 @@ export function installBridge(win: Window & typeof globalThis): () => void {
 
   postToParent({ type: 'ready', payload: {} });
 
+  // Ctrl/Cmd+O opens the editor's quick switcher, as it does outside the
+  // page. Prevent it at once, or the browser offers to open a file; that must
+  // be synchronous, so a page sees it first only from element or document
+  // handlers (its window listeners run after ours). The parent honours it only
+  // with user activation.
+  const onQuickSwitchKey = (event: KeyboardEvent): void => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+    if (event.key !== 'o' && event.key !== 'O') return;
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    if (nonce !== null) postToParent({ type: 'shortcut', payload: { key: 'o' } });
+  };
+  win.addEventListener('keydown', onQuickSwitchKey);
+
   let scrollFrame: number | null = null;
   let restoreFrame: number | null = null;
   function readScrollState(): PreviewScrollState {
@@ -297,6 +311,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   const cleanup = (): void => {
     win.removeEventListener('message', messageListener);
     win.removeEventListener('scroll', scheduleScrollState);
+    win.removeEventListener('keydown', onQuickSwitchKey);
     if (scrollFrame !== null) {
       win.cancelAnimationFrame(scrollFrame);
       scrollFrame = null;
