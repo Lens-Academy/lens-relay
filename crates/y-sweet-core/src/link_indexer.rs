@@ -708,7 +708,7 @@ pub fn index_content_into_folders(
 }
 
 /// Core indexing logic: resolves wikilinks against folder docs and updates backlinks_v0.
-/// Used by `reindex_all_backlinks` to avoid holding a content read lock while
+/// Takes the content as text to avoid holding a content read lock while
 /// taking folder write locks (which deadlocks when content doc == folder doc).
 fn index_content_into_folders_from_text(
     source_uuid: &str,
@@ -1454,7 +1454,17 @@ pub struct LinkIndexer {
     /// write after filemeta moved, dropping a real backlink, or write a
     /// stale snapshot over the worker's fresher one. Always taken before any
     /// DashMap shard or awareness lock.
-    step_lock: std::sync::Mutex<()>,
+    ///
+    /// A tokio mutex, not a std one, for two reasons. The worker waits for it
+    /// with `.await`, so a reindex step in progress never parks one of the
+    /// runtime's few worker threads. And it is fair (FIFO): the reindex loop
+    /// releases and re-takes it within nanoseconds, which starves a std
+    /// mutex's waiter; here the release hands the lock to the waiting worker,
+    /// so an edit made during the reindex waits for one reindex step at most.
+    step_lock: tokio::sync::Mutex<()>,
+    /// Test hook: called inside each reindex step, with `step_lock` held.
+    #[cfg(test)]
+    reindex_step_hook: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
 impl LinkIndexer {
@@ -1469,7 +1479,9 @@ impl LinkIndexer {
                 pending: Arc::new(DashMap::new()),
                 index_tx,
                 filemeta_cache: Arc::new(DashMap::new()),
-                step_lock: std::sync::Mutex::new(()),
+                step_lock: tokio::sync::Mutex::new(()),
+                #[cfg(test)]
+                reindex_step_hook: std::sync::Mutex::new(None),
             },
             index_rx,
         )
@@ -1843,7 +1855,7 @@ impl LinkIndexer {
                 {
                     // One step at a time against the startup reindex (see
                     // `step_lock`). No await inside this block.
-                    let _step = self.step_lock.lock().unwrap_or_else(|e| e.into_inner());
+                    let _step = self.step_lock.lock().await;
                     // Re-check folder status (need fresh content UUIDs).
                     if let Some(content_uuids) = is_folder_doc(&doc_id, &docs) {
                         // Folder doc — process immediately (no debounce)
@@ -2032,19 +2044,11 @@ impl LinkIndexer {
         Ok(())
     }
 
-    /// Reindex all backlinks by scanning every loaded document.
-    ///
-    /// Seeds the filemeta cache, then indexes every content doc's wikilinks
-    /// into backlinks_v0 of the folder doc(s). Kept for callers that want the
-    /// whole thing in one blocking call; the relay's startup runs the two
-    /// halves separately (seed before serving, reindex in the background).
-    pub fn reindex_all_backlinks(
-        &self,
-        docs: &DashMap<String, DocWithSyncKv>,
-    ) -> anyhow::Result<()> {
-        self.seed_filemeta_cache(docs);
-        self.reindex_backlinks(docs, &ReindexProgress::new(), || false);
-        Ok(())
+    #[cfg(test)]
+    fn run_reindex_step_hook(&self) {
+        if let Some(hook) = self.reindex_step_hook.lock().unwrap().as_ref() {
+            hook();
+        }
     }
 
     /// Seed the filemeta cache for all folder docs.
@@ -2075,7 +2079,8 @@ impl LinkIndexer {
     /// Index every loaded content doc's wikilinks into backlinks_v0.
     ///
     /// Blocking and CPU-heavy (minutes at several thousand docs): call it via
-    /// spawn_blocking from async context. Takes each awareness lock only for
+    /// spawn_blocking, never on a runtime thread (taking `step_lock` panics
+    /// there rather than stalling the runtime). Takes each awareness lock only for
     /// one doc/folder step (same discipline as `index_document` in the
     /// worker), so it can run while the server serves requests and while the
     /// link indexer worker runs. `progress` is updated as it goes;
@@ -2111,7 +2116,9 @@ impl LinkIndexer {
                 return;
             }
             let result = {
-                let _step = self.step_lock.lock().unwrap_or_else(|e| e.into_inner());
+                let _step = self.step_lock.blocking_lock();
+                #[cfg(test)]
+                self.run_reindex_step_hook();
                 self.index_document(doc_id, docs, &folder_doc_ids)
             };
             match result {
@@ -5713,6 +5720,124 @@ mod tests {
             .expect("backlinks_v0 should exist");
         let ideas_backlinks = read_backlinks_array(&backlinks, &txn, ideas_uuid);
         assert_eq!(ideas_backlinks, vec![notes_uuid]);
+    }
+
+    // Prevents: the startup reindex, which runs while the worker is live,
+    // stalling it. With a std mutex as `step_lock` the worker parked its
+    // runtime thread (prod has two) for as long as a reindex step ran, and
+    // the reindex loop re-took the lock before the woken worker could, so an
+    // edit made during the reindex could wait out the whole of it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn worker_waits_for_a_reindex_step_without_blocking_the_runtime_and_goes_next() {
+        use crate::doc_resolver::DocumentResolver;
+        use crate::doc_sync::DocWithSyncKv;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let relay_id = "cb696037-0f72-4e93-8717-4e433129d789";
+        let folder_id = format!("{relay_id}-b0000001-0000-4000-8000-000000000001");
+        let content_uuid = "a0000001-0000-4000-8000-000000000001";
+        let content_id = format!("{relay_id}-{content_uuid}");
+
+        let folder = DocWithSyncKv::new(&folder_id, None, || {}, None)
+            .await
+            .unwrap();
+        {
+            let awareness = folder.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let mut meta = HashMap::new();
+            meta.insert("id".to_string(), Any::String(content_uuid.into()));
+            meta.insert("type".to_string(), Any::String("markdown".into()));
+            filemeta.insert(&mut txn, "/Notes.md", Any::Map(meta.into()));
+        }
+        let content = DocWithSyncKv::new(&content_id, None, || {}, None)
+            .await
+            .unwrap();
+        {
+            let awareness = content.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, "No links.");
+        }
+        let docs: Arc<DashMap<String, DocWithSyncKv>> = Arc::new(DashMap::new());
+        docs.insert(folder_id.clone(), folder);
+        docs.insert(content_id, content);
+
+        let (indexer, mut rx) = LinkIndexer::new();
+        let indexer = Arc::new(indexer);
+        indexer.seed_filemeta_cache(&docs);
+
+        // The reindex stops inside its first step, holding `step_lock`, until
+        // told to go on. At its second step it notes whether the worker's
+        // item is still queued.
+        let (in_step_tx, mut in_step_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let pending_at_second_step = Arc::new(AtomicBool::new(true));
+        {
+            let steps = AtomicUsize::new(0);
+            let pending = indexer.pending.clone();
+            let folder_id = folder_id.clone();
+            let pending_at_second_step = pending_at_second_step.clone();
+            *indexer.reindex_step_hook.lock().unwrap() = Some(Box::new(move || {
+                match steps.fetch_add(1, Ordering::SeqCst) {
+                    0 => {
+                        in_step_tx.send(()).unwrap();
+                        go_rx.recv().unwrap();
+                    }
+                    1 => pending_at_second_step
+                        .store(pending.contains_key(&folder_id), Ordering::SeqCst),
+                    _ => {}
+                }
+            }));
+        }
+        let reindex = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            tokio::task::spawn_blocking(move || {
+                indexer.reindex_backlinks(&docs, &ReindexProgress::new(), || false)
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), in_step_rx.recv())
+            .await
+            .expect("the reindex should reach its first step");
+
+        // A folder update arrives mid-step (folder docs skip the debounce).
+        indexer.queue_document_update_with_lease(&folder_id, None);
+        let worker = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            tokio::spawn(async move {
+                indexer
+                    .run_worker(&mut rx, docs, Arc::new(DocumentResolver::new()))
+                    .await
+            })
+        };
+        // The runtime's only worker thread ran the worker up to the lock and
+        // must be free again: a task spawned after it still runs. Waited for
+        // with a std timeout on this (non-runtime) thread, because a blocked
+        // worker thread stops the runtime's timers too.
+        let (ran_tx, ran_rx) = std::sync::mpsc::channel::<()>();
+        tokio::spawn(async move {
+            let _ = ran_tx.send(());
+        });
+        ran_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the worker must not block the runtime while a reindex step runs");
+        assert!(
+            indexer.has_pending(&folder_id),
+            "the worker cannot have run: the reindex step still holds the lock"
+        );
+
+        go_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), reindex)
+            .await
+            .expect("the reindex should finish")
+            .unwrap();
+        assert!(
+            !pending_at_second_step.load(Ordering::SeqCst),
+            "the waiting worker goes before the reindex's next step"
+        );
+        worker.abort();
     }
 
     #[tokio::test]
