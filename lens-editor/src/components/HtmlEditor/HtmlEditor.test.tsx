@@ -287,7 +287,8 @@ describe('HtmlEditor', () => {
       activation.isActive = true;
       await fromBridge({ type: 'shortcut', payload: { key: 'o' } });
       expect(openQuickSwitcher).toHaveBeenCalledTimes(1);
-      // Not mistaken for the Comment-mode shortcut.
+      // Neither it nor an unknown key is taken for the Comment-mode shortcut.
+      await fromBridge({ type: 'shortcut', payload: { key: 'x' } } as unknown as BridgeToParent);
       expect(screen.getByRole('button', { name: /^Comment$/ })).toHaveAttribute('aria-pressed', 'false');
     } finally {
       vi.unstubAllGlobals();

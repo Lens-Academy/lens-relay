@@ -107,8 +107,10 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   postToParent({ type: 'ready', payload: {} });
 
   // Ctrl/Cmd+O opens the editor's quick switcher, as it does outside the
-  // page. Prevent it at once (or the browser offers to open a file) unless the
-  // page took the key itself; the parent honours it only with user activation.
+  // page. Prevent it at once, or the browser offers to open a file; that must
+  // be synchronous, so a page sees it first only from element or document
+  // handlers (its window listeners run after ours). The parent honours it only
+  // with user activation.
   const onQuickSwitchKey = (event: KeyboardEvent): void => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
     if (event.key !== 'o' && event.key !== 'O') return;

@@ -854,12 +854,12 @@ export const HtmlPreview = forwardRef<HtmlPreviewHandle, HtmlPreviewProps>(funct
           break;
         case 'shortcut': {
           const key = isObject(message.payload) ? message.payload.key : null;
-          if (key === 'o') {
+          if (key === 'c') {
+            callbacks.onShortcut?.();
+          } else if (key === 'o') {
             // The page can forge this too: open the switcher only right after
             // a real key press (activation in the frame reaches us).
             if (hasUserActivation()) callbacks.onQuickSwitcher?.();
-          } else {
-            callbacks.onShortcut?.();
           }
           break;
         }
