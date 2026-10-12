@@ -440,7 +440,9 @@ systemctl disable --now relay-watchdog.timer
 
 Counters are stored in `/var/lib/lens-relay-watchdog/state.env`. Restart events are appended to `/var/log/lens-relay-watchdog/restarts.jsonl`, and human-readable events are logged under `journalctl -t relay-watchdog`.
 
-Environment overrides are supported by the watchdog script, including `RELAY_WATCHDOG_NETWORK`, `RELAY_WATCHDOG_FAILS_REQUIRED`, `RELAY_WATCHDOG_TIMEOUT_SECONDS`, and `RELAY_WATCHDOG_CURL_IMAGE`.
+**Startup grace.** The relay answers `/ready` only once startup has loaded every doc, and a restart during that load only starts it again (the 2026-10-11 restart loop: startup took ~4m40s, the watchdog restarted at ~3 min, 15 times). So failed probes are not counted until the container has answered once since its current start, for at most `RELAY_WATCHDOG_STARTUP_GRACE_SECONDS` (default 600, `0` disables). Once it has answered, a hang is caught after the usual `RELAY_WATCHDOG_FAILS_REQUIRED` (default 3) failures, so keep that low rather than raising it to cover startup. A startup that never finishes is restarted after the grace plus the failure budget.
+
+Environment overrides are supported by the watchdog script, including `RELAY_WATCHDOG_NETWORK`, `RELAY_WATCHDOG_FAILS_REQUIRED`, `RELAY_WATCHDOG_STARTUP_GRACE_SECONDS`, `RELAY_WATCHDOG_TIMEOUT_SECONDS`, and `RELAY_WATCHDOG_CURL_IMAGE`.
 
 ## Content Validation
 

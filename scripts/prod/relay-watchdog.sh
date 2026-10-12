@@ -7,6 +7,7 @@ PROBE_URL="${RELAY_WATCHDOG_PROBE_URL:-http://relay-server:8080/ready}"
 CURL_IMAGE="${RELAY_WATCHDOG_CURL_IMAGE:-curlimages/curl:8.10.1}"
 TIMEOUT_SECONDS="${RELAY_WATCHDOG_TIMEOUT_SECONDS:-5}"
 FAILS_REQUIRED="${RELAY_WATCHDOG_FAILS_REQUIRED:-3}"
+STARTUP_GRACE_SECONDS="${RELAY_WATCHDOG_STARTUP_GRACE_SECONDS:-600}"
 STATE_DIR="${RELAY_WATCHDOG_STATE_DIR:-/var/lib/lens-relay-watchdog}"
 LOG_DIR="${RELAY_WATCHDOG_LOG_DIR:-/var/log/lens-relay-watchdog}"
 STATE_FILE="$STATE_DIR/state.env"
@@ -31,22 +32,30 @@ if ! is_positive_integer "$FAILS_REQUIRED"; then
   exit 2
 fi
 
+if [[ ! "$STARTUP_GRACE_SECONDS" =~ ^(0|[1-9][0-9]*)$ ]]; then
+  log_info "invalid configuration: RELAY_WATCHDOG_STARTUP_GRACE_SECONDS must be a non-negative base-10 integer without leading zeros, got '$STARTUP_GRACE_SECONDS'"
+  exit 2
+fi
+
 mkdir -p "$STATE_DIR" "$LOG_DIR"
 chmod 0755 "$STATE_DIR" "$LOG_DIR"
 
 fail_count=0
 total_restarts=0
 last_restart_at=""
+ready_started_at=""
 
 write_state() {
   local new_fail_count="$1"
   local new_total_restarts="$2"
   local new_last_restart_at="$3"
+  local new_ready_started_at="$4"
   umask 022
   {
     printf 'fail_count=%q\n' "$new_fail_count"
     printf 'total_restarts=%q\n' "$new_total_restarts"
     printf 'last_restart_at=%q\n' "$new_last_restart_at"
+    printf 'ready_started_at=%q\n' "$new_ready_started_at"
   } > "$STATE_FILE.tmp"
   mv "$STATE_FILE.tmp" "$STATE_FILE"
 }
@@ -82,7 +91,7 @@ read_state() {
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in
-      fail_count=* | total_restarts=* | last_restart_at=*)
+      fail_count=* | total_restarts=* | last_restart_at=* | ready_started_at=*)
         key="${line%%=*}"
         value="${line#*=}"
         value="$(strip_simple_shell_quoting "$value")"
@@ -95,6 +104,9 @@ read_state() {
             ;;
           last_restart_at)
             last_restart_at="$value"
+            ;;
+          ready_started_at)
+            ready_started_at="$value"
             ;;
         esac
         ;;
@@ -154,6 +166,27 @@ container_running_state() {
   esac
 }
 
+# The relay answers /ready only once startup has loaded every doc, which can
+# outlast the failure budget; restarting it then only starts the load again.
+# So failures do not count until the container has answered once since its
+# current start, for at most STARTUP_GRACE_SECONDS.
+in_startup_grace() {
+  local started_epoch
+  startup_age=""
+  if [[ "$STARTUP_GRACE_SECONDS" == "0" || -z "$container_started_at" ]]; then
+    return 1
+  fi
+  if [[ "$container_started_at" == "$ready_started_at" ]]; then
+    return 1
+  fi
+  if ! started_epoch="$(date -u -d "$container_started_at" +%s 2>/dev/null)"; then
+    log_info "cannot parse container StartedAt='$container_started_at'; startup grace not applied"
+    return 1
+  fi
+  startup_age=$(( $(date -u +%s) - started_epoch ))
+  (( startup_age < STARTUP_GRACE_SECONDS ))
+}
+
 container_status=0
 container_running_state || container_status=$?
 if [[ "$container_status" == "2" ]]; then
@@ -166,9 +199,10 @@ failure_reason=""
 if [[ "$container_status" == "1" ]]; then
   failure_reason="container_not_running"
   fail_count=$((fail_count + 1))
-  write_state "$fail_count" "$total_restarts" "$last_restart_at"
+  write_state "$fail_count" "$total_restarts" "$last_restart_at" "$ready_started_at"
   log_info "probe failed: reason=$failure_reason fail_count=$fail_count required=$FAILS_REQUIRED"
 else
+  container_started_at="$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER" 2>/dev/null || true)"
   probe_status=0
   probe || probe_status=$?
   case "$probe_status" in
@@ -176,7 +210,7 @@ else
       if [[ "$fail_count" != "0" ]]; then
         log_info "probe recovered; resetting fail_count from $fail_count to 0"
       fi
-      write_state 0 "$total_restarts" "$last_restart_at"
+      write_state 0 "$total_restarts" "$last_restart_at" "${container_started_at:-$ready_started_at}"
       exit 0
       ;;
     2)
@@ -184,9 +218,15 @@ else
       ;;
   esac
 
+  if in_startup_grace; then
+    log_info "probe failed during startup grace: url=$PROBE_URL started=${startup_age}s ago grace=${STARTUP_GRACE_SECONDS}s; not counted"
+    write_state 0 "$total_restarts" "$last_restart_at" "$ready_started_at"
+    exit 0
+  fi
+
   failure_reason="ready_failed"
   fail_count=$((fail_count + 1))
-  write_state "$fail_count" "$total_restarts" "$last_restart_at"
+  write_state "$fail_count" "$total_restarts" "$last_restart_at" "$ready_started_at"
   log_info "probe failed: url=$PROBE_URL network=$NETWORK timeout=${TIMEOUT_SECONDS}s fail_count=$fail_count required=$FAILS_REQUIRED"
 fi
 
@@ -205,7 +245,7 @@ new_container_id="$(docker inspect -f '{{.Id}}' "$CONTAINER" 2>/dev/null || true
 new_started_at="$(docker inspect -f '{{.State.StartedAt}}' "$CONTAINER" 2>/dev/null || true)"
 total_restarts=$((total_restarts + 1))
 last_restart_at="$now"
-write_state 0 "$total_restarts" "$last_restart_at"
+write_state 0 "$total_restarts" "$last_restart_at" "$ready_started_at"
 
 old_container_id_json="$(printf '%s' "$old_container_id" | json_escape)"
 new_container_id_json="$(printf '%s' "$new_container_id" | json_escape)"
