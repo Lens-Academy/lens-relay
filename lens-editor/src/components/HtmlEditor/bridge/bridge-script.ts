@@ -224,7 +224,11 @@ export function installBridge(win: Window & typeof globalThis): () => void {
         break;
       case 'tts-state':
         if (!isObject(msg.payload)) return;
-        tts.setState({ enabled: msg.payload.enabled === true, playing: msg.payload.playing === true });
+        tts.setState({
+          enabled: msg.payload.enabled === true,
+          open: msg.payload.open === true,
+          playing: msg.payload.playing === true,
+        });
         break;
       case 'tts-highlight': {
         if (!isObject(msg.payload)) return;

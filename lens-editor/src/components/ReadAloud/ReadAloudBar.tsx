@@ -3,7 +3,8 @@
  * pause and forward by sentence, an always-visible speed slider, a settings
  * popover (highlight, voice) and close; a "Back to current sentence" pill when
  * the listener has scrolled away. Space, [ / ], the arrow keys and < / > (speed,
- * as on YouTube) work while focus is not in the editor or a field.
+ * as on YouTube) work while focus is not in the editor or a field
+ * (`lib/read-aloud/keys.ts`; an HTML preview forwards them from its frame).
  *
  * Shown at the bottom centre of its (relatively positioned) container.
  */
@@ -13,7 +14,8 @@ import { useReadAloudSnapshot } from './useReadAloudSnapshot';
 import { Icon } from '../Icon';
 import type { ReadAloudEngine } from '../../lib/read-aloud/engine';
 import { loadVoices, type Voice } from '../../lib/read-aloud/api';
-import { MAX_SPEAKING_RATE, MIN_SPEAKING_RATE, SPEAKING_RATE_STEP, normalizeSpeakingRate } from '../../lib/read-aloud/prefs';
+import { MAX_SPEAKING_RATE, MIN_SPEAKING_RATE, SPEAKING_RATE_STEP } from '../../lib/read-aloud/prefs';
+import { applyReadAloudKey, readAloudKeyFor } from '../../lib/read-aloud/keys';
 
 
 export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
@@ -52,25 +54,10 @@ export function ReadAloudBar({ engine }: { engine: ReadAloudEngine | null }) {
   useEffect(() => {
     if (!open || !engine) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
-      if (target?.isContentEditable) return;
-      if (e.code === 'Space') {
-        e.preventDefault();
-        engine.toggle();
-      } else if (e.key === ']' || e.key === 'ArrowRight') {
-        e.preventDefault();
-        engine.skip(1);
-      } else if (e.key === '[' || e.key === 'ArrowLeft') {
-        e.preventDefault();
-        engine.skip(-1);
-      } else if (e.key === '<' || e.key === '>') {
-        e.preventDefault();
-        const step = e.key === '>' ? SPEAKING_RATE_STEP : -SPEAKING_RATE_STEP;
-        const rate = normalizeSpeakingRate(engine.getSnapshot().prefs.speakingRate + step);
-        if (rate !== null) engine.setPrefs({ speakingRate: rate });
-      }
+      const key = readAloudKeyFor(e);
+      if (!key) return;
+      e.preventDefault();
+      applyReadAloudKey(engine, key);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

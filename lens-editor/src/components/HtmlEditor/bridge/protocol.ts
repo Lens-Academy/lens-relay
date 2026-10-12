@@ -1,4 +1,5 @@
 import type { AnchorState, HtmlAnchor } from '../anchoring/types';
+import type { ReadAloudKey } from '../../../lib/read-aloud/keys';
 
 export interface PreviewScroll {
   x: number;
@@ -120,7 +121,7 @@ export type ParentToBridge =
   | { type: 'restore-scroll-ratio'; payload: PreviewScrollRatio }
   | { type: 'capture-ui-state'; payload: Record<string, never> }
   | { type: 'restore-ui-state'; payload: PreviewUiState }
-  | { type: 'tts-state'; payload: { enabled: boolean; playing: boolean } }
+  | { type: 'tts-state'; payload: { enabled: boolean; open: boolean; playing: boolean } }
   | { type: 'tts-highlight'; payload: { unit: number | null; word: { start: number; end: number } | null; follow: boolean } }
   | { type: 'tts-request-units'; payload: { start: boolean } };
 
@@ -140,7 +141,9 @@ export type BridgeToParent =
   | { type: 'storage-ops'; payload: { ops: StorageOp[] } }
   /** The page's sentences; with `play`, a request to play from that one. */
   | { type: 'tts-units'; payload: { units: TtsUnit[]; play?: number } }
-  | { type: 'tts-user-scrolled'; payload: Record<string, never> };
+  | { type: 'tts-user-scrolled'; payload: Record<string, never> }
+  /** A player shortcut pressed in the page while the player is open. */
+  | { type: 'tts-key'; payload: { key: ReadAloudKey } };
 
 export interface Envelope<M> {
   nonce: string;

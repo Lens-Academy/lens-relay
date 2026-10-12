@@ -9,7 +9,10 @@
  * - shows a small play button before the paragraph under the pointer (in a
  *   shadow root after <body>, like the comment badges), which plays from there;
  * - while audio plays, turns a click on a sentence into "play from here".
- *   When it does not play, clicks reach the page as usual.
+ *   When it does not play, clicks reach the page as usual;
+ * - while the player is open, sends the player's shortcuts (Space, [ / ],
+ *   arrows, < / >) to the parent instead of letting them scroll the page,
+ *   because focus usually sits in the frame. Keys the page uses stay its own.
  *
  * The page shares this realm and can forge what we post; the parent treats
  * every tts message as a request from the page, never as proof of a click.
@@ -18,6 +21,7 @@
 import type { BridgeToParent, TtsUnit } from './protocol';
 import { OVERLAY_ATTRIBUTE } from '../anchoring/text-index';
 import { splitSentences, type CharRange } from '../../../lib/read-aloud/text';
+import { readAloudKeyFor } from '../../../lib/read-aloud/keys';
 
 export interface TtsLayerOptions {
   post: (message: BridgeToParent) => void;
@@ -26,7 +30,7 @@ export interface TtsLayerOptions {
 }
 
 export interface TtsLayer {
-  setState(state: { enabled: boolean; playing: boolean }): void;
+  setState(state: { enabled: boolean; open: boolean; playing: boolean }): void;
   setHighlight(h: { unit: number | null; word: CharRange | null; follow: boolean }): void;
   /** Send the units, asking the parent to start at the first one in view. */
   sendUnits(start: boolean): void;
@@ -88,6 +92,8 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
   const canHighlight = !!registry && typeof Highlight === 'function';
 
   let enabled = false;
+  // The player bar is showing (playing or paused): its shortcuts are live.
+  let open = false;
   let playing = false;
   let reading: Reading | null = null;
   let observer: MutationObserver | null = null;
@@ -491,6 +497,18 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
     playFrom(unit);
   }
 
+  // Bubble phase on the window: the page's own handlers have run, so a key
+  // it used (defaultPrevented) is left alone, as is one on a focused control.
+  function onKeyDown(event: KeyboardEvent) {
+    if (!open || options.commentMode()) return;
+    const target = event.target as Element | null;
+    if (target?.closest?.(INTERACTIVE)) return;
+    const key = readAloudKeyFor(event);
+    if (!key) return;
+    event.preventDefault();
+    options.post({ type: 'tts-key', payload: { key } });
+  }
+
   function onUserScroll() {
     if (!playing || Date.now() < ownScrollUntil) return;
     options.post({ type: 'tts-user-scrolled', payload: {} });
@@ -502,11 +520,13 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
   doc.addEventListener('click', onClick, true);
   win.addEventListener('wheel', onUserScroll, { passive: true });
   win.addEventListener('touchmove', onUserScroll, { passive: true });
+  win.addEventListener('keydown', onKeyDown);
 
   return {
     setState(state) {
       const wasPlaying = playing;
       enabled = state.enabled;
+      open = state.open;
       playing = state.playing;
       if (!enabled) hideButton();
       if (!playing) {
@@ -549,6 +569,7 @@ export function installTtsLayer(win: Window & typeof globalThis, options: TtsLay
       doc.removeEventListener('click', onClick, true);
       win.removeEventListener('wheel', onUserScroll);
       win.removeEventListener('touchmove', onUserScroll);
+      win.removeEventListener('keydown', onKeyDown);
       observer?.disconnect();
       if (pointerFrame !== null) win.cancelAnimationFrame(pointerFrame);
       if (unitsTimer !== null) win.clearTimeout(unitsTimer);
