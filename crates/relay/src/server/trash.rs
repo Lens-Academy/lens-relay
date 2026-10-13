@@ -550,17 +550,21 @@ impl Server {
             .filter(|p| !p.uuid.is_empty())
             .map(|p| p.uuid.clone())
             .collect();
-        // The check is only as good as backlinks_v0. While the startup
-        // reindex is under way, the docs it has not reached that link into
-        // the subtree count too: their backlinks may be missing. Under the
-        // indexer's step lock, held until the entries have moved, so no step
-        // runs in between.
+        // The check is only as good as backlinks_v0. For the docs the
+        // startup reindex has not reached yet, backlinks are what was
+        // persisted before the restart, so for those it goes by their text
+        // instead: a link added just before a stop counts, one removed just
+        // before a stop does not. Under the indexer's step lock, held until
+        // the entries have moved, so no step runs in between.
         let step = match &self.link_indexer {
             Some(indexer) => Some(indexer.lock_step().await),
             None => None,
         };
         let folder_doc_ids: Vec<String> = folders.iter().map(|(id, _)| id.clone()).collect();
-        let unreached_linkers = self
+        let link_indexer::UnreachedLinkers {
+            linkers: unreached_linkers,
+            unreached,
+        } = self
             .unreached_linkers(subtree_uuids.iter().cloned().collect(), &folder_doc_ids)
             .await;
         let refs = {
@@ -581,7 +585,9 @@ impl Server {
                     if !sources.is_empty() {
                         let known = backlinks.entry(target.clone()).or_default();
                         for source in sources {
-                            if !known.contains(&source) {
+                            // An unreached doc's links are already in
+                            // `known`, read from its text.
+                            if !unreached.contains(&source) && !known.contains(&source) {
                                 known.push(source);
                             }
                         }

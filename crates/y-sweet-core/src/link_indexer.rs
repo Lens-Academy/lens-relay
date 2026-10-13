@@ -1749,7 +1749,7 @@ impl LinkIndexer {
             return found;
         }
         let html_pages = html_page_uuids(docs, folder_doc_ids);
-        let names: Vec<String> = link_names.iter().map(|n| n.to_lowercase()).collect();
+        let names: Vec<String> = link_names.iter().map(|n| wikilink_file_name(n)).collect();
         for doc_id in &todo {
             let Some((_relay_id, uuid)) = parse_doc_id(doc_id) else {
                 continue;
@@ -1797,11 +1797,12 @@ impl LinkIndexer {
     }
 
     /// For each of the files `uuids`, the docs a startup reindex has still to
-    /// index that link to it: file uuid -> linking docs' uuids. Their
-    /// backlinks may be missing, so server-side operations that go by a
-    /// file's backlinks (a move finds the docs to rewrite through them, a
-    /// delete refuses while they exist) add these. Empty at once when no
-    /// reindex is under way.
+    /// index that link to it. Those docs' backlinks are only what was
+    /// persisted before the restart (a link added or removed just before a
+    /// stop is not in them), so server-side operations that go by a file's
+    /// backlinks (a move finds the docs to rewrite through them, a delete
+    /// refuses while they exist) go by this for the unreached docs instead.
+    /// Empty at once when no reindex is under way.
     ///
     /// Read-only, and resolved exactly as indexing would. It reads every
     /// unreached doc's text, so call it off the async runtime; call it with
@@ -1811,16 +1812,21 @@ impl LinkIndexer {
         docs: &DashMap<String, DocWithSyncKv>,
         folder_doc_ids: &[String],
         uuids: &[String],
-    ) -> HashMap<String, Vec<String>> {
+    ) -> UnreachedLinkers {
         let mut linkers: HashMap<String, Vec<String>> = HashMap::new();
         let todo: Vec<String> = match &*self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner())
         {
             Some(todo) => todo.remaining().to_vec(),
-            None => return linkers,
+            None => return UnreachedLinkers::default(),
         };
         if todo.is_empty() || uuids.is_empty() {
-            return linkers;
+            return UnreachedLinkers::default();
         }
+        let unreached: HashSet<String> = todo
+            .iter()
+            .filter_map(|doc_id| parse_doc_id(doc_id))
+            .map(|(_relay_id, uuid)| uuid.to_string())
+            .collect();
 
         let mut entries: Vec<VirtualEntry> = Vec::new();
         for (fi, fid) in folder_doc_ids.iter().enumerate() {
@@ -1845,13 +1851,16 @@ impl LinkIndexer {
             }
         }
         let wanted: HashSet<&str> = uuids.iter().map(|uuid| uuid.as_str()).collect();
-        let wanted_names: HashSet<String> = uuids
+        // Only files a wikilink can point at have a name to look for
+        // (folders and attachments in a deleted subtree do not).
+        let wanted_names: HashSet<String> = entries
             .iter()
-            .filter_map(|uuid| paths.get(uuid.as_str()))
-            .map(|path| link_name_from_filemeta_path(path).to_lowercase())
+            .filter(|entry| wanted.contains(entry.id.as_str()))
+            .filter(|entry| is_link_target(&entry.virtual_path, &entry.entry_type))
+            .map(|entry| wikilink_file_name(&entry.virtual_path))
             .collect();
         if wanted_names.is_empty() {
-            return linkers;
+            return UnreachedLinkers { linkers, unreached };
         }
 
         for doc_id in &todo {
@@ -1899,7 +1908,7 @@ impl LinkIndexer {
                 }
             }
         }
-        linkers
+        UnreachedLinkers { linkers, unreached }
     }
 
     /// Detect renames in a folder doc and update wikilinks in all backlinkers.
@@ -2635,6 +2644,16 @@ impl LinkIndexer {
             std::thread::sleep(RENAME_WAIT_POLL);
         }
     }
+}
+
+/// What `LinkIndexer::unreached_linkers` found.
+#[derive(Debug, Default)]
+pub struct UnreachedLinkers {
+    /// File uuid -> the unreached docs that link to it.
+    pub linkers: HashMap<String, Vec<String>>,
+    /// Every doc the reindex has still to index. For one of these, a
+    /// persisted backlink that is not in `linkers` is stale.
+    pub unreached: HashSet<String>,
 }
 
 /// What the startup reindex did with one doc.
@@ -6897,19 +6916,19 @@ mod tests {
 
         // No reindex under way: backlinks are trusted as they are.
         assert!(!indexer.reindex_in_progress());
-        assert!(indexer
-            .unreached_linkers(&docs, &folders, &target)
-            .is_empty());
+        let found = indexer.unreached_linkers(&docs, &folders, &target);
+        assert!(found.linkers.is_empty() && found.unreached.is_empty());
 
         indexer.plan_reindex(&docs);
         assert!(indexer.reindex_in_progress());
-        let linkers = indexer.unreached_linkers(&docs, &folders, &target);
+        let found = indexer.unreached_linkers(&docs, &folders, &target);
         assert_eq!(
-            linkers.get(RX_TARGET),
+            found.linkers.get(RX_TARGET),
             Some(&vec![RX_SOURCE.to_string()]),
             "X links to it; the note that links to Older does not"
         );
-        assert_eq!(linkers.len(), 1);
+        assert_eq!(found.linkers.len(), 1);
+        assert!(found.unreached.contains(RX_SOURCE) && found.unreached.contains(other_uuid));
     }
 
     // The reindex tells a busy worker from a dead one by this count.

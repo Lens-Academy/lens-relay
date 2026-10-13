@@ -445,7 +445,7 @@ Counters are stored in `/var/lib/lens-relay-watchdog/state.env`. Restart events 
 What to expect from the grace:
 
 - "Has answered" is what the watchdog saw on its own once-a-minute probe. A relay that comes up and hangs before the next probe is treated as still starting, and is restarted only after the grace plus the failure budget.
-- A container Docker's restart policy keeps restarting (a crash loop) gets a fresh grace every time, so the watchdog leaves it alone: restarting would not help. The journal line for each such probe carries Docker's own counter (`docker_restarts=N`).
+- A container Docker's restart policy keeps restarting (a crash loop) gets a fresh grace every time it comes up, so a failed probe of it is not counted: restarting would not help. The journal line for each such probe carries Docker's own counter (`docker_restarts=N`). A container found not running at all is counted as before, grace or no grace.
 - A container start time in the future (the host clock was set back) gets no grace.
 
 The watchdog is installed on the host, not shipped in an image: after a change to `scripts/prod/relay-watchdog*.sh` or `ops/systemd/relay-watchdog.*`, run the install commands above again. `scripts/prod/relay-watchdog.test.sh` tests the script against a stub `docker`.
