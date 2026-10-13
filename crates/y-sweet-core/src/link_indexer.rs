@@ -339,20 +339,10 @@ pub struct VirtualEntry {
     pub folder_idx: usize,
 }
 
-/// Resolve a wikilink in the virtual filesystem tree.
-///
-/// Algorithm (matches frontend's `resolvePageName()` exactly):
-/// 1. Relative: resolve link_name from source's directory, case-insensitive
-/// 2. Absolute (fallback): /{link_name}.md, case-insensitive
-///
-/// At each step a link without an extension finds `{name}.md`, and failing
-/// that `{name}.html`; `[[name.md]]` and `[[name.html]]` find only that file. Only link
-/// targets (see `is_link_target`) match.
-pub fn resolve_in_virtual_tree<'a>(
-    link_name: &str,
-    source_virtual_path: Option<&str>,
-    entries: &'a [VirtualEntry],
-) -> Option<&'a VirtualEntry> {
+/// The lower-case virtual paths a wikilink could mean, best first: relative
+/// to the source's directory, then absolute; each `.md` path followed by its
+/// `.html` twin for a link without an extension.
+fn wikilink_candidate_paths(link_name: &str, source_virtual_path: Option<&str>) -> Vec<String> {
     let stripped = without_terminal_md(link_name);
     // [[x.md]] names the Markdown file: no .html fallback, as in the content processor
     let names_md = stripped.len() != link_name.len();
@@ -378,6 +368,41 @@ pub fn resolve_in_virtual_tree<'a>(
             _ => candidates.push(lower),
         }
     }
+    candidates
+}
+
+/// The file name a wikilink ends in, in lower case and without `.md` or
+/// `.html`: "notes/Old.md" -> "old". A link can only resolve to a file whose
+/// link name, in lower case, is this.
+fn wikilink_file_name(link_name: &str) -> String {
+    let name = link_name
+        .rsplit('/')
+        .find(|part| !part.is_empty() && *part != "." && *part != "..")
+        .unwrap_or("");
+    let name = without_terminal_md(name);
+    let name = if has_terminal_html(name) {
+        &name[..name.len() - 5]
+    } else {
+        name
+    };
+    name.to_lowercase()
+}
+
+/// Resolve a wikilink in the virtual filesystem tree.
+///
+/// Algorithm (matches frontend's `resolvePageName()` exactly):
+/// 1. Relative: resolve link_name from source's directory, case-insensitive
+/// 2. Absolute (fallback): /{link_name}.md, case-insensitive
+///
+/// At each step a link without an extension finds `{name}.md`, and failing
+/// that `{name}.html`; `[[name.md]]` and `[[name.html]]` find only that file. Only link
+/// targets (see `is_link_target`) match.
+pub fn resolve_in_virtual_tree<'a>(
+    link_name: &str,
+    source_virtual_path: Option<&str>,
+    entries: &'a [VirtualEntry],
+) -> Option<&'a VirtualEntry> {
+    let candidates = wikilink_candidate_paths(link_name, source_virtual_path);
 
     let mut best: Option<(usize, &VirtualEntry)> = None;
     for entry in entries {
@@ -1048,6 +1073,15 @@ pub fn move_document(
         }
     }
 
+    // Docs the caller handed in without a backlink: it found them another
+    // way (`LinkIndexer::unreached_linkers`, during a startup reindex). The
+    // rewrite below only touches links that resolve to the moved file.
+    for handed_in in content_docs.keys() {
+        if handed_in != uuid && !all_backlinker_uuids.contains(handed_in) {
+            all_backlinker_uuids.push(handed_in.clone());
+        }
+    }
+
     // 6. For each backlinker, rewrite wikilinks (handles both renames and directory moves)
     let new_virtual_path = format!("/{}{}", target_folder_name, new_path);
     let mut total_rewritten = 0usize;
@@ -1517,6 +1551,9 @@ pub struct LinkIndexer {
     /// Items the worker has processed. The reindex watches it while it waits
     /// for a rename to be applied, to tell a busy worker from a dead one.
     worker_steps: std::sync::atomic::AtomicU64,
+    /// Set while the worker waits for `step_lock`: someone else holds it (a
+    /// server-side move, say), and the worker is alive however long that is.
+    worker_waiting_for_step: std::sync::atomic::AtomicBool,
     /// How long the reindex waits for a rename without the worker
     /// processing anything before it stops waiting for the worker at all.
     rename_wait_stall: Duration,
@@ -1545,6 +1582,7 @@ impl LinkIndexer {
                 filemeta_cache: Arc::new(DashMap::new()),
                 step_lock: tokio::sync::Mutex::new(()),
                 worker_steps: std::sync::atomic::AtomicU64::new(0),
+                worker_waiting_for_step: std::sync::atomic::AtomicBool::new(false),
                 rename_wait_stall: RENAME_WAIT_STALL,
                 reindex_todo: std::sync::Mutex::new(None),
                 #[cfg(test)]
@@ -1688,13 +1726,13 @@ impl LinkIndexer {
     }
 
     /// For each of `link_names` (a file's wikilink name), the docs a startup
-    /// reindex has still to index that have a wikilink containing that name.
-    /// Empty lists when no reindex is planned or running.
+    /// reindex has still to index that have a wikilink ending in that file
+    /// name ("[[Old]]", "[[notes/Old.md]]", any case). Empty lists when no
+    /// reindex is planned or running.
     ///
-    /// Compared in lower case, and by containment so that path-style links
-    /// ("[[notes/Old]]") count; callers must still check that a link resolves
-    /// to the file before rewriting it. HTML pages are left out: their
-    /// source is never indexed or rewritten.
+    /// Such a link may still mean another file of the same name: callers
+    /// check that it resolves to theirs before rewriting it. HTML pages are
+    /// left out: their source is never indexed or rewritten.
     fn unindexed_docs_linking_by_name(
         &self,
         docs: &DashMap<String, DocWithSyncKv>,
@@ -1735,9 +1773,12 @@ impl LinkIndexer {
             if !names.iter().any(|name| text.contains(name.as_str())) {
                 continue;
             }
-            let links = extract_wikilinks(&text);
+            let linked: HashSet<String> = extract_wikilinks(&text)
+                .iter()
+                .map(|link| wikilink_file_name(link))
+                .collect();
             for (linkers, name) in found.iter_mut().zip(&names) {
-                if links.iter().any(|link| link.contains(name.as_str())) {
+                if linked.contains(name) {
                     linkers.push(uuid.to_string());
                 }
             }
@@ -1755,65 +1796,110 @@ impl LinkIndexer {
             .is_some_and(|todo| !todo.remaining().is_empty())
     }
 
-    /// Index, now, the docs a startup reindex has still to reach that may
-    /// link to any of the files `uuids`, so that those files' backlinks are
-    /// complete. For server-side operations that rely on a file's backlinks
-    /// before the names change (a move finds the docs to rewrite through
-    /// them, a delete refuses while they exist). Returns how many docs it
-    /// indexed; 0 at once when no reindex is under way.
+    /// For each of the files `uuids`, the docs a startup reindex has still to
+    /// index that link to it: file uuid -> linking docs' uuids. Their
+    /// backlinks may be missing, so server-side operations that go by a
+    /// file's backlinks (a move finds the docs to rewrite through them, a
+    /// delete refuses while they exist) add these. Empty at once when no
+    /// reindex is under way.
     ///
-    /// Call it with the step lock held, off the async runtime: each doc is a
-    /// full index step. The docs stay on the reindex's list, so it indexes
-    /// them again in its own time.
-    pub fn index_unreached_linkers(
+    /// Read-only, and resolved exactly as indexing would. It reads every
+    /// unreached doc's text, so call it off the async runtime; call it with
+    /// the step lock held so the names cannot change under it.
+    pub fn unreached_linkers(
         &self,
         docs: &DashMap<String, DocWithSyncKv>,
         folder_doc_ids: &[String],
         uuids: &[String],
-    ) -> usize {
-        if !self.reindex_in_progress() {
-            return 0;
+    ) -> HashMap<String, Vec<String>> {
+        let mut linkers: HashMap<String, Vec<String>> = HashMap::new();
+        let todo: Vec<String> = match &*self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner())
+        {
+            Some(todo) => todo.remaining().to_vec(),
+            None => return linkers,
+        };
+        if todo.is_empty() || uuids.is_empty() {
+            return linkers;
         }
-        let mut link_names: Vec<String> = Vec::new();
-        for fid in folder_doc_ids {
+
+        let mut entries: Vec<VirtualEntry> = Vec::new();
+        for (fi, fid) in folder_doc_ids.iter().enumerate() {
             // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
             let Some(awareness) = docs.get(fid).map(|doc_ref| doc_ref.awareness()) else {
                 continue;
             };
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-            let Some(names) = read_filemeta_names(&guard.doc) else {
+            let (_name, folder_entries) = snapshot_folder_entries(&guard.doc, fid, fi);
+            entries.extend(folder_entries);
+        }
+        // What `resolve_in_virtual_tree` does per link, looked up instead of
+        // scanned: lower-case virtual path -> the first link target there.
+        let mut targets: HashMap<String, &VirtualEntry> = HashMap::new();
+        let mut paths: HashMap<&str, &str> = HashMap::new();
+        for entry in &entries {
+            paths.insert(entry.id.as_str(), entry.virtual_path.as_str());
+            if is_link_target(&entry.virtual_path, &entry.entry_type) {
+                targets
+                    .entry(entry.virtual_path.to_lowercase())
+                    .or_insert(entry);
+            }
+        }
+        let wanted: HashSet<&str> = uuids.iter().map(|uuid| uuid.as_str()).collect();
+        let wanted_names: HashSet<String> = uuids
+            .iter()
+            .filter_map(|uuid| paths.get(uuid.as_str()))
+            .map(|path| link_name_from_filemeta_path(path).to_lowercase())
+            .collect();
+        if wanted_names.is_empty() {
+            return linkers;
+        }
+
+        for doc_id in &todo {
+            let Some((_relay_id, doc_uuid)) = parse_doc_id(doc_id) else {
                 continue;
             };
-            for uuid in uuids {
-                if let Some((link_name, _path)) = names.get(uuid) {
-                    link_names.push(link_name.clone());
+            let source_path = paths.get(doc_uuid).copied();
+            if source_path.is_some_and(has_terminal_html) {
+                continue; // HTML pages are never indexed
+            }
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let Some(awareness) = docs.get(doc_id).map(|doc_ref| doc_ref.awareness()) else {
+                continue;
+            };
+            let text = {
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+                let txn = guard.doc.transact();
+                match txn.get_text("contents") {
+                    Some(contents) => contents.get_string(&txn),
+                    None => continue,
+                }
+            };
+            // Most docs mention none of the names: skip the wikilink parse.
+            let lower = text.to_lowercase();
+            if !wanted_names
+                .iter()
+                .any(|name| lower.contains(name.as_str()))
+            {
+                continue;
+            }
+            for link in extract_wikilinks(&text) {
+                if !wanted_names.contains(&wikilink_file_name(&link)) {
+                    continue;
+                }
+                let resolved = wikilink_candidate_paths(&link, source_path)
+                    .iter()
+                    .find_map(|candidate| targets.get(candidate));
+                if let Some(target) = resolved {
+                    if wanted.contains(target.id.as_str()) {
+                        let sources = linkers.entry(target.id.clone()).or_default();
+                        if !sources.iter().any(|source| source == doc_uuid) {
+                            sources.push(doc_uuid.to_string());
+                        }
+                    }
                 }
             }
         }
-        let link_names: Vec<&str> = link_names.iter().map(|n| n.as_str()).collect();
-        let mut linkers: Vec<String> = self
-            .unindexed_docs_linking_by_name(docs, folder_doc_ids, &link_names)
-            .into_iter()
-            .flatten()
-            .collect();
-        linkers.sort();
-        linkers.dedup();
-
-        let Some(relay_id) = folder_doc_ids
-            .first()
-            .and_then(|fid| parse_doc_id(fid))
-            .map(|(relay_id, _)| relay_id)
-        else {
-            return 0;
-        };
-        let mut indexed = 0;
-        for uuid in &linkers {
-            let doc_id = format!("{}-{}", relay_id, uuid);
-            if self.index_document(&doc_id, docs, folder_doc_ids).is_ok() {
-                indexed += 1;
-            }
-        }
-        indexed
+        linkers
     }
 
     /// Detect renames in a folder doc and update wikilinks in all backlinkers.
@@ -2053,8 +2139,11 @@ impl LinkIndexer {
             for (doc_id, queued) in ready {
                 {
                     // One step at a time against the startup reindex (see
-                    // `step_lock`). No await inside this block.
-                    let _step = self.step_lock.lock().await;
+                    // `step_lock`). No await inside this block once it is held.
+                    let _step = {
+                        let _waiting = WaitingForStep::new(&self.worker_waiting_for_step);
+                        self.step_lock.lock().await
+                    };
                     // Re-check folder status (need fresh content UUIDs).
                     if let Some(content_uuids) = is_folder_doc(&doc_id, &docs) {
                         // Folder doc — process immediately (no debounce)
@@ -2418,59 +2507,36 @@ impl LinkIndexer {
             folder_doc_ids.len()
         );
 
-        // Docs whose backlinks were left as persisted because a rename never
-        // got applied (see `WorkerStall`).
-        let mut left = 0;
-        let mut stall = WorkerStall::new(self.rename_wait_stall);
+        let cancel = |done: usize| {
+            tracing::info!(
+                "Backlink reindexing cancelled after {} of {} docs",
+                done,
+                doc_ids.len()
+            );
+            self.set_reindex_todo(None);
+            progress.finish(ReindexState::Cancelled, started.elapsed());
+        };
+        let left_count = |by: isize| {
+            use std::sync::atomic::Ordering;
+            if by > 0 {
+                progress.left.fetch_add(1, Ordering::Relaxed);
+            } else {
+                progress.left.fetch_sub(1, Ordering::Relaxed);
+            }
+        };
 
+        // Docs passed over because a rename never got applied (see
+        // `WorkerStall`).
+        let mut passed_over: Vec<String> = Vec::new();
+        let mut stall = WorkerStall::new(self.rename_wait_stall);
         for (i, doc_id) in doc_ids.iter().enumerate() {
-            let result = loop {
-                if cancelled() {
-                    tracing::info!(
-                        "Backlink reindexing cancelled after {} of {} docs",
-                        indexed + skipped + left,
-                        doc_ids.len()
-                    );
-                    self.set_reindex_todo(None);
-                    progress.finish(ReindexState::Cancelled, started.elapsed());
-                    return;
-                }
-                // A rename the worker has not applied yet: the doc's text
-                // still has the old link while filemeta has the new name, so
-                // indexing now would drop a real backlink, and the worker's
-                // rename (which finds the docs to rewrite through backlinks)
-                // would then miss this doc. Let the worker go first.
-                if !self.any_rename_unprocessed(docs, &folder_doc_ids) {
-                    let step = {
-                        let _step = self.step_lock.blocking_lock();
-                        #[cfg(test)]
-                        self.run_reindex_step_hook();
-                        self.index_document_step(doc_id, docs, &folder_doc_ids, true)
-                    };
-                    match step {
-                        Ok(IndexStep::Done) => break Some(Ok(())),
-                        Err(e) => break Some(Err(e)),
-                        // One landed during the step; wait for it too.
-                        Ok(IndexStep::RenamePending) => {}
-                    }
-                }
-                let worker_steps = self.worker_steps.load(std::sync::atomic::Ordering::Relaxed);
-                if stall.worker_gone(worker_steps) {
-                    break None;
-                }
-                std::thread::sleep(RENAME_WAIT_POLL);
-            };
-            match result {
-                Some(Ok(())) => {
-                    indexed += 1;
-                    stall.reset();
-                }
-                Some(Err(_)) => skipped += 1, // Not all docs are content docs
-                None => {
-                    left += 1;
-                    progress
-                        .left
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match self.reindex_doc(doc_id, docs, &folder_doc_ids, &mut stall, &cancelled) {
+                None => return cancel(i),
+                Some(ReindexedDoc::Indexed) => indexed += 1,
+                Some(ReindexedDoc::Skipped) => skipped += 1,
+                Some(ReindexedDoc::PassedOver) => {
+                    passed_over.push(doc_id.clone());
+                    left_count(1);
                 }
             }
             self.set_reindex_todo(Some(ReindexTodo {
@@ -2478,6 +2544,34 @@ impl LinkIndexer {
                 next: i + 1,
             }));
             progress.advance();
+        }
+
+        // The worker was written off while a rename waited. If it was only
+        // held up, it has applied the rename by now: one more go at the docs
+        // passed over, with fresh patience. They stay listed as unindexed
+        // meanwhile.
+        let mut left = 0;
+        if !passed_over.is_empty() {
+            let passed_over = Arc::new(passed_over);
+            let mut stall = WorkerStall::new(self.rename_wait_stall);
+            for (i, doc_id) in passed_over.iter().enumerate() {
+                self.set_reindex_todo(Some(ReindexTodo {
+                    doc_ids: Arc::clone(&passed_over),
+                    next: i,
+                }));
+                match self.reindex_doc(doc_id, docs, &folder_doc_ids, &mut stall, &cancelled) {
+                    None => return cancel(doc_ids.len() - passed_over.len() + i),
+                    Some(ReindexedDoc::Indexed) => {
+                        indexed += 1;
+                        left_count(-1);
+                    }
+                    Some(ReindexedDoc::Skipped) => {
+                        skipped += 1;
+                        left_count(-1);
+                    }
+                    Some(ReindexedDoc::PassedOver) => left += 1,
+                }
+            }
         }
 
         self.set_reindex_todo(None);
@@ -2490,6 +2584,93 @@ impl LinkIndexer {
             started.elapsed().as_secs_f64()
         );
     }
+
+    /// One doc of the startup reindex: index it, first waiting for the
+    /// worker to apply any rename it has not got to (see
+    /// `rename_unprocessed`). `None` when cancelled.
+    fn reindex_doc(
+        &self,
+        doc_id: &str,
+        docs: &DashMap<String, DocWithSyncKv>,
+        folder_doc_ids: &[String],
+        stall: &mut WorkerStall,
+        cancelled: &impl Fn() -> bool,
+    ) -> Option<ReindexedDoc> {
+        loop {
+            if cancelled() {
+                return None;
+            }
+            // A rename the worker has not applied yet: the doc's text still
+            // has the old link while filemeta has the new name, so indexing
+            // now would drop a real backlink, and the worker's rename (which
+            // finds the docs to rewrite through backlinks) would then miss
+            // this doc. Let the worker go first.
+            if !self.any_rename_unprocessed(docs, folder_doc_ids) {
+                let step = {
+                    let _step = self.step_lock.blocking_lock();
+                    #[cfg(test)]
+                    self.run_reindex_step_hook();
+                    self.index_document_step(doc_id, docs, folder_doc_ids, true)
+                };
+                match step {
+                    Ok(IndexStep::Done) => {
+                        stall.reset();
+                        return Some(ReindexedDoc::Indexed);
+                    }
+                    // Not all docs are content docs
+                    Err(_) => return Some(ReindexedDoc::Skipped),
+                    // One landed during the step; wait for it too.
+                    Ok(IndexStep::RenamePending) => {}
+                }
+            }
+            let worker = WorkerActivity {
+                steps: self.worker_steps.load(std::sync::atomic::Ordering::Relaxed),
+                waiting_for_step: self
+                    .worker_waiting_for_step
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            };
+            if stall.worker_gone(worker) {
+                return Some(ReindexedDoc::PassedOver);
+            }
+            std::thread::sleep(RENAME_WAIT_POLL);
+        }
+    }
+}
+
+/// What the startup reindex did with one doc.
+enum ReindexedDoc {
+    Indexed,
+    /// Not a content doc, or gone.
+    Skipped,
+    /// A rename waited and the worker was written off: backlinks left as
+    /// they were.
+    PassedOver,
+}
+
+/// Marks the worker as waiting for `step_lock` for as long as it lives (also
+/// when the wait is dropped half-way, on shutdown).
+struct WaitingForStep<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl<'a> WaitingForStep<'a> {
+    fn new(flag: &'a std::sync::atomic::AtomicBool) -> Self {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        Self(flag)
+    }
+}
+
+impl Drop for WaitingForStep<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// What the reindex can see of the worker.
+#[derive(Clone, Copy)]
+struct WorkerActivity {
+    /// Items processed so far.
+    steps: u64,
+    /// It is waiting for the step lock, which someone else holds.
+    waiting_for_step: bool,
 }
 
 /// The docs of a startup reindex, in the order it indexes them, and how far it
@@ -2515,15 +2696,17 @@ enum IndexStep {
 }
 
 /// The reindex's patience while it waits for the worker to apply a rename.
-/// A busy worker keeps taking steps, and the reindex waits for it
-/// however long its batch is. A worker that takes none for `limit` is dead or
-/// stuck: from then on the reindex stops waiting, and leaves any doc it would
-/// have had to wait for with the backlinks it had before the restart.
+/// A worker that keeps taking steps, or that is itself waiting for the step
+/// lock, is alive, and the reindex waits for it however long it takes. One
+/// that does neither for `limit` is dead or stuck: the reindex then passes
+/// over the docs it would have to wait for, leaving their backlinks as they
+/// were before the restart, until the worker moves again.
 struct WorkerStall {
     limit: Duration,
     /// When the current wait began, and the worker's step count then.
     waiting: Option<(std::time::Instant, u64)>,
-    gone: bool,
+    /// The worker's step count when it was written off.
+    gone_at: Option<u64>,
 }
 
 impl WorkerStall {
@@ -2531,17 +2714,22 @@ impl WorkerStall {
         Self {
             limit,
             waiting: None,
-            gone: false,
+            gone_at: None,
         }
     }
 
     /// Called each time the reindex finds a rename still waiting.
-    fn worker_gone(&mut self, worker_steps: u64) -> bool {
-        if self.gone {
-            return true;
+    fn worker_gone(&mut self, worker: WorkerActivity) -> bool {
+        if let Some(steps_then) = self.gone_at {
+            if steps_then == worker.steps && !worker.waiting_for_step {
+                return true;
+            }
+            // It moved after all: held up, not dead.
+            self.gone_at = None;
+            self.waiting = None;
         }
         match self.waiting {
-            Some((since, seen)) if seen == worker_steps => {
+            Some((since, seen)) if seen == worker.steps && !worker.waiting_for_step => {
                 if since.elapsed() >= self.limit {
                     tracing::error!(
                         "Backlink reindex: a rename has waited {:?} with no link indexer worker \
@@ -2549,12 +2737,12 @@ impl WorkerStall {
                          were before the restart",
                         self.limit
                     );
-                    self.gone = true;
+                    self.gone_at = Some(worker.steps);
                 }
             }
-            _ => self.waiting = Some((std::time::Instant::now(), worker_steps)),
+            _ => self.waiting = Some((std::time::Instant::now(), worker.steps)),
         }
-        self.gone
+        self.gone_at.is_some()
     }
 
     /// The reindex got a step in: the next wait starts from scratch.
@@ -6665,36 +6853,63 @@ mod tests {
         assert_eq!(page_text, page_source, "the HTML page is not");
     }
 
-    // For server-side moves and deletes, which rely on a file's backlinks
-    // before any name changes: while a reindex is under way they first index
-    // the docs it has not reached that may link to the file.
+    // For server-side moves and deletes, which go by a file's backlinks:
+    // while a reindex is under way they also need the docs it has not
+    // reached that link to the file, resolved as indexing would.
     #[tokio::test]
-    async fn index_unreached_linkers_completes_a_files_backlinks_during_a_reindex() {
-        let (docs, indexer, _rx, folder_id, source_id) = reindex_fixture().await;
+    async fn unreached_linkers_finds_the_docs_a_reindex_has_not_reached() {
+        let (docs, indexer, _rx, folder_id, _source_id) = reindex_fixture().await;
         let folders = vec![folder_id.clone()];
         let target = vec![RX_TARGET.to_string()];
-        // X links to the target, but the backlink was never persisted.
+        // Two more notes: "Older" (a name that contains the target's), and
+        // one that links to it and only mentions "Old" in passing.
+        let older_uuid = "a0000004-0000-4000-8000-000000000004";
+        let other_uuid = "a0000005-0000-4000-8000-000000000005";
         {
             let awareness = docs.get(&folder_id).unwrap().awareness();
             let guard = awareness.write().unwrap();
+            // X's backlink was never persisted.
             apply_backlink_diff(&guard.doc, RX_SOURCE, &HashSet::new());
+            let mut txn = guard.doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            for (path, uuid) in [("/Older.md", older_uuid), ("/Other.md", other_uuid)] {
+                let mut meta = HashMap::new();
+                meta.insert("id".to_string(), Any::String(uuid.into()));
+                meta.insert("type".to_string(), Any::String("markdown".into()));
+                filemeta.insert(&mut txn, path, Any::Map(meta.into()));
+            }
+        }
+        for (uuid, text) in [
+            (older_uuid, "Older."),
+            (other_uuid, "See [[Older]], not the Old one."),
+        ] {
+            let id = format!("{RX_RELAY}-{uuid}");
+            let doc = DocWithSyncKv::new(&id, None, || {}, None).await.unwrap();
+            {
+                let awareness = doc.awareness();
+                let guard = awareness.write().unwrap();
+                let mut txn = guard.doc.transact_mut();
+                let contents = txn.get_or_insert_text("contents");
+                contents.insert(&mut txn, 0, text);
+            }
+            docs.insert(id, doc);
         }
 
         // No reindex under way: backlinks are trusted as they are.
         assert!(!indexer.reindex_in_progress());
-        assert_eq!(indexer.index_unreached_linkers(&docs, &folders, &target), 0);
-        let (_, backlinks) = source_text_and_target_backlinks(&docs, &folder_id, &source_id);
-        assert!(backlinks.is_empty());
+        assert!(indexer
+            .unreached_linkers(&docs, &folders, &target)
+            .is_empty());
 
         indexer.plan_reindex(&docs);
         assert!(indexer.reindex_in_progress());
-        assert_eq!(indexer.index_unreached_linkers(&docs, &folders, &target), 1);
-        let (_, backlinks) = source_text_and_target_backlinks(&docs, &folder_id, &source_id);
-        assert_eq!(backlinks, vec![RX_SOURCE]);
-        assert!(
-            indexer.reindex_in_progress(),
-            "X is still the reindex's to index in its own time"
+        let linkers = indexer.unreached_linkers(&docs, &folders, &target);
+        assert_eq!(
+            linkers.get(RX_TARGET),
+            Some(&vec![RX_SOURCE.to_string()]),
+            "X links to it; the note that links to Older does not"
         );
+        assert_eq!(linkers.len(), 1);
     }
 
     // The reindex tells a busy worker from a dead one by this count.
@@ -6745,19 +6960,81 @@ mod tests {
     }
 
     #[test]
-    fn worker_stall_gives_up_on_an_idle_worker_but_not_a_busy_one() {
+    fn worker_stall_writes_off_only_a_worker_that_shows_no_sign_of_life() {
+        let idle = |steps| WorkerActivity {
+            steps,
+            waiting_for_step: false,
+        };
+        let waiting = |steps| WorkerActivity {
+            steps,
+            waiting_for_step: true,
+        };
         let mut stall = WorkerStall::new(Duration::from_millis(30));
         // A busy worker: its step count moves between looks.
         for steps in 0..5 {
-            assert!(!stall.worker_gone(steps));
+            assert!(!stall.worker_gone(idle(steps)));
             std::thread::sleep(Duration::from_millis(15));
         }
-        // Then it stops.
-        assert!(!stall.worker_gone(5));
+        // One held up behind whoever has the step lock: no steps, but alive.
+        for _ in 0..5 {
+            assert!(!stall.worker_gone(waiting(5)));
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        // Then nothing at all.
+        assert!(!stall.worker_gone(idle(5)));
         std::thread::sleep(Duration::from_millis(40));
-        assert!(stall.worker_gone(5));
-        // And stays written off, even if the count moves later.
-        assert!(stall.worker_gone(6));
+        assert!(stall.worker_gone(idle(5)));
+        assert!(stall.worker_gone(idle(5)));
+        // It moves again: it was not dead, and gets the full wait once more.
+        assert!(!stall.worker_gone(idle(6)));
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(stall.worker_gone(idle(6)));
+    }
+
+    // Prevents: the reindex writing off a live worker that is merely queued
+    // behind a long holder of the step lock (a server-side move), and then
+    // passing over every remaining doc. Seen in scenario testing: 6,406 of
+    // 6,444 docs left with their pre-restart backlinks.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reindex_waits_for_a_worker_held_up_behind_the_step_lock() {
+        use crate::doc_resolver::DocumentResolver;
+
+        let (docs, mut indexer, mut rx, folder_id, source_id) = reindex_fixture().await;
+        indexer.rename_wait_stall = Duration::from_millis(100);
+        let indexer = Arc::new(indexer);
+
+        // Someone holds the step lock for much longer than the stall limit,
+        // with a rename waiting for the worker.
+        let held = indexer.lock_step().await;
+        rename_target(&docs, &indexer, &folder_id, "/New.md");
+        let worker = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            tokio::spawn(async move {
+                indexer
+                    .run_worker(&mut rx, docs, Arc::new(DocumentResolver::new()))
+                    .await
+            })
+        };
+        let progress = Arc::new(ReindexProgress::new());
+        let reindex = {
+            let (indexer, docs, progress) = (indexer.clone(), docs.clone(), progress.clone());
+            tokio::task::spawn_blocking(move || {
+                indexer.reindex_backlinks(&docs, &progress, || false)
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(!reindex.is_finished(), "the reindex is still waiting");
+        drop(held);
+
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("the reindex should finish once the worker has had its turn")
+            .unwrap();
+        worker.abort();
+        assert_eq!(progress.left(), 0, "no doc was passed over");
+        let (text, backlinks) = source_text_and_target_backlinks(&docs, &folder_id, &source_id);
+        assert_eq!(text, "See [[New]].");
+        assert_eq!(backlinks, vec![RX_SOURCE]);
     }
 
     #[tokio::test]

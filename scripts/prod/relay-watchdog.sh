@@ -32,8 +32,8 @@ if ! is_positive_integer "$FAILS_REQUIRED"; then
   exit 2
 fi
 
-if [[ ! "$STARTUP_GRACE_SECONDS" =~ ^(0|[1-9][0-9]*)$ ]]; then
-  log_info "invalid configuration: RELAY_WATCHDOG_STARTUP_GRACE_SECONDS must be a non-negative base-10 integer without leading zeros, got '$STARTUP_GRACE_SECONDS'"
+if [[ ! "$STARTUP_GRACE_SECONDS" =~ ^(0|[1-9][0-9]{0,5})$ ]]; then
+  log_info "invalid configuration: RELAY_WATCHDOG_STARTUP_GRACE_SECONDS must be a non-negative base-10 integer of at most 6 digits without leading zeros, got '$STARTUP_GRACE_SECONDS'"
   exit 2
 fi
 

@@ -1528,31 +1528,35 @@ impl Server {
         }
     }
 
-    /// While the startup reindex is under way, index the docs it has not
-    /// reached that may link to `uuids`, so those files' backlinks are
-    /// complete before an operation that relies on them (a move finds the
-    /// docs to rewrite through them, a delete refuses while they exist). The
-    /// caller holds the indexer's step lock. Nothing to do, and no cost, once
-    /// the reindex has finished.
-    async fn index_unreached_linkers(&self, uuids: Vec<String>, folder_doc_ids: &[String]) {
+    /// While the startup reindex is under way: for each of the files
+    /// `uuids`, the docs it has not reached that link to it (file uuid ->
+    /// linking docs' uuids). Their backlinks may be missing, and a move finds
+    /// the docs to rewrite, and a delete the links that forbid it, through
+    /// backlinks. The caller holds the indexer's step lock. Empty, at no
+    /// cost, once the reindex has finished.
+    async fn unreached_linkers(
+        &self,
+        uuids: Vec<String>,
+        folder_doc_ids: &[String],
+    ) -> std::collections::HashMap<String, Vec<String>> {
         let Some(indexer) = self.link_indexer.clone() else {
-            return;
+            return std::collections::HashMap::new();
         };
         if !indexer.reindex_in_progress() {
-            return;
+            return std::collections::HashMap::new();
         }
         let docs = self.docs.clone();
         let folder_doc_ids = folder_doc_ids.to_vec();
-        // Each doc is a full index step: off the runtime.
-        let indexed = tokio::task::spawn_blocking(move || {
-            indexer.index_unreached_linkers(&docs, &folder_doc_ids, &uuids)
+        // It reads every unreached doc's text: off the runtime. Read-only, so
+        // it does no harm if this request is dropped while it runs.
+        tokio::task::spawn_blocking(move || {
+            indexer.unreached_linkers(&docs, &folder_doc_ids, &uuids)
         })
-        .await;
-        match indexed {
-            Ok(0) => {}
-            Ok(n) => tracing::info!("Indexed {} doc(s) ahead of the startup reindex", n),
-            Err(e) => tracing::error!(?e, "Indexing ahead of the startup reindex panicked"),
-        }
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!(?e, "Looking for unreached linkers panicked");
+            std::collections::HashMap::new()
+        })
     }
 
     /// Queue a doc for derived indexing — link indexer AND search/suggestions
@@ -2609,19 +2613,19 @@ impl Server {
         new_path: &str,
         target_folder: Option<&str>,
     ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
-        self.move_document_impl(uuid, new_path, target_folder, true)
+        self.move_document_impl(uuid, new_path, target_folder, None)
             .await
     }
 
-    /// `move_document`. `index_ahead` is false only when the caller has
-    /// already run `index_unreached_linkers` for this document (a folder move
-    /// does it once for all its documents).
+    /// `move_document`. `unreached_linkers` is given only by a caller that
+    /// has already looked them up (a folder move does it once for all its
+    /// documents); otherwise the move looks for itself.
     async fn move_document_impl(
         &self,
         uuid: &str,
         new_path: &str,
         target_folder: Option<&str>,
-        index_ahead: bool,
+        unreached_linkers: Option<Vec<String>>,
     ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
         validate_file_path(new_path)
             .map_err(|message| MoveDocumentError::BadRequest(message.to_string()))?;
@@ -2766,21 +2770,31 @@ impl Server {
         //
         // The docs to rewrite are found through backlinks_v0, read under the
         // same lock, so no step can add a backlinker between the read and
-        // the move. While the startup reindex is under way those backlinks
-        // are first brought up to date for the docs it has not reached. A
-        // backlinker that is not in memory is loaded with the lock released
-        // (it reads the store), and the read is then done again.
+        // the move. While the startup reindex is under way, the docs it has
+        // not reached that link to the file are added: their backlinks may
+        // be missing. A backlinker that is not in memory is loaded with the
+        // lock released (it reads the store), and the read is then done
+        // again.
         let mut loaded_missing = false;
         let (step, needed_uuids) = loop {
             let step = match &self.link_indexer {
                 Some(indexer) => Some(indexer.lock_step().await),
                 None => None,
             };
-            if index_ahead {
-                self.index_unreached_linkers(vec![uuid.to_string()], &folder_doc_ids)
-                    .await;
+            let unreached = match &unreached_linkers {
+                Some(linkers) => linkers.clone(),
+                None => self
+                    .unreached_linkers(vec![uuid.to_string()], &folder_doc_ids)
+                    .await
+                    .remove(uuid)
+                    .unwrap_or_default(),
+            };
+            let mut needed_uuids = self.moved_doc_and_backlinkers(uuid, &folder_doc_ids);
+            for linker in unreached {
+                if !needed_uuids.contains(&linker) {
+                    needed_uuids.push(linker);
+                }
             }
-            let needed_uuids = self.moved_doc_and_backlinkers(uuid, &folder_doc_ids);
             let missing: Vec<String> = needed_uuids
                 .iter()
                 .map(|u| to_content_id(u))
@@ -3479,23 +3493,25 @@ impl Server {
             })
             .collect();
 
-        // One look ahead of the startup reindex for the whole folder, rather
-        // than one per document.
-        {
+        // One look through the docs the startup reindex has not reached for
+        // the whole folder, rather than one per document.
+        let mut unreached_linkers = {
             let step = match &self.link_indexer {
                 Some(indexer) => Some(indexer.lock_step().await),
                 None => None,
             };
             let uuids: Vec<String> = markdown_moves.iter().map(|(id, _)| id.clone()).collect();
             let folder_doc_ids = link_indexer::find_all_folder_docs(&self.docs);
-            self.index_unreached_linkers(uuids, &folder_doc_ids).await;
+            let linkers = self.unreached_linkers(uuids, &folder_doc_ids).await;
             drop(step);
-        }
+            linkers
+        };
 
         let mut links_rewritten = 0usize;
         for (uuid, destination) in markdown_moves {
+            let linkers = unreached_linkers.remove(&uuid).unwrap_or_default();
             let result = self
-                .move_document_impl(&uuid, &destination, None, false)
+                .move_document_impl(&uuid, &destination, None, Some(linkers))
                 .await?;
             links_rewritten += result.links_rewritten;
         }

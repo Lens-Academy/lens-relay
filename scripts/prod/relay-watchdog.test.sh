@@ -158,6 +158,9 @@ setup 60 0
 last_rc=0
 run 1 RELAY_WATCHDOG_STARTUP_GRACE_SECONDS=abc
 expect "invalid grace value: exit 2" "$last_rc" 2
+last_rc=0
+run 1 RELAY_WATCHDOG_STARTUP_GRACE_SECONDS=99999999999999999999
+expect "grace value too large for shell arithmetic: exit 2" "$last_rc" 2
 
 if ((failures > 0)); then
   echo "$failures failed"
