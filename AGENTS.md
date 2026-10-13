@@ -222,14 +222,22 @@ docs are loaded; the backlink reindex (minutes at several thousand docs) then ru
 beside live traffic, and `GET /ready` reports it under `backlinks` (`pending` / `indexing` / `ready` /
 `cancelled` / `failed`, with counts) without affecting `ok` or the status code. Until it finishes,
 backlinks are the ones persisted before the restart, refreshed doc by doc. Rules that keep this safe:
-- Reindex steps, link indexer worker steps and server-side moves exclude each other through the
-  indexer's step lock, a fair tokio mutex: await it (`lock_step`) from async code, never block on it there,
-  and take it before any DashMap shard or awareness lock. Anything new that rewrites filemeta, wikilinks
-  and backlinks together outside the worker must take it too.
-- A client's rename is applied outside any step. The reindex therefore never indexes a doc while a folder
-  has a change the worker has not processed (it waits; if the worker shows no activity for 30s it leaves
-  those docs' backlinks as persisted), and while a reindex is planned or running the worker's rename also
-  looks through the docs the reindex has not reached, since their backlinks may be missing.
+- Reindex steps, link indexer worker steps, `Server::move_document` and the delete guard in `trash_path`
+  exclude each other through the indexer's step lock, a fair tokio mutex: await it (`lock_step`) from
+  async code, never block on it there, never hold it across a store write, and take it before any DashMap
+  shard or awareness lock. Anything new that rewrites filemeta, wikilinks and backlinks together outside
+  the worker must take it too.
+- A rename is applied to filemeta before the worker rewrites the wikilinks. The reindex therefore never
+  indexes a doc while a folder has a rename the worker has not applied (it waits; if the worker shows no
+  activity for 30s it leaves those docs' backlinks as persisted and says so in `/ready` as
+  `left_as_persisted`). It tells by the folder being queued for the worker, so server code that changes
+  filemeta must queue the folder while it still holds the folder's write lock (`queue_folder_change`), as
+  the update callback does for a client's change. Files added, removed or moved are not waited for.
+- Until the reindex has reached a doc, its backlinks may be missing (a link added just before a stop).
+  While a reindex is planned or running, the worker's rename therefore also looks through the wikilinks of
+  the docs not reached yet, and server-side moves and deletes first index the ones that may link to the
+  file (`index_unreached_linkers`), because they find backlinkers through backlinks alone. HTML pages are
+  never looked through or rewritten.
 
 **Attachments over MCP** (`crates/relay/src/mcp/tools/import_attachment.rs`,
 `lens-editor/server/attachments/`): `import_attachment` hosts png/jpeg/gif/webp under

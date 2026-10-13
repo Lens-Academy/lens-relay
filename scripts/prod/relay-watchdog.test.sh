@@ -136,6 +136,14 @@ run 4
 expect "redeploy while failures were being counted: no restart" "$(restarts)" 0
 expect "redeploy while failures were being counted: count reset" "$(fail_count)" 0
 
+setup 172800 28
+mkdir -p "$T/state"
+printf 'fail_count=0\ntotal_restarts=0\nlast_restart_at=2026-10-11 10:00:00\nready_started_at=2026-10-11 10:00:00\n' > "$T/state/state.env"
+run 2
+expect "state file with a space in a timestamp: cleared, not escaped again each run" \
+  "$(grep -c '^ready_started_at=..$\|^last_restart_at=..$' "$T/state/state.env")" 2
+expect "state file with a space in a timestamp: failures still counted" "$(fail_count)" 2
+
 setup 60 28
 echo false > "$T/stub/running"
 run 3

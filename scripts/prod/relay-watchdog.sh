@@ -83,6 +83,18 @@ validate_state_number() {
   fi
 }
 
+# Timestamps are written back with %q on every run. One with a character %q
+# escapes (a hand-edited file) would gain a backslash per run, so drop it.
+validate_state_timestamp() {
+  local name="$1"
+  local value="$2"
+  if [[ "$value" =~ ^[0-9A-Za-z:.+-]*$ ]]; then
+    printf '%s' "$value"
+  else
+    log_info "invalid state: $name is not a timestamp, got '$value'; clearing it"
+  fi
+}
+
 read_state() {
   local line key value
   if [[ ! -f "$STATE_FILE" ]]; then
@@ -103,10 +115,10 @@ read_state() {
             total_restarts="$(validate_state_number "$key" "$value")"
             ;;
           last_restart_at)
-            last_restart_at="$value"
+            last_restart_at="$(validate_state_timestamp "$key" "$value")"
             ;;
           ready_started_at)
-            ready_started_at="$value"
+            ready_started_at="$(validate_state_timestamp "$key" "$value")"
             ;;
         esac
         ;;

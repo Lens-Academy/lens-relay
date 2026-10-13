@@ -550,6 +550,17 @@ impl Server {
             .filter(|p| !p.uuid.is_empty())
             .map(|p| p.uuid.clone())
             .collect();
+        // The check is only as good as backlinks_v0. While the startup
+        // reindex is under way, first index the docs it has not reached that
+        // may link into the subtree; under the indexer's step lock, held
+        // until the entries have moved, so no step runs in between.
+        let step = match &self.link_indexer {
+            Some(indexer) => Some(indexer.lock_step().await),
+            None => None,
+        };
+        let folder_doc_ids: Vec<String> = folders.iter().map(|(id, _)| id.clone()).collect();
+        self.index_unreached_linkers(subtree_uuids.iter().cloned().collect(), &folder_doc_ids)
+            .await;
         let refs = {
             let mut backlinks: HashMap<String, Vec<String>> = HashMap::new();
             for (id, _) in &folders {
@@ -651,7 +662,9 @@ impl Server {
                     );
                 }
             }
+            self.queue_folder_change(&folder_doc_id, &awareness);
         }
+        drop(step);
         if let Err(e) = sync_kv.persist().await {
             tracing::error!(?e, "Failed to persist folder doc after trash");
         }
