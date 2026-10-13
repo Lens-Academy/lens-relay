@@ -26,8 +26,8 @@ jobs:
           link_indexer::tests
       - run: >-
           cargo test --manifest-path crates/Cargo.toml -p relay --lib --
-          serving_starts backlink_reindex move_document_waits ready_
-          during_the_reindex
+          serving_starts backlink_reindex move_document_ ready_
+          during_the_reindex server_side_filemeta
       - run: >-
           cargo test --manifest-path crates/Cargo.toml -p relay
           --test search_deadlock

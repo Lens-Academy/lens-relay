@@ -371,21 +371,36 @@ fn wikilink_candidate_paths(link_name: &str, source_virtual_path: Option<&str>) 
     candidates
 }
 
-/// The file name a wikilink ends in, in lower case and without `.md` or
-/// `.html`: "notes/Old.md" -> "old". A link can only resolve to a file whose
-/// link name, in lower case, is this.
+/// Lower case for comparing names, the same whatever surrounds a letter
+/// (`str::to_lowercase` picks a Greek sigma's form by its position in the
+/// word, so a name would not always match itself inside a longer text).
+fn fold_case(text: &str) -> String {
+    if text.is_ascii() {
+        return text.to_ascii_lowercase();
+    }
+    text.chars()
+        .flat_map(|c| c.to_lowercase())
+        .map(|c| if c == 'ς' { 'σ' } else { c })
+        .collect()
+}
+
+/// The file name a wikilink ends in, case-folded and without `.md` or
+/// `.html`: "notes/Old.md" -> "old". Except for a link that ends in a `.` or
+/// `..` segment, a link can only resolve to a file whose name, read the same
+/// way, is this; so it serves to pick out the links worth resolving.
 fn wikilink_file_name(link_name: &str) -> String {
-    let name = link_name
+    let mut name = link_name
         .rsplit('/')
         .find(|part| !part.is_empty() && *part != "." && *part != "..")
         .unwrap_or("");
-    let name = without_terminal_md(name);
-    let name = if has_terminal_html(name) {
-        &name[..name.len() - 5]
-    } else {
-        name
-    };
-    name.to_lowercase()
+    // The resolver strips `.md` more than once ("x.md.md" finds x.md).
+    while without_terminal_md(name).len() != name.len() {
+        name = without_terminal_md(name);
+    }
+    if has_terminal_html(name) {
+        name = &name[..name.len() - 5];
+    }
+    fold_case(name)
 }
 
 /// Resolve a wikilink in the virtual filesystem tree.
@@ -1551,9 +1566,10 @@ pub struct LinkIndexer {
     /// Items the worker has processed. The reindex watches it while it waits
     /// for a rename to be applied, to tell a busy worker from a dead one.
     worker_steps: std::sync::atomic::AtomicU64,
-    /// Set while the worker waits for `step_lock`: someone else holds it (a
-    /// server-side move, say), and the worker is alive however long that is.
-    worker_waiting_for_step: std::sync::atomic::AtomicBool,
+    /// Set while the worker waits for `step_lock` (someone else holds it: a
+    /// server-side move, say) or is inside a step of its own. Either way it
+    /// is alive, however long that takes.
+    worker_at_step: std::sync::atomic::AtomicBool,
     /// How long the reindex waits for a rename without the worker
     /// processing anything before it stops waiting for the worker at all.
     rename_wait_stall: Duration,
@@ -1582,7 +1598,7 @@ impl LinkIndexer {
                 filemeta_cache: Arc::new(DashMap::new()),
                 step_lock: tokio::sync::Mutex::new(()),
                 worker_steps: std::sync::atomic::AtomicU64::new(0),
-                worker_waiting_for_step: std::sync::atomic::AtomicBool::new(false),
+                worker_at_step: std::sync::atomic::AtomicBool::new(false),
                 rename_wait_stall: RENAME_WAIT_STALL,
                 reindex_todo: std::sync::Mutex::new(None),
                 #[cfg(test)]
@@ -1742,7 +1758,7 @@ impl LinkIndexer {
         let mut found = vec![Vec::new(); link_names.len()];
         let todo: Vec<String> = match &*self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner())
         {
-            Some(todo) => todo.remaining().to_vec(),
+            Some(todo) => todo.remaining(),
             None => return found,
         };
         if todo.is_empty() {
@@ -1765,12 +1781,13 @@ impl LinkIndexer {
                 let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
                 let txn = guard.doc.transact();
                 match txn.get_text("contents") {
-                    Some(contents) => contents.get_string(&txn).to_lowercase(),
+                    Some(contents) => contents.get_string(&txn),
                     None => continue,
                 }
             };
             // Most docs mention none of the names: skip the wikilink parse.
-            if !names.iter().any(|name| text.contains(name.as_str())) {
+            let folded = fold_case(&text);
+            if !names.iter().any(|name| folded.contains(name.as_str())) {
                 continue;
             }
             let linked: HashSet<String> = extract_wikilinks(&text)
@@ -1793,7 +1810,7 @@ impl LinkIndexer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .is_some_and(|todo| !todo.remaining().is_empty())
+            .is_some_and(|todo| !todo.is_done())
     }
 
     /// For each of the files `uuids`, the docs a startup reindex has still to
@@ -1804,9 +1821,14 @@ impl LinkIndexer {
     /// refuses while they exist) go by this for the unreached docs instead.
     /// Empty at once when no reindex is under way.
     ///
-    /// Read-only, and resolved exactly as indexing would. It reads every
-    /// unreached doc's text, so call it off the async runtime; call it with
-    /// the step lock held so the names cannot change under it.
+    /// Read-only. An unreached doc that is listed as a backlinker of one of
+    /// the files has every one of its links resolved, exactly as indexing
+    /// would, so a persisted backlink is confirmed or found stale for
+    /// certain. The other unreached docs are searched for links ending in
+    /// one of the files' names (see `wikilink_file_name`), which are then
+    /// resolved the same way. It reads every unreached doc's text, so call it
+    /// off the async runtime; call it with the step lock held so the names
+    /// cannot change under it.
     pub fn unreached_linkers(
         &self,
         docs: &DashMap<String, DocWithSyncKv>,
@@ -1816,7 +1838,7 @@ impl LinkIndexer {
         let mut linkers: HashMap<String, Vec<String>> = HashMap::new();
         let todo: Vec<String> = match &*self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner())
         {
-            Some(todo) => todo.remaining().to_vec(),
+            Some(todo) => todo.remaining(),
             None => return UnreachedLinkers::default(),
         };
         if todo.is_empty() || uuids.is_empty() {
@@ -1829,6 +1851,8 @@ impl LinkIndexer {
             .collect();
 
         let mut entries: Vec<VirtualEntry> = Vec::new();
+        // Docs listed in backlinks_v0 as linking to one of the files.
+        let mut listed: HashSet<String> = HashSet::new();
         for (fi, fid) in folder_doc_ids.iter().enumerate() {
             // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
             let Some(awareness) = docs.get(fid).map(|doc_ref| doc_ref.awareness()) else {
@@ -1837,6 +1861,12 @@ impl LinkIndexer {
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let (_name, folder_entries) = snapshot_folder_entries(&guard.doc, fid, fi);
             entries.extend(folder_entries);
+            let txn = guard.doc.transact();
+            if let Some(backlinks) = txn.get_map("backlinks_v0") {
+                for uuid in uuids {
+                    listed.extend(read_backlinks_array(&backlinks, &txn, uuid));
+                }
+            }
         }
         // What `resolve_in_virtual_tree` does per link, looked up instead of
         // scanned: lower-case virtual path -> the first link target there.
@@ -1883,16 +1913,21 @@ impl LinkIndexer {
                     None => continue,
                 }
             };
-            // Most docs mention none of the names: skip the wikilink parse.
-            let lower = text.to_lowercase();
-            if !wanted_names
-                .iter()
-                .any(|name| lower.contains(name.as_str()))
-            {
-                continue;
+            // A doc listed as a backlinker has all its links resolved. For
+            // the rest, most mention none of the names: skip the wikilink
+            // parse, and then the links that end in another name.
+            let every_link = listed.contains(doc_uuid);
+            if !every_link {
+                let folded = fold_case(&text);
+                if !wanted_names
+                    .iter()
+                    .any(|name| folded.contains(name.as_str()))
+                {
+                    continue;
+                }
             }
             for link in extract_wikilinks(&text) {
-                if !wanted_names.contains(&wikilink_file_name(&link)) {
+                if !every_link && !wanted_names.contains(&wikilink_file_name(&link)) {
                     continue;
                 }
                 let resolved = wikilink_candidate_paths(&link, source_path)
@@ -2149,10 +2184,8 @@ impl LinkIndexer {
                 {
                     // One step at a time against the startup reindex (see
                     // `step_lock`). No await inside this block once it is held.
-                    let _step = {
-                        let _waiting = WaitingForStep::new(&self.worker_waiting_for_step);
-                        self.step_lock.lock().await
-                    };
+                    let _at_step = WorkerAtStep::new(&self.worker_at_step);
+                    let _step = self.step_lock.lock().await;
                     // Re-check folder status (need fresh content UUIDs).
                     if let Some(content_uuids) = is_folder_doc(&doc_id, &docs) {
                         // Folder doc — process immediately (no debounce)
@@ -2463,10 +2496,17 @@ impl LinkIndexer {
     /// a rename looks at that doc's text as well as at the backlinks.
     pub fn plan_reindex(&self, docs: &DashMap<String, DocWithSyncKv>) {
         let doc_ids: Vec<String> = docs.iter().map(|e| e.key().clone()).collect();
-        self.set_reindex_todo(Some(ReindexTodo {
-            doc_ids: Arc::new(doc_ids),
-            next: 0,
-        }));
+        self.set_reindex_todo(Some(ReindexTodo::new(Arc::new(doc_ids))));
+    }
+
+    /// The reindex is done with the doc at `next - 1` of its current list.
+    fn advance_reindex_todo(&self, passed_over: Option<&str>) {
+        if let Some(todo) = &mut *self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner()) {
+            todo.next += 1;
+            if let Some(doc_id) = passed_over {
+                todo.passed_over.push(doc_id.to_string());
+            }
+        }
     }
 
     fn set_reindex_todo(&self, todo: Option<ReindexTodo>) {
@@ -2495,14 +2535,15 @@ impl LinkIndexer {
         // The list `plan_reindex` made, or one made now.
         let doc_ids: Arc<Vec<String>> = {
             let mut slot = self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner());
-            match &*slot {
-                Some(planned) => planned.doc_ids.clone(),
+            match &mut *slot {
+                Some(planned) => {
+                    planned.next = 0;
+                    planned.passed_over.clear();
+                    planned.doc_ids.clone()
+                }
                 None => {
                     let doc_ids = Arc::new(docs.iter().map(|e| e.key().clone()).collect());
-                    *slot = Some(ReindexTodo {
-                        doc_ids: Arc::clone(&doc_ids),
-                        next: 0,
-                    });
+                    *slot = Some(ReindexTodo::new(Arc::clone(&doc_ids)));
                     doc_ids
                 }
             }
@@ -2541,44 +2582,49 @@ impl LinkIndexer {
         for (i, doc_id) in doc_ids.iter().enumerate() {
             match self.reindex_doc(doc_id, docs, &folder_doc_ids, &mut stall, &cancelled) {
                 None => return cancel(i),
-                Some(ReindexedDoc::Indexed) => indexed += 1,
-                Some(ReindexedDoc::Skipped) => skipped += 1,
+                Some(ReindexedDoc::Indexed) => {
+                    indexed += 1;
+                    self.advance_reindex_todo(None);
+                }
+                Some(ReindexedDoc::Skipped) => {
+                    skipped += 1;
+                    self.advance_reindex_todo(None);
+                }
                 Some(ReindexedDoc::PassedOver) => {
                     passed_over.push(doc_id.clone());
                     left_count(1);
+                    self.advance_reindex_todo(Some(doc_id));
                 }
             }
-            self.set_reindex_todo(Some(ReindexTodo {
-                doc_ids: Arc::clone(&doc_ids),
-                next: i + 1,
-            }));
             progress.advance();
         }
 
         // The worker was written off while a rename waited. If it was only
         // held up, it has applied the rename by now: one more go at the docs
-        // passed over, with fresh patience. They stay listed as unindexed
-        // meanwhile.
+        // passed over, with fresh patience. All along they stay listed as
+        // not indexed, until this reindex ends.
         let mut left = 0;
         if !passed_over.is_empty() {
             let passed_over = Arc::new(passed_over);
+            self.set_reindex_todo(Some(ReindexTodo::new(Arc::clone(&passed_over))));
             let mut stall = WorkerStall::new(self.rename_wait_stall);
             for (i, doc_id) in passed_over.iter().enumerate() {
-                self.set_reindex_todo(Some(ReindexTodo {
-                    doc_ids: Arc::clone(&passed_over),
-                    next: i,
-                }));
                 match self.reindex_doc(doc_id, docs, &folder_doc_ids, &mut stall, &cancelled) {
                     None => return cancel(doc_ids.len() - passed_over.len() + i),
                     Some(ReindexedDoc::Indexed) => {
                         indexed += 1;
                         left_count(-1);
+                        self.advance_reindex_todo(None);
                     }
                     Some(ReindexedDoc::Skipped) => {
                         skipped += 1;
                         left_count(-1);
+                        self.advance_reindex_todo(None);
                     }
-                    Some(ReindexedDoc::PassedOver) => left += 1,
+                    Some(ReindexedDoc::PassedOver) => {
+                        left += 1;
+                        self.advance_reindex_todo(Some(doc_id));
+                    }
                 }
             }
         }
@@ -2634,8 +2680,8 @@ impl LinkIndexer {
             }
             let worker = WorkerActivity {
                 steps: self.worker_steps.load(std::sync::atomic::Ordering::Relaxed),
-                waiting_for_step: self
-                    .worker_waiting_for_step
+                at_step: self
+                    .worker_at_step
                     .load(std::sync::atomic::Ordering::Relaxed),
             };
             if stall.worker_gone(worker) {
@@ -2666,18 +2712,19 @@ enum ReindexedDoc {
     PassedOver,
 }
 
-/// Marks the worker as waiting for `step_lock` for as long as it lives (also
-/// when the wait is dropped half-way, on shutdown).
-struct WaitingForStep<'a>(&'a std::sync::atomic::AtomicBool);
+/// Marks the worker as waiting for `step_lock` or inside a step for as long
+/// as it lives (cleared also when the wait is dropped half-way, on shutdown,
+/// or the step panics).
+struct WorkerAtStep<'a>(&'a std::sync::atomic::AtomicBool);
 
-impl<'a> WaitingForStep<'a> {
+impl<'a> WorkerAtStep<'a> {
     fn new(flag: &'a std::sync::atomic::AtomicBool) -> Self {
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
         Self(flag)
     }
 }
 
-impl Drop for WaitingForStep<'_> {
+impl Drop for WorkerAtStep<'_> {
     fn drop(&mut self) {
         self.0.store(false, std::sync::atomic::Ordering::Relaxed);
     }
@@ -2688,8 +2735,9 @@ impl Drop for WaitingForStep<'_> {
 struct WorkerActivity {
     /// Items processed so far.
     steps: u64,
-    /// It is waiting for the step lock, which someone else holds.
-    waiting_for_step: bool,
+    /// It is waiting for the step lock, which someone else holds, or is
+    /// inside a step of its own.
+    at_step: bool,
 }
 
 /// The docs of a startup reindex, in the order it indexes them, and how far it
@@ -2697,11 +2745,28 @@ struct WorkerActivity {
 struct ReindexTodo {
     doc_ids: Arc<Vec<String>>,
     next: usize,
+    /// Docs before `next` that were passed over, not indexed.
+    passed_over: Vec<String>,
 }
 
 impl ReindexTodo {
-    fn remaining(&self) -> &[String] {
-        &self.doc_ids[self.next.min(self.doc_ids.len())..]
+    fn new(doc_ids: Arc<Vec<String>>) -> Self {
+        Self {
+            doc_ids,
+            next: 0,
+            passed_over: Vec::new(),
+        }
+    }
+
+    /// Every doc not indexed yet.
+    fn remaining(&self) -> Vec<String> {
+        let mut remaining = self.passed_over.clone();
+        remaining.extend_from_slice(&self.doc_ids[self.next.min(self.doc_ids.len())..]);
+        remaining
+    }
+
+    fn is_done(&self) -> bool {
+        self.passed_over.is_empty() && self.next >= self.doc_ids.len()
     }
 }
 
@@ -2715,9 +2780,9 @@ enum IndexStep {
 }
 
 /// The reindex's patience while it waits for the worker to apply a rename.
-/// A worker that keeps taking steps, or that is itself waiting for the step
-/// lock, is alive, and the reindex waits for it however long it takes. One
-/// that does neither for `limit` is dead or stuck: the reindex then passes
+/// A worker that keeps taking steps, or that is waiting for the step lock or
+/// inside a step, is alive, and the reindex waits for it however long it
+/// takes. One that does none of these for `limit` is dead or stuck: the reindex then passes
 /// over the docs it would have to wait for, leaving their backlinks as they
 /// were before the restart, until the worker moves again.
 struct WorkerStall {
@@ -2740,7 +2805,7 @@ impl WorkerStall {
     /// Called each time the reindex finds a rename still waiting.
     fn worker_gone(&mut self, worker: WorkerActivity) -> bool {
         if let Some(steps_then) = self.gone_at {
-            if steps_then == worker.steps && !worker.waiting_for_step {
+            if steps_then == worker.steps && !worker.at_step {
                 return true;
             }
             // It moved after all: held up, not dead.
@@ -2748,7 +2813,7 @@ impl WorkerStall {
             self.waiting = None;
         }
         match self.waiting {
-            Some((since, seen)) if seen == worker.steps && !worker.waiting_for_step => {
+            Some((since, seen)) if seen == worker.steps && !worker.at_step => {
                 if since.elapsed() >= self.limit {
                     tracing::error!(
                         "Backlink reindex: a rename has waited {:?} with no link indexer worker \
@@ -6931,6 +6996,99 @@ mod tests {
         assert!(found.unreached.contains(RX_SOURCE) && found.unreached.contains(other_uuid));
     }
 
+    // A doc already listed as a backlinker gets every one of its links
+    // resolved, so that a persisted backlink is confirmed or found stale for
+    // certain, whatever the link looks like. (The delete guard goes by this
+    // for unreached docs instead of by their persisted backlinks.)
+    #[tokio::test]
+    async fn unreached_linkers_resolves_every_link_of_a_listed_backlinker() {
+        let (docs, indexer, _rx, folder_id, source_id) = reindex_fixture().await;
+        let folders = vec![folder_id.clone()];
+        let target = vec![RX_TARGET.to_string()];
+        // X's link to the target ends in a ".." segment: it resolves, but
+        // it does not end in the target's name.
+        {
+            let awareness = docs.get(&source_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let contents = txn.get_or_insert_text("contents");
+            let len = contents.len(&txn);
+            contents.remove_range(&mut txn, 0, len);
+            contents.insert(&mut txn, 0, "See [[Old/x/..]].");
+        }
+        indexer.index_document(&source_id, &docs, &folders).unwrap();
+        let (_, backlinks) = source_text_and_target_backlinks(&docs, &folder_id, &source_id);
+        assert_eq!(backlinks, vec![RX_SOURCE], "the link does resolve");
+
+        indexer.plan_reindex(&docs);
+        let found = indexer.unreached_linkers(&docs, &folders, &target);
+        assert_eq!(
+            found.linkers.get(RX_TARGET),
+            Some(&vec![RX_SOURCE.to_string()])
+        );
+
+        // The link goes; the persisted backlink is now stale, and is not
+        // confirmed.
+        {
+            let awareness = docs.get(&source_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let contents = txn.get_or_insert_text("contents");
+            let len = contents.len(&txn);
+            contents.remove_range(&mut txn, 0, len);
+            contents.insert(&mut txn, 0, "Old is only mentioned.");
+        }
+        let found = indexer.unreached_linkers(&docs, &folders, &target);
+        assert!(found.linkers.is_empty());
+        assert!(found.unreached.contains(RX_SOURCE));
+    }
+
+    // Prevents: docs the reindex passes over (it wrote the worker off)
+    // dropping off the list of docs not indexed yet. A worker that came back
+    // in the middle of the pass then applied its rename without looking at
+    // them, and a doc among them with no persisted backlink kept a dead link.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn docs_passed_over_stay_listed_as_not_indexed_until_the_reindex_ends() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (docs, mut indexer, _rx, folder_id, _source_id) = reindex_fixture().await;
+        indexer.rename_wait_stall = Duration::from_millis(50);
+        let indexer = Arc::new(indexer);
+        // A rename waits, and there is no worker: every doc is passed over,
+        // on the first pass and again on the second.
+        rename_target(&docs, &indexer, &folder_id, "/New.md");
+        let total = docs.len();
+
+        // `cancelled` is asked before every attempt at a doc.
+        let fewest_listed = Arc::new(AtomicUsize::new(usize::MAX));
+        let reindex = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            let fewest_listed = fewest_listed.clone();
+            tokio::task::spawn_blocking(move || {
+                let progress = ReindexProgress::new();
+                let listed = || {
+                    let todo = indexer.reindex_todo.lock().unwrap();
+                    let listed = todo.as_ref().map_or(0, |todo| todo.remaining().len());
+                    fewest_listed.fetch_min(listed, Ordering::SeqCst);
+                    false
+                };
+                indexer.reindex_backlinks(&docs, &progress, listed);
+                progress.left()
+            })
+        };
+        let left = tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("the reindex should finish")
+            .unwrap();
+        assert_eq!(left, total, "no doc could be indexed");
+        assert_eq!(
+            fewest_listed.load(Ordering::SeqCst),
+            total,
+            "every doc stayed listed for as long as the reindex ran"
+        );
+        assert!(!indexer.reindex_in_progress(), "and the list is gone after");
+    }
+
     // The reindex tells a busy worker from a dead one by this count.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn worker_counts_the_items_it_processes() {
@@ -6982,11 +7140,11 @@ mod tests {
     fn worker_stall_writes_off_only_a_worker_that_shows_no_sign_of_life() {
         let idle = |steps| WorkerActivity {
             steps,
-            waiting_for_step: false,
+            at_step: false,
         };
         let waiting = |steps| WorkerActivity {
             steps,
-            waiting_for_step: true,
+            at_step: true,
         };
         let mut stall = WorkerStall::new(Duration::from_millis(30));
         // A busy worker: its step count moves between looks.
