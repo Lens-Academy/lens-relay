@@ -6,7 +6,6 @@ import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import * as Y from 'yjs';
 import { useThreadsFromYText } from './criticmarkupAdapter';
-import { insertCommentInYText, replyInYText } from '../../lib/ytext-comment-ops';
 
 // `getCurrentAuthor` (used by buildCommentMarkup) reads from window.__currentUser
 // in this codebase; check the function source if your test fixtures don't pick
@@ -88,5 +87,73 @@ describe('useThreadsFromYText', () => {
     // the new parse.
     expect(result.current.threads[0].replies).toHaveLength(1);
     expect(result.current.threads[0].replies[0].body).toBe('reply-body');
+  });
+
+  it('canModify is false for the author when the viewer lacks edit access', () => {
+    const { ytext } = makeDoc();
+    insertWithMetadata(ytext, 0, 'alice', 1716553200000, 'x');
+
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'alice', false));
+    expect(result.current.threads[0].root.canModify).toBe(false);
+  });
+
+  it('onResolve lets a non-author mark a thread resolved, and exposes who resolved it', () => {
+    const { ytext } = makeDoc();
+    insertWithMetadata(ytext, 0, 'alice', 1716553200000, 'please fix');
+
+    // bob (not the author) has edit access and resolves it.
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'bob'));
+    expect(result.current.threads[0].resolved).toBeUndefined();
+
+    act(() => { result.current.callbacks.onResolve(result.current.threads[0]); });
+
+    expect(result.current.threads[0].resolved).toBeDefined();
+    expect(result.current.threads[0].resolved?.by).toBe('bob');
+    // Body and author of the original comment are preserved.
+    expect(result.current.threads[0].root.body).toBe('please fix');
+    expect(result.current.threads[0].root.author).toBe('alice');
+  });
+
+  it('resolving a headerless comment does not make the resolver its author or editor', () => {
+    const { ytext } = makeDoc();
+    // A hand-written comment with no author metadata.
+    ytext.insert(0, 'Hi {>>please fix<<} end');
+
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'bob'));
+    expect(result.current.threads[0].root.author).toBe('unknown');
+    expect(result.current.threads[0].root.canModify).toBe(false);
+
+    act(() => { result.current.callbacks.onResolve(result.current.threads[0]); });
+
+    // Still not bob's comment after bob resolves it.
+    expect(result.current.threads[0].resolved?.by).toBe('bob');
+    expect(result.current.threads[0].root.author).toBe('unknown');
+    expect(result.current.threads[0].root.canModify).toBe(false);
+  });
+
+  it('replying to a resolved thread reopens it (HTML-editor parity)', () => {
+    const { ytext } = makeDoc();
+    insertWithMetadata(ytext, 0, 'alice', 1716553200000, 'please fix');
+
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'bob'));
+    act(() => { result.current.callbacks.onResolve(result.current.threads[0]); });
+    expect(result.current.threads[0].resolved).toBeDefined();
+
+    act(() => { result.current.callbacks.onReply(result.current.threads[0], 'this is still wrong'); });
+
+    expect(result.current.threads[0].resolved).toBeUndefined();
+    expect(result.current.threads[0].replies.at(-1)?.body).toBe('this is still wrong');
+  });
+
+  it('onReopen clears the resolved state', () => {
+    const { ytext } = makeDoc();
+    insertWithMetadata(ytext, 0, 'alice', 1716553200000, 'please fix');
+
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'bob'));
+    act(() => { result.current.callbacks.onResolve(result.current.threads[0]); });
+    expect(result.current.threads[0].resolved).toBeDefined();
+
+    act(() => { result.current.callbacks.onReopen(result.current.threads[0]); });
+    expect(result.current.threads[0].resolved).toBeUndefined();
   });
 });

@@ -98,6 +98,10 @@ doc.getMap('activity_v0')    // direct AI edits: event id → { ts, actor, kind,
 doc.getMap('comments_v0')    // HTML pages only: comment threads, thread id → Y.Map { anchor, status, createdAt,
                              // createdBy, resolvedAt?, resolvedBy?, seen?, originalQuote?, messages: Y.Map<id, {…}> }
                              // (src/components/HtmlEditor/comments/thread-store.ts; the relay's comments MCP tool)
+doc.getMap('md_comments_resolve_v0') // Markdown pages only: resolve state for inline CriticMarkup comment threads,
+                             // thread root id ("<author>|<timestamp>") → { by, at }. Out of band (not in the
+                             // markup) so concurrent resolve is conflict-free; editor-only, the relay has no
+                             // notion of it (src/lib/md-comment-resolve.ts)
 ```
 
 See `src/test/fixtures/folder-metadata/production-sample.json` for real production data.

@@ -17,6 +17,7 @@ import { RELAY_ID } from '../../lib/constants';
 import { SuggestionModeControl } from '../SuggestionModeToggle/SuggestionModeControl';
 import { OverflowMenu } from '../OverflowMenu';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
+import type { ThreadActions } from '../Comments/types';
 import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
 import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
 import { useScrollSource } from '../Comments/useScrollSource';
@@ -108,7 +109,14 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const effectiveYText = activeYText ?? fallbackYText;
 
   // Thread data and mutation callbacks from the criticmarkup adapter.
-  const { threads, callbacks } = useThreadsFromYText(effectiveYText, displayName ?? '');
+  const { threads, callbacks } = useThreadsFromYText(effectiveYText, displayName ?? '', canWrite);
+
+  // Resolve/reopen a comment thread — available to anyone with edit access
+  // (not just the author), mirroring the HTML editor. Reversible.
+  const commentActions = useMemo<ThreadActions | undefined>(
+    () => (canWrite ? { onResolve: callbacks.onResolve, onReopen: callbacks.onReopen } : undefined),
+    [canWrite, callbacks.onResolve, callbacks.onReopen],
+  );
 
   // ScrollSource wrapping the content scroll container.
   const scrollSource = useScrollSource(contentScrollEl);
@@ -456,6 +464,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 onEdit={callbacks.onEdit}
                 onDelete={callbacks.onDelete}
                 onAddComment={callbacks.onAddComment}
+                actions={commentActions}
                 getInsertKey={() => commentInsertPosRef.current != null ? String(commentInsertPosRef.current) : null}
               />
             </div>

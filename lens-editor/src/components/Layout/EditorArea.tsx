@@ -26,6 +26,7 @@ import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
+import type { ThreadActions } from '../Comments/types';
 import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
 import { useScrollSource } from '../Comments/useScrollSource';
 import { DebugYMapPanel } from '../DebugYMapPanel';
@@ -158,7 +159,14 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const resolveAnchorY = useCallback((key: string) => resolveAnchorYByOffset(Number(key)), [resolveAnchorYByOffset]);
 
   // Thread data and mutation callbacks from the criticmarkup adapter.
-  const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous');
+  const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous', canWrite);
+
+  // Resolve/reopen a comment thread — available to anyone with edit access
+  // (not just the comment's author), mirroring the HTML editor. Reversible.
+  const commentActions = useMemo<ThreadActions | undefined>(
+    () => (canWrite ? { onResolve: callbacks.onResolve, onReopen: callbacks.onReopen } : undefined),
+    [canWrite, callbacks.onResolve, callbacks.onReopen],
+  );
 
   // ScrollSource wrapping the editor's scroll container. Pass the live element
   // (not the ref) so the hook re-attaches when editorView arrives.
@@ -566,6 +574,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
               onAddComment={callbacks.onAddComment}
+              actions={commentActions}
               getInsertKey={editorView ? () => String(editorView.state.selection.main.head) : undefined}
             />
           )}
@@ -648,6 +657,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
               onAddComment={canWrite ? callbacks.onAddComment : undefined}
+              actions={commentActions}
               getInsertKey={editorView && canWrite ? () => String(editorView.state.selection.main.head) : undefined}
             />
           </MobileDrawer>
