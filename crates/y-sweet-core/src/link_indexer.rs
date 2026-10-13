@@ -1494,10 +1494,11 @@ pub struct LinkIndexer {
     /// How long the reindex waits for a folder change without the worker
     /// processing anything before it stops waiting for the worker at all.
     folder_change_stall: Duration,
-    /// The docs a startup reindex is still to index, while one is planned or
-    /// running (`plan_reindex` to the end of `reindex_backlinks`). Their
-    /// backlinks are only as good as what was persisted before the restart,
-    /// so a rename must not rely on backlinks alone to find them.
+    /// The docs a startup reindex is still to index, from `plan_reindex`
+    /// until `reindex_backlinks` has been through them all. Their backlinks
+    /// are only as good as what was persisted before the restart, so a
+    /// rename must not rely on backlinks alone to find them. A reindex that
+    /// panics leaves the rest listed: they never were indexed.
     reindex_todo: std::sync::Mutex<Option<ReindexTodo>>,
     /// Test hook: called inside each reindex step, with `step_lock` held.
     #[cfg(test)]
@@ -2237,10 +2238,14 @@ impl LinkIndexer {
     /// a rename looks at that doc's text as well as at the backlinks.
     pub fn plan_reindex(&self, docs: &DashMap<String, DocWithSyncKv>) {
         let doc_ids: Vec<String> = docs.iter().map(|e| e.key().clone()).collect();
-        *self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner()) = Some(ReindexTodo {
+        self.set_reindex_todo(Some(ReindexTodo {
             doc_ids: Arc::new(doc_ids),
             next: 0,
-        });
+        }));
+    }
+
+    fn set_reindex_todo(&self, todo: Option<ReindexTodo>) {
+        *self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner()) = todo;
     }
 
     /// Index every loaded content doc's wikilinks into backlinks_v0.
@@ -2262,9 +2267,7 @@ impl LinkIndexer {
         let mut indexed = 0;
         let mut skipped = 0;
 
-        // The list `plan_reindex` made, or one made now. Cleared when this
-        // returns, however it returns.
-        let todo = ReindexTodoGuard(&self.reindex_todo);
+        // The list `plan_reindex` made, or one made now.
         let doc_ids: Arc<Vec<String>> = {
             let mut slot = self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner());
             match &*slot {
@@ -2301,6 +2304,7 @@ impl LinkIndexer {
                         indexed + skipped + left,
                         doc_ids.len()
                     );
+                    self.set_reindex_todo(None);
                     progress.finish(ReindexState::Cancelled, started.elapsed());
                     return;
                 }
@@ -2337,10 +2341,14 @@ impl LinkIndexer {
                 Some(Err(_)) => skipped += 1, // Not all docs are content docs
                 None => left += 1,
             }
-            todo.done_up_to(i + 1);
+            self.set_reindex_todo(Some(ReindexTodo {
+                doc_ids: Arc::clone(&doc_ids),
+                next: i + 1,
+            }));
             progress.advance();
         }
 
+        self.set_reindex_todo(None);
         progress.finish(ReindexState::Ready, started.elapsed());
         tracing::info!(
             "Backlink reindexing complete: {} content docs indexed, {} skipped, {} left as persisted, in {:.1}s",
@@ -2362,23 +2370,6 @@ struct ReindexTodo {
 impl ReindexTodo {
     fn remaining(&self) -> &[String] {
         &self.doc_ids[self.next.min(self.doc_ids.len())..]
-    }
-}
-
-/// Clears `LinkIndexer::reindex_todo` when the reindex ends, panic included.
-struct ReindexTodoGuard<'a>(&'a std::sync::Mutex<Option<ReindexTodo>>);
-
-impl ReindexTodoGuard<'_> {
-    fn done_up_to(&self, next: usize) {
-        if let Some(todo) = &mut *self.0.lock().unwrap_or_else(|e| e.into_inner()) {
-            todo.next = next;
-        }
-    }
-}
-
-impl Drop for ReindexTodoGuard<'_> {
-    fn drop(&mut self) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
