@@ -1041,6 +1041,9 @@ pub struct Server {
     /// The hourly sweep only logs what it would purge (default on; see
     /// `[server] trash_purge_dry_run`).
     trash_purge_dry_run: bool,
+    /// Progress of the startup backlink reindex, which runs in the
+    /// background after the server starts listening (reported by /ready).
+    pub(crate) backlink_reindex: Arc<link_indexer::ReindexProgress>,
 }
 
 /// Holds channel receivers for background workers.
@@ -1200,6 +1203,7 @@ impl Server {
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: trash::retention_from_days(10.0),
             trash_purge_dry_run: true,
+            backlink_reindex: Arc::new(link_indexer::ReindexProgress::new()),
         };
 
         let receivers = WorkerReceivers {
@@ -1211,8 +1215,10 @@ impl Server {
     }
 
     /// Spawn background workers for link indexing and search index updates.
-    /// Must be called after `startup_reindex` to avoid race conditions where
-    /// workers process notifications while startup is still writing to Y.Docs.
+    /// Must be called after `startup_load` to avoid race conditions where
+    /// workers process notifications while startup is still writing to Y.Docs
+    /// (and before the filemeta cache is seeded). The background backlink
+    /// reindex (`spawn_backlink_reindex`) may run alongside the workers.
     pub fn spawn_workers(self: &Arc<Self>, receivers: WorkerReceivers) {
         let WorkerReceivers {
             mut index_rx,
@@ -1221,7 +1227,7 @@ impl Server {
 
         // The channels are only wakeup signals; the pending MAPS are the
         // work lists, and they are deliberately NOT cleared here. Entries
-        // queued while startup_reindex ran (a webhook edit, an MCP accept)
+        // queued while startup_load ran (a webhook edit, an MCP accept)
         // represent real work; wiping them permanently lost those refreshes
         // — a doc edited mid-startup kept stale suggestions until its next
         // edit. Redundant re-scans of already-reindexed docs are bounded by
@@ -1503,6 +1509,54 @@ impl Server {
     /// Get the link indexer, if enabled.
     pub fn link_indexer(&self) -> &Option<Arc<LinkIndexer>> {
         &self.link_indexer
+    }
+
+    /// Queue a folder for the link indexer while its awareness write lock is
+    /// still held, as the update callback does for a client's change.
+    /// Server-side filemeta writes carry LINK_INDEXER_ORIGIN and so bypass the
+    /// callback, but the startup reindex tells a rename the worker has not
+    /// applied by the folder being queued: it has to be queued before the new
+    /// names can be read, not after the folder doc is persisted. Touches no
+    /// `docs` shard (safe under awareness WRITE, like the callback).
+    fn queue_folder_change(
+        &self,
+        folder_doc_id: &str,
+        awareness: &Arc<RwLock<y_sweet_core::sync::awareness::Awareness>>,
+    ) {
+        if let Some(ref indexer) = self.link_indexer {
+            indexer.queue_document_update_with_lease(folder_doc_id, Some(awareness.clone()));
+        }
+    }
+
+    /// While the startup reindex is under way: for each of the files
+    /// `uuids`, the docs it has not reached that link to it. Those docs'
+    /// backlinks are only what was persisted before the restart, and a move
+    /// finds the docs to rewrite, and a delete the links that forbid it,
+    /// through backlinks. The caller holds the indexer's step lock. Empty, at
+    /// no cost, once the reindex has finished.
+    async fn unreached_linkers(
+        &self,
+        uuids: Vec<String>,
+        folder_doc_ids: &[String],
+    ) -> link_indexer::UnreachedLinkers {
+        let Some(indexer) = self.link_indexer.clone() else {
+            return Default::default();
+        };
+        if !indexer.reindex_in_progress() {
+            return Default::default();
+        }
+        let docs = self.docs.clone();
+        let folder_doc_ids = folder_doc_ids.to_vec();
+        // It reads every unreached doc's text: off the runtime. Read-only, so
+        // it does no harm if this request is dropped while it runs.
+        tokio::task::spawn_blocking(move || {
+            indexer.unreached_linkers(&docs, &folder_doc_ids, &uuids)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::error!(?e, "Looking for unreached linkers panicked");
+            Default::default()
+        })
     }
 
     /// Queue a doc for derived indexing — link indexer AND search/suggestions
@@ -2523,6 +2577,30 @@ impl Server {
         })
     }
 
+    /// The uuids a move of `uuid` has to hold: the document itself, then
+    /// every document listed as linking to it in any folder's backlinks_v0.
+    fn moved_doc_and_backlinkers(&self, uuid: &str, folder_doc_ids: &[String]) -> Vec<String> {
+        let mut uuids: Vec<String> = vec![uuid.to_string()];
+        for folder_doc_id in folder_doc_ids {
+            let awareness = {
+                let Some(doc_ref) = self.docs.get(folder_doc_id) else {
+                    continue;
+                };
+                doc_ref.awareness() // Arc clone
+            }; // DashMap shard lock released
+            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            let txn = guard.doc.transact();
+            if let Some(backlinks) = txn.get_map("backlinks_v0") {
+                for bl_uuid in link_indexer::read_backlinks_array(&backlinks, &txn, uuid) {
+                    if !uuids.contains(&bl_uuid) {
+                        uuids.push(bl_uuid);
+                    }
+                }
+            }
+        }
+        uuids
+    }
+
     /// Move a document to a new path within or across folders.
     ///
     /// This is the shared implementation used by both the HTTP handler and MCP tool.
@@ -2534,6 +2612,20 @@ impl Server {
         uuid: &str,
         new_path: &str,
         target_folder: Option<&str>,
+    ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
+        self.move_document_impl(uuid, new_path, target_folder, None)
+            .await
+    }
+
+    /// `move_document`. `unreached_linkers` is given only by a caller that
+    /// has already looked them up (a folder move does it once for all its
+    /// documents); otherwise the move looks for itself.
+    async fn move_document_impl(
+        &self,
+        uuid: &str,
+        new_path: &str,
+        target_folder: Option<&str>,
+        unreached_linkers: Option<Vec<String>>,
     ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
         validate_file_path(new_path)
             .map_err(|message| MoveDocumentError::BadRequest(message.to_string()))?;
@@ -2554,7 +2646,7 @@ impl Server {
 
         // Sync block 1: Gather metadata from folder docs.
         // Non-Send guards must not cross .await points, so we extract owned data here.
-        let (folder_doc_ids, source_folder_doc_id, target_folder_doc_id, relay_id, needed_uuids) = {
+        let (folder_doc_ids, source_folder_doc_id, target_folder_doc_id, relay_id) = {
             let docs = &self.docs;
 
             // 1. Find all folder doc IDs
@@ -2648,28 +2740,7 @@ impl Server {
                 }
             }
 
-            // 5. Collect only the needed content UUIDs: backlinkers + the moved doc itself.
-            let mut needed_uuids: Vec<String> = vec![uuid.to_string()];
-            for folder_doc_id in &folder_doc_ids {
-                let awareness = {
-                    let Some(doc_ref) = docs.get(folder_doc_id) else {
-                        continue;
-                    };
-                    doc_ref.awareness() // Arc clone
-                }; // DashMap shard lock released
-                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-                let txn = guard.doc.transact();
-
-                if let Some(backlinks) = txn.get_map("backlinks_v0") {
-                    for bl_uuid in link_indexer::read_backlinks_array(&backlinks, &txn, uuid) {
-                        if !needed_uuids.contains(&bl_uuid) {
-                            needed_uuids.push(bl_uuid);
-                        }
-                    }
-                }
-            }
-
-            // 6. Find the relay_id prefix from the source folder doc
+            // 5. Find the relay_id prefix from the source folder doc
             let relay_id = link_indexer::parse_doc_id(&source_folder_doc_id)
                 .map(|(r, _)| r.to_string())
                 .unwrap_or_default();
@@ -2679,7 +2750,6 @@ impl Server {
                 source_folder_doc_id,
                 target_folder_doc_id,
                 relay_id,
-                needed_uuids,
             )
         }; // All DashMap refs and awareness guards dropped here
 
@@ -2692,11 +2762,51 @@ impl Server {
             }
         };
 
-        // Pre-load backlinker + moved docs from storage if not already in DashMap.
-        for uuid in &needed_uuids {
-            let content_id = to_content_id(uuid);
-            if !self.docs.contains_key(&content_id) {
-                if let Err(e) = self.load_doc(&content_id, None).await {
+        // A move rewrites filemeta, backlinkers' wikilinks and backlinks in
+        // one go, so it is a step of its own: without the indexer's step
+        // lock, a link indexer or startup reindex step could read a
+        // backlinker's old text before the move and the new filemeta after
+        // it, and drop a real backlink.
+        //
+        // The docs to rewrite are found through backlinks_v0, read under the
+        // same lock, so no step can add a backlinker between the read and
+        // the move. While the startup reindex is under way, the docs it has
+        // not reached that link to the file are added: their backlinks may
+        // be missing. A backlinker that is not in memory is loaded with the
+        // lock released (it reads the store), and the read is then done
+        // again.
+        let mut loaded_missing = false;
+        let (step, needed_uuids) = loop {
+            let step = match &self.link_indexer {
+                Some(indexer) => Some(indexer.lock_step().await),
+                None => None,
+            };
+            let unreached = match &unreached_linkers {
+                Some(linkers) => linkers.clone(),
+                None => self
+                    .unreached_linkers(vec![uuid.to_string()], &folder_doc_ids)
+                    .await
+                    .linkers
+                    .remove(uuid)
+                    .unwrap_or_default(),
+            };
+            let mut needed_uuids = self.moved_doc_and_backlinkers(uuid, &folder_doc_ids);
+            for linker in unreached {
+                if !needed_uuids.contains(&linker) {
+                    needed_uuids.push(linker);
+                }
+            }
+            let missing: Vec<String> = needed_uuids
+                .iter()
+                .map(|u| to_content_id(u))
+                .filter(|content_id| !self.docs.contains_key(content_id))
+                .collect();
+            if missing.is_empty() || loaded_missing {
+                break (step, needed_uuids);
+            }
+            drop(step);
+            for content_id in &missing {
+                if let Err(e) = self.load_doc(content_id, None).await {
                     tracing::warn!(
                         "Failed to load backlinker doc {} from storage: {:?}",
                         content_id,
@@ -2704,7 +2814,8 @@ impl Server {
                     );
                 }
             }
-        }
+            loaded_missing = true;
+        };
 
         // Sync block 2: Clone Arcs out of DashMap, then acquire write locks.
         // Phase 1: Extract awareness Arcs and sync_kv Arcs from DashMap refs.
@@ -2793,7 +2904,7 @@ impl Server {
                 }
             }
 
-            link_indexer::move_document(
+            let result = link_indexer::move_document(
                 uuid,
                 new_path,
                 folder_doc_refs[source_idx],
@@ -2803,8 +2914,14 @@ impl Server {
                 &doc_resolver,
                 &content_docs,
             )
-            .map_err(|e| MoveDocumentError::Internal(e.to_string()))?
+            .map_err(|e| MoveDocumentError::Internal(e.to_string()))?;
+            self.queue_folder_change(&source_folder_doc_id, &folder_awareness[source_idx]);
+            if target_idx != source_idx {
+                self.queue_folder_change(&target_folder_doc_id, &folder_awareness[target_idx]);
+            }
+            result
         }; // All awareness write guards dropped here
+        drop(step);
 
         // Persist all mutated folder docs and content docs
         for sync_kv in &folder_sync_kvs {
@@ -3207,6 +3324,7 @@ impl Server {
             filemeta.remove(&mut txn, old_path.as_str());
             docs_map.remove(&mut txn, old_path.as_str());
             filemeta.insert(&mut txn, new_path, yrs::Any::Map(fields.clone().into()));
+            self.queue_folder_change(&info.folder_doc_id, &awareness);
             sync_kv
         };
 
@@ -3376,9 +3494,26 @@ impl Server {
             })
             .collect();
 
+        // One look through the docs the startup reindex has not reached for
+        // the whole folder, rather than one per document.
+        let mut unreached_linkers = {
+            let step = match &self.link_indexer {
+                Some(indexer) => Some(indexer.lock_step().await),
+                None => None,
+            };
+            let uuids: Vec<String> = markdown_moves.iter().map(|(id, _)| id.clone()).collect();
+            let folder_doc_ids = link_indexer::find_all_folder_docs(&self.docs);
+            let linkers = self.unreached_linkers(uuids, &folder_doc_ids).await.linkers;
+            drop(step);
+            linkers
+        };
+
         let mut links_rewritten = 0usize;
         for (uuid, destination) in markdown_moves {
-            let result = self.move_document(&uuid, &destination, None).await?;
+            let linkers = unreached_linkers.remove(&uuid).unwrap_or_default();
+            let result = self
+                .move_document_impl(&uuid, &destination, None, Some(linkers))
+                .await?;
             links_rewritten += result.links_rewritten;
         }
 
@@ -3426,6 +3561,7 @@ impl Server {
                     continue;
                 }
             }
+            self.queue_folder_change(&source_folder_doc_id, &awareness);
             sync_kv
         };
 
@@ -3522,6 +3658,7 @@ impl Server {
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: None,
             trash_purge_dry_run: true,
+            backlink_reindex: Arc::new(link_indexer::ReindexProgress::new()),
         }
     }
 
@@ -3561,6 +3698,7 @@ impl Server {
             worker_status: Arc::new(crate::worker_status::WorkerStatusMap::new()),
             trash_retention: None,
             trash_purge_dry_run: true,
+            backlink_reindex: Arc::new(link_indexer::ReindexProgress::new()),
         });
         server
     }
@@ -4107,14 +4245,111 @@ impl Server {
         );
     }
 
-    /// Load all documents from storage and reindex all backlinks.
-    ///
-    /// Called once on startup, before accepting connections.
+    /// Load all documents from storage, then reindex all backlinks, and
+    /// wait for both (tests; the relay itself uses `startup_load` +
+    /// `serve_with_background_reindex` so it listens before the reindex
+    /// finishes).
     /// No-op if no store is configured (in-memory mode).
     pub async fn startup_reindex(
-        &self,
+        self: &Arc<Self>,
         folders: &[y_sweet_core::config::FolderConfig],
     ) -> Result<()> {
+        self.startup_load(folders).await?;
+        self.spawn_backlink_reindex()
+            .await
+            .map_err(|e| anyhow!("backlink reindex task failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Run the startup backlink reindex on a blocking thread and return its
+    /// handle. Call after `startup_load` and `spawn_workers`; the server can
+    /// serve meanwhile.
+    ///
+    /// While it runs, readers of backlinks_v0 (get_links, delete/trash
+    /// checks, rename link rewriting) see the backlinks persisted before the
+    /// restart, refreshed doc by doc; nothing waits or 503s. Edits made
+    /// meanwhile are indexed by the link indexer worker as usual (it runs
+    /// alongside; both take each awareness lock for one step only, and the
+    /// filemeta cache was seeded in `startup_load`). /ready reports the
+    /// progress under `backlinks`. Shutdown (the cancellation token) stops
+    /// it between docs. Reindex steps, worker steps and server-side moves
+    /// exclude each other through the indexer's `step_lock`, and the reindex
+    /// waits out any rename the worker has not applied yet, so it never
+    /// indexes a doc's old text against a file's new name. A panic is logged
+    /// and reported as `failed`.
+    pub fn spawn_backlink_reindex(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        // Before any request can be served: until the reindex has reached a
+        // doc, a rename must not trust backlinks alone to find it.
+        if let (Some(_), Some(indexer)) = (&self.store, &self.link_indexer) {
+            indexer.plan_reindex(&self.docs);
+        }
+        let server = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let progress = &server.backlink_reindex;
+            match (&server.store, &server.link_indexer) {
+                (Some(_), Some(indexer)) => {
+                    let token = server.cancellation_token.clone();
+                    let run = std::panic::AssertUnwindSafe(|| {
+                        indexer.reindex_backlinks(&server.docs, progress, || token.is_cancelled())
+                    });
+                    // Nobody awaits this in serve: a panic must not leave
+                    // /ready saying "indexing" forever without a trace.
+                    if let Err(panic) = std::panic::catch_unwind(run) {
+                        let msg = panic
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| panic.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown panic".into());
+                        tracing::error!("Backlink reindex panicked: {msg}");
+                        progress.finish(link_indexer::ReindexState::Failed, Duration::ZERO);
+                    }
+                }
+                _ => progress.finish(link_indexer::ReindexState::Ready, Duration::ZERO),
+            }
+        })
+    }
+
+    /// Start answering requests on `listener`, and the startup backlink
+    /// reindex alongside it. Returns (server task, reindex task) at once.
+    ///
+    /// Serving must never wait for the reindex: it takes minutes at several
+    /// thousand docs, and on 2026-10-11 a relay that only listened once it
+    /// was done got restarted by the box watchdog in a loop. Call after
+    /// `startup_load` and `spawn_workers`. Shutdown (the cancellation token)
+    /// ends both.
+    pub fn serve_with_background_reindex(
+        self: &Arc<Self>,
+        listener: TcpListener,
+        redact_errors: bool,
+    ) -> (tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>) {
+        let reindex = self.spawn_backlink_reindex();
+        let server = self.clone();
+        let serve = tokio::spawn(async move {
+            let token = server.cancellation_token.clone();
+            let routes = server.routes_with_metrics();
+            let app = routes.layer(middleware::from_fn(Self::version_header_middleware));
+            let app = if redact_errors {
+                app.layer(middleware::from_fn(Self::redact_error_middleware))
+            } else {
+                app
+            };
+            axum::serve(listener, app.into_make_service())
+                .with_graceful_shutdown(async move { token.cancelled().await })
+                .await
+                .unwrap();
+        });
+        (serve, reindex)
+    }
+
+    /// Load all documents from storage and build everything requests need
+    /// before the server listens: folder names, the filemeta (rename) cache,
+    /// the document resolver, and the suggestions, recent-changes and search
+    /// indexes. The slow backlink reindex is NOT part of this; see
+    /// `spawn_backlink_reindex`.
+    ///
+    /// Called once on startup, before accepting connections and before
+    /// `spawn_workers`. No-op if no store is configured (in-memory mode).
+    pub async fn startup_load(&self, folders: &[y_sweet_core::config::FolderConfig]) -> Result<()> {
         if self.store.is_none() {
             tracing::info!("No store configured, skipping startup reindex");
             // Even without a store, mark search as ready (empty index)
@@ -4128,13 +4363,15 @@ impl Server {
         }
 
         let loaded = self.load_all_docs().await?;
-        tracing::info!("Loaded {} documents, now reindexing backlinks...", loaded);
+        tracing::info!("Loaded {} documents", loaded);
 
-        // Apply folder names from config before reindexing
+        // Apply folder names from config before indexing
         self.apply_folder_names(folders).await?;
 
+        // Baseline for rename detection; must exist before the link indexer
+        // worker processes its first folder update.
         if let Some(ref indexer) = self.link_indexer {
-            indexer.reindex_all_backlinks(&self.docs)?;
+            indexer.seed_filemeta_cache(&self.docs);
         }
 
         // Build document resolver (bidirectional path <-> UUID mapping)
@@ -5250,6 +5487,24 @@ async fn check_store_deprecated(
 struct ReadyResponse {
     ok: bool,
     workers: Vec<WorkerReadiness>,
+    backlinks: BacklinkReadiness,
+}
+
+/// Startup backlink reindex progress. Informational: it does not affect
+/// `ok` or the status code, because the server serves (with the backlinks
+/// persisted before the restart) while it runs.
+#[derive(serde::Serialize)]
+struct BacklinkReadiness {
+    /// "pending" (docs still loading), "indexing", "ready", "cancelled" or
+    /// "failed" (panicked; logged as an error).
+    state: &'static str,
+    indexed: usize,
+    total: usize,
+    /// Of `indexed`, the docs whose backlinks were left as persisted before
+    /// the restart (the reindex stopped waiting for a link indexer worker
+    /// that showed no activity). 0 in a healthy run.
+    left_as_persisted: usize,
+    duration_ms: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -5263,6 +5518,8 @@ struct WorkerReadiness {
 /// reports per-worker liveness so operators can distinguish "process up
 /// but a worker has died" from "fully healthy". `ok` is true iff every
 /// registered worker is still alive; an empty worker set is vacuously OK.
+/// The server listens once docs are loaded, so this answers while the
+/// startup backlink reindex still runs; `backlinks` shows its progress.
 async fn ready(State(server): State<Arc<Server>>) -> Json<ReadyResponse> {
     let workers: Vec<WorkerReadiness> = server
         .worker_status
@@ -5275,7 +5532,20 @@ async fn ready(State(server): State<Arc<Server>>) -> Json<ReadyResponse> {
         })
         .collect();
     let ok = workers.iter().all(|w| w.alive);
-    Json(ReadyResponse { ok, workers })
+    let progress = &server.backlink_reindex;
+    let (indexed, total) = progress.counts();
+    let backlinks = BacklinkReadiness {
+        state: progress.state().as_str(),
+        indexed,
+        total,
+        left_as_persisted: progress.left(),
+        duration_ms: progress.duration_ms(),
+    };
+    Json(ReadyResponse {
+        ok,
+        workers,
+        backlinks,
+    })
 }
 
 async fn handle_open_by_path(
@@ -8913,7 +9183,10 @@ mod test {
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: JsonValue = serde_json::from_slice(&bytes).unwrap();
-        assert!(body["error"].as_str().is_some_and(|e| !e.is_empty()), "{body}");
+        assert!(
+            body["error"].as_str().is_some_and(|e| !e.is_empty()),
+            "{body}"
+        );
     }
 
     // Prevents: the removed MCP_API_KEY fallback coming back. A plain-text
@@ -11154,6 +11427,708 @@ mod test {
 
         assert_eq!(json["ok"], true);
         assert_eq!(json["workers"].as_array().unwrap().len(), 0);
+    }
+
+    // Prevents: the 2026-10-11 outage. The relay only listened after the
+    // backlink reindex (~4m20s at 6444 docs), so /ready 502'd and the box
+    // watchdog restarted it mid-startup in a loop. The reindex now runs in
+    // the background: /ready must answer while it is still running, and the
+    // backlinks must still be built once it finishes.
+    #[tokio::test]
+    async fn ready_answers_while_backlink_reindex_is_running() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000001";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000001";
+        const B_UUID: &str = "b0b0b0b0-0000-4000-8000-000000000001";
+        let server = attachment_test_server("Lens").await; // has a store
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/A.md", A_UUID, "markdown"), ("/B.md", B_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "See [[B]].").await;
+        insert_test_content_doc(&server, B_UUID, "No links.").await;
+
+        let (status, body) = get_json(&server, "/ready").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["backlinks"]["state"], "pending");
+
+        // Stand-in for a slow reindex: hold a folder doc's write lock so the
+        // reindex blocks on its first folder read.
+        let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+        let held = folder_awareness.write().unwrap();
+        let reindex = server.spawn_backlink_reindex();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while server.backlink_reindex.state() != link_indexer::ReindexState::Indexing {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("reindex should start");
+
+        let (status, body) = get_json(&server, "/ready").await;
+        assert_eq!(status, StatusCode::OK, "/ready must answer mid-reindex");
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["backlinks"]["state"], "indexing");
+        let total = body["backlinks"]["total"].as_u64().unwrap();
+        assert!(total >= 4, "two folders and two content docs: {body}");
+        assert!(body["backlinks"]["indexed"].as_u64().unwrap() < total);
+        assert!(!reindex.is_finished());
+
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("reindex should finish once unblocked")
+            .unwrap();
+
+        let (status, body) = get_json(&server, "/ready").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["backlinks"]["state"], "ready");
+        assert_eq!(body["backlinks"]["indexed"], body["backlinks"]["total"]);
+
+        // The reindex did its job: B is backlinked from A.
+        let guard = folder_awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        let backlinks = txn.get_map("backlinks_v0").expect("backlinks_v0");
+        let from_b = backlinks.get(&txn, B_UUID).expect("B has backlinks");
+        assert!(
+            format!("{from_b:?}").contains(A_UUID),
+            "B's backlinks should list A: {from_b:?}"
+        );
+    }
+
+    // Shutdown during the background reindex must not wait for it.
+    #[tokio::test]
+    async fn backlink_reindex_stops_on_cancellation() {
+        let server = attachment_test_server("Lens").await;
+        insert_test_content_doc(&server, "c0c0c0c0-0000-4000-8000-000000000001", "x").await;
+        server.cancellation_token.cancel();
+        tokio::time::timeout(Duration::from_secs(5), server.spawn_backlink_reindex())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            server.backlink_reindex.state(),
+            link_indexer::ReindexState::Cancelled
+        );
+    }
+
+    // Prevents: the 2026-10-11 outage coming back through the startup order.
+    // `main` starts serving and the reindex with this one call; if it ever
+    // waited for the reindex before listening, no request would be answered
+    // here and the watchdog would be restarting the relay mid-startup again.
+    #[tokio::test]
+    async fn serving_starts_while_the_backlink_reindex_is_still_running() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000002";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000002";
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/A.md", A_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "No links.").await;
+
+        // Stand-in for a slow reindex: it blocks on this folder doc.
+        let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+        let held = folder_awareness.write().unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/ready", listener.local_addr().unwrap());
+        let (serve, reindex) = server.serve_with_background_reindex(listener, false);
+
+        // Real requests over the socket, answered while the reindex is stuck.
+        let state = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let body: JsonValue = reqwest::get(&url).await.unwrap().json().await.unwrap();
+                if body["backlinks"]["state"] != "pending" {
+                    break body["backlinks"]["state"].clone();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the server must answer while the reindex is still running");
+        assert_eq!(state, "indexing");
+        assert!(!reindex.is_finished());
+
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("the reindex should finish once unblocked")
+            .unwrap();
+        let body: JsonValue = reqwest::get(&url).await.unwrap().json().await.unwrap();
+        assert_eq!(body["backlinks"]["state"], "ready");
+        assert_eq!(body["backlinks"]["left_as_persisted"], 0);
+
+        server.cancellation_token.cancel();
+        tokio::time::timeout(Duration::from_secs(10), serve)
+            .await
+            .expect("the server should stop on cancellation")
+            .unwrap();
+    }
+
+    // Nobody awaits the background reindex, so a panic in it must end up in
+    // /ready (and the log), not leave "indexing" there forever.
+    #[tokio::test]
+    async fn backlink_reindex_panic_is_reported_as_failed() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000003";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000003";
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/A.md", A_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "No links.").await;
+
+        // yrs panics on a read of a doc that has a write transaction open.
+        let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+        let guard = folder_awareness.read().unwrap();
+        let open_write = guard.doc.transact_mut();
+
+        tokio::time::timeout(Duration::from_secs(10), server.spawn_backlink_reindex())
+            .await
+            .expect("the reindex task should end")
+            .expect("the panic is caught inside the task");
+        drop(open_write);
+        drop(guard);
+
+        assert_eq!(
+            server.backlink_reindex.state(),
+            link_indexer::ReindexState::Failed
+        );
+        let (status, body) = get_json(&server, "/ready").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["backlinks"]["state"], "failed");
+    }
+
+    // Prevents: a server-side move interleaving with a link indexer or
+    // startup reindex step, which would read a backlinker's old text, then
+    // the move's new filemeta, and drop a real backlink.
+    #[tokio::test]
+    async fn move_document_waits_for_the_link_indexer_step_lock() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000004";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000004";
+        let server = attachment_test_server("Lens").await;
+        insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/Old.md", A_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "No links.").await;
+        server.doc_resolver().rebuild(server.docs());
+
+        let indexer = server.link_indexer().clone().expect("link indexer");
+        let step = indexer.lock_step().await;
+        let moving = {
+            let server = server.clone();
+            tokio::spawn(async move { server.move_document(A_UUID, "/New.md", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!moving.is_finished(), "the move must wait for the step");
+        assert!(server.doc_resolver().resolve_path("Notes/Old.md").is_some());
+
+        drop(step);
+        let result = tokio::time::timeout(Duration::from_secs(10), moving)
+            .await
+            .expect("the move should go through once the step is over")
+            .unwrap()
+            .expect("move");
+        assert_eq!(result.new_path, "/New.md");
+    }
+
+    fn test_doc_text(server: &Arc<Server>, uuid: &str) -> String {
+        let awareness = server
+            .docs()
+            .get(&format!("{}-{}", TEST_RELAY_ID, uuid))
+            .unwrap()
+            .awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        txn.get_text("contents").unwrap().get_string(&txn)
+    }
+
+    fn test_backlinks(server: &Arc<Server>, folder_doc_id: &str, target_uuid: &str) -> Vec<String> {
+        let awareness = server.docs().get(folder_doc_id).unwrap().awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        match txn.get_map("backlinks_v0") {
+            Some(backlinks) => link_indexer::read_backlinks_array(&backlinks, &txn, target_uuid),
+            None => Vec::new(),
+        }
+    }
+
+    /// A folder "Notes" with /Old.md and /X.md ("See [[Old]]."), the rename
+    /// baseline seeded, and no backlink from X: the state after a restart
+    /// that followed a link added too late to be persisted. The startup
+    /// reindex is planned but has not reached any doc.
+    async fn server_awaiting_reindex_with_an_unpersisted_backlink(
+        folder_uuid: &str,
+        old_uuid: &str,
+        x_uuid: &str,
+    ) -> (Arc<Server>, String) {
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            folder_uuid,
+            "Notes",
+            &[
+                ("/Old.md", old_uuid, "markdown"),
+                ("/X.md", x_uuid, "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, old_uuid, "The target.").await;
+        insert_test_content_doc(&server, x_uuid, "See [[Old]].").await;
+        server.doc_resolver().rebuild(server.docs());
+        let indexer = server.link_indexer().clone().expect("link indexer");
+        indexer.seed_filemeta_cache(server.docs());
+        indexer.plan_reindex(server.docs());
+        (server, folder_doc_id)
+    }
+
+    // Prevents: a server-side move during the startup reindex missing a
+    // backlinker whose backlink was never persisted. The move finds the docs
+    // to rewrite through backlinks; before the change the reindex had always
+    // rebuilt them by the time a move could be served.
+    #[tokio::test]
+    async fn move_during_the_reindex_rewrites_a_backlinker_whose_backlink_was_never_persisted() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000005";
+        const OLD_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000005";
+        const X_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000015";
+        let (server, folder_doc_id) =
+            server_awaiting_reindex_with_an_unpersisted_backlink(FOLDER_UUID, OLD_UUID, X_UUID)
+                .await;
+
+        let result = server
+            .move_document(OLD_UUID, "/sub/Old.md", None)
+            .await
+            .expect("move");
+        assert_eq!(result.links_rewritten, 1);
+        assert_eq!(test_doc_text(&server, X_UUID), "See [[sub/Old]].");
+
+        tokio::time::timeout(Duration::from_secs(10), server.spawn_backlink_reindex())
+            .await
+            .expect("the reindex should finish")
+            .unwrap();
+        assert_eq!(test_doc_text(&server, X_UUID), "See [[sub/Old]].");
+        assert_eq!(
+            test_backlinks(&server, &folder_doc_id, OLD_UUID),
+            vec![X_UUID]
+        );
+    }
+
+    // Prevents: the delete guard being bypassed during the startup reindex.
+    // It refuses to delete a file other documents link to, going by
+    // backlinks, which may be missing for docs the reindex has not reached.
+    #[tokio::test]
+    async fn delete_during_the_reindex_still_refuses_a_file_that_is_linked_to() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000006";
+        const OLD_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000006";
+        const X_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000016";
+        let (server, _folder_doc_id) =
+            server_awaiting_reindex_with_an_unpersisted_backlink(FOLDER_UUID, OLD_UUID, X_UUID)
+                .await;
+
+        match server.trash_path("Notes/Old.md", false).await {
+            Err(trash::TrashError::InboundLinks { referencing, .. }) => {
+                assert_eq!(referencing.len(), 1);
+                assert_eq!(referencing[0].path, "Notes/X.md");
+            }
+            other => panic!(
+                "expected the delete to be refused, got {:?}",
+                other.map(|_| ())
+            ),
+        }
+        assert!(server.doc_resolver().resolve_path("Notes/Old.md").is_some());
+    }
+
+    /// A store whose writes wait for the test, as a remote store's wait for
+    /// the network. `writing` is set when a write has reached it.
+    struct GatedStore {
+        data: DashMap<String, Vec<u8>>,
+        writing: Arc<std::sync::atomic::AtomicBool>,
+        gate: Arc<tokio::sync::Semaphore>,
+    }
+
+    #[async_trait::async_trait]
+    impl Store for GatedStore {
+        async fn init(&self) -> y_sweet_core::store::Result<()> {
+            Ok(())
+        }
+        async fn get(&self, key: &str) -> y_sweet_core::store::Result<Option<Vec<u8>>> {
+            Ok(self.data.get(key).map(|v| v.clone()))
+        }
+        async fn set(&self, key: &str, value: Vec<u8>) -> y_sweet_core::store::Result<()> {
+            self.writing
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let _open = self.gate.acquire().await.unwrap();
+            self.data.insert(key.to_owned(), value);
+            Ok(())
+        }
+        async fn remove(&self, key: &str) -> y_sweet_core::store::Result<()> {
+            self.data.remove(key);
+            Ok(())
+        }
+        async fn exists(&self, key: &str) -> y_sweet_core::store::Result<bool> {
+            Ok(self.data.contains_key(key))
+        }
+    }
+
+    /// A folder "Notes" on a `GatedStore`, with the given filemeta entries
+    /// (path, uuid, type) and persisted backlinks (target, source). Returns
+    /// its doc id, the store's `writing` flag and its gate (closed).
+    async fn insert_gated_folder_doc(
+        server: &Arc<Server>,
+        folder_uuid: &str,
+        entries: &[(&str, &str, &str)],
+        backlinks: &[(&str, &str)],
+    ) -> (
+        String,
+        Arc<std::sync::atomic::AtomicBool>,
+        Arc<tokio::sync::Semaphore>,
+    ) {
+        let folder_doc_id = format!("{}-{}", TEST_RELAY_ID, folder_uuid);
+        let writing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let store: Arc<Box<dyn Store>> = Arc::new(Box::new(GatedStore {
+            data: DashMap::new(),
+            writing: writing.clone(),
+            gate: gate.clone(),
+        }));
+        let folder = DocWithSyncKv::new(&folder_doc_id, Some(store), || (), None)
+            .await
+            .unwrap();
+        {
+            let awareness = folder.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let config = txn.get_or_insert_map("folder_config");
+            config.insert(&mut txn, "name", Any::String("Notes".into()));
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let docs_map = txn.get_or_insert_map("docs");
+            for (path, uuid, entry_type) in entries {
+                let mut map = std::collections::HashMap::new();
+                map.insert("id".to_string(), Any::String((*uuid).into()));
+                map.insert("type".to_string(), Any::String((*entry_type).into()));
+                map.insert("version".to_string(), Any::Number(0.0));
+                filemeta.insert(&mut txn, *path, Any::Map(map.into()));
+                if *entry_type == "markdown" {
+                    docs_map.insert(&mut txn, *path, Any::String((*uuid).into()));
+                }
+            }
+            let backlinks_map = txn.get_or_insert_map("backlinks_v0");
+            for (target, source) in backlinks {
+                backlinks_map.insert(&mut txn, *target, vec![Any::String((*source).into())]);
+            }
+        }
+        server.docs().insert(folder_doc_id.clone(), folder);
+        writing.store(false, std::sync::atomic::Ordering::SeqCst);
+        (folder_doc_id, writing, gate)
+    }
+
+    async fn until_writing(writing: &std::sync::atomic::AtomicBool) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !writing.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the operation should reach its write to the store");
+    }
+
+    // Prevents: the startup reindex indexing against a server-side rename
+    // before the worker has applied it. Renaming an HTML page changes
+    // filemeta at once and leaves the wikilink rewrite to the worker; the
+    // folder used to be queued only after the folder doc had been persisted
+    // (an R2 write), and in that gap the reindex resolved "[[Old]]" against
+    // the new name, dropped the backlink, and the worker then found nothing
+    // to rewrite.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn page_rename_during_the_reindex_is_applied_before_the_reindex_goes_on() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000007";
+        const PAGE_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000007";
+        const X_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000017";
+
+        let server = attachment_test_server("Lens").await;
+        // A healthy store: the backlink page <- X is there.
+        let (folder_doc_id, writing, gate) = insert_gated_folder_doc(
+            &server,
+            FOLDER_UUID,
+            &[
+                ("/Old.html", PAGE_UUID, "file"),
+                ("/X.md", X_UUID, "markdown"),
+            ],
+            &[(PAGE_UUID, X_UUID)],
+        )
+        .await;
+        insert_test_content_doc(&server, PAGE_UUID, "<p>page</p>").await;
+        insert_test_content_doc(&server, X_UUID, "See [[Old]].").await;
+        server.doc_resolver().rebuild(server.docs());
+        let indexer = server.link_indexer().clone().expect("link indexer");
+        indexer.seed_filemeta_cache(server.docs());
+
+        // The test server runs no link indexer worker of its own.
+        let (_wake, mut rx) = tokio::sync::mpsc::channel::<String>(8);
+        let worker = {
+            let (indexer, docs, resolver) = (
+                indexer.clone(),
+                server.docs().clone(),
+                server.doc_resolver().clone(),
+            );
+            tokio::spawn(async move { indexer.run_worker(&mut rx, docs, resolver).await })
+        };
+
+        indexer.plan_reindex(server.docs());
+        writing.store(false, std::sync::atomic::Ordering::SeqCst);
+        let moving = {
+            let server = server.clone();
+            tokio::spawn(async move { server.move_path("Notes/Old.html", "/New.html", None).await })
+        };
+        // The new name is in filemeta; the move is persisting the folder doc.
+        until_writing(&writing).await;
+        // The whole reindex runs inside that gap.
+        tokio::time::timeout(Duration::from_secs(20), server.spawn_backlink_reindex())
+            .await
+            .expect("the reindex should finish")
+            .unwrap();
+        assert!(!moving.is_finished());
+        gate.add_permits(64);
+        let result = tokio::time::timeout(Duration::from_secs(20), moving)
+            .await
+            .expect("the move should finish")
+            .unwrap()
+            .expect("move");
+        assert_eq!(result.new_path, "/New.html");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while indexer.has_pending(&folder_doc_id) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the worker should get through the folder");
+        worker.abort();
+
+        assert_eq!(test_doc_text(&server, X_UUID), "See [[New]].");
+        assert_eq!(
+            test_backlinks(&server, &folder_doc_id, PAGE_UUID),
+            vec![X_UUID]
+        );
+    }
+
+    // Server code that changes filemeta queues the folder for the worker
+    // while it still holds the folder's write lock, not after persisting the
+    // folder doc: the startup reindex tells an unapplied rename by the
+    // folder being queued. (Each of these also queues it again afterwards.)
+    #[tokio::test]
+    async fn server_side_filemeta_changes_queue_the_folder_before_they_persist_it() {
+        const OLD_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000008";
+        const IMG_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000018";
+        for (n, operation) in ["move a document", "delete", "move a folder"]
+            .into_iter()
+            .enumerate()
+        {
+            let server = attachment_test_server("Lens").await;
+            let folder_uuid = format!("f0f0f0f0-0000-4000-8000-00000000008{n}");
+            let (folder_doc_id, writing, gate) = insert_gated_folder_doc(
+                &server,
+                &folder_uuid,
+                // The folder that is moved holds no document, so that only
+                // the folder move's own write can have queued it.
+                &[
+                    ("/dir/Old.md", OLD_UUID, "markdown"),
+                    ("/assets/pic.png", IMG_UUID, "file"),
+                ],
+                &[],
+            )
+            .await;
+            insert_test_content_doc(&server, OLD_UUID, "The target.").await;
+            server.doc_resolver().rebuild(server.docs());
+            let indexer = server.link_indexer().clone().expect("link indexer");
+            assert!(!indexer.has_pending(&folder_doc_id));
+
+            let running = {
+                let server = server.clone();
+                tokio::spawn(async move {
+                    match n {
+                        0 => server
+                            .move_document(OLD_UUID, "/dir/New.md", None)
+                            .await
+                            .is_ok(),
+                        1 => server.trash_path("Notes/dir/Old.md", false).await.is_ok(),
+                        _ => server
+                            .move_path("Notes/assets", "/assets2", None)
+                            .await
+                            .is_ok(),
+                    }
+                })
+            };
+            until_writing(&writing).await;
+            assert!(
+                indexer.has_pending(&folder_doc_id),
+                "{operation}: the folder is queued while its doc is still being persisted"
+            );
+            gate.add_permits(64);
+            let ok = tokio::time::timeout(Duration::from_secs(10), running)
+                .await
+                .expect("the operation should finish")
+                .unwrap();
+            assert!(ok, "{operation} succeeded");
+        }
+    }
+
+    // Prevents: a reindex or worker step running between a move's read of
+    // the backlinks and its rewrite. The move holds the step lock until the
+    // rewrite is done.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn move_document_holds_the_step_lock_until_it_has_rewritten_the_backlinkers() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000009";
+        const OLD_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000009";
+        const X_UUID: &str = "a0a0a0a0-0000-4000-8000-000000000019";
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[
+                ("/Old.md", OLD_UUID, "markdown"),
+                ("/X.md", X_UUID, "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, OLD_UUID, "The target.").await;
+        insert_test_content_doc(&server, X_UUID, "See [[Old]].").await;
+        server.doc_resolver().rebuild(server.docs());
+        let indexer = server.link_indexer().clone().expect("link indexer");
+        {
+            let awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.insert(&mut txn, OLD_UUID, vec![Any::String(X_UUID.into())]);
+        }
+
+        // The move cannot get X's write lock, so it stops inside its rewrite.
+        let x_awareness = server
+            .docs()
+            .get(&format!("{}-{}", TEST_RELAY_ID, X_UUID))
+            .unwrap()
+            .awareness();
+        let x_held = x_awareness.read().unwrap();
+        let moving = {
+            let server = server.clone();
+            tokio::spawn(async move { server.move_document(OLD_UUID, "/New.md", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!moving.is_finished());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), indexer.lock_step())
+                .await
+                .is_err(),
+            "no step can start while the move is rewriting"
+        );
+
+        drop(x_held);
+        let result = tokio::time::timeout(Duration::from_secs(10), moving)
+            .await
+            .expect("the move should finish")
+            .unwrap()
+            .expect("move");
+        assert_eq!(result.links_rewritten, 1);
+        assert_eq!(test_doc_text(&server, X_UUID), "See [[New]].");
+        let _free = tokio::time::timeout(Duration::from_secs(10), indexer.lock_step())
+            .await
+            .expect("the step lock is free again");
+    }
+
+    // A folder move looks through the unreached docs once for all its
+    // documents; each document's move must still get its own linkers.
+    #[tokio::test]
+    async fn folder_move_during_the_reindex_rewrites_a_backlinker_whose_backlink_was_never_persisted(
+    ) {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-00000000000a";
+        const OLD_UUID: &str = "a0a0a0a0-0000-4000-8000-00000000000a";
+        const X_UUID: &str = "a0a0a0a0-0000-4000-8000-00000000001a";
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[
+                ("/dir/Old.md", OLD_UUID, "markdown"),
+                ("/X.md", X_UUID, "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, OLD_UUID, "The target.").await;
+        insert_test_content_doc(&server, X_UUID, "See [[dir/Old]].").await;
+        server.doc_resolver().rebuild(server.docs());
+        let indexer = server.link_indexer().clone().expect("link indexer");
+        indexer.seed_filemeta_cache(server.docs());
+        indexer.plan_reindex(server.docs());
+
+        server
+            .move_path("Notes/dir", "/dir2", None)
+            .await
+            .expect("folder move");
+        assert_eq!(test_doc_text(&server, X_UUID), "See [[dir2/Old]].");
+
+        tokio::time::timeout(Duration::from_secs(10), server.spawn_backlink_reindex())
+            .await
+            .expect("the reindex should finish")
+            .unwrap();
+        assert_eq!(
+            test_backlinks(&server, &folder_doc_id, OLD_UUID),
+            vec![X_UUID]
+        );
+    }
+
+    // The other way round from a missing backlink: one that was persisted
+    // but whose link was removed just before the stop. For a doc the reindex
+    // has not reached, the delete guard goes by the doc's text.
+    #[tokio::test]
+    async fn delete_during_the_reindex_is_not_refused_over_a_stale_backlink() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-00000000000b";
+        const OLD_UUID: &str = "a0a0a0a0-0000-4000-8000-00000000000b";
+        const X_UUID: &str = "a0a0a0a0-0000-4000-8000-00000000001b";
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[
+                ("/Old.md", OLD_UUID, "markdown"),
+                ("/X.md", X_UUID, "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, OLD_UUID, "The target.").await;
+        insert_test_content_doc(&server, X_UUID, "No link any more.").await;
+        {
+            let awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let backlinks = txn.get_or_insert_map("backlinks_v0");
+            backlinks.insert(&mut txn, OLD_UUID, vec![Any::String(X_UUID.into())]);
+        }
+        server.doc_resolver().rebuild(server.docs());
+        let indexer = server.link_indexer().clone().expect("link indexer");
+        indexer.seed_filemeta_cache(server.docs());
+        indexer.plan_reindex(server.docs());
+
+        server
+            .trash_path("Notes/Old.md", false)
+            .await
+            .unwrap_or_else(|_| panic!("the delete should go through"));
+        assert!(server.doc_resolver().resolve_path("Notes/Old.md").is_none());
     }
 
     async fn get_suggestions(server: &Arc<Server>, folder_id: &str) -> (StatusCode, JsonValue) {

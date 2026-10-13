@@ -550,8 +550,25 @@ impl Server {
             .filter(|p| !p.uuid.is_empty())
             .map(|p| p.uuid.clone())
             .collect();
+        // The check is only as good as backlinks_v0. For the docs the
+        // startup reindex has not reached yet, backlinks are what was
+        // persisted before the restart, so for those it goes by their text
+        // instead: a link added just before a stop counts, one removed just
+        // before a stop does not. Under the indexer's step lock, held until
+        // the entries have moved, so no step runs in between.
+        let step = match &self.link_indexer {
+            Some(indexer) => Some(indexer.lock_step().await),
+            None => None,
+        };
+        let folder_doc_ids: Vec<String> = folders.iter().map(|(id, _)| id.clone()).collect();
+        let link_indexer::UnreachedLinkers {
+            linkers: unreached_linkers,
+            unreached,
+        } = self
+            .unreached_linkers(subtree_uuids.iter().cloned().collect(), &folder_doc_ids)
+            .await;
         let refs = {
-            let mut backlinks: HashMap<String, Vec<String>> = HashMap::new();
+            let mut backlinks: HashMap<String, Vec<String>> = unreached_linkers;
             for (id, _) in &folders {
                 let Some(doc_ref) = self.docs.get(id) else {
                     continue;
@@ -566,7 +583,14 @@ impl Server {
                 for target in &subtree_uuids {
                     let sources = link_indexer::read_backlinks_array(&map, &txn, target);
                     if !sources.is_empty() {
-                        backlinks.entry(target.clone()).or_default().extend(sources);
+                        let known = backlinks.entry(target.clone()).or_default();
+                        for source in sources {
+                            // An unreached doc's links are already in
+                            // `known`, read from its text.
+                            if !unreached.contains(&source) && !known.contains(&source) {
+                                known.push(source);
+                            }
+                        }
                     }
                 }
             }
@@ -651,7 +675,9 @@ impl Server {
                     );
                 }
             }
+            self.queue_folder_change(&folder_doc_id, &awareness);
         }
+        drop(step);
         if let Err(e) = sync_kv.persist().await {
             tracing::error!(?e, "Failed to persist folder doc after trash");
         }

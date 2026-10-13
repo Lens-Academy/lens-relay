@@ -1,6 +1,5 @@
 use anyhow::Context;
 use anyhow::Result;
-use axum::middleware;
 use clap::{Parser, Subcommand, ValueEnum};
 use relay::cli::{print_auth_message, sign_stdin, verify_stdin};
 use relay::server::AllowedHost;
@@ -682,34 +681,20 @@ async fn main() -> Result<()> {
             server.set_trash_purge_dry_run(config.server.trash_purge_dry_run);
             let server = Arc::new(server);
 
-            if let Err(e) = server.startup_reindex(&config.folders).await {
-                tracing::warn!("Startup reindex failed: {:?}", e);
+            if let Err(e) = server.startup_load(&config.folders).await {
+                tracing::warn!("Startup load failed: {:?}", e);
             }
 
-            // Spawn workers AFTER startup_reindex to avoid race conditions
+            // Spawn workers AFTER startup_load to avoid race conditions
             server.spawn_workers(worker_receivers);
 
-            let main_handle = tokio::spawn({
-                let server = server.clone();
-                let token = token.clone();
-                async move {
-                    let routes = server.routes_with_metrics();
-                    let app = routes.layer(middleware::from_fn(
-                        relay::server::Server::version_header_middleware,
-                    ));
-                    let app = if redact_errors {
-                        app.layer(middleware::from_fn(
-                            relay::server::Server::redact_error_middleware,
-                        ))
-                    } else {
-                        app
-                    };
-                    axum::serve(listener, app.into_make_service())
-                        .with_graceful_shutdown(async move { token.cancelled().await })
-                        .await
-                        .unwrap();
-                }
-            });
+            // Serving starts at once; the backlink reindex (minutes at several
+            // thousand docs) runs alongside, so /ready answers as soon as the
+            // docs are loaded. Requests meanwhile see the backlinks persisted
+            // before the restart, and /ready reports progress. The reindex is
+            // not awaited: shutdown cancels it via the token.
+            let (main_handle, _backlink_reindex) =
+                server.serve_with_background_reindex(listener, redact_errors);
 
             let metrics_addr_for_logging =
                 metrics_listener_and_addr.as_ref().map(|(_, addr)| *addr);

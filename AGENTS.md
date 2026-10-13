@@ -144,6 +144,8 @@ quiet window.
 
 For lens-editor changes (no Rust), skip steps 1 and 3 and replace `relay-server` with `lens-editor`.
 
+The relay watchdog (`scripts/prod/relay-watchdog*.sh`, `ops/systemd/relay-watchdog.*`) lives on the host, so none of the steps above update it. After a change to those files, reinstall them (`docs/server-ops.md`, "Relay Readiness Watchdog").
+
 Source code lives at `/root/lens-relay` on prod (git clone from `Lens-Academy/lens-relay`).
 
 ### Local Dev 
@@ -213,6 +215,30 @@ See [docs/relay-auth-customizations.md](docs/relay-auth-customizations.md) for f
 - Wikilink extraction from Y.Doc content
 - Backlink tracking
 - Folder-content mapping for multi-folder support
+
+**Startup: serve first, reindex backlinks in the background** (`Server::startup_load`,
+`Server::serve_with_background_reindex`, `LinkIndexer::reindex_backlinks`): the relay answers as soon as
+docs are loaded; the backlink reindex (minutes at several thousand docs) then runs on a blocking thread
+beside live traffic, and `GET /ready` reports it under `backlinks` (`pending` / `indexing` / `ready` /
+`cancelled` / `failed`, with counts) without affecting `ok` or the status code. Until it finishes,
+backlinks are the ones persisted before the restart, refreshed doc by doc. Rules that keep this safe:
+- Reindex steps, link indexer worker steps, `Server::move_document` and the delete guard in `trash_path`
+  exclude each other through the indexer's step lock, a fair tokio mutex: await it (`lock_step`) from
+  async code, never block on it there, never hold it across a store write, and take it before any DashMap
+  shard or awareness lock. Anything new that rewrites filemeta, wikilinks and backlinks together outside
+  the worker must take it too.
+- A rename is applied to filemeta before the worker rewrites the wikilinks. The reindex therefore never
+  indexes a doc while a folder has a rename the worker has not applied (it waits; if the worker shows no
+  activity for 30s it leaves those docs' backlinks as persisted and says so in `/ready` as
+  `left_as_persisted`). It tells by the folder being queued for the worker, so server code that changes
+  filemeta must queue the folder while it still holds the folder's write lock (`queue_folder_change`), as
+  the update callback does for a client's change. Files added, removed or moved are not waited for.
+- Until the reindex has reached a doc, its backlinks may be missing (a link added just before a stop).
+  While a reindex is planned or running, the worker's rename therefore also looks through the wikilinks of
+  the docs not reached yet, and server-side moves and deletes add the unreached docs that link to the file
+  (`unreached_linkers`, a read-only lookup), because they find backlinkers through backlinks alone. HTML
+  pages are never looked through or rewritten. Keep work done under the step lock short: the reindex takes
+  a worker that is waiting for the lock as alive, but everything else queues behind the holder.
 
 **Attachments over MCP** (`crates/relay/src/mcp/tools/import_attachment.rs`,
 `lens-editor/server/attachments/`): `import_attachment` hosts png/jpeg/gif/webp under
