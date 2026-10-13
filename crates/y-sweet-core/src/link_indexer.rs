@@ -1494,6 +1494,11 @@ pub struct LinkIndexer {
     /// How long the reindex waits for a folder change without the worker
     /// processing anything before it stops waiting for the worker at all.
     folder_change_stall: Duration,
+    /// The docs a startup reindex is still to index, while one is planned or
+    /// running (`plan_reindex` to the end of `reindex_backlinks`). Their
+    /// backlinks are only as good as what was persisted before the restart,
+    /// so a rename must not rely on backlinks alone to find them.
+    reindex_todo: std::sync::Mutex<Option<ReindexTodo>>,
     /// Test hook: called inside each reindex step, with `step_lock` held.
     #[cfg(test)]
     reindex_step_hook: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
@@ -1514,6 +1519,7 @@ impl LinkIndexer {
                 step_lock: tokio::sync::Mutex::new(()),
                 worker_steps: std::sync::atomic::AtomicU64::new(0),
                 folder_change_stall: FOLDER_CHANGE_STALL,
+                reindex_todo: std::sync::Mutex::new(None),
                 #[cfg(test)]
                 reindex_step_hook: std::sync::Mutex::new(None),
             },
@@ -1654,6 +1660,47 @@ impl LinkIndexer {
         }
     }
 
+    /// For each rename, the docs a startup reindex has still to index whose
+    /// text mentions the file's old name (compared in lower case; every
+    /// wikilink that resolves to the file contains it). Empty lists when no
+    /// reindex is planned or running.
+    fn unindexed_docs_mentioning(
+        &self,
+        docs: &DashMap<String, DocWithSyncKv>,
+        renames: &[RenameEvent],
+    ) -> Vec<Vec<String>> {
+        let mut found = vec![Vec::new(); renames.len()];
+        let todo: Vec<String> = match &*self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner())
+        {
+            Some(todo) => todo.remaining().to_vec(),
+            None => return found,
+        };
+        let old_names: Vec<String> = renames.iter().map(|r| r.old_name.to_lowercase()).collect();
+        for doc_id in &todo {
+            let Some((_relay_id, uuid)) = parse_doc_id(doc_id) else {
+                continue;
+            };
+            // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
+            let Some(awareness) = docs.get(doc_id).map(|doc_ref| doc_ref.awareness()) else {
+                continue;
+            };
+            let text = {
+                let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+                let txn = guard.doc.transact();
+                match txn.get_text("contents") {
+                    Some(contents) => contents.get_string(&txn).to_lowercase(),
+                    None => continue,
+                }
+            };
+            for (mentions, old_name) in found.iter_mut().zip(&old_names) {
+                if text.contains(old_name.as_str()) {
+                    mentions.push(uuid.to_string());
+                }
+            }
+        }
+        found
+    }
+
     /// Detect renames in a folder doc and update wikilinks in all backlinkers.
     ///
     /// (See `FolderApplyOutcome` for what the caller does with the result.)
@@ -1731,11 +1778,17 @@ impl LinkIndexer {
             }
         }
 
+        // While a startup reindex is under way, backlinks_v0 is only sure to
+        // be complete for the docs it has reached. One it has not reached
+        // may link to a renamed file without being listed (a link added just
+        // before an unclean stop), so those are found by their text.
+        let unindexed_mentions = self.unindexed_docs_mentioning(docs, &renames);
+
         // 4. For each rename, read backlinks and update content docs
-        for rename in &renames {
+        for (rename, unindexed) in renames.iter().zip(unindexed_mentions) {
             let old_virtual_path = format!("/{}{}", folder_name, rename.old_path);
 
-            let source_uuids = {
+            let mut source_uuids = {
                 // Clone Arc out of DashMap ref, then drop shard lock before awareness lock.
                 let awareness = {
                     let Some(doc_ref) = docs.get(folder_doc_id) else {
@@ -1752,6 +1805,13 @@ impl LinkIndexer {
                     Vec::new()
                 }
             };
+            // The rewrite below only touches links that resolve to the
+            // renamed file, so a doc that merely mentions the name is safe.
+            for uuid in unindexed {
+                if !source_uuids.contains(&uuid) {
+                    source_uuids.push(uuid);
+                }
+            }
 
             if source_uuids.is_empty() {
                 tracing::info!(
@@ -2171,6 +2231,18 @@ impl LinkIndexer {
         );
     }
 
+    /// Note every loaded doc as still to be reindexed. Call it before the
+    /// server takes requests when the reindex itself starts later, on
+    /// another thread: from here until `reindex_backlinks` has indexed a doc,
+    /// a rename looks at that doc's text as well as at the backlinks.
+    pub fn plan_reindex(&self, docs: &DashMap<String, DocWithSyncKv>) {
+        let doc_ids: Vec<String> = docs.iter().map(|e| e.key().clone()).collect();
+        *self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner()) = Some(ReindexTodo {
+            doc_ids: Arc::new(doc_ids),
+            next: 0,
+        });
+    }
+
     /// Index every loaded content doc's wikilinks into backlinks_v0.
     ///
     /// Blocking and CPU-heavy (minutes at several thousand docs): call it via
@@ -2190,7 +2262,23 @@ impl LinkIndexer {
         let mut indexed = 0;
         let mut skipped = 0;
 
-        let doc_ids: Vec<String> = docs.iter().map(|e| e.key().clone()).collect();
+        // The list `plan_reindex` made, or one made now. Cleared when this
+        // returns, however it returns.
+        let todo = ReindexTodoGuard(&self.reindex_todo);
+        let doc_ids: Arc<Vec<String>> = {
+            let mut slot = self.reindex_todo.lock().unwrap_or_else(|e| e.into_inner());
+            match &*slot {
+                Some(planned) => planned.doc_ids.clone(),
+                None => {
+                    let doc_ids = Arc::new(docs.iter().map(|e| e.key().clone()).collect());
+                    *slot = Some(ReindexTodo {
+                        doc_ids: Arc::clone(&doc_ids),
+                        next: 0,
+                    });
+                    doc_ids
+                }
+            }
+        };
         progress.start(doc_ids.len());
         // Pre-compute folder doc IDs once (avoids re-scanning on every iteration).
         let folder_doc_ids = find_all_folder_docs(docs);
@@ -2205,7 +2293,7 @@ impl LinkIndexer {
         let mut left = 0;
         let mut stall = WorkerStall::new(self.folder_change_stall);
 
-        for doc_id in &doc_ids {
+        for (i, doc_id) in doc_ids.iter().enumerate() {
             let result = loop {
                 if cancelled() {
                     tracing::info!(
@@ -2249,6 +2337,7 @@ impl LinkIndexer {
                 Some(Err(_)) => skipped += 1, // Not all docs are content docs
                 None => left += 1,
             }
+            todo.done_up_to(i + 1);
             progress.advance();
         }
 
@@ -2260,6 +2349,36 @@ impl LinkIndexer {
             left,
             started.elapsed().as_secs_f64()
         );
+    }
+}
+
+/// The docs of a startup reindex, in the order it indexes them, and how far it
+/// has got.
+struct ReindexTodo {
+    doc_ids: Arc<Vec<String>>,
+    next: usize,
+}
+
+impl ReindexTodo {
+    fn remaining(&self) -> &[String] {
+        &self.doc_ids[self.next.min(self.doc_ids.len())..]
+    }
+}
+
+/// Clears `LinkIndexer::reindex_todo` when the reindex ends, panic included.
+struct ReindexTodoGuard<'a>(&'a std::sync::Mutex<Option<ReindexTodo>>);
+
+impl ReindexTodoGuard<'_> {
+    fn done_up_to(&self, next: usize) {
+        if let Some(todo) = &mut *self.0.lock().unwrap_or_else(|e| e.into_inner()) {
+            todo.next = next;
+        }
+    }
+}
+
+impl Drop for ReindexTodoGuard<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -6180,6 +6299,71 @@ mod tests {
             backlinks,
             vec![RX_SOURCE],
             "the backlink survived the reindex"
+        );
+    }
+
+    // Prevents: a rename during the startup reindex missing a backlinker the
+    // reindex has not reached, when its backlink was never persisted (a link
+    // added just before an unclean stop). The worker found the docs to
+    // rewrite through backlinks alone, so X kept "[[Old]]" for good.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rename_during_the_reindex_rewrites_a_backlinker_whose_backlink_was_never_persisted() {
+        use crate::doc_resolver::DocumentResolver;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let (docs, indexer, mut rx, folder_id, source_id) = reindex_fixture().await;
+        let indexer = Arc::new(indexer);
+        // The state after an unclean stop: X links to the target, but the
+        // backlink never made it into the folder doc.
+        {
+            let awareness = docs.get(&folder_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            apply_backlink_diff(&guard.doc, RX_SOURCE, &HashSet::new());
+        }
+        indexer.plan_reindex(&docs);
+        let worker = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            tokio::spawn(async move {
+                indexer
+                    .run_worker(&mut rx, docs, Arc::new(DocumentResolver::new()))
+                    .await
+            })
+        };
+
+        // The rename lands at the reindex's step for X, before X is indexed.
+        let source_step = docs.iter().position(|e| e.key() == &source_id).unwrap();
+        {
+            let steps = AtomicUsize::new(0);
+            let (docs, folder_id) = (docs.clone(), folder_id.clone());
+            let weak = Arc::downgrade(&indexer);
+            *indexer.reindex_step_hook.lock().unwrap() = Some(Box::new(move || {
+                if steps.fetch_add(1, Ordering::SeqCst) == source_step {
+                    rename_target(&docs, &weak.upgrade().unwrap(), &folder_id, "/New.md");
+                }
+            }));
+        }
+        let reindex = {
+            let (indexer, docs) = (indexer.clone(), docs.clone());
+            tokio::task::spawn_blocking(move || {
+                indexer.reindex_backlinks(&docs, &ReindexProgress::new(), || false)
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(10), reindex)
+            .await
+            .expect("the reindex should finish")
+            .unwrap();
+        worker.abort();
+
+        let (text, backlinks) = source_text_and_target_backlinks(&docs, &folder_id, &source_id);
+        assert_eq!(text, "See [[New]].", "the worker found X by its text");
+        assert_eq!(
+            backlinks,
+            vec![RX_SOURCE],
+            "and the reindex then built the backlink"
+        );
+        assert!(
+            indexer.reindex_todo.lock().unwrap().is_none(),
+            "nothing is left to reindex once it has finished"
         );
     }
 

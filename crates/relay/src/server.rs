@@ -4158,6 +4158,11 @@ impl Server {
     /// has not processed yet, so it never indexes a doc's old text against
     /// new file names. A panic is logged and reported as `failed`.
     pub fn spawn_backlink_reindex(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        // Before any request can be served: until the reindex has reached a
+        // doc, a rename must not trust backlinks alone to find it.
+        if let (Some(_), Some(indexer)) = (&self.store, &self.link_indexer) {
+            indexer.plan_reindex(&self.docs);
+        }
         let server = self.clone();
         tokio::task::spawn_blocking(move || {
             let progress = &server.backlink_reindex;

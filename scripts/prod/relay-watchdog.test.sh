@@ -86,7 +86,11 @@ expect "hang after a good probe, inside the grace window: counted" "$(fail_count
 run 1
 expect "hang after a good probe: restarted on the third failure" "$(restarts)" 1
 
-setup 700 28
+setup 280 28
+run 3
+expect "startup still inside the default grace: no restart" "$(restarts)" 0
+
+setup 400 28
 run 3
 expect "startup that never finishes: restarted once the grace is over" "$(restarts)" 1
 run 5
