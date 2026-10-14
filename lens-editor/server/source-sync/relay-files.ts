@@ -9,10 +9,44 @@ import { attachmentPublicUrl } from "../attachments/public-url";
 import { defaultAttachmentRouteDeps, importAttachment } from "../attachments/routes";
 import { PermanentImageError, type SyncFiles } from "./types";
 
-/** "Lens Edu/articles/Chapter 1 - Capabilities.md" -> "chapter-1-capabilities" (attachment name stem). */
-function stemOf(path: string): string {
-  const name = path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
+/** "Chapter 1 - Capabilities" -> "chapter-1-capabilities" (attachment name stem). */
+function stemOf(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60).replace(/-$/, "") || "synced";
+}
+
+/** Folders already reported as having no public attachment URL. */
+const unpublishedFolders = new Set<string>();
+
+/**
+ * Host image bytes in the top-level `folder`, in a file named after `name`
+ * and the bytes' hash; resolves to the URL to embed. That is the folder's
+ * public mirror; a folder without one gets the path from the in-folder
+ * directory `fromDir`, which only a local test folder should ever need.
+ */
+export async function hostRelayImage(folder: string, name: string, bytes: Uint8Array, fromDir = "/"): Promise<string> {
+  let path: string;
+  try {
+    // The MCP import_attachment path: type and size checks, dedup by content, hashed name.
+    ({ path } = await importAttachment(
+      { folder, content_base64: Buffer.from(bytes).toString("base64"), stem: stemOf(name) },
+      defaultAttachmentRouteDeps(),
+      () => true,
+    ));
+  } catch (err) {
+    // 413/415/422: too large, not an image type Lens hosts, or empty -- retrying will not help.
+    const status = (err as { status?: number }).status;
+    if (status === 413 || status === 415 || status === 422) throw new PermanentImageError((err as Error).message);
+    throw new Error(`Relay: hosting an image failed: ${(err as Error).message}`);
+  }
+
+  // Lens (and the editor preview) render only absolute image URLs.
+  const publicUrl = attachmentPublicUrl(folder, path);
+  if (publicUrl) return publicUrl;
+  if (!unpublishedFolders.has(folder)) {
+    unpublishedFolders.add(folder);
+    console.warn(`[source-sync] "${folder}" has no public attachment URL (ATTACHMENT_PUBLIC_URLS); images will not display`);
+  }
+  return posix.relative(fromDir, path);
 }
 
 /** Relay failures named as the relay's (not Google's), with the path. */
@@ -28,8 +62,6 @@ async function relay<T>(what: string, path: string, call: () => Promise<T>): Pro
 }
 
 export function relayFiles(): SyncFiles {
-  const unpublishedFolders = new Set<string>();
-
   return {
     read: (path) =>
       relay("reading", path, async () => {
@@ -39,33 +71,10 @@ export function relayFiles(): SyncFiles {
 
     write: (path, content) => relay("writing", path, () => createRelayDoc(path, content)),
 
-    async hostImage(targetPath, bytes) {
+    /** Beside `targetPath`, named after its file. */
+    hostImage(targetPath, bytes) {
       const folder = targetPath.slice(0, targetPath.indexOf("/"));
-      let path: string;
-      try {
-        // The MCP import_attachment path: type and size checks, dedup by content, hashed name.
-        ({ path } = await importAttachment(
-          { folder, content_base64: Buffer.from(bytes).toString("base64"), stem: stemOf(targetPath) },
-          defaultAttachmentRouteDeps(),
-          () => true,
-        ));
-      } catch (err) {
-        // 413/415/422: too large, not an image type Lens hosts, or empty -- retrying will not help.
-        const status = (err as { status?: number }).status;
-        if (status === 413 || status === 415 || status === 422) throw new PermanentImageError((err as Error).message);
-        throw new Error(`Relay: hosting an image failed: ${(err as Error).message}`);
-      }
-
-      // Lens (and the editor preview) render only absolute image URLs: the
-      // folder's public mirror. A folder without one gets a relative path,
-      // which only a local test folder should ever need.
-      const publicUrl = attachmentPublicUrl(folder, path);
-      if (publicUrl) return publicUrl;
-      if (!unpublishedFolders.has(folder)) {
-        unpublishedFolders.add(folder);
-        console.warn(`[source-sync] "${folder}" has no public attachment URL (ATTACHMENT_PUBLIC_URLS); images will not display`);
-      }
-      return posix.relative(posix.dirname(targetPath.slice(folder.length)), path);
+      return hostRelayImage(folder, posix.basename(targetPath, ".md"), bytes, posix.dirname(targetPath.slice(folder.length)));
     },
   };
 }

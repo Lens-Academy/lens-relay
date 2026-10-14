@@ -479,6 +479,113 @@ vim /root/relay-git-sync-data/repos/cb696037-0f72-4e93-8717-4e433129d789/ea4015d
 docker exec relay-git-sync bash -c 'cd /data/repos/cb696037-0f72-4e93-8717-4e433129d789/ea4015da-24af-4d9d-ac49-8c902cb17121 && git add -A && git commit -m "Update workflow" && GIT_SSH_COMMAND="ssh -F /data/ssh/config" git push origin staging'
 ```
 
+## Iliad course sync
+
+The lens-editor server keeps the Iliad Intensive course in Lens Edu a
+read-only copy of https://iliad-intensive.org
+(`lens-editor/server/source-sync/iliad/`, start at `types.ts` and `sync.ts`).
+It is off until `ILIAD_SYNC_COURSE` names the course file.
+
+**What a run does.** Every `SOURCE_SYNC_INTERVAL_MINUTES` it asks the site
+which source commit it was built from and reads the course file. If the
+course file's `upstream_commit` is that commit, the run ends: one request and
+one file read. Otherwise it reads the 28 worksheets and every module and lens
+of the course, and writes, moves and trashes what differs. The course file's
+`upstream_commit` is written last, so a run that stops early is done again by
+the next one.
+
+**Turn it on.** The image needs this code, `@resvg/resvg-js` and the
+`font-dejavu` package (the Dockerfile has both), so build it first. Then set
+in `/root/lens-relay/.env`:
+
+```
+ILIAD_SYNC_COURSE="Lens Edu/courses/in-development/iliad-intensive-demo.md"
+```
+
+and recreate the container (`docker compose -f docker-compose.prod.yaml up -d
+lens-editor`). When the course file moves to another `courses/` folder,
+change the variable to its new path, or the sync stops with "the course file
+does not exist".
+
+**The first run** starts from the hand import of 8 Oct 2026 and takes a few
+minutes. It moves the course's lenses to `Lenses/Iliad/<day>/` and its
+modules to `modules/Iliad/`, gives every lens its pin (`upstream_key`,
+`upstream_fingerprint`, `synced_from` in the frontmatter), draws the figures
+again as new attachments, and trashes one lens whose text joins the lens
+before it. Lens ids do not change. Promote the result to production as one
+set: git records a moved module as a delete and an add.
+
+**Turn it off.** Empty `ILIAD_SYNC_COURSE` and recreate the container. The
+files stay as the last run left them.
+
+**Run it again without a new Iliad commit** (after a fix to the converter or
+the layout is deployed): delete the `upstream_commit:` line from the course
+file's frontmatter in the editor. The next run does a full pass.
+
+**What a person may change.** The text of a synced lens is overwritten at
+the next new Iliad commit, whichever page that commit changes; the editor's
+banner says so. Removing Iliad content by editing files does not work: the
+next run puts it back or folds it into the lens before. These survive a run:
+frontmatter fields the sync does not write; reading cards, which stay after
+the same text (a card moves only when the text before it changes);
+entries in an Iliad module that are not Iliad lenses (readings, a lens of our
+own) and their order; and everything in the course file except
+`upstream_commit`. A reading entry is removed when the source of its day
+stops linking to it. Iliad moving a link to another address of the same work
+(arXiv abs or pdf, LessWrong or the Alignment Forum) does not remove it;
+moving it to a copy on another site does.
+
+**Changes that lose something wait.** A change that retires a lens, moves
+where a lens starts, or removes a reading or a card is applied only once the
+deploy that makes it is an hour old, because Iliad often fixes a bad deploy
+within the hour, and a lost lens id loses learners' progress with it. Until
+then the run changes nothing and logs what it is waiting to apply; every
+other change of that deploy waits with it. A site that does not say when it
+was deployed holds such changes until a person approves them (below).
+
+**The log.** `docker logs lens-editor 2>&1 | grep iliad-sync`. Every line of
+a message carries the prefix. A finished run prints one line with counts,
+then one line per warning. A failed run prints `[iliad-sync] failed: <reason>`,
+records nothing, and is tried again at the next interval, so a failure that
+needs a person repeats until it is dealt with. The reasons that need a
+person:
+
+- *More than 3 lenses, readings or cards would go, or every lens of one
+  page.* The message lists each with its reason. If Iliad lost the text by
+  mistake, do nothing; the sync carries on when it is back. If the loss is
+  right, set `ILIAD_SYNC_APPROVE_RETIREMENT=<the commit in the message>` in
+  `.env` and recreate the container. The approval is for that commit only;
+  it also lets a held change through at once.
+- *A lens that a module lists is missing or cannot be read.* The message
+  names the module. Restore the file from `_trash` or fix its frontmatter;
+  the sync will not guess, because a new file would get a new id.
+- *The course file does not exist.* It was moved or renamed: set
+  `ILIAD_SYNC_COURSE` to its new path and recreate the container.
+- *A file changed during the run.* Someone edited it meanwhile. Nothing to
+  do: the next run plans again from the new state.
+- *A figure has text and this machine has no font.* The image was built
+  without `font-dejavu`.
+
+A figure that cannot be fetched or drawn does not stop the sync: the lens
+links to the figure on Iliad's site, the run warns, and the next Iliad commit
+tries again.
+
+**Summaries.** `ILIAD_SYNC_SUMMARIES=1` lets a model (the article importer's
+Claude pool) write `tldr` and `summary_for_tutor` for new lenses and for
+lenses whose text changed. Without it a new lens has neither (the validator
+warns), and a summary that names a section number can go stale when Iliad
+renumbers.
+
+**Undo a retirement.** The lens is in `Lens Edu/_trash/` with its path until
+the purge sweep removes it (see "Deleting" above). Move it back, put its
+entry back in its module, and trash any lens the sync made in its place. It
+keeps its id, but the sync retires it again unless its text is back in the
+source.
+
+**Try it on a copy.** `cd lens-editor && npx tsx scripts/iliad-sync.ts
+--content <checkout of lens-edu-relay>` reads the live site and reports what
+it would do; `--apply` changes the copy. It cannot write to a relay.
+
 ## Lens Editor Production Promotion
 
 The Lens Editor promotion feature compares the relay-owned staging repository

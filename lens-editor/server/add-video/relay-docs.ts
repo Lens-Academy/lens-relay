@@ -10,7 +10,7 @@ const RELAY_WRITE_TIMEOUT_MS = 60_000; // upserts/attachments carry larger paylo
 // The production relay's id (root AGENTS.md); the local relay uses a0000000-….
 const PRODUCTION_RELAY_ID = "cb696037-0f72-4e93-8717-4e433129d789";
 
-function getRelayConfig() {
+export function getRelayConfig() {
   const url = process.env.RELAY_URL || "http://relay-server:8080";
   const token = process.env.RELAY_SERVER_TOKEN || "";
   const relayId = process.env.RELAY_ID || PRODUCTION_RELAY_ID;

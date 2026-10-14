@@ -1,5 +1,5 @@
 import { useYDoc } from '../../lib/ydoc-provider';
-import { syncSourceLabel } from '../../../shared/source-sync';
+import { syncSourceEditable, syncSourceLabel } from '../../../shared/source-sync';
 import { useSyncMarker } from './useSyncMarker';
 
 /** Warns that the open file is a synced copy, so edits made here will not last. */
@@ -13,9 +13,9 @@ export function SyncedFileBanner() {
         This file is synced from {source}. Any changes you make here will be overwritten the next
         time it syncs.{' '}
         <a href={marker.url} target="_blank" rel="noopener noreferrer" className="underline font-medium">
-          Edit it in {source}
-        </a>{' '}
-        instead.
+          {syncSourceEditable(marker.source) ? `Edit it in ${source}` : `Open it on ${source}`}
+        </a>
+        {syncSourceEditable(marker.source) ? ' instead.' : '.'}
       </div>
     </div>
   );

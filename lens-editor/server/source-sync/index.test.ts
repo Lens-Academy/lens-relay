@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isLocalRelay, startSourceSyncFromEnv } from "./index";
+import { startCourseSync } from "./iliad/sync";
+import { isLocalRelay, startIliadSyncFromEnv, startSourceSyncFromEnv } from "./index";
+
+// The real loop starts a run at once, which reads iliad-intensive.org.
+vi.mock("./iliad/sync", () => ({ startCourseSync: vi.fn(() => () => {}) }));
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -44,5 +48,43 @@ describe("startSourceSyncFromEnv", () => {
     const log = { log: vi.fn(), error: vi.fn() };
     expect(startSourceSyncFromEnv({}, log)).toBeNull();
     expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/not started: SOURCE_SYNC_INTERVAL_MINUTES must be/));
+  });
+});
+
+describe("startIliadSyncFromEnv", () => {
+  const COURSE = "Lens Edu/courses/user-facing/iliad-intensive.md";
+
+  it("does nothing while ILIAD_SYNC_COURSE is unset", () => {
+    vi.stubEnv("ILIAD_SYNC_COURSE", "");
+    expect(startIliadSyncFromEnv()).toBeNull();
+    expect(startCourseSync).not.toHaveBeenCalled();
+  });
+
+  it("syncs the course it is given, into folders beside it, with no model and no approval unless set", () => {
+    vi.stubEnv("ILIAD_SYNC_COURSE", COURSE);
+    vi.stubEnv("SOURCE_SYNC_INTERVAL_MINUTES", "15");
+    expect(startIliadSyncFromEnv()).toBeTypeOf("function");
+    const [options, interval] = vi.mocked(startCourseSync).mock.calls.at(-1)!;
+    expect(interval).toBe(15 * 60_000);
+    expect(options.layout).toMatchObject({ course: COURSE, moduleDir: "Lens Edu/modules/Iliad" });
+    expect(options.ask).toBeUndefined();
+    expect(options.approvedRetirement).toBeUndefined();
+  });
+
+  it("passes on the approved commit and the model when they are set", () => {
+    vi.stubEnv("ILIAD_SYNC_COURSE", COURSE);
+    vi.stubEnv("ILIAD_SYNC_SUMMARIES", "1");
+    vi.stubEnv("ILIAD_SYNC_APPROVE_RETIREMENT", " d5fec17 ");
+    startIliadSyncFromEnv();
+    const [options] = vi.mocked(startCourseSync).mock.calls.at(-1)!;
+    expect(options.ask).toBeTypeOf("function");
+    expect(options.approvedRetirement).toBe("d5fec17");
+  });
+
+  it("reports a course path it cannot use instead of throwing", () => {
+    vi.stubEnv("ILIAD_SYNC_COURSE", "iliad-intensive-demo");
+    const log = { log: vi.fn(), error: vi.fn() };
+    expect(startIliadSyncFromEnv(log)).toBeNull();
+    expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/not started: ILIAD_SYNC_COURSE must be/));
   });
 });
