@@ -91,16 +91,23 @@ pub fn stamp_new_comments(old_str: &str, new_str: &str, author: &str, timestamp:
     if comments.is_empty() {
         return new_str.to_string();
     }
-    let preserved: std::collections::HashSet<String> = extract_comments(old_str)
-        .into_iter()
-        .map(|c| c.full_match)
-        .collect();
+    // Multiset: each comment in old_str covers one carried-over copy, so a
+    // duplicate of a person's comment is stamped as the AI's, not passed off
+    // as theirs.
+    let mut preserved = comment_counts(old_str);
 
     let mut result = String::with_capacity(new_str.len());
     let mut cursor = 0;
     for comment in &comments {
         result.push_str(&new_str[cursor..comment.from]);
-        if preserved.contains(&comment.full_match) {
+        let carried = match preserved.get_mut(&comment.full_match) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                true
+            }
+            _ => false,
+        };
+        if carried {
             // Unchanged comment carried over from old_str — keep byte-identical.
             result.push_str(&comment.full_match);
         } else {
@@ -132,21 +139,22 @@ pub fn stamp_new_comments(old_str: &str, new_str: &str, author: &str, timestamp:
 /// rewrite.
 pub fn validate_comment_preservation(old_str: &str, new_str: &str) -> Result<(), String> {
     let old_comments = extract_comments(old_str);
-    let new_comments = extract_comments(new_str);
+    let old_counts = comment_counts(old_str);
+    let new_counts = comment_counts(new_str);
+    let count = |m: &std::collections::HashMap<String, usize>, k: &str| m.get(k).copied().unwrap_or(0);
 
-    let removed_human = old_comments.iter().find(|old_comment| {
-        !is_ai_author(&old_comment.author)
-            && !new_comments
-                .iter()
-                .any(|nc| nc.full_match == old_comment.full_match)
+    // Counted, not just present: a copy of another kept comment must not
+    // stand in for a removed one.
+    let removed_human = old_comments.iter().find(|oc| {
+        !is_ai_author(&oc.author) && count(&new_counts, &oc.full_match) < count(&old_counts, &oc.full_match)
     });
     let Some(removed) = removed_human else {
         return Ok(());
     };
 
-    let adds_comment = new_comments
+    let adds_comment = new_counts
         .iter()
-        .any(|nc| !old_comments.iter().any(|oc| oc.full_match == nc.full_match));
+        .any(|(k, n)| *n > count(&old_counts, k));
     if adds_comment {
         return Err(format!(
             "Error: Cannot rewrite or reattribute {}'s comment: \"{}\". Keep it exactly as it is, or remove it whole without adding a comment in the same edit; to leave your own note, add it in a separate edit.",
@@ -155,6 +163,15 @@ pub fn validate_comment_preservation(old_str: &str, new_str: &str) -> Result<(),
     }
 
     Ok(())
+}
+
+/// How many times each exact comment markup occurs in `text`.
+fn comment_counts(text: &str) -> std::collections::HashMap<String, usize> {
+    let mut counts = std::collections::HashMap::new();
+    for c in extract_comments(text) {
+        *counts.entry(c.full_match).or_insert(0) += 1;
+    }
+    counts
 }
 
 /// Extract metadata (author, timestamp) from the inner content of a critic markup block.
@@ -2258,6 +2275,27 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.contains("Luc's comment"), "{}", err);
         assert!(err.contains("separate edit"), "{}", err);
+    }
+
+    #[test]
+    fn validate_comments_duplicate_cannot_replace_removed_human_comment() {
+        // Review finding: "fix intro" removed, the other Luc comment copied
+        // into its place. Counts, not presence, catch it.
+        let old = r#"A {>>{"author":"Luc","timestamp":1}@@fix intro<<} B {>>{"author":"Luc","timestamp":2}@@nice<<} C"#;
+        let new = r#"A {>>{"author":"Luc","timestamp":2}@@nice<<} B {>>{"author":"Luc","timestamp":2}@@nice<<} C"#;
+        assert!(validate_comment_preservation(old, new).is_err());
+    }
+
+    #[test]
+    fn stamp_duplicate_of_human_comment_is_attributed_to_ai() {
+        // Review finding: a byte-identical copy of Luc's comment must not stay Luc's.
+        let old = r#"B {>>{"author":"Luc","timestamp":2}@@nice<<} C"#;
+        let new = r#"{>>{"author":"Luc","timestamp":2}@@nice<<} B {>>{"author":"Luc","timestamp":2}@@nice<<} C"#;
+        let out = stamp_new_comments(old, new, "AI", 7);
+        assert_eq!(
+            out,
+            r#"{>>{"author":"Luc","timestamp":2}@@nice<<} B {>>{"author":"AI","timestamp":7}@@nice<<} C"#
+        );
     }
 
     #[test]

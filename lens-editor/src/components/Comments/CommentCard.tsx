@@ -225,7 +225,7 @@ export function CommentCard(props: CommentCardProps): ReactElement {
 
 // ---------------------------------------------------------------------------
 // CommentRow — renders a single comment with author, timestamp, content,
-// and owner-only Edit / Delete actions.
+// author-only Edit, and Delete for the author or (canDelete) anyone with edit access.
 // ---------------------------------------------------------------------------
 
 interface CommentRowProps {
