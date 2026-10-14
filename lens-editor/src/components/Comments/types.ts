@@ -11,7 +11,11 @@ export interface MessageView {
   author: string;
   body: string;
   timestamp: string;
+  /** Edit and delete: the current user wrote this message. */
   canModify: boolean;
+  /** Delete only, for someone else's message: anyone with edit access may
+   *  clear a Markdown comment once it is addressed. Absent means canModify. */
+  canDelete?: boolean;
 }
 
 /** Where an out-of-band thread points (HTML pages); absent for inline comments. */

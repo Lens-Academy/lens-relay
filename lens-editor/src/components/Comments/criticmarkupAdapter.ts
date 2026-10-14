@@ -40,7 +40,16 @@ function useYTextString(yText: Y.Text): string {
   );
 }
 
-export function useThreadsFromYText(yText: Y.Text, currentUserName: string): AdapterResult {
+/**
+ * `canDeleteAny`: the current user has edit access, so they may delete any
+ * comment (e.g. once they fixed what it asks for), not only their own.
+ * Editing a comment's text stays with its author.
+ */
+export function useThreadsFromYText(
+  yText: Y.Text,
+  currentUserName: string,
+  canDeleteAny = false,
+): AdapterResult {
   const text = useYTextString(yText);
   const rawThreads = useCommentsFromText(text).filter(
     (t) => t.comments[0]?.type === 'comment',
@@ -53,6 +62,7 @@ export function useThreadsFromYText(yText: Y.Text, currentUserName: string): Ada
     const projectMessage = (range: CriticMarkupRange): MessageView => {
       const id = messageIdFor(range);
       rangeByMessageId.set(id, range);
+      const isOwn = range.metadata?.author === currentUserName;
       return {
         id,
         author: range.metadata?.author ?? 'unknown',
@@ -60,7 +70,8 @@ export function useThreadsFromYText(yText: Y.Text, currentUserName: string): Ada
         // is called inside parse() for comment type), so use it directly.
         body: range.content,
         timestamp: range.metadata?.timestamp != null ? String(range.metadata.timestamp) : '',
-        canModify: range.metadata?.author === currentUserName,
+        canModify: isOwn,
+        canDelete: isOwn || canDeleteAny,
       };
     };
 
@@ -100,5 +111,5 @@ export function useThreadsFromYText(yText: Y.Text, currentUserName: string): Ada
     };
 
     return { threads, callbacks };
-  }, [rawThreads, yText, currentUserName]);
+  }, [rawThreads, yText, currentUserName, canDeleteAny]);
 }

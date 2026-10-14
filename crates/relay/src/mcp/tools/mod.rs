@@ -396,7 +396,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "The replacement text. Empty string for deletion. In Markdown, to leave a comment for human reviewers, wrap a note in comment delimiters, e.g. '{>>your note<<}'; it is automatically attributed to your session (do not add author metadata yourself). On .html pages use the comments tool instead."
+                        "description": "The replacement text. Empty string for deletion. In Markdown, to leave a comment for human reviewers, wrap a note in comment delimiters, e.g. '{>>your note<<}'; it is automatically attributed to your session (do not add author metadata yourself). A person's comment must be kept exactly as it is or removed whole (e.g. once you fixed what it asks for, or replaced the passage it sits on); a removal becomes a pending change someone accepts, and you cannot rewrite their comment. On .html pages use the comments tool instead."
                     },
                     "session_id": {
                         "type": "string",

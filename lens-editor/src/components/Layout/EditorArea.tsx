@@ -158,7 +158,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const resolveAnchorY = useCallback((key: string) => resolveAnchorYByOffset(Number(key)), [resolveAnchorYByOffset]);
 
   // Thread data and mutation callbacks from the criticmarkup adapter.
-  const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous');
+  const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous', canEdit);
 
   // ScrollSource wrapping the editor's scroll container. Pass the live element
   // (not the ref) so the hook re-attaches when editorView arrives.

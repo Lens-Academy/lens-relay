@@ -49,7 +49,7 @@ When the AI adds a new comment, it ends up inside suggestion markup (e.g., `{++m
 | Comment with no metadata | Treated as non-AI, protected |
 | Multiple comments in one edit | Each validated independently |
 | AI modifies non-AI comment content | Rejected with error |
-| AI removes non-AI comment | Rejected with error |
+| AI removes non-AI comment | Allowed since 2026-10-14 when removed whole and the same edit adds no comment; lands as a pending change (any hunk touching comment markup is a suggestion), so a person accepts it. See below. |
 | AI removes its own comment | Allowed |
 | AI adds new comment | Allowed, may nest inside suggestion markup |
 | Comment inside code block | Already handled — parser skips code blocks |
@@ -69,11 +69,24 @@ new: "Hello world{>>{"author":"AI"}@@observation<<}"
 old: "Hello {>>{"author":"AI"}@@note<<} world"
 new: "Hello world"
 
-# REJECTED: removing non-AI comment
+# OK since 2026-10-14 (pending change): removing a person's comment whole
 old: "Hello {>>{"author":"human"}@@note<<} world"
 new: "Hello world"
+
+# REJECTED: removing a person's comment and adding one in the same edit (could be a rewrite)
+old: "Hello {>>{"author":"human"}@@note<<} world"
+new: "Hello world {>>my note<<}"
 
 # REJECTED: modifying non-AI comment
 old: "Hello {>>{"author":"human"}@@note<<} world"
 new: "Hello {>>{"author":"human"}@@different<<} world"
 ```
+
+## Update 2026-10-14: removing a person's comment
+
+A course creator could not replace a passage carrying another person's comments with a shared segment
+through his AI: the edit was refused ("Cannot remove or modify non-AI comment"), and in the editor only the
+author could delete a comment. Now a non-AI comment may be removed whole by the AI; the removal always lands
+as a pending deletion containing the comment, so rejecting it restores the comment and accepting removes it.
+Rewriting or reattributing it is still refused. In the editor, anyone with edit access may delete any
+Markdown comment (Edit stays with the author).

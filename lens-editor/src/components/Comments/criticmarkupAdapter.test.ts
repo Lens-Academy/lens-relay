@@ -50,6 +50,22 @@ describe('useThreadsFromYText', () => {
     expect(result.current.threads[0].root.canModify).toBe(false);
   });
 
+  it("with edit access, a non-author may delete (not edit) someone else's comment", () => {
+    const { ytext } = makeDoc('Fixed text. ');
+    insertWithMetadata(ytext, 12, 'Luc', 1716553200000, 'this needs fixing');
+
+    const { result: noAccess } = renderHook(() => useThreadsFromYText(ytext, 'Andreas'));
+    expect(noAccess.current.threads[0].root.canDelete).toBe(false);
+
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'Andreas', true));
+    const root = result.current.threads[0].root;
+    expect(root.canModify).toBe(false);
+    expect(root.canDelete).toBe(true);
+
+    act(() => { result.current.callbacks.onDelete(root); });
+    expect(ytext.toString()).toBe('Fixed text. ');
+  });
+
   it('onEdit operates on the live range after a remote offset shift', () => {
     const { ytext } = makeDoc('A');
     insertWithMetadata(ytext, 1, 'alice', 1716553200000, 'x');
