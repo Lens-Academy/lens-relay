@@ -57,6 +57,7 @@ describe("forum comment URLs", () => {
     expect(greaterWrongMirrorUrl(lwComment)).toBe(
       "https://www.greaterwrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research/comment/FpZmBx2Q4eswZWmy6",
     );
+    expect(greaterWrongMirrorUrl("https://www.lesswrong.com/s/abcd/p/8wBN8cdNAv3c7vt6p?commentId=FpZmBx2Q4eswZWmy6")).toBe("");
     expect(greaterWrongMirrorUrl("https://forum.effectivealtruism.org/posts/abcdEFGH12345678/x?commentId=CmtABCDE12345678")).toBe(
       "https://ea.greaterwrong.com/posts/abcdEFGH12345678/x/comment/CmtABCDE12345678",
     );
@@ -133,7 +134,7 @@ describe("forum comment pages", () => {
           result: {
             postedAt: "2025-01-22T09:00:00.000Z",
             user: { displayName: "Buck" },
-            contents: { html: "<p>I disagree: control evaluations measure exactly this, and the post's story does not engage with them at all. Which part of the argument survives that?</p><p>Second paragraph, still short, still mine.</p>" },
+            contents: { html: "<p>I disagree: control evaluations measure exactly this, and the post's story does not engage with them at all. Which part of the argument survives that?</p><p>Second paragraph, still short, still mine, and past the 200-character article floor.</p>" },
             post: { title: "The Case Against AI Control Research" },
           },
         },

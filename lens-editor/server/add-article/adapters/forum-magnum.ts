@@ -62,6 +62,9 @@ export function greaterWrongCommentUrl(ref: ForumCommentRef): string {
   const ea = ref.host === "forum.effectivealtruism.org" || ref.host === "ea.greaterwrong.com";
   // Other mirror subdomains (arbital.) are not ForumMagnum mirrors.
   if (!ea && ref.host.endsWith(".greaterwrong.com")) return "";
+  // GreaterWrong's comment route needs the post's slug, which a slug-less or
+  // sequence (`/s/<seq>/p/<id>`) URL lacks: no mirror then, the API only.
+  if (!/^\/posts\/[^/]+\/[^/]+$/.test(ref.postPath)) return "";
   return `https://${ea ? "ea" : "www"}.greaterwrong.com${ref.postPath}/comment/${ref.commentId}`;
 }
 
