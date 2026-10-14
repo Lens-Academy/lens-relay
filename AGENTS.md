@@ -265,8 +265,18 @@ markdown and reports what it cannot map; inline maths is rewritten so markdown c
 finds `$…$` only after markdown has run. Images are hosted as folder attachments (the `import_attachment`
 path) and embedded by the folder's public URL; if one fails for a passing reason the run writes nothing.
 Only the production server writes synced files: the Vite dev server syncs only into a local relay, and
-`npx tsx scripts/source-sync.ts` only previews. Sources are adapters (`types.ts` `SourceAdapter`), so another
-source kind, or a UI that takes a pasted link, adds an adapter or a binding store rather than a new pipeline.
+`npx tsx scripts/source-sync.ts` only previews. Sources of one article are adapters (`types.ts`
+`SourceAdapter`), so another such source, or a UI that takes a pasted link, adds an adapter or a binding store.
+
+**Iliad course sync: iliad-intensive.org → a read-only course** (`lens-editor/server/source-sync/iliad/`):
+a whole course is not one article, so it has its own steps, named in `iliad/types.ts`: read the published
+site at one source commit (`snapshot.ts`), turn each worksheet's built MDX into Lens markdown (`convert.ts`),
+group it into lenses (`plan.ts`), and compose, move and write the lens, module and course files
+(`course-files.ts`). Learner progress is keyed on a lens `id`, so a lens is pinned to the place it starts at
+in the source (`upstream_key` in its frontmatter) and found again by its text when that place is renamed;
+nothing but the files records which lenses exist. Off until `ILIAD_SYNC_COURSE` names the course file; only
+the production server writes, and `npx tsx scripts/iliad-sync.ts` runs it against a directory. Operating it:
+`docs/server-ops.md`, "Iliad course sync".
 
 **Trash instead of delete** (`crates/relay/src/server/trash.rs`,
 `crates/relay/src/mcp/tools/delete_doc.rs`): the MCP `delete` tool (Admin/Edit only)

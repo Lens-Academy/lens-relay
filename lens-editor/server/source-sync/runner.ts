@@ -53,9 +53,30 @@ export function logOutcome(outcome: SyncOutcome, log: SyncLog): void {
 }
 
 /**
- * Sync every binding now, then again every `intervalMs`. Runs never overlap:
- * the next one is scheduled when the last finishes. `problems` (bindings that
- * failed validation) are reported on every run, so they are not missed.
+ * Do `run` now, then again `intervalMs` after each time it finishes, so two
+ * runs never overlap. `run` is told when to stop early. Returns a stop
+ * function.
+ */
+export function repeatEvery(intervalMs: number, run: (stopped: () => boolean) => Promise<void>): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+  const again = async () => {
+    await run(() => stopped);
+    if (!stopped) {
+      timer = setTimeout(again, intervalMs);
+      timer.unref?.();
+    }
+  };
+  void again();
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+}
+
+/**
+ * Sync every binding now, then again every `intervalMs`. `problems` (bindings
+ * that failed validation) are reported on every run, so they are not missed.
  * Returns a stop function.
  */
 export function startSourceSync(
@@ -65,25 +86,12 @@ export function startSourceSync(
   log: SyncLog = console,
   problems: string[] = [],
 ): () => void {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let stopped = false;
-
-  const run = async () => {
+  log.log(`[source-sync] ${bindings.length} binding(s), every ${Math.round(intervalMs / 60_000)} min${problems.length ? `, ${problems.length} ignored` : ""}`);
+  return repeatEvery(intervalMs, async (stopped) => {
     for (const problem of problems) log.error(`[source-sync] ${problem}`);
     for (const binding of bindings) {
-      if (stopped) return;
+      if (stopped()) return;
       logOutcome(await syncBinding(binding, deps), log);
     }
-    if (!stopped) {
-      timer = setTimeout(run, intervalMs);
-      timer.unref?.();
-    }
-  };
-
-  log.log(`[source-sync] ${bindings.length} binding(s), every ${Math.round(intervalMs / 60_000)} min${problems.length ? `, ${problems.length} ignored` : ""}`);
-  void run();
-  return () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
-  };
+  });
 }

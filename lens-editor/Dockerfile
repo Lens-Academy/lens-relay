@@ -10,7 +10,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 # pandoc converts arXiv e-print LaTeX and pdftoppm (poppler-utils) draws its PDF
 # figures, for the article importer (server/add-article/arxiv-latex.ts).
-RUN apk add --no-cache bash git openssh-client pandoc-cli poppler-utils
+# font-dejavu is what the Iliad sync draws the lettering of an SVG figure
+# with (server/source-sync/iliad/figures.ts); the base image has no font.
+RUN apk add --no-cache bash git openssh-client pandoc-cli poppler-utils font-dejavu
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 RUN npm install -g @anthropic-ai/claude-code
