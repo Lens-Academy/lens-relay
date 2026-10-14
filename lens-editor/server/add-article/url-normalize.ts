@@ -7,6 +7,8 @@
  * the stored source_url is the page's canonical URL, not this key.
  */
 
+import { forumCommentRef, greaterWrongCommentUrl } from "./adapters/forum-magnum";
+
 // Query parameters that identify a marketing campaign, not a document.
 const TRACKING_PARAM_RE =
   /^(utm_\w+|fbclid|gclid|dclid|msclkid|twclid|igshid|mc_cid|mc_eid|mkt_tok|ref|ref_src|cmpid|s_kwcid)$/i;
@@ -36,11 +38,18 @@ export function normalizeUrlForDedup(raw: string): string {
   u.password = "";
   u.hostname = canonicalHost(u.hostname.toLowerCase().replace(/^www\./, ""));
 
+  // A forum comment is one key whether spelled `?commentId=<id>` or as
+  // GreaterWrong's `/comment/<id>` path; a comment never folds onto its post.
+  const comment = forumCommentRef(u.href);
   const kept = [...u.searchParams.entries()].filter(
-    ([k]) => !TRACKING_PARAM_RE.test(k),
+    ([k]) => !TRACKING_PARAM_RE.test(k) && !(comment && k === "commentId"),
   );
   u.search = "";
   for (const [k, v] of kept) u.searchParams.append(k, v);
+  if (comment) {
+    u.pathname = comment.postPath;
+    u.searchParams.append("commentId", comment.commentId);
+  }
 
   if (u.pathname.length > 1) u.pathname = u.pathname.replace(/\/+$/, "");
   return u.href;
@@ -60,6 +69,14 @@ export function dedupUrlVariants(
     if (!u) continue;
     out.add(u);
     out.add(normalizeUrlForDedup(u));
+    // A forum comment may be stored under either spelling: the forum's
+    // `?commentId=` URL or the GreaterWrong comment page it was imported from.
+    const comment = forumCommentRef(u);
+    if (comment) {
+      out.add(`https://${canonicalHost(comment.host)}${comment.postPath}?commentId=${comment.commentId}`);
+      const mirror = greaterWrongCommentUrl(comment);
+      if (mirror) out.add(mirror);
+    }
   }
   // Also toggle the "www." spelling of every http(s) variant. The relay
   // compares against the STORED source_url spelling (it only trims trailing

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { extractArticle } from "../extract";
-import { forumApiAnswerToHtml, forumGraphqlUrl } from "./forum-magnum";
+import { forumApiAnswerToHtml, forumCommentRef, forumGraphqlUrl, greaterWrongMirrorUrl } from "./forum-magnum";
 
 const mathjax = (tex: string) =>
   `<span class="math-tex"><span class="mjpage"><span class="mjx-chtml"><span class="mjx-math" aria-label="${tex}"><span class="mjx-mi">x</span></span></span></span></span>`;
@@ -18,6 +18,69 @@ describe("forumGraphqlUrl", () => {
     // Nothing but an id or slug reaches the query text.
     expect(forumGraphqlUrl('https://www.lesswrong.com/w/x"}){a}')).toBe("");
     expect(forumGraphqlUrl("https://www.greaterwrong.com/posts/de3xjFaACCAk6imzv/x")).toBe("");
+  });
+});
+
+// Prevents: a LessWrong `?commentId=` link importing the whole post (and its
+// title and author) instead of the comment.
+describe("forum comment URLs", () => {
+  const lwComment =
+    "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research?commentId=FpZmBx2Q4eswZWmy6";
+
+  it("recognises ?commentId= and GreaterWrong /comment/ permalinks, not post URLs", () => {
+    expect(forumCommentRef(lwComment)).toEqual({
+      host: "lesswrong.com",
+      postPath: "/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research",
+      postId: "8wBN8cdNAv3c7vt6p",
+      commentId: "FpZmBx2Q4eswZWmy6",
+    });
+    expect(
+      forumCommentRef(
+        "https://www.greaterwrong.com/posts/rZcyemEpBHgb2hqLP/ai-control-may-increase-existential-risk/comment/7bruHf5quFdJseAoh",
+      )?.commentId,
+    ).toBe("7bruHf5quFdJseAoh");
+    expect(forumCommentRef("https://www.alignmentforum.org/posts/abcdEFGH12345678?commentId=CmtABCDE12345678")?.postPath).toBe(
+      "/posts/abcdEFGH12345678",
+    );
+    expect(forumCommentRef("https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research")).toBeNull();
+    expect(forumCommentRef("https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/x?commentId=bad%22id")).toBeNull();
+    expect(forumCommentRef("https://example.com/posts/8wBN8cdNAv3c7vt6p/x?commentId=FpZmBx2Q4eswZWmy6")).toBeNull();
+  });
+
+  it("queries the comment, not its post, and mirrors to the comment's GreaterWrong page", () => {
+    const q = decodeURIComponent(forumGraphqlUrl(lwComment).split("?query=")[1] ?? "");
+    expect(q).toContain('comment(selector: {_id: "FpZmBx2Q4eswZWmy6"})');
+    expect(q).not.toContain("post(selector");
+    expect(greaterWrongMirrorUrl(lwComment)).toBe(
+      "https://www.greaterwrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research/comment/FpZmBx2Q4eswZWmy6",
+    );
+    expect(greaterWrongMirrorUrl("https://forum.effectivealtruism.org/posts/abcdEFGH12345678/x?commentId=CmtABCDE12345678")).toBe(
+      "https://ea.greaterwrong.com/posts/abcdEFGH12345678/x/comment/CmtABCDE12345678",
+    );
+  });
+
+  it("turns a comment answer into an article by the commenter, titled after the post", async () => {
+    const answer = JSON.stringify({
+      data: {
+        comment: {
+          result: {
+            postedAt: "2025-01-22T09:00:00.000Z",
+            user: { displayName: "Buck" },
+            contents: { html: `<p>${"I disagree with the core claim here. ".repeat(20)}</p>` },
+            post: { title: "The Case Against AI Control Research" },
+          },
+        },
+      },
+    });
+    const ex = await extractArticle(forumApiAnswerToHtml(answer, lwComment), "https://www.lesswrong.com/graphql?query=x", {
+      sourceUrl: lwComment,
+    });
+    expect(ex.via).toBe("forum-adapter");
+    expect(ex.meta.title).toBe("Comment on The Case Against AI Control Research");
+    expect(ex.meta.author).toEqual(["Buck"]);
+    expect(ex.meta.published).toBe("2025-01-22");
+    expect(ex.meta.source_url).toBe(lwComment);
+    expect(ex.body).toContain("I disagree with the core claim here.");
   });
 });
 

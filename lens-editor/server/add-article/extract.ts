@@ -56,17 +56,31 @@ export interface ExtractResult {
   requiredBodyPrefixMarkdown?: string;
 }
 
-// A post is treated as a "link-out" when the body is short AND points at an
-// external canonical document. Prevents writing a useless stub to the library.
+// A post is treated as a "link-out" when the body is short AND is essentially
+// a pointer to an external canonical document: it announces where the work
+// lives ("viewable as a public google doc here"), or it links to an external
+// document and says next to nothing besides the link. A short post or comment
+// that argues in its own words and merely cites a paper is not a link-out.
+// Prevents writing a useless stub to the library.
 const LINKOUT_MAX_CHARS = 1500;
 const LINKOUT_LINK_RE =
   /https?:\/\/(docs\.google\.com\/document|drive\.google\.com|arxiv\.org\/(abs|pdf))/i;
 const LINKOUT_PHRASE_RE =
   /\b(viewable|available|published|posted|read it|find it|full (report|paper|version))\b[^.]{0,40}\b(public )?(google doc|pdf|paper|report|document)\b/i;
+// Prose left once links and bare URLs are taken out, below which a body with
+// an external-document link is only that link plus a caption.
+const LINKOUT_MAX_OWN_PROSE = 300;
 
 function looksLikeLinkOut(body: string): boolean {
   if (body.length > LINKOUT_MAX_CHARS) return false;
-  return LINKOUT_LINK_RE.test(body) || LINKOUT_PHRASE_RE.test(body);
+  if (LINKOUT_PHRASE_RE.test(body)) return true;
+  if (!LINKOUT_LINK_RE.test(body)) return false;
+  const ownProse = body
+    .replace(/!?\[[^\]]*\]\([^)]*\)/g, " ") // markdown links and images, text included
+    .replace(/<?https?:\/\/\S+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  return ownProse.length < LINKOUT_MAX_OWN_PROSE;
 }
 
 // Below this an adapter's output is treated as a mis-fire and we fall back to

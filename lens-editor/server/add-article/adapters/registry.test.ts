@@ -85,6 +85,20 @@ describe("adapter registry — resolveFetchUrls", () => {
     );
   });
 
+  it("fetches a forum comment URL from the API and GreaterWrong's comment page, never the post page", () => {
+    const urls = fetchUrls(
+      "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research?commentId=FpZmBx2Q4eswZWmy6",
+    );
+    expect(urls).toHaveLength(2);
+    expect(decodeURIComponent(urls[0])).toContain('comment(selector: {_id: "FpZmBx2Q4eswZWmy6"})');
+    expect(urls[1]).toBe(
+      "https://www.greaterwrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research/comment/FpZmBx2Q4eswZWmy6",
+    );
+    const gw =
+      "https://www.greaterwrong.com/posts/rZcyemEpBHgb2hqLP/ai-control-may-increase-existential-risk/comment/7bruHf5quFdJseAoh";
+    expect(fetchUrls(gw)).toEqual([gw]);
+  });
+
   it("vetoes an arXiv HTML candidate that redirected to the abstract landing page", () => {
     const ctx = adapterContext("https://arxiv.org/abs/1805.00899", "");
     expect(acceptsFetchedUrl(ctx, "https://arxiv.org/abs/1805.00899v2")).toBe(false);

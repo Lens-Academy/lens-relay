@@ -90,6 +90,34 @@ describe("extractArticle — link-out detection", () => {
     expect(ex.linkedOut).toBe(true);
   });
 
+  it("flags a short post that is only a caption around an arXiv link", async () => {
+    const body =
+      "<p>New paper from our team, with Jane Doe and John Roe:</p>" +
+      '<p><a href="https://arxiv.org/abs/2501.00001">Scalable Oversight via Recursive Critique</a></p>' +
+      "<p>Comments and questions welcome!</p>";
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.linkedOut).toBe(true);
+  });
+
+  // Prevents: a two-paragraph LessWrong comment rejected as a link-out
+  // because it cites one paper in passing.
+  it("does not flag a short comment that argues in its own words and cites a paper", async () => {
+    const body =
+      "<p>I buy that AI control can let an AU lab detect real incidents internally and thus hide the " +
+      "effects outside the lab. Outside view is then a green checkbox \u201csystems worked as designed\u201d, " +
+      "But AI control is often understood as measuring whether a protocol still holds under intentional " +
+      "subversion (control evals, remaining capability gap), which your story does not cover. AI control " +
+      "used by external auditors would have different effects.</p>" +
+      '<p>Also, how has your <a href="https://arxiv.org/abs/2501.16946">Gradual Disempowerment</a> argument ' +
+      "changed your view? Is AI control more or less important when the process is gradual? Or do you " +
+      "see these as strictly independent?</p>";
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain("arxiv.org/abs/2501.16946");
+    expect(ex.linkedOut).toBe(false);
+  });
+
   it("does not flag a normal full-length article", async () => {
     const body = "<p>" + "This is a genuine, full-length article body. ".repeat(60) + "</p>";
     const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");

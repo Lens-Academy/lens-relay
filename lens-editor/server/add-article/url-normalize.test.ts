@@ -18,6 +18,18 @@ describe("normalizeUrlForDedup", () => {
     expect(normalizeUrlForDedup("https://EXAMPLE.com/post#section")).toBe(key);
   });
 
+  // Prevents: a comment queued twice, once per spelling, or folded onto its post.
+  it("folds both spellings of a forum comment onto one key, distinct from the post", () => {
+    const key = normalizeUrlForDedup(
+      "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case?commentId=FpZmBx2Q4eswZWmy6",
+    );
+    expect(key).toBe("https://lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case?commentId=FpZmBx2Q4eswZWmy6");
+    expect(
+      normalizeUrlForDedup("https://www.greaterwrong.com/posts/8wBN8cdNAv3c7vt6p/the-case/comment/FpZmBx2Q4eswZWmy6"),
+    ).toBe(key);
+    expect(normalizeUrlForDedup("https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case")).not.toBe(key);
+  });
+
   // Prevents: a GreaterWrong link and its LessWrong original making two jobs.
   it("maps GreaterWrong mirror hosts to their canonical hosts", () => {
     expect(
@@ -35,6 +47,18 @@ describe("normalizeUrlForDedup", () => {
 });
 
 describe("dedupUrlVariants", () => {
+  // Prevents: re-importing a comment already stored under its other spelling.
+  it("checks a forum comment under its ?commentId= and GreaterWrong spellings", () => {
+    const v = dedupUrlVariants(
+      "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case?commentId=FpZmBx2Q4eswZWmy6",
+    );
+    expect(v).toContain("https://www.greaterwrong.com/posts/8wBN8cdNAv3c7vt6p/the-case/comment/FpZmBx2Q4eswZWmy6");
+    expect(v).not.toContain("https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case");
+    expect(
+      dedupUrlVariants("https://www.greaterwrong.com/posts/8wBN8cdNAv3c7vt6p/the-case/comment/FpZmBx2Q4eswZWmy6"),
+    ).toContain("https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case?commentId=FpZmBx2Q4eswZWmy6");
+  });
+
   it("returns each URL plus its normalized form, de-duplicated", () => {
     const variants = dedupUrlVariants(
       "https://www.greaterwrong.com/posts/abc/slug",
