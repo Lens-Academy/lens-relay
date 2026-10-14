@@ -577,7 +577,7 @@ export async function extractArticle(
       }
       const bodyPrefix = ex.bodyPrefixMarkdown?.trim();
       if (bodyPrefix && md) md = `${bodyPrefix}\n\n${md.trim()}`;
-      if (md.length >= MIN_ADAPTER_CHARS) {
+      if (md.length >= (ex.minBodyChars ?? MIN_ADAPTER_CHARS)) {
         body = md;
         chosen = {
           title: ex.title,

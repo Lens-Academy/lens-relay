@@ -46,18 +46,22 @@ export function forumCommentRef(url: string): ForumCommentRef | null {
   const m = u.pathname.match(
     /^\/posts\/([A-Za-z0-9]{8,32})((?:\/[\w-]+)?)(?:\/comment\/([A-Za-z0-9]{8,32}))?\/?$/,
   );
-  if (!m) return null;
+  // A post inside a sequence (`/s/<seq>/p/<id>`) takes `?commentId=` too.
+  const inSequence = m ? null : u.pathname.match(/^\/s\/[\w-]+\/p\/([A-Za-z0-9]{8,32})\/?$/);
+  const postId = m?.[1] ?? inSequence?.[1];
+  if (!postId) return null;
   const query = u.searchParams.get("commentId") ?? "";
-  const commentId = m[3] || (/^[A-Za-z0-9]{8,32}$/.test(query) ? query : "");
+  const commentId = m?.[3] || (/^[A-Za-z0-9]{8,32}$/.test(query) ? query : "");
   if (!commentId) return null;
-  return { host, postPath: `/posts/${m[1]}${m[2]}`, postId: m[1], commentId };
+  return { host, postPath: `/posts/${postId}${m?.[2] ?? ""}`, postId, commentId };
 }
 
 /** GreaterWrong permalink of a comment: its own page shows just that comment
  *  thread. LW/AF comments live at the apex host, EA Forum ones at `ea.`. */
 export function greaterWrongCommentUrl(ref: ForumCommentRef): string {
   const ea = ref.host === "forum.effectivealtruism.org" || ref.host === "ea.greaterwrong.com";
-  if (!ea && ref.host.endsWith(".greaterwrong.com") && ref.host !== "www.greaterwrong.com") return "";
+  // Other mirror subdomains (arbital.) are not ForumMagnum mirrors.
+  if (!ea && ref.host.endsWith(".greaterwrong.com")) return "";
   return `https://${ea ? "ea" : "www"}.greaterwrong.com${ref.postPath}/comment/${ref.commentId}`;
 }
 
@@ -259,10 +263,65 @@ export function forumApiAnswerToHtml(json: string, canonicalUrl = ""): string {
 }
 
 /** GreaterWrong branch: mirror pages are server-rendered with their own DOM. */
+/** A GreaterWrong date element as YYYY-MM-DD ("" when it has none). */
+function greaterWrongDate(dateEl: Element | null): string {
+  // The epoch in data-js-date first; the text ("7 Apr 2021 20:12 UTC") is
+  // the fallback.
+  const epochMs = Number(dateEl?.getAttribute("data-js-date"));
+  if (Number.isFinite(epochMs) && epochMs > 0) {
+    return new Date(epochMs).toISOString().slice(0, 10);
+  }
+  if (dateEl?.textContent) {
+    // Parse WITH the "UTC" suffix first — stripping it made Date.parse read
+    // the timestamp as local time and toISOString() shift it, an off-by-one
+    // day near midnight on non-UTC hosts. Stripping is only the last resort.
+    const raw = dateEl.textContent.trim();
+    let t = Date.parse(raw);
+    if (Number.isNaN(t)) t = Date.parse(raw.replace(/\s+UTC\s*$/i, ""));
+    if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
+  }
+  return "";
+}
+
+/**
+ * GreaterWrong comment page (`/posts/<id>/<slug>/comment/<id>`): no post body,
+ * a heading "<user> comments on <post title>", then the comment's thread. Only
+ * the permalinked comment is the article: its own body, byline, date and "LW"
+ * link (the `?commentId=` URL), never the replies nested under it.
+ */
+function extractGreaterWrongComment(
+  doc: Document,
+  ctx: AdapterContext,
+  commentId: string,
+): AdapterExtract | null {
+  const item = doc.getElementById(`comment-${commentId}`);
+  const comment = item?.querySelector(":scope > .comment");
+  const bodyEl = comment?.querySelector(":scope > .body-text.comment-body");
+  if (!comment || !bodyEl || !bodyEl.innerHTML.trim()) return null;
+  canonicalizeMirrorLinks(bodyEl, ctx.url);
+  const meta = comment.querySelector(":scope > .comment-meta");
+  const postTitle = (doc.querySelector("h1.post-title a")?.textContent || "").trim();
+  const author = cleanAuthorName(meta?.querySelector("a.author")?.textContent || "");
+  const canonical = meta?.querySelector("a.lw2-link")?.getAttribute("href")?.trim() || "";
+  return {
+    bodyHtml: bodyEl.innerHTML,
+    title: postTitle ? `Comment on ${postTitle}` : "",
+    author: author ? [author] : [],
+    published: greaterWrongDate(meta?.querySelector(".date") ?? null),
+    canonicalUrl: /^https:\/\/(www\.)?(lesswrong\.com|alignmentforum\.org|forum\.effectivealtruism\.org)\//.test(canonical)
+      ? canonical
+      : undefined,
+    // The comment is the whole source: a short one is not a mis-fire.
+    minBodyChars: 1,
+  };
+}
+
 function extractGreaterWrong(
   doc: Document,
   ctx: AdapterContext,
 ): AdapterExtract | null {
+  const commentRef = forumCommentRef(ctx.url);
+  if (commentRef) return extractGreaterWrongComment(doc, ctx, commentRef.commentId);
   const bodyEl = doc.querySelector(".body-text.post-body");
   if (!bodyEl || !bodyEl.innerHTML.trim()) return null;
   canonicalizeMirrorLinks(bodyEl, ctx.url);
@@ -281,24 +340,10 @@ function extractGreaterWrong(
     .map((a) => cleanAuthorName(a.textContent || ""))
     .filter(Boolean);
 
-  // The post date carries the epoch in data-js-date; the text ("7 Apr 2021
-  // 20:12 UTC") is the fallback. Comments have dates too — scope to post-meta.
-  let published = "";
-  const dateEl =
-    doc.querySelector(".top-post-meta .date") ||
-    doc.querySelector(".post-meta .date");
-  const epochMs = Number(dateEl?.getAttribute("data-js-date"));
-  if (Number.isFinite(epochMs) && epochMs > 0) {
-    published = new Date(epochMs).toISOString().slice(0, 10);
-  } else if (dateEl?.textContent) {
-    // Parse WITH the "UTC" suffix first — stripping it made Date.parse read
-    // the timestamp as local time and toISOString() shift it, an off-by-one
-    // day near midnight on non-UTC hosts. Stripping is only the last resort.
-    const raw = dateEl.textContent.trim();
-    let t = Date.parse(raw);
-    if (Number.isNaN(t)) t = Date.parse(raw.replace(/\s+UTC\s*$/i, ""));
-    if (!Number.isNaN(t)) published = new Date(t).toISOString().slice(0, 10);
-  }
+  // Comments have dates too — scope to post-meta.
+  const published = greaterWrongDate(
+    doc.querySelector(".top-post-meta .date") || doc.querySelector(".post-meta .date"),
+  );
 
   // "LW link" → the canonical ForumMagnum URL. Fallback: map the mirror host
   // (paths are identical on both sides), so a mirror import is never cited as
@@ -382,6 +427,9 @@ export const forumMagnumAdapter: SiteAdapter = {
           .map((a) => cleanAuthorName(a.getAttribute("content") || ""))
           .filter(Boolean),
         published: (doc.head.querySelector('meta[name="lens-forum-posted"]')?.getAttribute("content") || "").slice(0, 10),
+        // The API answer is the whole post or comment: a short comment is
+        // its full text, not a mis-fire.
+        minBodyChars: 1,
       };
     }
 
@@ -390,6 +438,15 @@ export const forumMagnumAdapter: SiteAdapter = {
     if (/(^|\.)greaterwrong\.com$/.test(ctx.host) || doc.querySelector(".body-text.post-body")) {
       const gw = extractGreaterWrong(doc, ctx);
       if (gw) return gw;
+    }
+
+    // A comment URL whose page did not yield the comment alone: a forum page
+    // for `?commentId=` is the whole post (comments load client-side), a
+    // GreaterWrong thread page without the comment would be scraped with its
+    // replies. Importing either files the wrong text under the comment's URL,
+    // so fail; the API and GreaterWrong's comment page are the sources.
+    if (forumCommentRef(ctx.url)) {
+      throw new Error("This page does not hold the linked comment on its own; the comment could not be fetched");
     }
 
     // Wiki/tag pages (lesswrong.com/w/<slug>) have no post body: their text
