@@ -8,6 +8,7 @@ import { getPlatformUrl } from '../lib/platform-url';
 import { extractFrontmatter } from '../lib/frontmatter';
 import { shortUuid } from '../lib/url-utils';
 import { RELAY_ID } from '../App';
+import { useDocTabTitle } from '../hooks/useDocTabTitle';
 
 interface DocumentTitleProps {
   currentDocId: string;
@@ -38,11 +39,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
     setRenameError(null);
   }, [displayName]);
 
-  // Update browser tab title to reflect current document
-  useEffect(() => {
-    document.title = displayName ? `${displayName} - Editor` : 'Editor';
-    return () => { document.title = 'Editor'; };
-  }, [displayName]);
+  useDocTabTitle(currentDocId);
 
   // Auto-focus and select when document was just created via instant-create
   useEffect(() => {

@@ -5,6 +5,7 @@ import { MobileDrawer } from '../Mobile/MobileDrawer';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { useMobile } from '../../contexts/MobileContext';
 import { ResizeHandle } from './ResizeHandle';
+import { useDocTabTitle } from '../../hooks/useDocTabTitle';
 
 /**
  * An HTML page beside the right sidebar a Markdown document has in EditorArea,
@@ -16,6 +17,7 @@ export function HtmlDocumentLayout({ docId, children }: { docId: string; childre
   const { manager } = useSidebar();
   const { isMobile, activeDrawer, closeDrawer, setDocPanelsAvailable } = useMobile();
   const rightCollapsed = manager.collapsedState['right-sidebar'] ?? false;
+  useDocTabTitle(docId);
 
   // Shows the phone's bottom-bar buttons for the comments and backlinks drawers
   useEffect(() => {
