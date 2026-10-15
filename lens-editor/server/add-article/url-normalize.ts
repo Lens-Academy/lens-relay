@@ -30,21 +30,22 @@ export function normalizeUrlForDedup(raw: string): string {
   if (u.protocol !== "http:" && u.protocol !== "https:") return raw.trim();
 
   u.protocol = "https:"; // http/https variants are the same document
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  // GreaterWrong's comment permalinks (a /comment/<cid> path or a
+  // #comment-<cid> anchor) are ForumMagnum's ?commentId= — the form stored as
+  // source_url — so every spelling of one comment shares one key.
+  if (host.endsWith("greaterwrong.com")) {
+    const path = u.pathname.match(/^(\/posts\/[^/]+(?:\/[^/]+)?)\/comment\/([\w-]+)\/?$/);
+    const anchor = u.hash.match(/^#comment-([\w-]+)$/);
+    if (path) u.pathname = path[1];
+    const commentId = path?.[2] ?? anchor?.[1];
+    if (commentId) u.searchParams.set("commentId", commentId);
+  }
   u.hash = "";
   u.port = "";
   u.username = "";
   u.password = "";
-  const host = u.hostname.toLowerCase().replace(/^www\./, "");
   u.hostname = canonicalHost(host);
-  // GreaterWrong's comment permalink path is ForumMagnum's ?commentId= (the
-  // form stored as source_url), so both spellings share one key.
-  const gwComment =
-    host.endsWith("greaterwrong.com") &&
-    u.pathname.match(/^(\/posts\/[^/]+(?:\/[^/]+)?)\/comment\/([\w-]+)\/?$/);
-  if (gwComment) {
-    u.pathname = gwComment[1];
-    u.searchParams.set("commentId", gwComment[2]);
-  }
 
   const kept = [...u.searchParams.entries()].filter(
     ([k]) => !TRACKING_PARAM_RE.test(k),

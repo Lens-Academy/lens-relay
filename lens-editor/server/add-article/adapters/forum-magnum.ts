@@ -338,21 +338,23 @@ export const forumMagnumAdapter: SiteAdapter = {
    * direct LW/AF/EAF import) or the mirror page's own "LW link".
    */
   resolveFetchUrls(ctx: AdapterContext): string[] {
-    // A GreaterWrong URL is read through the canonical forum's API too: the
-    // mirror is not always up.
+    // Every spelling is read through its canonical forum form (a GreaterWrong
+    // URL, comment path or #comment- anchor alike): the mirror is not always
+    // up, so its pages are a fallback behind the forum's API.
     const forumUrl = greaterWrongCanonicalSourceUrl(ctx.url) || ctx.url;
     const api = forumGraphqlUrl(forumUrl);
-    const mirror = greaterWrongMirrorUrl(ctx.url);
-    // The forum's own page for a ?commentId= permalink renders the whole
-    // post, so a comment is read only from the API or the mirror's comment page.
-    const isComment = (() => {
-      try {
-        return !!forumCommentId(new URL(ctx.url));
-      } catch {
-        return false;
-      }
-    })();
-    return [api, isComment ? "" : ctx.url, mirror].filter(Boolean);
+    const mirror = greaterWrongMirrorUrl(forumUrl);
+    let isComment = false;
+    try {
+      isComment = !!forumCommentId(new URL(forumUrl));
+    } catch {
+      /* invalid URL */
+    }
+    // A comment is read only from the API or the mirror's comment page: the
+    // forum's page (and the mirror's post page) render the whole post.
+    // A GreaterWrong post is covered by `mirror` already.
+    const page = isComment || (mirror && forumUrl !== ctx.url) ? "" : ctx.url;
+    return [...new Set([api, page, mirror].filter(Boolean))];
   },
 
   fetchAccept(candidateUrl: string): string | undefined {

@@ -33,6 +33,13 @@ describe("normalizeUrlForDedup", () => {
     expect(
       normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug/comment/Cmt1"),
     ).toBe(normalizeUrlForDedup("https://www.lesswrong.com/posts/abc/slug?commentId=Cmt1"));
+    expect(
+      normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug#comment-Cmt1"),
+    ).toBe(normalizeUrlForDedup("https://www.lesswrong.com/posts/abc/slug?commentId=Cmt1"));
+    // A plain fragment on the mirror is still not a different document.
+    expect(normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug#section")).toBe(
+      "https://lesswrong.com/posts/abc/slug",
+    );
   });
 
   it("passes through non-http(s) and malformed input unchanged", () => {

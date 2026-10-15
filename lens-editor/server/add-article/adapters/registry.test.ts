@@ -96,7 +96,14 @@ describe("adapter registry — resolveFetchUrls", () => {
     const gw = "https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we/comment/CmtId1234567";
     const gwUrls = fetchUrls(gw);
     expect(decodeURIComponent(gwUrls[0])).toContain('comment(selector: {_id: "CmtId1234567"})');
-    expect(gwUrls[1]).toBe(gw);
+    expect(gwUrls).toEqual([gwUrls[0], gw]);
+    // The #comment- anchor spelling must not fall back to the mirror's post page.
+    const anchored = fetchUrls("https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we#comment-CmtId1234567");
+    expect(anchored).toEqual(gwUrls);
+    // A GreaterWrong post: canonical API first, then the mirror page.
+    const gwPost = fetchUrls("https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we");
+    expect(decodeURIComponent(gwPost[0])).toContain('post(selector: {_id: "TTFsKxQThrqgWeXYJ"})');
+    expect(gwPost.slice(1)).toEqual(["https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we"]);
   });
 
   it("vetoes an arXiv HTML candidate that redirected to the abstract landing page", () => {
