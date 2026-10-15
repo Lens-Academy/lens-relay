@@ -44,14 +44,20 @@ describe("greaterWrongCanonicalSourceUrl", () => {
     expect(greaterWrongCanonicalSourceUrl("https://arbital.greaterwrong.com/p/consequentialist")).toBe("");
     expect(greaterWrongCanonicalSourceUrl("not a url")).toBe("");
   });
+
+  it("treats only well-formed ids as comments", () => {
+    expect(greaterWrongCanonicalSourceUrl("https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/x/comment/abc_12")).toBe(
+      "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/x/comment/abc_12",
+    );
+  });
 });
 
 describe("canonicalizeMirrorLinks", () => {
   it("rewrites body links, comment anchors and comment paths alike", () => {
     const base = "https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-story/comment/CmtId123";
     const dom = new JSDOM(`<body>
-      <a id="a" href="https://www.greaterwrong.com/posts/p1/slug#comment-C1">anchor</a>
-      <a id="b" href="/posts/p2/slug/comment/C2">path</a>
+      <a id="a" href="https://www.greaterwrong.com/posts/p1/slug#comment-CmtId0001">anchor</a>
+      <a id="b" href="/posts/p2/slug/comment/CmtId0002">path</a>
       <a id="c" href="https://www.greaterwrong.com/posts/p3/slug#section">section</a>
       <a id="d" href="#comment-C4">in-page</a>
       <a id="e" href="https://example.org/posts/p5/comment/C5">external</a>
@@ -59,8 +65,8 @@ describe("canonicalizeMirrorLinks", () => {
     const doc = dom.window.document;
     canonicalizeMirrorLinks(doc.body as unknown as Element, base);
     const href = (id: string) => doc.getElementById(id)!.getAttribute("href");
-    expect(href("a")).toBe("https://www.lesswrong.com/posts/p1/slug?commentId=C1");
-    expect(href("b")).toBe("https://www.lesswrong.com/posts/p2/slug?commentId=C2");
+    expect(href("a")).toBe("https://www.lesswrong.com/posts/p1/slug?commentId=CmtId0001");
+    expect(href("b")).toBe("https://www.lesswrong.com/posts/p2/slug?commentId=CmtId0002");
     expect(href("c")).toBe("https://www.lesswrong.com/posts/p3/slug#section");
     expect(href("d")).toBe("#comment-C4");
     expect(href("e")).toBe("https://example.org/posts/p5/comment/C5");

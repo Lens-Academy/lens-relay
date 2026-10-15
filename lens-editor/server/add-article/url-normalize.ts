@@ -35,10 +35,12 @@ export function normalizeUrlForDedup(raw: string): string {
   // #comment-<cid> anchor) are ForumMagnum's ?commentId= — the form stored as
   // source_url — so every spelling of one comment shares one key.
   if (host.endsWith("greaterwrong.com")) {
-    const path = u.pathname.match(/^(\/posts\/[^/]+(?:\/[^/]+)?)\/comment\/([\w-]+)\/?$/);
-    const anchor = u.hash.match(/^#comment-([\w-]+)$/);
+    // Same id rule and precedence (anchor over path) as the stored form,
+    // forum-magnum's greaterWrongCanonicalSourceUrl.
+    const path = u.pathname.match(/^(\/posts\/[^/]+(?:\/[^/]+)?)\/comment\/([A-Za-z0-9]{8,32})\/?$/);
+    const anchor = u.hash.match(/^#comment-([A-Za-z0-9]{8,32})$/);
     if (path) u.pathname = path[1];
-    const commentId = path?.[2] ?? anchor?.[1];
+    const commentId = anchor?.[1] ?? path?.[2];
     if (commentId) u.searchParams.set("commentId", commentId);
   }
   u.hash = "";

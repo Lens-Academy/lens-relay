@@ -489,6 +489,8 @@ interface Chosen {
   canonicalUrl?: string;
   /** True for a site adapter (owns its byline/date); false for the generic path. */
   adapterAuthored: boolean;
+  /** The adapter extracted a whole forum post (see AdapterExtract.wholePost). */
+  wholePost?: boolean;
   requiredBodyPrefixMarkdown?: string;
 }
 
@@ -577,6 +579,7 @@ export async function extractArticle(
           via: adapter.id,
           siteName: ex.siteName,
           canonicalUrl: ex.canonicalUrl,
+          wholePost: ex.wholePost,
           adapterAuthored: true,
           requiredBodyPrefixMarkdown: bodyPrefix,
         };
@@ -784,6 +787,12 @@ export async function extractArticle(
   // submitted comment permalink stays the comment even if the page declares
   // its post as canonical (else two comments on one post collide in dedup).
   const sourceComment = greaterWrongCanonicalSourceUrl(sourceUrl);
+  if (sourceComment.includes("?commentId=") && chosen.wholePost) {
+    // A fragment never reaches the server, so a #comment- URL can come back
+    // as the post page: storing that under the comment's permalink would
+    // cite (and dedup-block) the comment with the post's text.
+    throw new Error("Fetched the whole post, not the comment the URL names");
+  }
   const citedUrl = sourceComment.includes("?commentId=")
     ? sourceComment
     : canonical || sourceUrl;

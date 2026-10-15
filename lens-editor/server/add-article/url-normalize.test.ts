@@ -31,11 +31,11 @@ describe("normalizeUrlForDedup", () => {
   // Prevents: a GreaterWrong comment re-submit missing its stored ?commentId= source_url.
   it("folds GreaterWrong comment paths onto the ?commentId= form", () => {
     expect(
-      normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug/comment/Cmt1"),
-    ).toBe(normalizeUrlForDedup("https://www.lesswrong.com/posts/abc/slug?commentId=Cmt1"));
+      normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug/comment/CmtId0001"),
+    ).toBe(normalizeUrlForDedup("https://www.lesswrong.com/posts/abc/slug?commentId=CmtId0001"));
     expect(
-      normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug#comment-Cmt1"),
-    ).toBe(normalizeUrlForDedup("https://www.lesswrong.com/posts/abc/slug?commentId=Cmt1"));
+      normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug#comment-CmtId0001"),
+    ).toBe(normalizeUrlForDedup("https://www.lesswrong.com/posts/abc/slug?commentId=CmtId0001"));
     // A plain fragment on the mirror is still not a different document.
     expect(normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug#section")).toBe(
       "https://lesswrong.com/posts/abc/slug",

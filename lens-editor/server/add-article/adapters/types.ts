@@ -77,6 +77,9 @@ export interface AdapterExtract {
    *  (e.g. a GreaterWrong page's "LW link"). Recorded as source_url instead of
    *  the mirror URL, and checked during duplicate detection. */
   canonicalUrl?: string;
+  /** True when the extracted text is a whole forum post (not one of its
+   *  comments): a comment permalink must never be cited for it. */
+  wholePost?: boolean;
 }
 
 export interface SiteAdapter {

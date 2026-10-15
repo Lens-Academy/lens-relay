@@ -43,10 +43,13 @@ export function greaterWrongMirrorUrl(url: string): string {
   return "";
 }
 
+/** A ForumMagnum document id (the only form allowed into an API query). */
+const FORUM_ID_RE = /^[A-Za-z0-9]{8,32}$/;
+
 /** The `?commentId=` of a ForumMagnum comment permalink ("" if none, or not an id). */
 function forumCommentId(u: URL): string {
   const id = u.searchParams.get("commentId") || "";
-  return /^[A-Za-z0-9]{8,32}$/.test(id) ? id : "";
+  return FORUM_ID_RE.test(id) ? id : "";
 }
 
 /**
@@ -84,8 +87,9 @@ function canonicalForumUrl(url: string, baseUrl: string | undefined, bare: boole
   else if (host === "ea.greaterwrong.com") u.hostname = "forum.effectivealtruism.org";
   else return ""; // arbital.greaterwrong.com, unknown subdomains, non-mirror hosts
   u.protocol = "https:";
-  const commentPath = u.pathname.match(/^(\/posts\/[^/]+(?:\/[^/]+)?)\/comment\/([\w-]+)\/?$/);
-  const commentHash = u.hash.match(/^#comment-([\w-]+)$/);
+  // Only well-formed ids count as comments, as everywhere else in this file.
+  const commentPath = u.pathname.match(/^(\/posts\/[^/]+(?:\/[^/]+)?)\/comment\/([A-Za-z0-9]{8,32})\/?$/);
+  const commentHash = u.hash.match(/^#comment-([A-Za-z0-9]{8,32})$/);
   if (commentPath) {
     u.pathname = commentPath[1];
     u.searchParams.set("commentId", commentPath[2]);
@@ -252,6 +256,7 @@ export function forumApiAnswerToHtml(json: string, canonicalUrl = ""): string {
     ...authors.map((name) => `<meta name="lens-forum-author" content="${escapeHtml(name)}">`),
     post?.postedAt ? `<meta name="lens-forum-posted" content="${escapeHtml(post.postedAt)}">` : "",
     `<meta name="lens-forum-title" content="${escapeHtml(title)}">`,
+    comment ? '<meta name="lens-forum-kind" content="comment">' : "",
     "</head><body>",
     `<div class="lens-forum-body">${body}</div>`,
     "</body></html>",
@@ -317,6 +322,7 @@ function extractGreaterWrong(
     author: Array.from(new Set(authors)),
     published,
     canonicalUrl: /^https?:\/\//.test(canonical) ? canonical : undefined,
+    wholePost: true,
   };
 }
 
@@ -380,6 +386,7 @@ export const forumMagnumAdapter: SiteAdapter = {
           .map((a) => cleanAuthorName(a.getAttribute("content") || ""))
           .filter(Boolean),
         published: (doc.head.querySelector('meta[name="lens-forum-posted"]')?.getAttribute("content") || "").slice(0, 10),
+        wholePost: !doc.head.querySelector('meta[name="lens-forum-kind"][content="comment"]'),
       };
     }
 
@@ -437,6 +444,7 @@ export const forumMagnumAdapter: SiteAdapter = {
       title,
       author: Array.from(new Set(authors)),
       published,
+      wholePost: true,
     };
   },
 };

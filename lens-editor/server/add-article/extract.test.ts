@@ -850,6 +850,14 @@ describe("extractArticle — GreaterWrong mirror", () => {
     expect(ex.body).not.toContain("must not leak");
   });
 
+  // Prevents: a #comment- URL (the fragment never reaches the server) coming
+  // back as the post page and the whole post being stored as the comment.
+  it("refuses the post page for a comment permalink", async () => {
+    await expect(
+      extractArticle(GW_SHELL(), GW_URL, { sourceUrl: `${GW_URL}#comment-CmtId1234567` }),
+    ).rejects.toThrow(/whole post, not the comment/);
+  });
+
   it("maps the mirror host to the canonical host when the LW link is missing", async () => {
     const ex = await extractArticle(GW_SHELL({ lw2Link: false }), GW_URL);
     expect(ex.meta.source_url).toBe(
