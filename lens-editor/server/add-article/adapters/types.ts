@@ -77,6 +77,11 @@ export interface AdapterExtract {
    *  (e.g. a GreaterWrong page's "LW link"). Recorded as source_url instead of
    *  the mirror URL, and checked during duplicate detection. */
   canonicalUrl?: string;
+  /** Shortest body this result is trusted at. Defaults to the extractor's
+   *  mis-fire floor; an adapter whose source holds exactly the article (a
+   *  forum API answer, a single comment) sets it lower, so a short comment
+   *  is not dropped for a generic scrape of the page. */
+  minBodyChars?: number;
 }
 
 export interface SiteAdapter {
