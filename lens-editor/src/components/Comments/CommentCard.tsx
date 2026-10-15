@@ -225,7 +225,7 @@ export function CommentCard(props: CommentCardProps): ReactElement {
 
 // ---------------------------------------------------------------------------
 // CommentRow — renders a single comment with author, timestamp, content,
-// and owner-only Edit / Delete actions.
+// author-only Edit, and Delete for the author or (canDelete) anyone with edit access.
 // ---------------------------------------------------------------------------
 
 interface CommentRowProps {
@@ -239,6 +239,7 @@ function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const { author, body, timestamp, canModify } = message;
+  const canDelete = message.canDelete ?? canModify;
 
   if (editing) {
     return (
@@ -270,19 +271,23 @@ function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
         )}
       </div>
       <p className="text-[13px] leading-relaxed text-gray-800 whitespace-pre-wrap">{body}</p>
-      {canModify && (
+      {(canModify || canDelete) && (
         <div className="mt-1 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setEditing(true);
-            }}
-            className="text-[11px] text-gray-500 hover:text-blue-700"
-          >
-            Edit
-          </button>
-          <span className="text-gray-300">·</span>
+          {canModify && (
+            <>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditing(true);
+                }}
+                className="text-[11px] text-gray-500 hover:text-blue-700"
+              >
+                Edit
+              </button>
+              <span className="text-gray-300">·</span>
+            </>
+          )}
           <button
             type="button"
             onClick={(e) => {
@@ -297,7 +302,11 @@ function CommentRow({ message, onEdit, onDelete }: CommentRowProps) {
             open={deleteOpen}
             onOpenChange={setDeleteOpen}
             title="Delete comment"
-            description="Are you sure you want to delete this comment? This cannot be undone."
+            description={
+              canModify
+                ? 'Are you sure you want to delete this comment? This cannot be undone.'
+                : `Delete ${author}'s comment for everyone? Do this once it is addressed. This cannot be undone.`
+            }
             onConfirm={() => {
               setDeleteOpen(false);
               onDelete(message);

@@ -107,6 +107,27 @@ describe('CommentCard', () => {
     expect(onDelete).toHaveBeenCalledWith(t.root);
   });
 
+  it("offers Delete but not Edit on someone else's comment when canDelete", () => {
+    const t = thread({ root: message({ canModify: false, canDelete: true }) });
+    const onDelete = vi.fn();
+    render(
+      <CommentCard
+        thread={t}
+        focused
+        onFocus={vi.fn()}
+        onReply={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={onDelete}
+      />
+    );
+    expect(screen.queryByText('Edit')).toBeNull();
+    fireEvent.click(screen.getByText('Delete'));
+    expect(screen.getByText(/Delete Alice's comment for everyone/)).toBeInTheDocument();
+    const dialogButtons = screen.getAllByText('Delete');
+    fireEvent.click(dialogButtons[dialogButtons.length - 1]);
+    expect(onDelete).toHaveBeenCalledWith(t.root);
+  });
+
   it('Reply flow calls onReply(thread, body)', () => {
     const t = thread();
     const onReply = vi.fn();
