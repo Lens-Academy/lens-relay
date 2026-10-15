@@ -10,6 +10,11 @@ import { normalizeArticleDom, isIntraWord } from "./normalize-dom";
 import { escapeTagOpeners } from "./escape";
 import { convertSidenotes } from "./sidenotes";
 import { arxivAbsUrl } from "./adapters/arxiv";
+import {
+  canonicalizeMirrorLinks,
+  greaterWrongCanonicalSourceUrl,
+  greaterWrongCanonicalUrl,
+} from "./adapters/forum-magnum";
 import { LITERAL_DOLLAR_ATTR } from "./adapters/util";
 import { SOURCE_IMAGE_SCHEME } from "./arxiv-latex";
 import {
@@ -584,6 +589,14 @@ export async function extractArticle(
   //    mis-selects the container or drops the lede; Readability is the safety
   //    net against gross under-extraction.
   if (!chosen) {
+    // A GreaterWrong page the forum adapter could not read (a comment
+    // permalink has no post body) still cites the canonical forum in its
+    // body: rewrite mirror links before the generic extractors see them.
+    if (greaterWrongCanonicalUrl(url)) {
+      const dom = new JSDOM(html, { url });
+      canonicalizeMirrorLinks(dom.window.document.documentElement as unknown as Element, url);
+      html = dom.serialize();
+    }
     const candidates: {
       bodyHtml: string;
       title: string;
@@ -766,12 +779,15 @@ export async function extractArticle(
     usableCanonical(chosen.canonicalUrl) ||
     (fetchRedirected || !sameSite ? "" : usableCanonical(htmlMeta.canonicalUrl));
 
+  // GreaterWrong is a mirror (and not always up): whichever extraction path
+  // ran, cite the canonical forum URL, comment permalinks as ?commentId=.
+  const citedUrl = canonical || sourceUrl;
   const meta: ArticleMeta = {
     title:
       chosen.title ||
       stripSiteSuffix(htmlMeta.title, { url, siteName: htmlMeta.siteName }),
     author,
-    source_url: canonical || sourceUrl,
+    source_url: greaterWrongCanonicalSourceUrl(citedUrl) || citedUrl,
     published,
     description: htmlMeta.description,
   };

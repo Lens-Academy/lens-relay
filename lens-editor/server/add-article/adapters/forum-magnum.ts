@@ -39,37 +39,70 @@ export function greaterWrongMirrorUrl(url: string): string {
 }
 
 /**
- * Rewrite mirror-host links in a GreaterWrong body to their canonical hosts,
- * so a mirror-fetched article cites lesswrong.com / forum.effectivealtruism.org
- * in its BODY as well as its source_url. Paths are identical on both sides.
- * Also converts GreaterWrong's `#comment-<id>` permalink fragments to the
- * ForumMagnum `?commentId=<id>` form, which the canonical sites resolve.
- * `arbital.greaterwrong.com` is left alone — it is the readable mirror of a
+ * The canonical ForumMagnum form of a GreaterWrong mirror URL, or "" when
+ * `url` is not one. The mirror host maps to its canonical host (paths are
+ * identical on both sides), and GreaterWrong's comment permalinks — the
+ * `/posts/<id>/<slug>/comment/<cid>` path and the `#comment-<cid>` fragment —
+ * become ForumMagnum's `?commentId=<cid>`, which the canonical sites resolve.
+ * `arbital.greaterwrong.com` is not mapped — it is the readable mirror of a
  * defunct site, so it IS the best available destination.
+ */
+export function greaterWrongCanonicalUrl(url: string, baseUrl?: string): string {
+  return canonicalForumUrl(url, baseUrl, false);
+}
+
+/**
+ * `greaterWrongCanonicalUrl` for a document's identity (its source_url): only
+ * the post path and the comment id survive — mirror view parameters and
+ * fragments do not name a different document.
+ */
+export function greaterWrongCanonicalSourceUrl(url: string): string {
+  return canonicalForumUrl(url, undefined, true);
+}
+
+function canonicalForumUrl(url: string, baseUrl: string | undefined, bare: boolean): string {
+  let u: URL;
+  try {
+    u = new URL(url, baseUrl);
+  } catch {
+    return "";
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "";
+  const host = u.hostname.replace(/^www\./, "").toLowerCase();
+  if (host === "greaterwrong.com") u.hostname = "www.lesswrong.com";
+  else if (host === "ea.greaterwrong.com") u.hostname = "forum.effectivealtruism.org";
+  else return ""; // arbital.greaterwrong.com, unknown subdomains, non-mirror hosts
+  u.protocol = "https:";
+  const commentPath = u.pathname.match(/^(\/posts\/[^/]+(?:\/[^/]+)?)\/comment\/([\w-]+)\/?$/);
+  const commentHash = u.hash.match(/^#comment-([\w-]+)$/);
+  if (commentPath) {
+    u.pathname = commentPath[1];
+    u.searchParams.set("commentId", commentPath[2]);
+  }
+  if (commentHash) u.searchParams.set("commentId", commentHash[1]);
+  if (commentPath || commentHash) u.hash = "";
+  if (bare) {
+    const commentId = u.searchParams.get("commentId");
+    u.search = "";
+    u.hash = "";
+    if (commentId) u.searchParams.set("commentId", commentId);
+  }
+  return u.href;
+}
+
+/**
+ * Rewrite mirror-host links in a GreaterWrong body to their canonical hosts
+ * (see `greaterWrongCanonicalUrl`), so a mirror-fetched article cites
+ * lesswrong.com / forum.effectivealtruism.org in its BODY as well as its
+ * source_url. Relative hrefs resolve against the mirror base and are caught
+ * too; in-page anchors and links to any non-mirror host are left untouched.
  */
 export function canonicalizeMirrorLinks(root: Element, baseUrl: string): void {
   root.querySelectorAll("a[href]").forEach((a) => {
     const href = a.getAttribute("href") || "";
     if (!href || href.startsWith("#")) return; // in-page anchors stay
-    let u: URL;
-    try {
-      u = new URL(href, baseUrl);
-    } catch {
-      return;
-    }
-    if (u.protocol !== "https:" && u.protocol !== "http:") return;
-    const host = u.hostname.replace(/^www\./, "").toLowerCase();
-    // Relative hrefs resolve against the mirror base and are caught here too;
-    // links that resolve to any non-mirror host are left untouched.
-    if (host === "greaterwrong.com") u.hostname = "www.lesswrong.com";
-    else if (host === "ea.greaterwrong.com") u.hostname = "forum.effectivealtruism.org";
-    else return; // arbital.greaterwrong.com, unknown subdomains, non-mirror hosts
-    const comment = u.hash.match(/^#comment-([\w-]+)$/);
-    if (comment) {
-      u.hash = "";
-      u.searchParams.set("commentId", comment[1]);
-    }
-    a.setAttribute("href", u.href);
+    const canonical = greaterWrongCanonicalUrl(href, baseUrl);
+    if (canonical) a.setAttribute("href", canonical);
   });
 }
 
@@ -239,19 +272,7 @@ function extractGreaterWrong(
       .querySelector(".top-post-meta a.lw2-link, .post-meta a.lw2-link")
       ?.getAttribute("href")
       ?.trim() || "";
-  if (!/^https?:\/\//.test(canonical)) {
-    try {
-      const u = new URL(ctx.url);
-      const host = u.hostname.replace(/^www\./, "").toLowerCase();
-      if (host === "ea.greaterwrong.com") {
-        canonical = `https://forum.effectivealtruism.org${u.pathname}`;
-      } else if (host.endsWith("greaterwrong.com")) {
-        canonical = `https://www.lesswrong.com${u.pathname}`;
-      }
-    } catch {
-      canonical = "";
-    }
-  }
+  if (!/^https?:\/\//.test(canonical)) canonical = greaterWrongCanonicalSourceUrl(ctx.url);
 
   return {
     bodyHtml: bodyEl.innerHTML,

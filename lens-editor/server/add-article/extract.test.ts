@@ -1046,6 +1046,50 @@ describe("extractArticle — GreaterWrong mirror body-link canonicalization", ()
   });
 });
 
+describe("extractArticle — GreaterWrong comment permalink (generic path)", () => {
+  // Learner reports #238/#242: a comment page has no `.body-text.post-body`,
+  // so the forum adapter declines and the generic extractors ran — which kept
+  // the mirror URL as source_url and mirror links in the body.
+  const GW_COMMENT_URL =
+    "https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story/comment/CmtId123";
+  const GW_COMMENT_SHELL = `
+<!doctype html><html><head><title>paulfchristiano comments on Another (outer) alignment failure story</title></head><body><main>
+  <article>
+    <h1>paulfchristiano comments on Another (outer) alignment failure story</h1>
+    <div class="comment">
+      <a class="author" href="/users/paulfchristiano">paulfchristiano</a>
+      <div class="body-text comment-body">
+        <p>${"The comment itself is the article a learner reads here. ".repeat(20)}
+        See <a href="https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story#comment-Other456">this reply</a>
+        and <a href="/posts/xyz987aaa11/third-post">the earlier post</a>.
+        ${"More of the comment's argument follows in plain prose. ".repeat(10)}</p>
+      </div>
+    </div>
+  </article>
+</main></body></html>`;
+
+  it("cites the LessWrong ?commentId= permalink and rewrites body links", async () => {
+    const ex = await extractArticle(GW_COMMENT_SHELL, GW_COMMENT_URL);
+    expect(ex.via).not.toBe("forum-adapter");
+    expect(ex.meta.source_url).toBe(
+      "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story?commentId=CmtId123",
+    );
+    expect(ex.body).toContain(
+      "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story?commentId=Other456",
+    );
+    expect(ex.body).toContain("https://www.lesswrong.com/posts/xyz987aaa11/third-post");
+    expect(ex.body).not.toContain("greaterwrong.com");
+  });
+
+  it("leaves a non-GreaterWrong source_url unchanged", async () => {
+    const html = GW_COMMENT_SHELL.replace(/www\.greaterwrong\.com/g, "example.com");
+    const url = "https://example.com/posts/AyNHoTWWAJ5eb99ji/x/comment/CmtId123";
+    const ex = await extractArticle(html, url);
+    expect(ex.meta.source_url).toBe(url);
+    expect(ex.body).toContain("https://example.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story#comment-Other456");
+  });
+});
+
 describe("sectionHeadingCount — gutted-extraction signal", () => {
   it("counts ## through #### headings, ignoring h1 and footnote bulk", () => {
     const md = [
