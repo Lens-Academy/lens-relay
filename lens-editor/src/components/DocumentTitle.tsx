@@ -8,7 +8,7 @@ import { getPlatformUrl } from '../lib/platform-url';
 import { extractFrontmatter } from '../lib/frontmatter';
 import { shortUuid } from '../lib/url-utils';
 import { RELAY_ID } from '../App';
-import { useDocTabTitle } from '../hooks/useDocTabTitle';
+import { useDocTabTitle, docDisplayName } from '../hooks/useDocTabTitle';
 
 interface DocumentTitleProps {
   currentDocId: string;
@@ -25,10 +25,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
   // Find the prefixed path for this UUID in merged metadata
   const path = findPathByUuid(uuid, metadata);
 
-  // Extract display name (filename without .md extension)
-  const displayName = path
-    ? path.split('/').pop()?.replace(/\.md$/, '') ?? ''
-    : '';
+  const displayName = docDisplayName(path);
 
   const [value, setValue] = useState(displayName);
   const [renameError, setRenameError] = useState<string | null>(null);
