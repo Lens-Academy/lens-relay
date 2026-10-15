@@ -47,6 +47,10 @@ describe("forum API comment answers", () => {
       "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story?commentId=CmtId1234567",
     );
     expect(() => forumApiAnswerToHtml(JSON.stringify({ data: { comment: { result: null } } }))).toThrow(/no article/);
+    const orphan = JSON.stringify({
+      data: { comment: { result: { user: { displayName: "Wei Dai" }, contents: { html: "<p>Text.</p>" }, post: null } } },
+    });
+    expect(forumApiAnswerToHtml(orphan)).toContain("Comment by Wei Dai");
   });
 });
 

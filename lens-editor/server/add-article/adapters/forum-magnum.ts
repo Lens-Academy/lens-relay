@@ -52,6 +52,16 @@ function forumCommentId(u: URL): string {
   return FORUM_ID_RE.test(id) ? id : "";
 }
 
+/** Whether `url` names one comment: a ForumMagnum `?commentId=` permalink or
+ *  any GreaterWrong comment spelling. */
+export function isForumCommentUrl(url: string): boolean {
+  try {
+    return !!forumCommentId(new URL(greaterWrongCanonicalSourceUrl(url) || url));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The canonical ForumMagnum form of a GreaterWrong mirror URL, or "" when
  * `url` is not one. The mirror host maps to its canonical host (paths are
@@ -222,9 +232,10 @@ export function forumApiAnswerToHtml(json: string, canonicalUrl = ""): string {
   // title a comment permalink page.
   const post: ForumApiPost | null | undefined = comment
     ? {
+        // A comment whose post is gone (deleted, draft) still has its text.
         title: comment.post?.title
           ? `${comment.user?.displayName || "Comment"} comments on ${comment.post.title}`
-          : "",
+          : `Comment by ${comment.user?.displayName || "unknown author"}`,
         postedAt: comment.postedAt,
         user: comment.user,
         contents: comment.contents,

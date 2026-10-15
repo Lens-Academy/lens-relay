@@ -856,6 +856,11 @@ describe("extractArticle — GreaterWrong mirror", () => {
     await expect(
       extractArticle(GW_SHELL(), GW_URL, { sourceUrl: `${GW_URL}#comment-CmtId1234567` }),
     ).rejects.toThrow(/whole post, not the comment/);
+    await expect(
+      extractArticle(GW_SHELL(), GW_URL, {
+        sourceUrl: "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/x?commentId=CmtId1234567",
+      }),
+    ).rejects.toThrow(/whole post, not the comment/);
   });
 
   it("maps the mirror host to the canonical host when the LW link is missing", async () => {
