@@ -28,6 +28,13 @@ describe("normalizeUrlForDedup", () => {
     ).toBe("https://forum.effectivealtruism.org/posts/abc/slug");
   });
 
+  // Prevents: a GreaterWrong comment re-submit missing its stored ?commentId= source_url.
+  it("folds GreaterWrong comment paths onto the ?commentId= form", () => {
+    expect(
+      normalizeUrlForDedup("https://www.greaterwrong.com/posts/abc/slug/comment/Cmt1"),
+    ).toBe(normalizeUrlForDedup("https://www.lesswrong.com/posts/abc/slug?commentId=Cmt1"));
+  });
+
   it("passes through non-http(s) and malformed input unchanged", () => {
     expect(normalizeUrlForDedup("not a url")).toBe("not a url");
     expect(normalizeUrlForDedup("ftp://example.com/x")).toBe("ftp://example.com/x");

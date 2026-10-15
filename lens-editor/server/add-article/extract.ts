@@ -780,8 +780,13 @@ export async function extractArticle(
     (fetchRedirected || !sameSite ? "" : usableCanonical(htmlMeta.canonicalUrl));
 
   // GreaterWrong is a mirror (and not always up): whichever extraction path
-  // ran, cite the canonical forum URL, comment permalinks as ?commentId=.
-  const citedUrl = canonical || sourceUrl;
+  // ran, cite the canonical forum URL, comment permalinks as ?commentId=. A
+  // submitted comment permalink stays the comment even if the page declares
+  // its post as canonical (else two comments on one post collide in dedup).
+  const sourceComment = greaterWrongCanonicalSourceUrl(sourceUrl);
+  const citedUrl = sourceComment.includes("?commentId=")
+    ? sourceComment
+    : canonical || sourceUrl;
   const meta: ArticleMeta = {
     title:
       chosen.title ||

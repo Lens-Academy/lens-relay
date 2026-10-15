@@ -85,6 +85,20 @@ describe("adapter registry — resolveFetchUrls", () => {
     );
   });
 
+  // Prevents: a ?commentId= permalink (or its GreaterWrong spelling) being
+  // re-fetched as the whole post, and GreaterWrong URLs failing while the mirror is down.
+  it("reads a comment permalink as the comment: API comment query, then the mirror's comment page", () => {
+    const lw = "https://www.lesswrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we?commentId=CmtId1234567";
+    const urls = fetchUrls(lw);
+    expect(urls).toHaveLength(2);
+    expect(decodeURIComponent(urls[0])).toContain('comment(selector: {_id: "CmtId1234567"})');
+    expect(urls[1]).toBe("https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we/comment/CmtId1234567");
+    const gw = "https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we/comment/CmtId1234567";
+    const gwUrls = fetchUrls(gw);
+    expect(decodeURIComponent(gwUrls[0])).toContain('comment(selector: {_id: "CmtId1234567"})');
+    expect(gwUrls[1]).toBe(gw);
+  });
+
   it("vetoes an arXiv HTML candidate that redirected to the abstract landing page", () => {
     const ctx = adapterContext("https://arxiv.org/abs/1805.00899", "");
     expect(acceptsFetchedUrl(ctx, "https://arxiv.org/abs/1805.00899v2")).toBe(false);

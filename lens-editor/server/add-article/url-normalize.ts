@@ -34,7 +34,17 @@ export function normalizeUrlForDedup(raw: string): string {
   u.port = "";
   u.username = "";
   u.password = "";
-  u.hostname = canonicalHost(u.hostname.toLowerCase().replace(/^www\./, ""));
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  u.hostname = canonicalHost(host);
+  // GreaterWrong's comment permalink path is ForumMagnum's ?commentId= (the
+  // form stored as source_url), so both spellings share one key.
+  const gwComment =
+    host.endsWith("greaterwrong.com") &&
+    u.pathname.match(/^(\/posts\/[^/]+(?:\/[^/]+)?)\/comment\/([\w-]+)\/?$/);
+  if (gwComment) {
+    u.pathname = gwComment[1];
+    u.searchParams.set("commentId", gwComment[2]);
+  }
 
   const kept = [...u.searchParams.entries()].filter(
     ([k]) => !TRACKING_PARAM_RE.test(k),

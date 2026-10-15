@@ -1081,6 +1081,17 @@ describe("extractArticle — GreaterWrong comment permalink (generic path)", () 
     expect(ex.body).not.toContain("greaterwrong.com");
   });
 
+  it("keeps the comment when the page declares its post as canonical", async () => {
+    const html = GW_COMMENT_SHELL.replace(
+      "</title></head>",
+      '</title><link rel="canonical" href="https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story"></head>',
+    );
+    const ex = await extractArticle(html, GW_COMMENT_URL);
+    expect(ex.meta.source_url).toBe(
+      "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story?commentId=CmtId123",
+    );
+  });
+
   it("leaves a non-GreaterWrong source_url unchanged", async () => {
     const html = GW_COMMENT_SHELL.replace(/www\.greaterwrong\.com/g, "example.com");
     const url = "https://example.com/posts/AyNHoTWWAJ5eb99ji/x/comment/CmtId123";

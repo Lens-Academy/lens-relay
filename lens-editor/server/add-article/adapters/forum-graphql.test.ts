@@ -21,6 +21,35 @@ describe("forumGraphqlUrl", () => {
   });
 });
 
+describe("forum API comment answers", () => {
+  it("turns a comment into an article by its commenter, cited as the ?commentId= permalink", async () => {
+    const answer = JSON.stringify({
+      data: {
+        comment: {
+          result: {
+            postedAt: "2021-04-09T10:00:00.000Z",
+            user: { displayName: "paulfchristiano" },
+            contents: { html: `<p>${"The comment is the article here. ".repeat(30)}</p>` },
+            post: { title: "Another (outer) alignment failure story" },
+          },
+        },
+      },
+    });
+    const src =
+      "https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story/comment/CmtId1234567";
+    const ex = await extractArticle(forumApiAnswerToHtml(answer, src), "https://www.lesswrong.com/graphql?query=x", {
+      sourceUrl: src,
+    });
+    expect(ex.meta.title).toBe("paulfchristiano comments on Another (outer) alignment failure story");
+    expect(ex.meta.author).toEqual(["paulfchristiano"]);
+    expect(ex.meta.published).toBe("2021-04-09");
+    expect(ex.meta.source_url).toBe(
+      "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story?commentId=CmtId1234567",
+    );
+    expect(() => forumApiAnswerToHtml(JSON.stringify({ data: { comment: { result: null } } }))).toThrow(/no article/);
+  });
+});
+
 describe("forum API answers", () => {
   it("turns a post into an article with its byline, date and math", async () => {
     const answer = JSON.stringify({

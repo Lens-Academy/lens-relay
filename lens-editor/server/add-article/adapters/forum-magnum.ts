@@ -20,22 +20,33 @@ const FORUM_HOST_RE =
 
 /** greaterwrong.com mirror URL for a ForumMagnum post URL ("" if not one).
  *  GreaterWrong serves LW/AF at its apex host and the EA Forum at `ea.`,
- *  with identical /posts/... paths. */
+ *  with identical /posts/... paths; a `?commentId=` permalink becomes the
+ *  mirror's `/comment/<cid>` page (the post page would be the wrong text). */
 export function greaterWrongMirrorUrl(url: string): string {
   try {
     const u = new URL(url);
     const host = u.hostname.replace(/^www\./, "").toLowerCase();
     if (!u.pathname.startsWith("/posts/")) return "";
+    const commentId = forumCommentId(u);
+    const path = commentId
+      ? `${u.pathname.replace(/\/+$/, "")}/comment/${commentId}`
+      : u.pathname;
     if (host === "lesswrong.com" || host === "alignmentforum.org") {
-      return `https://www.greaterwrong.com${u.pathname}`;
+      return `https://www.greaterwrong.com${path}`;
     }
     if (host === "forum.effectivealtruism.org") {
-      return `https://ea.greaterwrong.com${u.pathname}`;
+      return `https://ea.greaterwrong.com${path}`;
     }
   } catch {
     /* invalid URL */
   }
   return "";
+}
+
+/** The `?commentId=` of a ForumMagnum comment permalink ("" if none, or not an id). */
+function forumCommentId(u: URL): string {
+  const id = u.searchParams.get("commentId") || "";
+  return /^[A-Za-z0-9]{8,32}$/.test(id) ? id : "";
 }
 
 /**
@@ -121,7 +132,8 @@ const FORUM_API_HOSTS: Record<string, string> = {
 /** Marker the converted API answer is recognised by in `extract`. */
 export const FORUM_GRAPHQL_MARKER = "lens-forum-graphql";
 
-/** GET URL of the API query for a post or wiki page URL ("" if not one). */
+/** GET URL of the API query for a post, comment permalink (`?commentId=`) or
+ *  wiki page URL ("" if not one). */
 export function forumGraphqlUrl(url: string): string {
   let u: URL;
   try {
@@ -135,8 +147,14 @@ export function forumGraphqlUrl(url: string): string {
   // and nothing else may reach the query text.
   const post = u.pathname.match(/^\/(?:posts|s\/[\w-]+\/p)\/([A-Za-z0-9]{8,32})(?:\/[\w-]*)?\/?$/);
   const wiki = u.pathname.match(/^\/(?:w|tag)\/([\w-]+)\/?$/);
+  const commentId = post ? forumCommentId(u) : "";
   let query: string;
-  if (post) {
+  if (commentId) {
+    // A comment permalink is the comment, not the post it hangs under.
+    query =
+      `{ comment(selector: {_id: "${commentId}"}) { result { postedAt ` +
+      "user { displayName } contents { html } post { title } } } }";
+  } else if (post) {
     query =
       `{ post(selector: {_id: "${post[1]}"}) { result { title postedAt ` +
       "user { displayName } coauthors { displayName } contents { html } } } }";
@@ -165,6 +183,7 @@ function escapeHtml(text: string): string {
 interface ForumApiAnswer {
   data?: {
     post?: { result?: ForumApiPost | null } | null;
+    comment?: { result?: ForumApiComment | null } | null;
     tags?: { results?: ForumApiTag[] | null } | null;
   };
 }
@@ -174,6 +193,12 @@ interface ForumApiPost {
   user?: { displayName?: string } | null;
   coauthors?: { displayName?: string }[] | null;
   contents?: { html?: string } | null;
+}
+interface ForumApiComment {
+  postedAt?: string;
+  user?: { displayName?: string } | null;
+  contents?: { html?: string } | null;
+  post?: { title?: string } | null;
 }
 interface ForumApiTag {
   name?: string;
@@ -187,8 +212,20 @@ interface ForumApiTag {
  */
 export function forumApiAnswerToHtml(json: string, canonicalUrl = ""): string {
   const answer = JSON.parse(json) as ForumApiAnswer;
-  const post = answer.data?.post?.result;
+  const comment = answer.data?.comment?.result;
   const tag = answer.data?.tags?.results?.[0];
+  // A comment reads like a post by its commenter, titled the way the forums
+  // title a comment permalink page.
+  const post: ForumApiPost | null | undefined = comment
+    ? {
+        title: comment.post?.title
+          ? `${comment.user?.displayName || "Comment"} comments on ${comment.post.title}`
+          : "",
+        postedAt: comment.postedAt,
+        user: comment.user,
+        contents: comment.contents,
+      }
+    : answer.data?.post?.result;
   const title = post?.title ?? tag?.name ?? "";
   // Page metadata tags in the post's own HTML (a canonical link, citation_*
   // meta) would be read as the article's: the metadata scan covers the whole
@@ -301,9 +338,21 @@ export const forumMagnumAdapter: SiteAdapter = {
    * direct LW/AF/EAF import) or the mirror page's own "LW link".
    */
   resolveFetchUrls(ctx: AdapterContext): string[] {
-    const api = forumGraphqlUrl(ctx.url);
+    // A GreaterWrong URL is read through the canonical forum's API too: the
+    // mirror is not always up.
+    const forumUrl = greaterWrongCanonicalSourceUrl(ctx.url) || ctx.url;
+    const api = forumGraphqlUrl(forumUrl);
     const mirror = greaterWrongMirrorUrl(ctx.url);
-    return [api, ctx.url, mirror].filter(Boolean);
+    // The forum's own page for a ?commentId= permalink renders the whole
+    // post, so a comment is read only from the API or the mirror's comment page.
+    const isComment = (() => {
+      try {
+        return !!forumCommentId(new URL(ctx.url));
+      } catch {
+        return false;
+      }
+    })();
+    return [api, isComment ? "" : ctx.url, mirror].filter(Boolean);
   },
 
   fetchAccept(candidateUrl: string): string | undefined {
