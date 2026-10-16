@@ -10,12 +10,7 @@ import { normalizeArticleDom, isIntraWord } from "./normalize-dom";
 import { escapeTagOpeners } from "./escape";
 import { convertSidenotes } from "./sidenotes";
 import { arxivAbsUrl } from "./adapters/arxiv";
-import {
-  canonicalizeMirrorLinks,
-  greaterWrongCanonicalSourceUrl,
-  greaterWrongCanonicalUrl,
-  isForumCommentUrl,
-} from "./adapters/forum-magnum";
+import { canonicalizeMirrorLinks, greaterWrongCanonicalSourceUrl } from "./adapters/forum-magnum";
 import { LITERAL_DOLLAR_ATTR } from "./adapters/util";
 import { SOURCE_IMAGE_SCHEME } from "./arxiv-latex";
 import {
@@ -62,17 +57,31 @@ export interface ExtractResult {
   requiredBodyPrefixMarkdown?: string;
 }
 
-// A post is treated as a "link-out" when the body is short AND points at an
-// external canonical document. Prevents writing a useless stub to the library.
+// A post is treated as a "link-out" when the body is short AND is essentially
+// a pointer to an external canonical document: it announces where the work
+// lives ("viewable as a public google doc here"), or it links to an external
+// document and says next to nothing besides the link. A short post or comment
+// that argues in its own words and merely cites a paper is not a link-out.
+// Prevents writing a useless stub to the library.
 const LINKOUT_MAX_CHARS = 1500;
 const LINKOUT_LINK_RE =
   /https?:\/\/(docs\.google\.com\/document|drive\.google\.com|arxiv\.org\/(abs|pdf))/i;
 const LINKOUT_PHRASE_RE =
   /\b(viewable|available|published|posted|read it|find it|full (report|paper|version))\b[^.]{0,40}\b(public )?(google doc|pdf|paper|report|document)\b/i;
+// Prose left once links and bare URLs are taken out, below which a body with
+// an external-document link is only that link plus a caption.
+const LINKOUT_MAX_OWN_PROSE = 300;
 
 function looksLikeLinkOut(body: string): boolean {
   if (body.length > LINKOUT_MAX_CHARS) return false;
-  return LINKOUT_LINK_RE.test(body) || LINKOUT_PHRASE_RE.test(body);
+  if (LINKOUT_PHRASE_RE.test(body)) return true;
+  if (!LINKOUT_LINK_RE.test(body)) return false;
+  const ownProse = body
+    .replace(/!?\[[^\]]*\]\([^)]*\)/g, " ") // markdown links and images, text included
+    .replace(/<?https?:\/\/\S+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+  return ownProse.length < LINKOUT_MAX_OWN_PROSE;
 }
 
 // Below this an adapter's output is treated as a mis-fire and we fall back to
@@ -490,8 +499,6 @@ interface Chosen {
   canonicalUrl?: string;
   /** True for a site adapter (owns its byline/date); false for the generic path. */
   adapterAuthored: boolean;
-  /** The adapter extracted a whole forum post (see AdapterExtract.wholePost). */
-  wholePost?: boolean;
   requiredBodyPrefixMarkdown?: string;
 }
 
@@ -571,7 +578,7 @@ export async function extractArticle(
       }
       const bodyPrefix = ex.bodyPrefixMarkdown?.trim();
       if (bodyPrefix && md) md = `${bodyPrefix}\n\n${md.trim()}`;
-      if (md.length >= MIN_ADAPTER_CHARS) {
+      if (md.length >= (ex.minBodyChars ?? MIN_ADAPTER_CHARS)) {
         body = md;
         chosen = {
           title: ex.title,
@@ -580,7 +587,6 @@ export async function extractArticle(
           via: adapter.id,
           siteName: ex.siteName,
           canonicalUrl: ex.canonicalUrl,
-          wholePost: ex.wholePost,
           adapterAuthored: true,
           requiredBodyPrefixMarkdown: bodyPrefix,
         };
@@ -593,10 +599,9 @@ export async function extractArticle(
   //    mis-selects the container or drops the lede; Readability is the safety
   //    net against gross under-extraction.
   if (!chosen) {
-    // A GreaterWrong page the forum adapter could not read (a comment
-    // permalink has no post body) still cites the canonical forum in its
-    // body: rewrite mirror links before the generic extractors see them.
-    if (greaterWrongCanonicalUrl(url)) {
+    // A GreaterWrong page the forum adapter could not read still links to the
+    // forum, not the mirror.
+    if (greaterWrongCanonicalSourceUrl(url)) {
       const dom = new JSDOM(html, { url });
       canonicalizeMirrorLinks(dom.window.document.documentElement as unknown as Element, url);
       html = dom.serialize();
@@ -783,27 +788,15 @@ export async function extractArticle(
     usableCanonical(chosen.canonicalUrl) ||
     (fetchRedirected || !sameSite ? "" : usableCanonical(htmlMeta.canonicalUrl));
 
-  // GreaterWrong is a mirror (and not always up): whichever extraction path
-  // ran, cite the canonical forum URL, comment permalinks as ?commentId=. A
-  // submitted comment permalink stays the comment even if the page declares
-  // its post as canonical (else two comments on one post collide in dedup).
-  const sourceComment = greaterWrongCanonicalSourceUrl(sourceUrl);
-  if (chosen.wholePost && isForumCommentUrl(sourceUrl)) {
-    // A fragment never reaches the server, and a mirror may redirect to the
-    // post, so a comment URL can come back as the post page: storing that
-    // under the comment's permalink would
-    // cite (and dedup-block) the comment with the post's text.
-    throw new Error("Fetched the whole post, not the comment the URL names");
-  }
-  const citedUrl = sourceComment.includes("?commentId=")
-    ? sourceComment
-    : canonical || sourceUrl;
+  // GreaterWrong is a mirror (and not always up): cite the forum, whichever
+  // path ran.
+  const cited = canonical || sourceUrl;
   const meta: ArticleMeta = {
     title:
       chosen.title ||
       stripSiteSuffix(htmlMeta.title, { url, siteName: htmlMeta.siteName }),
     author,
-    source_url: greaterWrongCanonicalSourceUrl(citedUrl) || citedUrl,
+    source_url: greaterWrongCanonicalSourceUrl(cited) || cited,
     published,
     description: htmlMeta.description,
   };

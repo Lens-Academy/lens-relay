@@ -55,7 +55,7 @@ interface EduEditorProps {
 export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const { getOrConnect, disconnectAll } = useDocConnection();
   const { metadata } = useNavigation();
-  const { canWrite } = useAuth();
+  const { canWrite, canEdit } = useAuth();
   const { displayName } = useDisplayName();
   const { headerStage } = useSidebar();
 
@@ -108,7 +108,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   const effectiveYText = activeYText ?? fallbackYText;
 
   // Thread data and mutation callbacks from the criticmarkup adapter.
-  const { threads, callbacks } = useThreadsFromYText(effectiveYText, displayName ?? '');
+  const { threads, callbacks } = useThreadsFromYText(effectiveYText, displayName ?? '', canEdit);
 
   // ScrollSource wrapping the content scroll container.
   const scrollSource = useScrollSource(contentScrollEl);

@@ -90,6 +90,34 @@ describe("extractArticle — link-out detection", () => {
     expect(ex.linkedOut).toBe(true);
   });
 
+  it("flags a short post that is only a caption around an arXiv link", async () => {
+    const body =
+      "<p>New paper from our team, with Jane Doe and John Roe:</p>" +
+      '<p><a href="https://arxiv.org/abs/2501.00001">Scalable Oversight via Recursive Critique</a></p>' +
+      "<p>Comments and questions welcome!</p>";
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.linkedOut).toBe(true);
+  });
+
+  // Prevents: a two-paragraph LessWrong comment rejected as a link-out
+  // because it cites one paper in passing.
+  it("does not flag a short comment that argues in its own words and cites a paper", async () => {
+    const body =
+      "<p>I buy that AI control can let an AU lab detect real incidents internally and thus hide the " +
+      "effects outside the lab. Outside view is then a green checkbox \u201csystems worked as designed\u201d, " +
+      "But AI control is often understood as measuring whether a protocol still holds under intentional " +
+      "subversion (control evals, remaining capability gap), which your story does not cover. AI control " +
+      "used by external auditors would have different effects.</p>" +
+      '<p>Also, how has your <a href="https://arxiv.org/abs/2501.16946">Gradual Disempowerment</a> argument ' +
+      "changed your view? Is AI control more or less important when the process is gradual? Or do you " +
+      "see these as strictly independent?</p>";
+    const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
+    const ex = await extractArticle(html, "https://www.lesswrong.com/posts/x/y");
+    expect(ex.body).toContain("arxiv.org/abs/2501.16946");
+    expect(ex.linkedOut).toBe(false);
+  });
+
   it("does not flag a normal full-length article", async () => {
     const body = "<p>" + "This is a genuine, full-length article body. ".repeat(60) + "</p>";
     const html = FORUM_SHELL(body, "/users/a?from=post_header", "Author A");
@@ -850,19 +878,6 @@ describe("extractArticle — GreaterWrong mirror", () => {
     expect(ex.body).not.toContain("must not leak");
   });
 
-  // Prevents: a #comment- URL (the fragment never reaches the server) coming
-  // back as the post page and the whole post being stored as the comment.
-  it("refuses the post page for a comment permalink", async () => {
-    await expect(
-      extractArticle(GW_SHELL(), GW_URL, { sourceUrl: `${GW_URL}#comment-CmtId1234567` }),
-    ).rejects.toThrow(/whole post, not the comment/);
-    await expect(
-      extractArticle(GW_SHELL(), GW_URL, {
-        sourceUrl: "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/x?commentId=CmtId1234567",
-      }),
-    ).rejects.toThrow(/whole post, not the comment/);
-  });
-
   it("maps the mirror host to the canonical host when the LW link is missing", async () => {
     const ex = await extractArticle(GW_SHELL({ lw2Link: false }), GW_URL);
     expect(ex.meta.source_url).toBe(
@@ -1056,61 +1071,6 @@ describe("extractArticle — GreaterWrong mirror body-link canonicalization", ()
       "https://www.lesswrong.com/posts/abc123def45/some-other-post?commentId=CmtId123",
     );
     expect(ex.body).not.toContain("#comment-CmtId123");
-  });
-});
-
-describe("extractArticle — GreaterWrong comment permalink (generic path)", () => {
-  // Learner reports #238/#242: a comment page has no `.body-text.post-body`,
-  // so the forum adapter declines and the generic extractors ran — which kept
-  // the mirror URL as source_url and mirror links in the body.
-  const GW_COMMENT_URL =
-    "https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story/comment/CmtId123";
-  const GW_COMMENT_SHELL = `
-<!doctype html><html><head><title>paulfchristiano comments on Another (outer) alignment failure story</title></head><body><main>
-  <article>
-    <h1>paulfchristiano comments on Another (outer) alignment failure story</h1>
-    <div class="comment">
-      <a class="author" href="/users/paulfchristiano">paulfchristiano</a>
-      <div class="body-text comment-body">
-        <p>${"The comment itself is the article a learner reads here. ".repeat(20)}
-        See <a href="https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story#comment-Other456">this reply</a>
-        and <a href="/posts/xyz987aaa11/third-post">the earlier post</a>.
-        ${"More of the comment's argument follows in plain prose. ".repeat(10)}</p>
-      </div>
-    </div>
-  </article>
-</main></body></html>`;
-
-  it("cites the LessWrong ?commentId= permalink and rewrites body links", async () => {
-    const ex = await extractArticle(GW_COMMENT_SHELL, GW_COMMENT_URL);
-    expect(ex.via).not.toBe("forum-adapter");
-    expect(ex.meta.source_url).toBe(
-      "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story?commentId=CmtId123",
-    );
-    expect(ex.body).toContain(
-      "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story?commentId=Other456",
-    );
-    expect(ex.body).toContain("https://www.lesswrong.com/posts/xyz987aaa11/third-post");
-    expect(ex.body).not.toContain("greaterwrong.com");
-  });
-
-  it("keeps the comment when the page declares its post as canonical", async () => {
-    const html = GW_COMMENT_SHELL.replace(
-      "</title></head>",
-      '</title><link rel="canonical" href="https://www.greaterwrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story"></head>',
-    );
-    const ex = await extractArticle(html, GW_COMMENT_URL);
-    expect(ex.meta.source_url).toBe(
-      "https://www.lesswrong.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story?commentId=CmtId123",
-    );
-  });
-
-  it("leaves a non-GreaterWrong source_url unchanged", async () => {
-    const html = GW_COMMENT_SHELL.replace(/www\.greaterwrong\.com/g, "example.com");
-    const url = "https://example.com/posts/AyNHoTWWAJ5eb99ji/x/comment/CmtId123";
-    const ex = await extractArticle(html, url);
-    expect(ex.meta.source_url).toBe(url);
-    expect(ex.body).toContain("https://example.com/posts/AyNHoTWWAJ5eb99ji/another-outer-alignment-failure-story#comment-Other456");
   });
 });
 

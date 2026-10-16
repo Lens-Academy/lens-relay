@@ -206,7 +206,8 @@ pub(crate) async fn execute_checked(
         super::critic_markup::reject_if_contains_markup(old_string, "old_string")?;
         super::critic_markup::reject_if_contains_markup(new_string, "new_string")?;
 
-        // Validate comment preservation: non-AI comments must be kept intact.
+        // Non-AI comments may be kept or removed whole (removal lands as a
+        // pending change via edit_policy), never rewritten.
         super::critic_markup::validate_comment_preservation(old_string, new_string)?;
     } else {
         if mode == EditMode::Suggest {
@@ -2267,7 +2268,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_rejects_removing_non_ai_comment() {
+    async fn edit_removing_human_comment_becomes_pending_change() {
+        // Andreas's case (2026-10-12): Luc's comments sit on a passage that
+        // a shared segment now replaces. The AI may remove them with the
+        // passage, but only as a pending change a person accepts.
+        let doc = "Intro.\n\nSpeaking up is optional.{>>{\"author\":\"Luc\",\"timestamp\":1}@@vague<<}\n\nAsk the tutor. {>>{\"author\":\"Luc\",\"timestamp\":2}@@bad advice<<}\n\nRoom 1.";
+        let server = build_test_server(&[("/Doc.md", "uuid-doc", doc)]).await;
+        let doc_id = format!("{}-uuid-doc", RELAY_ID);
+        // Even text the AI wrote itself must not let a comment removal go direct.
+        register_doc_client(&server, &doc_id, "ai:opus-5.5:andreas");
+        let sid = setup_session_with_read(&server, &doc_id);
+
+        let old = "Speaking up is optional.{>>{\"author\":\"Luc\",\"timestamp\":1}@@vague<<}\n\nAsk the tutor. {>>{\"author\":\"Luc\",\"timestamp\":2}@@bad advice<<}";
+        let result = execute(
+            &server,
+            &sid,
+            &json!({
+                "file_path": "Lens/Doc.md",
+                "old_string": old,
+                "new_string": "source:: [[../shared/Session Doc - How today works]]"
+            }),
+        )
+        .await
+        .expect("removing a person's comment with its passage should be allowed");
+        assert!(result.starts_with("Made pending changes"), "{}", result);
+
+        let raw = read_doc_content(&server, &doc_id);
+        // Until accepted, Luc's comments are still in the document (inside
+        // the pending deletion), so rejecting restores them exactly.
+        assert!(raw.contains("@@vague<<}"), "{}", raw);
+        assert!(raw.contains("@@bad advice<<}"), "{}", raw);
+        let spans = critic_markup::parse(&raw);
+        assert_eq!(
+            critic_markup::accepted_view(&spans),
+            "Intro.\n\nsource:: [[../shared/Session Doc - How today works]]\n\nRoom 1."
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_rewriting_human_comment() {
         let server =
             build_test_server(&[("/Doc.md", "uuid-doc", "Hello {>>human note<<} world")]).await;
         let doc_id = format!("{}-uuid-doc", RELAY_ID);
@@ -2279,17 +2318,16 @@ mod tests {
             &json!({
                 "file_path": "Lens/Doc.md",
                 "old_string": "Hello {>>human note<<} world",
-                "new_string": "Hello world"
+                "new_string": "Hello {>>human note, edited<<} world"
             }),
         )
         .await;
 
-        assert!(result.is_err(), "should reject removing non-AI comment");
-        let err = result.unwrap_err();
-        assert!(
-            err.contains("comment"),
-            "Error should mention comment: {}",
-            err
+        let err = result.expect_err("rewriting a person's comment must be refused");
+        assert!(err.contains("comment"), "Error should mention comment: {}", err);
+        assert_eq!(
+            read_doc_content(&server, &doc_id),
+            "Hello {>>human note<<} world"
         );
     }
 

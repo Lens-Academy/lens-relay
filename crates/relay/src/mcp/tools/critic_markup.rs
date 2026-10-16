@@ -91,16 +91,23 @@ pub fn stamp_new_comments(old_str: &str, new_str: &str, author: &str, timestamp:
     if comments.is_empty() {
         return new_str.to_string();
     }
-    let preserved: std::collections::HashSet<String> = extract_comments(old_str)
-        .into_iter()
-        .map(|c| c.full_match)
-        .collect();
+    // Multiset: each comment in old_str covers one carried-over copy, so a
+    // duplicate of a person's comment is stamped as the AI's, not passed off
+    // as theirs.
+    let mut preserved = comment_counts(old_str);
 
     let mut result = String::with_capacity(new_str.len());
     let mut cursor = 0;
     for comment in &comments {
         result.push_str(&new_str[cursor..comment.from]);
-        if preserved.contains(&comment.full_match) {
+        let carried = match preserved.get_mut(&comment.full_match) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                true
+            }
+            _ => false,
+        };
+        if carried {
             // Unchanged comment carried over from old_str — keep byte-identical.
             result.push_str(&comment.full_match);
         } else {
@@ -115,32 +122,56 @@ pub fn stamp_new_comments(old_str: &str, new_str: &str, author: &str, timestamp:
     result
 }
 
-/// Validate that non-AI comments from `old_str` are preserved in `new_str`.
-/// AI-authored comments ("AI" or "{name}'s AI") can be modified or removed.
-/// New comments in `new_str` are allowed.
-/// Compares `full_match` (not just content) to prevent metadata reattribution.
+/// Validate how an edit treats the non-AI comments in `old_str`.
+///
+/// A person's comment may be kept byte-identical or removed whole (e.g. the
+/// AI fixed what it asked for, or replaced the passage it sits on). It may
+/// not be rewritten or reattributed. Removing a comment touches comment
+/// markup, so `edit_policy` always lands it as a pending change that a
+/// person with edit access accepts or rejects in the editor; anyone with edit
+/// access may also delete any comment there directly.
+///
+/// A rewrite looks like "old comment gone, a new comment in its place", so
+/// an edit that removes a non-AI comment may not also add a new comment;
+/// the AI adds its own note in a separate edit. AI-authored comments ("AI"
+/// or "{name}'s AI") can be modified or removed freely. Compares
+/// `full_match` (not just content) so metadata reattribution counts as a
+/// rewrite.
 pub fn validate_comment_preservation(old_str: &str, new_str: &str) -> Result<(), String> {
     let old_comments = extract_comments(old_str);
-    let new_comments = extract_comments(new_str);
+    let old_counts = comment_counts(old_str);
+    let new_counts = comment_counts(new_str);
+    let count = |m: &std::collections::HashMap<String, usize>, k: &str| m.get(k).copied().unwrap_or(0);
 
-    for old_comment in &old_comments {
-        if is_ai_author(&old_comment.author) {
-            continue; // AI comments can be modified/removed
-        }
+    // Counted, not just present: a copy of another kept comment must not
+    // stand in for a removed one.
+    let removed_human = old_comments.iter().find(|oc| {
+        !is_ai_author(&oc.author) && count(&new_counts, &oc.full_match) < count(&old_counts, &oc.full_match)
+    });
+    let Some(removed) = removed_human else {
+        return Ok(());
+    };
 
-        // Non-AI comment must appear in new_str with identical markup
-        let preserved = new_comments
-            .iter()
-            .any(|nc| nc.full_match == old_comment.full_match);
-        if !preserved {
-            return Err(format!(
-                "Error: Cannot remove or modify non-AI comment: \"{}\". Only AI-authored comments can be changed.",
-                old_comment.content
-            ));
-        }
+    let adds_comment = new_counts
+        .iter()
+        .any(|(k, n)| *n > count(&old_counts, k));
+    if adds_comment {
+        return Err(format!(
+            "Error: Cannot rewrite or reattribute {}'s comment: \"{}\". Keep it exactly as it is, or remove it whole without adding a comment in the same edit; to leave your own note, add it in a separate edit.",
+            removed.author, removed.content
+        ));
     }
 
     Ok(())
+}
+
+/// How many times each exact comment markup occurs in `text`.
+fn comment_counts(text: &str) -> std::collections::HashMap<String, usize> {
+    let mut counts = std::collections::HashMap::new();
+    for c in extract_comments(text) {
+        *counts.entry(c.full_match).or_insert(0) += 1;
+    }
+    counts
 }
 
 /// Extract metadata (author, timestamp) from the inner content of a critic markup block.
@@ -2224,11 +2255,54 @@ mod tests {
     }
 
     #[test]
-    fn validate_comments_non_ai_removed_rejected() {
-        // Non-AI comment removed → rejected
+    fn validate_comments_non_ai_removed_ok() {
+        // Non-AI comment removed whole → OK (lands as a pending change)
+        let result = validate_comment_preservation(
+            r#"Hello {>>{"author":"Luc","timestamp":1}@@note<<} world"#,
+            "Hello world",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_comments_non_ai_removed_plus_new_comment_rejected() {
+        // Removing a person's comment and adding another in the same edit
+        // could be a rewrite → rejected, with a pointer to split the edit.
+        let result = validate_comment_preservation(
+            r#"Hello {>>{"author":"Luc","timestamp":1}@@note<<} world"#,
+            "Hello world {>>my own note<<}",
+        );
+        let err = result.unwrap_err();
+        assert!(err.contains("Luc's comment"), "{}", err);
+        assert!(err.contains("separate edit"), "{}", err);
+    }
+
+    #[test]
+    fn validate_comments_duplicate_cannot_replace_removed_human_comment() {
+        // Review finding: "fix intro" removed, the other Luc comment copied
+        // into its place. Counts, not presence, catch it.
+        let old = r#"A {>>{"author":"Luc","timestamp":1}@@fix intro<<} B {>>{"author":"Luc","timestamp":2}@@nice<<} C"#;
+        let new = r#"A {>>{"author":"Luc","timestamp":2}@@nice<<} B {>>{"author":"Luc","timestamp":2}@@nice<<} C"#;
+        assert!(validate_comment_preservation(old, new).is_err());
+    }
+
+    #[test]
+    fn stamp_duplicate_of_human_comment_is_attributed_to_ai() {
+        // Review finding: a byte-identical copy of Luc's comment must not stay Luc's.
+        let old = r#"B {>>{"author":"Luc","timestamp":2}@@nice<<} C"#;
+        let new = r#"{>>{"author":"Luc","timestamp":2}@@nice<<} B {>>{"author":"Luc","timestamp":2}@@nice<<} C"#;
+        let out = stamp_new_comments(old, new, "AI", 7);
+        assert_eq!(
+            out,
+            r#"{>>{"author":"Luc","timestamp":2}@@nice<<} B {>>{"author":"AI","timestamp":7}@@nice<<} C"#
+        );
+    }
+
+    #[test]
+    fn validate_comments_no_metadata_removed_ok() {
+        // A bare (Obsidian-written) comment can also be removed whole.
         let result = validate_comment_preservation("Hello {>>note<<} world", "Hello world");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("comment"));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -2359,8 +2433,9 @@ mod tests {
 
     #[test]
     fn validate_comments_no_metadata_treated_as_non_ai() {
-        // Comment without metadata is protected (non-AI)
-        let result = validate_comment_preservation("Hello {>>note<<} world", "Hello world");
+        // Comment without metadata is protected (non-AI): it cannot be rewritten
+        let result =
+            validate_comment_preservation("Hello {>>note<<} world", "Hello {>>edited<<} world");
         assert!(result.is_err());
     }
 

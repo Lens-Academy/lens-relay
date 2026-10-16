@@ -85,25 +85,30 @@ describe("adapter registry — resolveFetchUrls", () => {
     );
   });
 
-  // Prevents: a ?commentId= permalink (or its GreaterWrong spelling) being
-  // re-fetched as the whole post, and GreaterWrong URLs failing while the mirror is down.
-  it("reads a comment permalink as the comment: API comment query, then the mirror's comment page", () => {
-    const lw = "https://www.lesswrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we?commentId=CmtId1234567";
-    const urls = fetchUrls(lw);
-    expect(urls).toHaveLength(2);
-    expect(decodeURIComponent(urls[0])).toContain('comment(selector: {_id: "CmtId1234567"})');
-    expect(urls[1]).toBe("https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we/comment/CmtId1234567");
+  // Prevents: GreaterWrong URLs failing while the mirror is down.
+  it("reads a GreaterWrong URL through the forum's API first, then the mirror", () => {
     const gw = "https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we/comment/CmtId1234567";
-    const gwUrls = fetchUrls(gw);
-    expect(decodeURIComponent(gwUrls[0])).toContain('comment(selector: {_id: "CmtId1234567"})');
-    expect(gwUrls).toEqual([gwUrls[0], gw]);
-    // The #comment- anchor spelling must not fall back to the mirror's post page.
-    const anchored = fetchUrls("https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we#comment-CmtId1234567");
-    expect(anchored).toEqual(gwUrls);
-    // A GreaterWrong post: canonical API first, then the mirror page.
-    const gwPost = fetchUrls("https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we");
-    expect(decodeURIComponent(gwPost[0])).toContain('post(selector: {_id: "TTFsKxQThrqgWeXYJ"})');
-    expect(gwPost.slice(1)).toEqual(["https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we"]);
+    const urls = fetchUrls(gw);
+    expect(decodeURIComponent(urls[0])).toContain('comment(selector: {_id: "CmtId1234567"})');
+    expect(urls).toEqual([urls[0], gw]);
+    expect(fetchUrls("https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we#comment-CmtId1234567")).toEqual(urls);
+    const post = fetchUrls("https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we");
+    expect(decodeURIComponent(post[0])).toContain('post(selector: {_id: "TTFsKxQThrqgWeXYJ"})');
+    expect(post.slice(1)).toEqual(["https://www.greaterwrong.com/posts/TTFsKxQThrqgWeXYJ/how-might-we"]);
+    expect(fetchUrls("https://www.greaterwrong.com/users/paulfchristiano")).toEqual([
+      "https://www.greaterwrong.com/users/paulfchristiano",
+    ]);
+  });
+
+  it("fetches a forum comment URL from the API and GreaterWrong's comment page, never the post page", () => {
+    const urls = fetchUrls(
+      "https://www.lesswrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research?commentId=FpZmBx2Q4eswZWmy6",
+    );
+    expect(urls).toHaveLength(2);
+    expect(decodeURIComponent(urls[0])).toContain('comment(selector: {_id: "FpZmBx2Q4eswZWmy6"})');
+    expect(urls[1]).toBe(
+      "https://www.greaterwrong.com/posts/8wBN8cdNAv3c7vt6p/the-case-against-ai-control-research/comment/FpZmBx2Q4eswZWmy6",
+    );
   });
 
   it("vetoes an arXiv HTML candidate that redirected to the abstract landing page", () => {
