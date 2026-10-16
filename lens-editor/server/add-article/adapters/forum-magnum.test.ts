@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { JSDOM } from "jsdom";
+import { extractArticle } from "../extract";
 import { canonicalizeMirrorLinks, greaterWrongCanonicalSourceUrl } from "./forum-magnum";
 
 describe("greaterWrongCanonicalSourceUrl", () => {
@@ -29,6 +30,7 @@ describe("canonicalizeMirrorLinks", () => {
       <a id="c" href="https://www.greaterwrong.com/posts/postId00003/slug#section">section</a>
       <a id="d" href="#comment-CmtId0004">in-page</a>
       <a id="e" href="https://example.org/posts/postId00005/comment/CmtId0005">external</a>
+      <a id="f" href="https://www.greaterwrong.com/lw/dr9/game_theory#comment-abcdefghij">legacy</a>
     </body>`);
     const doc = dom.window.document;
     canonicalizeMirrorLinks(doc.body as unknown as Element, "https://www.greaterwrong.com/posts/postId00000/x");
@@ -38,5 +40,17 @@ describe("canonicalizeMirrorLinks", () => {
     expect(href("c")).toBe("https://www.lesswrong.com/posts/postId00003/slug#section");
     expect(href("d")).toBe("#comment-CmtId0004");
     expect(href("e")).toBe("https://example.org/posts/postId00005/comment/CmtId0005");
+    expect(href("f")).toBe("https://www.lesswrong.com/lw/dr9/game_theory?commentId=abcdefghij");
+  });
+
+  it("rewrites them on the generic path too (a mirror page the adapter declines)", async () => {
+    const url = "https://www.greaterwrong.com/users/someone";
+    const html = `<html><head><title>someone</title></head><body><main><article><h1>someone</h1>
+      <p>${"Prose by the user, long enough for the generic extractors. ".repeat(20)}
+      See <a href="/posts/postId00001/slug#comment-CmtId0001">this comment</a>.</p></article></main></body></html>`;
+    const ex = await extractArticle(html, url);
+    expect(ex.via).not.toBe("forum-adapter");
+    expect(ex.body).toContain("https://www.lesswrong.com/posts/postId00001/slug?commentId=CmtId0001");
+    expect(ex.meta.source_url).toBe("https://www.lesswrong.com/users/someone");
   });
 });

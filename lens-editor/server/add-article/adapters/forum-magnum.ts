@@ -111,14 +111,15 @@ export function greaterWrongCanonicalUrl(url: string, baseUrl?: string, bare = f
   const host = u.hostname.replace(/^www\./, "").toLowerCase();
   if (host !== "greaterwrong.com" && host !== "ea.greaterwrong.com") return "";
   const comment = forumCommentRef(u.href);
+  // Legacy paths (`/lw/<id>/<slug>`) take a comment anchor too.
+  const anchorId = comment ? "" : u.hash.match(/^#comment-([\w-]+)$/)?.[1];
   u.protocol = "https:";
   u.hostname = host === "greaterwrong.com" ? "www.lesswrong.com" : "forum.effectivealtruism.org";
   if (bare) u.search = "";
-  if (bare || comment) u.hash = "";
-  if (comment) {
-    u.pathname = comment.postPath;
-    u.searchParams.set("commentId", comment.commentId);
-  }
+  if (bare || comment || anchorId) u.hash = "";
+  if (comment) u.pathname = comment.postPath;
+  const commentId = comment?.commentId || anchorId;
+  if (commentId) u.searchParams.set("commentId", commentId);
   return u.href;
 }
 
