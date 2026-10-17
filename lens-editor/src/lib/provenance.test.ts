@@ -9,7 +9,9 @@ import {
   ensureRegistration,
   attachProvenanceRegistration,
   classifyPendingPaste,
-  pasteOriginLabels,
+  pasteOriginOptions,
+  carrierClientId,
+  isOwnClient,
   getClientActorMap,
 } from './provenance';
 
@@ -219,39 +221,72 @@ describe('attachProvenanceRegistration', () => {
   });
 });
 
-describe('pasteOriginLabels', () => {
-  it('names the writer and their AI', () => {
-    expect(pasteOriginLabels('Luc')).toEqual({ name: 'Luc', human: 'Luc', ai: "Luc's AI" });
+describe('pasteOriginOptions', () => {
+  it('offers the writer, their AI, and a generic Human and AI', () => {
+    expect(pasteOriginOptions('  Luc ').map((o) => [o.origin, o.label, o.kind])).toEqual([
+      ['self', 'Luc', 'human'],
+      ['self-ai', "Luc's AI", 'ai'],
+      ['human', 'Human', 'human'],
+      ['ai', 'AI', 'ai'],
+    ]);
   });
 
-  it('trims the display name', () => {
-    expect(pasteOriginLabels('  Luc ')).toEqual({ name: 'Luc', human: 'Luc', ai: "Luc's AI" });
-  });
-
-  it('falls back to Me / AI without a display name', () => {
-    expect(pasteOriginLabels(null)).toEqual({ name: null, human: 'Me', ai: 'AI' });
-    expect(pasteOriginLabels('   ')).toEqual({ name: null, human: 'Me', ai: 'AI' });
+  it('offers only the generic two without a display name', () => {
+    expect(pasteOriginOptions(null).map((o) => o.label)).toEqual(['Human', 'AI']);
+    expect(pasteOriginOptions('   ').map((o) => o.label)).toEqual(['Human', 'AI']);
   });
 });
 
 describe('classifyPendingPaste', () => {
-  it('registers a human answer under the human actor for the display name', () => {
+  it.each([
+    ['self', 'human:Luc'],
+    ['self-ai', 'ai:unknown:Luc'],
+    ['human', 'human:unknown'],
+    ['ai', 'ai:unknown'],
+  ] as const)('records %s as %s', (origin, actor) => {
     const doc = new Y.Doc();
-    classifyPendingPaste(doc, 12345, 'human', 'Luc', T0);
-    expect(getRegisteredActor(doc, 12345)).toBe('human:Luc');
+    classifyPendingPaste(doc, 12345, origin, 'Luc', T0);
+    expect(getRegisteredActor(doc, 12345)).toBe(actor);
     expect(getRegisteredAt(doc, 12345)).toBe(T0);
   });
 
-  it('registers an AI answer under the generic AI actor', () => {
+  it('falls back to the generic actors when no display name is set', () => {
     const doc = new Y.Doc();
-    classifyPendingPaste(doc, 12345, 'ai', 'Luc', T0);
-    expect(getRegisteredActor(doc, 12345)).toBe('ai:unknown');
+    classifyPendingPaste(doc, 1, 'self', null, T0);
+    classifyPendingPaste(doc, 2, 'self-ai', null, T0);
+    expect(getRegisteredActor(doc, 1)).toBe('human:unknown');
+    expect(getRegisteredActor(doc, 2)).toBe('ai:unknown');
+  });
+});
+
+describe('carrierClientId', () => {
+  it('mints one registered clientID per actor and date, and reuses it', () => {
+    const doc = new Y.Doc();
+    const a = carrierClientId(doc, 'human:Luc', T0);
+    expect(a).not.toBe(doc.clientID);
+    expect(getRegisteredActor(doc, a)).toBe('human:Luc');
+    expect(getRegisteredAt(doc, a)).toBe(T0);
+    expect(carrierClientId(doc, 'human:Luc', T0)).toBe(a);
+    expect(carrierClientId(doc, 'human:Luc', T0 + 1)).not.toBe(a);
+    expect(isOwnClient(doc, a)).toBe(true);
   });
 
-  it('falls back to human:unknown when no display name is set', () => {
+  it('is own only to the doc instance that minted it, not to a reopened copy', () => {
+    const a = new Y.Doc();
+    const carrier = carrierClientId(a, 'human:Luc', T0);
+    const b = new Y.Doc();
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    expect(isOwnClient(a, carrier)).toBe(true);
+    expect(isOwnClient(b, carrier)).toBe(false);
+    expect(carrierClientId(b, 'human:Luc', T0)).not.toBe(carrier);
+  });
+
+  it('leaves unknown authors unmapped and undated ones undated', () => {
     const doc = new Y.Doc();
-    classifyPendingPaste(doc, 12345, 'human', null, T0);
-    expect(getRegisteredActor(doc, 12345)).toBe('human:unknown');
+    expect(getRegisteredActor(doc, carrierClientId(doc, null, null))).toBeNull();
+    const undated = carrierClientId(doc, 'human:Luc', null);
+    expect(getRegisteredActor(doc, undated)).toBe('human:Luc');
+    expect(getRegisteredAt(doc, undated)).toBeNull();
   });
 });
 

@@ -34,7 +34,7 @@ import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import type * as Y from 'yjs';
 import { getAuthorshipRuns } from '../../../lib/authorship-runs';
 import type { AuthorshipRun } from '../../../lib/authorship-runs';
-import { getClientActorMap, getRegisteredAt } from '../../../lib/provenance';
+import { GENERIC_HUMAN_ACTOR, getClientActorMap, getRegisteredAt } from '../../../lib/provenance';
 import {
   ACTIVITY_MAP,
   eventCoversItems,
@@ -151,6 +151,9 @@ function categoryOf(actor: string | undefined): Category {
 /** 'human:Luc' → 'Luc'; 'ai:opus-4.8:luc' → 'opus-4.8 (luc)'; undefined → 'Unknown'. */
 export function actorDisplayName(actor: string | undefined): string {
   if (!actor) return 'Unknown';
+  // human:unknown: a human whose name we don't know (the paste popover's
+  // "Human", or a writer without a display name)
+  if (actor === GENERIC_HUMAN_ACTOR) return 'Human';
   if (actor.startsWith('human:')) return actor.slice('human:'.length) || 'Unknown';
   if (actor.startsWith('ai:')) {
     const [, model, behalf] = actor.split(':');

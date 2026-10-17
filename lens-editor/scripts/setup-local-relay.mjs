@@ -127,6 +127,15 @@ const READ_ALOUD_HTML = `<!doctype html>
 </html>
 `;
 
+// Who wrote each part of the provenance demo: actor keys and registration
+// dates as the editor's provenance layer writes them (src/lib/provenance.ts).
+const PROVENANCE_DEMO = [
+  { actor: 'human:Luc', at: T.thisWeek, text: '# Provenance Demo\n\nLuc wrote this first paragraph by hand, on a quiet morning.\n\n' },
+  { actor: 'ai:fable-5:Luc', at: T.today, text: "Luc's AI drafted this second paragraph, which Luc asked for.\n\n" },
+  { actor: 'human:Luc', at: T.thisWeek, text: 'Luc added this third paragraph by hand.\n\n' },
+  { actor: null, at: null, text: 'Nobody knows who wrote this last paragraph.\n' },
+];
+
 // Two test folders for multi-folder support testing.
 // Suggestions use a mix of authors (AI, Bob, Carol) and time buckets so that
 // every combination of the author / time / folder filters produces results.
@@ -471,6 +480,16 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
         type: 'file',
         version: 0,
         content: READ_ALOUD_HTML,
+      },
+      // Provenance demo: paragraphs by Luc, Luc's AI and an unknown writer, so
+      // the authorship gutter, moved lines and copy/paste have something to keep.
+      {
+        path: '/Provenance Demo.md',
+        id: 'c0000016-0000-4000-8000-000000000016',
+        type: 'markdown',
+        version: 0,
+        content: PROVENANCE_DEMO.map((p) => p.text).join(''),
+        authored: PROVENANCE_DEMO,
       },
     ],
   },
@@ -863,6 +882,32 @@ const EDU_DOCS = [
   { path: '/articles/recursion-magic.md', id: 'e000000b-0000-4000-8000-00000000000b', type: 'markdown', version: 0, file: 'articles/recursion-magic.md' },
 ].map(d => ({ ...d, content: readEduFile(d.file) })).filter(d => d.content !== null);
 
+/** Write `parts` into the doc's text, each under its own clientID mapped to its
+ *  actor in the `users` map (an actor of null stays unmapped: unknown). */
+function writeAuthored(doc, text, parts) {
+  const sessionId = doc.clientID;
+  const users = doc.getMap('users');
+  parts.forEach((part, i) => {
+    const clientID = 0x5eed0000 + i;
+    doc.clientID = clientID;
+    text.insert(text.length, part.text);
+    if (!part.actor) return;
+    doc.transact(() => {
+      let entry = users.get(part.actor);
+      if (!entry) {
+        entry = new Y.Map();
+        users.set(part.actor, entry);
+        entry.set('ids', new Y.Array());
+        entry.set('ds', new Y.Array());
+        entry.set('meta', new Y.Map());
+      }
+      entry.get('ids').push([clientID]);
+      entry.get('meta').set(String(clientID), { registeredAt: part.at });
+    });
+  });
+  doc.clientID = sessionId;
+}
+
 async function createDoc(docId) {
   const response = await fetch(`${RELAY_URL}/doc/new`, {
     method: 'POST',
@@ -985,7 +1030,10 @@ async function populateDocContent(testDoc) {
     const text = doc.getText('contents');
 
     // Only populate if empty
-    if (text.length === 0) {
+    if (text.length === 0 && testDoc.authored) {
+      writeAuthored(doc, text, testDoc.authored);
+      console.log(`    ✓ ${testDoc.path} - content added, with authors`);
+    } else if (text.length === 0) {
       text.insert(0, testDoc.content);
       console.log(`    ✓ ${testDoc.path} - content added`);
     } else {
