@@ -641,9 +641,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
                 : 'flex shrink-0 rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100'}
               onClick={() => classifyPaste(pastePrompt.pasteId, option.origin)}
             >
-              {option.origin === 'self-ai' ? (
+              {option.name ? (
                 <>
-                  <span className="max-w-[min(10rem,22vw)] truncate">{option.label.slice(0, -"'s AI".length)}</span>
+                  <span className="max-w-[min(10rem,22vw)] truncate">{option.name}</span>
                   <span>'s AI</span>
                 </>
               ) : (

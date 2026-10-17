@@ -153,17 +153,17 @@ interface ActivePlan {
   pieces: { from: number; to: number; client: number }[];
 }
 
+/** The plan of the update being written, per Y.Text: shared by every editor
+ *  on it, since the split insert is installed only once (an editor can be
+ *  created again for the same Y.Text, e.g. by a React remount). */
+const activePlans = new WeakMap<Y.Text, ActivePlan>();
+
 /**
  * Split yCollab's inserts of a planned update into per-author pieces. yCollab
  * writes each inserted chunk with one ytext.insert(index, text) call, at the
  * chunk's new-doc position; while a plan is active, this writes the carried
  * pieces of the chunk under their clientIDs and the rest as usual.
  */
-/** The plan of the update being written, per Y.Text: shared by every editor
- *  on it, since the split insert is installed only once (an editor can be
- *  created again for the same Y.Text, e.g. by a React remount). */
-const activePlans = new WeakMap<Y.Text, ActivePlan>();
-
 function installSplittingInsert(ydoc: Y.Doc, ytext: Y.Text): void {
   const marker = ytext as Y.Text & { __carriedInsert?: true };
   if (marker.__carriedInsert) return;
@@ -207,6 +207,8 @@ export function keepAuthorship(ydoc: Y.Doc, ytext: Y.Text): Extension {
     EditorView.domEventHandlers({
       copy: (_event, view) => remember(view),
       cut: (_event, view) => remember(view),
+      // CodeMirror drags the main selection only (not every range, nor whole
+      // lines as a copy does), so this records just that
       dragstart: (_event, view) => {
         const { from, to } = view.state.selection.main;
         if (from < to && ytext.length === view.state.doc.length) {

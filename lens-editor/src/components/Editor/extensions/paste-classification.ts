@@ -23,6 +23,7 @@ import type { Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type * as Y from 'yjs';
 import {
+  claimClientId,
   freshClientId,
   markPendingClassification,
 } from '../../../lib/provenance';
@@ -51,13 +52,19 @@ export function pasteClassification(ydoc: Y.Doc): Extension {
       if (view.state.readOnly) return false;
       const text = event.clipboardData?.getData('text/plain') ?? '';
       if (text.length < MIN_CLASSIFY_CHARS) return false;
-      const carried = recallCopied(normalizeLineBreaks(text));
+      // Only a single-cursor paste re-uses the copy as a whole (keepAuthorship
+      // finds no match in a paste spread over several cursors), so only then
+      // can the remembered authors stand in for the prompt.
+      const carried = view.state.selection.ranges.length === 1
+        ? recallCopied(normalizeLineBreaks(text))
+        : null;
       if (carried && unmarkedLength(carried) < MIN_CLASSIFY_CHARS) return false;
       const partial = !!carried?.some((s) => s.author?.actor);
 
       const sessionId = ydoc.clientID;
       const pasteId = freshClientId(ydoc);
       markPendingClassification(pasteId);
+      claimClientId(ydoc, pasteId);
       ydoc.clientID = pasteId;
       const from = view.state.selection.main.from;
 

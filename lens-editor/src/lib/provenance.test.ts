@@ -271,6 +271,16 @@ describe('carrierClientId', () => {
     expect(isOwnClient(doc, a)).toBe(true);
   });
 
+  it('is own only to the doc instance that minted it, not to a reopened copy', () => {
+    const a = new Y.Doc();
+    const carrier = carrierClientId(a, 'human:Luc', T0);
+    const b = new Y.Doc();
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a));
+    expect(isOwnClient(a, carrier)).toBe(true);
+    expect(isOwnClient(b, carrier)).toBe(false);
+    expect(carrierClientId(b, 'human:Luc', T0)).not.toBe(carrier);
+  });
+
   it('leaves unknown authors unmapped and undated ones undated', () => {
     const doc = new Y.Doc();
     expect(getRegisteredActor(doc, carrierClientId(doc, null, null))).toBeNull();

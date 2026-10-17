@@ -130,7 +130,7 @@ const READ_ALOUD_HTML = `<!doctype html>
 // Who wrote each part of the provenance demo: actor keys and registration
 // dates as the editor's provenance layer writes them (src/lib/provenance.ts).
 const PROVENANCE_DEMO = [
-  { actor: 'human:Luc', at: T.thisWeek, text: '# Provenance Demo\n\nLuc wrote this first paragraph himself, on a quiet morning.\n\n' },
+  { actor: 'human:Luc', at: T.thisWeek, text: '# Provenance Demo\n\nLuc wrote this first paragraph by hand, on a quiet morning.\n\n' },
   { actor: 'ai:fable-5:Luc', at: T.today, text: "Luc's AI drafted this second paragraph, which Luc asked for.\n\n" },
   { actor: 'human:Luc', at: T.thisWeek, text: 'Luc added this third paragraph by hand.\n\n' },
   { actor: null, at: null, text: 'Nobody knows who wrote this last paragraph.\n' },

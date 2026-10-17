@@ -202,6 +202,8 @@ export interface PasteOriginOption {
   origin: PasteOrigin;
   label: string;
   kind: 'human' | 'ai';
+  /** The writer's name, for "self-ai": shown truncatable, with a fixed "'s AI". */
+  name?: string;
 }
 
 /**
@@ -219,7 +221,7 @@ export function pasteOriginOptions(displayName: string | null): PasteOriginOptio
   if (!name) return generic;
   return [
     { origin: 'self', label: name, kind: 'human' },
-    { origin: 'self-ai', label: `${name}'s AI`, kind: 'ai' },
+    { origin: 'self-ai', label: `${name}'s AI`, kind: 'ai', name },
     ...generic,
   ];
 }
@@ -257,12 +259,23 @@ export function classifyPendingPaste(
  * makes reusing them safe (a clientID shared by two writers corrupts the doc).
  */
 const carriers = new WeakMap<Y.Doc, Map<string, number>>();
-const carrierIds = new Set<number>();
+
+/** Extra clientIDs this Y.Doc instance minted and writes under (carriers and
+ *  paste IDs). Per instance: a doc opened again is a new Y.Doc that receives
+ *  text under the old instance's IDs, and must not write under them. */
+const ownClients = new WeakMap<Y.Doc, Set<number>>();
+
+/** Record that this Y.Doc instance minted `clientID` to write under. */
+export function claimClientId(doc: Y.Doc, clientID: number): void {
+  let ids = ownClients.get(doc);
+  if (!ids) ownClients.set(doc, (ids = new Set()));
+  ids.add(clientID);
+}
 
 /** Whether this doc instance may write under `clientID` itself: its own
- *  session ID, a paste awaiting classification, or a carrier it minted. */
+ *  session ID, or an ID it minted (a carrier, a paste's ID). */
 export function isOwnClient(doc: Y.Doc, clientID: number): boolean {
-  return clientID === doc.clientID || isPendingClassification(clientID) || carrierIds.has(clientID);
+  return clientID === doc.clientID || !!ownClients.get(doc)?.has(clientID);
 }
 
 /**
@@ -279,7 +292,7 @@ export function carrierClientId(doc: Y.Doc, actor: string | null, at: number | n
   const id = freshClientId(doc);
   if (actor !== null) registerClientMapping(doc, actor, at, id);
   byKey.set(key, id);
-  carrierIds.add(id);
+  claimClientId(doc, id);
   return id;
 }
 
