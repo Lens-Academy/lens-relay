@@ -161,4 +161,63 @@ describe("normalizeArticleBody", () => {
       expect(normalizeArticleBody(untouched, "https://example.com", pdf).body).toBe(untouched);
     }
   });
+
+  it("trims Datalab's padding around inline math in PDF bodies only", () => {
+    // From "Compact Proofs of Model Performance via Mechanistic
+    // Interpretability" (arXiv 2406.11779), imported through the PDF path.
+    const input = [
+      "A small transformer trained on Max-of- $K$ , validating proof transfer.",
+      "Let  $\\mathcal{M} : X \\rightarrow Y$  be a model, ( $l, t$ ) a pair, and  $a$  $b$  two values.",
+      "Keep x - $y$ and $z$ -dimensional, `code  $x$  here`, $$a$$  then.",
+    ].join("\n");
+    expect(normalizeArticleBody(input, "https://example.com/a").body).toBe(input);
+    const pdf = { pdf: true };
+    const { body, changes } = normalizeArticleBody(input, "https://example.com/a.pdf", pdf);
+    expect(body.split("\n")).toEqual([
+      "A small transformer trained on Max-of-$K$, validating proof transfer.",
+      "Let $\\mathcal{M} : X \\rightarrow Y$ be a model, ($l, t$) a pair, and $a$ $b$ two values.",
+      "Keep x - $y$ and $z$ -dimensional, `code  $x$  here`, $$a$$  then.",
+    ]);
+    expect(changes.find((c) => c.code === "normalize.pdf-inline-math-padding")?.count).toBeGreaterThan(0);
+    expect(normalizeArticleBody(body, "https://example.com/a.pdf", pdf).body).toBe(body);
+    for (const untouched of [
+      "See value $x$ ![figure](_page_3_Picture_1.jpeg) here.",
+      "between $0$ .5 and $1$",
+      "between $0$ ,5 and $1$ ,000",
+      ">     a = f( $x$ );",
+      "-     $K$",
+      "We need $x$ != 0.",
+      "Code:\n\n  \tf( $x$ ) = 1;",
+      "1.     a = f( $x$ );",
+      "Code:\n\n    foo( $x$ );\n    bar( $y$ );",
+    ]) {
+      expect(normalizeArticleBody(untouched, "https://example.com/a.pdf", pdf).body).toBe(untouched);
+    }
+  });
+
+  describe("display math fences", () => {
+    const fence = (body: string) => normalizeArticleBody(body, "https://example.com").body;
+
+    it("fences a one-line display formula that is a block of its own", () => {
+      expect(fence("Text.\n\n$$x^2 + y^2$$\n\nMore.")).toBe("Text.\n\n$$\nx^2 + y^2\n$$\n\nMore.");
+    });
+
+    it("keeps the container prefix in a blockquote and on multi-line TeX in a list", () => {
+      expect(fence("> Quote.\n>\n> $$a = b$$\n")).toContain("> $$\n> a = b\n> $$");
+      // Idempotent: already fenced math, quoted or not, is left as it is.
+      for (const body of ["> Quote.\n>\n> $$a = b$$\n", "Text.\n\n$$x$$\n", "-   Item.\n\n    $$\\liminf_n a_n =\n        b$$\n"]) {
+        expect(fence(fence(body))).toBe(fence(body));
+      }
+      expect(fence("> Quote.\n>\n> $$\n> a = b\n> $$\n")).toBe("> Quote.\n>\n> $$\n> a = b\n> $$\n");
+      // A continuation line without the list indentation: leave it alone.
+      expect(fence("-   Item.\n\n    $$a =\nb$$\n\nAfter.")).toBe("-   Item.\n\n    $$a =\nb$$\n\nAfter.");
+      expect(fence("-   Item.\n\n    $$\\liminf_n a_n =\n        b$$\n")).toContain("    $$\n    \\liminf_n a_n =\n        b\n    $$");
+    });
+
+    it("leaves display math inside a paragraph, and a literal dollar before inline math, alone", () => {
+      expect(fence("We get $$x$$ here.")).toBe("We get $$x$$ here.");
+      expect(fence("Text\n$$x$$\n")).toBe("Text\n$$x$$\n");
+      expect(fence("Bet \\$$t$ now.")).toBe("Bet \\$$t$ now.");
+    });
+  });
 });

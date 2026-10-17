@@ -2,7 +2,7 @@
 
 Full article imports now use one mandatory, fail-closed review pipeline. Stubs are exempt.
 
-1. Fetch the source with the importer's SSRF-safe adapters. PDFs retain their original bytes; every HTML page is rendered through Jina before extraction, while the direct response remains as unrendered provenance.
+1. Fetch the source with the importer's SSRF-safe adapters. PDFs retain their original bytes; every HTML page is rendered through Jina before extraction, while the direct response remains as unrendered provenance. Structured sources are the exception: an arXiv paper is read from its e-print LaTeX (converted by `pandoc --sandbox`, `server/add-article/arxiv-latex.ts`; arXiv's own HTML and then the PDF are the fallbacks), and LessWrong / Alignment Forum posts and wiki pages from the forum's GraphQL API, which keeps their math. Their converted HTML is the single candidate and is not rendered through Jina.
 2. Extract Markdown deterministically and prepare hosted images.
 3. Apply syntax-aware, idempotent, source-preserving normalizations. Code,
    comments, CriticMarkup, and math are opaque to these repairs.
@@ -11,9 +11,9 @@ Full article imports now use one mandatory, fail-closed review pipeline. Stubs a
 6. Programmatically protect pipeline-owned metadata and authoring comments, regenerate metadata, and validate again. Up to two additional repair rounds are allowed.
 7. Stamp review provenance, validate the exact final file, then write it to Relay.
 
-Any missing validator configuration, Platform outage, Claude failure/timeout, inaccessible source, rejected review, unsafe patch, or remaining validation error prevents the article write. Warnings remain review context and do not block a reviewed draft. PDF figure upload failure also blocks; arXiv image-hosting failure retains the original external image.
+Any missing validator configuration, Platform outage, Claude failure/timeout, inaccessible source, rejected review, unsafe patch, or remaining validation error prevents the article write. Warnings remain review context and do not block a reviewed draft. PDF figure upload failure also blocks, and so does a figure from an arXiv e-print (hosted the same way); a hotlinked image that fails to rehost keeps its original external URL.
 
-The lens-editor container needs `LENS_PLATFORM_URL`, `ADHOC_VALIDATION_SECRET`, and `JINA_API_KEY`. The validation secret must match Lens Platform. Article jobs default to 25 minutes and may be overridden with `ARTICLE_JOB_TIMEOUT_MS`.
+The lens-editor container needs `LENS_PLATFORM_URL`, `ADHOC_VALIDATION_SECRET`, and `JINA_API_KEY`. The validation secret must match Lens Platform. Article jobs default to 25 minutes and may be overridden with `ARTICLE_JOB_TIMEOUT_MS`; an article over 100k characters gets up to two hours more, and each review pass up to an hour (`jobDeadlineExtensionMs`, `scaledVerifyTimeoutMs`). The container needs `pandoc` and `pdftoppm` (the Dockerfile installs `pandoc-cli` and `poppler-utils`); without pandoc arXiv imports fall back to arXiv's HTML and the PDF, without pdftoppm PDF figures are dropped.
 
 For HTML evidence, `source-unrendered.html` is the direct response and
 `source-rendered.html` is the line-bounded Jina result used for extraction and

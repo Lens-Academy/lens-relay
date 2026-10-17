@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type * as Y from 'yjs';
 import type { Awareness } from 'y-protocols/awareness';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { useHeaderCommentsControl } from '../../contexts/HeaderActionsContext';
 import { useMobile } from '../../contexts/MobileContext';
+import { NavigationContext } from '../../contexts/NavigationContext';
 import { MobileDrawer } from '../Mobile/MobileDrawer';
 import { MobileCommentsSheet, type PendingCommentAction } from '../Mobile/MobileCommentsSheet';
 import { HtmlSourceEditor } from './HtmlSourceEditor';
@@ -17,6 +18,10 @@ import { useHtmlComments } from './comments/useHtmlComments';
 import { describeAnchorTarget, type HtmlAnchor } from './anchoring/types';
 import type { AnchorCapture, PageProblem, Rect } from './bridge/protocol';
 import { SCRIPT_HOSTS } from './runtime/page-runtime';
+import { ReadAloudEngine } from '../../lib/read-aloud/engine';
+import { readAloudAvailable } from '../../lib/read-aloud/api';
+import { ListenButton } from '../ReadAloud/ListenButton';
+import { ReadAloudBar } from '../ReadAloud/ReadAloudBar';
 
 type Mode = 'source' | 'preview' | 'split';
 type PreviewWidth = 'desktop' | 'phone';
@@ -112,6 +117,7 @@ export function HtmlEditor({
   storageKey,
 }: HtmlEditorProps) {
   const { displayName } = useDisplayName();
+  const openQuickSwitcher = useContext(NavigationContext)?.openQuickSwitcher;
   const currentUser = currentUserProp ?? displayName ?? 'Anonymous';
   const [mode, setMode] = useState<Mode>(initialMode);
   const [commentsVisible, setCommentsVisible] = useState(readCommentsVisible);
@@ -135,6 +141,15 @@ export function HtmlEditor({
   const canComment = !readOnly;
 
   const previewRef = useRef<HtmlPreviewHandle>(null);
+  // Read-aloud plays here; the preview frame supplies the sentences and highlights.
+  const [readAloud] = useState(() => new ReadAloudEngine());
+  useEffect(() => () => readAloud.destroy(), [readAloud]);
+  const [readAloudOn, setReadAloudOn] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    readAloudAvailable().then(ok => { if (!cancelled) setReadAloudOn(ok); });
+    return () => { cancelled = true; };
+  }, []);
   const describeLegacy = useCallback((ids: string[]) => previewRef.current?.describeLegacy(ids), []);
   const comments = useHtmlComments({ ytext, currentUser, canWrite: canComment, showResolved, describeLegacy });
   const { placements } = comments;
@@ -396,6 +411,9 @@ export function HtmlEditor({
           {commentMode ? 'Commenting…' : 'Comment'}
         </button>
       )}
+      {mode !== 'source' && (
+        <ListenButton engine={readAloud} onStart={() => previewRef.current?.startReadAloud()} />
+      )}
       {mode !== 'source' && pageProblems.length > 0 && (
         <button
           type="button"
@@ -551,13 +569,17 @@ export function HtmlEditor({
                   if (commentMode) exitCommentMode();
                   else startCommentMode();
                 }}
+                onQuickSwitcher={openQuickSwitcher}
                 onSelectionChanged={onSelectionChanged}
                 onLegacyDescribed={comments.onLegacyDescribed}
                 onCurrentDescribed={onCurrentDescribed}
                 storageKey={storageKey}
                 onPageProblems={setPageProblems}
+                readAloud={readAloud}
+                readAloudEnabled={readAloudOn}
               />
             </div>
+            <ReadAloudBar engine={readAloud} />
           </div>
         )}
         {mode !== 'source' && commentsVisible && !isMobile && (

@@ -11,6 +11,7 @@ port = 8080                      # PORT
 # entries). Restore before then by moving it out of _trash. 0 disables the
 # purge; fractional values are accepted for local testing.
 trash_retention_days = 10        # RELAY_SERVER_TRASH_RETENTION_DAYS / --trash-retention-days
+trash_purge_dry_run = true      # RELAY_SERVER_TRASH_PURGE_DRY_RUN; true = sweep only logs what it would purge
 
 [metrics]
 port = 9090                      # METRICS_PORT

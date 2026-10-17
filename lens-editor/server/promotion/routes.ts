@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { verifyShareToken, roleAtLeast } from '../share-token.ts';
+import { verifyShareToken, roleAtLeast, shareTokenFromHeaders } from '../share-token.ts';
 import { PromotionError, type PromotionPrResponse } from './types.ts';
 
 const PROMOTION_ERROR_STATUS_CODES = [
@@ -39,7 +39,7 @@ export function createPromotionRoutes(service: PromotionRouteService): Hono {
   });
 
   app.use('*', async (c, next) => {
-    const token = extractPromotionToken(c.req.header('X-Share-Token'), c.req.header('Authorization'));
+    const token = shareTokenFromHeaders(c.req.header('X-Share-Token'), c.req.header('Authorization'));
     if (!token) {
       return c.json({ error: 'Promotion authentication required' }, 401);
     }
@@ -103,13 +103,6 @@ function toPromotionErrorStatusCode(status: number): PromotionErrorStatusCode {
   return PROMOTION_ERROR_STATUS_CODES.includes(status as PromotionErrorStatusCode)
     ? status as PromotionErrorStatusCode
     : 500;
-}
-
-function extractPromotionToken(shareTokenHeader: string | undefined, authorizationHeader: string | undefined): string | null {
-  if (shareTokenHeader?.trim()) return shareTokenHeader.trim();
-
-  const match = authorizationHeader?.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -8,6 +8,7 @@ import { getPlatformUrl } from '../lib/platform-url';
 import { extractFrontmatter } from '../lib/frontmatter';
 import { shortUuid } from '../lib/url-utils';
 import { RELAY_ID } from '../App';
+import { useDocTabTitle, docDisplayName } from '../hooks/useDocTabTitle';
 
 interface DocumentTitleProps {
   currentDocId: string;
@@ -24,10 +25,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
   // Find the prefixed path for this UUID in merged metadata
   const path = findPathByUuid(uuid, metadata);
 
-  // Extract display name (filename without .md extension)
-  const displayName = path
-    ? path.split('/').pop()?.replace(/\.md$/, '') ?? ''
-    : '';
+  const displayName = docDisplayName(path);
 
   const [value, setValue] = useState(displayName);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -38,11 +36,7 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
     setRenameError(null);
   }, [displayName]);
 
-  // Update browser tab title to reflect current document
-  useEffect(() => {
-    document.title = displayName ? `${displayName} - Editor` : 'Editor';
-    return () => { document.title = 'Editor'; };
-  }, [displayName]);
+  useDocTabTitle(currentDocId);
 
   // Auto-focus and select when document was just created via instant-create
   useEffect(() => {

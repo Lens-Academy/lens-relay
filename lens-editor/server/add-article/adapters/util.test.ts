@@ -1,5 +1,32 @@
 import { describe, it, expect } from "vitest";
-import { isVideoEmbedUrl, videoEmbedMarker, stripSiteSuffix } from "./util";
+import { JSDOM } from "jsdom";
+import { isVideoEmbedUrl, LITERAL_DOLLAR_ATTR, markLiteralDollars, videoEmbedMarker, stripSiteSuffix } from "./util";
+
+describe("markLiteralDollars", () => {
+  const run = (html: string) => {
+    const doc = new JSDOM(`<body><div id="r">${html}</div></body>`).window.document;
+    const root = doc.getElementById("r")!;
+    markLiteralDollars(root as unknown as Element);
+    return root.innerHTML;
+  };
+
+  it("marks prose dollars and leaves math, code and MathJax alone", () => {
+    expect(run("pay $1 or $2 <code>$x$</code><math alttext=\"y\">$</math><span class=\"mjpage\">$</span>")).toBe(
+      `pay <span ${LITERAL_DOLLAR_ATTR}="">$</span>1 or <span ${LITERAL_DOLLAR_ATTR}="">$</span>2 <code>$x$</code><math alttext="y">$</math><span class="mjpage">$</span>`,
+    );
+  });
+
+  it("moves a dollar glued to an inline formula into its TeX as \\textdollar", () => {
+    expect(run("risked more than $<math alttext=\"t/2\"></math>")).toBe(
+      'risked more than <math alttext="\\text{\\textdollar}t/2"></math>',
+    );
+    // The same before a forum's MathJax formula.
+    expect(run('The prize is $<span class="math-tex"><span class="mjpage"><span class="mjx-math" aria-label="t/2">t</span></span></span> dollars.')).toBe(
+      'The prize is <span class="math-tex"><span class="mjpage"><span class="mjx-math" aria-label="\\text{\\textdollar}t/2">t</span></span></span> dollars.',
+    );
+  });
+});
+
 
 describe("stripSiteSuffix", () => {
   it("strips known community-site suffixes with no context (tier 1)", () => {

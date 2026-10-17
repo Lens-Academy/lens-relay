@@ -9,6 +9,7 @@ import {
 } from './protocol';
 import { installPageServices } from './page-services';
 import { installCommentLayer } from './comment-layer';
+import { installTtsLayer } from './tts-layer';
 import { readAnchor } from '../anchoring/types';
 
 // Bumped whenever comment placements are re-measured; scroll-state messages
@@ -97,7 +98,27 @@ export function installBridge(win: Window & typeof globalThis): () => void {
     bumpLayoutVersion: () => { layoutVersion++; },
   });
 
+  let commentMode = false;
+  const tts = installTtsLayer(win, {
+    post: message => { if (nonce !== null) postToParent(message); },
+    commentMode: () => commentMode,
+  });
+
   postToParent({ type: 'ready', payload: {} });
+
+  // Ctrl/Cmd+O opens the editor's quick switcher, as it does outside the
+  // page. Prevent it at once, or the browser offers to open a file; that must
+  // be synchronous, so a page sees it first only from element or document
+  // handlers (its window listeners run after ours). The parent honours it only
+  // with user activation.
+  const onQuickSwitchKey = (event: KeyboardEvent): void => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+    if (event.key !== 'o' && event.key !== 'O') return;
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    if (nonce !== null) postToParent({ type: 'shortcut', payload: { key: 'o' } });
+  };
+  win.addEventListener('keydown', onQuickSwitchKey);
 
   let scrollFrame: number | null = null;
   let restoreFrame: number | null = null;
@@ -212,7 +233,33 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       }
       case 'set-comment-mode':
         if (!isObject(msg.payload)) return;
-        comments.setCommentMode(msg.payload.on === true);
+        commentMode = msg.payload.on === true;
+        comments.setCommentMode(commentMode);
+        break;
+      case 'tts-state':
+        if (!isObject(msg.payload)) return;
+        tts.setState({
+          enabled: msg.payload.enabled === true,
+          open: msg.payload.open === true,
+          playing: msg.payload.playing === true,
+        });
+        break;
+      case 'tts-highlight': {
+        if (!isObject(msg.payload)) return;
+        const { unit, word } = msg.payload;
+        const range = isObject(word) && Number.isInteger(word.start) && Number.isInteger(word.end)
+          ? { start: word.start as number, end: word.end as number }
+          : null;
+        tts.setHighlight({
+          unit: Number.isInteger(unit) ? unit as number : null,
+          word: range,
+          follow: msg.payload.follow === true,
+        });
+        break;
+      }
+      case 'tts-request-units':
+        if (!isObject(msg.payload)) return;
+        tts.sendUnits(msg.payload.start === true);
         break;
       case 'capture-selection':
         comments.captureSelection();
@@ -264,6 +311,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
   const cleanup = (): void => {
     win.removeEventListener('message', messageListener);
     win.removeEventListener('scroll', scheduleScrollState);
+    win.removeEventListener('keydown', onQuickSwitchKey);
     if (scrollFrame !== null) {
       win.cancelAnimationFrame(scrollFrame);
       scrollFrame = null;
@@ -273,6 +321,7 @@ export function installBridge(win: Window & typeof globalThis): () => void {
       restoreFrame = null;
     }
     comments.cleanup();
+    tts.cleanup();
     pageServices.cleanup();
     if (bridgeWin[BRIDGE_STATE_KEY]?.cleanup === cleanup) {
       delete bridgeWin[BRIDGE_STATE_KEY];

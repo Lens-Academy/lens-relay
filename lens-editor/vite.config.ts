@@ -247,6 +247,18 @@ export default defineConfig(() => {
     };
   }
 
+  /** Dev /api/tts endpoints (read-aloud's Speechify proxy). */
+  function ttsPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'tts-api',
+      path: '/api/tts',
+      loadApp: async () => {
+        const { createTtsRoutes } = await import('./server/tts/routes.ts');
+        return createTtsRoutes();
+      },
+    });
+  }
+
   /** Dev /api/attachments endpoints (relay MCP import_attachment backend). */
   function attachmentsPlugin(): Plugin {
     return honoDevPlugin({
@@ -293,6 +305,22 @@ export default defineConfig(() => {
         const gitPromotion = createGitPromotionService(promotionConfig);
         const githubPromotion = createGitHubPromotionService(promotionConfig);
         return createPromotionRoutes(createPromotionRouteService(gitPromotion, githubPromotion));
+      },
+    });
+  }
+
+  /**
+   * Dev /api/content-status (the content status panel's proxy), so the panel
+   * gets the router's JSON 404 instead of Vite's SPA fallback when the
+   * setting is off. The router reads CONTENT_STATUS_ENABLED itself.
+   */
+  function contentStatusPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'content-status-api',
+      path: '/api/content-status',
+      loadApp: async () => {
+        const { createContentStatusRoutes } = await import('./server/content-status/routes.ts');
+        return createContentStatusRoutes();
       },
     });
   }
@@ -410,7 +438,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,

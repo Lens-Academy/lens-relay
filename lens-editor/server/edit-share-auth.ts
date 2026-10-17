@@ -1,5 +1,11 @@
 import type { Context, MiddlewareHandler } from "hono";
-import { verifyShareToken, roleAtLeast, type ShareTokenPayload } from "./share-token";
+import type { UserRole } from "../shared/types";
+import {
+  roleAtLeast,
+  shareTokenFromHeaders,
+  verifyShareToken,
+  type ShareTokenPayload,
+} from "./share-token";
 
 /** The relay folder the importer and attachment routes serve. */
 export const EDU_FOLDER = "ea4015da-24af-4d9d-ac49-8c902cb17121";
@@ -9,7 +15,7 @@ const ALL_FOLDERS = "00000000-0000-0000-0000-000000000000";
 
 const CONTEXT_KEY = "shareTokenPayload";
 
-/** The verified payload set by [`requireEduEditShareToken`]. */
+/** The verified payload set by [`requireEduShareToken`]. */
 export function shareTokenPayload(c: Context): ShareTokenPayload | undefined {
   return c.get(CONTEXT_KEY) as ShareTokenPayload | undefined;
 }
@@ -30,28 +36,30 @@ export function tokenAllowsFolderName(
 }
 
 /**
- * Hono middleware: require a `share` token with at least edit role on the
- * Lens Edu folder (or an all-folders token). Shared by the add-article and
- * attachment routes; the relay MCP tools forward the caller's own share
- * token as the Bearer, so this is where role and folder are enforced.
+ * Hono middleware: require a `share` token, from `X-Share-Token` or
+ * `Authorization: Bearer`, with at least `minRole` on the Lens Edu folder (or
+ * an all-folders token). The add-article and attachment routes ask for edit:
+ * the relay MCP tools forward the caller's own share token as the Bearer, so
+ * this is where role and folder are enforced. The content status panel asks
+ * for view.
  */
-export function requireEduEditShareToken(): MiddlewareHandler {
+export function requireEduShareToken({ minRole }: { minRole: UserRole }): MiddlewareHandler {
   return async (c, next) => {
-    const authHeader = c.req.header("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const token = shareTokenFromHeaders(c.req.header("X-Share-Token"), c.req.header("Authorization"));
+    if (!token) {
       return c.json({ error: "Authorization header required" }, 401);
     }
-    const payload = verifyShareToken(authHeader.slice(7));
+    const payload = verifyShareToken(token);
     if (!payload) {
       return c.json({ error: "Invalid or expired token" }, 401);
     }
     if (payload.purpose !== "share") {
       return c.json({ error: "Share token required" }, 403);
     }
-    if (!roleAtLeast(payload.role, "edit")) {
-      return c.json({ error: "Edit access required" }, 403);
+    if (!roleAtLeast(payload.role, minRole)) {
+      return c.json({ error: `${minRole[0].toUpperCase()}${minRole.slice(1)} access required` }, 403);
     }
-    if (payload.folder !== EDU_FOLDER && payload.folder !== ALL_FOLDERS) {
+    if (!tokenAllowsFolderName(payload, EDU_FOLDER_NAME)) {
       return c.json({ error: "Access denied: wrong folder scope" }, 403);
     }
     c.set(CONTEXT_KEY, payload);

@@ -104,7 +104,8 @@ function sourceSegments(source: string): Segment[] {
       continue;
     }
 
-    if (source.startsWith("$$", index)) {
+    // `\$$x$` is a literal dollar followed by inline math, not a display opener.
+    if (source.startsWith("$$", index) && source[index - 1] !== "\\") {
       const close = source.indexOf("$$", index + 2);
       protect(close < 0 ? source.length : close + 2);
       continue;
@@ -147,6 +148,87 @@ function repairListItemBoldOpener(marker: string, rest: string): string {
   return `${marker}**${rest}`;
 }
 
+/** A protected segment that starts with inline math (`$x$`, not `$$`). */
+function startsWithInlineMath(segment: Segment | undefined): boolean {
+  return !!segment && !segment.eligible && /^\$(?!\$)/.test(segment.text);
+}
+
+/** A protected segment that ends with inline math (`$x$`, not `$$` or `\$`). */
+function endsWithInlineMath(segment: Segment | undefined): boolean {
+  return !!segment && !segment.eligible && /(?<![$\\])\$$/.test(segment.text);
+}
+
+/**
+ * Datalab's PDF Markdown pads inline math with spaces: "Let  $M$  be",
+ * "Max-of- $K$ , validation". The doubled spaces collapse in HTML, but a space
+ * glued to a hyphen, an opening bracket or closing punctuation shows ("Max-of-
+ * K , validation"). Trim the padding where the PDF had none, for the text on
+ * each side of an inline formula. Prose spacing elsewhere is untouched, and a
+ * single space between words and math stays.
+ */
+function trimInlineMathPadding(
+  text: string,
+  mathBefore: boolean,
+  mathAfter: boolean,
+): string {
+  let out = text;
+  if (mathBefore) {
+    // "$K$ , x" -> "$K$, x"; "$K$  be" -> "$K$ be".
+    // Not before `!` (an image, or `!=`), and not `$0$ .5` or `$1$ ,000`, where the
+    // space may be all that keeps a number from reading differently.
+    out = out.replace(/^ +(?=[;:?)\]]|[.,](?!\d))/, "").replace(/^ {2,}(?=\S)/, " ");
+  }
+  if (mathAfter) {
+    // "Max-of- $K$" -> "Max-of-$K$"; "( $x$" -> "($x$"; "Let  $M$" -> "Let $M$".
+    out = out
+      .replace(/(?<=\w-) +$/, "")
+      .replace(/(?<=[([]) +$/, "")
+      .replace(/(?<=\S) {2,}$/, " ");
+  }
+  // Only spaces between two formulas: "$a$  $b$" -> "$a$ $b$".
+  if (mathBefore && mathAfter && /^ {2,}$/.test(text)) out = " ";
+  return out;
+}
+
+/** What may precede a block on its line: indentation and blockquote markers. */
+const BLOCK_PREFIX = /^(?:[ \t]*>)*[ \t]*$/;
+
+/**
+ * Lens wants an article's display math fenced, `$$` alone on the lines above
+ * and below the TeX (platform validator: article.math-display-delimiter-placement).
+ * The HTML converter writes `$$tex$$` on one line, so a paper with hundreds of
+ * equations reached the reviewer with hundreds of errors to fix by hand.
+ * Rewrites a `$$…$$` math segment only when it is a block of its own (nothing
+ * but indentation or `>` before it on its line, nothing after it), keeping the
+ * prefix on the new lines. Display math inside a paragraph or a table row is
+ * left alone: moving it would change the text around it.
+ */
+function fenceDisplayMath(math: string, before: string | undefined, after: string | undefined): string {
+  const m = /^\$\$([\s\S]*)\$\$$/.exec(math);
+  if (!m) return math;
+  // Already fenced (`$$` alone on its lines): leave it, prefixes and all.
+  if (/^[ \t]*\r?\n[\s\S]*\n[ \t>]*$/.test(m[1])) return math;
+  const tex = m[1].trim();
+  // Adjacent opaque ranges are merged into one segment; never split those.
+  if (!tex || tex.includes("$$")) return math;
+  const lines = (before ?? "").split("\n");
+  const prefix = lines[lines.length - 1];
+  if (!BLOCK_PREFIX.test(prefix)) return math;
+  // A block of its own: a blank line (or the document edge) on both sides,
+  // so the rewrite never pulls an equation out of a paragraph.
+  if (lines.length > 1 && !BLOCK_PREFIX.test(lines[lines.length - 2])) return math;
+  if (after !== undefined && !/^[ \t]*(?:\r?\n(?:[ \t>]*(?:\r?\n|$))|$)/.test(after)) return math;
+  // Inside a blockquote or list, continuation lines of multi-line TeX already
+  // carry the container prefix (the converter indents every line); only the
+  // first line needs it. If any continuation line lacks it, leave the math be.
+  const [first, ...rest] = tex.split("\n");
+  // An indentation-only prefix (a list item) must be there whole; a quote
+  // prefix may lose its trailing space ("> " vs ">").
+  const need = /^[ \t]+$/.test(prefix) ? prefix : prefix.replace(/[ \t]+$/, "");
+  if (prefix && rest.some((line) => !line.startsWith(need))) return math;
+  return `$$\n${prefix}${first}${rest.length ? `\n${rest.join("\n")}` : ""}\n${prefix}$$`;
+}
+
 /** Idempotent, syntax-aware, semantics-preserving repairs only. */
 export function normalizeArticleBody(
   body: string,
@@ -167,6 +249,13 @@ export function normalizeArticleBody(
   };
 
   const segments = sourceSegments(body);
+  // Offsets into `body`, so a segment's surroundings can be read whole (an
+  // inline-math segment right before a display segment must count as text).
+  const starts: number[] = [];
+  segments.reduce((offset, segment) => {
+    starts.push(offset);
+    return offset + segment.text.length;
+  }, 0);
   const transformed = segments.map((segment, i) => {
     if (!segment.eligible) {
       // Empty escaped inline math is the one math construct known to be pure
@@ -175,9 +264,35 @@ export function normalizeArticleBody(
         record("normalize.empty-inline-math", segment.text, "");
         return "";
       }
-      return segment.text;
+      const start = starts[i];
+      const end = start + segment.text.length;
+      const fenced = fenceDisplayMath(
+        segment.text,
+        i > 0 ? body.slice(Math.max(0, start - 2_000), start) : undefined,
+        i < segments.length - 1 ? body.slice(end, end + 2_000) : undefined,
+      );
+      if (fenced !== segment.text) record("normalize.display-math-fences", segment.text, fenced);
+      return fenced;
     }
     let out = segment.text;
+    if (opts.pdf) {
+      // Indented code is not protected by sourceSegments; leave its lines alone,
+      // also behind blockquote and list markers ("-     a = f( $x$ )").
+      const indented = (offset: number) =>
+        /^(?:[ \t]*>)*(?:[ \t]*(?:[-*+]|\d{1,9}[.)]))?(?: {4}| {0,3}\t)/.test(
+          body.slice(body.lastIndexOf("\n", offset - 1) + 1),
+        );
+      const end = starts[i] + out.length;
+      const trimmed = trimInlineMathPadding(
+        out,
+        endsWithInlineMath(segments[i - 1]) && !indented(starts[i]),
+        startsWithInlineMath(segments[i + 1]) && !indented(end),
+      );
+      if (trimmed !== out) {
+        record("normalize.pdf-inline-math-padding", out, trimmed);
+        out = trimmed;
+      }
+    }
     out = out.replace(
       /(!?\[[^\]\r\n]*\]\()\/(?!\/)([^)\s]+)(\))/g,
       (whole, open: string, destination: string, close: string) => {

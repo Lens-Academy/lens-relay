@@ -125,4 +125,7 @@ Comments on HTML pages are stored out of band (`comments_v0`, above) and anchore
 - `comments/useHtmlComments.ts`: threads, document-order numbering, write-backs (refreshing drifted anchors,
   recording what editors saw for agents) and the one-time migration of old inline `<!--lens-comment-->` markers.
 - The page can forge bridge messages: `HtmlPreview.tsx` accepts captures and descriptions only in reply to requests.
+  Read-aloud requests from the page (`tts-units` with `play`, `tts-key`) are honoured only right after a real
+  click or key press (user activation), and `tts-key` only while the player is open. Ctrl/Cmd+O pressed in the
+  page reaches the parent as `shortcut` `o` and opens the quick switcher under the same activation check.
 - `scripts/anchor-bench/run.ts <dir of .html>` benchmarks anchoring against edits on real pages.

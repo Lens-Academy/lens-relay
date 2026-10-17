@@ -21,9 +21,11 @@ function shareToken() {
 describe("production app (createApp)", () => {
   let app: Hono;
   const originalPromotionEnabled = process.env.PROMOTION_ENABLED;
+  const originalContentStatusEnabled = process.env.CONTENT_STATUS_ENABLED;
 
   beforeAll(() => {
     delete process.env.PROMOTION_ENABLED;
+    delete process.env.CONTENT_STATUS_ENABLED;
     app = createApp({ relayUrl: "http://localhost:1", relayServerToken: "test" });
   });
 
@@ -33,6 +35,11 @@ describe("production app (createApp)", () => {
     } else {
       process.env.PROMOTION_ENABLED = originalPromotionEnabled;
     }
+    if (originalContentStatusEnabled === undefined) {
+      delete process.env.CONTENT_STATUS_ENABLED;
+    } else {
+      process.env.CONTENT_STATUS_ENABLED = originalContentStatusEnabled;
+    }
   });
 
   it("mounts /api/add-article/status behind share-token auth", async () => {
@@ -40,7 +47,7 @@ describe("production app (createApp)", () => {
       headers: { Authorization: `Bearer ${shareToken()}` },
     });
     expect(resp.status).toBe(200);
-    expect(await resp.json()).toEqual({ jobs: [] });
+    expect(await resp.json()).toMatchObject({ jobs: [], queue: { queued: 0, processing: 0 } });
   });
 
   it("rejects /api/add-article without auth", async () => {
@@ -74,6 +81,13 @@ describe("production app (createApp)", () => {
       body: JSON.stringify({}),
     });
     expect(resp.status).not.toBe(404);
+  });
+
+  it("returns JSON 404 for the content status route when it is disabled by default", async () => {
+    const resp = await app.request("/api/content-status?path=Lenses/X.md");
+
+    expect(resp.status).toBe(404);
+    expect(await resp.json()).toEqual({ error: "Content status is disabled", code: "disabled" });
   });
 
   it("returns JSON 404 for promotion routes when promotion is disabled by default", async () => {

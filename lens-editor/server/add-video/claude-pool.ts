@@ -93,10 +93,15 @@ export class ClaudeSessionPool {
         );
       };
       signal?.addEventListener("abort", onAbort, { once: true });
-      const deadline = setTimeout(() => {
-        removeWaiter();
-        waiter.cancel();
-      }, timeoutMs);
+      // Infinity = no backstop: the caller's AbortSignal is the only limit
+      // (article imports, whose job deadline starts only once the import
+      // queue hands them a worker). setTimeout(Infinity) would fire at once.
+      const deadline = Number.isFinite(timeoutMs)
+        ? setTimeout(() => {
+          removeWaiter();
+          waiter.cancel();
+        }, timeoutMs)
+        : undefined;
       const waitLogger = setInterval(() => {
         console.warn(
           `[claude-pool] Still waiting for a slot after ${Math.round((Date.now() - startedAt) / 1000)}s ` +
@@ -116,5 +121,12 @@ export class ClaudeSessionPool {
   }
 }
 
-/** Global pool: max 3 concurrent Claude CLI processes */
-export const claudeSessionPool = new ClaudeSessionPool(3);
+/** Size of the global pool: CLAUDE_SESSION_POOL_SIZE, default 3. Each Claude
+ *  process takes ~300 MB, so raise it only with the box's memory in mind. */
+export function claudeSessionPoolSize(env: NodeJS.ProcessEnv = process.env): number {
+  const v = Number(env.CLAUDE_SESSION_POOL_SIZE);
+  return Number.isInteger(v) && v > 0 ? v : 3;
+}
+
+/** Global pool: max CLAUDE_SESSION_POOL_SIZE (default 3) concurrent Claude CLI processes */
+export const claudeSessionPool = new ClaudeSessionPool(claudeSessionPoolSize());

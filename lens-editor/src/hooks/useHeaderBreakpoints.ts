@@ -1,7 +1,7 @@
 export type HeaderStage =
   | 'full'             // > 1100px: everything visible
   | 'compact-toggles'  // < 1100px: toggles become icon-only
-  | 'hide-title'       // < 900px: "Lens Editor" title hidden
+  | 'hide-title'       // < 900px: "Lens Relay Editor" title hidden
   | 'hide-username'    // < 750px: display name hidden
   | 'overflow';        // < 600px: toggles move to overflow menu
 

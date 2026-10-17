@@ -2,7 +2,8 @@
 //!
 //! `import_source` (alias `import_article`, kept for agents configured before
 //! the rename) forwards URLs to lens-editor's `POST /api/add-article`;
-//! `import_status` proxies `GET /api/add-article/status`. Auth: the session's
+//! `import_status` proxies `GET /api/add-article/status` and `import_cancel`
+//! proxies `POST /api/add-article/cancel`. Auth: the session's
 //! own share token (carried on `McpAccess::raw_token`) is forwarded as the
 //! Bearer, so role/folder enforcement stays in lens-editor — the relay adds
 //! no new trust.
@@ -149,6 +150,44 @@ pub async fn status_with_editor_url(
     proxy(reqwest::Method::GET, url.as_str(), &token, None).await
 }
 
+/// Execute the `import_cancel` tool: remove queued jobs from the import queue
+/// (or stop running ones). Per-id results come back from the editor.
+pub async fn cancel(access: &McpAccess, arguments: &Value) -> Result<String, String> {
+    cancel_with_editor_url(access, arguments, &editor_url_from_env()).await
+}
+
+pub async fn cancel_with_editor_url(
+    access: &McpAccess,
+    arguments: &Value,
+    editor_url: &str,
+) -> Result<String, String> {
+    let ids: Vec<String> = arguments
+        .get("job_ids")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Missing required parameter: job_ids (array of strings)".to_string())?
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| "Every entry in job_ids must be a string".to_string())
+        })
+        .collect::<Result<_, _>>()?;
+    if ids.is_empty() {
+        return Err("job_ids must not be empty".to_string());
+    }
+    let token = request_token(access)?;
+    proxy(
+        reqwest::Method::POST,
+        &format!(
+            "{}/api/add-article/cancel",
+            editor_url.trim_end_matches('/')
+        ),
+        &token,
+        Some(json!({ "ids": ids })),
+    )
+    .await
+}
+
 fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -225,6 +264,7 @@ mod tests {
     ) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let tx2 = tx.clone();
+        let tx3 = tx.clone();
         let app = Router::new()
             .route(
                 "/api/add-article",
@@ -243,6 +283,26 @@ mod tests {
                         tx.send((auth, String::from_utf8_lossy(&body).to_string()))
                             .unwrap();
                         axum::Json(json!({"results": [{"url": "https://example.com/a", "status": "queued", "id": "job-1"}]}))
+                    }
+                }),
+            )
+            .route(
+                "/api/add-article/cancel",
+                post(move |req: Request| {
+                    let tx = tx3.clone();
+                    async move {
+                        let auth = req
+                            .headers()
+                            .get("authorization")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("")
+                            .to_string();
+                        let body = axum::body::to_bytes(req.into_body(), 1 << 20)
+                            .await
+                            .unwrap();
+                        tx.send((auth, String::from_utf8_lossy(&body).to_string()))
+                            .unwrap();
+                        axum::Json(json!({"results": [{"id": "job-1", "cancelled": true}]}))
                     }
                 }),
             )
@@ -269,6 +329,40 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         (format!("http://{}", addr), rx)
+    }
+
+    // Prevents: import_cancel dropping the caller's token or the ids, or
+    // sending an empty batch (which the editor would reject anyway)
+    #[tokio::test]
+    async fn cancel_forwards_job_ids_with_the_callers_token() {
+        let (editor_url, mut rx) = mock_editor().await;
+        let out = cancel_with_editor_url(
+            &access_with_token("tok-9"),
+            &json!({"job_ids": ["job-1", "job-2"]}),
+            &editor_url,
+        )
+        .await
+        .expect("cancel should succeed");
+        assert!(out.contains("cancelled"));
+        let (auth, body) = rx.recv().await.unwrap();
+        assert_eq!(auth, "Bearer tok-9");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["ids"], json!(["job-1", "job-2"]));
+
+        for bad in [json!({}), json!({"job_ids": []}), json!({"job_ids": [1]})] {
+            let err = cancel_with_editor_url(&access_with_token("tok"), &bad, "http://127.0.0.1:1")
+                .await
+                .expect_err("bad job_ids must be rejected before any request");
+            assert!(err.contains("job_ids"), "got: {err}");
+        }
+        let err = cancel_with_editor_url(
+            &access_without_token(),
+            &json!({"job_ids": ["job-1"]}),
+            "http://127.0.0.1:1",
+        )
+        .await
+        .expect_err("no share token");
+        assert!(err.contains("share token"), "got: {err}");
     }
 
     // Prevents: importer requests going out without the caller's own share

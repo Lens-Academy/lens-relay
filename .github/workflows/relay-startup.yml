@@ -1,0 +1,39 @@
+name: Relay startup and watchdog
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/relay-startup.yml"
+      - "crates/relay/src/main.rs"
+      - "crates/relay/src/server.rs"
+      - "crates/relay/src/server/trash.rs"
+      - "crates/relay/src/supervisor.rs"
+      - "crates/relay/tests/search_deadlock.rs"
+      - "crates/y-sweet-core/src/link_indexer.rs"
+      - "crates/y-sweet-core/src/doc_sync.rs"
+      - "scripts/prod/relay-watchdog.sh"
+      - "scripts/prod/relay-watchdog.test.sh"
+
+jobs:
+  relay-startup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p y-sweet-core
+          link_indexer::tests
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p relay --lib --
+          serving_starts backlink_reindex move_document_ ready_
+          during_the_reindex server_side_filemeta
+      - run: >-
+          cargo test --manifest-path crates/Cargo.toml -p relay
+          --test search_deadlock
+
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/prod/relay-watchdog.test.sh

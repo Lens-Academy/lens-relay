@@ -1,0 +1,52 @@
+# Cut down from iliad-team/iliad-intensive schedule.yaml (commit d5fec17):
+# the same fields, fewer days. Order is positional: clusters, then a
+# cluster's days, then a day's worksheets.
+clusters:
+  - id: "0"
+    label: Foundations
+    urlSlug: foundations
+    days:
+      - code: "0"
+        title: Prerequisites
+        lead: none
+        source: ready
+        worksheets:
+          - prerequisites
+
+  - id: D
+    label: D — Agency
+    urlSlug: agency
+    days:
+      - code: D.2
+        title: Policy Gradients and Misgeneralization
+        lead: David
+        source: ready
+        worksheets:
+          - policy-gradients-misgeneralization
+
+      # Two worksheets on one day: the site shows D.3.1 and D.3.2.
+      - code: D.3
+        title: AIXI
+        lead: David
+        source: ready
+        worksheets:
+          - solomonoff-induction
+          - aixi
+
+      # A day nobody has ported yet lists no worksheets.
+      - code: D.8
+        title: Not Ported Yet
+        lead: Nobody
+        source: missing
+
+  - id: E
+    label: E — Safety Guarantees and their Limits
+    urlSlug: safety
+    days:
+      - code: E.3
+        title: Worst-Case Interpretability
+        lead: Louis
+        source: ready
+        slides: https://drive.google.com/file/d/1CqJtSUFLZ_L-kSsSzvSJGXfuf1Lbq5Un/view
+        worksheets:
+          - worst-case-interp

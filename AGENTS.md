@@ -58,6 +58,7 @@ docs/                 # Operational documentation
 - **Relay server URL:** https://relay.lensacademy.org
 - **Production server:** Hetzner VPS (46.224.127.155), Docker containers
 - **Storage:** Cloudflare R2 bucket `lens-relay-storage`
+- **Backups:** hourly/daily/weekly snapshots in R2 bucket `lens-relay-backups`, copied inside Cloudflare by `scripts/r2-backup.sh`; see the Backups section of `docs/server-ops.md`
 - **Tunnel:** Cloudflare Tunnel (no inbound ports needed)
 - **Relay ID:** `cb696037-0f72-4e93-8717-4e433129d789`
 - **Relay watchdog:** Detects when `relay-server` is running but unresponsive and automatically restarts it; see `docs/relay-watchdog.md`.
@@ -143,6 +144,8 @@ quiet window.
 
 For lens-editor changes (no Rust), skip steps 1 and 3 and replace `relay-server` with `lens-editor`.
 
+The relay watchdog (`scripts/prod/relay-watchdog*.sh`, `ops/systemd/relay-watchdog.*`) lives on the host, so none of the steps above update it. After a change to those files, reinstall them (`docs/server-ops.md`, "Relay Readiness Watchdog").
+
 Source code lives at `/root/lens-relay` on prod (git clone from `Lens-Academy/lens-relay`).
 
 ### Local Dev 
@@ -213,6 +216,30 @@ See [docs/relay-auth-customizations.md](docs/relay-auth-customizations.md) for f
 - Backlink tracking
 - Folder-content mapping for multi-folder support
 
+**Startup: serve first, reindex backlinks in the background** (`Server::startup_load`,
+`Server::serve_with_background_reindex`, `LinkIndexer::reindex_backlinks`): the relay answers as soon as
+docs are loaded; the backlink reindex (minutes at several thousand docs) then runs on a blocking thread
+beside live traffic, and `GET /ready` reports it under `backlinks` (`pending` / `indexing` / `ready` /
+`cancelled` / `failed`, with counts) without affecting `ok` or the status code. Until it finishes,
+backlinks are the ones persisted before the restart, refreshed doc by doc. Rules that keep this safe:
+- Reindex steps, link indexer worker steps, `Server::move_document` and the delete guard in `trash_path`
+  exclude each other through the indexer's step lock, a fair tokio mutex: await it (`lock_step`) from
+  async code, never block on it there, never hold it across a store write, and take it before any DashMap
+  shard or awareness lock. Anything new that rewrites filemeta, wikilinks and backlinks together outside
+  the worker must take it too.
+- A rename is applied to filemeta before the worker rewrites the wikilinks. The reindex therefore never
+  indexes a doc while a folder has a rename the worker has not applied (it waits; if the worker shows no
+  activity for 30s it leaves those docs' backlinks as persisted and says so in `/ready` as
+  `left_as_persisted`). It tells by the folder being queued for the worker, so server code that changes
+  filemeta must queue the folder while it still holds the folder's write lock (`queue_folder_change`), as
+  the update callback does for a client's change. Files added, removed or moved are not waited for.
+- Until the reindex has reached a doc, its backlinks may be missing (a link added just before a stop).
+  While a reindex is planned or running, the worker's rename therefore also looks through the wikilinks of
+  the docs not reached yet, and server-side moves and deletes add the unreached docs that link to the file
+  (`unreached_linkers`, a read-only lookup), because they find backlinkers through backlinks alone. HTML
+  pages are never looked through or rewritten. Keep work done under the step lock short: the reindex takes
+  a worker that is waiting for the lock as alive, but everything else queues behind the holder.
+
 **Attachments over MCP** (`crates/relay/src/mcp/tools/import_attachment.rs`,
 `lens-editor/server/attachments/`): `import_attachment` hosts png/jpeg/gif/webp under
 `<folder>/attachments/` from a URL or base64 (magic-byte sniffing, sha256 dedup, 5 MiB
@@ -238,8 +265,18 @@ markdown and reports what it cannot map; inline maths is rewritten so markdown c
 finds `$…$` only after markdown has run. Images are hosted as folder attachments (the `import_attachment`
 path) and embedded by the folder's public URL; if one fails for a passing reason the run writes nothing.
 Only the production server writes synced files: the Vite dev server syncs only into a local relay, and
-`npx tsx scripts/source-sync.ts` only previews. Sources are adapters (`types.ts` `SourceAdapter`), so another
-source kind, or a UI that takes a pasted link, adds an adapter or a binding store rather than a new pipeline.
+`npx tsx scripts/source-sync.ts` only previews. Sources of one article are adapters (`types.ts`
+`SourceAdapter`), so another such source, or a UI that takes a pasted link, adds an adapter or a binding store.
+
+**Iliad course sync: iliad-intensive.org → a read-only course** (`lens-editor/server/source-sync/iliad/`):
+a whole course is not one article, so it has its own steps, named in `iliad/types.ts`: read the published
+site at one source commit (`snapshot.ts`), turn each worksheet's built MDX into Lens markdown (`convert.ts`),
+group it into lenses (`plan.ts`), and compose, move and write the lens, module and course files
+(`course-files.ts`). Learner progress is keyed on a lens `id`, so a lens is pinned to the place it starts at
+in the source (`upstream_key` in its frontmatter) and found again by its text when that place is renamed;
+nothing but the files records which lenses exist. Off until `ILIAD_SYNC_COURSE` names the course file; only
+the production server writes, and `npx tsx scripts/iliad-sync.ts` runs it against a directory. Operating it:
+`docs/server-ops.md`, "Iliad course sync".
 
 **Trash instead of delete** (`crates/relay/src/server/trash.rs`,
 `crates/relay/src/mcp/tools/delete_doc.rs`): the MCP `delete` tool (Admin/Edit only)
@@ -247,7 +284,9 @@ and the editor's Delete (`POST /doc/trash`) move files and folders to
 `<shared folder>/_trash/` with the relative path preserved and a `trashed_at` stamp,
 refusing while other documents link into them unless `force`; a `move` out of `_trash/`
 restores. An hourly sweep purges entries older than `[server] trash_retention_days`
-(default 10) from the file tree, the store (doc + blobs) and every index. See the
+(default 10) from the file tree, the store (doc + blobs) and every index; while
+`[server] trash_purge_dry_run` is `true` (the default) it only logs what it would
+purge, so trash is kept until an operator sets it to `false`. See the
 "Deleting" section of `docs/server-ops.md`.
 
 **HTML pages, modelled on Claude artifacts** (`lens-editor/src/components/HtmlEditor/runtime/page-runtime.ts`,
@@ -270,6 +309,15 @@ page's DOM is never touched. MCP: `read` of an `.html` lists open threads, the `
 resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anchoring changes with
 `lens-editor/scripts/anchor-bench/run.ts` (real pages, ground-truth markers, edit scenarios).
 
+**Read-aloud in the editor** (`lens-editor/src/lib/read-aloud/`, `server/tts/`): a Listen button on Markdown and HTML
+pages plays the page through Speechify (simba-3.2, the platform's model and voice), sentence by sentence with word
+highlighting, after lens-platform's immersion reader but without its audio cache. The editor server proxies
+`POST /api/tts/stream` (any valid share link; `SPEECHIFY_API_KEY`, per-link hourly character cap
+`TTS_CHARS_PER_HOUR`); without the key the button hides. Markdown: `Editor/extensions/readAloud.ts` maps sentences to
+source positions (`markdown-reading.ts`), so it works with CodeMirror's virtualised DOM. HTML: the preview frame's
+`bridge/tts-layer.ts` sends the page's sentences to the parent and draws highlights and hover play buttons inside the
+frame. While audio plays a click jumps to the sentence; otherwise clicks behave as usual.
+
 **Direct MCP edits with human-text protection** (`docs/plans/2026-08-27-direct-mcp-edits-plan.md`):
 - The MCP `edit` tool applies Markdown edits directly when they only add text or change
   text attributed (via the doc's `users` provenance map) to an `ai:` actor; edits that would
@@ -282,6 +330,12 @@ resolves / re-anchors, and `edit` warns when it removes quoted text. Measure anc
   limit, `old`/`new` cut to `preview` chars, `truncated` flag) for the editor's `/recent` page
   and its in-file "Highlight recent changes" overlay. Page excerpts are built server-side
   (`crates/relay/src/recent_excerpts.rs`) on every index refresh.
+
+**Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
+`edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's
+Jev writing checks on the paragraphs it changed (`POST /api/content/course-checks`), after the
+edit's validator lines; the two run at once. Off until `ENABLE_COURSE_CHECKS` is true; the
+platform has a switch of the same name, so each side can be turned on separately.
 
 ## Git Sync
 

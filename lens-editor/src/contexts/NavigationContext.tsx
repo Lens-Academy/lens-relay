@@ -12,6 +12,8 @@ interface NavigationContextValue {
   onNavigate: (docId: string) => void;
   /** Set to true after instant-create; DocumentTitle reads and clears it */
   justCreatedRef: RefObject<boolean>;
+  /** Open the quick switcher (Ctrl/Cmd+O), for keys caught where the window's own handler can't see them. */
+  openQuickSwitcher?: () => void;
 }
 
 export const NavigationContext = createContext<NavigationContextValue | null>(null);

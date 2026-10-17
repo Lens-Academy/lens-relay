@@ -29,4 +29,6 @@ export type ArticleJobStatus =
   | "done"
   /** Resolved to a document that already exists -- not an error, nothing to retry. */
   | "skipped"
+  /** Removed from the queue (or stopped) on request -- not a failure. */
+  | "cancelled"
   | "failed";

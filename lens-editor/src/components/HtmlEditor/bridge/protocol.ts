@@ -1,4 +1,5 @@
 import type { AnchorState, HtmlAnchor } from '../anchoring/types';
+import type { ReadAloudKey } from '../../../lib/read-aloud/keys';
 
 export interface PreviewScroll {
   x: number;
@@ -101,6 +102,12 @@ export interface AnchorCapture {
   warning?: string;
 }
 
+/** One sentence of the page for read-aloud (src/lib/read-aloud/engine.ts ReadingUnit). */
+export interface TtsUnit {
+  text: string;
+  pauseBefore: number;
+}
+
 export type ParentToBridge =
   | { type: 'init'; payload: Record<string, never> }
   | { type: 'set-threads'; payload: { threads: ThreadMark[] } }
@@ -113,7 +120,10 @@ export type ParentToBridge =
   | { type: 'restore-scroll'; payload: PreviewScroll }
   | { type: 'restore-scroll-ratio'; payload: PreviewScrollRatio }
   | { type: 'capture-ui-state'; payload: Record<string, never> }
-  | { type: 'restore-ui-state'; payload: PreviewUiState };
+  | { type: 'restore-ui-state'; payload: PreviewUiState }
+  | { type: 'tts-state'; payload: { enabled: boolean; open: boolean; playing: boolean } }
+  | { type: 'tts-highlight'; payload: { unit: number | null; word: { start: number; end: number } | null; follow: boolean } }
+  | { type: 'tts-request-units'; payload: { start: boolean } };
 
 export type BridgeToParent =
   | { type: 'ready'; payload: Record<string, never> }
@@ -123,12 +133,18 @@ export type BridgeToParent =
   | { type: 'thread-clicked'; payload: { id: string } }
   | { type: 'anchor-captured'; payload: AnchorCapture }
   | { type: 'comment-mode-exit'; payload: Record<string, never> }
-  | { type: 'shortcut'; payload: { key: 'c' } }
+  /** An editor shortcut pressed in the page: C (Comment mode) or Ctrl/Cmd+O (quick switcher). */
+  | { type: 'shortcut'; payload: { key: 'c' | 'o' } }
   | { type: 'selection-changed'; payload: { rect: Rect | null } }
   | { type: 'legacy-described'; payload: { anchors: Record<string, HtmlAnchor | null> } }
   | { type: 'current-described'; payload: { id: string; anchor: HtmlAnchor | null } }
   | { type: 'page-problems'; payload: { problems: PageProblem[] } }
-  | { type: 'storage-ops'; payload: { ops: StorageOp[] } };
+  | { type: 'storage-ops'; payload: { ops: StorageOp[] } }
+  /** The page's sentences; with `play`, a request to play from that one. */
+  | { type: 'tts-units'; payload: { units: TtsUnit[]; play?: number } }
+  | { type: 'tts-user-scrolled'; payload: Record<string, never> }
+  /** A player shortcut pressed in the page while the player is open. */
+  | { type: 'tts-key'; payload: { key: ReadAloudKey } };
 
 export interface Envelope<M> {
   nonce: string;

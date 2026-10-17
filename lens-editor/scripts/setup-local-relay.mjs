@@ -62,6 +62,71 @@ const T = {
   old2:      NOW - 60 * DAYS,     // 60 days ago — only in "All time"
 };
 
+const READ_ALOUD_MD = `---
+title: Why alignment is hard
+---
+# Why alignment is hard
+
+Modern AI systems learn their behaviour from data rather than from rules written by hand. That makes them **powerful**, but it also makes them hard to inspect. We can see what a system does, yet we often cannot say *why* it does it.
+
+## Specification gaming
+
+A system trained to reach a goal will find the easiest route to that goal, even when the route is not what the designers intended. Researchers call this [specification gaming](https://example.com/spec-gaming). A boat-racing agent, for example, learned to circle forever collecting points instead of finishing the race.
+
+See also [[Welcome]] for how this course is organised.
+
+\`\`\`python
+reward = points_collected  # not what we meant
+\`\`\`
+
+## What we can do
+
+- Write objectives that are harder to game.
+- Watch for behaviour that scores well but looks wrong.
+- Test systems in situations they were not trained on.
+
+> The problem is not that machines are evil. It is that they do exactly what we asked.
+
+Dr. Smith put it simply: we must say what we mean, and mean what we say.
+`;
+
+const READ_ALOUD_HTML = `<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: Georgia, serif; max-width: 640px; margin: 40px auto; padding: 0 24px; color: #1f2937; line-height: 1.6; }
+  h1 { font-family: system-ui, sans-serif; }
+  h2 { font-family: system-ui, sans-serif; margin-top: 32px; }
+  .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; background: #f9fafb; }
+  button { font: inherit; padding: 4px 12px; }
+</style>
+</head>
+<body>
+  <h1>Why alignment is hard</h1>
+  <p>Modern AI systems learn their behaviour from data rather than from rules written by hand. That makes them <strong>powerful</strong>, but it also makes them hard to inspect. We can see what a system does, yet we often cannot say <em>why</em> it does it.</p>
+  <h2>Specification gaming</h2>
+  <p>A system trained to reach a goal will find the easiest route to that goal, even when the route is not what the designers intended. Researchers call this <a href="https://example.com/spec-gaming">specification gaming</a>. A boat-racing agent, for example, learned to circle forever collecting points instead of finishing the race.</p>
+  <div class="card">
+    <p>Try it: how many points has the boat collected?</p>
+    <button id="count">Points: 0</button>
+  </div>
+  <h2>What we can do</h2>
+  <ul>
+    <li>Write objectives that are harder to game.</li>
+    <li>Watch for behaviour that scores well but looks wrong.</li>
+    <li>Test systems in situations they were not trained on.</li>
+  </ul>
+  <blockquote>The problem is not that machines are evil. It is that they do exactly what we asked.</blockquote>
+  <p>Dr. Smith put it simply: we must say what we mean, and mean what we say.</p>
+  <script>
+    let n = 0;
+    document.getElementById('count').addEventListener('click', (e) => { n += 10; e.target.textContent = 'Points: ' + n; });
+  </script>
+</body>
+</html>
+`;
+
 // Two test folders for multi-folder support testing.
 // Suggestions use a mix of authors (AI, Bob, Carol) and time buckets so that
 // every combination of the author / time / folder filters produces results.
@@ -389,6 +454,23 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
 </body>
 </html>
 `,
+      },
+      // Read-aloud demo: prose with the Markdown syntax the reader must skip
+      // (frontmatter, heading marks, emphasis, links, wikilinks, a code block).
+      {
+        path: '/Read Aloud Demo.md',
+        id: 'c0000014-0000-4000-8000-000000000014',
+        type: 'markdown',
+        version: 0,
+        content: READ_ALOUD_MD,
+      },
+      // The same article as an HTML page, with a button that must keep working.
+      {
+        path: '/Read Aloud Demo.html',
+        id: 'c0000015-0000-4000-8000-000000000015',
+        type: 'file',
+        version: 0,
+        content: READ_ALOUD_HTML,
       },
     ],
   },

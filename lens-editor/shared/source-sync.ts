@@ -16,13 +16,24 @@ export interface SyncMarker {
   url: string;
 }
 
-const SOURCE_LABELS: Record<string, string> = {
-  "google-doc": "Google Docs",
+/**
+ * What the editor knows of a source kind: its name, and whether a person
+ * with the file open can go and edit the source ("Edit it in Google Docs").
+ * Nobody at Lens edits iliad-intensive.org, so that file only links to it.
+ */
+const SOURCES: Record<string, { label: string; editable: boolean }> = {
+  "google-doc": { label: "Google Docs", editable: true },
+  iliad: { label: "iliad-intensive.org", editable: false },
 };
 
 /** Human name of a source kind ("Google Docs"), or the kind itself. */
 export function syncSourceLabel(source: string): string {
-  return SOURCE_LABELS[source] ?? source;
+  return SOURCES[source]?.label ?? source;
+}
+
+/** Whether the file's reader can edit the source instead. An unknown kind is taken as editable. */
+export function syncSourceEditable(source: string): boolean {
+  return SOURCES[source]?.editable ?? true;
 }
 
 /** The sync marker in parsed frontmatter, or null when the file is not synced. */

@@ -45,6 +45,12 @@ describe('listCourses', () => {
     expect(courses.map(c => c.label)).toEqual(['Demo Course', 'Other Course', 'Private Course']);
     expect(courses[0]).toMatchObject({ kind: 'course', uuid: 'c1', path: '/Lens Edu/courses/Demo Course.md' });
   });
+
+  it('finds courses grouped in subfolders of courses/', () => {
+    expect(isCoursePath('/Lens Edu/courses/live/Grouped Course.md')).toBe(true);
+    const courses = listCourses({ ...metadata, '/Lens Edu/courses/live/Grouped Course.md': md('c4') });
+    expect(courses.map(c => c.label)).toEqual(['Demo Course', 'Grouped Course', 'Other Course', 'Private Course']);
+  });
 });
 
 describe('courseChildrenFromText', () => {
@@ -70,6 +76,12 @@ survey:: {>>check<<} [[../surveys/Demo Survey#top]] {>>comment<<}
       ['module', null, 'Missing Module', null, true],
     ]);
     expect(nodes[2].children.map(n => [n.field, n.uuid])).toEqual([['survey', 's1']]);
+  });
+
+  it('resolves ../../ links from a course in a subfolder', () => {
+    const text = 'application-survey:: [[../../surveys/Demo Survey]]\n\n# Module: [[../../modules/Demo Module]]\n';
+    const nodes = courseChildrenFromText(text, '/Lens Edu/courses/live/Demo Course.md', metadata);
+    expect(nodes.map(n => [n.kind, n.uuid ?? null])).toEqual([['link', 's1'], ['module', 'm1']]);
   });
 
   it('turns a module into lens and outcome nodes, nesting an inline lens over its article', () => {

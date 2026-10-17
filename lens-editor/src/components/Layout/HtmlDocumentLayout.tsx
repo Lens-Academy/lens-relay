@@ -1,19 +1,23 @@
 import { useEffect, type ReactNode } from 'react';
 import { BacklinksPanel } from '../BacklinksPanel';
+import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { MobileDrawer } from '../Mobile/MobileDrawer';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { useMobile } from '../../contexts/MobileContext';
 import { ResizeHandle } from './ResizeHandle';
+import { useDocTabTitle } from '../../hooks/useDocTabTitle';
 
 /**
  * An HTML page beside the right sidebar a Markdown document has in EditorArea,
  * toggled by the same header button. The page has no outline, so the sidebar
- * holds only its backlinks; on a phone they open from the bottom bar's drawer.
+ * holds its backlinks and, for a widget, its content status; on a phone they
+ * open from the bottom bar's drawer.
  */
 export function HtmlDocumentLayout({ docId, children }: { docId: string; children: ReactNode }) {
   const { manager } = useSidebar();
   const { isMobile, activeDrawer, closeDrawer, setDocPanelsAvailable } = useMobile();
   const rightCollapsed = manager.collapsedState['right-sidebar'] ?? false;
+  useDocTabTitle(docId);
 
   // Shows the phone's bottom-bar buttons for the comments and backlinks drawers
   useEffect(() => {
@@ -38,12 +42,14 @@ export function HtmlDocumentLayout({ docId, children }: { docId: string; childre
             style={{ width: rightCollapsed ? 0 : manager.getWidth('right-sidebar') }}
           >
             <BacklinksPanel currentDocId={docId} />
+            {!rightCollapsed && <ContentStatusPanel docId={docId} className="border-t border-gray-200" />}
           </div>
         </>
       )}
       {isMobile && (
         <MobileDrawer open={activeDrawer === 'right'} onClose={closeDrawer} side="right" label="Backlinks">
           <BacklinksPanel currentDocId={docId} />
+          <ContentStatusPanel docId={docId} className="border-t border-gray-200" />
         </MobileDrawer>
       )}
     </div>

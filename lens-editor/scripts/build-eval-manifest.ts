@@ -2,7 +2,7 @@
  * Resolve the Navigating Superintelligence course → article pool → stratified
  * manifest. Reads the course graph + article frontmatter from the local
  * lens-edu-relay checkout ($LENS_EDU_REPO). Read-only; never writes to it.
- * Usage: npx tsx scripts/build-eval-manifest.ts [--target 50]
+ * Usage: npx tsx scripts/build-eval-manifest.ts [--target 50] [--course <path under Lens Edu>]
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -11,7 +11,6 @@ import { readEduDoc, splitFrontmatter } from "../server/add-article/eval/edu-rep
 import { classifyVia, stratifiedSelect, type ManifestEntry } from "../server/add-article/eval/manifest";
 import { adapterContext, resolveFetchUrls } from "../server/add-article/adapters";
 
-const COURSE = "courses/Navigating Superintelligence.md";
 const OUT = path.join(import.meta.dirname, "../server/add-article/eval/fixtures.manifest.json");
 
 function slugFor(relayPath: string): string {
@@ -20,7 +19,10 @@ function slugFor(relayPath: string): string {
 }
 
 async function main() {
-  const target = Number(process.argv[process.argv.indexOf("--target") + 1]) || 50;
+  const arg = (name: string) => { const i = process.argv.indexOf(name); return i < 0 ? undefined : process.argv[i + 1]; };
+  const target = Number(arg("--target")) || 50;
+  // Courses may sit in a group folder (courses/<group>/...): pass the path when this one moves.
+  const COURSE = arg("--course") ?? "courses/Navigating Superintelligence.md";
   const { articles, report } = await resolveCourseArticles(COURSE, (p) => readEduDoc(p));
   console.log(`Resolved ${articles.length} course articles.`);
   for (const m of report.perModule) console.log(`  ${m.module}: ${m.articleCount}`);

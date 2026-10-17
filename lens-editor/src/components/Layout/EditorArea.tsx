@@ -16,11 +16,15 @@ import { DocumentTitle } from '../DocumentTitle';
 import { SourceModeToggle } from '../SourceModeToggle/SourceModeToggle';
 import { AuthorshipModeToggle } from '../AuthorshipModeToggle/AuthorshipModeToggle';
 import { SpellcheckToggle } from '../SpellcheckToggle/SpellcheckToggle';
+import { ListenButton } from '../ReadAloud/ListenButton';
+import { ReadAloudBar } from '../ReadAloud/ReadAloudBar';
+import { getReadAloud } from '../Editor/extensions/readAloud';
 import { SuggestionModeToggle } from '../SuggestionModeToggle/SuggestionModeToggle';
 import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
+import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
 import { useScrollSource } from '../Comments/useScrollSource';
@@ -154,7 +158,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const resolveAnchorY = useCallback((key: string) => resolveAnchorYByOffset(Number(key)), [resolveAnchorYByOffset]);
 
   // Thread data and mutation callbacks from the criticmarkup adapter.
-  const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous');
+  const { threads, callbacks } = useThreadsFromYText(yText, displayName ?? 'anonymous', canEdit);
 
   // ScrollSource wrapping the editor's scroll container. Pass the live element
   // (not the ref) so the hook re-attaches when editorView arrives.
@@ -252,6 +256,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     // Force re-render to pass view to ToC
     setStateVersion(v => v + 1);
   }, []);
+
+  // Read-aloud lives on the editor view (extensions/readAloud.ts).
+  const readAloudEngine = getReadAloud(editorView)?.engine ?? null;
+  const startReadAloud = useCallback(() => getReadAloud(editorView)?.start(), [editorView]);
 
   // Callback for document changes
   const handleDocChange = useCallback(() => {
@@ -441,6 +449,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <AuthorshipModeToggle view={editorView} />
               <SpellcheckToggle view={editorView} />
+              <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
@@ -464,6 +473,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               <SourceModeToggle editorView={editorView} isSourceMode={isSourceMode} onSourceModeChange={setIsSourceMode} />
               <AuthorshipModeToggle view={editorView} />
               <SpellcheckToggle view={editorView} iconOnly={headerStage !== 'full'} />
+              <ListenButton engine={readAloudEngine} onStart={startReadAloud} />
               {promotionFilePath && (
                 <PromotionStatus
                   filePath={promotionFilePath}
@@ -511,7 +521,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           {isSourceMode && isSuggestionMode && (
             <SourceSuggestionBanner />
           )}
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 relative">
+            <ReadAloudBar engine={readAloudEngine} />
             <Editor
               readOnly={!canWrite}
               canAcceptReject={canEdit}
@@ -568,23 +579,33 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           disabled={rightCollapsed}
         />
         <div
-          ref={sidebarContainerRef}
           id="right-sidebar"
           className="overflow-hidden flex-shrink-0 bg-[#f6f6f6] flex flex-col"
           style={{ width: rightCollapsed ? 0 : manager.getWidth('right-sidebar') }}
         >
-          <div ref={tocScrollRef} style={{ height: tocHeight, flexShrink: 0 }} className="overflow-y-auto">
-            <TableOfContents view={editorView} stateVersion={stateVersion} />
+          {/* The outline/backlinks split measures this box, which the
+              content status panel below leaves room for. */}
+          <div ref={sidebarContainerRef} className="flex-1 min-h-0 flex flex-col">
+            <div ref={tocScrollRef} style={{ height: tocHeight, flexShrink: 0 }} className="overflow-y-auto">
+              <TableOfContents view={editorView} stateVersion={stateVersion} />
+            </div>
+            <ResizeHandle
+              orientation="horizontal"
+              onDragStart={() => tocHeight}
+              onDrag={(size) => setUserOverride(Math.max(50, size))}
+              onDoubleClick={() => setUserOverride(null)}
+            />
+            <div ref={blScrollRef} style={{ height: blHeight, flexShrink: 0 }} className="overflow-y-auto">
+              <BacklinksPanel currentDocId={currentDocId} />
+            </div>
           </div>
-          <ResizeHandle
-            orientation="horizontal"
-            onDragStart={() => tocHeight}
-            onDrag={(size) => setUserOverride(Math.max(50, size))}
-            onDoubleClick={() => setUserOverride(null)}
-          />
-          <div ref={blScrollRef} style={{ height: blHeight, flexShrink: 0 }} className="overflow-y-auto">
-            <BacklinksPanel currentDocId={currentDocId} />
-          </div>
+          {/* Not mounted while collapsed, so it does not keep asking the platform. */}
+          {!rightCollapsed && (
+            <ContentStatusPanel
+              docId={currentDocId}
+              className="flex-shrink-0 max-h-[45%] overflow-y-auto border-t border-gray-200"
+            />
+          )}
         </div>
 
         {/* Discussion — conditionally rendered (only when doc has discussion) */}
@@ -644,6 +665,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             </div>
             <div className="border-t border-gray-200 mt-2" />
             <BacklinksPanel currentDocId={currentDocId} />
+            <ContentStatusPanel docId={currentDocId} className="border-t border-gray-200" />
           </MobileDrawer>
 
           {hasDiscussion && (
