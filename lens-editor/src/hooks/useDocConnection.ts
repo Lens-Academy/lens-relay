@@ -59,6 +59,33 @@ export function teardownProvider(provider: YSweetProvider): void {
 }
 
 /**
+ * Open a live connection to `docId` and wait until it has synced (10 s
+ * timeout). The caller owns it: end it with `teardownProvider(provider)` and
+ * `doc.destroy()`.
+ */
+export async function connectDoc(docId: string): Promise<DocConnection> {
+  const doc = new Y.Doc();
+  const authEndpoint = () => getClientToken(docId);
+  const provider = new YSweetProvider(authEndpoint, docId, doc, { connect: true });
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
+      provider.on('synced', () => { clearTimeout(timeout); resolve(); });
+      provider.on('connection-error', (err: Error) => { clearTimeout(timeout); reject(err); });
+    });
+  } catch (err) {
+    // Connect failed/timed out — tear the provider down so it doesn't keep
+    // reconnecting in the background forever (see teardownProvider).
+    teardownProvider(provider);
+    doc.destroy();
+    throw err;
+  }
+
+  return { doc, provider };
+}
+
+/**
  * Manages temporary Y.Doc connections for applying suggestion actions
  * from the review page (outside the normal editor context).
  */
@@ -69,25 +96,7 @@ export function useDocConnection() {
     const existing = connections.current.get(docId);
     if (existing) return existing;
 
-    const doc = new Y.Doc();
-    const authEndpoint = () => getClientToken(docId);
-    const provider = new YSweetProvider(authEndpoint, docId, doc, { connect: true });
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
-        provider.on('synced', () => { clearTimeout(timeout); resolve(); });
-        provider.on('connection-error', (err: Error) => { clearTimeout(timeout); reject(err); });
-      });
-    } catch (err) {
-      // Connect failed/timed out — tear the provider down so it doesn't keep
-      // reconnecting in the background forever (see teardownProvider).
-      teardownProvider(provider);
-      doc.destroy();
-      throw err;
-    }
-
-    const connection: DocConnection = { doc, provider };
+    const connection = await connectDoc(docId);
     connections.current.set(docId, connection);
     return connection;
   }, []);

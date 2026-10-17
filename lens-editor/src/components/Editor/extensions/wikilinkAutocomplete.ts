@@ -89,6 +89,8 @@ interface WikilinkOption extends Completion {
  * Create a completion source for wikilinks.
  * Triggers when user types [[ and provides document name suggestions.
  */
+const QUESTIONS_FOLDER = /(^|\/)Questions\//i;
+
 export function createWikilinkCompletionSource(
   getMetadata: () => FolderMetadata | null,
   getCurrentFilePath: () => string | null = () => null,
@@ -153,8 +155,14 @@ export function createWikilinkCompletionSource(
       });
     }
 
+    // After `![[` (an embed), question files come first: embedding one is
+    // how a lens shares a question.
+    const isEmbed = before.from > 0 && context.state.sliceDoc(before.from - 1, before.from) === '!';
+    const embedRank = (label: string) => (isEmbed && QUESTIONS_FOLDER.test(label) ? 0 : 1);
+
     // Best match first (see matchLabel), then shorter paths, then alphabetical
     options.sort((a, b) =>
+      embedRank(a.label) - embedRank(b.label) ||
       a.rank - b.rank || a.label.length - b.label.length || a.label.localeCompare(b.label),
     );
 

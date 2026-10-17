@@ -1,4 +1,5 @@
 import path from 'node:path/posix';
+import { findEmbedLines } from '../../shared/embeds.ts';
 import {
   parseModuleLinkEntries,
   parseSourceTargets,
@@ -74,7 +75,8 @@ function buildScopeGraph(snapshot: PromotionTreeSnapshot): ScopeGraph {
   const edges = new Map<string, Set<string>>();
   for (const [filePath, markdown] of snapshot.markdown) {
     const targets = new Set<string>();
-    for (const rawTarget of parseSourceTargets(markdown)) {
+    // Embedded files (question files above all) travel with the file that embeds them.
+    for (const rawTarget of [...parseSourceTargets(markdown), ...findEmbedLines(markdown.split(/\r?\n/)).map((e) => e.target)]) {
       const target = resolveCurriculumTarget(filePath, rawTarget, snapshot.paths);
       if (!target || !snapshot.paths.has(target)) continue;
       targets.add(target);

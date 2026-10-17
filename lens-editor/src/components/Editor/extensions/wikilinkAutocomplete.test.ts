@@ -399,3 +399,21 @@ describe('wikilinkAutocomplete EditorView integration', () => {
     }
   });
 });
+
+describe('wikilinkAutocomplete - embeds', () => {
+  const metadata: FolderMetadata = {
+    '/Questions/Control property.md': { id: 'q1', type: 'markdown', version: 0 },
+    '/Lenses/Control basics.md': { id: 'l1', type: 'markdown', version: 0 },
+    '/Control.md': { id: 'c1', type: 'markdown', version: 0 },
+  };
+
+  it('lists question files first after ![[', () => {
+    const result = getCompletions('![[contr', 8, metadata);
+    expect(result!.options[0].label).toBe('Questions/Control property');
+  });
+
+  it('keeps the usual order after [[', () => {
+    const result = getCompletions('[[contr', 7, metadata);
+    expect(result!.options[0].label).toBe('Control');
+  });
+});
