@@ -11,7 +11,14 @@ import {
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { getAuthorshipRuns } from '../../../lib/authorship-runs';
-import { getClientActorMap, getRegisteredAt, registerClientMapping } from '../../../lib/provenance';
+import {
+  classifyPendingPaste,
+  getClientActorMap,
+  getRegisteredAt,
+  markPendingClassification,
+  registerClientMapping,
+  resolvePendingClassification,
+} from '../../../lib/provenance';
 import { forgetCopied } from '../../../lib/carried-authorship';
 import { keepAuthorship, copiedAuthoredText } from './keepAuthorship';
 import { rememberCopied } from '../../../lib/carried-authorship';
@@ -228,6 +235,25 @@ describe('keepAuthorship', () => {
       rememberCopied(copiedAuthoredText(view.state, ydoc, ytext)!);
       view.dispatch({ changes: { from: 0, insert: 'AI line two\n' }, userEvent: 'input.paste' });
       expect(authors(ydoc, ytext)).toEqual([L2, L1, L2, L3]);
+    });
+
+    it('while the paste prompt is pending, unmarked parts go to the prompt and marked ones keep their authors', () => {
+      const { ydoc, ytext, view } = setup(true);
+      ydoc.clientID = 3000; // never registered: unmarked text
+      ytext.insert(ytext.length, '\nNobody marked this line');
+      ydoc.clientID = 2000;
+      copy(view, ydoc, ytext, view.state.doc.line(2).from, view.state.doc.length);
+
+      // What the paste handler does before CodeMirror's paste runs
+      const pasteId = 4000;
+      markPendingClassification(pasteId);
+      ydoc.clientID = pasteId;
+      view.dispatch({ changes: { from: 0, insert: 'AI line two\nLuc line three\nNobody marked this line\n' }, userEvent: 'input.paste' });
+      ydoc.clientID = 2000;
+      classifyPendingPaste(ydoc, pasteId, 'human', 'Ann');
+      resolvePendingClassification(pasteId);
+
+      expect(authors(ydoc, ytext).slice(0, 3)).toEqual([L2, L3, 'human:unknown: Nobody marked this line']);
     });
 
     it('a paste of other text is the paster’s', () => {

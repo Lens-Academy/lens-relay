@@ -36,7 +36,7 @@ import {
   type CarriedAuthor,
   type CarriedRange,
 } from '../../../lib/carried-authorship';
-import { carrierClientId, isOwnClient } from '../../../lib/provenance';
+import { carrierClientId, isOwnClient, isPendingClassification } from '../../../lib/provenance';
 
 export const carriedAuthors = Annotation.define<CarriedRange[]>();
 
@@ -103,9 +103,15 @@ export function planCarriedAuthors(tr: Transaction, ydoc: Y.Doc, ytext: Y.Text):
 
   const plan: CarriedRange[] = [];
   if (pasted) {
+    // While the paste prompt is coming (the doc writes under a pending paste
+    // ID), its unmarked parts are left to the prompt: they are written under
+    // the paste ID, which the answer maps to an author.
+    const askingUnmarked = isPendingClassification(ydoc.clientID);
     for (const { fromB, text } of inserts(tr)) {
       const found = recallChunk(text);
-      if (found) plan.push(...placeSpans(found.spans, fromB + found.offset));
+      if (!found) continue;
+      const ranges = placeSpans(found.spans, fromB + found.offset);
+      plan.push(...(askingUnmarked ? ranges.filter((r) => r.author.actor !== null) : ranges));
     }
     return plan;
   }

@@ -7,6 +7,7 @@ import {
   recallCopied,
   forgetCopied,
   normalizeLineBreaks,
+  unmarkedLength,
 } from './carried-authorship';
 
 const luc = { actor: 'human:Luc', at: 1 };
@@ -40,6 +41,10 @@ describe('spans', () => {
       { length: 1, author: null },
       { length: 2, author: ai },
     ]);
+  });
+
+  it('counts unmarked characters (unknown author), not uncarried ones', () => {
+    expect(unmarkedLength([...spans, { length: 5, author: { actor: null, at: null } }])).toBe(5);
   });
 
   it('places carried spans only', () => {

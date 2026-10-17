@@ -79,6 +79,11 @@ export function sliceSpans(spans: AuthorSpan[], start: number, length: number): 
   return out;
 }
 
+/** How many characters of the spans have no known author. */
+export function unmarkedLength(spans: AuthorSpan[]): number {
+  return spans.reduce((n, s) => n + (s.author && s.author.actor === null ? s.length : 0), 0);
+}
+
 /** Turn spans placed at doc position `at` into carried ranges. */
 export function placeSpans(spans: AuthorSpan[], at: number): CarriedRange[] {
   const ranges: CarriedRange[] = [];

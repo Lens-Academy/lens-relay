@@ -163,6 +163,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // classification, and where to show the prompt.
   const [pastePrompt, setPastePrompt] = useState<{
     pasteId: number;
+    partial: boolean;
     x: number;
     y: number;
   } | null>(null);
@@ -210,7 +211,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         // edge is clamped once the popover's width is known (useLayoutEffect below).
         const x = Math.max(8, coords.left);
         const y = Math.max(8, Math.min(coords.bottom + 6, window.innerHeight - 48));
-        setPastePrompt({ pasteId: paste.pasteId, x, y });
+        setPastePrompt({ pasteId: paste.pasteId, partial: paste.partial, x, y });
         if (pastePromptTimer.current) clearTimeout(pastePromptTimer.current);
         pastePromptTimer.current = setTimeout(() => closePastePrompt(paste.pasteId), 8000);
       },
@@ -625,7 +626,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
           style={{ left: pastePrompt.x, top: pastePrompt.y }}
           data-testid="paste-classification-popover"
         >
-          <span className="min-w-0 truncate text-gray-600">Pasted text — who wrote it?</span>
+          <span className="min-w-0 truncate text-gray-600">
+            {pastePrompt.partial ? 'Unmarked parts of the paste — who wrote them?' : 'Pasted text — who wrote it?'}
+          </span>
           {/* Long display names are truncated; "'s AI" always stays visible */}
           {pasteOptions.map((option) => (
             <button

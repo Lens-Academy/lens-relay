@@ -11,9 +11,12 @@
  * it unmapped (renders as unknown, classifiable later).
  *
  * Small pastes (< MIN_CLASSIFY_CHARS) skip all of this and inherit the
- * session's human identity — nobody wants a prompt for pasting a word. So do
- * pastes of the text last copied in an editor: they keep their original
- * authors (keepAuthorship.ts), so there is nothing to ask.
+ * session's human identity — nobody wants a prompt for pasting a word.
+ *
+ * A paste of the text last copied in an editor keeps its original authors
+ * (keepAuthorship.ts). It is asked about only for its unmarked parts (unknown
+ * author), since copying unmarked text to mark it is a way to mark it: those
+ * parts are written under the paste ID, the marked ones keep their authors.
  */
 import { Facet } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
@@ -23,7 +26,7 @@ import {
   freshClientId,
   markPendingClassification,
 } from '../../../lib/provenance';
-import { normalizeLineBreaks, recallCopied } from '../../../lib/carried-authorship';
+import { normalizeLineBreaks, recallCopied, unmarkedLength } from '../../../lib/carried-authorship';
 
 export const MIN_CLASSIFY_CHARS = 20;
 
@@ -34,6 +37,8 @@ export interface PendingPaste {
   from: number;
   /** Length of the pasted plain text. */
   length: number;
+  /** Only part of the paste is asked about: the rest kept known authors. */
+  partial: boolean;
 }
 
 export type PasteClassifyHandler = (paste: PendingPaste, view: EditorView) => void;
@@ -46,7 +51,9 @@ export function pasteClassification(ydoc: Y.Doc): Extension {
       if (view.state.readOnly) return false;
       const text = event.clipboardData?.getData('text/plain') ?? '';
       if (text.length < MIN_CLASSIFY_CHARS) return false;
-      if (recallCopied(normalizeLineBreaks(text))) return false;
+      const carried = recallCopied(normalizeLineBreaks(text));
+      if (carried && unmarkedLength(carried) < MIN_CLASSIFY_CHARS) return false;
+      const partial = !!carried?.some((s) => s.author?.actor);
 
       const sessionId = ydoc.clientID;
       const pasteId = freshClientId(ydoc);
@@ -60,7 +67,7 @@ export function pasteClassification(ydoc: Y.Doc): Extension {
       queueMicrotask(() => {
         ydoc.clientID = sessionId;
         for (const handler of view.state.facet(pasteClassifyCallback)) {
-          handler({ pasteId, from, length: text.length }, view);
+          handler({ pasteId, from, length: text.length, partial }, view);
         }
       });
 
