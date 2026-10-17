@@ -151,6 +151,9 @@ function categoryOf(actor: string | undefined): Category {
 /** 'human:Luc' → 'Luc'; 'ai:opus-4.8:luc' → 'opus-4.8 (luc)'; undefined → 'Unknown'. */
 export function actorDisplayName(actor: string | undefined): string {
   if (!actor) return 'Unknown';
+  // human:unknown: a human whose name we don't know (the paste popover's
+  // "Human", or a writer without a display name)
+  if (actor === 'human:unknown') return 'Human';
   if (actor.startsWith('human:')) return actor.slice('human:'.length) || 'Unknown';
   if (actor.startsWith('ai:')) {
     const [, model, behalf] = actor.split(':');

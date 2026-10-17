@@ -32,6 +32,17 @@ export function humanActor(displayName: string): string {
   return `human:${trimmed || 'unknown'}`;
 }
 
+/** A human or an AI whose name or model we don't know (the paste popover's
+ *  generic "Human" / "AI" answers). */
+export const GENERIC_HUMAN_ACTOR = 'human:unknown';
+export const GENERIC_AI_ACTOR = 'ai:unknown';
+
+/** "<name>'s AI": an AI of unknown model writing on behalf of `displayName`. */
+export function aiOnBehalfActor(displayName: string): string {
+  const trimmed = displayName.trim();
+  return trimmed ? `ai:unknown:${trimmed}` : GENERIC_AI_ACTOR;
+}
+
 function usersMap(doc: Y.Doc): Y.Map<unknown> {
   return doc.getMap(USERS_MAP_KEY);
 }
@@ -116,11 +127,12 @@ export function getRegisteredAt(doc: Y.Doc, clientID: number): number | null {
 /**
  * Register a clientID under an actor. Idempotent: a clientID already
  * registered (to any actor) is left untouched. Returns whether it wrote.
+ * `now` null registers the actor without a date (text of unknown date).
  */
 export function registerClientMapping(
   doc: Y.Doc,
   actor: string,
-  now: number,
+  now: number | null,
   clientID: number = doc.clientID
 ): boolean {
   if (getRegisteredActor(doc, clientID) !== null) return false;
@@ -147,7 +159,7 @@ export function registerClientMapping(
     if (!(meta instanceof Y.Map)) {
       meta = map.set('meta', new Y.Map());
     }
-    (meta as Y.Map<unknown>).set(String(clientID), { registeredAt: now });
+    if (now !== null) (meta as Y.Map<unknown>).set(String(clientID), { registeredAt: now });
   }, PROVENANCE_ORIGIN);
 
   return true;
@@ -184,32 +196,91 @@ export function isPendingClassification(clientID: number): boolean {
   return pendingClassification.has(clientID);
 }
 
-/**
- * Button labels for the paste popover: the writer's own name and "<name>'s AI",
- * so the choice reads as "Luc" / "Luc's AI". Without a display name they fall
- * back to "Me" / "AI". `name` is the trimmed name (null without one), for
- * rendering the AI label with a truncatable name and a fixed "'s AI".
- */
-export function pasteOriginLabels(displayName: string | null): { name: string | null; human: string; ai: string } {
-  const name = displayName?.trim() || null;
-  return name ? { name, human: name, ai: `${name}'s AI` } : { name, human: 'Me', ai: 'AI' };
+export type PasteOrigin = 'self' | 'self-ai' | 'human' | 'ai';
+
+export interface PasteOriginOption {
+  origin: PasteOrigin;
+  label: string;
+  kind: 'human' | 'ai';
 }
 
 /**
- * Record the popover's answer for a pending paste: the human answer maps the paste's
- * temporary clientID to the human actor for `displayName` (the same
- * DisplayNameContext value the lazy registration path uses), the AI answer
- * to the generic AI actor.
+ * Answers for the paste popover: the writer's own name and "<name>'s AI"
+ * ("Luc" / "Luc's AI"), then a generic "Human" and "AI" for someone else's
+ * text or text of unknown origin. Without a display name only the generic
+ * two remain, since the writer's own answer would be the generic human.
+ */
+export function pasteOriginOptions(displayName: string | null): PasteOriginOption[] {
+  const name = displayName?.trim() || null;
+  const generic: PasteOriginOption[] = [
+    { origin: 'human', label: 'Human', kind: 'human' },
+    { origin: 'ai', label: 'AI', kind: 'ai' },
+  ];
+  if (!name) return generic;
+  return [
+    { origin: 'self', label: name, kind: 'human' },
+    { origin: 'self-ai', label: `${name}'s AI`, kind: 'ai' },
+    ...generic,
+  ];
+}
+
+export function pasteOriginActor(origin: PasteOrigin, displayName: string | null): string {
+  switch (origin) {
+    case 'self': return humanActor(displayName ?? '');
+    case 'self-ai': return aiOnBehalfActor(displayName ?? '');
+    case 'human': return GENERIC_HUMAN_ACTOR;
+    case 'ai': return GENERIC_AI_ACTOR;
+  }
+}
+
+/**
+ * Record the popover's answer for a pending paste: map the paste's temporary
+ * clientID to the actor of the chosen answer. "self" uses `displayName`, the
+ * same DisplayNameContext value the lazy registration path uses, so the
+ * answer and ordinary typing land under the same actor key.
  */
 export function classifyPendingPaste(
   doc: Y.Doc,
   pasteId: number,
-  origin: 'human' | 'ai',
+  origin: PasteOrigin,
   displayName: string | null,
   now: number = Date.now()
 ): void {
-  const actor = origin === 'human' ? humanActor(displayName ?? '') : 'ai:unknown';
-  registerClientMapping(doc, actor, now, pasteId);
+  registerClientMapping(doc, pasteOriginActor(origin, displayName), now, pasteId);
+}
+
+/**
+ * ClientIDs this doc instance minted to re-insert existing text under its
+ * original author (moved lines, pasted copies): one per (actor, date), so
+ * each resolves to the same actor and registration date as the text it
+ * carries. Only this Y.Doc instance ever writes under them, which is what
+ * makes reusing them safe (a clientID shared by two writers corrupts the doc).
+ */
+const carriers = new WeakMap<Y.Doc, Map<string, number>>();
+const carrierIds = new Set<number>();
+
+/** Whether this doc instance may write under `clientID` itself: its own
+ *  session ID, a paste awaiting classification, or a carrier it minted. */
+export function isOwnClient(doc: Y.Doc, clientID: number): boolean {
+  return clientID === doc.clientID || isPendingClassification(clientID) || carrierIds.has(clientID);
+}
+
+/**
+ * A clientID to write text under so it resolves to `actor` (null: unknown,
+ * left unmapped) dated `at` (null: undated). Registers it on first use.
+ */
+export function carrierClientId(doc: Y.Doc, actor: string | null, at: number | null): number {
+  let byKey = carriers.get(doc);
+  if (!byKey) carriers.set(doc, (byKey = new Map()));
+  const key = `${actor ?? ''}\u0000${at ?? ''}`;
+  const existing = byKey.get(key);
+  if (existing !== undefined) return existing;
+
+  const id = freshClientId(doc);
+  if (actor !== null) registerClientMapping(doc, actor, at, id);
+  byKey.set(key, id);
+  carrierIds.add(id);
+  return id;
 }
 
 /**

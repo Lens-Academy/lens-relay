@@ -50,8 +50,9 @@ import {
 import {
   classifyPendingPaste,
   humanActor,
-  pasteOriginLabels,
+  pasteOriginOptions,
   resolvePendingClassification,
+  type PasteOrigin,
 } from '../../lib/provenance';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { ContextMenu } from './ContextMenu';
@@ -62,6 +63,7 @@ import { openDocInNewTab } from '../../lib/url-utils';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 import { imagePasteExtension } from './extensions/imagePaste';
+import { keepAuthorship } from './extensions/keepAuthorship';
 import { updateNoteEmbedContext } from './extensions/noteEmbed';
 import { closeLive } from '../../lib/embed-docs';
 
@@ -173,7 +175,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
     setPastePrompt((current) => (current?.pasteId === pasteId ? null : current));
   };
 
-  const classifyPaste = (pasteId: number, origin: 'human' | 'ai') => {
+  const classifyPaste = (pasteId: number, origin: PasteOrigin) => {
     // Same identity source as the lazy registration in AwarenessInitializer,
     // so a human answer and ordinary typing land under the same actor key.
     classifyPendingPaste(ydoc, pasteId, origin, displayName);
@@ -186,19 +188,33 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
       if (current) resolvePendingClassification(current.pasteId);
       return null;
     });
-    const coords = view.coordsAtPos(Math.min(paste.from, view.state.doc.length));
-    if (!coords) {
-      resolvePendingClassification(paste.pasteId);
-      return;
-    }
-    // Clamp to the viewport: the popover is position:fixed, so an offscreen
-    // anchor (paste at the bottom edge) would make it unreachable. The right
-    // edge is clamped once the popover's width is known (useLayoutEffect below).
-    const x = Math.max(8, coords.left);
-    const y = Math.max(8, Math.min(coords.bottom + 6, window.innerHeight - 48));
-    setPastePrompt({ pasteId: paste.pasteId, x, y });
-    if (pastePromptTimer.current) clearTimeout(pastePromptTimer.current);
-    pastePromptTimer.current = setTimeout(() => closePastePrompt(paste.pasteId), 8000);
+    // Anchor at the paste's start if it is on screen, else at its end (where
+    // the paste scrolled to), else at the editor's visible bottom: a long paste
+    // leaves its start offscreen, often where CodeMirror has no coordinates at
+    // all, and the prompt must still show. Read after the paste's scroll.
+    view.requestMeasure({
+      read: () => {
+        const box = view.scrollDOM.getBoundingClientRect();
+        const len = view.state.doc.length;
+        const onScreen = (pos: number) => {
+          const at = view.coordsAtPos(Math.min(pos, len));
+          return at && at.top >= box.top && at.bottom <= box.bottom ? at : null;
+        };
+        const at = onScreen(paste.from) ?? onScreen(paste.from + paste.length);
+        if (at) return { left: at.left, bottom: at.bottom };
+        return { left: box.left + 24, bottom: Math.min(box.bottom, window.innerHeight) - 48 };
+      },
+      write: (coords) => {
+        // Clamp to the viewport: the popover is position:fixed, so an offscreen
+        // anchor (paste at the bottom edge) would make it unreachable. The right
+        // edge is clamped once the popover's width is known (useLayoutEffect below).
+        const x = Math.max(8, coords.left);
+        const y = Math.max(8, Math.min(coords.bottom + 6, window.innerHeight - 48));
+        setPastePrompt({ pasteId: paste.pasteId, x, y });
+        if (pastePromptTimer.current) clearTimeout(pastePromptTimer.current);
+        pastePromptTimer.current = setTimeout(() => closePastePrompt(paste.pasteId), 8000);
+      },
+    });
   };
   const handlePendingPasteRef = useRef(handlePendingPaste);
   handlePendingPasteRef.current = handlePendingPaste;
@@ -440,6 +456,9 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         listIndentKeymap,
         // Awareness stays out of yCollab: collaborator carets come from
         // remoteCarets, which hides the name labels until hover/movement.
+        // Moved, duplicated and re-pasted text keeps its authors; must come
+        // before yCollab, whose writes it splits by author
+        keepAuthorship(ydoc, ytext),
         yCollab(ytext, null, { undoManager }),
         remoteCarets({ ytext, awareness: provider.awareness }),
         // Must come after yCollab: reads the Y.Text during plugin update()
@@ -556,7 +575,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
   // to avoid recreating the editor (which would lose Y.Text sync state)
   }, [ydoc, provider, onEditorReady, onDocChange, readOnly, canAcceptReject, initialSuggestionModeOnMount]);
 
-  const pasteLabels = pasteOriginLabels(displayName);
+  const pasteOptions = pasteOriginOptions(displayName);
 
   // The popover's width depends on the display name, so keep it on screen by
   // measuring it rather than assuming a width when positioning
@@ -608,28 +627,27 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
         >
           <span className="min-w-0 truncate text-gray-600">Pasted text — who wrote it?</span>
           {/* Long display names are truncated; "'s AI" always stays visible */}
-          <button
-            type="button"
-            title={pasteLabels.human}
-            className="max-w-[min(10rem,22vw)] shrink-0 truncate rounded bg-blue-50 px-2 py-0.5 text-blue-700 hover:bg-blue-100"
-            onClick={() => classifyPaste(pastePrompt.pasteId, 'human')}
-          >
-            {pasteLabels.human}
-          </button>
-          <button
-            type="button"
-            title={pasteLabels.ai}
-            aria-label={pasteLabels.ai}
-            className="flex shrink-0 rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100"
-            onClick={() => classifyPaste(pastePrompt.pasteId, 'ai')}
-          >
-            {pasteLabels.name ? (
-              <>
-                <span className="max-w-[min(10rem,22vw)] truncate">{pasteLabels.name}</span>
-                <span>'s AI</span>
-              </>
-            ) : pasteLabels.ai}
-          </button>
+          {pasteOptions.map((option) => (
+            <button
+              key={option.origin}
+              type="button"
+              title={option.label}
+              aria-label={option.label}
+              className={option.kind === 'human'
+                ? 'flex max-w-[min(10rem,22vw)] shrink-0 rounded bg-blue-50 px-2 py-0.5 text-blue-700 hover:bg-blue-100'
+                : 'flex shrink-0 rounded bg-orange-50 px-2 py-0.5 text-orange-700 hover:bg-orange-100'}
+              onClick={() => classifyPaste(pastePrompt.pasteId, option.origin)}
+            >
+              {option.origin === 'self-ai' ? (
+                <>
+                  <span className="max-w-[min(10rem,22vw)] truncate">{option.label.slice(0, -"'s AI".length)}</span>
+                  <span>'s AI</span>
+                </>
+              ) : (
+                <span className="truncate">{option.label}</span>
+              )}
+            </button>
+          ))}
           <button
             type="button"
             className="px-1 text-gray-400 hover:text-gray-600"

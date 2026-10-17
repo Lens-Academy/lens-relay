@@ -11,7 +11,9 @@
  * it unmapped (renders as unknown, classifiable later).
  *
  * Small pastes (< MIN_CLASSIFY_CHARS) skip all of this and inherit the
- * session's human identity — nobody wants a prompt for pasting a word.
+ * session's human identity — nobody wants a prompt for pasting a word. So do
+ * pastes of the text last copied in an editor: they keep their original
+ * authors (keepAuthorship.ts), so there is nothing to ask.
  */
 import { Facet } from '@codemirror/state';
 import type { Extension } from '@codemirror/state';
@@ -21,6 +23,7 @@ import {
   freshClientId,
   markPendingClassification,
 } from '../../../lib/provenance';
+import { normalizeLineBreaks, recallCopied } from '../../../lib/carried-authorship';
 
 export const MIN_CLASSIFY_CHARS = 20;
 
@@ -43,6 +46,7 @@ export function pasteClassification(ydoc: Y.Doc): Extension {
       if (view.state.readOnly) return false;
       const text = event.clipboardData?.getData('text/plain') ?? '';
       if (text.length < MIN_CLASSIFY_CHARS) return false;
+      if (recallCopied(normalizeLineBreaks(text))) return false;
 
       const sessionId = ydoc.clientID;
       const pasteId = freshClientId(ydoc);
