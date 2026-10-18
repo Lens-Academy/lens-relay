@@ -11,6 +11,7 @@ import {
   buildAncestors,
   childrenOf,
   countLabel,
+  countShares,
   findCycle,
   graphData,
   isConceptPath,
@@ -50,6 +51,7 @@ describe('parseParents', () => {
 
   it('concept graph rules v1 #3: a flow list', () => {
     expect(links('---\nparent-concepts: ["[[A]]", \'[[B]]\']\n---\n')).toEqual(['A', 'B']);
+    expect(links('---\nparent-concepts: ["[[A]]", "[[B]]"] # see [x]\n---\n')).toEqual(['A', 'B']);
   });
 
   it('concept graph rules v1 #4: quoted and unquoted links, alias and heading dropped', () => {
@@ -170,6 +172,20 @@ describe('children and the walk below', () => {
 
     const loop = { b: ['a'], a: ['b'] };
     expect(belowTwoLevels('a', candidates(loop), graph(loop), names).cycle).toBe(true);
+  });
+
+  it('splits the count budget fairly: a large child does not starve its sibling', () => {
+    const edges: Record<string, string[]> = { big: ['me'], small: ['me'] };
+    for (let i = 0; i < 60; i++) edges[`b${String(i).padStart(2, '0')}`] = ['big'];
+    for (let i = 0; i < 3; i++) edges[`s${i}`] = ['small'];
+    const below = belowTwoLevels('me', candidates(edges), graph(edges), names);
+    expect(below.counts.get('big')).toEqual({ count: 25, more: true });
+    expect(below.counts.get('small')).toEqual({ count: 3, more: false });
+    expect(countShares([60, 3])).toEqual([25, 3]);
+    expect(countShares([0, 10, 100])).toEqual([0, 10, 40]); // unused share carried forward
+    expect(countShares([100, 100, 100])).toEqual([16, 17, 17]);
+    expect(countShares(Array(60).fill(2)).filter((n) => n === 0)).toHaveLength(10);
+    expect(countLabel({ count: null, more: true })).toBe('+?');
   });
 
   it('caps the backlinkers read: MAX_CHILD_CANDIDATES for the file, MAX_COUNT_FILES for the counts', () => {

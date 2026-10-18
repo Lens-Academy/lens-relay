@@ -17,7 +17,7 @@
  * docs/concept-relationships.md, "Concept graph".
  *
  * Every walk is capped (MAX_DEPTH levels; MAX_ANCESTORS, MAX_CHILD_CANDIDATES,
- * MAX_COUNT_FILES and MAX_FILES files) and never visits a file twice, so cycles (invalid content) never hang it.
+ * MAX_COUNT_FILES files) and never visits a file twice, so cycles (invalid content) never hang it.
  */
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 import { resolvePageName } from './document-resolver';
@@ -32,8 +32,6 @@ export const MAX_DEPTH = 20;
 export const MAX_CHILD_CANDIDATES = 80;
 /** Backlinkers of its children read, in all, to count their children ("+N"). */
 export const MAX_COUNT_FILES = 50;
-/** Concept files read for one header (ancestors, children, counts). */
-export const MAX_FILES = 200;
 /** Ancestors walked and drawn. */
 export const MAX_ANCESTORS = 30;
 /** Children drawn (the lists show them all). */
@@ -96,8 +94,10 @@ export function parseParents(text: string): ParentEntry[] {
     if (!m) continue;
     const inline = m[1].trim();
     if (inline.startsWith('[') && !inline.startsWith('[[')) {
+      // A trailing comment after the closing `]` (#5) goes first.
+      const flow = inline.replace(/\][ \t]+#.*$/, ']');
       // Flow list (#3): up to its closing `]`; commas inside [[...]] or quotes do not split.
-      const inner = inline.slice(1, inline.lastIndexOf(']') > 0 ? inline.lastIndexOf(']') : undefined);
+      const inner = flow.slice(1, flow.lastIndexOf(']') > 0 ? flow.lastIndexOf(']') : undefined);
       for (const part of inner.match(/"[^"]*"|'[^']*'|\[\[[^\]]*\]\]|[^,]+/g) ?? []) push(part);
     } else if (inline && !inline.startsWith('#')) {
       push(inline);
@@ -266,11 +266,28 @@ export function childrenOf(id: string, candidates: readonly string[], parentsOf:
   return out;
 }
 
-/** A child's "+N": how many children it has, and whether there may be more
- *  below them (a grandchild that other concepts link to, or a cap). */
+/** A child's "+N": how many children it has (null: not counted, its share
+ *  of MAX_COUNT_FILES was empty), and whether there may be more below them
+ *  (a grandchild that other concepts link to, or a cap). */
 export interface ChildCount {
-  count: number;
+  count: number | null;
   more: boolean;
+}
+
+/** How many backlinkers to read for each child (`candidateCounts`, in
+ *  order), out of MAX_COUNT_FILES: an even split of what is left among the
+ *  children still to come that have any (at least 1 while any is left), so
+ *  unused shares carry forward and one large child cannot starve the rest. */
+export function countShares(candidateCounts: readonly number[], budget = MAX_COUNT_FILES): number[] {
+  let left = budget;
+  return candidateCounts.map((n, i) => {
+    if (n === 0 || left === 0) return 0;
+    const still = candidateCounts.slice(i).filter((m) => m > 0).length;
+    const share = Math.max(1, Math.floor(left / still));
+    const taken = Math.min(n, share);
+    left -= taken;
+    return taken;
+  });
 }
 
 export interface Below {
@@ -294,8 +311,9 @@ export interface Below {
  * Two levels below `start`, cheaply: its children (backlinkers in the
  * concepts folder whose parents include it, MAX_CHILD_CANDIDATES read), and
  * for each child the number of its own children, reading at most
- * MAX_COUNT_FILES of their backlinkers in all. Deeper levels are only hinted
- * at (`more`), from the backlinks index, without reading anything.
+ * MAX_COUNT_FILES of their backlinkers in all, split fairly (`countShares`,
+ * children in path order, as the relay). Deeper levels are only hinted at
+ * (`more`), from the backlinks index, without reading anything.
  */
 export function belowTwoLevels(
   start: string,
@@ -307,7 +325,7 @@ export function belowTwoLevels(
   const own = all.slice(0, MAX_CHILD_CANDIDATES);
   const found = childrenOf(start, own, parentsOf);
   const out: Below = {
-    children: found.ids.sort((a, b) => nameOf(a).localeCompare(nameOf(b))),
+    children: [...found.ids].sort((a, b) => nameOf(a).localeCompare(nameOf(b))),
     counts: new Map(),
     candidatesCut: all.length - own.length,
     cycle: false,
@@ -315,26 +333,31 @@ export function belowTwoLevels(
     pendingChildren: found.pending.length,
     pendingCounts: 0,
   };
-  let budget = MAX_COUNT_FILES;
-  for (const child of out.children) {
-    const cands = candidatesOf(child).filter((c) => c !== child);
-    const taken = cands.slice(0, budget);
-    budget -= taken.length;
+  const candsOf = found.ids.map((child) => candidatesOf(child).filter((c) => c !== child));
+  const shares = countShares(candsOf.map((c) => c.length));
+  found.ids.forEach((child, i) => {
+    const cands = candsOf[i];
+    const taken = cands.slice(0, shares[i]);
     for (const c of taken) if (!out.reads.includes(c)) out.reads.push(c);
+    if (taken.length === 0 && cands.length > 0) {
+      out.counts.set(child, { count: null, more: true });
+      return;
+    }
     const kids = childrenOf(child, taken, parentsOf);
     if (kids.ids.includes(start)) out.cycle = true;
     const grandkids = kids.ids.filter((k) => k !== start);
     out.pendingCounts += kids.pending.length;
-    if (kids.pending.length) continue;
+    if (kids.pending.length) return;
     const deeper = grandkids.some((g) => candidatesOf(g).some((c) => c !== g && c !== child && c !== start));
     out.counts.set(child, { count: grandkids.length, more: taken.length < cands.length || deeper });
-  }
+  });
   return out;
 }
 
-/** "+N", "+N+" (maybe more below), or "" for none. */
+/** "+N", "+N+" (maybe more below), "+?" (not counted), or "" for none. */
 export function countLabel(count: ChildCount | undefined): string {
   if (!count || (count.count === 0 && !count.more)) return '';
+  if (count.count === null) return '+?';
   return `+${count.count}${count.more ? '+' : ''}`;
 }
 

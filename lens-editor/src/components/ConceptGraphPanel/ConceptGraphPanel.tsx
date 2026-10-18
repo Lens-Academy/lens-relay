@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import type * as Y from 'yjs';
-import { countLabel, isConceptPath, MAX_ANCESTORS, MAX_CHILD_CANDIDATES, MAX_FILES } from '../../lib/concept-graph';
+import { countLabel, isConceptPath, MAX_ANCESTORS, MAX_CHILD_CANDIDATES } from '../../lib/concept-graph';
 import { docUuidFromCompoundId } from '../../lib/url-utils';
 import { DocLink } from '../DocLink';
 import { useConceptGraph, type ConceptGraph } from './useConceptGraph';
@@ -68,10 +68,8 @@ function Panel({ docId, path, ytext }: PanelProps & { path: string }) {
   const { own, ancestors, below } = graph;
 
   const toggle = () => {
-    setOpen((v) => {
-      writeOpen(!v);
-      return !v;
-    });
+    writeOpen(!open);
+    setOpen(!open);
   };
 
   const children = below.children;
@@ -134,7 +132,6 @@ function Panel({ docId, path, ytext }: PanelProps & { path: string }) {
                 {below.candidatesCut} more concept file(s) link here and were not checked (at most {MAX_CHILD_CANDIDATES}).
               </div>
             )}
-            {graph.filesCut && <div className="text-xs text-gray-400">Not every concept file was read (at most {MAX_FILES}).</div>}
             {ancestors.cut && <div className="text-xs text-gray-400">More ancestors not shown (at most {MAX_ANCESTORS}).</div>}
             {(ancestors.pending.length > 0 || below.pendingChildren > 0) && <div className="text-xs text-gray-400">Loading…</div>}
             {graph.failed > 0 && (

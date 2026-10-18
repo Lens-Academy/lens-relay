@@ -4,7 +4,7 @@ import { createElement, type ReactNode } from 'react';
 import * as Y from 'yjs';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import { __embedDocsTesting } from '../../lib/embed-docs';
-import { MAX_CHILD_CANDIDATES, MAX_COUNT_FILES, MAX_FILES } from '../../lib/concept-graph';
+import { MAX_ANCESTORS, MAX_CHILD_CANDIDATES, MAX_COUNT_FILES } from '../../lib/concept-graph';
 import { useConceptGraph } from './useConceptGraph';
 
 afterEach(() => {
@@ -117,6 +117,8 @@ describe('useConceptGraph', () => {
     expect(result.current.below.candidatesCut).toBe(300 - MAX_CHILD_CANDIDATES);
     expect(result.current.below.children).toHaveLength(MAX_CHILD_CANDIDATES);
     expect(read.size).toBe(MAX_CHILD_CANDIDATES + MAX_COUNT_FILES);
-    expect(read.size).toBeLessThanOrEqual(MAX_FILES);
+    expect(read.size).toBeLessThanOrEqual(MAX_ANCESTORS + MAX_CHILD_CANDIDATES + MAX_COUNT_FILES);
+    // 80 children, 50 count files: the first 50 are counted from one file each, the rest are "+?".
+    expect([...result.current.below.counts.values()].filter((c) => c.count === null)).toHaveLength(MAX_CHILD_CANDIDATES - MAX_COUNT_FILES);
   });
 });

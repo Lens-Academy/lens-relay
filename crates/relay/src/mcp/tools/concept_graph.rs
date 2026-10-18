@@ -41,8 +41,6 @@ const MAX_ANCESTORS: usize = 30;
 const MAX_COUNT_FILES: usize = 50;
 /// Backlinkers of one concept read when looking for its children.
 const MAX_CHILD_CANDIDATES: usize = 80;
-/// Concept files loaded by one `read` in all (ancestors and below).
-const MAX_FILES_PER_READ: usize = 200;
 
 /// Whether the file at resolver path `path` is a concept file.
 pub(crate) fn is_concept_path(path: &str) -> bool {
@@ -136,10 +134,13 @@ fn parse_parents(text: &str) -> Vec<ParentEntry> {
         };
         let inline = m.get(1).unwrap().as_str().trim();
         if inline.starts_with('[') && !inline.starts_with("[[") {
-            // Flow list (#3): up to its closing `]`.
-            let inner = match inline.rfind(']') {
-                Some(close) if close > 0 => &inline[1..close],
-                _ => &inline[1..],
+            // Flow list (#3): a trailing comment after the closing `]` (#5)
+            // goes first, then up to the closing `]`.
+            static FLOW_COMMENT: OnceLock<Regex> = OnceLock::new();
+            let flow = regex(&FLOW_COMMENT, r"\][ \t]+#.*$").replace(inline, "]");
+            let inner = match flow.rfind(']') {
+                Some(close) if close > 0 => &flow[1..close],
+                _ => &flow[1..],
             };
             let parts = regex(&FLOW_PART, r#""[^"]*"|'[^']*'|\[\[[^\]]*\]\]|[^,]+"#);
             for part in parts.find_iter(inner) {
@@ -334,16 +335,14 @@ const BLOCK_START: &str = "── Concept graph (context — NOT part of this fi
 const BLOCK_END: &str = "── end of concept graph ──";
 const EDIT_HINT: &str = "Edit this file's parents in its `parent-concepts:` frontmatter (the first is the primary one); each child lists this file in its own. \"Part of\" goes upward only. Line numbers below the end marker are this file's own.";
 
-/// Loads concept files and resolves their parents, each once per `read`,
-/// at most [`MAX_FILES_PER_READ`] in all.
+/// Loads concept files and resolves their parents, each once per `read`.
+/// The callers' caps bound the loads: at most [`MAX_ANCESTORS`] +
+/// [`MAX_CHILD_CANDIDATES`] + [`MAX_COUNT_FILES`].
 struct GraphLoader<'a> {
     server: &'a Arc<Server>,
     index: &'a VirtualTreeIndex<'a>,
     parents: HashMap<String, ResolvedParents>,
-    loaded: usize,
     failed: usize,
-    /// Files passed over because the per-read total was reached.
-    unread: usize,
 }
 
 impl GraphLoader<'_> {
@@ -354,15 +353,8 @@ impl GraphLoader<'_> {
             if self.parents.contains_key(id) || wanted.iter().any(|(w, _)| w == id) {
                 continue;
             }
-            if self.loaded + wanted.len() >= MAX_FILES_PER_READ {
-                // Over the total: counted as having no parents.
-                self.unread += 1;
-                self.parents.insert(id.clone(), ResolvedParents::default());
-                continue;
-            }
             wanted.push((id.clone(), server.doc_resolver().path_for_uuid(id)));
         }
-        self.loaded += wanted.len();
         let loaded: Vec<(String, Option<(String, String)>)> = futures::stream::iter(wanted)
             .map(|(id, path)| async move {
                 let Some(path) = path else {
@@ -391,7 +383,8 @@ impl GraphLoader<'_> {
 /// more below them (a grandchild that other concepts link to, or a cap).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ChildCount {
-    count: usize,
+    /// None: not counted (its share of [`MAX_COUNT_FILES`] was empty).
+    count: Option<usize>,
     more: bool,
 }
 
@@ -415,10 +408,32 @@ async fn candidates_of(server: &Arc<Server>, folder_doc_id: &str, id: &str) -> V
         .collect()
 }
 
+/// How many backlinkers to read for each child (`candidate_counts`, in
+/// order), out of [`MAX_COUNT_FILES`]: an even split of what is left among
+/// the children still to come that have any (at least 1 while any is left),
+/// so unused shares carry forward. The editor's `countShares`.
+fn count_shares(candidate_counts: &[usize]) -> Vec<usize> {
+    let mut left = MAX_COUNT_FILES;
+    candidate_counts
+        .iter()
+        .enumerate()
+        .map(|(i, &n)| {
+            if n == 0 || left == 0 {
+                return 0;
+            }
+            let still = candidate_counts[i..].iter().filter(|&&m| m > 0).count();
+            let taken = n.min((left / still).max(1));
+            left -= taken;
+            taken
+        })
+        .collect()
+}
+
 /// Two levels below `start`, cheaply (the editor's `belowTwoLevels`): its
 /// children (backlinkers whose parents include it, [`MAX_CHILD_CANDIDATES`]
 /// read), and for each child the number of its own children, reading at most
-/// [`MAX_COUNT_FILES`] of their backlinkers in all. Deeper levels are only
+/// [`MAX_COUNT_FILES`] of their backlinkers in all, split fairly
+/// ([`count_shares`], children in path order). Deeper levels are only
 /// hinted at (`more`) from the backlinks index, without loading anything.
 async fn below_two_levels(
     server: &Arc<Server>,
@@ -445,12 +460,23 @@ async fn below_two_levels(
         cycle: false,
         candidates_over_cap,
     };
-    let mut budget = MAX_COUNT_FILES;
-    for child in kids {
-        let candidates = candidates_of(server, folder_doc_id, &child).await;
-        let taken: Vec<String> = candidates.iter().take(budget).cloned().collect();
-        budget -= taken.len();
-        let unread_before = loader.unread;
+    let mut cands_of = Vec::with_capacity(kids.len());
+    for child in &kids {
+        cands_of.push(candidates_of(server, folder_doc_id, child).await);
+    }
+    let shares = count_shares(&cands_of.iter().map(Vec::len).collect::<Vec<_>>());
+    for ((child, candidates), share) in kids.into_iter().zip(cands_of).zip(shares) {
+        let taken: Vec<String> = candidates.iter().take(share).cloned().collect();
+        if taken.is_empty() && !candidates.is_empty() {
+            out.children.push((
+                child,
+                ChildCount {
+                    count: None,
+                    more: true,
+                },
+            ));
+            continue;
+        }
         loader.load(&taken).await;
         let mut grandkids = Vec::new();
         for c in &taken {
@@ -463,7 +489,7 @@ async fn below_two_levels(
                 grandkids.push(c.clone());
             }
         }
-        let mut more = taken.len() < candidates.len() || loader.unread > unread_before;
+        let mut more = taken.len() < candidates.len();
         for g in &grandkids {
             if more {
                 break;
@@ -476,7 +502,7 @@ async fn below_two_levels(
         out.children.push((
             child,
             ChildCount {
-                count: grandkids.len(),
+                count: Some(grandkids.len()),
                 more,
             },
         ));
@@ -511,9 +537,7 @@ pub(crate) async fn concept_graph_block(
         server,
         index: &index,
         parents: HashMap::new(),
-        loaded: 0,
         failed: 0,
-        unread: 0,
     };
     let own = resolve_parents(text, path, &index);
     loader.parents.insert(uuid.to_string(), own.clone());
@@ -573,8 +597,9 @@ pub(crate) async fn concept_graph_block(
         out.push_str("Child concepts:\n");
         for (p, n) in &children {
             let count = match (n.count, n.more) {
-                (0, false) => String::new(),
-                (c, more) => format!(" (+{c}{} below)", if more { "+" } else { "" }),
+                (Some(0), false) => String::new(),
+                (None, _) => " (+? below: not counted)".to_string(),
+                (Some(c), more) => format!(" (+{c}{} below)", if more { "+" } else { "" }),
             };
             out.push_str(&format!("  - {p}{count}\n"));
         }
@@ -605,12 +630,6 @@ pub(crate) async fn concept_graph_block(
     if ancestors.cut {
         out.push_str(&format!(
             "(Ancestors cut at {MAX_DEPTH} levels or {MAX_ANCESTORS} concepts.)\n"
-        ));
-    }
-    if loader.unread > 0 {
-        out.push_str(&format!(
-            "({} concept file(s) not read: at most {MAX_FILES_PER_READ} per read; counts marked + may be higher.)\n",
-            loader.unread
         ));
     }
     if loader.failed > 0 {
@@ -656,6 +675,10 @@ mod tests {
     fn concept_graph_rules_v1_3_flow_list() {
         assert_eq!(
             links("---\nparent-concepts: [\"[[A]]\", '[[B]]']\n---\n"),
+            some(&["A", "B"])
+        );
+        assert_eq!(
+            links("---\nparent-concepts: [\"[[A]]\", \"[[B]]\"] # see [x]\n---\n"),
             some(&["A", "B"])
         );
     }
@@ -801,6 +824,17 @@ mod tests {
         let a = ancestors("A", &g);
         assert!(a.cut);
         assert!(a.nodes.len() <= MAX_ANCESTORS);
+    }
+
+    #[test]
+    fn count_shares_split_the_budget_fairly() {
+        assert_eq!(count_shares(&[60, 3]), vec![25, 3]);
+        assert_eq!(count_shares(&[0, 10, 100]), vec![0, 10, 40]);
+        assert_eq!(count_shares(&[100, 100, 100]), vec![16, 17, 17]);
+        assert_eq!(
+            count_shares(&[2; 60]).iter().filter(|&&n| n == 0).count(),
+            10
+        );
     }
 
     #[test]
@@ -1013,7 +1047,7 @@ mod read_tests {
             c(100),
             "# Hub\n".to_string(),
         )];
-        for i in 0..MAX_CHILD_CANDIDATES + 5 {
+        for i in 0..MAX_CHILD_CANDIDATES + 1 {
             files.push((
                 format!("/Concepts/Spoke {i:03}.md"),
                 c(200 + i as u32),
@@ -1025,7 +1059,7 @@ mod read_tests {
         let b = block(&out);
         assert!(
             b.contains(
-                "(5 more concept file(s) link here but were not read; use get_links to list them.)"
+                "(1 more concept file(s) link here but were not read; use get_links to list them.)"
             ),
             "got: {b}"
         );
@@ -1036,7 +1070,8 @@ mod read_tests {
     }
 
     #[tokio::test]
-    async fn child_counts_read_a_small_capped_number_of_files() {
+    async fn a_large_child_does_not_starve_its_sibling() {
+        // Big has more backlinkers than its share (25 of MAX_COUNT_FILES).
         let mut files = vec![
             (
                 "/Concepts/Top.md".to_string(),
@@ -1044,24 +1079,36 @@ mod read_tests {
                 "# Top\n".to_string(),
             ),
             (
-                "/Concepts/Mid.md".to_string(),
+                "/Concepts/Big.md".to_string(),
                 c(101),
-                fm(&["Top"], "# Mid\n"),
+                fm(&["Top"], "# Big\n"),
+            ),
+            (
+                "/Concepts/Small.md".to_string(),
+                c(102),
+                fm(&["Top"], "# Small\n"),
             ),
         ];
-        for i in 0..MAX_COUNT_FILES + 10 {
+        for i in 0..30u32 {
             files.push((
-                format!("/Concepts/Leaf {i:03}.md"),
-                c(200 + i as u32),
-                fm(&["Mid"], "# Leaf\n"),
+                format!("/Concepts/B {i:03}.md"),
+                c(200 + i),
+                fm(&["Big"], "# B\n"),
+            ));
+        }
+        for i in 0..3u32 {
+            files.push((
+                format!("/Concepts/S {i}.md"),
+                c(300 + i),
+                fm(&["Small"], "# S\n"),
             ));
         }
         let server = server_with(&files).await;
         let out = read(&server, "Lens Edu/Concepts/Top.md", None).await;
         assert!(
-            block(&out).contains(&format!(
-                "Child concepts:\n  - Lens Edu/Concepts/Mid.md (+{MAX_COUNT_FILES}+ below)\n"
-            )),
+            block(&out).contains(
+                "Child concepts:\n  - Lens Edu/Concepts/Big.md (+25+ below)\n  - Lens Edu/Concepts/Small.md (+3 below)\n"
+            ),
             "got: {out}"
         );
     }

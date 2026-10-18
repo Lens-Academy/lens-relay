@@ -156,14 +156,17 @@ Both implementations compute the graph in the same way:
   does not make it a child. At most 80 backlinkers are read, and the display says when
   more exist.
 - **"+N below".** This is the number of a child's own children. It is found by reading at
-  most 50 of the children's backlinkers in all. A `+` after the number means there may be
-  more below. That is the case when a grandchild has backlinkers of its own (checked in
-  the backlinks index, without reading anything) or when the 50-file cap was reached. The
-  editor shows "counting…" until the counts are ready, and it reads nothing below while
-  the header is collapsed.
-- **File budget.** At most 200 concept files are read for one header or one `read`:
-  the ancestors (at most 30), the children's candidates (at most 80) and the count files
-  (at most 50).
+  most 50 of the children's backlinkers in all. The 50 are split fairly: children take
+  turns in path order, each gets an even share of what is left (at least 1), and an unused
+  share carries forward. A `+` after the number means there may be more below. That is
+  the case when a grandchild has backlinkers of its own (checked in the backlinks index,
+  without reading anything) or when the child's share was smaller than its backlinkers. A
+  child that got no share shows "+?". The editor shows "counting…" until the counts are
+  ready, and it reads nothing below while the header is collapsed.
+- **Bounded reads.** Each walk has its own cap, so one header or one `read` loads at most
+  30 + 80 + 50 concept files: the ancestors, the children's candidates and the count
+  files. Both sides take candidates in path order, so they pick the same files when a cap
+  applies.
 - **Invalid content.** A cycle is drawn as far as it goes, gets a note ("A cycle runs
   through this file", or one above it), and is never followed twice. An entry that does
   not resolve is reported as "Parent not found". A concept whose entries all fail to

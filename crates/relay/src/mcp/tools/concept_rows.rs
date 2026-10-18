@@ -86,7 +86,7 @@ const MAX_LENS_SOURCES: usize = 8;
 /// Concept files loaded at once.
 pub(super) const LOAD_CONCURRENCY: usize = 4;
 
-pub(super) fn is_md(path: &str) -> bool {
+fn is_md(path: &str) -> bool {
     without_terminal_md(path).len() != path.len()
 }
 
@@ -462,12 +462,12 @@ fn group_lens_rows(own: &[RowEntry], sources: &[SourceRows]) -> LensRowGroups {
 }
 
 /// `Concepts/Low-stakes control.md` → `Low-stakes control`.
-pub(super) fn file_name(path: &str) -> String {
+fn file_name(path: &str) -> String {
     without_terminal_md(path.rsplit('/').next().unwrap_or(path)).to_string()
 }
 
 /// Concept names in display order: lower case first (rule #9), then as written.
-pub(super) fn by_concept_name(a: &str, b: &str) -> std::cmp::Ordering {
+fn by_concept_name(a: &str, b: &str) -> std::cmp::Ordering {
     // Names equal but for case: lower case first, as the editor's
     // `localeCompare` orders them. Non-ASCII names may sort slightly
     // differently from the editor (cosmetic).

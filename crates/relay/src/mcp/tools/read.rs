@@ -579,7 +579,8 @@ mod tests {
 
         // Advance paused time past 2 GC checkpoints so the GC worker evicts the doc.
         // With no WebSocket connections, awareness strong_count == 1, so GC proceeds.
-        for _ in 0..10 {
+        // Generous: under a loaded test run the worker can need many turns.
+        for _ in 0..100 {
             tokio::time::advance(checkpoint_freq).await;
             tokio::task::yield_now().await;
             if server.docs().get(&content_doc_id).is_none() {

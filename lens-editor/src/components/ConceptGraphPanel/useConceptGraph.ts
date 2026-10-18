@@ -7,7 +7,6 @@ import { uuidToPathIndex } from '../../lib/uuid-to-path';
 import { basenameOf } from '../../lib/course-tree';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import {
-  MAX_FILES,
   belowTwoLevels,
   buildAncestors,
   isConceptPath,
@@ -26,8 +25,6 @@ export interface ConceptGraph {
   ancestors: Ancestors;
   /** Children and their counts; empty while the panel is collapsed. */
   below: Below;
-  /** More files were wanted than MAX_FILES. */
-  filesCut: boolean;
   /** Concept files that could not be read (counted as having no parents). */
   failed: number;
   parentsOf: ParentsOf;
@@ -77,7 +74,14 @@ export function useConceptGraph(
 
   const candidatesOf = useMemo(() => {
     void backlinksVersion;
-    return (id: string) => backlinkSources(id, folderDocs.values()).filter((s) => isConceptPath(pathIndex.get(s)));
+    // Sorted by path, as the relay sorts them, so both pick the same files when a cap bites.
+    return (id: string) => backlinkSources(id, folderDocs.values())
+      .filter((s) => isConceptPath(pathIndex.get(s)))
+      .sort((a, b) => {
+        const pa = pathIndex.get(a)!;
+        const pb = pathIndex.get(b)!;
+        return pa < pb ? -1 : pa > pb ? 1 : 0;
+      });
   }, [folderDocs, backlinksVersion, pathIndex]);
 
   // Which files to read grows as the walks reach further (texts → ids → texts).
@@ -114,19 +118,20 @@ export function useConceptGraph(
     [refreshing, self, candidatesOf, parentsOf, nameOf],
   );
 
-  // Ancestors first, then children, then the counts' files, at most MAX_FILES.
-  const { wanted, filesCut } = useMemo(() => {
-    const list = [...new Set([...ancestors.nodes, ...below.reads])].filter((id) => id !== self);
-    return { wanted: list.slice(0, MAX_FILES).sort(), filesCut: list.length > MAX_FILES };
-  }, [ancestors, below, self]);
+  // The ancestors, the children's candidates and the counts' files: each
+  // capped, so at most MAX_ANCESTORS + MAX_CHILD_CANDIDATES + MAX_COUNT_FILES.
+  const wanted = useMemo(
+    () => [...new Set([...ancestors.nodes, ...below.reads])].filter((id) => id !== self).sort(),
+    [ancestors, below, self],
+  );
   // Adjusted during render (React's "storing information from previous
   // renders"), so no extra effect pass per level.
   if (ids.join(',') !== wanted.join(',')) setIds(wanted);
 
   const failedCount = ids.filter((id) => failed.has(id) && !texts.has(id)).length;
   return useMemo(
-    () => ({ own, ancestors, below, filesCut, failed: failedCount, parentsOf, nameOf, pathOf }),
-    [own, ancestors, below, filesCut, failedCount, parentsOf, nameOf, pathOf],
+    () => ({ own, ancestors, below, failed: failedCount, parentsOf, nameOf, pathOf }),
+    [own, ancestors, below, failedCount, parentsOf, nameOf, pathOf],
   );
 }
 
