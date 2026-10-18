@@ -846,7 +846,7 @@ content::
 source:: 
 `,
       },
-      // Concept files: rows ("### [[link]]" under "## Considered") about the
+      // Concept files: rows ("### [[link]]" under "## Relationships") about the
       // sample article and the Demo Lens, shown in the Concepts panel at the
       // top of those files (src/lib/concept-rows.ts).
       {
@@ -865,7 +865,7 @@ source::
 
 Control where no single bad action is catastrophic. Contrast [[High-stakes control]]. See [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]] on why this may matter sooner than expected.
 
-## Considered
+## Relationships
 
 ### [[../articles/sample-existing-article]]
 Best intro we have. §2 is the explanation; §4 drifts into high-stakes territory and should be cut from any excerpt we use.
@@ -897,7 +897,7 @@ The lens mentions low-stakes control in its last section; enough for a pointer, 
 
 How outputs of a process feed back into its inputs. The [[../Lenses/Demo Lens]] touches on it in passing.
 
-## Considered
+## Relationships
 
 ### [[../articles/sample-existing-article|Sample article]]
 Uses the term once in passing. Came up in search; not an explanation.
@@ -912,7 +912,7 @@ Uses the term once in passing. Came up in search; not an explanation.
 
 An AI system that lets itself be corrected. Not covered by [[../articles/sample-existing-article]] at all.
 
-## Considered
+## Relationships
 `,
       },
       // Realistic names (taken from the real vault, where article and lens
@@ -979,28 +979,57 @@ An AI system that lets itself be corrected. Not covered by [[../articles/sample-
         id: 'ed00002b-0000-4000-8000-0000000000cb',
         type: 'markdown',
         version: 0,
-        content: "# Trading with early misaligned AIs\n\nPaying or otherwise compensating an early misaligned AI for cooperating, before it could take over.\n\n## Considered\n\n### [[../articles/pan-a-taxonomy-of-barriers-to-trading-with-early-misaligned-ais]]\nThe best overview we have of why deals with early misaligned AIs are hard. The credibility section is the one to excerpt; verification and enforcement are thinner and lean on footnotes.\n\nFor the course: pair §1 with a short prompt asking students what a developer could put up as collateral. Pilot readers found the three-family structure easy to remember, but several confused \"credibility\" with \"honesty\", so the excerpt needs a one-line gloss.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nMentions trade in one aside; not about it.\n\n### [[../Lenses/AIV - Flexible Hardware-Enabled Guarantees]]\nThe lens frames hardware guarantees as the verification piece that Pan says is missing. Works; the chat prompt should ask which barrier HEGs actually remove.\n",
+        content: "# Trading with early misaligned AIs\n\nPaying or otherwise compensating an early misaligned AI for cooperating, before it could take over.\n\n## Relationships\n\n### [[../articles/pan-a-taxonomy-of-barriers-to-trading-with-early-misaligned-ais]]\nThe best overview we have of why deals with early misaligned AIs are hard. The credibility section is the one to excerpt; verification and enforcement are thinner and lean on footnotes.\n\nFor the course: pair §1 with a short prompt asking students what a developer could put up as collateral. Pilot readers found the three-family structure easy to remember, but several confused \"credibility\" with \"honesty\", so the excerpt needs a one-line gloss.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nMentions trade in one aside; not about it.\n\n### [[../Lenses/AIV - Flexible Hardware-Enabled Guarantees]]\nThe lens frames hardware guarantees as the verification piece that Pan says is missing. Works; the chat prompt should ask which barrier HEGs actually remove.\n",
       },
       {
         path: "/Concepts/Acausal cooperation and advanced-agent bargaining.md",
         id: 'ed000028-0000-4000-8000-0000000000c8',
         type: 'markdown',
         version: 0,
-        content: "# Acausal cooperation and advanced-agent bargaining\n\nCooperation between agents that cannot communicate or verify each other, and bargaining between highly capable agents more generally.\n\n## Considered\n\n### [[../articles/pan-a-taxonomy-of-barriers-to-trading-with-early-misaligned-ais]]\nTouches bargaining only as background for the credibility barrier. Not an explanation of acausal ideas; do not use for that.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nThe aside on whether a highly capable model could bargain with its developers is the only part relevant here. It is a sceptical take, which is useful as a counterweight, but it assumes the reader already knows what bargaining between advanced agents would involve.\n\nIf we use it, it belongs after an introduction, not as one. Considered for module 4 and set aside in October.\n\n### [[../articles/byrnes-6-reasons-why-alignment-is-hard-discourse-seems-alien]]\nReason 5 (trade between humans does not carry over to alien minds) is a decent hook for this concept.\n",
+        content: "# Acausal cooperation and advanced-agent bargaining\n\nCooperation between agents that cannot communicate or verify each other, and bargaining between highly capable agents more generally.\n\n## Relationships\n\n### [[../articles/pan-a-taxonomy-of-barriers-to-trading-with-early-misaligned-ais]]\nTouches bargaining only as background for the credibility barrier. Not an explanation of acausal ideas; do not use for that.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nThe aside on whether a highly capable model could bargain with its developers is the only part relevant here. It is a sceptical take, which is useful as a counterweight, but it assumes the reader already knows what bargaining between advanced agents would involve.\n\nIf we use it, it belongs after an introduction, not as one. Relationships for module 4 and set aside in October.\n\n### [[../articles/byrnes-6-reasons-why-alignment-is-hard-discourse-seems-alien]]\nReason 5 (trade between humans does not carry over to alien minds) is a decent hook for this concept.\n",
       },
       {
         path: "/Concepts/Gradual disempowerment.md",
         id: 'ed000029-0000-4000-8000-0000000000c9',
         type: 'markdown',
         version: 0,
-        content: "# Gradual disempowerment\n\nLoss of human influence through many small hand-offs to AI systems rather than one takeover.\n\n## Considered\n\n### [[../articles/1-gradual-disempowerment-systemic-existential-risks-from-incremental-ai-development]]\nThe source paper. Long, but §2 (economy) and §5 (mutual reinforcement) are excellent and can stand alone. The state and culture sections repeat the economic argument with new examples.\n\nAudience note: students without an economics background found §2 dense; the course would need a two-paragraph primer on labour share before it.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nUnrelated, despite coming up in search.\n\n### [[../articles/roger-rogue-internal-deployments-via-external-apis]]\nNot about gradual disempowerment, but the rogue-deployment story is a good contrast case: sudden, not gradual.\n",
+        content: "# Gradual disempowerment\n\nLoss of human influence through many small hand-offs to AI systems rather than one takeover.\n\n## Relationships\n\n### [[../articles/1-gradual-disempowerment-systemic-existential-risks-from-incremental-ai-development]]\nThe source paper. Long, but §2 (economy) and §5 (mutual reinforcement) are excellent and can stand alone. The state and culture sections repeat the economic argument with new examples.\n\nAudience note: students without an economics background found §2 dense; the course would need a two-paragraph primer on labour share before it.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nUnrelated, despite coming up in search.\n\n### [[../articles/roger-rogue-internal-deployments-via-external-apis]]\nNot about gradual disempowerment, but the rogue-deployment story is a good contrast case: sudden, not gradual.\n",
       },
       {
         path: "/Concepts/Conservative assumptions in AI control.md",
         id: 'ed00002a-0000-4000-8000-0000000000ca',
         type: 'markdown',
         version: 0,
-        content: "# Conservative assumptions in AI control\n\nControl research assumes the model is actively trying to subvert safety measures, and asks what still works.\n\n## Considered\n\n### [[../articles/roger-rogue-internal-deployments-via-external-apis]]\nApplies the conservative assumption to one concrete threat. Good second reading after an intro.\n\n### [[../Lenses/shlegeris-thoughts-on-the-conservative-assumptions-in-ai-control]]\nThe lens is the intro we were missing: it states the assumption, says why it is conservative rather than pessimistic, and only then turns to the Roger article as a worked example.\n\nKeep the order. An earlier draft put the article first and readers took \"assume the model is scheming\" as a prediction rather than a design choice.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nOne paragraph says the assumptions are being tested now. Quotable, not teachable.\n",
+        content: "# Conservative assumptions in AI control\n\nControl research assumes the model is actively trying to subvert safety measures, and asks what still works.\n\n## Relationships\n\n### [[../articles/roger-rogue-internal-deployments-via-external-apis]]\nApplies the conservative assumption to one concrete threat. Good second reading after an intro.\n\n### [[../Lenses/shlegeris-thoughts-on-the-conservative-assumptions-in-ai-control]]\nThe lens is the intro we were missing: it states the assumption, says why it is conservative rather than pessimistic, and only then turns to the Roger article as a worked example.\n\nKeep the order. An earlier draft put the article first and readers took \"assume the model is scheming\" as a prediction rather than a design choice.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nOne paragraph says the assumptions are being tested now. Quotable, not teachable.\n\n### [[../video_transcripts/3blue1brown-but-what-is-a-neural-network-deep-learning-chapter-1]]\nBackground only: nothing on control. Listed so nobody searches it again.\n",
+      },
+      // A video transcript with rows, and a lens that has it and an article as sources.
+      {
+        path: '/video_transcripts',
+        id: 'ed00002f-0000-4000-8000-0000000000cf',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: "/video_transcripts/3blue1brown-but-what-is-a-neural-network-deep-learning-chapter-1.md",
+        id: 'ed00002c-0000-4000-8000-0000000000cc',
+        type: 'markdown',
+        version: 0,
+        content: "---\ntitle: \"But what is a neural network? | Deep learning chapter 1\"\nchannel: \"3Blue1Brown\"\nurl: \"https://www.youtube.com/watch?v=aircAruvnKk\"\n---\n\nThis is a 3. It's sloppily written and rendered at an extremely low resolution of 28 by 28 pixels, but your brain has no trouble recognizing it as a 3.\n\nThe plan is to build a neural network that can learn to recognize handwritten digits. We will look at the structure first: neurons, layers, weights and biases, and what it means for one layer's activations to determine the next.\n\nBy the end you should see the network as a function, about 13,000 numbers that are adjusted to make that function behave, and you should have a sense of why that is both powerful and hard to interpret.\n",
+      },
+      {
+        path: "/Lenses/What a neural network actually computes.md",
+        id: 'ed00002d-0000-4000-8000-0000000000cd',
+        type: 'markdown',
+        version: 0,
+        content: "---\ntitle: \"What a neural network actually computes\"\n---\n\n#### Text\ncontent::\nBefore we talk about what goes wrong inside large models, we need a picture of what a network is. Watch the first chapter, then answer the question below.\n\n#### Video\nsource:: [[../video_transcripts/3blue1brown-but-what-is-a-neural-network-deep-learning-chapter-1]]\nfrom:: \"0:00\"\nto:: \"12:30\"\n\n#### Article\nsource:: [[../articles/byrnes-6-reasons-why-alignment-is-hard-discourse-seems-alien]]\n",
+      },
+      {
+        path: "/Concepts/Neural networks as learned functions.md",
+        id: 'ed00002e-0000-4000-8000-0000000000ce',
+        type: 'markdown',
+        version: 0,
+        content: "# Neural networks as learned functions\n\nA network is a parameterised function whose parameters are found by training, not written by hand.\n\n## Relationships\n\n### [[../video_transcripts/3blue1brown-but-what-is-a-neural-network-deep-learning-chapter-1]]\nThe clearest visual introduction we know of. The first twelve minutes cover everything the course needs; the rest goes into detail on biases that students did not miss when we cut it.\n\n### [[../Lenses/What a neural network actually computes]]\nThe lens keeps 0:00 to 12:30, which is right. The question afterwards asks for the number of parameters; ask what the parameters are instead.\n",
       },
     ],
   },

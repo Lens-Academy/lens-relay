@@ -6,7 +6,7 @@ import { embedViewExtensions } from '../Editor/extensions/noteEmbed';
 import { ySectionSync, ySectionUndoManagerKeymap } from '../SectionEditor/y-section-sync';
 import { closeLive, isLive, openLive } from '../../lib/embed-docs';
 import { attachProvenanceRegistration } from '../../lib/provenance';
-import { rowPreview, rowsAbout, type ArticleRows, type RowEntry } from '../../lib/concept-rows';
+import { rowPreview, rowsAbout, type RowEntry, type SourceRows } from '../../lib/concept-rows';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 import { DocLink } from './DocLink';
@@ -17,13 +17,15 @@ export interface RowCardProps {
   target: string;
   section: string;
   metadata: FolderMetadata;
-  /** Greyed and read-only: an article's row shown on its lens. */
+  /** Greyed and read-only, on a lens: a concept with rows about the lens's
+   *  sources only. `entry` is its first such row (the collapsed preview);
+   *  expanded, it shows `sourceRows`. */
   context?: boolean;
   canEdit: boolean;
   canAcceptReject: boolean;
   getActor: () => string;
   /** The file the row is about, for the pair header: its name (tooltip) and
-   *  keyword ("This article", "This lens" or "Article"). */
+   *  keyword ("This article", "This video" or "This lens"). */
   targetName: string;
   targetKeyword: string;
   /** Expanded or not: the panel holds it, for "Expand all". */
@@ -34,12 +36,21 @@ export interface RowCardProps {
   onAutoEdited?: () => void;
   /** Context rows: add a row for the lens, prefilled with this one's text. */
   onAddForLens?: () => void;
-  /** A lens's own row: its concept's rows about the lens's articles, shown
-   *  read-only under it (given on lenses only, empty when there are none). */
-  articleRows?: ArticleRows[];
+  /** On a lens: the concept's rows about the lens's sources, shown read-only
+   *  under the lens row (or alone, for `context`). */
+  sourceRows?: SourceRows[];
 }
 
 type CardState = 'idle' | 'connecting' | 'live' | 'error';
+
+/** The panel sits inside the main editor, whose theme (`.ͼx .cm-content`:
+ *  page padding, 700px column, scrolling) also matches these nested editors.
+ *  Undo it here with selectors that outrank it. */
+const rowEditorTheme = EditorView.theme({
+  '&.cm-editor .cm-content': { padding: '0', maxWidth: 'none', margin: '0' },
+  '&.cm-editor .cm-scroller': { overflow: 'visible', fontFamily: 'inherit', lineHeight: '1.5' },
+  '&.cm-editor': { fontSize: 'inherit', background: 'transparent' },
+});
 
 /** A keyword in a small bordered box, with the full name in its tooltip. */
 function Chip({ children, name }: { children: string; name: string }) {
@@ -82,7 +93,7 @@ function RowPreview({ text }: { text: string }) {
     const state = EditorState.create({
       doc,
       selection: { anchor: doc.length },
-      extensions: [...embedViewExtensions(false), EditorState.readOnly.of(true), EditorView.editable.of(false)],
+      extensions: [...embedViewExtensions(false), rowEditorTheme, EditorState.readOnly.of(true), EditorView.editable.of(false)],
     });
     if (!view.current) view.current = new EditorView({ parent: host.current!, state });
     else view.current.setState(state);
@@ -161,6 +172,7 @@ export function ConceptRowCard(props: RowCardProps) {
         doc: ytext.toString().slice(row.bodyFrom, row.bodyTo),
         extensions: [
           ...embedViewExtensions(canAcceptReject),
+          rowEditorTheme,
           keymap.of([{ key: 'Escape', run: () => { closeLive(owner); return true; } }]),
           ySectionUndoManagerKeymap,
           keymap.of(defaultKeymap),
@@ -201,7 +213,7 @@ export function ConceptRowCard(props: RowCardProps) {
 
   const preview = rowPreview(entry.body);
   const showBody = expanded || state !== 'idle';
-  const articleRows = props.articleRows ?? [];
+  const sourceRows = props.sourceRows ?? [];
   /** Expand or collapse (finishing an edit first): the triangle, or a click
    *  anywhere on the header bar but the concept link and its own buttons. */
   const toggle = () => {
@@ -261,10 +273,10 @@ export function ConceptRowCard(props: RowCardProps) {
           </button>
         )}
       </div>
-      {showBody && (
+      {showBody && !context && (
         <PairHeader concept={entry.conceptName} file={props.targetName} keyword={props.targetKeyword} />
       )}
-      {expanded && state === 'idle' && (
+      {expanded && state === 'idle' && !context && (
         <div
           className={`concept-row-body ml-5 mt-1 ${editable ? 'cursor-text' : ''}`}
           title={editable ? 'Click to edit' : undefined}
@@ -282,15 +294,15 @@ export function ConceptRowCard(props: RowCardProps) {
       )}
       {/* Always mounted: the editor goes in as soon as the connection is up. */}
       <div ref={liveHost} className="concept-row-body ml-5 mt-1" hidden={state === 'idle'} />
-      {showBody && articleRows.map((article) => (
-        <div key={article.articleId} className="mt-2 text-gray-400" data-testid="concept-row-article">
+      {showBody && sourceRows.map((src, i) => (
+        <div key={src.sourceId} className={`${context && i === 0 ? 'mt-1' : 'mt-2'} text-gray-400`} data-testid="concept-row-source">
           <PairHeader
             concept={entry.conceptName}
-            file={article.articleName}
-            keyword="Article"
-            label={`Article: ${article.articleName}`}
+            file={src.sourceName}
+            keyword={src.kind}
+            label={`${src.kind}: ${src.sourceName}`}
           />
-          {article.rows.map((row) => (
+          {src.rows.map((row) => (
             <div key={row.index} className="concept-row-body ml-5 mt-0.5">
               {row.body ? <RowPreview text={row.body} /> : <div className="italic">No notes yet</div>}
             </div>

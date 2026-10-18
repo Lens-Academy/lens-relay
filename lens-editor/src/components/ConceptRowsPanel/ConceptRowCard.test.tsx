@@ -12,7 +12,7 @@ const metadata: FolderMetadata = {
   '/Lens Edu/Concepts/Trading.md': { id: 'c1', type: 'markdown', version: 0 },
   [`/Lens Edu/articles/${ARTICLE}.md`]: { id: 'a1', type: 'markdown', version: 0 },
 };
-const text = `## Considered\n\n### [[../articles/${ARTICLE}]]\nFirst line of the note.\n`;
+const text = `## Relationships\n\n### [[../articles/${ARTICLE}]]\nFirst line of the note.\n`;
 const entry: RowEntry = {
   conceptId: 'c1',
   conceptPath: '/Lens Edu/Concepts/Trading.md',
@@ -40,7 +40,7 @@ function Card(props: Partial<RowCardProps>) {
         target="a1"
         targetName={ARTICLE}
         targetKeyword="This article"
-        section="Considered"
+        section="Relationships"
         metadata={metadata}
         canEdit={false}
         canAcceptReject={false}
@@ -87,15 +87,34 @@ describe('ConceptRowCard', () => {
   });
 
   it('shows no source tag on the collapsed line', () => {
-    render(<Card articleRows={[{ articleId: 'a1', articleName: ARTICLE, rows: [entry] }]} targetKeyword="This lens" />);
+    render(<Card sourceRows={[{ sourceId: 'a1', sourceName: ARTICLE, kind: 'Article', rows: [entry] }]} targetKeyword="This lens" />);
     expect(screen.queryByText(/^lens/)).toBeNull();
   });
 
   it('labels and chips each article block on a lens', () => {
-    render(<Card articleRows={[{ articleId: 'a1', articleName: ARTICLE, rows: [entry] }]} targetKeyword="This lens" />);
+    render(<Card sourceRows={[{ sourceId: 'a1', sourceName: ARTICLE, kind: 'Article', rows: [entry] }]} targetKeyword="This lens" />);
     fireEvent.click(screen.getByRole('button', { name: 'Expand row' }));
     expect(screen.getByText('This lens')).toBeInTheDocument();
     expect(screen.getByText('Article')).toHaveAttribute('title', ARTICLE);
     expect(screen.getByText(`Article: ${ARTICLE}`)).toHaveAttribute('title', `Article: ${ARTICLE}`);
+  });
+
+  it('shows a source-only concept as its source blocks, chipped by kind, with no lens block', () => {
+    render(
+      <Card
+        context
+        targetKeyword="Video"
+        sourceRows={[
+          { sourceId: 'a1', sourceName: ARTICLE, kind: 'Article', rows: [entry] },
+          { sourceId: 'v1', sourceName: 'a-long-video-transcript-name', kind: 'Video', rows: [{ ...entry, body: 'Video note.' }] },
+        ]}
+        onAddForLens={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    expect(screen.queryByText('This lens')).toBeNull();
+    expect(screen.getByText('Video')).toHaveAttribute('title', 'a-long-video-transcript-name');
+    expect(screen.getByText('Video: a-long-video-transcript-name')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Add for this lens too' })).toHaveLength(1);
   });
 });

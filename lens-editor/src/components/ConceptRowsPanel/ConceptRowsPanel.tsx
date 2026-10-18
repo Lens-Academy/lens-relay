@@ -10,12 +10,13 @@ import { computeRelativePath, resolvePageName } from '../../lib/document-resolve
 import {
   fileName,
   groupLensRows,
-  lensArticleTargets,
+  lensSourceTargets,
   matchRule,
   newConceptText,
   planRowInsertion,
   rowsAbout,
   rowsFolder,
+  sourceKind,
   type CollectedRows,
   type ConceptRowRule,
   type RowEntry,
@@ -64,14 +65,16 @@ export function ConceptRowsPanel(props: PanelProps) {
   return <Panel {...props} path={props.path} rule={rule} />;
 }
 
-/** The lens's article targets, resolved, kept up to date with its text. */
-function useArticles(enabled: boolean, ytext: Y.Text, path: string) {
+/** The lens's sources with rows of their own (articles, videos), resolved,
+ *  kept up to date with its text. */
+function useSources(rule: ConceptRowRule, ytext: Y.Text, path: string) {
+  const enabled = !!rule.sourceContext;
   const { metadata } = useNavigation();
   const [targets, setTargets] = useState<string[]>([]);
   useEffect(() => {
     if (!enabled) return;
     const update = () => {
-      const next = lensArticleTargets(ytext.toString());
+      const next = lensSourceTargets(ytext.toString());
       setTargets((prev) => (prev.join('\n') === next.join('\n') ? prev : next));
     };
     update();
@@ -79,13 +82,16 @@ function useArticles(enabled: boolean, ytext: Y.Text, path: string) {
     return () => ytext.unobserve(update);
   }, [enabled, ytext]);
   return useMemo(() => {
-    const out: Array<{ id: string; path: string }> = [];
+    const out: Array<{ id: string; path: string; kind: string }> = [];
     for (const target of targets) {
       const resolved = resolvePageName(target, metadata, path);
-      if (resolved && !out.some((a) => a.id === resolved.docId)) out.push({ id: resolved.docId, path: resolved.path });
+      const kind = resolved && sourceKind(resolved.path, rule.sharedFolder);
+      if (resolved && kind && !out.some((a) => a.id === resolved.docId)) {
+        out.push({ id: resolved.docId, path: resolved.path, kind });
+      }
     }
     return out;
-  }, [targets, metadata, path]);
+  }, [targets, metadata, path, rule.sharedFolder]);
 }
 
 function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: ConceptRowRule }) {
@@ -97,8 +103,8 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
   const getActor = useCallback(() => humanActor(displayNameRef.current ?? ''), []);
 
   const target = docId.slice(RELAY_ID.length + 1);
-  const articles = useArticles(!!rule.articleContext, ytext, path);
-  const targets = useMemo(() => [target, ...articles.map((a) => a.id)], [target, articles]);
+  const sources = useSources(rule, ytext, path);
+  const targets = useMemo(() => [target, ...sources.map((a) => a.id)], [target, sources]);
   const [added, setAdded] = useState<AddedSource[]>([]);
   const { byTarget, failed } = useConceptRows(rule, targets, added);
   const own: CollectedRows = byTarget.get(target) ?? { rows: [], mentions: [], pending: 0 };
@@ -175,7 +181,7 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
       setOpen(true);
     } catch (err) {
       console.error('Could not add the concept row:', err);
-      setError('Could not add the concept. Try again.');
+      setError('Could not add the relationship. Try again.');
     } finally {
       setBusy(false);
     }
@@ -196,18 +202,22 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
   });
 
   const loading = own.pending - failed > 0;
-  // Lenses: a concept with rows on the lens and on its article shows once.
-  const groups = groupLensRows(own.rows, articles.map((a) => ({
-    articleId: a.id,
-    articleName: fileName(a.path),
-    rows: byTarget.get(a.id)?.rows ?? [],
+  // Lenses: each concept shows once, with its rows about the lens's sources.
+  const groups = groupLensRows(own.rows, sources.map((src) => ({
+    sourceId: src.id,
+    sourceName: fileName(src.path),
+    kind: src.kind,
+    rows: byTarget.get(src.id)?.rows ?? [],
   })));
   const ownKey = (entry: RowEntry) => `${entry.conceptId}:${entry.index}`;
-  const articleKey = (articleId: string, entry: RowEntry) => `${articleId}:${entry.conceptId}:${entry.index}`;
+  const sourceOnlyKey = (conceptId: string) => `sources:${conceptId}`;
   const allKeys = [
     ...groups.lens.map(({ entry }) => ownKey(entry)),
-    ...groups.articleOnly.flatMap((a) => a.rows.map((entry) => articleKey(a.articleId, entry))),
+    ...groups.sourceOnly.map((c) => sourceOnlyKey(c.conceptId)),
   ];
+  const sourceOnlyHeading = sources.length === 1
+    ? `Only linked to ${sources[0].kind}: ${fileName(sources[0].path)}`
+    : 'Only linked to its sources';
   const allExpanded = allKeys.length > 0 && allKeys.every((k) => expanded.has(k));
   const targetName = fileName(path);
 
@@ -247,7 +257,7 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
             disabled={busy}
             className={`${open && allKeys.length > 0 ? '' : 'ml-auto '}text-xs text-indigo-600 hover:underline cursor-pointer disabled:text-gray-400`}
           >
-            {busy ? 'Adding…' : '+ Add concept'}
+            {busy ? 'Adding…' : '+ Add relationship'}
           </button>
         )}
       </header>
@@ -259,20 +269,20 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
             </div>
           )}
           {error && <div className="px-2 py-1 text-xs text-red-700">{error}</div>}
-          {groups.lens.map(({ entry, articleRows }) => {
+          {groups.lens.map(({ entry, sourceRows }) => {
             const key = ownKey(entry);
             return (
               <ConceptRowCard
                 key={key}
                 {...cardProps(key, entry, target, targetName, rule.openedLabel)}
-                articleRows={rule.articleContext ? articleRows : undefined}
+                sourceRows={rule.sourceContext ? sourceRows : undefined}
                 autoEdit={autoEdit === key}
                 onAutoEdited={clearAutoEdit}
               />
             );
           })}
           {own.rows.length === 0 && (
-            <div className="px-2 py-1 text-gray-400">{loading ? 'Loading…' : 'No concepts yet'}</div>
+            <div className="px-2 py-1 text-gray-400">{loading ? 'Loading…' : 'No concept relationships yet'}</div>
           )}
           {failed > 0 && (
             <div className="px-2 py-1 text-xs text-red-700">
@@ -292,21 +302,28 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
               ))}
             </div>
           )}
-          {groups.articleOnly.map((article) => (
-            <div key={article.articleId} className="mt-2 border-t border-gray-200 pt-1.5" data-testid="concept-context-group">
-              <div className="truncate px-2 pb-0.5 text-xs text-gray-400" title={`Only linked to Article: ${article.articleName}`}>
-                Only linked to Article: {article.articleName}
+          {groups.sourceOnly.length > 0 && (
+            <div className="mt-2 border-t border-gray-200 pt-1.5" data-testid="concept-context-group">
+              <div className="truncate px-2 pb-0.5 text-xs text-gray-400" title={sourceOnlyHeading}>
+                {sourceOnlyHeading}
               </div>
-              {article.rows.map((entry) => (
-                <ConceptRowCard
-                  key={articleKey(article.articleId, entry)}
-                  {...cardProps(articleKey(article.articleId, entry), entry, article.articleId, article.articleName, 'Article')}
-                  context
-                  onAddForLens={canEdit && !busy ? () => void addRow({ id: entry.conceptId }, entry.body) : undefined}
-                />
-              ))}
+              {groups.sourceOnly.map(({ conceptId, sourceRows }) => {
+                const first = sourceRows[0];
+                const entry = first.rows[0];
+                const key = sourceOnlyKey(conceptId);
+                return (
+                  <ConceptRowCard
+                    key={key}
+                    {...cardProps(key, entry, first.sourceId, first.sourceName, first.kind)}
+                    context
+                    sourceRows={sourceRows}
+                    // Prefilled with the first source's notes, as a draft.
+                    onAddForLens={canEdit && !busy ? () => void addRow({ id: conceptId }, entry.body) : undefined}
+                  />
+                );
+              })}
             </div>
-          ))}
+          )}
         </div>
       )}
     </section>

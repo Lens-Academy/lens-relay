@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
+import type { RowEntry } from './concept-rows';
 import {
   collectRows,
   groupLensRows,
   CONCEPT_ROW_RULES,
-  lensArticleTargets,
+  lensSourceTargets,
   matchRule,
   newConceptText,
   parseConceptFile,
   planRowInsertion,
   rowPreview,
   rowsAbout,
+  sourceKind,
 } from './concept-rows';
 
 const md = (id: string) => ({ id, type: 'markdown' as const, version: 0 });
@@ -32,7 +34,7 @@ topic:
 
 Control where no single bad action is catastrophic. Contrast [[../articles/lw-post-on-monitoring]].
 
-## Considered
+## Relationships
 
 ### [[../articles/ai-control-redwood]]
 Best intro we have. §2 is the explanation; §4 drifts into high-stakes.
@@ -48,13 +50,13 @@ Uses §1–3 of the Redwood article.
 
 ## See also
 ### [[../articles/ai-control-redwood]]
-Not a row: outside the Considered section.
+Not a row: outside the Relationships section.
 `;
 
 const CONCEPT_PATH = '/Lens Edu/Concepts/Low-stakes control.md';
 
 describe('parseConceptFile', () => {
-  it('finds the level-3 link headings under ## Considered', () => {
+  it('finds the level-3 link headings under ## Relationships', () => {
     const { section, rows } = parseConceptFile(CONCEPT);
     expect(section).not.toBeNull();
     expect(rows.map((r) => r.target)).toEqual([
@@ -82,25 +84,31 @@ describe('parseConceptFile', () => {
   });
 
   it('ignores headings that are not a single link, and headings in code', () => {
-    const text = '## Considered\n\n### About [[x]]\nno\n\n```\n### [[y]]\n```\n### [[z#Part]]\nyes\n';
+    const text = '## Relationships\n\n### About [[x]]\nno\n\n```\n### [[y]]\n```\n### [[z#Part]]\nyes\n';
     expect(parseConceptFile(text).rows.map((r) => r.target)).toEqual(['z']);
   });
 
-  it('matches the Considered heading case-sensitively', () => {
-    expect(parseConceptFile('## considered\n\n### [[x]]\n').section).toBeNull();
+  it('takes a heading with a closing sequence of #s as a row', () => {
+    const text = '## Relationships ##\n\n### [[a]] ###\n\n### [[b|B]]   #\n\n### [[c]]#\n';
+    // `[[c]]#` has no space before the #: not a closing sequence, so not a row
+    expect(parseConceptFile(text).rows.map((r) => r.target)).toEqual(['a', 'b']);
+  });
+
+  it('matches the Relationships heading case-sensitively', () => {
+    expect(parseConceptFile('## relationships\n\n### [[x]]\n').section).toBeNull();
   });
 
   it('takes only a heading that is exactly one link, outside lists and quotes', () => {
-    const text = '## Considered\n\n### [[a]] (draft)\n\n- ### [[b]]\n> ### [[c]]\n### [[d|D]]\n';
+    const text = '## Relationships\n\n### [[a]] (draft)\n\n- ### [[b]]\n> ### [[c]]\n### [[d|D]]\n';
     expect(parseConceptFile(text).rows.map((r) => r.target)).toEqual(['d']);
   });
 
-  it('has no rows without a Considered section', () => {
+  it('has no rows without a Relationships section', () => {
     expect(parseConceptFile('# C\n\n### [[x]]\n')).toEqual({ section: null, rows: [] });
   });
 
   it('gives an empty row an empty body', () => {
-    const text = '## Considered\n\n### [[x]]\n\n### [[y]]';
+    const text = '## Relationships\n\n### [[x]]\n\n### [[y]]';
     const [x, y] = parseConceptFile(text).rows;
     expect(x.bodyFrom).toBe(x.bodyTo);
     expect(text.slice(x.headingFrom, x.headingTo)).toBe('### [[x]]');
@@ -115,18 +123,18 @@ describe('rowsAbout', () => {
   });
 
   it('does not count a link outside a row heading', () => {
-    // a1 is linked twice, but only once inside ## Considered
+    // a1 is linked twice, but only once inside ## Relationships
     expect(rowsAbout(CONCEPT, CONCEPT_PATH, 'a1', metadata)).toHaveLength(1);
   });
 
   it('returns every row about the target when there are several', () => {
-    const text = '## Considered\n\n### [[../articles/ai-control-redwood]]\none\n\n### [[../articles/AI-Control-Redwood.md]]\ntwo\n';
+    const text = '## Relationships\n\n### [[../articles/ai-control-redwood]]\none\n\n### [[../articles/AI-Control-Redwood.md]]\ntwo\n';
     expect(rowsAbout(text, CONCEPT_PATH, 'a1', metadata).map((r) => text.slice(r.bodyFrom, r.bodyTo)))
       .toEqual(['one', 'two']);
   });
 
   it('does not match a link that resolves elsewhere or nowhere', () => {
-    const text = '## Considered\n\n### [[ai-control-redwood]]\n\n### [[../articles/missing]]\n';
+    const text = '## Relationships\n\n### [[ai-control-redwood]]\n\n### [[../articles/missing]]\n';
     expect(rowsAbout(text, CONCEPT_PATH, 'a1', metadata)).toEqual([]);
   });
 });
@@ -155,13 +163,24 @@ describe('collectRows', () => {
 });
 
 describe('matchRule', () => {
-  it('matches articles and lenses in Lens Edu only', () => {
-    expect(matchRule('/Lens Edu/articles/x.md')?.openedIn).toBe('articles');
-    expect(matchRule('/Lens Edu/Lenses/x.md')?.articleContext).toBe(true);
+  it('matches articles, video transcripts and lenses in Lens Edu only', () => {
+    expect(matchRule('/Lens Edu/articles/x.md')?.openedLabel).toBe('This article');
+    expect(matchRule('/Lens Edu/video_transcripts/x.md')?.openedLabel).toBe('This video');
+    expect(matchRule('/Lens Edu/Lenses/x.md')?.sourceContext).toBe(true);
+    expect(matchRule('/Lens Edu/Lenses/x.md')?.title).toBe('Concept relationships');
     expect(matchRule('/Lens Edu/Concepts/x.md')).toBeNull();
     expect(matchRule('/Lens/articles/x.md')).toBeNull();
     expect(matchRule('/Lens Edu/articles/x.html')).toBeNull();
     expect(matchRule(undefined)).toBeNull();
+  });
+});
+
+describe('sourceKind', () => {
+  it('tells articles and videos apart, and leaves other sources out', () => {
+    expect(sourceKind('/Lens Edu/articles/x.md', 'Lens Edu')).toBe('Article');
+    expect(sourceKind('/Lens Edu/video_transcripts/x.md', 'Lens Edu')).toBe('Video');
+    expect(sourceKind('/Lens Edu/widgets/x.html', 'Lens Edu')).toBeNull();
+    expect(sourceKind('/Lens/articles/x.md', 'Lens Edu')).toBeNull();
   });
 });
 
@@ -177,23 +196,23 @@ describe('planRowInsertion', () => {
   const apply = (text: string, p: ReturnType<typeof planRowInsertion>) =>
     text.slice(0, p.at) + p.insert + text.slice(p.at);
 
-  it('appends a row with an empty line at the end of the Considered section', () => {
-    const text = '# C\n\n## Considered\n\n### [[a]]\nNotes.\n\n## See also\nx\n';
+  it('appends a row with an empty line at the end of the Relationships section', () => {
+    const text = '# C\n\n## Relationships\n\n### [[a]]\nNotes.\n\n## See also\nx\n';
     const p = planRowInsertion(text, '../articles/b');
     const out = apply(text, p);
-    expect(out).toBe('# C\n\n## Considered\n\n### [[a]]\nNotes.\n\n### [[../articles/b]]\n\n\n## See also\nx\n');
+    expect(out).toBe('# C\n\n## Relationships\n\n### [[a]]\nNotes.\n\n### [[../articles/b]]\n\n\n## See also\nx\n');
     expect(p.bodyFrom).toBe(p.bodyTo);
     expect(parseConceptFile(out).rows.map((r) => r.target)).toEqual(['a', '../articles/b']);
   });
 
-  it('adds the Considered section when missing', () => {
+  it('adds the Relationships section when missing', () => {
     const text = '# C\n\nDescription.';
     const out = apply(text, planRowInsertion(text, 'x'));
-    expect(out).toBe('# C\n\nDescription.\n\n## Considered\n\n### [[x]]\n\n');
+    expect(out).toBe('# C\n\nDescription.\n\n## Relationships\n\n### [[x]]\n\n');
   });
 
   it('places a prefilled body where bodyFrom/bodyTo say', () => {
-    const text = '## Considered\n';
+    const text = '## Relationships\n';
     const p = planRowInsertion(text, 'x', 'Draft text');
     const out = apply(text, p);
     expect(out.slice(p.bodyFrom, p.bodyTo)).toBe('Draft text');
@@ -203,15 +222,15 @@ describe('planRowInsertion', () => {
 });
 
 describe('newConceptText', () => {
-  it('starts with the title, the Considered section and the row', () => {
+  it('starts with the title, the Relationships section and the row', () => {
     const text = newConceptText('Corrigibility', '../articles/x');
-    expect(text).toBe('# Corrigibility\n\n## Considered\n\n### [[../articles/x]]\n\n');
+    expect(text).toBe('# Corrigibility\n\n## Relationships\n\n### [[../articles/x]]\n\n');
     expect(parseConceptFile(text).rows).toHaveLength(1);
   });
 });
 
-describe('lensArticleTargets', () => {
-  it('reads source:: of each Article section', () => {
+describe('lensSourceTargets', () => {
+  it('reads every source:: of the lens, once each, but not from text sections', () => {
     const lens = `---
 title: Demo
 ---
@@ -222,15 +241,18 @@ from:: "Start"
 
 #### Text
 content::
-source:: [[../articles/not-an-article]]
+source:: [[../articles/not-a-source]]
 
-#### Article
-source:: [[../articles/two]]
+#### Video
+source:: [[../video_transcripts/talk]]
 
 #### Article
 source:: [[../articles/one]]
+
+#### Widget
+source:: [[../widgets/quiz]]
 `;
-    expect(lensArticleTargets(lens)).toEqual(['../articles/one', '../articles/two']);
+    expect(lensSourceTargets(lens)).toEqual(['../articles/one', '../video_transcripts/talk', '../widgets/quiz']);
   });
 });
 
@@ -239,36 +261,42 @@ describe('groupLensRows', () => {
     conceptId,
     conceptPath: `/Lens Edu/Concepts/${conceptId}.md`,
     conceptName: conceptId,
-    row: parseConceptFile('## Considered\n\n### [[x]]\n').rows[0],
+    row: parseConceptFile('## Relationships\n\n### [[x]]\n').rows[0],
     index,
     body,
   });
 
-  it('puts a concept with lens and article rows once, its article rows under the lens row', () => {
+  const src = (sourceId: string, rows: RowEntry[], kind = 'Article') => ({ sourceId, sourceName: sourceId, kind, rows });
+
+  it('puts a concept with lens and source rows once, its source rows under the lens row', () => {
     const own = [entry('Feedback'), entry('Low-stakes')];
-    const articles = [
-      { articleId: 'a1', articleName: 'One', rows: [entry('Corrigibility'), entry('Feedback', 0, 'article note')] },
-      { articleId: 'a2', articleName: 'Two', rows: [entry('Feedback', 0, 'second article')] },
+    const sources = [
+      src('One', [entry('Corrigibility'), entry('Feedback', 0, 'article note')]),
+      src('Talk', [entry('Feedback', 0, 'video note')], 'Video'),
     ];
-    const { lens, articleOnly } = groupLensRows(own, articles);
-    expect(lens.map((g) => [g.entry.conceptId, g.articleRows.map((a) => [a.articleName, a.rows.map((r) => r.body)])]))
+    const { lens, sourceOnly } = groupLensRows(own, sources);
+    expect(lens.map((g) => [g.entry.conceptId, g.sourceRows.map((s) => [s.sourceName, s.kind, s.rows.map((r) => r.body)])]))
       .toEqual([
-        ['Feedback', [['One', ['article note']], ['Two', ['second article']]]],
+        ['Feedback', [['One', 'Article', ['article note']], ['Talk', 'Video', ['video note']]]],
         ['Low-stakes', []],
       ]);
-    expect(articleOnly.map((a) => [a.articleName, a.rows.map((r) => r.conceptId)])).toEqual([['One', ['Corrigibility']]]);
+    expect(sourceOnly.map((c) => [c.conceptName, c.sourceRows.map((s) => s.sourceName)])).toEqual([['Corrigibility', ['One']]]);
   });
 
-  it('attaches the article rows to the first of several lens rows only', () => {
-    const { lens } = groupLensRows(
-      [entry('C', 0), entry('C', 1)],
-      [{ articleId: 'a', articleName: 'A', rows: [entry('C')] }],
-    );
-    expect(lens.map((g) => g.articleRows.length)).toEqual([1, 0]);
+  it('attaches the source rows to the first of several lens rows only', () => {
+    const { lens } = groupLensRows([entry('C', 0), entry('C', 1)], [src('A', [entry('C')])]);
+    expect(lens.map((g) => g.sourceRows.length)).toEqual([1, 0]);
   });
 
-  it('keeps every article row apart when the lens has none', () => {
-    const articles = [{ articleId: 'a', articleName: 'A', rows: [entry('B'), entry('A')] }];
-    expect(groupLensRows([], articles)).toEqual({ lens: [], articleOnly: articles });
+  it('shows a concept with rows about several sources once, one block per source, by concept name', () => {
+    const { lens, sourceOnly } = groupLensRows([], [
+      src('Pan', [entry('Acausal', 0, 'pan note'), entry('Trading')]),
+      src('Greenblatt', [entry('Acausal', 0, 'greenblatt note')]),
+    ]);
+    expect(lens).toEqual([]);
+    expect(sourceOnly.map((c) => [c.conceptId, c.sourceRows.map((s) => [s.sourceName, s.rows[0].body])])).toEqual([
+      ['Acausal', [['Pan', 'pan note'], ['Greenblatt', 'greenblatt note']]],
+      ['Trading', [['Pan', 'Trading']]],
+    ]);
   });
 });

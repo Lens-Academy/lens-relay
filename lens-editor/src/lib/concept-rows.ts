@@ -2,11 +2,11 @@
  * Concept rows ("junction rows"): what the team knows about a concept and a
  * source, stored once in the concept file and shown from the other end.
  *
- * A concept file (`Concepts/<name>.md`) has a `## Considered` section; each
+ * A concept file (`Concepts/<name>.md`) has a `## Relationships` section; each
  * level-3 heading in it whose text is a single wikilink is a row about the
  * linked file, and runs until the next heading of level ≤ 3:
  *
- *     ## Considered
+ *     ## Relationships
  *
  *     ### [[../articles/ai-control-redwood]]
  *     Best intro we have. §2 is the explanation.
@@ -32,15 +32,31 @@ export interface ConceptRowRule {
   title: string;
   /** What the opened file is called in a row's pair header ("[Concept] × [This article]"). */
   openedLabel: string;
-  /** Also show, greyed, the rows of the articles the opened file wraps (lenses). */
-  articleContext?: boolean;
+  /** Also show, greyed, the rows of the sources the opened file wraps
+   *  (a lens's `source::` articles and videos). */
+  sourceContext?: boolean;
 }
+
+const RELATIONSHIPS = { sharedFolder: 'Lens Edu', rowsIn: 'Concepts', section: 'Relationships', title: 'Concept relationships' };
 
 /** "For a file in `openedIn`, embed the rows about it from the files in `rowsIn`." */
 export const CONCEPT_ROW_RULES: readonly ConceptRowRule[] = [
-  { sharedFolder: 'Lens Edu', openedIn: 'articles', rowsIn: 'Concepts', section: 'Considered', title: 'Concepts', openedLabel: 'This article' },
-  { sharedFolder: 'Lens Edu', openedIn: 'Lenses', rowsIn: 'Concepts', section: 'Considered', title: 'Concepts', openedLabel: 'This lens', articleContext: true },
+  { ...RELATIONSHIPS, openedIn: 'articles', openedLabel: 'This article' },
+  { ...RELATIONSHIPS, openedIn: 'video_transcripts', openedLabel: 'This video' },
+  { ...RELATIONSHIPS, openedIn: 'Lenses', openedLabel: 'This lens', sourceContext: true },
 ];
+
+/** The kinds of file a lens's `source::` can name that have rows of their
+ *  own, by folder (relative to the shared folder). Others (widgets) are left out. */
+export const SOURCE_KINDS: ReadonlyArray<{ folder: string; label: string }> = [
+  { folder: 'articles', label: 'Article' },
+  { folder: 'video_transcripts', label: 'Video' },
+];
+
+/** "Article" or "Video" for a source at `path` (merged path), or null. */
+export function sourceKind(path: string, sharedFolder: string): string | null {
+  return SOURCE_KINDS.find((k) => path.startsWith(`/${sharedFolder}/${k.folder}/`))?.label ?? null;
+}
 
 /** The rule for the file at `path` (a merged, folder-prefixed path), or null. */
 export function matchRule(
@@ -109,7 +125,9 @@ function headingsOf(text: string): Heading[] {
         else if (fence === fenceMatch[1]) fence = null;
       } else if (fence === null) {
         const m = HEADING.exec(raw);
-        if (m) out.push({ level: m[1].length, text: (m[2] ?? '').trim(), from: pos, to: pos + raw.length, line });
+        // A closing sequence of #s (`### [[x]] ###`) is not part of the text.
+        const headingText = (m?.[2] ?? '').replace(/(^|[ \t]+)#+$/, '').trim();
+        if (m) out.push({ level: m[1].length, text: headingText, from: pos, to: pos + raw.length, line });
       }
     }
     if (nl === -1) break;
@@ -125,7 +143,7 @@ function headingsOf(text: string): Heading[] {
  * `#anchor` allowed, nothing else); headings in code, lists and quotes do
  * not count (only a `#` at the start of a line makes a heading).
  */
-export function parseConceptFile(text: string, section = 'Considered'): ParsedConceptFile {
+export function parseConceptFile(text: string, section = 'Relationships'): ParsedConceptFile {
   const headings = headingsOf(text);
   const start = headings.findIndex((h) => h.level === 2 && h.text === section);
   if (start === -1) return { section: null, rows: [] };
@@ -156,7 +174,7 @@ export function rowsAbout(
   conceptPath: string,
   targetId: string,
   metadata: FolderMetadata,
-  section = 'Considered',
+  section = 'Relationships',
 ): ConceptRow[] {
   return parseConceptFile(text, section).rows.filter(
     (row) => resolvePageName(row.target, metadata, conceptPath)?.docId === targetId,
@@ -182,7 +200,7 @@ export interface RowInsertion {
  * appended to the end of the rows section, which is added at the end of the
  * file when missing.
  */
-export function planRowInsertion(text: string, link: string, body = '', section = 'Considered'): RowInsertion {
+export function planRowInsertion(text: string, link: string, body = '', section = 'Relationships'): RowInsertion {
   const heading = `### [[${link}]]\n`;
   const row = `${heading}${body}\n`;
   const parsed = parseConceptFile(text, section);
@@ -197,15 +215,16 @@ export function planRowInsertion(text: string, link: string, body = '', section 
 }
 
 /** A new concept file with its first row. */
-export function newConceptText(name: string, link: string, body = '', section = 'Considered'): string {
+export function newConceptText(name: string, link: string, body = '', section = 'Relationships'): string {
   return `# ${name}\n\n## ${section}\n\n### [[${link}]]\n${body}\n`;
 }
 
-/** The link targets of a lens's articles: `source::` of each `#### Article` section. */
-export function lensArticleTargets(text: string): string[] {
+/** The link targets of every `source::` in a lens (articles, videos, and
+ *  whatever else; `sourceKind` sorts them), outside its text sections. */
+export function lensSourceTargets(text: string): string[] {
   const targets: string[] = [];
   for (const section of parseSections(text)) {
-    if (section.type !== 'article') continue;
+    if (section.type === 'text' || section.type === 'frontmatter') continue;
     const source = parseFields(section.content).get('source') ?? '';
     const m = /\[\[([^[\]\n]+)\]\]/.exec(source);
     const target = m ? linkPage(m[1]) : '';
@@ -271,42 +290,46 @@ export function collectRows(
   return out;
 }
 
-/** The rows about one of a lens's articles. */
-export interface ArticleRows {
-  articleId: string;
-  articleName: string;
+/** The rows about one of a lens's sources (an article or a video). */
+export interface SourceRows {
+  sourceId: string;
+  sourceName: string;
+  /** "Article" or "Video". */
+  kind: string;
   rows: RowEntry[];
 }
 
 export interface LensRowGroups {
-  /** One per lens row, with its concept's article rows (only on the concept's
-   *  first lens row, and only articles that have a row there). */
-  lens: Array<{ entry: RowEntry; articleRows: ArticleRows[] }>;
-  /** Per article, the rows of concepts with no lens row; articles left with
-   *  none are dropped. */
-  articleOnly: ArticleRows[];
+  /** One per lens row, with its concept's rows about the lens's sources (only
+   *  on the concept's first lens row, and only sources that have a row there). */
+  lens: Array<{ entry: RowEntry; sourceRows: SourceRows[] }>;
+  /** One per concept with rows about the lens's sources but none about the
+   *  lens, with those rows per source. */
+  sourceOnly: Array<{ conceptId: string; conceptName: string; sourceRows: SourceRows[] }>;
 }
 
 /**
- * A lens's rows grouped by concept: a concept with a lens row shows once, its
- * article rows under the lens row; the rest of the article rows stay apart.
- * Both keep the order they come in.
+ * A lens's rows grouped by concept: a concept with a lens row shows once,
+ * its source rows under the lens row; a concept with only source rows also
+ * shows once, however many of the sources it has rows for. Lens rows keep
+ * the order they come in; the others go by concept name.
  */
-export function groupLensRows(own: readonly RowEntry[], articles: readonly ArticleRows[]): LensRowGroups {
-  const withLensRow = new Set(own.map((r) => r.conceptId));
+export function groupLensRows(own: readonly RowEntry[], sources: readonly SourceRows[]): LensRowGroups {
+  const forConcept = (conceptId: string) => sources
+    .map((src) => ({ ...src, rows: src.rows.filter((r) => r.conceptId === conceptId) }))
+    .filter((src) => src.rows.length > 0);
   const seen = new Set<string>();
   const lens = own.map((entry) => {
     const first = !seen.has(entry.conceptId);
     seen.add(entry.conceptId);
-    const articleRows = first
-      ? articles
-        .map((a) => ({ ...a, rows: a.rows.filter((r) => r.conceptId === entry.conceptId) }))
-        .filter((a) => a.rows.length > 0)
-      : [];
-    return { entry, articleRows };
+    return { entry, sourceRows: first ? forConcept(entry.conceptId) : [] };
   });
-  const articleOnly = articles
-    .map((a) => ({ ...a, rows: a.rows.filter((r) => !withLensRow.has(r.conceptId)) }))
-    .filter((a) => a.rows.length > 0);
-  return { lens, articleOnly };
+  const names = new Map<string, string>();
+  for (const src of sources) {
+    for (const r of src.rows) if (!seen.has(r.conceptId)) names.set(r.conceptId, r.conceptName);
+  }
+  const sourceOnly = [...names]
+    .sort(([, a], [, b]) => a.localeCompare(b))
+    .map(([conceptId, conceptName]) => ({ conceptId, conceptName, sourceRows: forConcept(conceptId) }));
+  return { lens, sourceOnly };
 }
