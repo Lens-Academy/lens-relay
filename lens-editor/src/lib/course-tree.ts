@@ -96,7 +96,9 @@ export function leadingWikilink(value: string): string | null {
   return /^\s*!?\[\[/.test(bare) ? firstWikilink(bare) : null;
 }
 
-/** The wikilink a ref section points at: its `source::` field, else one in its heading. */
+/** The wikilink a ref section points at: its `source::` field, else one in its heading.
+ *  (The Concepts panel reads a lens's sources differently, every `source::` line
+ *  in the file: lensSourceTargets in concept-rows.ts, canonical rule #8.) */
 export function sectionWikilink(section: Section): string | null {
   return leadingWikilink(parseFields(section.content).get('source') ?? '') ?? firstWikilink(section.label);
 }

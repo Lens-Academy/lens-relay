@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import { useNavigation } from '../../contexts/NavigationContext';
-import { isPlainLeftClick, urlForDoc } from '../../lib/url-utils';
-import { RELAY_ID } from '../../App';
+import { useNavigation } from '../contexts/NavigationContext';
+import { isPlainLeftClick, urlForDoc } from '../lib/url-utils';
+import { RELAY_ID } from '../App';
 
 /**
  * A link to a document (bare uuid): a real `<a href>` to its editor URL, so

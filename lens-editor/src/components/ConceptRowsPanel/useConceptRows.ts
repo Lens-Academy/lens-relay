@@ -14,16 +14,21 @@ export interface AddedSource {
 }
 
 /** While the panel is open and the page visible, concept files are read
- *  again this often (and whenever the window regains focus). */
-export const SNAPSHOT_REFRESH_MS = 45_000;
+ *  again this often, besides on window focus. Each read is a full connection
+ *  to the relay, so not more often. */
+export const SNAPSHOT_REFRESH_MS = 5 * 60_000;
 
 /**
  * Text of each document in `ids` (bare uuids), read as embeds read: cached,
- * at most three at a time (lib/embed-docs.ts), updated whenever an edit made
- * here is closed, and read again on window focus and every
- * SNAPSHOT_REFRESH_MS, so edits made elsewhere show up.
+ * at most three at a time (lib/embed-docs.ts), and updated whenever an edit
+ * made here is closed. While `refreshing` (the panel is open), read again on
+ * window focus, when the tab becomes visible, and every SNAPSHOT_REFRESH_MS,
+ * so edits made elsewhere show up.
  */
-export function useSnapshots(ids: readonly string[]): { texts: Map<string, string>; failed: Set<string> } {
+export function useSnapshots(
+  ids: readonly string[],
+  refreshing = true,
+): { texts: Map<string, string>; failed: Set<string> } {
   const key = ids.join(',');
   const [texts, setTexts] = useState<Map<string, string>>(() => new Map());
   const [failed, setFailed] = useState<Set<string>>(() => new Set());
@@ -41,6 +46,11 @@ export function useSnapshots(ids: readonly string[]): { texts: Map<string, strin
       );
       return onSnapshot(fullId, (text) => set(id, text));
     });
+    return () => unsubscribe.forEach((fn) => fn());
+  }, [key]);
+
+  useEffect(() => {
+    if (!refreshing) return;
     const refresh = () => {
       if (document.visibilityState === 'hidden') return;
       for (const id of key.split(',').filter(Boolean)) {
@@ -51,12 +61,11 @@ export function useSnapshots(ids: readonly string[]): { texts: Map<string, strin
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
     return () => {
-      unsubscribe.forEach((fn) => fn());
       clearInterval(timer);
       window.removeEventListener('focus', refresh);
       document.removeEventListener('visibilitychange', refresh);
     };
-  }, [key]);
+  }, [key, refreshing]);
 
   return { texts, failed };
 }
@@ -69,7 +78,9 @@ export function useConceptRows(
   rule: ConceptRowRule,
   targets: readonly string[],
   added: readonly AddedSource[],
-): { byTarget: Map<string, CollectedRows>; failed: number } {
+  /** The panel is open: keep the files fresh (useSnapshots). */
+  refreshing: boolean,
+): { byTarget: Map<string, CollectedRows>; failed: number; failedFor: (target: string) => number } {
   const { metadata, folderDocs } = useNavigation();
   const backlinksVersion = useBacklinksVersion(folderDocs);
   const pathIndex = uuidToPathIndex(metadata);
@@ -90,7 +101,7 @@ export function useConceptRows(
     () => [...new Set([...sourcesByTarget.values()].flat())].sort(),
     [sourcesByTarget],
   );
-  const { texts, failed } = useSnapshots(ids);
+  const { texts, failed } = useSnapshots(ids, refreshing);
 
   const byTarget = useMemo(() => {
     const out = new Map<string, CollectedRows>();
@@ -100,5 +111,10 @@ export function useConceptRows(
     return out;
   }, [sourcesByTarget, texts, metadata, rule, pathIndex]);
 
-  return { byTarget, failed: ids.filter((id) => failed.has(id) && !texts.has(id)).length };
+  const unread = (id: string) => failed.has(id) && !texts.has(id);
+  return {
+    byTarget,
+    failed: ids.filter(unread).length,
+    failedFor: (target) => (sourcesByTarget.get(target) ?? []).filter(unread).length,
+  };
 }

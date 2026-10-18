@@ -8,7 +8,6 @@ import { attachProvenanceRegistration, humanActor } from '../../lib/provenance';
 import { createDocument, createFolder } from '../../lib/relay-api';
 import { computeRelativePath, resolvePageName } from '../../lib/document-resolver';
 import {
-  fileName,
   insertRowUnlessPresent,
   groupLensRows,
   lensSourceTargets,
@@ -22,10 +21,12 @@ import {
   type RowEntry,
 } from '../../lib/concept-rows';
 import { RELAY_ID } from '../../App';
+import { basenameOf } from '../../lib/course-tree';
+import { docUuidFromCompoundId } from '../../lib/url-utils';
 import { ConceptRowCard } from './ConceptRowCard';
 import { ConceptPicker, type PickerConcept } from './ConceptPicker';
 import { useConceptRows, type AddedSource } from './useConceptRows';
-import { DocLink } from './DocLink';
+import { DocLink } from '../DocLink';
 
 const OPEN_KEY = 'lens-editor:concept-rows-open';
 
@@ -102,14 +103,14 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
   displayNameRef.current = displayName;
   const getActor = useCallback(() => humanActor(displayNameRef.current ?? ''), []);
 
-  const target = docId.slice(RELAY_ID.length + 1);
+  const target = docUuidFromCompoundId(docId);
   const sources = useSources(rule, ytext, path);
   const targets = useMemo(() => [target, ...sources.map((a) => a.id)], [target, sources]);
   const [added, setAdded] = useState<AddedSource[]>([]);
-  const { byTarget, failed } = useConceptRows(rule, targets, added);
+  const [open, setOpen] = useState(readOpen);
+  const { byTarget, failed, failedFor } = useConceptRows(rule, targets, added, open);
   const own: CollectedRows = byTarget.get(target) ?? { rows: [], mentions: [], pending: 0 };
 
-  const [open, setOpen] = useState(readOpen);
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -139,7 +140,7 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
     const taken = new Set(own.rows.map((r) => r.conceptId));
     return Object.entries(metadata)
       .filter(([p, m]) => p.startsWith(`${folder}/`) && m.type === 'markdown' && /\.md$/i.test(p))
-      .map(([p, m]) => ({ id: m.id, name: fileName(p), taken: taken.has(m.id) }));
+      .map(([p, m]) => ({ id: m.id, name: basenameOf(p), taken: taken.has(m.id) }));
   }, [metadata, folder, own.rows]);
 
   /** Add a row about the opened file to a concept file (made when `name` is
@@ -172,7 +173,10 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
             detach();
           }
         });
-        if (!result) return;
+        if (!result) {
+          setError('Another file was opened for editing meanwhile. Try again.');
+          return;
+        }
         index = result.index;
       } else {
         const folderDoc = folderDocs.get(rule.sharedFolder);
@@ -209,11 +213,11 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
     onExpandedChange: (value: boolean) => setRowExpanded(key, value),
   });
 
-  const loading = own.pending - failed > 0;
+  const loading = own.pending - failedFor(target) > 0;
   // Lenses: each concept shows once, with its rows about the lens's sources.
   const groups = groupLensRows(own.rows, sources.map((src) => ({
     sourceId: src.id,
-    sourceName: fileName(src.path),
+    sourceName: basenameOf(src.path),
     kind: src.kind,
     rows: byTarget.get(src.id)?.rows ?? [],
   })));
@@ -224,10 +228,10 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
     ...groups.sourceOnly.map((c) => sourceOnlyKey(c.conceptId)),
   ];
   const sourceOnlyHeading = sources.length === 1
-    ? `Only linked to ${sources[0].kind}: ${fileName(sources[0].path)}`
+    ? `Only linked to ${sources[0].kind}: ${basenameOf(sources[0].path)}`
     : 'Only linked to its sources';
   const allExpanded = allKeys.length > 0 && allKeys.every((k) => expanded.has(k));
-  const targetName = fileName(path);
+  const targetName = basenameOf(path);
 
   return (
     <section

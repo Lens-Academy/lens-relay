@@ -153,4 +153,52 @@ describe('ConceptRowCard', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Collapse row' })));
     __embedDocsTesting.reset();
   });
+
+  it('writes nothing when an empty row is opened and left without typing', async () => {
+    const live = `## Relationships\n### [[../articles/${ARTICLE}]]\n### [[../articles/other]]\n`;
+    const doc = new Y.Doc();
+    doc.getText('contents').insert(0, live);
+    const provider = { hasLocalChanges: false, on: () => {}, off: () => {} };
+    __embedDocsTesting.setConnector(async () => ({ doc, provider } as unknown as DocConnection));
+    render(<Card canEdit entry={{ ...entry, row: parseConceptFile(live).rows[0], body: '' }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: `Edit notes on ${entry.conceptName}` }), { key: 'Enter' });
+    await waitFor(() => expect(document.querySelector('.concept-row')).toHaveAttribute('data-state', 'live'));
+    const view = EditorView.findFromDOM(document.querySelector('.concept-row [contenteditable=true]') as HTMLElement)!;
+    fireEvent.keyDown(view.contentDOM, { key: 'Escape' });
+    await waitFor(() => expect(document.querySelector('.concept-row')).toHaveAttribute('data-state', 'idle'));
+    expect(doc.getText('contents').toString()).toBe(live);
+    __embedDocsTesting.reset();
+  });
+
+  it('offers Retry after a failed open, and still collapses', async () => {
+    const doc = new Y.Doc();
+    doc.getText('contents').insert(0, text);
+    const provider = { hasLocalChanges: false, on: () => {}, off: () => {} };
+    let fail = true;
+    __embedDocsTesting.setConnector(async () => {
+      if (fail) throw new Error('offline');
+      return { doc, provider } as unknown as DocConnection;
+    });
+    render(<Card canEdit />);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: `Edit notes on ${entry.conceptName}` }), { key: 'Enter' });
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    expect(screen.getByText(/Could not open/)).toBeInTheDocument();
+
+    // The toggle still works: collapse clears the error
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse row' }));
+    expect(screen.getByRole('button', { name: 'Expand row' })).toBeInTheDocument();
+    expect(screen.queryByText(/Could not open/)).toBeNull();
+    expect(retry).not.toBeInTheDocument();
+
+    // Fail again, then Retry once the connection works
+    fireEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: `Edit notes on ${entry.conceptName}` }), { key: 'Enter' });
+    const retryAgain = await screen.findByRole('button', { name: 'Retry' });
+    fail = false;
+    fireEvent.click(retryAgain);
+    await waitFor(() => expect(document.querySelector('.concept-row')).toHaveAttribute('data-state', 'live'));
+    __embedDocsTesting.reset();
+  });
 });

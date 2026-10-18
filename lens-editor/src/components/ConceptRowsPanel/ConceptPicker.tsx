@@ -99,7 +99,7 @@ export function ConceptPicker({
               : (
                 <>
                   <span className="min-w-0 truncate" title={option.concept.name}>{option.concept.name}</span>
-                  {option.concept.taken && <span className="ml-auto shrink-0 text-xs">already has a row</span>}
+                  {option.concept.taken && <span className="ml-auto shrink-0 text-xs">already linked</span>}
                 </>
               )}
           </li>

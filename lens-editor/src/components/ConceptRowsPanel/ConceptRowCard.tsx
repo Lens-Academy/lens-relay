@@ -9,7 +9,7 @@ import { attachProvenanceRegistration } from '../../lib/provenance';
 import { bodyLineFix, findLiveRow, rowPreview, rowsAbout, type RowEntry, type SourceRows } from '../../lib/concept-rows';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
-import { DocLink } from './DocLink';
+import { DocLink } from '../DocLink';
 
 export interface RowCardProps {
   entry: RowEntry;
@@ -50,6 +50,7 @@ const rowEditorTheme = EditorView.theme({
   '&.cm-editor .cm-content': { padding: '0', maxWidth: 'none', margin: '0' },
   '&.cm-editor .cm-scroller': { overflow: 'visible', fontFamily: 'inherit', lineHeight: '1.5' },
   '&.cm-editor': { fontSize: 'inherit', background: 'transparent' },
+  '&.cm-editor.cm-focused': { outline: 'none' },
 });
 
 /** A keyword in a small bordered box, with the full name in its tooltip. */
@@ -164,15 +165,12 @@ export function ConceptRowCard(props: RowCardProps) {
     const detach = attachProvenanceRegistration(doc, getActor);
     const liveRow = () => findLiveRow(
       rowsAbout(ytext.toString(), entry.conceptPath, target, metadata, section), ytext.toString(), entry);
-    let row = liveRow();
-    const fix = row ? bodyLineFix(row) : null;
-    if (fix !== null) {
-      // An empty row right before the next heading (or at the end of its own
-      // heading line): give it a line of its own, so nothing typed here can
-      // run into a heading.
-      ytext.insert(fix, '\n');
-      row = liveRow();
-    }
+    const row = liveRow();
+    // An empty row right before the next heading (or at the end of its own
+    // heading line, at the end of the file) gets a line of its own with the
+    // first edit, so nothing typed here can run into a heading; opening it
+    // and leaving writes nothing.
+    const lineBreak = row ? bodyLineFix(row, ytext.length) : null;
     if (!row) {
       detach();
       closeLive(owner);
@@ -189,7 +187,7 @@ export function ConceptRowCard(props: RowCardProps) {
           keymap.of([{ key: 'Escape', run: () => { refocusToggle.current = true; closeLive(owner); return true; } }]),
           ySectionUndoManagerKeymap,
           keymap.of(defaultKeymap),
-          ySectionSync(ytext, row.bodyFrom, row.bodyTo),
+          ySectionSync(ytext, row.bodyFrom, row.bodyTo, { lineBreakOnFirstEdit: lineBreak ?? undefined, endExclusive: true }),
           EditorView.contentAttributes.of({ 'aria-label': `Notes on ${entry.conceptName}` }),
         ],
       }),
@@ -225,12 +223,14 @@ export function ConceptRowCard(props: RowCardProps) {
   }, [autoEdit, onAutoEdited, startEdit]);
 
   const preview = rowPreview(entry.body);
-  const showBody = expanded || state !== 'idle';
+  // Opening or editing keeps the row open; a failed open does not.
+  const showBody = expanded || state === 'connecting' || state === 'live';
   const sourceRows = props.sourceRows ?? [];
   /** Expand or collapse (finishing an edit first): the triangle, or a click
    *  anywhere on the header bar but the concept link and its own buttons. */
   const toggle = () => {
-    if (state !== 'idle') closeLive(owner);
+    if (state === 'error') setState('idle');
+    else if (state !== 'idle') closeLive(owner);
     onExpandedChange(!showBody);
   };
 
@@ -275,7 +275,12 @@ export function ConceptRowCard(props: RowCardProps) {
         <span className="ml-auto shrink-0 text-xs text-gray-400">
           {state === 'connecting' && 'Opening…'}
           {state === 'live' && 'Editing · Esc to finish'}
-          {state === 'error' && <span className="text-red-700">Could not open</span>}
+          {state === 'error' && (
+            <span className="text-red-700">
+              Could not open ·{' '}
+              <button type="button" onClick={() => void startEdit()} className="cursor-pointer underline">Retry</button>
+            </span>
+          )}
         </span>
         {props.onAddForLens && (
           <button
@@ -290,7 +295,7 @@ export function ConceptRowCard(props: RowCardProps) {
       {showBody && !context && (
         <PairHeader concept={entry.conceptName} file={props.targetName} keyword={props.targetKeyword} />
       )}
-      {expanded && state === 'idle' && !context && (
+      {expanded && (state === 'idle' || state === 'error') && !context && (
         <div
           className={`concept-row-body ml-5 mt-1 ${editable ? 'cursor-text rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-300' : ''}`}
           title={editable ? 'Click or press Enter to edit' : undefined}
@@ -314,7 +319,7 @@ export function ConceptRowCard(props: RowCardProps) {
         </div>
       )}
       {/* Always mounted: the editor goes in as soon as the connection is up. */}
-      <div ref={liveHost} className="concept-row-body ml-5 mt-1" hidden={state === 'idle'} />
+      <div ref={liveHost} className="concept-row-body ml-5 mt-1" hidden={state !== 'connecting' && state !== 'live'} />
       {showBody && sourceRows.map((src, i) => (
         <div key={src.sourceId} className={`${context && i === 0 ? 'mt-1' : 'mt-2'} text-gray-400`} data-testid="concept-row-source">
           <PairHeader

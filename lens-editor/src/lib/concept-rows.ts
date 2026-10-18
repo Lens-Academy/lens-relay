@@ -12,11 +12,13 @@
  *     Best intro we have. §2 is the explanation.
  *
  * Which files show which rows is the rule table below; the panel itself is
- * `components/ConceptRowsPanel`. The platform's content validator flags
- * duplicate rows for one target (lens-platform content_processor).
+ * `components/ConceptRowsPanel`. The format, and the canonical parsing rules
+ * this file shares with the relay's MCP tools and the platform's content
+ * validator, are in docs/concept-relationships.md.
  */
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 import { resolvePageName } from './document-resolver';
+import { basenameOf } from './course-tree';
 
 export interface ConceptRowRule {
   /** Shared folder the rule applies in (the first path segment). */
@@ -46,7 +48,7 @@ export const CONCEPT_ROW_RULES: readonly ConceptRowRule[] = [
 
 /** The kinds of file a lens's `source::` can name that have rows of their
  *  own, by folder (relative to the shared folder). Others (widgets) are left out. */
-export const SOURCE_KINDS: ReadonlyArray<{ folder: string; label: string }> = [
+const SOURCE_KINDS: ReadonlyArray<{ folder: string; label: string }> = [
   { folder: 'articles', label: 'Article' },
   { folder: 'video_transcripts', label: 'Video' },
 ];
@@ -57,12 +59,9 @@ export function sourceKind(path: string, sharedFolder: string): string | null {
 }
 
 /** The rule for the file at `path` (a merged, folder-prefixed path), or null. */
-export function matchRule(
-  path: string | undefined,
-  rules: readonly ConceptRowRule[] = CONCEPT_ROW_RULES,
-): ConceptRowRule | null {
+export function matchRule(path: string | undefined): ConceptRowRule | null {
   if (!path || !/\.md$/i.test(path)) return null;
-  return rules.find((r) => path.startsWith(`/${r.sharedFolder}/${r.openedIn}/`)) ?? null;
+  return CONCEPT_ROW_RULES.find((r) => path.startsWith(`/${r.sharedFolder}/${r.openedIn}/`)) ?? null;
 }
 
 /** Folder (merged path, no trailing slash) whose files hold the rule's rows. */
@@ -73,9 +72,6 @@ export function rowsFolder(rule: ConceptRowRule): string {
 export interface ConceptRow {
   /** The heading's link target, without `|alias` or `#heading`. */
   target: string;
-  /** 1-based line of the heading. */
-  line: number;
-  headingFrom: number;
   /** End of the heading line (before its newline). */
   headingTo: number;
   /** The free text: from the line after the heading, trailing newlines left out. */
@@ -88,7 +84,7 @@ export interface ConceptRow {
 export interface ParsedConceptFile {
   /** Every rows section, in order: `to` is where it ends (the next heading of
    *  level ≤ 2, or the end). New rows go to the first. */
-  sections: Array<{ headingFrom: number; to: number }>;
+  sections: Array<{ to: number }>;
   rows: ConceptRow[];
 }
 
@@ -99,11 +95,11 @@ const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const SINGLE_LINK = /^\[\[([^[\]\n]+)\]\]$/;
 
 /** A wikilink's page part: `[[a/b#H|Alias]]` → `a/b`. */
-export function linkPage(inner: string): string {
+function linkPage(inner: string): string {
   return inner.split('|')[0].split('#')[0].trim();
 }
 
-interface Heading { level: number; text: string; from: number; to: number; line: number }
+interface Heading { level: number; text: string; from: number; to: number }
 
 /**
  * ATX headings of `text`, by the canonical concept-row rules (v1, shared with
@@ -150,7 +146,7 @@ function headingsOf(text: string): Heading[] {
         const inItem = inList && /^[ \t]/.test(raw);
         if (m && !inItem) {
           const headingText = (m[2] ?? '').replace(/(^|[ \t]+)#+$/, '').trim();
-          out.push({ level: m[1].length, text: headingText, from: pos, to: pos + raw.length, line });
+          out.push({ level: m[1].length, text: headingText, from: pos, to: pos + raw.length });
         }
       }
     }
@@ -176,7 +172,7 @@ export function parseConceptFile(text: string, section = 'Relationships'): Parse
     if (h.level !== 2 || h.text !== section) return;
     const endIndex = headings.findIndex((n, i) => i > start && n.level <= 2);
     const sectionTo = endIndex === -1 ? text.length : headings[endIndex].from;
-    sections.push({ headingFrom: h.from, to: sectionTo });
+    sections.push({ to: sectionTo });
     const inside = headings.slice(start + 1, endIndex === -1 ? undefined : endIndex);
     inside.forEach((r, i) => {
       if (r.level !== 3) return;
@@ -188,35 +184,36 @@ export function parseConceptFile(text: string, section = 'Relationships'): Parse
       const bodyFrom = Math.min(r.to + 1, to);
       let bodyTo = to;
       while (bodyTo > bodyFrom && /\s/.test(text[bodyTo - 1])) bodyTo--;
-      rows.push({ target, line: r.line, headingFrom: r.from, headingTo: r.to, bodyFrom, bodyTo, to });
+      rows.push({ target, headingTo: r.to, bodyFrom, bodyTo, to });
     });
   });
   return { sections, rows };
 }
 
 /**
- * Where to insert a newline so that an empty row has a line of its own to be
- * edited on, or null when it has one. Without it the row's (empty) text sits
- * at the very start of the next heading's line, or at the end of its own
- * heading line, and typing there would run into a heading.
+ * Whether an empty row has no line of its own to be edited on, and where the
+ * line break that gives it one goes: 'after' its (empty) text when it sits at
+ * the very start of the next heading's line, 'before' it when it sits at the
+ * end of its own heading line (no line break after it: the end of the
+ * file). Null when it has a line.
+ * Without the break, typing there would run into a heading.
  */
-export function bodyLineFix(row: ConceptRow): number | null {
-  return row.bodyFrom === row.to ? row.to : null;
+export function bodyLineFix(row: ConceptRow, textLength: number): 'before' | 'after' | null {
+  if (row.bodyFrom === row.headingTo) return 'before';
+  return row.bodyFrom === row.to && row.to < textLength ? 'after' : null;
 }
 
 /**
- * The live row an edit is for: `entry` was found in a snapshot that may be
- * stale, so match its heading's target and text rather than trusting its
- * position alone.
+ * The live row an edit is for. `liveRows` are the live file's rows about the
+ * target (rowsAbout); `entry` was found in a snapshot that may be stale, so
+ * when there are several, they are told apart by their text, then by position.
  */
 export function findLiveRow(
   liveRows: readonly ConceptRow[],
   liveText: string,
-  entry: Pick<RowEntry, 'row' | 'index' | 'body'>,
+  entry: Pick<RowEntry, 'index' | 'body'>,
 ): ConceptRow | null {
   if (liveRows.length <= 1) return liveRows[0] ?? null;
-  // Several rows about the same file (the validator flags it): tell them
-  // apart by their text, then by position.
   return liveRows.find((r) => liveText.slice(r.bodyFrom, r.bodyTo) === entry.body)
     ?? liveRows[entry.index]
     ?? null;
@@ -280,7 +277,7 @@ export function planRowInsertion(text: string, link: string, body = '', section 
 /**
  * Add a row about `targetId` to the concept file `text` (live), unless one is
  * already there: the live text, not a snapshot, decides. Returns which of the
- * file's rows about the target to open, and whether one was inserted.
+ * file's rows about the target to open.
  */
 export function insertRowUnlessPresent(
   text: { toString(): string; insert(index: number, content: string): void },
@@ -290,12 +287,12 @@ export function insertRowUnlessPresent(
   body: string,
   metadata: FolderMetadata,
   section = 'Relationships',
-): { index: number; inserted: boolean } {
-  if (rowsAbout(text.toString(), conceptPath, targetId, metadata, section).length > 0) return { index: 0, inserted: false };
+): { index: number } {
+  if (rowsAbout(text.toString(), conceptPath, targetId, metadata, section).length > 0) return { index: 0 };
   const plan = planRowInsertion(text.toString(), link, body, section);
   text.insert(plan.at, plan.insert);
   const index = rowsAbout(text.toString(), conceptPath, targetId, metadata, section).findIndex((r) => r.bodyFrom === plan.bodyFrom);
-  return { index: Math.max(0, index), inserted: true };
+  return { index: Math.max(0, index) };
 }
 
 /** A new concept file with its first row. */
@@ -308,6 +305,8 @@ export function newConceptText(name: string, link: string, body = '', section = 
  * rules v1 #8): several per section, before the first heading, in CRLF files
  * too, but not inside `#### Text` sections (their content is prose). The
  * first wikilink of each value; `sourceKind` keeps articles and videos.
+ * Unlike course-tree's sectionWikilink (one `source::` per section, for the
+ * course tree), this must find every source, to match the relay and platform.
  */
 export function lensSourceTargets(text: string): string[] {
   const targets: string[] = [];
@@ -351,10 +350,6 @@ export interface CollectedRows {
   pending: number;
 }
 
-export function fileName(path: string): string {
-  return (path.split('/').pop() ?? path).replace(/\.md$/i, '');
-}
-
 /**
  * The rows about `targetId` among `sourceIds` (documents linking to it, from
  * the backlinks index), keeping only files in the rule's rows folder. A file
@@ -373,7 +368,7 @@ export function collectRows(
   for (const conceptId of sourceIds) {
     const conceptPath = pathOf(conceptId);
     if (!conceptPath || !conceptPath.startsWith(folder) || !/\.md$/i.test(conceptPath)) continue;
-    const conceptName = fileName(conceptPath);
+    const conceptName = basenameOf(conceptPath);
     const text = texts.get(conceptId);
     if (text === undefined) {
       out.pending++;

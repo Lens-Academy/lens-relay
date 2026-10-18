@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import * as Y from 'yjs';
+import { EditorState } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { ySectionSync } from '../components/SectionEditor/y-section-sync';
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 import type { RowEntry } from './concept-rows';
 import {
@@ -81,12 +85,6 @@ describe('parseConceptFile', () => {
     expect(CONCEPT.slice(last.to).startsWith('## See also')).toBe(true);
   });
 
-  it('records the heading line', () => {
-    const [first] = parseConceptFile(CONCEPT).rows;
-    expect(CONCEPT.split('\n')[first.line - 1]).toBe('### [[../articles/ai-control-redwood]]');
-    expect(CONCEPT.slice(first.headingFrom, first.headingTo)).toBe('### [[../articles/ai-control-redwood]]');
-  });
-
   it('ignores headings that are not a single link, and headings in code', () => {
     const text = '## Relationships\n\n### About [[x]]\nno\n\n```\n### [[y]]\n```\n### [[z#Part]]\nyes\n';
     expect(parseConceptFile(text).rows.map((r) => r.target)).toEqual(['z']);
@@ -115,7 +113,7 @@ describe('parseConceptFile', () => {
     const text = '## Relationships\n\n### [[x]]\n\n### [[y]]';
     const [x, y] = parseConceptFile(text).rows;
     expect(x.bodyFrom).toBe(x.bodyTo);
-    expect(text.slice(x.headingFrom, x.headingTo)).toBe('### [[x]]');
+    expect(text.slice(0, x.headingTo).endsWith('### [[x]]')).toBe(true);
     expect(y.bodyFrom).toBe(text.length);
   });
 });
@@ -404,43 +402,72 @@ describe('planRowInsertion with several Relationships sections', () => {
   });
 });
 
-describe('bodyLineFix (empty rows next to a heading)', () => {
-  /** Edit the empty row `target` the way the panel does: fix its line, then type at its body. */
-  function typeInto(text: string, target: string, typed: string): string {
-    let row = parseConceptFile(text).rows.find((r) => r.target === target)!;
-    const fix = bodyLineFix(row);
-    if (fix !== null) {
-      text = text.slice(0, fix) + '\n' + text.slice(fix);
-      row = parseConceptFile(text).rows.find((r) => r.target === target)!;
-    }
-    return text.slice(0, row.bodyFrom) + typed + text.slice(row.bodyFrom);
+describe('editing an empty row next to a heading (bodyLineFix + ySectionSync)', () => {
+  /** Open the row about `target` the way the panel does, in an editor bound to its text. */
+  function openRow(text: string, target: string) {
+    const doc = new Y.Doc();
+    const ytext = doc.getText('contents');
+    ytext.insert(0, text);
+    const row = parseConceptFile(text).rows.find((r) => r.target === target)!;
+    const lineBreak = bodyLineFix(row, text.length);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: text.slice(row.bodyFrom, row.bodyTo),
+        extensions: [ySectionSync(ytext, row.bodyFrom, row.bodyTo, { lineBreakOnFirstEdit: lineBreak ?? undefined, endExclusive: true })],
+      }),
+    });
+    const type = (typed: string) => view.dispatch({ changes: { from: view.state.doc.length, insert: typed } });
+    return { ytext, view, type };
   }
 
   it('keeps the next row heading intact', () => {
-    const out = typeInto('## Relationships\n### [[a]]\n### [[b]]\n', 'a', 'TYPED');
-    expect(out).toBe('## Relationships\n### [[a]]\nTYPED\n### [[b]]\n');
-    expect(targets(out)).toEqual(['a', 'b']);
+    const { ytext, type } = openRow('## Relationships\n### [[a]]\n### [[b]]\n', 'a');
+    type('TYPED');
+    expect(ytext.toString()).toBe('## Relationships\n### [[a]]\nTYPED\n### [[b]]\n');
+    expect(targets(ytext.toString())).toEqual(['a', 'b']);
   });
 
   it('keeps a following section heading intact', () => {
-    const out = typeInto('## Relationships\n### [[a]]\n## Other\n', 'a', 'TYPED');
-    expect(out).toBe('## Relationships\n### [[a]]\nTYPED\n## Other\n');
+    const { ytext, type } = openRow('## Relationships\n### [[a]]\n## Other\n', 'a');
+    type('TYPED');
+    type(' more');
+    expect(ytext.toString()).toBe('## Relationships\n### [[a]]\nTYPED more\n## Other\n');
   });
 
   it('gives a heading at the end of the file a line of its own', () => {
-    expect(typeInto('## Relationships\n### [[a]]', 'a', 'TYPED')).toBe('## Relationships\n### [[a]]\nTYPED');
+    const { ytext, type } = openRow('## Relationships\n### [[a]]', 'a');
+    type('TYPED');
+    expect(ytext.toString()).toBe('## Relationships\n### [[a]]\nTYPED');
+  });
+
+  it('writes nothing when the row is only opened', () => {
+    const text = '## Relationships\n### [[a]]\n### [[b]]\n';
+    const { ytext, view } = openRow(text, 'a');
+    view.destroy();
+    expect(ytext.toString()).toBe(text);
   });
 
   it('leaves a row that already has a line alone', () => {
-    const [row] = parseConceptFile('## Relationships\n### [[a]]\n\n### [[b]]\n').rows;
-    expect(bodyLineFix(row)).toBeNull();
+    const text = '## Relationships\n### [[a]]\n\n### [[b]]\n';
+    expect(bodyLineFix(parseConceptFile(text).rows[0], text.length)).toBeNull();
+    const atEnd = '## Relationships\n### [[a]]\n';
+    expect(bodyLineFix(parseConceptFile(atEnd).rows[0], atEnd.length)).toBeNull();
+  });
+
+  it('keeps a row appended at the end of the file by someone else out of the open row', () => {
+    const { ytext, view } = openRow('## Relationships\n### [[a]]\nnotes', 'a');
+    const plan = planRowInsertion(ytext.toString(), 'b');
+    ytext.insert(plan.at, plan.insert); // another client's add, synced in
+    expect(view.state.doc.toString()).toBe('notes');
+    expect(ytext.toString()).toBe('## Relationships\n### [[a]]\nnotes\n\n### [[b]]\n\n');
+    expect(targets(ytext.toString())).toEqual(['a', 'b']);
   });
 });
 
 describe('findLiveRow', () => {
   const live = '## Relationships\n### [[x]]\nfirst\n### [[x]]\nsecond\n';
   const rows = parseConceptFile(live).rows;
-  const entry = (index: number, body: string) => ({ row: rows[0], index, body });
+  const entry = (index: number, body: string) => ({ index, body });
 
   it('takes the only live row, whatever the stale index', () => {
     expect(findLiveRow([rows[1]], live, entry(0, 'old'))).toBe(rows[1]);
@@ -468,14 +495,14 @@ describe('insertRowUnlessPresent', () => {
   it('opens the row already in the live text instead of writing a second one', () => {
     const text = live('## Relationships\n### [[../articles/ai-control-redwood]]\nnotes\n');
     expect(insertRowUnlessPresent(text, CONCEPT_PATH, 'a1', '../articles/ai-control-redwood', '', metadata))
-      .toEqual({ index: 0, inserted: false });
+      .toEqual({ index: 0 });
     expect(text.value).toBe('## Relationships\n### [[../articles/ai-control-redwood]]\nnotes\n');
   });
 
   it('inserts when there is none, and says which row it is', () => {
     const text = live('## Relationships\n### [[../articles/lw-post-on-monitoring]]\n');
     expect(insertRowUnlessPresent(text, CONCEPT_PATH, 'a1', '../articles/ai-control-redwood', 'draft', metadata))
-      .toEqual({ index: 0, inserted: true });
+      .toEqual({ index: 0 });
     expect(rowsAbout(text.value, CONCEPT_PATH, 'a1', metadata)).toHaveLength(1);
   });
 });

@@ -13,6 +13,7 @@ import {
   openLive,
   readSnapshot,
   refreshSnapshot,
+  setSnapshot,
   withLiveDoc,
 } from './embed-docs';
 import { teardownProvider, type DocConnection } from '../hooks/useDocConnection';
@@ -92,6 +93,30 @@ describe('readSnapshot', () => {
     await refreshSnapshot('a');
     expect(cachedSnapshot('a')).toBe('v2');
     expect(seen).toEqual(['v1', 'v2']);
+  });
+});
+
+describe('a read that resolves after a newer snapshot', () => {
+  it('does not put older text back over an edit closed meanwhile', async () => {
+    let finish!: (text: string) => void;
+    __embedDocsTesting.setReader(() => new Promise((resolve) => { finish = resolve; }));
+    const read = refreshSnapshot('a');
+    await Promise.resolve();
+    setSnapshot('a', 'new text, saved by closing an edit');
+    finish('old text');
+    await read;
+    expect(cachedSnapshot('a')).toBe('new text, saved by closing an edit');
+  });
+
+  it('does not record text read while the file is open live', async () => {
+    let finish!: (text: string) => void;
+    __embedDocsTesting.setReader(() => new Promise((resolve) => { finish = resolve; }));
+    __embedDocsTesting.setConnector(async () => fakeConnection('live text'));
+    const read = refreshSnapshot('a');
+    await openLive('a', {}, () => {});
+    finish('old text');
+    await read;
+    expect(cachedSnapshot('a')).toBeUndefined();
   });
 });
 
