@@ -52,6 +52,7 @@ const MINT_ATTEMPTS_VIA_PROXY = 5;
 const MINT_TIMEOUT_MS = 30_000;
 const MINT_MAX_BYTES = 2 * 1024 * 1024;
 const CAPTION_TIMEOUT_MS = 60_000;
+const OEMBED_TIMEOUT_MS = 15_000;
 // json3 for a multi-hour word-level track is a few MB; anything past this is
 // not a transcript.
 const CAPTION_MAX_BYTES = 40 * 1024 * 1024;
@@ -182,12 +183,32 @@ export function pickCaptionTrack<
  * Fetch a video's transcript and metadata from a bare YouTube URL, producing
  * the same payload shape the bookmarklet used to POST.
  */
-/** Only the video's title and channel (one mint, no caption download): what
- *  a video stub needs. */
+/**
+ * Only the video's title and channel: what a video stub needs. Read from
+ * YouTube's public oEmbed endpoint, which (unlike the player API) does not
+ * bot-check datacenter IPs and costs no proxy traffic; the player mint is the
+ * fallback.
+ */
 export async function fetchYouTubeVideoMeta(
   input: VideoInput,
   signal?: AbortSignal,
 ): Promise<{ title: string; channel: string }> {
+  try {
+    const watchUrl = `https://www.youtube.com/watch?v=${input.video_id}`;
+    const resp = await fetchBytesWithTimeout(
+      `https://www.youtube.com/oembed?${new URLSearchParams({ url: watchUrl, format: "json" })}`,
+      { timeoutMs: OEMBED_TIMEOUT_MS, maxBytes: 64 * 1024, signal },
+    );
+    if (resp.ok) {
+      const data = JSON.parse(bytesToText(resp.bytes)) as { title?: string; author_name?: string };
+      const title = data.title?.trim();
+      const channel = data.author_name?.trim();
+      if (title && channel) return { title, channel };
+    }
+  } catch (err) {
+    signal?.throwIfAborted();
+    console.warn(`[fetch-transcript] oEmbed lookup for ${input.video_id} failed, using the player API: ${err}`);
+  }
   const player = await mintPlayerResponse(input.video_id, signal);
   return {
     title: player.videoDetails?.title || "Unknown",
