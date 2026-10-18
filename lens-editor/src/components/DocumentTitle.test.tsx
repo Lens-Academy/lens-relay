@@ -108,4 +108,34 @@ describe('DocumentTitle', () => {
     });
     expect(serverMetadata.has('Lens/Projects/Old Title.md')).toBe(false);
   });
+
+  it('shows a long name in full, wrapping, and keeps it on one line when a line break is pasted', async () => {
+    const user = userEvent.setup();
+    const { DocumentTitle } = await import('./DocumentTitle');
+    const docUuid = '22222222-2222-4222-8222-222222222222';
+    const longName = 'greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines';
+    render(
+      <NavigationContext.Provider
+        value={{
+          metadata: { [`/Lens Edu/articles/${longName}.md`]: { id: docUuid, type: 'markdown', version: 0 } },
+          folderDocs: new Map([['Lens Edu', new Y.Doc()]]),
+          folderNames: ['Lens Edu'],
+          errors: new Map(),
+          onNavigate: vi.fn(),
+          justCreatedRef: { current: false },
+        }}
+      >
+        <DocumentTitle currentDocId={`${RELAY_ID}-${docUuid}`} />
+      </NavigationContext.Provider>
+    );
+
+    const title = screen.getByRole('textbox', { name: 'Document name' });
+    expect(title.tagName).toBe('TEXTAREA');
+    expect(title).toHaveValue(longName);
+
+    await user.clear(title);
+    await user.click(title);
+    await user.paste('Two\nlines');
+    expect(title).toHaveValue('Two lines');
+  });
 });

@@ -428,9 +428,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
         const segments = pathToSegments(currentFilePath);
         if (segments.length === 0) return null;
         return createPortal(
-          <span className="text-sm text-gray-600 truncate">
+          // Folders keep their names; a long file name is cut with an ellipsis
+          // (full path in the tooltip) instead of running under the controls.
+          <span className="flex min-w-0 text-sm text-gray-600" title={segments.join(' › ')}>
             {segments.map((seg, i) => (
-              <span key={i}>
+              <span key={i} className={i === segments.length - 1 ? 'min-w-0 truncate' : 'shrink-0 whitespace-nowrap'}>
                 {i > 0 && <span className="mx-0.5">›</span>}
                 {seg}
               </span>
