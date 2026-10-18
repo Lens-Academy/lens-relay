@@ -555,7 +555,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               decorations.push({
                 from: node.from,
                 to: node.to,
-                deco: Decoration.mark({ class: HEADING_CLASSES[node.name] }),
+                // inclusiveEnd: a widget replacing the heading's end (a wikilink
+                // that ends it, e.g. `### [[x]]`) is otherwise left outside the
+                // mark and renders at body size.
+                deco: Decoration.mark({ class: HEADING_CLASSES[node.name], inclusiveEnd: true }),
               });
               // Add line decoration for heading top spacing (margin-top doesn't work on inline spans)
               const headingLine = view.state.doc.lineAt(node.from);
