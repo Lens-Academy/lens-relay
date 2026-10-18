@@ -50,7 +50,10 @@ export const panelHostField = StateField.define<DecorationSet>({
       if (!effect.is(setPanelHost)) continue;
       value = effect.value
         ? Decoration.set([
-          Decoration.widget({ widget: new PanelHostWidget(effect.value), block: true, side: -1 }).range(0),
+          // The lowest side: before every other block at the start, such
+          // as the expanded frontmatter's header (side -1), which must stay
+          // with the frontmatter under the panel.
+          Decoration.widget({ widget: new PanelHostWidget(effect.value), block: true, side: -10000 }).range(0),
         ])
         : Decoration.none;
     }

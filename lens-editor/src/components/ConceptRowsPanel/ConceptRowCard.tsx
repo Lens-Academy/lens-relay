@@ -22,8 +22,10 @@ export interface RowCardProps {
   canEdit: boolean;
   canAcceptReject: boolean;
   getActor: () => string;
-  /** Name of the file the row is about, for the pair header ("concept × file"). */
+  /** The file the row is about, for the pair header: its name (tooltip) and
+   *  keyword ("This article", "This lens" or "Article"). */
   targetName: string;
+  targetKeyword: string;
   /** Expanded or not: the panel holds it, for "Expand all". */
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
@@ -39,13 +41,33 @@ export interface RowCardProps {
 
 type CardState = 'idle' | 'connecting' | 'live' | 'error';
 
-/** "Concept × file" over an expanded row: the row belongs to the pair, not
- *  to either side. */
-function PairHeader({ label, concept, file }: { label?: string; concept: string; file: string }) {
+/** A keyword in a small bordered box, with the full name in its tooltip. */
+function Chip({ children, name }: { children: string; name: string }) {
   return (
-    <div className="concept-row-pair ml-5 mt-1 text-[11px] text-gray-400">
-      {label && <span className="font-medium text-gray-500">{label} · </span>}
-      {concept} × {file}
+    <span className="concept-row-chip shrink-0 rounded border border-gray-300 px-1 leading-4 text-gray-500" title={name}>
+      {children}
+    </span>
+  );
+}
+
+/**
+ * "[Concept] × [This article]" over an expanded row: the row belongs to the
+ * pair, not to either side. Keywords rather than names (real file names run
+ * to 160 characters); each name is in its chip's tooltip. An article block
+ * on a lens also says which article (`label`, cut with an ellipsis).
+ */
+function PairHeader({ concept, file, keyword, label }: {
+  concept: string;
+  file: string;
+  keyword: string;
+  label?: string;
+}) {
+  return (
+    <div className="concept-row-pair ml-5 mt-1 flex min-w-0 items-center gap-1 text-[11px] text-gray-400">
+      <Chip name={concept}>Concept</Chip>
+      <span className="shrink-0">×</span>
+      <Chip name={file}>{keyword}</Chip>
+      {label && <span className="ml-1 min-w-0 truncate" title={label}>{label}</span>}
     </div>
   );
 }
@@ -180,7 +202,12 @@ export function ConceptRowCard(props: RowCardProps) {
   const preview = rowPreview(entry.body);
   const showBody = expanded || state !== 'idle';
   const articleRows = props.articleRows ?? [];
-  const labelled = articleRows.length > 0;
+  /** Expand or collapse (finishing an edit first): the triangle, or a click
+   *  anywhere on the header bar but the concept link and its own buttons. */
+  const toggle = () => {
+    if (state !== 'idle') closeLive(owner);
+    onExpandedChange(!showBody);
+  };
 
   return (
     <div
@@ -189,11 +216,18 @@ export function ConceptRowCard(props: RowCardProps) {
       data-state={state}
       data-concept={entry.conceptName}
     >
-      <div className="flex items-baseline gap-2 min-w-0">
+      <div
+        className="concept-row-header flex min-w-0 cursor-pointer items-baseline gap-2"
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest('a, button')) return;
+          toggle();
+        }}
+      >
+        {/* 24px hit box around a small triangle */}
         <button
           type="button"
-          onClick={() => (state === 'idle' ? onExpandedChange(!expanded) : closeLive(owner))}
-          className="w-3 shrink-0 text-xs text-gray-400 cursor-pointer"
+          onClick={toggle}
+          className="-my-1 -ml-1.5 -mr-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center self-center rounded text-xs text-gray-400 hover:bg-gray-100"
           aria-label={showBody ? 'Collapse row' : 'Expand row'}
           aria-expanded={showBody}
         >
@@ -201,26 +235,15 @@ export function ConceptRowCard(props: RowCardProps) {
         </button>
         <DocLink
           docId={entry.conceptId}
-          className={`shrink-0 font-medium hover:underline ${context ? 'text-gray-500' : 'text-indigo-700'}`}
-          title={`Open ${entry.conceptPath}`}
+          // Collapsed, the name leaves at least half the line to the preview.
+          className={`min-w-0 shrink-0 truncate font-medium hover:underline ${showBody ? '' : 'max-w-[50%]'} ${context ? 'text-gray-500' : 'text-indigo-700'}`}
+          title={entry.conceptName}
         >
           {entry.conceptName}
         </DocLink>
         {!showBody && (
-          <button
-            type="button"
-            onClick={() => onExpandedChange(true)}
-            className={`min-w-0 flex-1 truncate text-left cursor-pointer ${preview ? '' : 'italic text-gray-400'}`}
-          >
+          <span className={`min-w-0 flex-1 truncate ${preview ? '' : 'italic text-gray-400'}`}>
             {preview || 'No notes yet'}
-          </button>
-        )}
-        {props.articleRows && (
-          <span
-            className="shrink-0 rounded bg-gray-100 px-1.5 text-[11px] text-gray-500"
-            title={labelled ? 'Notes on this lens and on its article' : 'Notes on this lens'}
-          >
-            {labelled ? 'lens · article' : 'lens'}
           </span>
         )}
         <span className="ml-auto shrink-0 text-xs text-gray-400">
@@ -239,7 +262,7 @@ export function ConceptRowCard(props: RowCardProps) {
         )}
       </div>
       {showBody && (
-        <PairHeader label={labelled ? 'This lens' : undefined} concept={entry.conceptName} file={props.targetName} />
+        <PairHeader concept={entry.conceptName} file={props.targetName} keyword={props.targetKeyword} />
       )}
       {expanded && state === 'idle' && (
         <div
@@ -261,7 +284,12 @@ export function ConceptRowCard(props: RowCardProps) {
       <div ref={liveHost} className="concept-row-body ml-5 mt-1" hidden={state === 'idle'} />
       {showBody && articleRows.map((article) => (
         <div key={article.articleId} className="mt-2 text-gray-400" data-testid="concept-row-article">
-          <PairHeader label={`Article: ${article.articleName}`} concept={entry.conceptName} file={article.articleName} />
+          <PairHeader
+            concept={entry.conceptName}
+            file={article.articleName}
+            keyword="Article"
+            label={`Article: ${article.articleName}`}
+          />
           {article.rows.map((row) => (
             <div key={row.index} className="concept-row-body ml-5 mt-0.5">
               {row.body ? <RowPreview text={row.body} /> : <div className="italic">No notes yet</div>}

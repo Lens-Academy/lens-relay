@@ -30,14 +30,16 @@ export interface ConceptRowRule {
   /** Heading (level 2) of the section that holds the rows. */
   section: string;
   title: string;
+  /** What the opened file is called in a row's pair header ("[Concept] × [This article]"). */
+  openedLabel: string;
   /** Also show, greyed, the rows of the articles the opened file wraps (lenses). */
   articleContext?: boolean;
 }
 
 /** "For a file in `openedIn`, embed the rows about it from the files in `rowsIn`." */
 export const CONCEPT_ROW_RULES: readonly ConceptRowRule[] = [
-  { sharedFolder: 'Lens Edu', openedIn: 'articles', rowsIn: 'Concepts', section: 'Considered', title: 'Concepts' },
-  { sharedFolder: 'Lens Edu', openedIn: 'Lenses', rowsIn: 'Concepts', section: 'Considered', title: 'Concepts', articleContext: true },
+  { sharedFolder: 'Lens Edu', openedIn: 'articles', rowsIn: 'Concepts', section: 'Considered', title: 'Concepts', openedLabel: 'This article' },
+  { sharedFolder: 'Lens Edu', openedIn: 'Lenses', rowsIn: 'Concepts', section: 'Considered', title: 'Concepts', openedLabel: 'This lens', articleContext: true },
 ];
 
 /** The rule for the file at `path` (a merged, folder-prefixed path), or null. */

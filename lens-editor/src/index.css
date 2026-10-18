@@ -249,8 +249,10 @@
 
 /* Concept rows (components/ConceptRowsPanel): a row's text renders and edits
    like an embed card's, in the panel's text style, at full height (no inner scroll). */
-/* The panel sits in the main editor (a block widget): use normal text flow. */
-.concept-rows-panel { white-space: normal; }
+/* The panel sits in the main editor (a block widget): use normal text flow,
+   and keep its long, ellipsised names from widening the editor's content
+   (their full width would otherwise count as the content's minimum width). */
+.concept-rows-panel { white-space: normal; contain: inline-size; }
 .concept-row-body .cm-editor { font-size: inherit; outline: none; background: transparent; }
 .concept-row-body .cm-scroller { font-family: inherit; line-height: 1.5; overflow: visible; }
 .concept-row-body .cm-content { padding: 0; }

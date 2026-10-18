@@ -181,10 +181,11 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
     }
   }, [metadata, folderDocs, getActor, path, rule, folder, target]);
 
-  const cardProps = (key: string, entry: RowEntry, about: string, aboutName: string) => ({
+  const cardProps = (key: string, entry: RowEntry, about: string, aboutName: string, keyword: string) => ({
     entry,
     target: about,
     targetName: aboutName,
+    targetKeyword: keyword,
     section: rule.section,
     metadata,
     canEdit,
@@ -263,7 +264,7 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
             return (
               <ConceptRowCard
                 key={key}
-                {...cardProps(key, entry, target, targetName)}
+                {...cardProps(key, entry, target, targetName, rule.openedLabel)}
                 articleRows={rule.articleContext ? articleRows : undefined}
                 autoEdit={autoEdit === key}
                 onAutoEdited={clearAutoEdit}
@@ -293,13 +294,13 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
           )}
           {groups.articleOnly.map((article) => (
             <div key={article.articleId} className="mt-2 border-t border-gray-200 pt-1.5" data-testid="concept-context-group">
-              <div className="px-2 pb-0.5 text-xs text-gray-400">
+              <div className="truncate px-2 pb-0.5 text-xs text-gray-400" title={`Only linked to Article: ${article.articleName}`}>
                 Only linked to Article: {article.articleName}
               </div>
               {article.rows.map((entry) => (
                 <ConceptRowCard
                   key={articleKey(article.articleId, entry)}
-                  {...cardProps(articleKey(article.articleId, entry), entry, article.articleId, article.articleName)}
+                  {...cardProps(articleKey(article.articleId, entry), entry, article.articleId, article.articleName, 'Article')}
                   context
                   onAddForLens={canEdit && !busy ? () => void addRow({ id: entry.conceptId }, entry.body) : undefined}
                 />

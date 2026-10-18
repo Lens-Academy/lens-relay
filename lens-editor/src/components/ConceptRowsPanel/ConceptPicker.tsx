@@ -94,11 +94,11 @@ export function ConceptPicker({
             className={`flex cursor-pointer items-baseline gap-2 px-2 py-1 text-sm ${i === active ? 'bg-indigo-50' : ''} ${option.kind === 'existing' && option.concept.taken ? 'cursor-default text-gray-400' : 'text-gray-700'}`}
           >
             {option.kind === 'new'
-              ? <span>Create new concept <span className="font-medium">“{option.name}”</span></span>
+              ? <span className="min-w-0 truncate" title={option.name}>Create new concept <span className="font-medium">“{option.name}”</span></span>
               : (
                 <>
-                  <span>{option.concept.name}</span>
-                  {option.concept.taken && <span className="ml-auto text-xs">already has a row</span>}
+                  <span className="min-w-0 truncate" title={option.concept.name}>{option.concept.name}</span>
+                  {option.concept.taken && <span className="ml-auto shrink-0 text-xs">already has a row</span>}
                 </>
               )}
           </li>
