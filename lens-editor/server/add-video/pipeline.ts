@@ -15,11 +15,18 @@ import {
   updateRelayDoc,
   upsertRelayDocReturningId,
   readRelayDocText,
+  readRelayDocAtPath,
   replaceRelayBlob,
   relayTranscriptFolder,
   editorOpenUrl,
 } from "./relay-docs";
 import { maybeCreateLens } from "../lens-doc";
+import { ARTICLE_DISCUSSION_PROMPT } from "../add-article/export";
+import {
+  parsePromotableStub,
+  splitImportedDoc,
+  VIDEO_STUB,
+} from "../add-article/stub";
 
 const WORK_BASE = "/tmp/transcripts";
 const TIMEOUT_MS = 1_200_000; // 20 minutes
@@ -44,6 +51,9 @@ export interface VideoImportOptions {
    *  replaced in place, and only once the cleanup and alignment have both
    *  succeeded. Unset for a first import. */
   replaceExisting?: { mdPath: string };
+  /** Fill in the video stub at this relay path: the transcript is written
+   *  under the notes people added to the stub, which are kept. */
+  stubPath?: string;
 }
 
 /**
@@ -57,7 +67,7 @@ export async function importVideo(
   createdAt: string,
   opts: VideoImportOptions = {},
 ): Promise<{ mdPath: string }> {
-  const { createLens = true, signal, onStage, onRelayUrl, replaceExisting } = opts;
+  const { createLens = true, signal, onStage, onRelayUrl, replaceExisting, stubPath } = opts;
   const setStage = (stage: string) => {
     signal?.throwIfAborted();
     onStage?.(stage);
@@ -68,6 +78,7 @@ export async function importVideo(
   // since): embeds and the lens resolve through it.
   const mdPath =
     replaceExisting?.mdPath ??
+    stubPath ??
     `${relayFolder}/${generateFilenameBase(payload.channel, payload.title)}.md`;
   const jsonPath = mdPath.replace(/\.md$/i, ".timestamps.json");
   onRelayUrl?.(editorOpenUrl(mdPath));
@@ -89,15 +100,27 @@ export async function importVideo(
     const publishedWords = plainText.trim().split(/\s+/);
 
     const hasTranscript = originalWords.length > 0;
+    // The discussion area above the transcript; a stub's notes replace the
+    // prompt when the transcript is filled in under them.
+    let discussion: { discussionBlocks: string; tags?: string[] } = {
+      discussionBlocks: ARTICLE_DISCUSSION_PROMPT,
+    };
     const transcriptMarkdown = (body: string) =>
       generateMarkdown({
         title: payload.title,
         channel: payload.channel,
         url: payload.url,
+        ...discussion,
         body: hasTranscript
           ? body
           : "*This video has no captions on YouTube, so no transcript could be imported.*",
       });
+    // A file people may have edited since the importer wrote it, with its body
+    // (the transcript) replaced: their frontmatter and %% notes stay.
+    const withBody = (current: string, body: string): string | null => {
+      const split = splitImportedDoc(current);
+      return split ? `${split.head}\n\n${body.trim()}\n` : null;
+    };
     const sidecarJson = (words: TimestampedWord[]) =>
       JSON.stringify(generateTimestampsJson(words), null, 2);
     // Auto-create a lens wrapping the transcript (Asana 1215689584721257),
@@ -184,12 +207,25 @@ export async function importVideo(
         final = cleaned;
       }
       setStage("writing");
+      // Notes people wrote above the old transcript survive the re-import:
+      // read them only now, after the cleanup, so recent ones are kept too.
+      let existing: string | null;
+      try {
+        existing = await readRelayDocAtPath(mdPath, signal);
+      } catch (readErr) {
+        throw new Error(
+          `Could not read the existing transcript at ${mdPath}, so nothing was changed. Try again. (${readErr})`,
+        );
+      }
+      const content =
+        (existing && splitImportedDoc(existing)?.hasComments && withBody(existing, final.text)) ||
+        transcriptMarkdown(final.text);
       // Timings first, then the text. A failure between the two leaves the
       // timings describing text the document does not hold yet, so it is
       // reported as exactly that rather than as a generic failure.
       await replaceRelayBlob(jsonPath, sidecarJson(final.words), signal);
       try {
-        await upsertRelayDocReturningId(mdPath, transcriptMarkdown(final.text), signal);
+        await upsertRelayDocReturningId(mdPath, content, signal);
       } catch (writeErr) {
         throw new Error(
           `The timings in ${jsonPath} were replaced, but writing the transcript text to ${mdPath} failed, so the two no longer match. Re-import the video again to bring them back in step. (${writeErr})`,
@@ -206,6 +242,21 @@ export async function importVideo(
     //    its lens land now, and the cleanup pass (if any) edits them
     //    afterwards.
     setStage("publishing");
+    if (stubPath) {
+      // Read the stub only now, so notes added while the transcript was
+      // fetched are kept.
+      const stub = await readRelayDocAtPath(mdPath, signal);
+      if (stub === null) {
+        throw new Error(
+          `The video stub ${mdPath} disappeared while importing. Nothing was written; retry the import.`,
+        );
+      }
+      const parsed = parsePromotableStub(stub, mdPath, VIDEO_STUB);
+      discussion = {
+        discussionBlocks: parsed.discussionBlocks || ARTICLE_DISCUSSION_PROMPT,
+        tags: parsed.extraTags.length ? parsed.extraTags : undefined,
+      };
+    }
     // A video without captions still gets its document and lens: those are
     // what let it be referenced from course content, and neither depends on
     // having a transcript.
@@ -258,11 +309,12 @@ export async function importVideo(
         return null;
       }
       const aligned = cleaned.words;
-      const finalMd = transcriptMarkdown(cleaned.text);
 
       // Readers can open and edit the transcript while the cleanup runs, and
       // a relay write replaces the whole document -- so only apply the cleanup
-      // if the document is still exactly what we published.
+      // while the transcript itself is still exactly what we published. Edits
+      // above it (frontmatter, %% notes) are kept: the cleaned transcript is
+      // written under them.
       // One retry: a transient relay hiccup must not quietly downgrade this
       // guard into "overwrite and hope".
       let current: string | null = null;
@@ -281,13 +333,24 @@ export async function importVideo(
       // replaces the whole document, so an edit landing between this read and
       // the write below is still lost. That window is seconds rather than the
       // minutes the cleanup itself takes.
-      if (current !== null && current.trim() !== publishedContent.trim()) {
+      // Unreadable: skip the cleanup rather than write over notes we could
+      // not see. The published transcript is complete without it.
+      if (current === null) {
         console.warn(
-          `[add-video] "${payload.title}" was edited while the cleanup ran — keeping the edited document`,
+          `[add-video] "${payload.title}" could not be re-read — keeping the published transcript`,
+        );
+        onStage?.("polish-skipped-doc-unreadable");
+        return null;
+      }
+      const now = splitImportedDoc(current);
+      if (!now || now.body !== splitImportedDoc(publishedContent)?.body) {
+        console.warn(
+          `[add-video] "${payload.title}"'s transcript was edited while the cleanup ran — keeping the edited document`,
         );
         onStage?.("polish-skipped-doc-edited");
         return null;
       }
+      const finalMd = withBody(current, cleaned.text)!;
 
       setStage("writing");
       await updateRelayDoc(mdPath, publishedContent, finalMd, signal);

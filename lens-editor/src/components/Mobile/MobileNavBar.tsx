@@ -50,7 +50,7 @@ export function MobileNavBar({ onOpenQuickSwitcher }: MobileNavBarProps) {
     ...(access.review ? [{ label: 'Review suggestions', action: () => navigate('/review') }] : []),
     ...(access.recent ? [{ label: 'Recent changes', action: () => navigate('/recent') }] : []),
     ...(access.promote ? [{ label: 'Promote to production', action: () => navigate('/promote') }] : []),
-    ...(access.addSource ? [{ label: 'Add source', action: () => navigate('/add-article') }] : []),
+    ...(access.addSource ? [{ label: 'Add source', action: () => navigate('/add-source') }] : []),
   ];
 
   const btnClass = 'flex-1 flex items-center justify-center h-12 text-gray-500 active:text-gray-800 active:bg-gray-100';

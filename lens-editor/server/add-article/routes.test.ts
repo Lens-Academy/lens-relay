@@ -259,16 +259,20 @@ describe("POST /api/add-article", () => {
     expect(mockQueue.add).not.toHaveBeenCalled();
   });
 
-  it("marks youtube stub imports invalid without queueing them", async () => {
+  it("queues youtube stub imports", async () => {
     const resp = await post({
       urls: ["https://youtu.be/Nl7-bRFSZBs"],
       importMode: "stub",
     });
     expect(resp.status).toBe(200);
     const data = await resp.json();
-    expect(data.results[0].status).toBe("invalid");
-    expect(data.results[0].error).toContain("stub");
-    expect(mockQueue.add).not.toHaveBeenCalled();
+    expect(data.results[0].status).toBe("queued");
+    expect(mockQueue.add).toHaveBeenCalledWith(
+      "https://youtu.be/Nl7-bRFSZBs",
+      "stub",
+      undefined,
+      { replaceExisting: false },
+    );
   });
 
   it("dedupes urls within one request", async () => {

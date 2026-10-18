@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { toJson3Url, pickCaptionTrack } from "./fetch-transcript";
+import { describe, it, expect, vi, afterEach } from "vitest";
+
+const fetchMock = vi.hoisted(() => vi.fn());
+vi.mock("../fetch-timeout", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../fetch-timeout")>()),
+  fetchBytesWithTimeout: fetchMock,
+}));
+
+import { toJson3Url, pickCaptionTrack, fetchYouTubeVideoMeta } from "./fetch-transcript";
 
 describe("toJson3Url", () => {
   // fmt is not covered by the URL signature (sparams), so rewriting it is the
@@ -74,5 +81,47 @@ describe("pickCaptionTrack track kind", () => {
       pickCaptionTrack([{ languageCode: "en-GB" }, { languageCode: "en" }])
         .languageCode,
     ).toBe("en");
+  });
+});
+
+describe("fetchYouTubeVideoMeta", () => {
+  afterEach(() => fetchMock.mockReset());
+  const input = { video_id: "pYXy-A4siMw", url: "https://youtu.be/pYXy-A4siMw" };
+  const reply = (status: number, body: unknown) => ({
+    ok: status === 200,
+    status,
+    bytes: new TextEncoder().encode(JSON.stringify(body)),
+  });
+
+  it("reads the title and channel from oEmbed, without the player API", async () => {
+    fetchMock.mockResolvedValue(
+      reply(200, { title: "Intro to AI Safety, Remastered", author_name: "Robert Miles AI Safety " }),
+    );
+
+    await expect(fetchYouTubeVideoMeta(input)).resolves.toEqual({
+      title: "Intro to AI Safety, Remastered",
+      channel: "Robert Miles AI Safety",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      "oembed?url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DpYXy-A4siMw",
+    );
+  });
+
+  it("falls back to the player API when oEmbed has no answer", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes("oembed")
+        ? reply(401, {})
+        : reply(200, {
+            playabilityStatus: { status: "OK" },
+            videoDetails: { title: "From the player", author: "Channel" },
+          }),
+    );
+
+    await expect(fetchYouTubeVideoMeta(input)).resolves.toEqual({
+      title: "From the player",
+      channel: "Channel",
+    });
   });
 });

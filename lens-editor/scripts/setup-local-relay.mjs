@@ -495,7 +495,7 @@ See [[../Course Notes]] for course material and [[../Syllabus]] for the schedule
   },
   {
     // Real "Lens Edu" folder UUID — matches relay.toml / relay.local.toml.example
-    // and the EDU_FOLDER the editor gates /add-article and /add-video on. Seeding
+    // and the EDU_FOLDER the editor gates /add-source on. Seeding
     // it locally means imported articles have a real folder to land in, so the
     // import features can be tested end-to-end without dev R2 access.
     id: 'ea4015da-24af-4d9d-ac49-8c902cb17121',
@@ -520,14 +520,14 @@ author:
 source_url: "https://example.com/sample"
 published: 2024-01-01
 created: 2024-01-01
-description: "A placeholder article so the Lens Edu/articles folder is non-empty. Import a real one from /add-article."
+description: "A placeholder article so the Lens Edu/articles folder is non-empty. Import a real one from /add-source."
 tags:
   - "article-importer"
 ---
 
 This is a sample article in the **Lens Edu/articles** folder.
 
-Go to [/add-article](/add-article) (with an edit-scoped share token for the Lens Edu or all-folders scope) to import a real web article into this folder.
+Go to [/add-source](/add-source) (with an edit-scoped share token for the Lens Edu or all-folders scope) to import a real web article into this folder.
 `,
       },
       {

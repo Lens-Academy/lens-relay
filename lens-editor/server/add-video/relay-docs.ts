@@ -168,6 +168,16 @@ export async function resolveRelayDocIdByPath(
   return filemeta_uuid ? `${relayId}-${filemeta_uuid}` : null;
 }
 
+/** The current markdown of the file at a full path, or null when no file is
+ *  there. */
+export async function readRelayDocAtPath(
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const docId = await resolveRelayDocIdByPath(filePath, signal);
+  return docId ? readRelayDocText(docId, signal) : null;
+}
+
 /** Create a new document in Relay */
 export async function createRelayDoc(
   filePath: string,
