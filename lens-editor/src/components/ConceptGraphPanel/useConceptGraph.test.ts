@@ -4,6 +4,7 @@ import { createElement, type ReactNode } from 'react';
 import * as Y from 'yjs';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import { __embedDocsTesting } from '../../lib/embed-docs';
+import { MAX_CHILD_CANDIDATES, MAX_COUNT_FILES, MAX_FILES } from '../../lib/concept-graph';
 import { useConceptGraph } from './useConceptGraph';
 
 afterEach(() => {
@@ -55,9 +56,9 @@ describe('useConceptGraph', () => {
       { wrapper },
     );
     await waitFor(() => expect(result.current.ancestors.main).toEqual(['control', 'protocols']));
-    await waitFor(() => expect(result.current.below.pending).toEqual([]));
-    expect(result.current.below.kids.get('low')).toEqual(['tm']); // not high (text link), not the article
-    expect(result.current.below.kids.get('tm')).toEqual([]);
+    await waitFor(() => expect(result.current.below.counts.has('tm')).toBe(true));
+    expect(result.current.below.children).toEqual(['tm']); // not high (text link), not the article
+    expect(result.current.below.counts.get('tm')).toEqual({ count: 0, more: false });
 
     // Typing outside the frontmatter keeps the same parents object (no recompute).
     const before = result.current.own;
@@ -69,5 +70,53 @@ describe('useConceptGraph', () => {
     ytext.insert(ytext.toString().indexOf('---\n# x'), '  - "[[Monitoring]]"\n');
     await waitFor(() => expect(result.current.own.parents).toEqual(['protocols', 'mon']));
     expect(new Set(result.current.ancestors.nodes)).toEqual(new Set(['protocols', 'control', 'mon']));
+  });
+
+  it('reads a capped number of files in a large folder, and nothing below while collapsed', async () => {
+    // 300 concepts under "hub", each with 3 children of its own.
+    const texts = new Map<string, string>();
+    const metadata: Record<string, ReturnType<typeof md>> = { '/Lens Edu/Concepts/Hub.md': md('hub') };
+    const folder = new Y.Doc();
+    const backlinks = folder.getMap<string[]>('backlinks_v0');
+    const spokes: string[] = [];
+    for (let i = 0; i < 300; i++) {
+      const s = `s${i}`;
+      spokes.push(s);
+      metadata[`/Lens Edu/Concepts/S${i}.md`] = md(s);
+      texts.set(s, fm('Hub'));
+      const kids: string[] = [];
+      for (let j = 0; j < 3; j++) {
+        const k = `k${i}_${j}`;
+        kids.push(k);
+        metadata[`/Lens Edu/Concepts/K${i}_${j}.md`] = md(k);
+        texts.set(k, fm(`S${i}`));
+      }
+      backlinks.set(s, kids);
+    }
+    backlinks.set('hub', spokes);
+    const read = new Set<string>();
+    __embedDocsTesting.setReader(async (fullId) => {
+      const key = fullId.slice(fullId.lastIndexOf('-') + 1);
+      read.add(key);
+      return texts.get(key) ?? '';
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(NavigationContext.Provider, {
+      value: { metadata, folderDocs: new Map([['Lens Edu', folder]]), folderNames: ['Lens Edu'], errors: new Map(), onNavigate: vi.fn(), justCreatedRef: { current: false } },
+    }, children);
+    const ytext = new Y.Doc().getText('contents');
+    ytext.insert(0, '# Hub\n');
+
+    const collapsed = renderHook(() => useConceptGraph('hub', '/Lens Edu/Concepts/Hub.md', ytext, false), { wrapper });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(read.size).toBe(0);
+    collapsed.unmount();
+
+    const { result } = renderHook(() => useConceptGraph('hub', '/Lens Edu/Concepts/Hub.md', ytext, true), { wrapper });
+    await waitFor(() => expect(result.current.below.pendingCounts).toBe(0));
+    await waitFor(() => expect(result.current.below.counts.size).toBeGreaterThan(0));
+    expect(result.current.below.candidatesCut).toBe(300 - MAX_CHILD_CANDIDATES);
+    expect(result.current.below.children).toHaveLength(MAX_CHILD_CANDIDATES);
+    expect(read.size).toBe(MAX_CHILD_CANDIDATES + MAX_COUNT_FILES);
+    expect(read.size).toBeLessThanOrEqual(MAX_FILES);
   });
 });

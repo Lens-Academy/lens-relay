@@ -16,8 +16,8 @@
  * per "concept graph rules v1 #N". Format and rules:
  * docs/concept-relationships.md, "Concept graph".
  *
- * Every walk is capped (MAX_DEPTH levels, MAX_NODES files) and never visits a
- * file twice, so cycles (invalid content) never hang it.
+ * Every walk is capped (MAX_DEPTH levels; MAX_ANCESTORS, MAX_CHILD_CANDIDATES,
+ * MAX_COUNT_FILES and MAX_FILES files) and never visits a file twice, so cycles (invalid content) never hang it.
  */
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 import { resolvePageName } from './document-resolver';
@@ -28,8 +28,12 @@ export const CONCEPTS_FOLDER = '/Lens Edu/Concepts/';
 export const PARENTS_KEY = 'parent-concepts';
 /** Levels followed upward (ancestors) or downward (descendants). */
 export const MAX_DEPTH = 20;
-/** Concept files visited by the walk below (for "+N" counts), besides the opened one. */
-export const MAX_NODES = 200;
+/** Backlinkers of the opened concept read when looking for its children. */
+export const MAX_CHILD_CANDIDATES = 80;
+/** Backlinkers of its children read, in all, to count their children ("+N"). */
+export const MAX_COUNT_FILES = 50;
+/** Concept files read for one header (ancestors, children, counts). */
+export const MAX_FILES = 200;
 /** Ancestors walked and drawn. */
 export const MAX_ANCESTORS = 30;
 /** Children drawn (the lists show them all). */
@@ -146,8 +150,10 @@ export function sameParents(a: ResolvedParents, b: ResolvedParents): boolean {
 export type ParentsOf = (id: string) => ResolvedParents | undefined;
 
 /** First parents followed upward from `start`, top-level concept first, the
- *  direct parent last (`start` left out); stops at a repeat or at a file
- *  `allowed` rejects. */
+ *  direct parent last (`start` left out); stops at a repeat, after MAX_DEPTH
+ *  steps, at a file not read, or at one `allowed` rejects (the ancestor walk
+ *  passes the files it reached). The relay's `main_path` stops the same way:
+ *  its unread files have no parents. */
 export function mainPath(start: string, parentsOf: ParentsOf, allowed: (id: string) => boolean = () => true): string[] {
   const path: string[] = [];
   const seen = new Set([start]);
@@ -260,83 +266,84 @@ export function childrenOf(id: string, candidates: readonly string[], parentsOf:
   return out;
 }
 
+/** A child's "+N": how many children it has, and whether there may be more
+ *  below them (a grandchild that other concepts link to, or a cap). */
+export interface ChildCount {
+  count: number;
+  more: boolean;
+}
+
 export interface Below {
-  /** Children (sorted by name) of every concept the walk expanded. */
-  kids: Map<string, string[]>;
-  /** A cap (depth or files) cut the walk. */
-  cut: boolean;
-  /** Reached the opened file again (a cycle through it). */
+  /** Direct children, sorted by name. */
+  children: string[];
+  /** Each child's count, once its backlinkers are read. */
+  counts: Map<string, ChildCount>;
+  /** Backlinkers of the opened file not read (over MAX_CHILD_CANDIDATES). */
+  candidatesCut: number;
+  /** A child links back to the opened file as its parent (a cycle). */
   cycle: boolean;
-  /** Files still to read. */
-  pending: string[];
+  /** Files to read: the opened file's backlinkers, then the children's
+   *  (MAX_COUNT_FILES in all). */
+  reads: string[];
+  /** Of `reads`, those not read yet, for the children; for the counts. */
+  pendingChildren: number;
+  pendingCounts: number;
 }
 
 /**
- * Everything below `start`, breadth-first over `candidatesOf` (backlinkers in
- * the concepts folder) filtered by `parentsOf`, within MAX_DEPTH levels and
- * MAX_NODES files. Each concept is expanded once.
+ * Two levels below `start`, cheaply: its children (backlinkers in the
+ * concepts folder whose parents include it, MAX_CHILD_CANDIDATES read), and
+ * for each child the number of its own children, reading at most
+ * MAX_COUNT_FILES of their backlinkers in all. Deeper levels are only hinted
+ * at (`more`), from the backlinks index, without reading anything.
  */
-export function walkBelow(
+export function belowTwoLevels(
   start: string,
   candidatesOf: (id: string) => readonly string[],
   parentsOf: ParentsOf,
   nameOf: (id: string) => string,
 ): Below {
-  const out: Below = { kids: new Map(), cut: false, cycle: false, pending: [] };
-  const depth = new Map<string, number>([[start, 0]]);
-  const queue = [start];
-  while (queue.length) {
-    const id = queue.shift()!;
-    const found = childrenOf(id, candidatesOf(id), parentsOf);
-    out.pending.push(...found.pending);
-    const kids = found.ids.filter((k) => {
-      if (k === start) out.cycle = true;
-      return k !== start;
-    });
-    kids.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
-    out.kids.set(id, kids);
-    for (const k of kids) {
-      if (depth.has(k)) continue;
-      if (depth.get(id)! + 1 > MAX_DEPTH || depth.size > MAX_NODES) {
-        out.cut = true;
-        continue;
-      }
-      depth.set(k, depth.get(id)! + 1);
-      queue.push(k);
-    }
+  const all = candidatesOf(start).filter((c) => c !== start);
+  const own = all.slice(0, MAX_CHILD_CANDIDATES);
+  const found = childrenOf(start, own, parentsOf);
+  const out: Below = {
+    children: found.ids.sort((a, b) => nameOf(a).localeCompare(nameOf(b))),
+    counts: new Map(),
+    candidatesCut: all.length - own.length,
+    cycle: false,
+    reads: [...own],
+    pendingChildren: found.pending.length,
+    pendingCounts: 0,
+  };
+  let budget = MAX_COUNT_FILES;
+  for (const child of out.children) {
+    const cands = candidatesOf(child).filter((c) => c !== child);
+    const taken = cands.slice(0, budget);
+    budget -= taken.length;
+    for (const c of taken) if (!out.reads.includes(c)) out.reads.push(c);
+    const kids = childrenOf(child, taken, parentsOf);
+    if (kids.ids.includes(start)) out.cycle = true;
+    const grandkids = kids.ids.filter((k) => k !== start);
+    out.pendingCounts += kids.pending.length;
+    if (kids.pending.length) continue;
+    const deeper = grandkids.some((g) => candidatesOf(g).some((c) => c !== g && c !== child && c !== start));
+    out.counts.set(child, { count: grandkids.length, more: taken.length < cands.length || deeper });
   }
   return out;
 }
 
-/** Distinct concepts below `id` in `kids` (the opened file `start` left out);
- *  `cut` when the walk did not expand all of them. */
-export function countBelow(id: string, kids: ReadonlyMap<string, readonly string[]>, start: string): { count: number; cut: boolean } {
-  const seen = new Set<string>([id, start]);
-  const queue = [id];
-  let cut = false;
-  while (queue.length) {
-    const cur = queue.shift()!;
-    const next = kids.get(cur);
-    if (!next) {
-      if (cur !== id) cut = true;
-      continue;
-    }
-    for (const k of next) {
-      if (seen.has(k)) continue;
-      seen.add(k);
-      queue.push(k);
-    }
-  }
-  return { count: seen.size - (id === start ? 1 : 2), cut };
+/** "+N", "+N+" (maybe more below), or "" for none. */
+export function countLabel(count: ChildCount | undefined): string {
+  if (!count || (count.count === 0 && !count.more)) return '';
+  return `+${count.count}${count.more ? '+' : ''}`;
 }
 
 /** A node of the drawn graph. */
 export interface GraphNode {
   id: string;
   kind: 'ancestor' | 'self' | 'child' | 'more';
-  /** Distinct concepts below a child (`countBelow`), for its "+N". */
-  count?: number;
-  countCut?: boolean;
+  /** A child's "+N" (`belowTwoLevels`); undefined while counting. */
+  count?: ChildCount;
   /** For the 'more' node: children not drawn. */
   more?: number;
 }
@@ -368,10 +375,9 @@ export function graphData(
   for (const id of up) {
     for (const p of parentsOf(id)?.parents ?? []) if (up.has(p)) edges.push({ from: p, to: id });
   }
-  const kids = (below.kids.get(start) ?? []).filter((k) => !up.has(k));
+  const kids = below.children.filter((k) => !up.has(k));
   for (const k of kids.slice(0, MAX_CHILDREN_DRAWN)) {
-    const { count, cut } = countBelow(k, below.kids, start);
-    nodes.push({ id: k, kind: 'child', count, countCut: cut || below.cut });
+    nodes.push({ id: k, kind: 'child', count: below.counts.get(k) });
     edges.push({ from: start, to: k });
   }
   if (kids.length > MAX_CHILDREN_DRAWN) {

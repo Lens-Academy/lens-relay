@@ -92,7 +92,7 @@ describe('ConceptGraphPanel', () => {
   it('a top-level concept says so, and shows its children with "+N"', async () => {
     renderPanel('control', texts.control);
     expect(screen.getByTestId('concept-graph-parents').textContent).toContain('none (top-level concept)');
-    await waitFor(() => expect(screen.getByTestId('concept-graph-children').textContent).toMatch(/Control protocols\+3/));
+    await waitFor(() => expect(screen.getByTestId('concept-graph-children').textContent).toMatch(/Control protocols\+2\+/));
   });
 
   it('unresolved parents: "none resolved" and a red note, not "top-level"', async () => {

@@ -37,8 +37,8 @@ const PARENTS_KEY: &str = "parent-concepts";
 const MAX_DEPTH: usize = 20;
 /// Ancestors walked.
 const MAX_ANCESTORS: usize = 30;
-/// Concepts visited by the walk below (for the "+N below" counts).
-const MAX_NODES: usize = 200;
+/// Backlinkers of the children read, in all, to count their children.
+const MAX_COUNT_FILES: usize = 50;
 /// Backlinkers of one concept read when looking for its children.
 const MAX_CHILD_CANDIDATES: usize = 80;
 /// Concept files loaded by one `read` in all (ancestors and below).
@@ -255,7 +255,9 @@ fn build_ancestors<'a>(
 }
 
 /// First parents followed upward from `start`, top-level concept first, the
-/// direct parent last (`start` left out); stops at a repeat.
+/// direct parent last (`start` left out); stops at a repeat, after
+/// [`MAX_DEPTH`] steps, or at a file not loaded. The editor's `mainPath`
+/// stops the same way (its ancestor walk passes only the files it reached).
 fn main_path<'a>(
     start: &str,
     parents_of: impl Fn(&str) -> Option<&'a ResolvedParents>,
@@ -324,28 +326,6 @@ fn find_cycle(nodes: &[String], next: &impl Fn(&str) -> Vec<String>) -> Option<V
     None
 }
 
-/// Distinct concepts below `id` in `kids` (`start` left out); `cut` when the
-/// walk did not expand all of them.
-fn count_below(id: &str, kids: &HashMap<String, Vec<String>>, start: &str) -> (usize, bool) {
-    let mut seen: HashSet<&str> = HashSet::from([id, start]);
-    let mut queue = VecDeque::from([id]);
-    let mut cut = false;
-    while let Some(cur) = queue.pop_front() {
-        let Some(next) = kids.get(cur) else {
-            if cur != id {
-                cut = true;
-            }
-            continue;
-        };
-        for k in next {
-            if seen.insert(k.as_str()) {
-                queue.push_back(k.as_str());
-            }
-        }
-    }
-    (seen.len() - if id == start { 1 } else { 2 }, cut)
-}
-
 // ---------------------------------------------------------------------------
 // Loading and rendering
 // ---------------------------------------------------------------------------
@@ -407,80 +387,99 @@ impl GraphLoader<'_> {
     }
 }
 
-/// Everything below the read file: the children of each concept reached.
+/// A child's "+N below": how many children it has, and whether there may be
+/// more below them (a grandchild that other concepts link to, or a cap).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ChildCount {
+    count: usize,
+    more: bool,
+}
+
+/// Two levels below the read file.
 struct Below {
-    kids: HashMap<String, Vec<String>>,
-    cut: bool,
+    /// Direct children with their counts.
+    children: Vec<(String, ChildCount)>,
     cycle: bool,
     /// Concept files linking to the read file that were not read (over
     /// [`MAX_CHILD_CANDIDATES`]).
     candidates_over_cap: usize,
 }
 
-/// Breadth-first below `start`: each concept's backlinkers in the concepts
-/// folder ([`MAX_CHILD_CANDIDATES`] at most), kept when their parents
-/// include it, within [`MAX_DEPTH`] levels and [`MAX_NODES`] concepts.
-async fn walk_below(
+/// The backlinkers of `id` in the concepts folder, without itself.
+async fn candidates_of(server: &Arc<Server>, folder_doc_id: &str, id: &str) -> Vec<String> {
+    concepts_linking_to(server, folder_doc_id, id)
+        .await
+        .into_iter()
+        .map(|(c, _)| c)
+        .filter(|c| c != id)
+        .collect()
+}
+
+/// Two levels below `start`, cheaply (the editor's `belowTwoLevels`): its
+/// children (backlinkers whose parents include it, [`MAX_CHILD_CANDIDATES`]
+/// read), and for each child the number of its own children, reading at most
+/// [`MAX_COUNT_FILES`] of their backlinkers in all. Deeper levels are only
+/// hinted at (`more`) from the backlinks index, without loading anything.
+async fn below_two_levels(
     server: &Arc<Server>,
     loader: &mut GraphLoader<'_>,
     folder_doc_id: &str,
     start: &str,
 ) -> Below {
-    let mut out = Below {
-        kids: HashMap::new(),
-        cut: false,
-        cycle: false,
-        candidates_over_cap: 0,
+    let mut own = candidates_of(server, folder_doc_id, start).await;
+    let candidates_over_cap = own.len().saturating_sub(MAX_CHILD_CANDIDATES);
+    own.truncate(MAX_CHILD_CANDIDATES);
+    loader.load(&own).await;
+    let is_child_of = |loader: &GraphLoader<'_>, c: &str, of: &str| {
+        loader
+            .parents
+            .get(c)
+            .is_some_and(|p| p.parents.iter().any(|x| x == of))
     };
-    let mut depth: HashMap<String, usize> = HashMap::from([(start.to_string(), 0)]);
-    let mut queue = VecDeque::from([start.to_string()]);
-    while let Some(id) = queue.pop_front() {
-        let mut candidates: Vec<String> = concepts_linking_to(server, folder_doc_id, &id)
-            .await
-            .into_iter()
-            .map(|(c, _)| c)
-            .collect();
-        let over = candidates.len().saturating_sub(MAX_CHILD_CANDIDATES);
-        if over > 0 {
-            if id == start {
-                out.candidates_over_cap = over;
-            } else {
-                out.cut = true;
-            }
-        }
-        candidates.truncate(MAX_CHILD_CANDIDATES);
+    let kids: Vec<String> = own
+        .into_iter()
+        .filter(|c| is_child_of(loader, c, start))
+        .collect();
+    let mut out = Below {
+        children: Vec::new(),
+        cycle: false,
+        candidates_over_cap,
+    };
+    let mut budget = MAX_COUNT_FILES;
+    for child in kids {
+        let candidates = candidates_of(server, folder_doc_id, &child).await;
+        let taken: Vec<String> = candidates.iter().take(budget).cloned().collect();
+        budget -= taken.len();
         let unread_before = loader.unread;
-        loader.load(&candidates).await;
-        if loader.unread > unread_before {
-            out.cut = true;
-        }
-        let mut kids: Vec<String> = Vec::new();
-        for c in candidates {
-            if !loader
-                .parents
-                .get(&c)
-                .is_some_and(|p| p.parents.contains(&id))
-            {
+        loader.load(&taken).await;
+        let mut grandkids = Vec::new();
+        for c in &taken {
+            if !is_child_of(loader, c, &child) {
                 continue;
             }
             if c == start {
                 out.cycle = true;
-                continue;
+            } else {
+                grandkids.push(c.clone());
             }
-            kids.push(c);
         }
-        for k in &kids {
-            if depth.contains_key(k) {
-                continue;
+        let mut more = taken.len() < candidates.len() || loader.unread > unread_before;
+        for g in &grandkids {
+            if more {
+                break;
             }
-            if depth[&id] + 1 > MAX_DEPTH || depth.len() > MAX_NODES {
-                out.cut = true;
-                continue;
-            }
-            depth.insert(k.clone(), depth[&id] + 1);
-            queue.push_back(k.clone());
+            more = candidates_of(server, folder_doc_id, g)
+                .await
+                .iter()
+                .any(|c| c != &child && c != start);
         }
-        out.kids.insert(id, kids);
+        out.children.push((
+            child,
+            ChildCount {
+                count: grandkids.len(),
+                more,
+            },
+        ));
     }
     out
 }
@@ -527,7 +526,7 @@ pub(crate) async fn concept_graph_block(
         }
         loader.load(&a.pending).await;
     };
-    let below = walk_below(server, &mut loader, folder_doc_id, uuid).await;
+    let below = below_two_levels(server, &mut loader, folder_doc_id, uuid).await;
 
     let mut out = String::new();
     if own.parents.is_empty() {
@@ -564,25 +563,18 @@ pub(crate) async fn concept_graph_block(
             CONCEPTS_FOLDER.trim_end_matches('/')
         ));
     }
-    let mut children: Vec<(String, usize, bool)> = below
-        .kids
-        .get(uuid)
-        .map(|kids| {
-            kids.iter()
-                .map(|k| {
-                    let (n, cut) = count_below(k, &below.kids, uuid);
-                    (path_of(server, k), n, cut || below.cut)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    children.sort_by_key(|(p, _, _)| p.to_lowercase());
+    let mut children: Vec<(String, ChildCount)> = below
+        .children
+        .iter()
+        .map(|(k, n)| (path_of(server, k), *n))
+        .collect();
+    children.sort_by_key(|(p, _)| p.to_lowercase());
     if !children.is_empty() {
         out.push_str("Child concepts:\n");
-        for (p, n, cut) in &children {
-            let count = match (*n, *cut) {
+        for (p, n) in &children {
+            let count = match (n.count, n.more) {
                 (0, false) => String::new(),
-                (n, cut) => format!(" (+{n}{} below)", if cut { "+" } else { "" }),
+                (c, more) => format!(" (+{c}{} below)", if more { "+" } else { "" }),
             };
             out.push_str(&format!("  - {p}{count}\n"));
         }
@@ -816,25 +808,6 @@ mod tests {
         let g = graph(&[("A", &["B"])]);
         assert_eq!(build_ancestors("A", |id| g.get(id)).pending, ids(&["B"]));
     }
-
-    #[test]
-    fn counts_distinct_concepts_below() {
-        let kids: HashMap<String, Vec<String>> = [
-            ("start", vec!["b", "c"]),
-            ("b", vec!["d"]),
-            ("c", vec!["d"]),
-            ("d", vec![]),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
-        .collect();
-        assert_eq!(count_below("start", &kids, "start"), (3, false));
-        assert_eq!(count_below("b", &kids, "start"), (1, false));
-        // "e" was never expanded: the count may be higher.
-        let mut cut = kids.clone();
-        cut.insert("d".into(), vec!["e".into()]);
-        assert_eq!(count_below("b", &cut, "start"), (2, true));
-    }
 }
 
 #[cfg(test)]
@@ -996,7 +969,7 @@ mod read_tests {
             "got: {b}"
         );
         assert!(
-            b.contains("Child concepts:\n  - Lens Edu/Concepts/Control protocols.md (+3 below)\n"),
+            b.contains("Child concepts:\n  - Lens Edu/Concepts/Control protocols.md (+3+ below)\n"),
             "got: {b}"
         );
         // An article linking a concept is not its child.
@@ -1059,6 +1032,37 @@ mod read_tests {
         assert_eq!(
             b.matches("  - Lens Edu/Concepts/Spoke").count(),
             MAX_CHILD_CANDIDATES
+        );
+    }
+
+    #[tokio::test]
+    async fn child_counts_read_a_small_capped_number_of_files() {
+        let mut files = vec![
+            (
+                "/Concepts/Top.md".to_string(),
+                c(100),
+                "# Top\n".to_string(),
+            ),
+            (
+                "/Concepts/Mid.md".to_string(),
+                c(101),
+                fm(&["Top"], "# Mid\n"),
+            ),
+        ];
+        for i in 0..MAX_COUNT_FILES + 10 {
+            files.push((
+                format!("/Concepts/Leaf {i:03}.md"),
+                c(200 + i as u32),
+                fm(&["Mid"], "# Leaf\n"),
+            ));
+        }
+        let server = server_with(&files).await;
+        let out = read(&server, "Lens Edu/Concepts/Top.md", None).await;
+        assert!(
+            block(&out).contains(&format!(
+                "Child concepts:\n  - Lens Edu/Concepts/Mid.md (+{MAX_COUNT_FILES}+ below)\n"
+            )),
+            "got: {out}"
         );
     }
 

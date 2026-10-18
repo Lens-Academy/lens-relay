@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 import {
   MAX_ANCESTORS,
+  MAX_CHILD_CANDIDATES,
   MAX_CHILDREN_DRAWN,
+  MAX_COUNT_FILES,
   MAX_DEPTH,
   MORE_NODE,
+  belowTwoLevels,
   buildAncestors,
   childrenOf,
-  countBelow,
+  countLabel,
   findCycle,
   graphData,
   isConceptPath,
@@ -15,7 +18,6 @@ import {
   parseParents,
   resolveParents,
   sameParents,
-  walkBelow,
   type ParentsOf,
   type ResolvedParents,
 } from './concept-graph';
@@ -145,25 +147,40 @@ describe('children and the walk below', () => {
       .toEqual({ ids: ['child', 'second'], pending: ['unread'] });
   });
 
-  it('walks below once per concept, sorted, and counts distinct concepts', () => {
+  it('reads two levels: children, and the children of each child for its count', () => {
     const edges = { b: ['a'], c: ['a'], d: ['b', 'c'], e: ['d'] };
-    const below = walkBelow('a', candidates(edges, { a: ['mention'] }), graph(edges), names);
-    expect(below.kids.get('a')).toEqual(['b', 'c']);
-    expect(below).toMatchObject({ cut: false, cycle: false, pending: [] });
-    expect(countBelow('a', below.kids, 'a')).toEqual({ count: 4, cut: false });
-    expect(countBelow('b', below.kids, 'a')).toEqual({ count: 2, cut: false });
-    expect(countBelow('e', below.kids, 'a')).toEqual({ count: 0, cut: false });
+    const below = belowTwoLevels('a', candidates(edges, { a: ['mention'] }), graph(edges), names);
+    expect(below.children).toEqual(['b', 'c']);
+    // d has a backlinker of its own (e): there may be more below.
+    expect(below.counts.get('b')).toEqual({ count: 1, more: true });
+    expect(below.counts.get('c')).toEqual({ count: 1, more: true });
+    expect(below.reads.sort()).toEqual(['b', 'c', 'd', 'mention']);
+    expect(below).toMatchObject({ candidatesCut: 0, cycle: false, pendingChildren: 0, pendingCounts: 0 });
+    expect(countLabel(below.counts.get('b'))).toBe('+1+');
+    expect(countLabel({ count: 2, more: false })).toBe('+2');
+    expect(countLabel({ count: 0, more: false })).toBe('');
   });
 
-  it('a cycle back to the opened file is flagged, not followed; depth is capped', () => {
-    const loop = { b: ['a'], a: ['b'] };
-    expect(walkBelow('a', candidates(loop), graph(loop), names).cycle).toBe(true);
+  it('counts wait for the files they need ("counting…"), and a cycle back is flagged', () => {
+    const edges = { b: ['a'], c: ['b'] };
+    const pending = belowTwoLevels('a', candidates(edges), graph(edges, ['c']), names);
+    expect(pending.children).toEqual(['b']);
+    expect(pending.pendingCounts).toBe(1);
+    expect(pending.counts.has('b')).toBe(false);
 
-    const chain: Record<string, string[]> = {};
-    for (let i = 1; i <= 30; i++) chain[`n${i}`] = [`n${i - 1}`];
-    const below = walkBelow('n0', candidates(chain), graph(chain), names);
-    expect(below.cut).toBe(true);
-    expect(countBelow('n1', below.kids, 'n0').cut).toBe(true);
+    const loop = { b: ['a'], a: ['b'] };
+    expect(belowTwoLevels('a', candidates(loop), graph(loop), names).cycle).toBe(true);
+  });
+
+  it('caps the backlinkers read: MAX_CHILD_CANDIDATES for the file, MAX_COUNT_FILES for the counts', () => {
+    const edges: Record<string, string[]> = {};
+    for (let i = 0; i < MAX_CHILD_CANDIDATES + 20; i++) edges[`k${String(i).padStart(3, '0')}`] = ['me'];
+    for (let i = 0; i < MAX_COUNT_FILES + 30; i++) edges[`g${String(i).padStart(3, '0')}`] = ['k000'];
+    const below = belowTwoLevels('me', candidates(edges), graph(edges), names);
+    expect(below.candidatesCut).toBe(20);
+    expect(below.children).toHaveLength(MAX_CHILD_CANDIDATES);
+    expect(below.reads).toHaveLength(MAX_CHILD_CANDIDATES + MAX_COUNT_FILES);
+    expect(below.counts.get('k000')).toEqual({ count: MAX_COUNT_FILES, more: true });
   });
 });
 
@@ -172,11 +189,11 @@ describe('graphData', () => {
     const edges = { tm: ['low', 'mon', 'protocols'], low: ['protocols'], protocols: ['control'], col: ['tm'], deep: ['col'] };
     const parentsOf = graph(edges);
     const ancestors = buildAncestors('tm', parentsOf);
-    const below = walkBelow('tm', candidates(edges), parentsOf, names);
+    const below = belowTwoLevels('tm', candidates(edges), parentsOf, names);
     const { nodes, edges: drawn } = graphData('tm', ancestors, parentsOf, below);
     expect(nodes.find((n) => n.id === 'tm')?.kind).toBe('self');
     expect(nodes.filter((n) => n.kind === 'ancestor').map((n) => n.id).sort()).toEqual(['control', 'low', 'mon', 'protocols']);
-    expect(nodes.find((n) => n.id === 'col')).toMatchObject({ kind: 'child', count: 1 });
+    expect(nodes.find((n) => n.id === 'col')).toMatchObject({ kind: 'child', count: { count: 1, more: false } });
     expect(drawn).toEqual(expect.arrayContaining([
       { from: 'low', to: 'tm' }, { from: 'mon', to: 'tm' }, { from: 'protocols', to: 'tm' }, // shortcut
       { from: 'protocols', to: 'low' }, { from: 'control', to: 'protocols' }, { from: 'tm', to: 'col' },
@@ -188,7 +205,7 @@ describe('graphData', () => {
     const edges: Record<string, string[]> = {};
     for (let i = 0; i < MAX_CHILDREN_DRAWN + 3; i++) edges[`k${String(i).padStart(2, '0')}`] = ['me'];
     const parentsOf = graph(edges);
-    const { nodes } = graphData('me', buildAncestors('me', parentsOf), parentsOf, walkBelow('me', candidates(edges), parentsOf, names));
+    const { nodes } = graphData('me', buildAncestors('me', parentsOf), parentsOf, belowTwoLevels('me', candidates(edges), parentsOf, names));
     expect(nodes.filter((n) => n.kind === 'child')).toHaveLength(MAX_CHILDREN_DRAWN);
     expect(nodes.find((n) => n.id === MORE_NODE)).toMatchObject({ kind: 'more', more: 3 });
   });

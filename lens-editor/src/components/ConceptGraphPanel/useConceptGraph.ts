@@ -7,11 +7,12 @@ import { uuidToPathIndex } from '../../lib/uuid-to-path';
 import { basenameOf } from '../../lib/course-tree';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import {
+  MAX_FILES,
+  belowTwoLevels,
   buildAncestors,
   isConceptPath,
   resolveParents,
   sameParents,
-  walkBelow,
   type Ancestors,
   type Below,
   type ParentsOf,
@@ -23,8 +24,10 @@ export interface ConceptGraph {
   /** The opened file's own parents (live from its text). */
   own: ResolvedParents;
   ancestors: Ancestors;
-  /** Everything below, within the caps (children of each concept reached). */
+  /** Children and their counts; empty while the panel is collapsed. */
   below: Below;
+  /** More files were wanted than MAX_FILES. */
+  filesCut: boolean;
   /** Concept files that could not be read (counted as having no parents). */
   failed: number;
   parentsOf: ParentsOf;
@@ -102,27 +105,37 @@ export function useConceptGraph(
     const p = pathIndex.get(id);
     return p ? basenameOf(p) : id;
   }, [pathIndex]);
+  const pathOf = useCallback((id: string) => pathIndex.get(id), [pathIndex]);
 
   const ancestors = useMemo(() => buildAncestors(self, parentsOf), [self, parentsOf]);
-  const below = useMemo(() => walkBelow(self, candidatesOf, parentsOf, nameOf), [self, candidatesOf, parentsOf, nameOf]);
+  // Collapsed, the header shows only the main path: nothing below is read.
+  const below = useMemo(
+    () => (refreshing ? belowTwoLevels(self, candidatesOf, parentsOf, nameOf) : EMPTY_BELOW),
+    [refreshing, self, candidatesOf, parentsOf, nameOf],
+  );
 
-  const wanted = useMemo(() => {
-    const set = new Set<string>(ancestors.nodes);
-    for (const id of below.kids.keys()) for (const c of candidatesOf(id)) set.add(c);
-    set.delete(self);
-    return [...set].sort();
-  }, [ancestors, below, candidatesOf, self]);
+  // Ancestors first, then children, then the counts' files, at most MAX_FILES.
+  const { wanted, filesCut } = useMemo(() => {
+    const list = [...new Set([...ancestors.nodes, ...below.reads])].filter((id) => id !== self);
+    return { wanted: list.slice(0, MAX_FILES).sort(), filesCut: list.length > MAX_FILES };
+  }, [ancestors, below, self]);
   // Adjusted during render (React's "storing information from previous
   // renders"), so no extra effect pass per level.
   if (ids.join(',') !== wanted.join(',')) setIds(wanted);
 
-  return {
-    own,
-    ancestors,
-    below,
-    failed: ids.filter((id) => failed.has(id) && !texts.has(id)).length,
-    parentsOf,
-    nameOf,
-    pathOf: (id) => pathIndex.get(id),
-  };
+  const failedCount = ids.filter((id) => failed.has(id) && !texts.has(id)).length;
+  return useMemo(
+    () => ({ own, ancestors, below, filesCut, failed: failedCount, parentsOf, nameOf, pathOf }),
+    [own, ancestors, below, filesCut, failedCount, parentsOf, nameOf, pathOf],
+  );
 }
+
+const EMPTY_BELOW: Below = {
+  children: [],
+  counts: new Map(),
+  candidatesCut: 0,
+  cycle: false,
+  reads: [],
+  pendingChildren: 0,
+  pendingCounts: 0,
+};

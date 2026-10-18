@@ -153,12 +153,17 @@ Both implementations compute the graph in the same way:
   concepts, and say so when a cap cuts the walk. The main path follows first parents.
 - **Children.** These are the file's backlinks inside `Concepts/`, kept only when that
   file's own parents include this file. A plain link from another concept's text or rows
-  does not make it a child. The relay reads at most 80 backlinkers per concept, and it
-  says when more exist.
-- **"+N below".** This is the number of distinct concepts below a child. They are found
-  breadth first, at most 20 levels and 200 concepts. When a cap was hit, a `+` follows
-  the number. The relay reads at most 200 concept files per `read`, counting the ancestor
-  walk and the walk below together.
+  does not make it a child. At most 80 backlinkers are read, and the display says when
+  more exist.
+- **"+N below".** This is the number of a child's own children. It is found by reading at
+  most 50 of the children's backlinkers in all. A `+` after the number means there may be
+  more below. That is the case when a grandchild has backlinkers of its own (checked in
+  the backlinks index, without reading anything) or when the 50-file cap was reached. The
+  editor shows "counting…" until the counts are ready, and it reads nothing below while
+  the header is collapsed.
+- **File budget.** At most 200 concept files are read for one header or one `read`:
+  the ancestors (at most 30), the children's candidates (at most 80) and the count files
+  (at most 50).
 - **Invalid content.** A cycle is drawn as far as it goes, gets a note ("A cycle runs
   through this file", or one above it), and is never followed twice. An entry that does
   not resolve is reported as "Parent not found". A concept whose entries all fail to

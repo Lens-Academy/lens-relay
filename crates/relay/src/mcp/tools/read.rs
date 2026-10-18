@@ -198,8 +198,8 @@ pub async fn execute(
     // chunk of a paged read as a labelled block. They are context from the
     // concept files, not this file's text: the cat -n numbering below is
     // unchanged, and edits match only the file's own text.
-    // A concept file gets its place in the concept graph (`parent:` links)
-    // the same way.
+    // A concept file gets its place in the concept graph (its
+    // `parent-concepts:` frontmatter, see concept_graph.rs) the same way.
     let (graph_block, rows_block) = if offset <= 1 {
         let path = server
             .doc_resolver()

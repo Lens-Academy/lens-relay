@@ -154,6 +154,7 @@ concept and its direct children (backlinkers in `Concepts/` whose parents includ
 "Parent concepts" / "Child concepts" lists (the accessible version; the drawing is aria-hidden). Read-only.
 
 - `src/lib/concept-graph.ts`: `parent-concepts:` parsing ("concept graph rules v1 #N", shared with the relay's
-  `concept_graph.rs`) and resolution, the capped walks (ancestors, below), cycle detection, the drawn graph's data. Pure.
-- `src/components/ConceptGraphPanel/`: the header and its data hook (reads files through the relationships panel's
+  `concept_graph.rs`) and resolution, the capped walks (ancestors; two levels below for children and "+N"), cycle detection, the drawn graph's data. Pure.
+- `src/components/ConceptGraphPanel/`: the header, the drawing (`ConceptGraphDrawing.tsx`, loaded lazily so only concept
+  files download dagre) and its data hook (reads files through the relationships panel's
   `useSnapshots`, growing the set of files to read as the walks reach them).
