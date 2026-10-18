@@ -309,7 +309,6 @@ export async function importVideo(
         return null;
       }
       const aligned = cleaned.words;
-      let finalMd = transcriptMarkdown(cleaned.text);
 
       // Readers can open and edit the transcript while the cleanup runs, and
       // a relay write replaces the whole document -- so only apply the cleanup
@@ -334,17 +333,24 @@ export async function importVideo(
       // replaces the whole document, so an edit landing between this read and
       // the write below is still lost. That window is seconds rather than the
       // minutes the cleanup itself takes.
-      if (current !== null) {
-        const now = splitImportedDoc(current);
-        if (!now || now.body !== splitImportedDoc(publishedContent)?.body) {
-          console.warn(
-            `[add-video] "${payload.title}"'s transcript was edited while the cleanup ran — keeping the edited document`,
-          );
-          onStage?.("polish-skipped-doc-edited");
-          return null;
-        }
-        finalMd = withBody(current, cleaned.text)!;
+      // Unreadable: skip the cleanup rather than write over notes we could
+      // not see. The published transcript is complete without it.
+      if (current === null) {
+        console.warn(
+          `[add-video] "${payload.title}" could not be re-read — keeping the published transcript`,
+        );
+        onStage?.("polish-skipped-doc-unreadable");
+        return null;
       }
+      const now = splitImportedDoc(current);
+      if (!now || now.body !== splitImportedDoc(publishedContent)?.body) {
+        console.warn(
+          `[add-video] "${payload.title}"'s transcript was edited while the cleanup ran — keeping the edited document`,
+        );
+        onStage?.("polish-skipped-doc-edited");
+        return null;
+      }
+      const finalMd = withBody(current, cleaned.text)!;
 
       setStage("writing");
       await updateRelayDoc(mdPath, publishedContent, finalMd, signal);

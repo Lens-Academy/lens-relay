@@ -39,6 +39,14 @@ interface SubmitResult {
 
 export const POLL_INTERVAL_MS = 3000;
 
+/** Video job stages that come after the transcript file is written. */
+const VIDEO_STAGES_AFTER_PUBLISHING = new Set([
+  "polishing",
+  "aligning",
+  "writing",
+  "creating-lens",
+]);
+
 const STATUS_COLORS: Record<ArticleJob["status"], string> = {
   queued: "#f0ad4e",
   processing: "#4361ee",
@@ -521,13 +529,20 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                 >
                   {job.url}
                 </div>
-                {job.relay_url && job.status === "processing" && (
+                {job.relay_url && job.status === "processing" && !job.video && (
                   <div style={{ fontSize: 12, color: "#9aa4c7" }}>
                     The file is ready: open it to add notes in its %% area.
                     The text is filled in under them when the import finishes.
                   </div>
                 )}
-                {job.relay_url && (job.status === "failed" || job.status === "cancelled") && (
+                {job.status === "processing" && !!job.video && job.stage &&
+                  VIDEO_STAGES_AFTER_PUBLISHING.has(job.stage) && (
+                  <div style={{ fontSize: 12, color: "#9aa4c7" }}>
+                    The transcript is in: open it to add notes in its %%
+                    area. The cleanup still running keeps them.
+                  </div>
+                )}
+                {job.relay_url && !job.video && (job.status === "failed" || job.status === "cancelled") && (
                   <div style={{ fontSize: 12, color: "#9aa4c7" }}>
                     The file stays, with any notes you added. Retry fills the
                     text in.

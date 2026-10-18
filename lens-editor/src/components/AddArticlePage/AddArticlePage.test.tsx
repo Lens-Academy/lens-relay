@@ -179,4 +179,50 @@ describe("AddArticlePage status polling", () => {
       /only create the file with its discussion area/i,
     );
   });
+
+  function withJobs(jobs: object[]) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          jobs: jobs.map((job, i) => ({
+            id: `j${i}`,
+            importMode: "article",
+            created_at: `2026-06-12T08:0${i}:00.000Z`,
+            updated_at: "2026-06-12T08:00:00.000Z",
+            ...job,
+          })),
+        }),
+      }),
+    );
+  }
+
+  it("says the file is ready for notes while an article import runs, and that it stays after a failure", async () => {
+    withJobs([
+      { url: "https://example.com/a", title: "A", status: "processing", stage: "source-review", relay_url: "https://e/open/a" },
+      { url: "https://example.com/b", title: "B", status: "failed", error: "boom", relay_url: "https://e/open/b" },
+    ]);
+    render(<AddArticlePage shareToken="test-token" />);
+    await advance(0);
+
+    expect(screen.getByRole("link", { name: "A" })).toHaveAttribute("href", "https://e/open/a");
+    expect(screen.getByText(/The file is ready: open it to add notes/)).toBeInTheDocument();
+    expect(screen.getByText(/The file stays, with any notes you added/)).toBeInTheDocument();
+  });
+
+  it("speaks of the transcript for videos, only once it is written, and promises no retry fill-in", async () => {
+    const video = { video_id: "abc", url: "https://youtu.be/abc" };
+    withJobs([
+      { url: "https://youtu.be/abc", title: "V1", status: "processing", stage: "preparing", relay_url: "https://e/open/v1", video },
+      { url: "https://youtu.be/def", title: "V2", status: "processing", stage: "polishing", relay_url: "https://e/open/v2", video },
+      { url: "https://youtu.be/ghi", title: "V3", status: "failed", error: "boom", relay_url: "https://e/open/v3", video },
+    ]);
+    render(<AddArticlePage shareToken="test-token" />);
+    await advance(0);
+
+    expect(screen.getAllByText(/The transcript is in: open it to add notes/)).toHaveLength(1);
+    expect(screen.queryByText(/The file is ready/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Retry fills the text in/)).not.toBeInTheDocument();
+  });
 });

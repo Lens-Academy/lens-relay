@@ -180,10 +180,6 @@ export function pickCaptionTrack<
 }
 
 /**
- * Fetch a video's transcript and metadata from a bare YouTube URL, producing
- * the same payload shape the bookmarklet used to POST.
- */
-/**
  * Only the video's title and channel: what a video stub needs. Read from
  * YouTube's public oEmbed endpoint, which (unlike the player API) does not
  * bot-check datacenter IPs and costs no proxy traffic; the player mint is the
@@ -216,6 +212,10 @@ export async function fetchYouTubeVideoMeta(
   };
 }
 
+/**
+ * Fetch a video's transcript and metadata from a bare YouTube URL, producing
+ * the same payload shape the bookmarklet used to POST.
+ */
 export async function fetchYouTubeTranscript(
   input: VideoInput,
   signal?: AbortSignal,

@@ -270,14 +270,17 @@ describe('importVideo', () => {
     expect(finalMd).not.toContain('hello world');
   });
 
-  // A failed read must not block the cleanup: the common case is an untouched
-  // document, and losing the polish over a transient relay hiccup is worse.
-  it('still applies the cleanup when the document cannot be re-read', async () => {
+  // The transcript has a notes area people write in while the cleanup runs,
+  // so a document we cannot read is not written over: losing the polish is
+  // the lesser loss. The original timings still go out with it.
+  it('skips the cleanup when the document cannot be re-read', async () => {
     mockRelayDocs.readRelayDocText.mockRejectedValue(new Error('relay down'));
 
     await expect(runImport()).resolves.toEqual({ mdPath: expect.any(String) });
 
-    expect(mockRelayDocs.updateRelayDoc).toHaveBeenCalled();
+    expect(mockRelayDocs.updateRelayDoc).not.toHaveBeenCalled();
+    const json = mockRelayDocs.createRelayDoc.mock.calls[0][1];
+    expect(JSON.parse(json).map((w: { text: string }) => w.text)).toEqual(['hello', 'world']);
   });
 
   // Prevents a regression to the old "Transcript processing failed" doc, which
