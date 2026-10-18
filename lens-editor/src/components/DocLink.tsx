@@ -8,10 +8,11 @@ import { RELAY_ID } from '../App';
  * Ctrl/Cmd-click and middle-click open it in a new tab, while a plain click
  * navigates in the app.
  */
-export function DocLink({ docId, className, title, children }: {
+export function DocLink({ docId, className, title, tabIndex, children }: {
   docId: string;
   className?: string;
   title?: string;
+  tabIndex?: number;
   children: ReactNode;
 }) {
   const { metadata, onNavigate } = useNavigation();
@@ -21,6 +22,7 @@ export function DocLink({ docId, className, title, children }: {
       href={urlForDoc(compoundId, metadata)}
       className={className}
       title={title}
+      tabIndex={tabIndex}
       onClick={(e) => {
         if (!isPlainLeftClick(e)) return;
         e.preventDefault();

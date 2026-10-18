@@ -26,6 +26,8 @@ import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPanel';
 import { matchRule } from '../../lib/concept-rows';
+import { ConceptGraphPanel } from '../ConceptGraphPanel';
+import { isConceptPath } from '../../lib/concept-graph';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
@@ -252,17 +254,20 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     return folderName ? (folderDocsRef.current.get(folderName) ?? null) : null;
   }, []);
 
-  // The Concepts panel, for the files the concept-row rules name: rendered
-  // into a block widget at the top of the document so it scrolls with it.
+  // The Concepts panel, for the files the concept-row rules name, and the
+  // concept graph header, for concept files: rendered into a block widget at
+  // the top of the document so they scroll with it (graph first if both).
   const [conceptPanelHost] = useState(() => document.createElement('div'));
   const showConceptPanel = matchRule(currentFilePath) !== null;
+  const showConceptGraph = isConceptPath(currentFilePath);
+  const showPanelHost = showConceptPanel || showConceptGraph;
   useEffect(() => {
     if (!editorView) return;
     if (editorView.state.field(panelHostField, false) === undefined) {
       editorView.dispatch({ effects: StateEffect.appendConfig.of(panelHostField) });
     }
-    editorView.dispatch({ effects: setPanelHost.of(showConceptPanel ? conceptPanelHost : null) });
-  }, [editorView, showConceptPanel, conceptPanelHost]);
+    editorView.dispatch({ effects: setPanelHost.of(showPanelHost ? conceptPanelHost : null) });
+  }, [editorView, showPanelHost, conceptPanelHost]);
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -534,8 +539,13 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             <div className="mx-6 border-b border-gray-200" />
           </div>
           <SyncedFileBanner />
-          {showConceptPanel && createPortal(
-            <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} suggestionMode={isSuggestionMode} />,
+          {showPanelHost && createPortal(
+            <>
+              {showConceptGraph && <ConceptGraphPanel docId={currentDocId} path={currentFilePath} ytext={yText} />}
+              {showConceptPanel && (
+                <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} suggestionMode={isSuggestionMode} />
+              )}
+            </>,
             conceptPanelHost,
           )}
           {isSourceMode && isSuggestionMode && (

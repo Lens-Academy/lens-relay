@@ -1,4 +1,5 @@
 pub mod blob;
+pub mod concept_graph;
 pub mod concept_rows;
 pub mod course_checks;
 pub mod create_doc;
