@@ -24,6 +24,7 @@ import { RELAY_ID } from '../../App';
 import { ConceptRowCard } from './ConceptRowCard';
 import { ConceptPicker, type PickerConcept } from './ConceptPicker';
 import { useConceptRows, type AddedSource } from './useConceptRows';
+import { DocLink } from './DocLink';
 
 const OPEN_KEY = 'lens-editor:concept-rows-open';
 
@@ -88,7 +89,7 @@ function useArticles(enabled: boolean, ytext: Y.Text, path: string) {
 }
 
 function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: ConceptRowRule }) {
-  const { metadata, folderDocs, onNavigate } = useNavigation();
+  const { metadata, folderDocs } = useNavigation();
   const { canEdit } = useAuth();
   const { displayName } = useDisplayName();
   const displayNameRef = useRef(displayName);
@@ -108,6 +109,17 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
   const [error, setError] = useState<string | null>(null);
   const [autoEdit, setAutoEdit] = useState<string | null>(null);
   const clearAutoEdit = useCallback(() => setAutoEdit(null), []);
+  // Expanded rows, by card key: held here so "Expand all" reaches every row.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const setRowExpanded = useCallback((key: string, value: boolean) => {
+    setExpanded((prev) => {
+      if (prev.has(key) === value) return prev;
+      const next = new Set(prev);
+      if (value) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
 
   const toggle = () => {
     setOpen((v) => {
@@ -115,8 +127,6 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
       return !v;
     });
   };
-
-  const openConcept = useCallback((id: string) => onNavigate(`${RELAY_ID}-${id}`), [onNavigate]);
 
   const folder = rowsFolder(rule);
   const concepts = useMemo<PickerConcept[]>(() => {
@@ -171,15 +181,17 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
     }
   }, [metadata, folderDocs, getActor, path, rule, folder, target]);
 
-  const cardProps = (entry: RowEntry, about: string) => ({
+  const cardProps = (key: string, entry: RowEntry, about: string, aboutName: string) => ({
     entry,
     target: about,
+    targetName: aboutName,
     section: rule.section,
     metadata,
     canEdit,
     canAcceptReject: canEdit,
     getActor,
-    onOpenConcept: openConcept,
+    expanded: expanded.has(key),
+    onExpandedChange: (value: boolean) => setRowExpanded(key, value),
   });
 
   const loading = own.pending - failed > 0;
@@ -189,10 +201,18 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
     articleName: fileName(a.path),
     rows: byTarget.get(a.id)?.rows ?? [],
   })));
+  const ownKey = (entry: RowEntry) => `${entry.conceptId}:${entry.index}`;
+  const articleKey = (articleId: string, entry: RowEntry) => `${articleId}:${entry.conceptId}:${entry.index}`;
+  const allKeys = [
+    ...groups.lens.map(({ entry }) => ownKey(entry)),
+    ...groups.articleOnly.flatMap((a) => a.rows.map((entry) => articleKey(a.articleId, entry))),
+  ];
+  const allExpanded = allKeys.length > 0 && allKeys.every((k) => expanded.has(k));
+  const targetName = fileName(path);
 
   return (
     <section
-      className="concept-rows-panel mx-6 mt-3 rounded-md border border-gray-200 bg-gray-50/70 text-sm"
+      className="concept-rows-panel mb-3 mt-1 rounded-md border border-gray-200 bg-gray-50/70 text-sm"
       data-testid="concept-rows-panel"
       aria-label={rule.title}
     >
@@ -207,6 +227,15 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
           {rule.title}
           <span className="font-normal text-gray-400">{own.rows.length || ''}</span>
         </button>
+        {open && allKeys.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded(allExpanded ? new Set() : new Set(allKeys))}
+            className="ml-auto text-xs text-gray-500 hover:underline cursor-pointer"
+          >
+            {allExpanded ? 'Collapse all' : 'Expand all'}
+          </button>
+        )}
         {canEdit && (
           <button
             type="button"
@@ -215,14 +244,14 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
               setOpen(true);
             }}
             disabled={busy}
-            className="ml-auto text-xs text-indigo-600 hover:underline cursor-pointer disabled:text-gray-400"
+            className={`${open && allKeys.length > 0 ? '' : 'ml-auto '}text-xs text-indigo-600 hover:underline cursor-pointer disabled:text-gray-400`}
           >
             {busy ? 'Adding…' : '+ Add concept'}
           </button>
         )}
       </header>
       {open && (
-        <div className="max-h-[40vh] overflow-auto px-1 pb-2">
+        <div className="px-1 pb-2">
           {picking && (
             <div className="px-1 pb-1">
               <ConceptPicker concepts={concepts} onPick={(c) => void addRow(c)} onClose={() => setPicking(false)} />
@@ -230,11 +259,11 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
           )}
           {error && <div className="px-2 py-1 text-xs text-red-700">{error}</div>}
           {groups.lens.map(({ entry, articleRows }) => {
-            const key = `${entry.conceptId}:${entry.index}`;
+            const key = ownKey(entry);
             return (
               <ConceptRowCard
                 key={key}
-                {...cardProps(entry, target)}
+                {...cardProps(key, entry, target, targetName)}
                 articleRows={rule.articleContext ? articleRows : undefined}
                 autoEdit={autoEdit === key}
                 onAutoEdited={clearAutoEdit}
@@ -255,9 +284,9 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
               {own.mentions.map((m, i) => (
                 <span key={m.conceptId}>
                   {i > 0 && ', '}
-                  <button type="button" onClick={() => openConcept(m.conceptId)} className="hover:underline cursor-pointer">
+                  <DocLink docId={m.conceptId} className="hover:underline" title={`Open ${m.conceptPath}`}>
                     {m.conceptName}
-                  </button>
+                  </DocLink>
                 </span>
               ))}
             </div>
@@ -265,12 +294,12 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
           {groups.articleOnly.map((article) => (
             <div key={article.articleId} className="mt-2 border-t border-gray-200 pt-1.5" data-testid="concept-context-group">
               <div className="px-2 pb-0.5 text-xs text-gray-400">
-                Only linked to its article ({article.articleName})
+                Only linked to Article: {article.articleName}
               </div>
               {article.rows.map((entry) => (
                 <ConceptRowCard
-                  key={`${entry.conceptId}:${entry.index}`}
-                  {...cardProps(entry, article.articleId)}
+                  key={articleKey(article.articleId, entry)}
+                  {...cardProps(articleKey(article.articleId, entry), entry, article.articleId, article.articleName)}
                   context
                   onAddForLens={canEdit && !busy ? () => void addRow({ id: entry.conceptId }, entry.body) : undefined}
                 />

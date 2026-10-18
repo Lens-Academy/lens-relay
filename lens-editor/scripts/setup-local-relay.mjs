@@ -872,6 +872,12 @@ Best intro we have. §2 is the explanation; §4 drifts into high-stakes territor
 
 Checked again in October: still the clearest framing.
 
+What works: the opening frames control as a property of the whole deployment, not of the model, and the running example (a coding agent that may occasionally write a subtly wrong patch) makes "no single action is catastrophic" concrete. Students in the pilot cohort could restate the definition after reading §1–2 alone.
+
+What does not: §3 introduces auditing budgets with notation that is never used again; §4 switches to high-stakes settings without saying so, which confused two of the five pilot students; the conclusion repeats §1 nearly word for word. If we excerpt, stop before the notation in §3.
+
+Open question: whether to pair it with a shorter piece that shows a failed low-stakes protocol, so the contrast with high-stakes control is drawn by the students rather than told to them.
+
 ### [[../Lenses/Demo Lens]]
 Uses §1–3 of the sample article. Chat prompt needs work.
 `,

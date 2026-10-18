@@ -24,7 +24,8 @@ import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
-import { ConceptRowsPanel } from '../ConceptRowsPanel';
+import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPanel';
+import { matchRule } from '../../lib/concept-rows';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
@@ -250,6 +251,18 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
     const folderName = fp.split('/').filter(Boolean)[0];
     return folderName ? (folderDocsRef.current.get(folderName) ?? null) : null;
   }, []);
+
+  // The Concepts panel, for the files the concept-row rules name: rendered
+  // into a block widget at the top of the document so it scrolls with it.
+  const [conceptPanelHost] = useState(() => document.createElement('div'));
+  const showConceptPanel = matchRule(currentFilePath) !== null;
+  useEffect(() => {
+    if (!editorView) return;
+    if (editorView.state.field(panelHostField, false) === undefined) {
+      editorView.dispatch({ effects: StateEffect.appendConfig.of(panelHostField) });
+    }
+    editorView.dispatch({ effects: setPanelHost.of(showConceptPanel ? conceptPanelHost : null) });
+  }, [editorView, showConceptPanel, conceptPanelHost]);
 
   // Callback to receive view reference from Editor
   const handleEditorReady = useCallback((view: EditorView) => {
@@ -521,9 +534,10 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             <div className="mx-6 border-b border-gray-200" />
           </div>
           <SyncedFileBanner />
-          <div className="max-w-[700px] mx-auto w-full">
-            <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} />
-          </div>
+          {showConceptPanel && createPortal(
+            <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} />,
+            conceptPanelHost,
+          )}
           {isSourceMode && isSuggestionMode && (
             <SourceSuggestionBanner />
           )}

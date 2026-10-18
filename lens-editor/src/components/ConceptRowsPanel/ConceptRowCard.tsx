@@ -9,6 +9,7 @@ import { attachProvenanceRegistration } from '../../lib/provenance';
 import { rowPreview, rowsAbout, type ArticleRows, type RowEntry } from '../../lib/concept-rows';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
+import { DocLink } from './DocLink';
 
 export interface RowCardProps {
   entry: RowEntry;
@@ -21,7 +22,11 @@ export interface RowCardProps {
   canEdit: boolean;
   canAcceptReject: boolean;
   getActor: () => string;
-  onOpenConcept: (conceptId: string) => void;
+  /** Name of the file the row is about, for the pair header ("concept × file"). */
+  targetName: string;
+  /** Expanded or not: the panel holds it, for "Expand all". */
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
   /** Open for editing on mount, cursor at the end (a row just added). */
   autoEdit?: boolean;
   onAutoEdited?: () => void;
@@ -33,6 +38,17 @@ export interface RowCardProps {
 }
 
 type CardState = 'idle' | 'connecting' | 'live' | 'error';
+
+/** "Concept × file" over an expanded row: the row belongs to the pair, not
+ *  to either side. */
+function PairHeader({ label, concept, file }: { label?: string; concept: string; file: string }) {
+  return (
+    <div className="concept-row-pair ml-5 mt-1 text-[11px] text-gray-400">
+      {label && <span className="font-medium text-gray-500">{label} · </span>}
+      {concept} × {file}
+    </div>
+  );
+}
 
 /** A read-only rendering of `text`, as embeds render (live preview). */
 function RowPreview({ text }: { text: string }) {
@@ -64,7 +80,7 @@ function RowPreview({ text }: { text: string }) {
  */
 export function ConceptRowCard(props: RowCardProps) {
   const { entry, target, section, metadata, context, canEdit, canAcceptReject, getActor } = props;
-  const [expanded, setExpanded] = useState(false);
+  const { expanded, onExpandedChange } = props;
   const [state, setState] = useState<CardState>('idle');
   const [owner] = useState(() => ({}));
   const liveHost = useRef<HTMLDivElement>(null);
@@ -87,7 +103,7 @@ export function ConceptRowCard(props: RowCardProps) {
 
   const startEdit = useCallback(async () => {
     if (!editable || live.current || isLive(owner)) return;
-    setExpanded(true);
+    onExpandedChange(true);
     setState('connecting');
     let opened;
     try {
@@ -140,7 +156,7 @@ export function ConceptRowCard(props: RowCardProps) {
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     // The host shows once React has rendered the live state.
     requestAnimationFrame(() => view.focus());
-  }, [editable, owner, fullId, ended, getActor, entry, target, metadata, section, canAcceptReject]);
+  }, [editable, owner, fullId, ended, getActor, entry, target, metadata, section, canAcceptReject, onExpandedChange]);
 
   useEffect(() => {
     unmounted.current = false;
@@ -176,25 +192,24 @@ export function ConceptRowCard(props: RowCardProps) {
       <div className="flex items-baseline gap-2 min-w-0">
         <button
           type="button"
-          onClick={() => (state === 'idle' ? setExpanded((v) => !v) : closeLive(owner))}
+          onClick={() => (state === 'idle' ? onExpandedChange(!expanded) : closeLive(owner))}
           className="w-3 shrink-0 text-xs text-gray-400 cursor-pointer"
           aria-label={showBody ? 'Collapse row' : 'Expand row'}
           aria-expanded={showBody}
         >
           {showBody ? '▾' : '▸'}
         </button>
-        <button
-          type="button"
-          onClick={() => props.onOpenConcept(entry.conceptId)}
-          className={`shrink-0 font-medium hover:underline cursor-pointer ${context ? 'text-gray-500' : 'text-indigo-700'}`}
+        <DocLink
+          docId={entry.conceptId}
+          className={`shrink-0 font-medium hover:underline ${context ? 'text-gray-500' : 'text-indigo-700'}`}
           title={`Open ${entry.conceptPath}`}
         >
           {entry.conceptName}
-        </button>
+        </DocLink>
         {!showBody && (
           <button
             type="button"
-            onClick={() => setExpanded(true)}
+            onClick={() => onExpandedChange(true)}
             className={`min-w-0 flex-1 truncate text-left cursor-pointer ${preview ? '' : 'italic text-gray-400'}`}
           >
             {preview || 'No notes yet'}
@@ -223,7 +238,9 @@ export function ConceptRowCard(props: RowCardProps) {
           </button>
         )}
       </div>
-      {showBody && labelled && <div className="ml-5 mt-1 text-xs text-gray-400">This lens</div>}
+      {showBody && (
+        <PairHeader label={labelled ? 'This lens' : undefined} concept={entry.conceptName} file={props.targetName} />
+      )}
       {expanded && state === 'idle' && (
         <div
           className={`concept-row-body ml-5 mt-1 ${editable ? 'cursor-text' : ''}`}
@@ -243,10 +260,10 @@ export function ConceptRowCard(props: RowCardProps) {
       {/* Always mounted: the editor goes in as soon as the connection is up. */}
       <div ref={liveHost} className="concept-row-body ml-5 mt-1" hidden={state === 'idle'} />
       {showBody && articleRows.map((article) => (
-        <div key={article.articleId} className="ml-5 mt-2 text-gray-400" data-testid="concept-row-article">
-          <div className="text-xs">Its article ({article.articleName})</div>
+        <div key={article.articleId} className="mt-2 text-gray-400" data-testid="concept-row-article">
+          <PairHeader label={`Article: ${article.articleName}`} concept={entry.conceptName} file={article.articleName} />
           {article.rows.map((row) => (
-            <div key={row.index} className="concept-row-body mt-0.5">
+            <div key={row.index} className="concept-row-body ml-5 mt-0.5">
               {row.body ? <RowPreview text={row.body} /> : <div className="italic">No notes yet</div>}
             </div>
           ))}
