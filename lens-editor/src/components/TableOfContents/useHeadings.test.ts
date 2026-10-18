@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeHeadingLevels } from './useHeadings';
+import { EditorState } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { markdown } from '@codemirror/lang-markdown';
+import { forceParsing } from '@codemirror/language';
+import { extractHeadings, normalizeHeadingLevels } from './useHeadings';
 import type { Heading } from './useHeadings';
+import { frontmatterField } from '../Editor/extensions/frontmatter';
 
 /** Helper: build minimal Heading[] from raw levels */
 function headingsFromLevels(levels: number[]): Heading[] {
@@ -63,4 +68,49 @@ describe('normalizeHeadingLevels', () => {
       expect(result.map((h) => h.displayLevel)).toEqual(expected);
     });
   }
+});
+
+/** Helper: the headings extractHeadings finds in `doc`, with their line numbers */
+function headingsIn(doc: string) {
+  const view = new EditorView({
+    state: EditorState.create({ doc, extensions: [markdown(), frontmatterField] }),
+  });
+  try {
+    // A new state is parsed for at most 20ms; finish it, as the editor does in the background
+    forceParsing(view, doc.length, 5000);
+    return extractHeadings(view.state).map(({ level, text, from }) => ({
+      level,
+      text,
+      line: view.state.doc.lineAt(from).number,
+    }));
+  } finally {
+    view.destroy();
+  }
+}
+
+describe('extractHeadings', () => {
+  it('lists setext headings (text over === or ---) with # headings, in order', () => {
+    const doc = 'Title\n=====\n\n## Agenda\n\nUpdates\n---\n\nWe agreed on the budget\nand the hiring plan\n---\n';
+    expect(headingsIn(doc)).toEqual([
+      { level: 1, text: 'Title', line: 1 },
+      { level: 2, text: 'Agenda', line: 4 },
+      { level: 2, text: 'Updates', line: 6 },
+      { level: 2, text: 'We agreed on the budget and the hiring plan', line: 9 },
+    ]);
+  });
+
+  it('needs at least -- under a line of text for an H2, as the editor does', () => {
+    // `- ` is how a list typed under `Attendees:` starts
+    expect(headingsIn('Attendees:\n- \n\nTitle\n=\n\nSection\n--\n')).toEqual([
+      { level: 1, text: 'Title', line: 4 },
+      { level: 2, text: 'Section', line: 7 },
+    ]);
+  });
+
+  it('skips frontmatter, which Lezer reads as headings', () => {
+    // `title: Notes` over the closing --- is a setext heading to Lezer,
+    // and the YAML comment a # heading
+    const doc = '---\n# a YAML comment\ntitle: Notes\n---\n\nSection\n---\n';
+    expect(headingsIn(doc)).toEqual([{ level: 2, text: 'Section', line: 6 }]);
+  });
 });
