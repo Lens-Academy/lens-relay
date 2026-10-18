@@ -33,7 +33,7 @@ export class YSectionSyncConfig {
   /** Insert a line break before or after the section with the first local
    *  edit (in the same transaction), then never again. */
   public lineBreakOnFirstEdit: 'before' | 'after' | null;
-  /** Inserts by others exactly at the section's end are outside it. */
+  /** Inserts by others at the section's end that start a new line are outside it. */
   public readonly endExclusive: boolean;
 
   constructor(ytext: Y.Text, sectionFrom: number, sectionTo: number, awareness?: Awareness, opts: SectionSyncOptions = {}) {
@@ -60,10 +60,11 @@ export interface SectionSyncOptions {
    */
   lineBreakOnFirstEdit?: 'before' | 'after';
   /**
-   * Inserts by others exactly at the section's end go after it, not into it:
-   * text appended at the end of the file, or a row inserted right before the
-   * next heading, stays out of an open row. (This editor's own undo still
-   * counts as inside, so undoing a delete at the end restores it here.)
+   * Inserts by others exactly at the section's end that start a new line go
+   * after it, not into it: a row appended at the end of the file, or one
+   * inserted right before the next heading, stays out of an open row. Text
+   * that continues the section's last line (" world" after "Hello") still
+   * counts as inside, as does this editor's own undo.
    */
   endExclusive?: boolean;
 }
@@ -140,7 +141,8 @@ class YSectionSyncPluginValue {
           const insertLen = insertText.length;
 
           const atEnd = pos === this.conf.sectionTo;
-          const endIsOutside = this.conf.endExclusive && tr.origin !== this.conf.undoManager;
+          const endIsOutside = this.conf.endExclusive && tr.origin !== this.conf.undoManager
+            && insertText.startsWith('\n');
           if (pos >= this.conf.sectionFrom && (pos < this.conf.sectionTo || (atEnd && !endIsOutside))) {
             // Insert within section (inclusive boundaries so undo of
             // deletes at section start/end correctly updates the view)

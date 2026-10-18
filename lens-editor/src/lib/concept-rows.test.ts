@@ -454,6 +454,14 @@ describe('editing an empty row next to a heading (bodyLineFix + ySectionSync)', 
     expect(bodyLineFix(parseConceptFile(atEnd).rows[0], atEnd.length)).toBeNull();
   });
 
+  it('shows text that someone else adds to the end of the open row\'s last line', () => {
+    const { ytext, view } = openRow('## Relationships\n### [[a]]\nHello', 'a');
+    ytext.insert(ytext.length, ' world'); // another client, synced in
+    expect(view.state.doc.toString()).toBe('Hello world');
+    view.dispatch({ changes: { from: view.state.doc.length, insert: '!' } });
+    expect(ytext.toString()).toBe('## Relationships\n### [[a]]\nHello world!');
+  });
+
   it('keeps a row appended at the end of the file by someone else out of the open row', () => {
     const { ytext, view } = openRow('## Relationships\n### [[a]]\nnotes', 'a');
     const plan = planRowInsertion(ytext.toString(), 'b');

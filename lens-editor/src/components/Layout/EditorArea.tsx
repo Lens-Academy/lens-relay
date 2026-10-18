@@ -535,7 +535,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           </div>
           <SyncedFileBanner />
           {showConceptPanel && createPortal(
-            <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} />,
+            <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} suggestionMode={isSuggestionMode} />,
             conceptPanelHost,
           )}
           {isSourceMode && isSuggestionMode && (

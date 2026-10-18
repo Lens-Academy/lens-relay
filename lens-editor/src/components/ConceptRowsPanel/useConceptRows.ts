@@ -22,8 +22,9 @@ export const SNAPSHOT_REFRESH_MS = 5 * 60_000;
  * Text of each document in `ids` (bare uuids), read as embeds read: cached,
  * at most three at a time (lib/embed-docs.ts), and updated whenever an edit
  * made here is closed. While `refreshing` (the panel is open), read again on
- * window focus, when the tab becomes visible, and every SNAPSHOT_REFRESH_MS,
- * so edits made elsewhere show up.
+ * window focus and when the tab becomes visible (unless read in the last
+ * SNAPSHOT_TTL_MS), and every SNAPSHOT_REFRESH_MS, so edits made elsewhere
+ * show up.
  */
 export function useSnapshots(
   ids: readonly string[],
@@ -51,19 +52,25 @@ export function useSnapshots(
 
   useEffect(() => {
     if (!refreshing) return;
-    const refresh = () => {
+    const ids = key.split(',').filter(Boolean);
+    // Focus and visibility read through the snapshot cache (SNAPSHOT_TTL_MS),
+    // so switching windows back and forth costs nothing; only the timer
+    // forces a read.
+    const onReturn = () => {
       if (document.visibilityState === 'hidden') return;
-      for (const id of key.split(',').filter(Boolean)) {
-        refreshSnapshot(`${RELAY_ID}-${id}`).catch(() => {});
-      }
+      for (const id of ids) readSnapshot(`${RELAY_ID}-${id}`).catch(() => {});
     };
-    const timer = setInterval(refresh, SNAPSHOT_REFRESH_MS);
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', refresh);
+    const onTimer = () => {
+      if (document.visibilityState === 'hidden') return;
+      for (const id of ids) refreshSnapshot(`${RELAY_ID}-${id}`).catch(() => {});
+    };
+    const timer = setInterval(onTimer, SNAPSHOT_REFRESH_MS);
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
     return () => {
       clearInterval(timer);
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
     };
   }, [key, refreshing]);
 

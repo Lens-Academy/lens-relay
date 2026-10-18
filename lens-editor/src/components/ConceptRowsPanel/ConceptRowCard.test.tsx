@@ -201,4 +201,27 @@ describe('ConceptRowCard', () => {
     await waitFor(() => expect(document.querySelector('.concept-row')).toHaveAttribute('data-state', 'live'));
     __embedDocsTesting.reset();
   });
+
+  it('follows the main editor\'s Suggesting mode, also when it is switched while the row is open', async () => {
+    const live = `## Relationships\n### [[../articles/${ARTICLE}]]\nNotes.\n`;
+    const doc = new Y.Doc();
+    doc.getText('contents').insert(0, live);
+    const provider = { hasLocalChanges: false, on: () => {}, off: () => {} };
+    __embedDocsTesting.setConnector(async () => ({ doc, provider } as unknown as DocConnection));
+    const row = parseConceptFile(live).rows[0];
+    const { rerender } = render(<Card canEdit suggestionMode entry={{ ...entry, row, body: 'Notes.' }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: `Edit notes on ${entry.conceptName}` }), { key: 'Enter' });
+    await waitFor(() => expect(document.querySelector('.concept-row')).toHaveAttribute('data-state', 'live'));
+    const view = EditorView.findFromDOM(document.querySelector('.concept-row [contenteditable=true]') as HTMLElement)!;
+
+    view.dispatch({ changes: { from: view.state.doc.length, insert: ' More' }, userEvent: 'input.type' });
+    const suggested = doc.getText('contents').toString();
+    expect(suggested).toMatch(/\{\+\+.* More\+\+\}/);
+
+    rerender(<Card canEdit suggestionMode={false} entry={{ ...entry, row, body: 'Notes.' }} />);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: ' Direct' }, userEvent: 'input.type' });
+    expect(doc.getText('contents').toString()).toBe(`${suggested.slice(0, -1)} Direct\n`);
+    __embedDocsTesting.reset();
+  });
 });

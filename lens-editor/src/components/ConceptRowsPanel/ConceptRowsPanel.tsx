@@ -53,6 +53,8 @@ interface PanelProps {
   path: string | undefined;
   /** Its text, for a lens's article links. */
   ytext: Y.Text;
+  /** The main editor is in Suggesting mode (row edits become suggestions). */
+  suggestionMode?: boolean;
 }
 
 /**
@@ -95,7 +97,7 @@ function useSources(rule: ConceptRowRule, ytext: Y.Text, path: string) {
   }, [targets, metadata, path, rule.sharedFolder]);
 }
 
-function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: ConceptRowRule }) {
+function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path: string; rule: ConceptRowRule }) {
   const { metadata, folderDocs } = useNavigation();
   const { canEdit } = useAuth();
   const { displayName } = useDisplayName();
@@ -208,6 +210,7 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
     metadata,
     canEdit,
     canAcceptReject: canEdit,
+    suggestionMode,
     getActor,
     expanded: expanded.has(key),
     onExpandedChange: (value: boolean) => setRowExpanded(key, value),

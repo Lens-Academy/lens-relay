@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { __embedDocsTesting } from '../../lib/embed-docs';
+import { SNAPSHOT_TTL_MS, __embedDocsTesting } from '../../lib/embed-docs';
 import { createElement, type ReactNode } from 'react';
 import * as Y from 'yjs';
 import { NavigationContext } from '../../contexts/NavigationContext';
@@ -13,13 +13,22 @@ afterEach(() => {
 });
 
 describe('useSnapshots', () => {
-  it('reads concept files again on window focus, so edits made elsewhere show up', async () => {
+  it('on window focus, reads concept files again once the cached read is stale, not before', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     let version = 1;
-    __embedDocsTesting.setReader(async () => `text v${version}`);
+    const reader = vi.fn(async () => `text v${version}`);
+    __embedDocsTesting.setReader(reader);
     const { result } = renderHook(() => useSnapshots(['c1']));
     await waitFor(() => expect(result.current.texts.get('c1')).toBe('text v1'));
 
+    // Back to the window right away: the cached read is still fresh
     version = 2;
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(reader).toHaveBeenCalledTimes(1);
+
+    // Later: a focus reads again
+    vi.setSystemTime(Date.now() + SNAPSHOT_TTL_MS + 1);
     act(() => { window.dispatchEvent(new Event('focus')); });
     await waitFor(() => expect(result.current.texts.get('c1')).toBe('text v2'));
   });

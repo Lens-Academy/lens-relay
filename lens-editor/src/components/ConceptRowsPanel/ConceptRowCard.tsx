@@ -3,6 +3,7 @@ import { EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
 import { embedViewExtensions } from '../Editor/extensions/noteEmbed';
+import { toggleSuggestionMode } from '../Editor/extensions/criticmarkup';
 import { ySectionSync, ySectionUndoManagerKeymap } from '../SectionEditor/y-section-sync';
 import { closeLive, isLive, openLive } from '../../lib/embed-docs';
 import { attachProvenanceRegistration } from '../../lib/provenance';
@@ -23,6 +24,8 @@ export interface RowCardProps {
   context?: boolean;
   canEdit: boolean;
   canAcceptReject: boolean;
+  /** The main editor is in Suggesting mode: edits here become suggestions too. */
+  suggestionMode?: boolean;
   getActor: () => string;
   /** The file the row is about, for the pair header: its name (tooltip) and
    *  keyword ("This article", "This video" or "This lens"). */
@@ -120,6 +123,8 @@ export function ConceptRowCard(props: RowCardProps) {
   const liveHost = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
+  const suggestionMode = !!props.suggestionMode;
+  const suggestionModeRef = useRef(suggestionMode);
   /** Escape ended the edit: give the keyboard back to the row's toggle. */
   const refocusToggle = useRef(false);
   const live = useRef<{ view: EditorView; detach: () => void; onOutside: (e: MouseEvent) => void } | null>(null);
@@ -196,12 +201,20 @@ export function ConceptRowCard(props: RowCardProps) {
       if (!cardRef.current?.contains(e.target as Node)) closeLive(owner);
     };
     document.addEventListener('mousedown', onOutside, true);
+    // Follow the main editor's Suggesting toggle, as note embeds do.
+    if (suggestionModeRef.current) view.dispatch({ effects: toggleSuggestionMode.of(true) });
     live.current = { view, detach, onOutside };
     setState('live');
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     // The host shows once React has rendered the live state.
     requestAnimationFrame(() => view.focus());
   }, [editable, owner, fullId, ended, getActor, entry, target, metadata, section, canAcceptReject, onExpandedChange]);
+
+  // ...also when it is switched while the row is open.
+  useEffect(() => {
+    suggestionModeRef.current = suggestionMode;
+    live.current?.view.dispatch({ effects: toggleSuggestionMode.of(suggestionMode) });
+  }, [suggestionMode]);
 
   useEffect(() => {
     unmounted.current = false;
