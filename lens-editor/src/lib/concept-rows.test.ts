@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 import {
   collectRows,
+  groupLensRows,
   CONCEPT_ROW_RULES,
   lensArticleTargets,
   matchRule,
@@ -230,5 +231,44 @@ source:: [[../articles/two]]
 source:: [[../articles/one]]
 `;
     expect(lensArticleTargets(lens)).toEqual(['../articles/one', '../articles/two']);
+  });
+});
+
+describe('groupLensRows', () => {
+  const entry = (conceptId: string, index = 0, body = conceptId) => ({
+    conceptId,
+    conceptPath: `/Lens Edu/Concepts/${conceptId}.md`,
+    conceptName: conceptId,
+    row: parseConceptFile('## Considered\n\n### [[x]]\n').rows[0],
+    index,
+    body,
+  });
+
+  it('puts a concept with lens and article rows once, its article rows under the lens row', () => {
+    const own = [entry('Feedback'), entry('Low-stakes')];
+    const articles = [
+      { articleId: 'a1', articleName: 'One', rows: [entry('Corrigibility'), entry('Feedback', 0, 'article note')] },
+      { articleId: 'a2', articleName: 'Two', rows: [entry('Feedback', 0, 'second article')] },
+    ];
+    const { lens, articleOnly } = groupLensRows(own, articles);
+    expect(lens.map((g) => [g.entry.conceptId, g.articleRows.map((a) => [a.articleName, a.rows.map((r) => r.body)])]))
+      .toEqual([
+        ['Feedback', [['One', ['article note']], ['Two', ['second article']]]],
+        ['Low-stakes', []],
+      ]);
+    expect(articleOnly.map((a) => [a.articleName, a.rows.map((r) => r.conceptId)])).toEqual([['One', ['Corrigibility']]]);
+  });
+
+  it('attaches the article rows to the first of several lens rows only', () => {
+    const { lens } = groupLensRows(
+      [entry('C', 0), entry('C', 1)],
+      [{ articleId: 'a', articleName: 'A', rows: [entry('C')] }],
+    );
+    expect(lens.map((g) => g.articleRows.length)).toEqual([1, 0]);
+  });
+
+  it('keeps every article row apart when the lens has none', () => {
+    const articles = [{ articleId: 'a', articleName: 'A', rows: [entry('B'), entry('A')] }];
+    expect(groupLensRows([], articles)).toEqual({ lens: [], articleOnly: articles });
   });
 });

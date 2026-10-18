@@ -268,3 +268,43 @@ export function collectRows(
   out.mentions.sort((a, b) => a.conceptName.localeCompare(b.conceptName));
   return out;
 }
+
+/** The rows about one of a lens's articles. */
+export interface ArticleRows {
+  articleId: string;
+  articleName: string;
+  rows: RowEntry[];
+}
+
+export interface LensRowGroups {
+  /** One per lens row, with its concept's article rows (only on the concept's
+   *  first lens row, and only articles that have a row there). */
+  lens: Array<{ entry: RowEntry; articleRows: ArticleRows[] }>;
+  /** Per article, the rows of concepts with no lens row; articles left with
+   *  none are dropped. */
+  articleOnly: ArticleRows[];
+}
+
+/**
+ * A lens's rows grouped by concept: a concept with a lens row shows once, its
+ * article rows under the lens row; the rest of the article rows stay apart.
+ * Both keep the order they come in.
+ */
+export function groupLensRows(own: readonly RowEntry[], articles: readonly ArticleRows[]): LensRowGroups {
+  const withLensRow = new Set(own.map((r) => r.conceptId));
+  const seen = new Set<string>();
+  const lens = own.map((entry) => {
+    const first = !seen.has(entry.conceptId);
+    seen.add(entry.conceptId);
+    const articleRows = first
+      ? articles
+        .map((a) => ({ ...a, rows: a.rows.filter((r) => r.conceptId === entry.conceptId) }))
+        .filter((a) => a.rows.length > 0)
+      : [];
+    return { entry, articleRows };
+  });
+  const articleOnly = articles
+    .map((a) => ({ ...a, rows: a.rows.filter((r) => !withLensRow.has(r.conceptId)) }))
+    .filter((a) => a.rows.length > 0);
+  return { lens, articleOnly };
+}

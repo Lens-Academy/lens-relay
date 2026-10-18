@@ -9,6 +9,7 @@ import { createDocument, createFolder } from '../../lib/relay-api';
 import { computeRelativePath, resolvePageName } from '../../lib/document-resolver';
 import {
   fileName,
+  groupLensRows,
   lensArticleTargets,
   matchRule,
   newConceptText,
@@ -182,7 +183,12 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
   });
 
   const loading = own.pending - failed > 0;
-  const ownIds = new Set(own.rows.map((r) => r.conceptId));
+  // Lenses: a concept with rows on the lens and on its article shows once.
+  const groups = groupLensRows(own.rows, articles.map((a) => ({
+    articleId: a.id,
+    articleName: fileName(a.path),
+    rows: byTarget.get(a.id)?.rows ?? [],
+  })));
 
   return (
     <section
@@ -223,12 +229,13 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
             </div>
           )}
           {error && <div className="px-2 py-1 text-xs text-red-700">{error}</div>}
-          {own.rows.map((entry) => {
+          {groups.lens.map(({ entry, articleRows }) => {
             const key = `${entry.conceptId}:${entry.index}`;
             return (
               <ConceptRowCard
                 key={key}
                 {...cardProps(entry, target)}
+                articleRows={rule.articleContext ? articleRows : undefined}
                 autoEdit={autoEdit === key}
                 onAutoEdited={clearAutoEdit}
               />
@@ -255,26 +262,21 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
               ))}
             </div>
           )}
-          {articles.map((article) => {
-            const rows = byTarget.get(article.id)?.rows ?? [];
-            return (
-              <div key={article.id} className="mt-2 border-t border-gray-200 pt-1.5" data-testid="concept-context-group">
-                <div className="px-2 pb-0.5 text-xs text-gray-400">
-                  Concepts linked to its article ({fileName(article.path)})
-                </div>
-                {rows.length === 0 && <div className="px-2 text-xs text-gray-400">None</div>}
-                {rows.map((entry) => (
-                  <ConceptRowCard
-                    key={`${entry.conceptId}:${entry.index}`}
-                    {...cardProps(entry, article.id)}
-                    context
-                    addForLensDone={ownIds.has(entry.conceptId)}
-                    onAddForLens={canEdit && !busy ? () => void addRow({ id: entry.conceptId }, entry.body) : undefined}
-                  />
-                ))}
+          {groups.articleOnly.map((article) => (
+            <div key={article.articleId} className="mt-2 border-t border-gray-200 pt-1.5" data-testid="concept-context-group">
+              <div className="px-2 pb-0.5 text-xs text-gray-400">
+                Only linked to its article ({article.articleName})
               </div>
-            );
-          })}
+              {article.rows.map((entry) => (
+                <ConceptRowCard
+                  key={`${entry.conceptId}:${entry.index}`}
+                  {...cardProps(entry, article.articleId)}
+                  context
+                  onAddForLens={canEdit && !busy ? () => void addRow({ id: entry.conceptId }, entry.body) : undefined}
+                />
+              ))}
+            </div>
+          ))}
         </div>
       )}
     </section>

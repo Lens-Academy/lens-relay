@@ -6,7 +6,7 @@ import { embedViewExtensions } from '../Editor/extensions/noteEmbed';
 import { ySectionSync, ySectionUndoManagerKeymap } from '../SectionEditor/y-section-sync';
 import { closeLive, isLive, openLive } from '../../lib/embed-docs';
 import { attachProvenanceRegistration } from '../../lib/provenance';
-import { rowPreview, rowsAbout, type RowEntry } from '../../lib/concept-rows';
+import { rowPreview, rowsAbout, type ArticleRows, type RowEntry } from '../../lib/concept-rows';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 
@@ -27,7 +27,9 @@ export interface RowCardProps {
   onAutoEdited?: () => void;
   /** Context rows: add a row for the lens, prefilled with this one's text. */
   onAddForLens?: () => void;
-  addForLensDone?: boolean;
+  /** A lens's own row: its concept's rows about the lens's articles, shown
+   *  read-only under it (given on lenses only, empty when there are none). */
+  articleRows?: ArticleRows[];
 }
 
 type CardState = 'idle' | 'connecting' | 'live' | 'error';
@@ -161,6 +163,8 @@ export function ConceptRowCard(props: RowCardProps) {
 
   const preview = rowPreview(entry.body);
   const showBody = expanded || state !== 'idle';
+  const articleRows = props.articleRows ?? [];
+  const labelled = articleRows.length > 0;
 
   return (
     <div
@@ -196,25 +200,30 @@ export function ConceptRowCard(props: RowCardProps) {
             {preview || 'No notes yet'}
           </button>
         )}
+        {props.articleRows && (
+          <span
+            className="shrink-0 rounded bg-gray-100 px-1.5 text-[11px] text-gray-500"
+            title={labelled ? 'Notes on this lens and on its article' : 'Notes on this lens'}
+          >
+            {labelled ? 'lens · article' : 'lens'}
+          </span>
+        )}
         <span className="ml-auto shrink-0 text-xs text-gray-400">
           {state === 'connecting' && 'Opening…'}
           {state === 'live' && 'Editing · Esc to finish'}
           {state === 'error' && <span className="text-red-700">Could not open</span>}
         </span>
         {props.onAddForLens && (
-          props.addForLensDone
-            ? <span className="shrink-0 text-xs text-gray-400">Added for this lens</span>
-            : (
-              <button
-                type="button"
-                onClick={props.onAddForLens}
-                className="shrink-0 text-xs text-indigo-600 hover:underline cursor-pointer"
-              >
-                Add for this lens too
-              </button>
-            )
+          <button
+            type="button"
+            onClick={props.onAddForLens}
+            className="shrink-0 text-xs text-indigo-600 hover:underline cursor-pointer"
+          >
+            Add for this lens too
+          </button>
         )}
       </div>
+      {showBody && labelled && <div className="ml-5 mt-1 text-xs text-gray-400">This lens</div>}
       {expanded && state === 'idle' && (
         <div
           className={`concept-row-body ml-5 mt-1 ${editable ? 'cursor-text' : ''}`}
@@ -233,6 +242,16 @@ export function ConceptRowCard(props: RowCardProps) {
       )}
       {/* Always mounted: the editor goes in as soon as the connection is up. */}
       <div ref={liveHost} className="concept-row-body ml-5 mt-1" hidden={state === 'idle'} />
+      {showBody && articleRows.map((article) => (
+        <div key={article.articleId} className="ml-5 mt-2 text-gray-400" data-testid="concept-row-article">
+          <div className="text-xs">Its article ({article.articleName})</div>
+          {article.rows.map((row) => (
+            <div key={row.index} className="concept-row-body mt-0.5">
+              {row.body ? <RowPreview text={row.body} /> : <div className="italic">No notes yet</div>}
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }
