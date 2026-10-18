@@ -14,6 +14,8 @@
  * - Bullet list markers replaced with dot (•) widget
  * - Checklists rendered as interactive checkboxes with toggle
  * - Completed tasks shown with strikethrough
+ * - Horizontal rules (---, ***, ___) drawn as a divider line; the characters
+ *   hidden when cursor not on that line
  */
 
 import {
@@ -463,16 +465,20 @@ const obsidianCommentRangesField = StateField.define<readonly TextRange[]>({
   },
 });
 
+/**
+ * Check if pos is inside the leading --- frontmatter block (rendered by frontmatter.ts)
+ */
+function inFrontmatter(view: EditorView, pos: number): boolean {
+  const { enabled, range } = view.state.field(frontmatterField);
+  return enabled && range !== null && pos >= range.from && pos <= range.to;
+}
+
 function isHashtagContextExcluded(
   view: EditorView,
   pos: number,
   obsidianCommentRanges: readonly TextRange[]
 ): boolean {
-  const frontmatter = view.state.field(frontmatterField);
-  if (frontmatter.enabled && frontmatter.range &&
-      pos >= frontmatter.range.from && pos <= frontmatter.range.to) {
-    return true;
-  }
+  if (inFrontmatter(view, pos)) return true;
   if (obsidianCommentRanges.some((range) => pos >= range.from && pos < range.to)) {
     return true;
   }
@@ -517,6 +523,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       let decorations: Array<{ from: number; to: number; deco: Decoration }> =
         [];
       const obsidianCommentRanges = view.state.field(obsidianCommentRangesField);
+      // Line numbers of horizontal rules, which the bullet validation below skips
+      const hrLines = new Set<number>();
 
       // Iterate syntax tree within visible ranges only (performance)
       for (const { from, to } of view.visibleRanges) {
@@ -567,6 +575,26 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 decorations.push({
                   from: node.from,
                   to: end,
+                  deco: Decoration.mark({ class: HIDDEN_CLASS }),
+                });
+              }
+            }
+
+            // HorizontalRule (---, ***, ___): divider line when cursor not on line.
+            // The line class draws the rule (index.css) and the characters are
+            // hidden. The leading --- of frontmatter is left to frontmatter.ts.
+            if (node.name === 'HorizontalRule') {
+              const hrLine = view.state.doc.lineAt(node.from);
+              hrLines.add(hrLine.number);
+              if (!cursorOnLine(view, node.from) && !inFrontmatter(view, node.from)) {
+                decorations.push({
+                  from: hrLine.from,
+                  to: hrLine.from,
+                  deco: Decoration.line({ class: 'cm-hr-line' }),
+                });
+                decorations.push({
+                  from: node.from,
+                  to: node.to,
                   deco: Decoration.mark({ class: HIDDEN_CLASS }),
                 });
               }
@@ -975,6 +1003,9 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 
           const match = line.text.match(/^(\t*)- /);
           if (!match) continue;
+
+          // Skip horizontal rules such as `- - -` (handled above)
+          if (hrLines.has(line.number)) continue;
 
           // Skip task list items (handled by checklist code)
           if (/^(\t*)- \[[ x]\] /i.test(line.text)) continue;

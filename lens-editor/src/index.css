@@ -73,6 +73,20 @@
 .cm-line.cm-heading-5-line { padding-top: 0.5rem; }
 .cm-line.cm-heading-6-line { padding-top: 0.5rem; }
 
+/* Horizontal rule (---, ***, ___) — livePreview.ts marks the line and hides
+   the characters. The rule is a background band across the line's text
+   column, so the line keeps its height when the raw characters come back.
+   Its colour is the text colour at low alpha, so it follows the editor's
+   colours (light or dark) and never hides the selection behind it. */
+.cm-line.cm-hr-line {
+  --hr-color: color-mix(in srgb, currentColor 20%, transparent);
+  background-image: linear-gradient(var(--hr-color), var(--hr-color));
+  background-origin: content-box;
+  background-position: center;
+  background-size: 100% 2px;
+  background-repeat: no-repeat;
+}
+
 /* Blockquote — Obsidian-style left border; text keeps the normal color so it
    doesn't read like a greyed-out %%comment%% */
 .cm-blockquote {
