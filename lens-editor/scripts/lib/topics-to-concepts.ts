@@ -83,13 +83,23 @@ function parseFrontmatter(content: string): Frontmatter | null {
       throw new TransformError(`unexpected frontmatter line ${i + 1}: ${JSON.stringify(t)}`);
     }
     let end = i + 1;
+    const isCont = (n: string) => n.trim() !== '' && !n.startsWith('#') && (/^\s/.test(n) || n.startsWith('-'));
+    const isGap = (n: string) => n.trim() === '' || n.trimStart().startsWith('#');
     while (end < close) {
       const n = strip(lines[end]);
-      if (/^\s/.test(n) || n.startsWith('-')) end++;
-      else break;
+      if (isCont(n)) { end++; continue; }
+      if (isGap(n)) {
+        // A blank or `# comment` line (even at column 0) inside a block list:
+        // part of the field if more of its lines follow.
+        let k = end;
+        while (k < close && isGap(strip(lines[k]))) k++;
+        if (k < close && isCont(strip(lines[k]))) { end = k; continue; }
+      }
+      break;
     }
     const items: Field['items'] = [];
     for (let j = i + 1; j < end; j++) {
+      if (strip(lines[j]).trimStart().startsWith('#')) continue;
       const im = strip(lines[j]).match(/^\s*-\s*(.*)$/);
       if (im) items.push({ index: j, raw: im[1].trim() });
     }
@@ -110,11 +120,31 @@ export function unquote(raw: string): string {
 
 const CRITIC_RE = /\{(\+\+|--|~~|==|>>)/;
 
+const CRITIC_SPAN_RE = /\{(\+\+|--|~~|==|>>)[\s\S]*?(\+\+|--|~~|==|<<)\}/g;
+
+/** The pending CriticMarkup in a text, described for a problem line ("" if none). */
+export function describeCriticMarkup(text: string): string {
+  const spans = [...text.matchAll(CRITIC_SPAN_RE)].map((m) => {
+    const kind = { '++': 'insertion', '--': 'deletion', '~~': 'substitution', '==': 'highlight', '>>': 'comment' }[m[1]] ?? 'markup';
+    const author = m[0].match(/"author":"([^"]*)"/)?.[1];
+    const body = m[0].replace(/^\{(\+\+|--|~~|==|>>)(\{[^}]*\}@@)?/, '').replace(/(\+\+|--|~~|==|<<)\}$/, '');
+    return `${kind}${author ? ` by ${author}` : ''} ${JSON.stringify(body)}`;
+  });
+  if (spans.length) return spans.join(' + ');
+  return CRITIC_RE.test(text) ? 'unterminated CriticMarkup' : '';
+}
+
 function assertNoCriticMarkup(fm: Frontmatter) {
   const text = fm.lines.slice(fm.open, fm.close + 1).join('\n');
   if (CRITIC_RE.test(text)) {
-    throw new TransformError('frontmatter contains a pending CriticMarkup suggestion or comment; resolve it first');
+    throw new TransformError(`frontmatter has a pending CriticMarkup suggestion: ${describeCriticMarkup(text)}; accept or reject it in the editor first`);
   }
+}
+
+/** Frontmatter text (between the fences) of a document, for problem checks. */
+function frontmatterText(content: string): string {
+  const fm = parseFrontmatter(content);
+  return fm ? fm.lines.slice(fm.open + 1, fm.close).join('\n') : '';
 }
 
 /** Values of a scalar-or-list field: inline scalar, inline flow list, or block list. */
@@ -603,6 +633,8 @@ export interface Item {
   domainNumber?: number;
   /** merge-placeholder resumed after its trash went through: only the concept edit is left. */
   alreadyTrashed?: boolean;
+  /** drop/merge: the placeholder's text (the record of what is trashed). */
+  placeholderText?: string;
 }
 
 export interface Problem { path: string; reason: string }
@@ -762,7 +794,9 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
   const placeholders: PlaceholderCand[] = [];
   const realLOs: { entry: VaultEntry; content: string }[] = [];
   for (const e of snap.entries) {
-    if (!e.path.startsWith(LO_DIR) || e.type !== 'markdown') continue;
+    const inConcepts = e.path.startsWith(CONCEPTS_DIR);
+    if ((!e.path.startsWith(LO_DIR) && !inConcepts) || e.type !== 'markdown') continue;
+    if (inConcepts && !/skill-tree-placeholder/.test(text(e.path) ?? '')) continue;
     const content = text(e.path);
     if (content === undefined) { problems.push({ path: e.path, reason: 'content not loaded' }); continue; }
     let fmOk = true;
@@ -783,7 +817,18 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
     }
     if (!fmOk) continue;
     const real = hasTest(content) || hasLenses(content);
-    // Placeholder, or a placeholder already rewritten but not yet moved (a re-run after a partial apply).
+    if (inConcepts) {
+      // Placeholders move first and are edited after: one that moved but whose
+      // edit did not land (a run that stopped in between) is still tagged.
+      if (!tagged) continue;
+      if (real) { problems.push({ path: e.path, reason: 'tagged skill-tree-placeholder in Concepts/, but has a test or lenses' }); continue; }
+      const r = tryTransform(e.path, () => transformPlaceholder(content));
+      placeholders.push({ entry: e, content, r, linkVals: linkField(content, hasTopic ? 'topic' : PARENT_KEY) ?? 'none' });
+      destOf.set(e.path, e.path);
+      continue;
+    }
+    // Placeholder, or (from an earlier version of this script, which edited
+    // before moving) a placeholder already rewritten but not yet moved.
     const pendingMove = !tagged && hasParent && !hasTopic && !hasConcept && !hasLO;
     if ((tagged && !real) || pendingMove) {
       const r = tryTransform(e.path, () => transformPlaceholder(content));
@@ -844,7 +889,9 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
     sourcesByTarget.set(k, [...(sourcesByTarget.get(k) ?? []), source]);
   };
   for (const it of items) if (it.target) addTarget(it.target, it.path);
-  for (const p of placeholders) addTarget(`${CONCEPTS_DIR}${basename(p.entry.path)}`, p.entry.path);
+  for (const p of placeholders) {
+    if (!p.entry.path.startsWith(CONCEPTS_DIR)) addTarget(`${CONCEPTS_DIR}${basename(p.entry.path)}`, p.entry.path);
+  }
   const existingConcepts = new Map<string, string>();
   for (const e of snap.entries) {
     if (e.path.startsWith(CONCEPTS_DIR)) existingConcepts.set(e.path.toLowerCase(), e.path);
@@ -921,17 +968,18 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
         notes: [`merged into existing ${mergeInto.slice(1)}, then trashed`, ...r.notes],
         parents: names.map((n) => `${CONCEPTS_DIR}${n}.md`),
         merge: { conceptPath: mergeInto, conceptId: conceptEntry.id, id, parentNames: names },
+        placeholderText: p.content,
       });
       continue;
     }
     if (dropped.has(path)) {
       checkNoInbound(p.entry);
-      items.push({ kind: 'drop-placeholder', path, id: p.entry.id, before: p.content, after: p.content, notes: ['same name as its parent topic/domain; trashed instead of moved'] });
+      items.push({ kind: 'drop-placeholder', path, id: p.entry.id, before: p.content, after: p.content, placeholderText: p.content, notes: ['same name as its parent topic/domain; trashed instead of moved'] });
       counts.dropPlaceholders++;
       continue;
     }
     const parents: string[] = [];
-    if (p.linkVals !== 'none') {
+    if (p.linkVals !== 'none' && !CRITIC_RE.test(frontmatterText(p.content))) {
       for (const v of p.linkVals) {
         const target = wikilinkTargets(v)[0];
         const r = target ? resolveToDest(target, path) : null;
@@ -953,6 +1001,11 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
 
   // --- Real learning outcomes ----------------------------------------------------
   for (const { entry, content } of realLOs) {
+    if (CRITIC_RE.test(frontmatterText(content))) {
+      // Name the suggestion; the links inside it cannot be checked until it is resolved.
+      problems.push({ path: entry.path, reason: `frontmatter has a pending CriticMarkup suggestion: ${describeCriticMarkup(frontmatterText(content))}; accept or reject it in the editor first` });
+      continue;
+    }
     const vals = linkField(content, 'topic');
     if (vals && vals !== 'none') {
       let bad = false;
@@ -977,7 +1030,9 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
   // --- Template -------------------------------------------------------------------
   const tpl = byPath.get(TEMPLATE_PATH);
   const tplText = text(TEMPLATE_PATH);
-  if (tpl && tplText !== undefined) {
+  if (!tpl || tplText === undefined) {
+    problems.push({ path: TEMPLATE_PATH, reason: 'the LO authoring template is missing (moved or renamed?); update this script\'s TEMPLATE_PATH' });
+  } else {
     const r = transformTemplate(tplText);
     if (r.content !== tplText) {
       counts.template++;
@@ -1043,6 +1098,51 @@ export function verifyMigrated(
     }
   }
   return { problems, stats };
+}
+
+/**
+ * Relay snapshots: for every file that moves or is trashed, the files that link
+ * to it, except the `topic:` links of learning outcomes and placeholders into
+ * domains/topics (the migration's own subject). These are what the moves will
+ * rewrite elsewhere: bodies, modules, existing concepts, `requires:` links.
+ */
+export function incomingLinks(plan: Plan, snap: Snapshot): { path: string; target?: string; trashed: boolean; from: string[] }[] {
+  if (!snap.backlinks) return [];
+  const pathById = new Map(snap.entries.map((e) => [e.id, e.path]));
+  const out: { path: string; target?: string; trashed: boolean; from: string[] }[] = [];
+  for (const it of plan.items) {
+    const trashed = it.kind === 'drop-placeholder' || it.kind === 'merge-placeholder';
+    if (!trashed && !(it.target && it.target !== it.path)) continue;
+    const isDomainOrTopic = it.kind === 'domain' || it.kind === 'topic';
+    const from = (snap.backlinks.get(it.id) ?? [])
+      .filter((u) => u !== it.id)
+      .map((u) => pathById.get(u) ?? `(uuid ${u}, outside this folder)`)
+      .filter((p) => !p.startsWith(DOMAINS_DIR) && !(isDomainOrTopic && p.startsWith(LO_DIR)))
+      .sort();
+    if (from.length) out.push({ path: it.path, target: trashed ? undefined : it.target, trashed, from });
+  }
+  return out;
+}
+
+/**
+ * Signs that an apply already ran on this folder: migrated domain/topic files or
+ * still-tagged placeholders in Concepts/. Used to refuse an apply that has lost
+ * its journal.
+ */
+export function partialMigrationEvidence(snap: Snapshot): string[] {
+  const out: string[] = [];
+  for (const e of snap.entries) {
+    if (!e.path.startsWith(CONCEPTS_DIR) || e.type !== 'markdown') continue;
+    const t = snap.contents.get(e.path);
+    if (t === undefined) continue;
+    try {
+      const y = parseYamlFrontmatter(t);
+      if (y['skill-tree'] === 'domain' || y['skill-tree'] === 'topic' || isPlaceholderTagged(t)) out.push(e.path);
+    } catch (err) {
+      if (!(err instanceof TransformError)) throw err;
+    }
+  }
+  return out;
 }
 
 /** An item's transform applied to a file's current text (links may have been rewritten since planning). */

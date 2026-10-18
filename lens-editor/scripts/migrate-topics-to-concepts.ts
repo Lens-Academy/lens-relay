@@ -13,19 +13,23 @@
  *   phase 4  every other learning outcome: topic: -> concept: (topic: none -> removed)
  *   phase 5  the authoring template AI Guide/Writing (Learning) Outcomes 2.md
  *
- * In phases 1-3 each file's frontmatter is rewritten first, in place, then the file
- * is moved with the relay's move endpoint (POST /doc/move), which rewrites every
+ * In phases 1-3 each file is moved with the relay's move endpoint (POST /doc/move)
+ * and has its frontmatter rewritten (order: see Resuming below); the move rewrites every
  * wikilink to it (and its own outgoing relative links) through the link indexer.
  * Frontmatter edits are direct Y.Text edits over the y-sweet websocket (server
  * token -> per-doc client token -> YSweetProvider), one per changed hunk, applied
  * back to front in one transaction, because the MCP edit tool turns replacements
  * of human-written text into CriticMarkup suggestions, which break YAML.
  *
- * Resuming: each file is re-read right before it is changed, and every file in
- * phases 1-3 is written to a journal (--journal) before its first change and
- * marked done after its last. A re-run first finishes what the journal says was
- * started, then continues with the plan, so an apply that stopped half way (even
- * between a file's edit and its move) can simply be run again.
+ * Resuming: each file is re-read right before it is changed. Domains and topics
+ * are edited first and moved second (their order and domain name exist only in
+ * the old folder name), and are written to a journal (--journal) before their
+ * first change and marked done after their last; a re-run finishes what the
+ * journal says was started. Placeholders are moved first and edited second, so
+ * one caught in between is in Concepts/ and still tagged, which the plan
+ * recognises without the journal. An apply that stopped half way can simply be
+ * run again (with the same --journal; --apply refuses when the journal is
+ * missing but Concepts/ shows an earlier apply).
  *
  * Usage (from lens-editor/):
  *   # plan from a directory (a git mirror of the folder); never connects anywhere
@@ -67,11 +71,14 @@
  *   --concurrency <n>      parallel doc connections for reads and phase-4 edits (default 4)
  *   --journal <path>       apply journal (default ./migrate-topics-to-concepts.journal.json);
  *                          keep it until the migration is complete
+ *   --no-journal-check     apply even though the journal is missing while Concepts/ already
+ *                          holds migrated domains/topics or tagged placeholders
  *   --report <path>        also write everything printed to this file (keep the full
  *                          live dry run: it is the record of the data the migration drops)
  *   --simulate-failure <in-folder path>
- *                          testing only: stop half way through that file (after its edit,
- *                          before its move; for a merge after the trash, before the edit)
+ *                          testing only: stop half way through that file (domain/topic:
+ *                          after its edit, before its move; placeholder: after its move,
+ *                          before its edit; merge: after the trash, before the edit)
  *
  * RELAY_SERVER_TOKEN is read from the environment (required for a non-local relay;
  * a local dev relay without auth works without it). It is never printed. Exit code
@@ -84,7 +91,8 @@ import * as Y from 'yjs';
 import { YSweetProvider } from '@y-sweet/client';
 import {
   CONCEPTS_DIR, DOMAINS_DIR, TEMPLATE_PATH, TransformError, findTextReferences, hunkEdits, lineDiff, needsContent,
-  parseYamlFrontmatter, planMigration, resumeItems, transformFor, transformTemplate, verifyMigrated,
+  applyEdits, hasLenses, hasTest, incomingLinks, isPlaceholderTagged, parseYamlFrontmatter, partialMigrationEvidence,
+  planMigration, resumeItems, transformFor, transformPlaceholder, transformTemplate, verifyMigrated,
   type Item, type Journal, type JournalEntry, type Plan, type Snapshot, type VaultEntry,
 } from './lib/topics-to-concepts';
 
@@ -108,6 +116,7 @@ interface Args {
   journal: string;
   report: string | null;
   simulateFailure: string | null;
+  noJournalCheck: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -127,6 +136,7 @@ function parseArgs(argv: string[]): Args {
     journal: 'migrate-topics-to-concepts.journal.json',
     report: null,
     simulateFailure: null,
+    noJournalCheck: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -150,6 +160,7 @@ function parseArgs(argv: string[]): Args {
       case '--references': args.references = true; break;
       case '--concurrency': args.concurrency = Math.max(1, Number(next())); break;
       case '--journal': args.journal = next(); break;
+      case '--no-journal-check': args.noJournalCheck = true; break;
       case '--report': args.report = next(); break;
       case '--simulate-failure': args.simulateFailure = normalizeOnly(next()) + (/\.md$/i.test(argv[i]) ? '' : '.md'); break;
       case '--help': case '-h':
@@ -345,17 +356,49 @@ async function editDoc(args: Args, item: Item): Promise<boolean> {
     parseYamlFrontmatter(after);
     const edits = hunkEdits(before, after);
     if (!edits.length) return false;
+    // Check everything before anything is sent: the edits produce exactly the
+    // planned text, and the planned text is already migrated.
+    if (applyEdits(before, edits) !== after) throw new Error('planned edits do not reproduce the planned text; nothing sent');
+    if (transformFor(item, after) !== after) throw new Error('transform is not idempotent on the planned text; nothing sent');
     doc.transact(() => {
       for (const e of edits) {
         if (e.deleteCount) ytext.delete(e.index, e.deleteCount);
         if (e.insert) ytext.insert(e.index, e.insert);
       }
     }, 'migrate-topics-to-concepts');
-    const now = ytext.toString();
-    if (now !== after) throw new Error('post-edit text differs from the planned text');
-    if (transformFor(item, now) !== now) throw new Error('post-edit verification failed: transform is not idempotent');
+    if (ytext.toString() !== after) throw new Error('text after the edit differs from the planned text');
     return true;
   });
+}
+
+/** A file that no longer matches what the plan expected: skipped, reported as a problem. */
+class SkipError extends Error {}
+
+function bodyText(text: string): string {
+  const m = text.match(/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/);
+  return m ? text.slice(m[0].length) : text;
+}
+
+async function readText(args: Args, uuid: string): Promise<string> {
+  return withDoc(args.relayUrl, `${args.relayId}-${uuid}`, (doc) => doc.getText('contents').toString());
+}
+
+/**
+ * Right before a placeholder is moved or trashed: it must still be tagged and
+ * still have no test and no lenses (someone may have started writing it up
+ * since the plan was made). A trashed one must also still have no body.
+ */
+async function recheckPlaceholder(args: Args, it: Item) {
+  const text = await readText(args, it.id);
+  if (hasTest(text) || hasLenses(text)) throw new SkipError('now has a test or lenses: it is a real learning outcome; skipped');
+  const trashing = it.kind === 'drop-placeholder' || it.kind === 'merge-placeholder';
+  if (!isPlaceholderTagged(text)) {
+    // A placeholder rewritten by an earlier version of this script (edit before move) is untagged but done.
+    if (trashing || transformPlaceholder(text).content !== text) throw new SkipError('no longer tagged skill-tree-placeholder; skipped');
+  }
+  // Its topic links may have been rewritten by the topic moves since planning; what
+  // matters is that it still holds nothing but frontmatter.
+  if (trashing && bodyText(text).trim() !== '') throw new SkipError('has a body now; skipped (re-run to re-plan it)');
 }
 
 // --- Journal ---------------------------------------------------------------
@@ -390,10 +433,14 @@ function maybeFail(args: Args, it: Item) {
   }
 }
 
-interface ApplyReport { edited: number; moved: number; trashed: number; linksRewritten: number; errors: { path: string; reason: string }[] }
+interface ApplyReport {
+  edited: number; moved: number; trashed: number; linksRewritten: number;
+  errors: { path: string; reason: string }[];
+  skipped: { path: string; reason: string }[];
+}
 
 async function applyPlan(args: Args, items: Item[], journal: Journal): Promise<ApplyReport> {
-  const report: ApplyReport = { edited: 0, moved: 0, trashed: 0, linksRewritten: 0, errors: [] };
+  const report: ApplyReport = { edited: 0, moved: 0, trashed: 0, linksRewritten: 0, errors: [], skipped: [] };
   const sequential = items.filter((it) => it.kind !== 'lo' && it.kind !== 'template');
   const editsOnly = items.filter((it) => it.kind === 'lo' || it.kind === 'template');
 
@@ -402,6 +449,9 @@ async function applyPlan(args: Args, items: Item[], journal: Journal): Promise<A
   let done = 0;
   for (const it of sequential) {
     try {
+      if (it.kind === 'placeholder' || it.kind === 'drop-placeholder' || (it.kind === 'merge-placeholder' && !it.alreadyTrashed)) {
+        await recheckPlaceholder(args, it);
+      }
       journalMark(args, journal, it, 'started');
       if (it.kind === 'merge-placeholder') {
         // Trash first: the relay refuses while anything links to the placeholder,
@@ -418,17 +468,34 @@ async function applyPlan(args: Args, items: Item[], journal: Journal): Promise<A
         report.trashed++;
         console.log(`  trashed ${it.path}`);
       } else {
-        if (await editDoc(args, it)) report.edited++;
-        maybeFail(args, it);
-        if (it.target && it.target !== it.path) {
+        const move = async () => {
+          if (!it.target || it.target === it.path) return;
           const res = await postJson(args.relayUrl, '/doc/move', { uuid: it.id, new_path: it.target });
           report.moved++;
           report.linksRewritten += Number(res.links_rewritten ?? 0);
           console.log(`  moved ${it.path} -> ${it.target} (${res.links_rewritten ?? 0} links rewritten)`);
+        };
+        if (it.kind === 'placeholder') {
+          // Move first, then edit: a placeholder caught in between is in Concepts/
+          // and still tagged, which the plan recognises without the journal.
+          await move();
+          maybeFail(args, it);
+          if (await editDoc(args, it)) report.edited++;
+        } else {
+          // Domains and topics: edit first (the order and domain name live only in
+          // the old folder name), then move; the journal covers the gap.
+          if (await editDoc(args, it)) report.edited++;
+          maybeFail(args, it);
+          await move();
         }
       }
       journalMark(args, journal, it, 'done');
     } catch (err) {
+      if (err instanceof SkipError) {
+        report.skipped.push({ path: it.path, reason: err.message });
+        console.log(`  SKIPPED ${it.path}: ${err.message}`);
+        continue;
+      }
       report.errors.push({ path: it.path, reason: String((err as Error)?.message ?? err) });
       // Later items depend on earlier moves: stop at the first failure. The journal
       // keeps this item as started, so the next run finishes it first.
@@ -460,7 +527,7 @@ const KIND_LABEL: Record<Item['kind'], string> = {
   lo: 'learning outcome', template: 'template',
 };
 
-function printPlan(args: Args, plan: Plan, source: string, resumed: Item[] = []) {
+function printPlan(args: Args, plan: Plan, source: string, resumed: Item[] = [], snap?: Snapshot) {
   const items = [...resumed, ...plan.items.filter((it) => matchesOnly(args, it.path))];
   const c = plan.counts;
   const line = (label: string, n: number | string) => console.log(`  ${label.padEnd(58)} ${n}`);
@@ -494,11 +561,23 @@ function printPlan(args: Args, plan: Plan, source: string, resumed: Item[] = [])
 
   const trashed = items.filter((it) => it.kind === 'drop-placeholder' || it.kind === 'merge-placeholder');
   if (trashed.length) {
-    console.log('\nPlaceholder files trashed (record of their ids):');
+    console.log('\nPlaceholder files trashed (the record of what they held):');
     for (const it of trashed) {
-      const id = (it.kind === 'merge-placeholder' ? it.merge!.id : idOf(it.before)) ?? '(no id)';
-      console.log(`  ${it.path.slice(1)}  id: ${id}${it.kind === 'merge-placeholder' ? `  (id kept on ${it.merge!.conceptPath.slice(1)})` : ''}`);
+      const id = (it.kind === 'merge-placeholder' ? it.merge!.id : idOf(it.placeholderText ?? '')) ?? '(no id)';
+      console.log(`  ${it.path.slice(1)}  id: ${id}${it.kind === 'merge-placeholder' ? `  (merged: id and parents kept on ${it.merge!.conceptPath.slice(1)})` : ''}`);
+      for (const l of (it.placeholderText ?? '').split('\n')) console.log(`      | ${l.replace(/\r$/, '')}`);
     }
+  }
+
+  if (snap?.backlinks) {
+    const inc = incomingLinks({ ...plan, items }, snap);
+    console.log(`\nIncoming links to moved/trashed files, beyond the topic: links (from backlinks_v0; the moves rewrite them, a trash is refused while any remain): ${inc.length ? '' : '(none)'}`);
+    for (const x of inc) {
+      console.log(`  ${x.path.slice(1)} ${x.trashed ? '(trashed)' : `-> ${x.target!.slice(1)}`}`);
+      for (const f of x.from) console.log(`      <- ${f.replace(/^\//, '')}`);
+    }
+  } else {
+    console.log('\n(Incoming links are listed only in relay mode, from the backlink index.)');
   }
 
   console.log('\nMoves (in order):');
@@ -608,7 +687,7 @@ async function main() {
   const resume = resumeItems(journal, snap, plan);
   plan.problems.push(...resume.problems);
   for (const uuid of resume.completed) journal.entries[uuid].state = 'done';
-  printPlan(args, plan, source, resume.items);
+  printPlan(args, plan, source, resume.items, snap);
   if (all) printReferences(all);
 
   if (plan.problems.length) {
@@ -620,12 +699,21 @@ async function main() {
     process.exit(0);
   }
 
+  if (!fs.existsSync(args.journal) && !args.noJournalCheck) {
+    const evidence = partialMigrationEvidence(snap);
+    if (evidence.length) {
+      console.log(`\nSTOP: no journal at ${args.journal}, but Concepts/ already holds ${evidence.length} migrated domain/topic or tagged placeholder file(s), e.g. ${evidence.slice(0, 3).map((p) => p.slice(1)).join(', ')}.`);
+      console.log('An earlier apply ran with another journal: pass --journal <that file>, or --no-journal-check if it is really lost.');
+      process.exit(1);
+    }
+  }
   if (resume.completed.length) saveJournal(args, journal);
   // Finish what an earlier run started, then the plan.
   const report = await applyPlan(args, [...resume.items, ...plan.items.filter((it) => matchesOnly(args, it.path))], journal);
   console.log('='.repeat(78));
   console.log(`Applied: ${report.edited} docs edited, ${report.moved} moved (${report.linksRewritten} links rewritten), ${report.trashed} trashed`);
   for (const e of report.errors) console.log(`  ERROR ${e.path}: ${e.reason}`);
+  for (const e of report.skipped) console.log(`  PROBLEM (skipped) ${e.path}: ${e.reason}`);
 
   // Re-read everything and check: nothing left to do, links resolve.
   await new Promise((r) => setTimeout(r, 1500));
@@ -635,6 +723,7 @@ async function main() {
   const remaining = [...reresume.items, ...replan.items.filter((it) => matchesOnly(args, it.path))];
   console.log(`Re-plan after apply: ${remaining.length} pending changes, ${replan.problems.length} problems`);
   for (const it of remaining.slice(0, 20)) console.log(`  pending: ${it.kind} ${it.path}`);
+  for (const p of replan.problems) console.log(`  PROBLEM ${p.path}: ${p.reason}`);
   if (!args.only) {
     const placeholderIds = new Set(Object.values(journal.entries).filter((j) => j.kind === 'placeholder').map((j) => j.uuid));
     const v = verifyMigrated(after, placeholderIds);
@@ -642,7 +731,7 @@ async function main() {
     for (const p of v.problems) console.log(`  VERIFY ${p.path}: ${p.reason}`);
     if (v.problems.length) process.exit(1);
   }
-  process.exit(report.errors.length || remaining.length ? 1 : 0);
+  process.exit(report.errors.length || report.skipped.length || remaining.length || replan.problems.length ? 1 : 0);
 }
 
 main().catch((err) => {

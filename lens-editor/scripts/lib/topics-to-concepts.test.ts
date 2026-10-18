@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  TransformError, applyEdits, hunkEdits, lineDiff, mergeIntoConcept, resumeItems, transformFor, compareItems, linkField, minimalEdit, planMigration, transformDomain, transformLearningOutcome,
+  TransformError, describeCriticMarkup, incomingLinks, partialMigrationEvidence, applyEdits, hunkEdits, lineDiff, mergeIntoConcept, resumeItems, transformFor, compareItems, linkField, minimalEdit, planMigration, transformDomain, transformLearningOutcome,
   transformPlaceholder, transformTemplate, transformTopic, verifyMigrated, findTextReferences,
   type Journal, type Snapshot, type VaultEntry,
 } from './topics-to-concepts';
@@ -197,6 +197,7 @@ const base = (): Record<string, string> => ({
   '/Learning Outcomes/Facilitator.md': '---\nid: r3\n---\n## Test:\n',
   '/Learning Outcomes/Tagged real.md': '---\nid: r4\ntopic: "[[../Domains and Topics/3 Alignment/Scalable oversight]]"\ntags:\n  - skill-tree-placeholder\n---\n## Test:\n',
   '/modules/m.md': 'Links [[../Learning Outcomes/Debate]]\n',
+  '/AI Guide/Writing (Learning) Outcomes 2.md': 'topic: "[[../Domains/<N> <Domain>/<Topic>]]"\n',
 });
 
 describe('planMigration', () => {
@@ -207,7 +208,7 @@ describe('planMigration', () => {
       domains: 2, topics: 3, placeholders: 3, multiParentPlaceholders: 1, noParentPlaceholders: 1,
       los: 3, losNone: 1, loNoTopic: 1, taggedButReal: 1,
     });
-    const stage = (k: string) => (k === 'domain' || k === 'topic' ? 0 : ['placeholder', 'lo'].indexOf(k) + 1);
+    const stage = (k: string) => (k === 'domain' || k === 'topic' ? 0 : ['placeholder', 'lo', 'template'].indexOf(k) + 1);
     const kinds = plan.items.map((i) => i.kind);
     expect(kinds).toEqual([...kinds].sort((a, b) => stage(a) - stage(b)));
     const both = plan.items.find((i) => i.path === '/Learning Outcomes/Both.md')!;
@@ -425,5 +426,67 @@ describe('review fixes', () => {
   it('verify accepts only parent-concepts:', () => {
     const snap = snapshot({ '/Concepts/A.md': '---\nparent:\n  - "[[B]]"\n---\n', '/Concepts/B.md': '' });
     expect(verifyMigrated(snap).problems.map((p) => p.reason)).toEqual(['concept file uses parent:; the field is parent-concepts:']);
+  });
+});
+
+describe('second review fixes', () => {
+  it('a placeholder that moved but was not edited (still tagged, in Concepts/) is planned as an edit in place', () => {
+    const files = base();
+    files['/Concepts/Debate.md'] = files['/Learning Outcomes/Debate.md'].replace('../Domains and Topics/3 Alignment/Scalable oversight', '../Domains and Topics/3 Alignment/Scalable oversight');
+    files['/Concepts/Nowhere.md'] = files['/Learning Outcomes/Nowhere.md'];
+    delete files['/Learning Outcomes/Debate.md'];
+    delete files['/Learning Outcomes/Nowhere.md'];
+    const plan = planMigration(snapshot(files));
+    expect(plan.problems).toEqual([]);
+    for (const p of ['/Concepts/Debate.md', '/Concepts/Nowhere.md']) {
+      const it = plan.items.find((i) => i.path === p)!;
+      expect(it.kind).toBe('placeholder');
+      expect(it.target).toBe(p);
+      expect(it.after).not.toContain('skill-tree-placeholder');
+    }
+    expect(plan.items.find((i) => i.path === '/Concepts/Debate.md')!.parents).toEqual(['/Concepts/Scalable oversight.md']);
+    expect(partialMigrationEvidence(snapshot(files))).toEqual(['/Concepts/Debate.md', '/Concepts/Nowhere.md']);
+  });
+
+  it('partialMigrationEvidence sees migrated domains/topics, not ordinary concepts', () => {
+    expect(partialMigrationEvidence(snapshot(base()))).toEqual([]);
+    expect(partialMigrationEvidence(snapshot({
+      '/Concepts/Alignment.md': '---\nskill-tree: domain\norder: 3\n---\n',
+      '/Concepts/Corrigibility.md': '# Corrigibility\n',
+    }))).toEqual(['/Concepts/Alignment.md']);
+  });
+
+  it('a column-0 comment inside a block list does not hide later items', () => {
+    const r = transformPlaceholder('---\nid: a\ntopic:\n  - "[[../A/One]]"\n# a note\n  - "[[../B/Two]]"\nstage: x\ntags:\n  - skill-tree-placeholder\n---\n');
+    expect(linkField(r.content, 'parent-concepts')).toEqual(['"[[../A/One]]"', '"[[../B/Two]]"']);
+    expect(r.content).not.toMatch(/stage|tags/);
+  });
+
+  it('names the pending CriticMarkup suggestion', () => {
+    const files = base();
+    files['/Learning Outcomes/Real one.md'] = '---\nid: r1\ntopic: "[[../Domains and Topics/7 AI {--{"author":"James\'s AI","timestamp":1}@@Control/The control agenda]]"--}{++{"author":"James\'s AI","timestamp":1}@@Control/X]]"++}\n---\n## Test:\n';
+    const reasons = planMigration(snapshot(files)).problems.filter((p) => p.path === '/Learning Outcomes/Real one.md').map((p) => p.reason);
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/pending CriticMarkup suggestion: deletion by James's AI "Control\/The control agenda\]\]\\"" \+ insertion by James's AI "Control\/X\]\]\\""/);
+    expect(describeCriticMarkup('plain')).toBe('');
+  });
+
+  it('a missing template is a problem', () => {
+    const files = base();
+    delete files['/AI Guide/Writing (Learning) Outcomes 2.md'];
+    expect(planMigration(snapshot(files)).problems.map((p) => p.path)).toEqual(['/AI Guide/Writing (Learning) Outcomes 2.md']);
+  });
+
+  it('incomingLinks lists links from outside the topic: fields', () => {
+    const snap = snapshot(base());
+    snap.backlinks = new Map([
+      ['id-/Domains and Topics/3 Alignment/Scalable oversight.md', ['id-/Learning Outcomes/Debate.md', 'id-/modules/m.md']],
+      ['id-/Learning Outcomes/Debate.md', ['id-/modules/m.md', 'id-/Learning Outcomes/Real one.md']],
+    ]);
+    const inc = incomingLinks(planMigration(snap), snap);
+    expect(inc).toEqual([
+      { path: '/Domains and Topics/3 Alignment/Scalable oversight.md', target: '/Concepts/Scalable oversight.md', trashed: false, from: ['/modules/m.md'] },
+      { path: '/Learning Outcomes/Debate.md', target: '/Concepts/Debate.md', trashed: false, from: ['/Learning Outcomes/Real one.md', '/modules/m.md'] },
+    ]);
   });
 });
