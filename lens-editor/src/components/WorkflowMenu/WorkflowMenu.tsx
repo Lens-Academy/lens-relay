@@ -29,12 +29,11 @@ const WORKFLOWS: WorkflowItem[] = [
   },
   // One importer for everything: it detects YouTube URLs and imports the
   // video's transcript instead of an article, so the separate Add Video page
-  // (and its bookmarklet) is gone. The route stays /add-article so existing
-  // links keep working.
+  // (and its bookmarklet) is gone. The old /add-article address redirects here.
   {
     label: 'Add Source',
     description: 'Import an article or video into Lens Edu',
-    path: '/add-article',
+    path: '/add-source',
     access: 'addSource',
     icon: 'article',
   },

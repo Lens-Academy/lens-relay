@@ -36,18 +36,26 @@ import {
   generateArticleFilenameBase,
   articleFilenameCandidates,
 } from "./export";
-import { parsePromotableArticleStub } from "./stub";
+import { isStub, parsePromotableArticleStub, VIDEO_STUB } from "./stub";
 import {
   createRelayDoc,
   checkRelayDocsExist,
   checkRelayArticleUrls,
   createRelayAttachment,
   checkRelayVideoIds,
+  readRelayDocAtPath,
   relayTranscriptFolder,
   editorOpenUrl,
 } from "../add-video/relay-docs";
 import type { VideoInput } from "../add-video/video-url";
-import { fetchYouTubeTranscript } from "../add-video/fetch-transcript";
+import {
+  fetchYouTubeTranscript,
+  fetchYouTubeVideoMeta,
+} from "../add-video/fetch-transcript";
+import {
+  generateFilenameBase as generateVideoFilenameBase,
+  generateVideoStubMarkdown,
+} from "../add-video/export";
 import { importVideo } from "../add-video/pipeline";
 import { resolveVideoEmbeds } from "./video-embeds";
 import { maybeCreateLens } from "../lens-doc";
@@ -108,8 +116,9 @@ export function articleImportBehavior(
  * Import a YouTube video's transcript: mint + fetch the transcript
  * server-side, then reuse the add-video pipeline (Claude formatting,
  * timestamp alignment, relay write, optional lens). importMode maps as
- * "article" → transcript only, "article-and-lens" → + lens; stubs don't
- * exist for videos.
+ * "article" → transcript only, "article-and-lens" → + lens, "stub" → only
+ * the file with its discussion area (title, channel, link, no transcript),
+ * which a later full import fills in under the notes.
  */
 async function processYouTubeVideo(
   job: ArticleJob,
@@ -133,7 +142,29 @@ async function processYouTubeVideo(
     console.warn(`[add-article] video dedup check failed, proceeding: ${err}`);
   }
   const topFolder = relayTranscriptFolder().split("/")[0];
-  if (existingPath && !job.replaceExisting) {
+  // A video stub is not a duplicate for a full import: the transcript is
+  // filled in under its notes.
+  let stubPath: string | undefined;
+  if (existingPath) {
+    let content: string | null = null;
+    try {
+      content = await readRelayDocAtPath(topFolder + existingPath, signal);
+    } catch (err) {
+      signal?.throwIfAborted();
+      console.warn(`[add-article] could not read ${existingPath} to see whether it is a video stub: ${err}`);
+    }
+    if (content !== null && isStub(content, VIDEO_STUB)) {
+      job.relay_url = editorOpenUrl(topFolder + existingPath);
+      if (behavior.stubOnly) {
+        throw new DuplicateDocumentError(
+          `A video stub already exists for this video: ${topFolder}${existingPath}`,
+          topFolder + existingPath,
+        );
+      }
+      stubPath = topFolder + existingPath;
+    }
+  }
+  if (existingPath && !stubPath && !job.replaceExisting) {
     job.relay_url = editorOpenUrl(topFolder + existingPath);
     throw new DuplicateDocumentError(
       `This video was already imported: ${topFolder}${existingPath}`,
@@ -147,9 +178,32 @@ async function processYouTubeVideo(
       "Could not look up the existing transcript for this video, so nothing was re-imported. Try again.",
     );
   }
-  const replaceExisting = job.replaceExisting && existingPath
+  const replaceExisting = job.replaceExisting && existingPath && !stubPath
     ? { mdPath: topFolder + existingPath }
     : undefined;
+
+  if (behavior.stubOnly) {
+    setStage("fetching-video-details");
+    const meta = await fetchYouTubeVideoMeta(video, signal);
+    job.title = meta.title;
+    setStage("writing");
+    const mdPath = `${relayTranscriptFolder()}/${generateVideoFilenameBase(meta.channel, meta.title)}.md`;
+    // Never write over another video's file that happens to share the name.
+    if ((await checkRelayDocsExist([mdPath], signal))[mdPath]) {
+      throw new Error(`Document already exists: ${mdPath}`);
+    }
+    signal?.throwIfAborted();
+    await createRelayDoc(
+      mdPath,
+      generateVideoStubMarkdown({ title: meta.title, channel: meta.channel, url: video.url }),
+      signal,
+    );
+    job.relay_url = editorOpenUrl(mdPath);
+    job.relay_path = mdPath;
+    job.updated_at = new Date().toISOString();
+    console.log(`[add-article] Wrote video stub ${mdPath}`);
+    return;
+  }
 
   setStage("fetching-transcript");
   const payload = await fetchYouTubeTranscript(video, signal);
@@ -159,6 +213,7 @@ async function processYouTubeVideo(
   await importVideo(job.id, payload, job.created_at, {
     createLens: behavior.createLens,
     replaceExisting,
+    stubPath,
     signal,
     onStage: setStage,
     // Surface the link as soon as the path is known -- the placeholder doc
@@ -458,6 +513,42 @@ export async function processArticle(
       throw err;
     }
     console.warn(`[add-article] source_url dedup check failed, proceeding: ${err}`);
+  }
+
+  // 4.2. Write the stub now, before the slow part (review, images), so people
+  //      can open the file and start adding notes while the import runs. The
+  //      full article is merged into it at the end exactly as when importing
+  //      over a stub that was already there (step 5): the notes are kept, and
+  //      a stub that gained other text stops the import rather than lose it.
+  //      If the import fails or is cancelled, the stub stays and a retry
+  //      fills it in.
+  let stubSourceUrl: string | undefined;
+  if (!isStubOnly && !existingStub) {
+    await setStage("creating-stub");
+    const stubMarkdown = generateArticleStubMarkdown(meta, createdDate);
+    const stubPath = await withArticleWriteLock(async () => {
+      signal?.throwIfAborted();
+      const candidates = articleFilenameCandidates(
+        filenameBase,
+        meta.source_url || job.url,
+      ).map((b) => `${folder}/${b}.md`);
+      const existing = await checkRelayDocsExist(candidates, signal);
+      const chosen = candidates.find((p) => !existing[p]);
+      if (!chosen) {
+        throw new Error(`Document already exists: ${candidates[0]}`);
+      }
+      await createRelayDoc(chosen, stubMarkdown, signal);
+      return chosen;
+    });
+    existingStub = {
+      path: stubPath.slice(topFolder.length),
+      stubContent: stubMarkdown,
+    };
+    stubSourceUrl = meta.source_url;
+    job.relay_url = editorOpenUrl(stubPath);
+    job.relay_path = stubPath;
+    job.updated_at = new Date().toISOString();
+    console.log(`[add-article] Wrote stub ${stubPath}; importing the full text into it`);
   }
 
   // 4.5. Host + embed any PDF figure images: upload each to the folder's
@@ -913,7 +1004,7 @@ export async function processArticle(
     signal?.throwIfAborted();
     if (existingStub) {
       const refreshed = await findExistingArticle(
-        [job.url, meta.source_url],
+        [job.url, meta.source_url, ...(stubSourceUrl ? [stubSourceUrl] : [])],
         signal,
       );
       if (!refreshed || refreshed.path !== existingStub.path || !refreshed.stubContent) {

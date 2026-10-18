@@ -176,7 +176,7 @@ describe("AddArticlePage status polling", () => {
     expect(stubOption.parentElement).toContainElement(infoButton);
     fireEvent.mouseEnter(infoButton);
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      /only create an article stub without the article body/i,
+      /only create the file with its discussion area/i,
     );
   });
 });

@@ -31,7 +31,7 @@ function validateUrl(raw: string): string | null {
 }
 
 /**
- * Routes for the /add-article feature. Unlike add-video there is no
+ * Routes for the Add Source page (/add-source). Unlike add-video there is no
  * bookmarklet and no cross-origin caller, so the page authenticates with
  * its regular edit share token directly — no token exchange needed.
  */
@@ -119,15 +119,6 @@ export function createAddArticleRoutes(queue: ArticleJobQueue): Hono {
           url,
           status: "invalid",
           error: "replaceExisting re-imports YouTube videos only; articles can't be re-imported this way",
-        });
-        continue;
-      }
-      if (video && importMode === "stub") {
-        results.push({
-          url,
-          status: "invalid",
-          error:
-            'YouTube videos can\'t be imported as stubs. Use "article" (imports the transcript) or "article-and-lens"',
         });
         continue;
       }

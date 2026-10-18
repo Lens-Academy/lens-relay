@@ -241,6 +241,35 @@ describe('importVideo', () => {
     expect(mockRelayDocs.updateRelayDoc).not.toHaveBeenCalled();
   });
 
+  it('gives a new transcript a discussion area above the text', async () => {
+    await runImport();
+
+    const published = mockRelayDocs.upsertRelayDocReturningId.mock.calls[0][1];
+    expect(published).toMatch(/---\n\n%%\nAdd discussion note here:[\s\S]*%%\n\nhello world/);
+  });
+
+  // Prevents: notes typed into the transcript's %% area while the cleanup ran
+  // (minutes) costing the cleanup, or the cleanup costing the notes.
+  it('writes the cleaned transcript under notes added while the cleanup ran', async () => {
+    let published = '';
+    mockRelayDocs.upsertRelayDocReturningId.mockImplementation(
+      async (_path: string, content: string) => {
+        published = content;
+        return 'doc-1';
+      }
+    );
+    mockRelayDocs.readRelayDocText.mockImplementation(async () =>
+      published.replace('Add discussion note here:\n\n...', 'Luc: worth a lens?')
+    );
+
+    await runImport();
+
+    const [, , finalMd] = mockRelayDocs.updateRelayDoc.mock.calls[0];
+    expect(finalMd).toContain('%%\nLuc: worth a lens?\n\n%%');
+    expect(finalMd).toContain('Hello world.');
+    expect(finalMd).not.toContain('hello world');
+  });
+
   // A failed read must not block the cleanup: the common case is an untouched
   // document, and losing the polish over a transient relay hiccup is worse.
   it('still applies the cleanup when the document cannot be re-read', async () => {
@@ -342,6 +371,9 @@ describe('importVideo with replaceExisting', () => {
     mockClaude.runClaude.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
     mockRelayDocs.upsertRelayDocReturningId.mockResolvedValue('doc-1');
     mockRelayDocs.replaceRelayBlob.mockResolvedValue(undefined);
+    mockRelayDocs.readRelayDocAtPath.mockResolvedValue(
+      '---\ntitle: "Old"\n---\n\nOld transcript.\n'
+    );
     mockRelayDocs.relayTranscriptFolder.mockReturnValue('Lens Edu/video_transcripts');
     mockRelayDocs.editorOpenUrl.mockImplementation(
       (p: string) => `https://editor.lensacademy.org/open/${encodeURI(p)}`
@@ -418,6 +450,17 @@ describe('importVideo with replaceExisting', () => {
     expect(mockClaude.runClaude).not.toHaveBeenCalled();
   });
 
+  it('keeps the notes above the old transcript', async () => {
+    mockRelayDocs.readRelayDocAtPath.mockResolvedValue(
+      '---\ntitle: "Old"\nfrom: "1:00"\n---\n\n%%\nLuc: keep this\n%%\n\nOld transcript.\n'
+    );
+
+    await reimport();
+
+    const md = mockRelayDocs.upsertRelayDocReturningId.mock.calls[0][1];
+    expect(md).toBe('---\ntitle: "Old"\nfrom: "1:00"\n---\n\n%%\nLuc: keep this\n%%\n\nHello world.\n');
+  });
+
   it('uses the human captions as they are, without a cleanup pass', async () => {
     await importVideo(
       'test-job',
@@ -429,5 +472,53 @@ describe('importVideo with replaceExisting', () => {
     expect(mockClaude.runClaude).not.toHaveBeenCalled();
     expect(mockRelayDocs.replaceRelayBlob).toHaveBeenCalledOnce();
     expect(mockRelayDocs.upsertRelayDocReturningId.mock.calls[0][1]).toContain('hello world');
+  });
+});
+
+describe('importVideo over a video stub', () => {
+  const stubPath = 'Lens Edu/video_transcripts/testchannel-test-video.md';
+  const stub =
+    '---\ntitle: "Test Video"\nchannel: "TestChannel"\nurl: "https://www.youtube.com/watch?v=abc123"\n' +
+    'tags:\n  - "video-stub"\n  - "validator-ignore"\n  - "curated"\n---\n\n%%\nLuc: use the first ten minutes\n%%\n';
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mockFs.mkdir.mockResolvedValue(undefined);
+    mockFs.writeFile.mockResolvedValue(undefined);
+    mockFs.readFile.mockResolvedValue('Hello world.');
+    mockFs.rm.mockResolvedValue(undefined);
+    mockClaude.runClaude.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
+    mockRelayDocs.upsertRelayDocReturningId.mockResolvedValue('doc-1');
+    mockRelayDocs.readRelayDocText.mockImplementation(
+      async () => mockRelayDocs.upsertRelayDocReturningId.mock.calls.at(-1)![1]
+    );
+    mockRelayDocs.relayTranscriptFolder.mockReturnValue('Lens Edu/video_transcripts');
+    mockRelayDocs.editorOpenUrl.mockImplementation((p: string) => `https://x/open/${p}`);
+  });
+
+  it('fills the transcript in under the stub notes, keeping its own tags', async () => {
+    mockRelayDocs.readRelayDocAtPath.mockResolvedValue(stub);
+
+    const { mdPath } = await importVideo('test-job', makePayload(), new Date().toISOString(), {
+      createLens: false,
+      stubPath,
+    });
+
+    expect(mdPath).toBe(stubPath);
+    const [path, md] = mockRelayDocs.upsertRelayDocReturningId.mock.calls[0];
+    expect(path).toBe(stubPath);
+    expect(md).toContain('%%\nLuc: use the first ten minutes\n%%\n\nhello world');
+    expect(md).toContain('  - "curated"');
+    expect(md).not.toContain('video-stub');
+    expect(md).not.toContain('Add discussion note here');
+  });
+
+  it('writes nothing when the stub gained text outside its notes', async () => {
+    mockRelayDocs.readRelayDocAtPath.mockResolvedValue(stub + '\nMy own summary.\n');
+
+    await expect(
+      importVideo('test-job', makePayload(), new Date().toISOString(), { createLens: false, stubPath })
+    ).rejects.toThrow(/non-comment content.*before importing the transcript/);
+    expect(mockRelayDocs.upsertRelayDocReturningId).not.toHaveBeenCalled();
   });
 });

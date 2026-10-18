@@ -182,6 +182,19 @@ export function pickCaptionTrack<
  * Fetch a video's transcript and metadata from a bare YouTube URL, producing
  * the same payload shape the bookmarklet used to POST.
  */
+/** Only the video's title and channel (one mint, no caption download): what
+ *  a video stub needs. */
+export async function fetchYouTubeVideoMeta(
+  input: VideoInput,
+  signal?: AbortSignal,
+): Promise<{ title: string; channel: string }> {
+  const player = await mintPlayerResponse(input.video_id, signal);
+  return {
+    title: player.videoDetails?.title || "Unknown",
+    channel: player.videoDetails?.author || "Unknown",
+  };
+}
+
 export async function fetchYouTubeTranscript(
   input: VideoInput,
   signal?: AbortSignal,

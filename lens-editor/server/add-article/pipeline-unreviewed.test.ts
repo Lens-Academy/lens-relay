@@ -29,6 +29,13 @@ const reviewMocks = vi.hoisted(() => ({
   reviewArticle: vi.fn(),
 }));
 
+// A failed import leaves the stub it wrote first (with any notes) and nothing
+// else; a retry fills it in.
+function expectOnlyTheStub(): void {
+  expect(relayMocks.createRelayDoc).toHaveBeenCalledOnce();
+  expect(relayMocks.createRelayDoc.mock.calls[0][1]).toContain('"article-stub"');
+}
+
 vi.mock("./fetch", () => ({ ...fetchMocks, MIN_ARTICLE_CHARS: 200 }));
 vi.mock("../add-video/relay-docs", () => relayMocks);
 vi.mock("./extract", () => ({ extractArticle: extractionMocks.extractArticle }));
@@ -49,6 +56,7 @@ vi.mock("./claude", async (importOriginal) => ({
   reviewArticle: reviewMocks.reviewArticle,
 }));
 import { processArticle } from "./pipeline";
+import { installFakeRelay } from "./fake-relay.test-helper";
 import { ArticleReviewRejectedError, ArticleReviewUnavailableError } from "./claude";
 import type { ArticleJob } from "./types";
 
@@ -70,6 +78,7 @@ describe("processArticle when the review cannot give a verdict", () => {
     relayMocks.checkRelayArticleUrls.mockResolvedValue({ found: {}, stubs: {} });
     relayMocks.checkRelayDocsExist.mockResolvedValue({});
     relayMocks.createRelayDoc.mockResolvedValue(undefined);
+    installFakeRelay(relayMocks);
     reviewMocks.buildSourceEvidence.mockResolvedValue({
       extraction: {
         meta,
@@ -96,7 +105,7 @@ describe("processArticle when the review cannot give a verdict", () => {
       updated_at: now,
     };
   };
-  const written = (): string => relayMocks.createRelayDoc.mock.calls[0][1];
+  const written = (): string => relayMocks.createRelayDoc.mock.calls.at(-1)![1];
 
   // Prevents: Ryan & Deci 2000, Kasser 2016 & co. never importing because
   // the content filter blocks the review.
@@ -107,7 +116,8 @@ describe("processArticle when the review cannot give a verdict", () => {
     const j = job();
     await processArticle(j);
 
-    expect(relayMocks.createRelayDoc).toHaveBeenCalledOnce();
+    // The stub first, then the article written over it.
+    expect(relayMocks.createRelayDoc).toHaveBeenCalledTimes(2);
     expect(written()).toContain(
       'review-status: "unreviewed: needs a Claude check (Claude\'s content filter blocked the review)"',
     );
@@ -204,7 +214,7 @@ describe("processArticle when the review cannot give a verdict", () => {
   it("still fails on a REJECT", async () => {
     reviewMocks.reviewArticle.mockRejectedValue(new ArticleReviewRejectedError("only an abstract"));
     await expect(processArticle(job())).rejects.toThrow(/only an abstract/);
-    expect(relayMocks.createRelayDoc).not.toHaveBeenCalled();
+    expectOnlyTheStub();
   });
 
   it("still fails when the unreviewed draft does not validate", async () => {
@@ -216,6 +226,6 @@ describe("processArticle when the review cannot give a verdict", () => {
       counts: { errors: 1, warnings: 0 },
     });
     await expect(processArticle(job())).rejects.toThrow();
-    expect(relayMocks.createRelayDoc).not.toHaveBeenCalled();
+    expectOnlyTheStub();
   });
 });

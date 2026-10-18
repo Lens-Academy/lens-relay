@@ -3,7 +3,7 @@ import { EDU_FOLDER_ID } from './constants';
 
 // Routes that never show a document (the start page is '/'). Everything else is
 // a document path (/:docUuid/...), whose view may render EditorArea.
-const NON_DOC_ROUTES = /^\/(review|recent|promote|add-article|edu\/|section-editor\/)/;
+const NON_DOC_ROUTES = /^\/(review|recent|promote|add-source|add-article|edu\/|section-editor\/)/;
 
 export function isDocRoute(pathname: string): boolean {
   return pathname !== '/' && !NON_DOC_ROUTES.test(pathname);

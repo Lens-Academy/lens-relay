@@ -13,11 +13,16 @@ import { DisplayNameProvider, useDisplayName } from './contexts/DisplayNameConte
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 
 // The display name feeds collaborative-editing presence. The import tool page
-// (/add-article) doesn't edit documents, and the blocking modal made it
+// (/add-source) doesn't edit documents, and the blocking modal made it
 // unusable for fresh sessions and automation — skip it there.
+function AddSourceRedirect() {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: '/add-source', search, hash }} replace />;
+}
+
 function DisplayNamePromptGate() {
   const { pathname } = useLocation();
-  if (pathname === '/add-article') return null;
+  if (pathname === '/add-source' || pathname === '/add-article') return null;
   return <DisplayNamePrompt />;
 }
 import { SidebarContext } from './contexts/SidebarContext';
@@ -671,11 +676,13 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   <Route path="/recent" element={
                     <RecentChangesPage folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} />
                   } />
-                  <Route path="/add-article" element={
+                  <Route path="/add-source" element={
                     canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <AddArticlePage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
+                  {/* The page's old address, kept for links and bookmarks */}
+                  <Route path="/add-article" element={<AddSourceRedirect />} />
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />
                   <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
                   <Route path="/promote" element={<PromotionRoute />} />

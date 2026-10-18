@@ -1,14 +1,14 @@
 {
   "stub": {
     "label": "Stub only",
-    "description": "Only create an article stub without the article body. This is useful for discussing articles without storing full text that is not yet being used. Not available for YouTube videos."
+    "description": "Only create the file with its discussion area, without the article text or video transcript. This is useful for discussing sources without storing full text that is not yet being used. A later full import fills the text in under your notes."
   },
   "article": {
     "label": "Full text",
-    "description": "Import the full article, or for a YouTube URL the video's transcript, without creating a lens."
+    "description": "Import the full article, or for a YouTube URL the video's transcript, without creating a lens. The file appears first, so you can add notes while the import runs."
   },
   "article-and-lens": {
     "label": "Full text + lens",
-    "description": "Import the full article (or for a YouTube URL the video's transcript) and create a lens for it."
+    "description": "Import the full article (or for a YouTube URL the video's transcript) and create a lens for it. The file appears first, so you can add notes while the import runs."
   }
 }
