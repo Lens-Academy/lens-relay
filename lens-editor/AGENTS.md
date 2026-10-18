@@ -147,3 +147,12 @@ on a lens the rows about its `source::` articles and videos are shown too, read-
 The parsing rules are shared with the relay's MCP tools (`crates/relay/src/mcp/tools/concept_rows.rs`) and the
 platform's content validator, and must stay in step: each implementation has one test per numbered rule ("canonical
 concept-row rules v1 #N"). Format and rules: `docs/concept-relationships.md`.
+
+Concept files themselves get a "Concept graph" header instead (same panel host, above the relationships panel if both
+ever apply): their `parent:` frontmatter gives the main path upward, other paths, direct parents and children
+(backlinkers in `Concepts/` whose `parent:` resolves to the file), and on request the tree below. Read-only.
+
+- `src/lib/concept-graph.ts`: `parent:` parsing and resolution, the capped walks (ancestors, children, descendants),
+  cycle detection. Pure; the relay's `concept_graph.rs` follows the same rules.
+- `src/components/ConceptGraphPanel/`: the header and its data hook (reads files through the relationships panel's
+  `useSnapshots`, growing the set of files to read as the walks reach them).
