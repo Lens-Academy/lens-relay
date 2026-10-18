@@ -17,6 +17,8 @@ export const LO_DIR = '/Learning Outcomes/';
 export const CONCEPTS_DIR = '/Concepts/';
 export const TEMPLATE_PATH = '/AI Guide/Writing (Learning) Outcomes 2.md';
 export const PLACEHOLDER_TAG = 'skill-tree-placeholder';
+/** Frontmatter field listing a concept's broader concepts (Luc, 2026-10-18: renamed from `parent:`). */
+export const PARENT_KEY = 'parent-concepts';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -118,10 +120,20 @@ function assertNoCriticMarkup(fm: Frontmatter) {
 /** Values of a scalar-or-list field: inline scalar, inline flow list, or block list. */
 function fieldValues(f: Field): string[] {
   if (f.inline === '' || f.inline === '|' || f.inline === '>') return f.items.map((i) => i.raw);
-  const flow = f.inline.match(/^\[(.*)\]$/);
   // `[[x]]` unquoted is a wikilink, not a flow list.
-  if (flow && !/^\[\[.*\]\]$/.test(f.inline)) {
-    return flow[1].split(',').map((s) => s.trim()).filter(Boolean);
+  if (f.inline.startsWith('[') && !/^\[\[.*\]\]$/.test(f.inline)) {
+    // A YAML flow list: parse it properly (commas may sit inside quoted or
+    // wikilinked items) and hand back each item as a double-quoted scalar.
+    let parsed: unknown;
+    try {
+      parsed = YAML.parse(f.inline);
+    } catch (err) {
+      throw new TransformError(`${f.key}: is not a valid YAML flow list: ${(err as Error).message}`);
+    }
+    if (!Array.isArray(parsed) || parsed.some((v) => typeof v !== 'string' && typeof v !== 'number')) {
+      throw new TransformError(`${f.key}: flow list items must be plain strings`);
+    }
+    return parsed.map((v) => JSON.stringify(String(v)));
   }
   return [f.inline];
 }
@@ -141,7 +153,7 @@ export function wikilinkTargets(value: string): string[] {
   return out;
 }
 
-/** Parsed `topic:` (or `concept:`/`parent:`) value: 'none', a list of raw values, or null when absent. */
+/** Parsed `topic:` (or `concept:`/`parent-concepts:`) value: 'none', a list of raw values, or null when absent. */
 export function linkField(content: string, key: string): 'none' | string[] | null {
   const fm = parseFrontmatter(content);
   if (!fm) return null;
@@ -241,7 +253,7 @@ export function transformDomain(content: string, order: number): TransformResult
   if (st && unquote(st.inline) !== 'domain') throw new TransformError(`skill-tree: is ${JSON.stringify(st.inline)}, expected domain`);
   const ord = field(fm, 'order');
   if (ord && Number(unquote(ord.inline)) !== order) throw new TransformError(`order: is ${ord.inline}, folder number is ${order}`);
-  if (field(fm, 'parent')) throw new TransformError('a domain file already has parent:');
+  if (field(fm, PARENT_KEY)) throw new TransformError('a domain file already has parent-concepts:');
 
   const dn = field(fm, 'domain-number');
   if (dn) {
@@ -269,7 +281,7 @@ export function conceptLink(name: string): string {
 
 /**
  * Topic file -> `Concepts/<Topic>.md` frontmatter: `skill-tree: topic` and
- * `parent:` = the domain; `id`, `order`, other fields and the body kept.
+ * `parent-concepts:` = the domain; `id`, `order`, other fields and the body kept.
  */
 export function transformTopic(content: string, domainName: string): TransformResult {
   const notes: string[] = [];
@@ -279,17 +291,17 @@ export function transformTopic(content: string, domainName: string): TransformRe
   let fm = fm0;
   const st = field(fm, 'skill-tree');
   if (st && unquote(st.inline) !== 'topic') throw new TransformError(`skill-tree: is ${JSON.stringify(st.inline)}, expected topic`);
-  const parent = field(fm, 'parent');
+  const parent = field(fm, PARENT_KEY);
   if (parent) {
     const vals = fieldValues(parent).map((v) => wikilinkTargets(v)[0]);
     if (vals.length !== 1 || vals[0] !== domainName) {
-      throw new TransformError(`parent: is already set to something other than [[${domainName}]]`);
+      throw new TransformError(`parent-concepts: is already set to something other than [[${domainName}]]`);
     }
   }
   if (!field(fm, 'id')) notes.push('topic has no id:');
   const add: string[] = [];
   if (!st) add.push('skill-tree: topic');
-  if (!parent) add.push('parent:', `  - ${conceptLink(domainName)}`);
+  if (!parent) add.push(`${PARENT_KEY}:`, `  - ${conceptLink(domainName)}`);
   let lines = fm.lines;
   if (add.length) {
     const at = insertionPoint(fm);
@@ -302,7 +314,7 @@ export function transformTopic(content: string, domainName: string): TransformRe
 }
 
 /**
- * Placeholder learning outcome -> concept frontmatter: `topic:` becomes `parent:`
+ * Placeholder learning outcome -> concept frontmatter: `topic:` becomes `parent-concepts:`
  * (same links, same order; `topic: none` -> no parent), and `learning-outcome:`,
  * `stage:` and the `skill-tree-placeholder` tag go. `id`, other tags/fields and
  * the body are kept. A file already in that shape is returned unchanged.
@@ -315,7 +327,7 @@ export function transformPlaceholder(content: string): TransformResult {
   let lines = fm.lines;
 
   const topic = field(fm, 'topic');
-  if (topic && field(fm, 'parent')) throw new TransformError('has both topic: and parent:');
+  if (topic && field(fm, PARENT_KEY)) throw new TransformError('has both topic: and parent-concepts:');
   if (field(fm, 'concept')) throw new TransformError('placeholder has a concept: field');
 
   // Work bottom-up so earlier indices stay valid: collect replacements first.
@@ -332,9 +344,9 @@ export function transformPlaceholder(content: string): TransformResult {
       }
       if (topic.inline === '') {
         // Block list: rename the key, keep the items exactly.
-        edits.push({ start: topic.start, end: topic.start + 1, repl: ['parent:'] });
+        edits.push({ start: topic.start, end: topic.start + 1, repl: [`${PARENT_KEY}:`] });
       } else {
-        edits.push({ start: topic.start, end: topic.end, repl: ['parent:', ...values.map((v) => `  - ${v}`)] });
+        edits.push({ start: topic.start, end: topic.end, repl: [`${PARENT_KEY}:`, ...values.map((v) => `  - ${v}`)] });
       }
     }
   }
@@ -344,7 +356,10 @@ export function transformPlaceholder(content: string): TransformResult {
     edits.push({ start: lo.start, end: lo.end, repl: [] });
   }
   const stage = field(fm, 'stage');
-  if (stage) edits.push({ start: stage.start, end: stage.end, repl: [] });
+  if (stage) {
+    notes.push(`dropped stage: ${stage.inline}`);
+    edits.push({ start: stage.start, end: stage.end, repl: [] });
+  }
 
   const tags = field(fm, 'tags');
   if (tags) {
@@ -358,7 +373,7 @@ export function transformPlaceholder(content: string): TransformResult {
           if (unquote(it.raw) === PLACEHOLDER_TAG) edits.push({ start: it.index, end: it.index + 1, repl: [] });
         }
       } else {
-        edits.push({ start: tags.start, end: tags.end, repl: [`tags: [${rest.join(', ')}]`] });
+        edits.push({ start: tags.start, end: tags.end, repl: [`tags: [${rest.map((v) => JSON.stringify(v)).join(', ')}]`] });
       }
     }
   }
@@ -369,8 +384,8 @@ export function transformPlaceholder(content: string): TransformResult {
 
 /**
  * Existing concept file that absorbs a same-named placeholder: `id:` added when
- * it has none, `parent:` set to the placeholder's parents (bare names; both live
- * in Concepts/). Refuses a different existing `parent:` or `id:`.
+ * it has none, `parent-concepts:` set to the placeholder's parents (bare names; both live
+ * in Concepts/). Refuses a different existing `parent-concepts:` or `id:`.
  */
 export function mergeIntoConcept(content: string, id: string | null, parentNames: string[]): TransformResult {
   const notes: string[] = [];
@@ -382,11 +397,11 @@ export function mergeIntoConcept(content: string, id: string | null, parentNames
   if (existingId && id && unquote(existingId.inline) !== id) {
     throw new TransformError(`concept already has a different id: (${existingId.inline}); placeholder id ${id}`);
   }
-  const parent = field(fm, 'parent');
+  const parent = field(fm, PARENT_KEY);
   if (parent) {
     const have = fieldValues(parent).map((v) => wikilinkTargets(v)[0]);
     if (have.join('|') !== parentNames.join('|')) {
-      throw new TransformError(`concept already has parent: ${have.join(', ')}; placeholder parents: ${parentNames.join(', ')}`);
+      throw new TransformError(`concept already has parent-concepts: ${have.join(', ')}; placeholder parents: ${parentNames.join(', ')}`);
     }
   }
   let lines = fm.lines;
@@ -397,7 +412,7 @@ export function mergeIntoConcept(content: string, id: string | null, parentNames
   }
   if (!parent && parentNames.length) {
     const at = insertionPoint(fm);
-    lines = splice(fm.lines, at, at, ['parent:', ...parentNames.map((n) => `  - ${conceptLink(n)}`)], fm.cr);
+    lines = splice(fm.lines, at, at, [`${PARENT_KEY}:`, ...parentNames.map((n) => `  - ${conceptLink(n)}`)], fm.cr);
   }
   return { content: lines.join('\n'), notes };
 }
@@ -469,6 +484,52 @@ export function minimalEdit(a: string, b: string): { index: number; deleteCount:
   return { index: p, deleteCount: a.length - p - s, insert: b.slice(p, b.length - s) };
 }
 
+export interface TextEdit { index: number; deleteCount: number; insert: string }
+
+/** Lines with their terminators ("a\n", "b\r\n", last one possibly without). */
+function lineTokens(text: string): string[] {
+  const out = text.match(/[^\n]*\n|[^\n]+$/g);
+  return out ?? [];
+}
+
+/**
+ * One edit per changed hunk of a line diff between `a` and `b`, each trimmed to
+ * its own common prefix/suffix, ordered back to front (apply in that order and
+ * every index stays valid). Unchanged lines are never touched, so their
+ * authorship and any concurrent edits to them survive.
+ */
+export function hunkEdits(a: string, b: string): TextEdit[] {
+  if (a === b) return [];
+  const A = lineTokens(a), B = lineTokens(b);
+  const n = A.length, m = B.length;
+  const dp: Uint32Array[] = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) {
+    dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  }
+  const edits: TextEdit[] = [];
+  let i = 0, j = 0, offset = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && A[i] === B[j]) { offset += A[i].length; i++; j++; continue; }
+    // A hunk: consume deletions/insertions until the next common line.
+    let oldText = '', newText = '';
+    while ((i < n || j < m) && !(i < n && j < m && A[i] === B[j])) {
+      if (j >= m || (i < n && dp[i + 1][j] >= dp[i][j + 1])) oldText += A[i++];
+      else newText += B[j++];
+    }
+    const e = minimalEdit(oldText, newText);
+    if (e) edits.push({ index: offset + e.index, deleteCount: e.deleteCount, insert: e.insert });
+    offset += oldText.length;
+  }
+  return edits.reverse();
+}
+
+/** Apply `hunkEdits` output to a string (for tests and verification). */
+export function applyEdits(text: string, edits: TextEdit[]): string {
+  let out = text;
+  for (const e of edits) out = out.slice(0, e.index) + e.insert + out.slice(e.index + e.deleteCount);
+  return out;
+}
+
 /** A small unified-style line diff (LCS), enough for frontmatter-sized changes. */
 export function lineDiff(path: string, a: string, b: string, context = 1): string {
   const A = a.split('\n').map(strip);
@@ -508,6 +569,13 @@ export interface Snapshot {
   entries: VaultEntry[];
   /** Text of the files the plan reads: Domains and Topics/**, Learning Outcomes/**, Concepts/*, the template. */
   contents: Map<string, string>;
+  /**
+   * The relay's backlink index (folder doc `backlinks_v0`): target uuid -> uuids
+   * of the docs that link to it. Relay snapshots only; enables the checks that
+   * every link a move must rewrite is indexed, and that nothing links to a
+   * placeholder that would be trashed.
+   */
+  backlinks?: Map<string, string[]>;
 }
 
 export type ItemKind = 'domain' | 'topic' | 'placeholder' | 'drop-placeholder' | 'merge-placeholder' | 'lo' | 'template';
@@ -529,6 +597,12 @@ export interface Item {
    * trashed afterwards.
    */
   merge?: { conceptPath: string; conceptId: string; id: string | null; parentNames: string[] };
+  /** What the transform needs besides the text (the folder name is gone once a file has moved). */
+  params?: { order?: number; domainName?: string };
+  /** Domain number for domain/topic items: each domain is followed by its own topics. */
+  domainNumber?: number;
+  /** merge-placeholder resumed after its trash went through: only the concept edit is left. */
+  alreadyTrashed?: boolean;
 }
 
 export interface Problem { path: string; reason: string }
@@ -543,8 +617,8 @@ export interface PlanOptions {
   /**
    * A placeholder whose name is taken by an existing file in Concepts/ is merged
    * into it: the concept gets the placeholder's `id` (if it has none) and its
-   * parents as `parent:`, then the placeholder is trashed. Only when the
-   * placeholder has no body and the concept has no conflicting `parent:`.
+   * parents as `parent-concepts:`, then the placeholder is trashed. Only when the
+   * placeholder has no body and the concept has no conflicting `parent-concepts:`.
    */
   mergeIntoExistingConcepts?: boolean;
 }
@@ -556,7 +630,7 @@ export interface Plan {
   counts: {
     domains: number; topics: number; placeholders: number; dropPlaceholders: number;
     multiParentPlaceholders: number; noParentPlaceholders: number; droppedLoText: number;
-    mergePlaceholders: number; los: number; losNone: number; losMulti: number; template: number;
+    mergePlaceholders: number; droppedStage: number; los: number; losNone: number; losMulti: number; template: number;
     loNoTopic: number; loAlreadyConcept: number; taggedButReal: number;
   };
 }
@@ -568,13 +642,26 @@ export function phaseOf(kind: ItemKind): number {
   return { domain: 1, topic: 2, placeholder: 3, 'drop-placeholder': 3, 'merge-placeholder': 3, lo: 4, template: 5 }[kind];
 }
 
+/**
+ * Execution order: domain by domain (the domain file, then that domain's topics),
+ * so a failure leaves at most one domain half done; then placeholders, then
+ * learning outcomes, then the template.
+ */
+export function compareItems(a: Item, b: Item): number {
+  const stage = (it: Item) => (it.kind === 'domain' || it.kind === 'topic' ? 1 : phaseOf(it.kind));
+  return stage(a) - stage(b)
+    || (a.domainNumber ?? 0) - (b.domainNumber ?? 0)
+    || phaseOf(a.kind) - phaseOf(b.kind)
+    || a.path.localeCompare(b.path);
+}
+
 export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
   const problems: Problem[] = [];
   const warnings: Problem[] = [];
   const items: Item[] = [];
   const counts: Plan['counts'] = {
     domains: 0, topics: 0, placeholders: 0, dropPlaceholders: 0, multiParentPlaceholders: 0,
-    noParentPlaceholders: 0, droppedLoText: 0, mergePlaceholders: 0, los: 0, losNone: 0, losMulti: 0, template: 0,
+    noParentPlaceholders: 0, droppedLoText: 0, mergePlaceholders: 0, droppedStage: 0, los: 0, losNone: 0, losMulti: 0, template: 0,
     loNoTopic: 0, loAlreadyConcept: 0, taggedButReal: 0,
   };
   const meta: FolderMetadata = {};
@@ -618,7 +705,12 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
       const target = `${CONCEPTS_DIR}${folder.name}.md`;
       destOf.set(e.path, target);
       const r = tryTransform(e.path, () => transformDomain(content, folder.number));
-      if (r) items.push({ kind: 'domain', path: e.path, id: e.id, target, before: content, after: r.content, notes: r.notes });
+      if (r) {
+        items.push({
+          kind: 'domain', path: e.path, id: e.id, target, before: content, after: r.content, notes: r.notes,
+          params: { order: folder.number }, domainNumber: folder.number,
+        });
+      }
       counts.domains++;
     } else {
       const target = `${CONCEPTS_DIR}${parts[1]}`;
@@ -628,6 +720,7 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
         items.push({
           kind: 'topic', path: e.path, id: e.id, target, before: content, after: r.content, notes: r.notes,
           parents: [`${CONCEPTS_DIR}${folder.name}.md`],
+          params: { domainName: folder.name }, domainNumber: folder.number,
         });
       }
       counts.topics++;
@@ -638,7 +731,25 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
     }
   }
   for (const [folderName, f] of domainFolders) {
-    if (!f.hasMeta) problems.push({ path: `${DOMAINS_DIR}${folderName}/`, reason: 'domain folder has no _domain_metadata.md' });
+    if (f.hasMeta) continue;
+    // A re-run after a partial apply: the domain file already moved, its topics not yet.
+    const moved = `${CONCEPTS_DIR}${f.name}.md`;
+    const movedText = text(moved);
+    let ok = false;
+    if (movedText !== undefined) {
+      try {
+        const y = parseYamlFrontmatter(movedText);
+        ok = y['skill-tree'] === 'domain' && Number(y.order) === f.number;
+      } catch (err) {
+        if (!(err instanceof TransformError)) throw err;
+      }
+    }
+    if (!ok) {
+      problems.push({
+        path: `${DOMAINS_DIR}${folderName}/`,
+        reason: `domain folder has no _domain_metadata.md, and ${moved.slice(1)} is not a migrated domain with order: ${f.number}`,
+      });
+    }
   }
   const domainNumbers = new Map<number, string>();
   for (const [folderName, f] of domainFolders) {
@@ -660,7 +771,7 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
       const fm = parseFrontmatter(content);
       if (fm) {
         tagged = tagValues(fm).includes(PLACEHOLDER_TAG);
-        hasParent = !!field(fm, 'parent');
+        hasParent = !!field(fm, PARENT_KEY);
         hasTopic = !!field(fm, 'topic');
         hasConcept = !!field(fm, 'concept');
         hasLO = !!field(fm, 'learning-outcome');
@@ -676,7 +787,7 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
     const pendingMove = !tagged && hasParent && !hasTopic && !hasConcept && !hasLO;
     if ((tagged && !real) || pendingMove) {
       const r = tryTransform(e.path, () => transformPlaceholder(content));
-      const lf = linkField(content, hasTopic ? 'topic' : 'parent');
+      const lf = linkField(content, hasTopic ? 'topic' : PARENT_KEY);
       placeholders.push({ entry: e, content, r, linkVals: lf ?? 'none' });
       destOf.set(e.path, `${CONCEPTS_DIR}${basename(e.path)}`);
     } else {
@@ -696,6 +807,34 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
     const res = resolvePageName(link, meta, from);
     if (!res) return null;
     return { now: res.path, dest: destOf.get(res.path) };
+  };
+
+  const pathById = new Map(snap.entries.map((e) => [e.id, e.path]));
+  /**
+   * Relay snapshots: a link that a later move must rewrite has to be in the
+   * backlink index, because the move finds the files to rewrite through it.
+   */
+  const checkIndexed = (source: VaultEntry, v: string, r: { now: string; dest?: string }) => {
+    if (!snap.backlinks || r.dest === r.now) return;
+    const target = byPath.get(r.now);
+    if (!target) return;
+    if (!(snap.backlinks.get(target.id) ?? []).includes(source.id)) {
+      problems.push({
+        path: source.path,
+        reason: `link ${v} -> ${r.now.slice(1)} is missing from the relay's backlink index, so moving ${r.now.slice(1)} would not rewrite it (wait for the backlink reindex, or touch the file, then re-run)`,
+      });
+    }
+  };
+  /** Relay snapshots: files that link to a placeholder that would be trashed. */
+  const checkNoInbound = (entry: VaultEntry) => {
+    if (!snap.backlinks) return;
+    const inbound = (snap.backlinks.get(entry.id) ?? []).filter((u) => u !== entry.id);
+    if (inbound.length) {
+      problems.push({
+        path: entry.path,
+        reason: `would be trashed, but ${inbound.length} file(s) link to it: ${inbound.map((u) => pathById.get(u)?.slice(1) ?? u).join(', ')}`,
+      });
+    }
   };
 
   // --- Collisions -------------------------------------------------------------
@@ -718,25 +857,23 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
   for (const [k, sources] of sourcesByTarget) {
     const existing = existingConcepts.get(k);
     if (sources.length === 1 && !existing) continue;
-    if (opts.mergeIntoExistingConcepts && existing && sources.length === 1 && /\.md$/i.test(existing)) {
-      const p = placeholders.find((x) => x.entry.path === sources[0]);
-      if (p && bodyOf(p.content).trim() === '') { merged.set(sources[0], existing); continue; }
+    const phs = sources.filter((s) => placeholders.some((p) => p.entry.path === s));
+    const others = sources.filter((s) => !phs.includes(s));
+    // Optional resolution: a placeholder whose sole parent is its namesake (a topic
+    // or domain, still to move or already moved into Concepts/) is redundant.
+    const namesake = others.length === 1 && !existing ? others[0] : others.length === 0 && existing ? existing : null;
+    if (opts.dropRedundantPlaceholders && namesake && phs.length >= 1) {
+      const redundant = phs.every((s) => {
+        const p = placeholders.find((x) => x.entry.path === s)!;
+        const vals = p.linkVals;
+        const r = vals !== 'none' && vals.length === 1 ? resolveToDest(wikilinkTargets(vals[0])[0] ?? '', s) : null;
+        return !!r && r.now === namesake && bodyOf(p.content).trim() === '';
+      });
+      if (redundant) { phs.forEach((s) => dropped.add(s)); continue; }
     }
-    // Optional resolution: a same-named placeholder under its own namesake topic is redundant.
-    if (opts.dropRedundantPlaceholders && !existing) {
-      const phs = sources.filter((s) => placeholders.some((p) => p.entry.path === s));
-      const others = sources.filter((s) => !phs.includes(s));
-      if (others.length === 1 && phs.length >= 1) {
-        let allRedundant = true;
-        for (const s of phs) {
-          const p = placeholders.find((x) => x.entry.path === s)!;
-          const vals = p.linkVals;
-          const r = vals !== 'none' && vals.length === 1 ? resolveToDest(wikilinkTargets(vals[0])[0] ?? '', s) : null;
-          const ok = !!r && r.now === others[0] && bodyOf(p.content).trim() === '';
-          if (!ok) allRedundant = false;
-        }
-        if (allRedundant) { phs.forEach((s) => dropped.add(s)); continue; }
-      }
+    if (opts.mergeIntoExistingConcepts && existing && sources.length === 1 && phs.length === 1 && /\.md$/i.test(existing)) {
+      const p = placeholders.find((x) => x.entry.path === sources[0])!;
+      if (bodyOf(p.content).trim() === '') { merged.set(sources[0], existing); continue; }
     }
     const desc = sources.map((s) => s.slice(1)).join(', ');
     problems.push({
@@ -775,6 +912,7 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
       const fm = parseFrontmatter(p.content);
       const idField = fm ? field(fm, 'id') : undefined;
       const id = idField ? unquote(idField.inline) : null;
+      checkNoInbound(p.entry);
       const r = tryTransform(mergeInto, () => mergeIntoConcept(conceptText, id, names));
       if (!r) continue;
       counts.mergePlaceholders++;
@@ -787,6 +925,7 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
       continue;
     }
     if (dropped.has(path)) {
+      checkNoInbound(p.entry);
       items.push({ kind: 'drop-placeholder', path, id: p.entry.id, before: p.content, after: p.content, notes: ['same name as its parent topic/domain; trashed instead of moved'] });
       counts.dropPlaceholders++;
       continue;
@@ -799,6 +938,7 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
         if (!r) { problems.push({ path, reason: `topic link ${v} does not resolve` }); continue; }
         if (!r.dest || !r.dest.startsWith(CONCEPTS_DIR)) { problems.push({ path, reason: `topic link ${v} resolves to ${r.now}, which is not a domain/topic/concept` }); continue; }
         if (r.dest === destOf.get(path)) { problems.push({ path, reason: `topic link ${v} would make the concept its own parent` }); continue; }
+        checkIndexed(p.entry, v, r);
         parents.push(r.dest);
       }
     }
@@ -807,6 +947,7 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
     if (parents.length > 1) counts.multiParentPlaceholders++;
     if (p.linkVals === 'none') counts.noParentPlaceholders++;
     if (p.r.notes.some((n) => n.startsWith('dropped learning-outcome'))) counts.droppedLoText++;
+    if (p.r.notes.some((n) => n.startsWith('dropped stage'))) counts.droppedStage++;
     items.push({ kind: 'placeholder', path, id: p.entry.id, target: destOf.get(path), before: p.content, after: p.r.content, notes: p.r.notes, parents });
   }
 
@@ -822,6 +963,7 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
         if (!r) { problems.push({ path: entry.path, reason: `topic link ${v} does not resolve` }); bad = true; }
         else if (!r.dest || !r.dest.startsWith(CONCEPTS_DIR)) { problems.push({ path: entry.path, reason: `topic link ${v} resolves to ${r.now}, which is not a domain/topic/concept` }); bad = true; }
         else if (dropped.has(r.now) || merged.has(r.now)) { problems.push({ path: entry.path, reason: `topic link ${v} points at a placeholder that would be trashed` }); bad = true; }
+        else checkIndexed(entry, v, r);
       }
       if (bad) continue;
     }
@@ -845,16 +987,20 @@ export function planMigration(snap: Snapshot, opts: PlanOptions = {}): Plan {
 
   // Already-done files fall out here: no move and no text change.
   const pending = items.filter((it) => it.kind === 'drop-placeholder' || it.kind === 'merge-placeholder' || it.before !== it.after || (it.target && it.target !== it.path));
-  pending.sort((a, b) => phaseOf(a.kind) - phaseOf(b.kind) || a.path.localeCompare(b.path));
+  pending.sort(compareItems);
   return { items: pending, problems, warnings, counts };
 }
 
 /**
  * Checks on a migrated tree: nothing left in Domains and Topics/, no placeholder
- * or `topic:` left in Learning Outcomes/, every Concepts/ `parent:` and every
+ * or `topic:` left in Learning Outcomes/, every Concepts/ `parent-concepts:` and every
  * learning outcome `concept:` link resolves to a file in Concepts/.
  */
-export function verifyMigrated(snap: Snapshot): { problems: Problem[]; stats: Record<string, number> } {
+export function verifyMigrated(
+  snap: Snapshot,
+  /** uuids of files the journal recorded as placeholders: they must not still be in Learning Outcomes/. */
+  placeholderIds: Set<string> = new Set(),
+): { problems: Problem[]; stats: Record<string, number> } {
   const problems: Problem[] = [];
   const stats = { concepts: 0, domains: 0, topics: 0, parentLinks: 0, loConceptLinks: 0 };
   const meta: FolderMetadata = {};
@@ -880,9 +1026,12 @@ export function verifyMigrated(snap: Snapshot): { problems: Problem[]; stats: Re
         if (fm['skill-tree'] === 'topic') stats.topics++;
         if ('topic' in fm || 'learning-outcome' in fm) problems.push({ path: e.path, reason: 'concept file still has topic:/learning-outcome:' });
         if (isPlaceholderTagged(content)) problems.push({ path: e.path, reason: 'concept file still tagged skill-tree-placeholder' });
-        const p = linkField(content, 'parent');
-        if (p && p !== 'none') { stats.parentLinks += p.length; checkLinks(e.path, 'parent', p); }
+        if (linkField(content, 'parent') !== null) problems.push({ path: e.path, reason: 'concept file uses parent:; the field is parent-concepts:' });
+        const p = linkField(content, PARENT_KEY);
+        if (p && p !== 'none') { stats.parentLinks += p.length; checkLinks(e.path, PARENT_KEY, p); }
       } else if (e.path.startsWith(LO_DIR)) {
+        if (placeholderIds.has(e.id)) problems.push({ path: e.path, reason: 'placeholder (per the journal) still in Learning Outcomes/' });
+        if (linkField(content, PARENT_KEY) !== null) problems.push({ path: e.path, reason: 'learning outcome has parent-concepts: (a rewritten placeholder that was never moved?)' });
         if (linkField(content, 'topic') !== null) problems.push({ path: e.path, reason: 'learning outcome still has topic:' });
         if (isPlaceholderTagged(content) && !hasTest(content) && !hasLenses(content)) problems.push({ path: e.path, reason: 'placeholder still in Learning Outcomes/' });
         const c = linkField(content, 'concept');
@@ -894,6 +1043,106 @@ export function verifyMigrated(snap: Snapshot): { problems: Problem[]; stats: Re
     }
   }
   return { problems, stats };
+}
+
+/** An item's transform applied to a file's current text (links may have been rewritten since planning). */
+export function transformFor(item: Pick<Item, 'kind' | 'params' | 'merge'>, content: string): string {
+  switch (item.kind) {
+    case 'domain': return transformDomain(content, item.params!.order!).content;
+    case 'topic': return transformTopic(content, item.params!.domainName!).content;
+    case 'placeholder': return transformPlaceholder(content).content;
+    case 'lo': return transformLearningOutcome(content).content;
+    case 'template': return transformTemplate(content).content;
+    case 'merge-placeholder': return mergeIntoConcept(content, item.merge!.id, item.merge!.parentNames).content;
+    default: return content;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Journal: resuming items that a failed run left half done
+// ---------------------------------------------------------------------------
+
+/**
+ * One file the apply has started on. Written before the first change to that
+ * file and marked done after the last, so a re-run can finish it even when the
+ * half-done state looks like something else (a `topic: none` placeholder whose
+ * frontmatter is rewritten but which never moved is just an LO without topic:;
+ * a merged placeholder already in the trash is gone from the plan).
+ */
+export interface JournalEntry {
+  kind: ItemKind;
+  /** filemeta uuid of the file (for a merge: of the placeholder). */
+  uuid: string;
+  source: string;
+  target?: string;
+  params?: Item['params'];
+  merge?: Item['merge'];
+  state: 'started' | 'done';
+  at: string;
+}
+
+export interface Journal {
+  relayUrl: string;
+  folderId: string;
+  entries: Record<string, JournalEntry>;
+}
+
+/**
+ * Items that finish what the journal says was started but not done, for files
+ * the plan itself no longer covers. `completed` lists journal uuids that turn
+ * out to need nothing more.
+ */
+export function resumeItems(journal: Journal, snap: Snapshot, plan: Plan): { items: Item[]; problems: Problem[]; completed: string[] } {
+  const items: Item[] = [];
+  const problems: Problem[] = [];
+  const completed: string[] = [];
+  const planned = new Set(plan.items.map((i) => i.id));
+  const byId = new Map(snap.entries.map((e) => [e.id, e]));
+  for (const j of Object.values(journal.entries)) {
+    if (j.state === 'done' || planned.has(j.uuid)) continue;
+    if (j.kind === 'drop-placeholder') {
+      // Still present -> the plan would have it; gone -> the trash went through.
+      if (!byId.has(j.uuid)) completed.push(j.uuid);
+      continue;
+    }
+    if (j.kind === 'merge-placeholder') {
+      const concept = byId.get(j.merge!.conceptId);
+      const text = concept && snap.contents.get(concept.path);
+      if (!concept || text === undefined) { problems.push({ path: j.source, reason: `journal: concept ${j.merge!.conceptPath} to merge into is missing` }); continue; }
+      try {
+        const after = transformFor(j, text);
+        if (after === text && !byId.has(j.uuid)) { completed.push(j.uuid); continue; }
+        items.push({
+          kind: 'merge-placeholder', path: j.source, id: j.uuid, before: text, after,
+          notes: ['resumed from the journal'], merge: { ...j.merge!, conceptPath: concept.path },
+          alreadyTrashed: !byId.has(j.uuid),
+        });
+      } catch (err) {
+        if (!(err instanceof TransformError)) throw err;
+        problems.push({ path: concept.path, reason: `journal resume: ${err.message}` });
+      }
+      continue;
+    }
+    if (j.kind !== 'domain' && j.kind !== 'topic' && j.kind !== 'placeholder') continue;
+    const entry = byId.get(j.uuid);
+    if (!entry) { problems.push({ path: j.source, reason: 'journal: file was started but is no longer in the folder' }); continue; }
+    const text = snap.contents.get(entry.path);
+    if (text === undefined) { problems.push({ path: entry.path, reason: 'journal: content not loaded (file is outside the folders the plan reads)' }); continue; }
+    try {
+      const after = transformFor(j, text);
+      parseYamlFrontmatter(after);
+      if (after === text && entry.path === j.target) { completed.push(j.uuid); continue; }
+      items.push({
+        kind: j.kind, path: entry.path, id: j.uuid, target: j.target, before: text, after,
+        notes: ['resumed from the journal'], params: j.params,
+      });
+    } catch (err) {
+      if (!(err instanceof TransformError)) throw err;
+      problems.push({ path: entry.path, reason: `journal resume: ${err.message}` });
+    }
+  }
+  items.sort(compareItems);
+  return { items, problems, completed };
 }
 
 /** The in-folder paths whose text a plan needs (for snapshot builders). */

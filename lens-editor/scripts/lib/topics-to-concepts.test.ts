@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  TransformError, lineDiff, mergeIntoConcept, linkField, minimalEdit, planMigration, transformDomain, transformLearningOutcome,
+  TransformError, applyEdits, hunkEdits, lineDiff, mergeIntoConcept, resumeItems, transformFor, compareItems, linkField, minimalEdit, planMigration, transformDomain, transformLearningOutcome,
   transformPlaceholder, transformTemplate, transformTopic, verifyMigrated, findTextReferences,
-  type Snapshot, type VaultEntry,
+  type Journal, type Snapshot, type VaultEntry,
 } from './topics-to-concepts';
 
 const DOMAIN_BOILERPLATE = `%%
@@ -48,7 +48,7 @@ describe('transformDomain', () => {
 describe('transformTopic', () => {
   it('adds skill-tree and parent after id, keeps order, drops the boilerplate', () => {
     const r = transformTopic(`---\nid: abc\norder: 4\n---\n${TOPIC_BOILERPLATE}`, 'Governance and Policy');
-    expect(r.content).toBe('---\nid: abc\nskill-tree: topic\nparent:\n  - "[[Governance and Policy]]"\norder: 4\n---\n');
+    expect(r.content).toBe('---\nid: abc\nskill-tree: topic\nparent-concepts:\n  - "[[Governance and Policy]]"\norder: 4\n---\n');
     expect(transformTopic(r.content, 'Governance and Policy').content).toBe(r.content);
   });
 
@@ -58,7 +58,7 @@ describe('transformTopic', () => {
   });
 
   it('refuses a different existing parent', () => {
-    expect(() => transformTopic('---\nid: a\nparent: "[[Other]]"\n---\n', 'Alignment')).toThrow(TransformError);
+    expect(() => transformTopic('---\nid: a\nparent-concepts: "[[Other]]"\n---\n', 'Alignment')).toThrow(TransformError);
   });
 });
 
@@ -77,7 +77,7 @@ tags:
     const r = transformPlaceholder(ph('topic: "[[../Domains and Topics/5 Interpretability/Monitoring model behaviour]]"'));
     expect(r.content).toBe(`---
 id: 'cc95318b'
-parent:
+parent-concepts:
   - "[[../Domains and Topics/5 Interpretability/Monitoring model behaviour]]"
 ---
 `);
@@ -86,8 +86,8 @@ parent:
 
   it('keeps a multi-topic list in order (first stays primary)', () => {
     const r = transformPlaceholder(ph('topic:\n  - "[[../A/First]]"\n  - "[[../B/Second]]"'));
-    expect(r.content).toContain('parent:\n  - "[[../A/First]]"\n  - "[[../B/Second]]"\n');
-    expect(linkField(r.content, 'parent')).toEqual(['"[[../A/First]]"', '"[[../B/Second]]"']);
+    expect(r.content).toContain('parent-concepts:\n  - "[[../A/First]]"\n  - "[[../B/Second]]"\n');
+    expect(linkField(r.content, 'parent-concepts')).toEqual(['"[[../A/First]]"', '"[[../B/Second]]"']);
   });
 
   it('topic: none gives no parent', () => {
@@ -103,7 +103,7 @@ parent:
 
   it('handles an inline tag list', () => {
     const r = transformPlaceholder("---\nid: a\ntopic: none\ntags: [skill-tree-placeholder, other]\n---\n");
-    expect(r.content).toBe('---\nid: a\ntags: [other]\n---\n');
+    expect(r.content).toBe('---\nid: a\ntags: ["other"]\n---\n');
   });
 
   it('is idempotent', () => {
@@ -200,21 +200,22 @@ const base = (): Record<string, string> => ({
 });
 
 describe('planMigration', () => {
-  it('plans domains, then topics, then placeholders, then learning outcomes', () => {
+  it('plans domains with their topics, then placeholders, then learning outcomes', () => {
     const plan = planMigration(snapshot(base()));
     expect(plan.problems).toEqual([]);
     expect(plan.counts).toMatchObject({
       domains: 2, topics: 3, placeholders: 3, multiParentPlaceholders: 1, noParentPlaceholders: 1,
       los: 3, losNone: 1, loNoTopic: 1, taggedButReal: 1,
     });
+    const stage = (k: string) => (k === 'domain' || k === 'topic' ? 0 : ['placeholder', 'lo'].indexOf(k) + 1);
     const kinds = plan.items.map((i) => i.kind);
-    expect(kinds).toEqual([...kinds].sort((a, b) => ['domain', 'topic', 'placeholder', 'lo'].indexOf(a) - ['domain', 'topic', 'placeholder', 'lo'].indexOf(b)));
+    expect(kinds).toEqual([...kinds].sort((a, b) => stage(a) - stage(b)));
     const both = plan.items.find((i) => i.path === '/Learning Outcomes/Both.md')!;
     expect(both.target).toBe('/Concepts/Both.md');
     expect(both.parents).toEqual(['/Concepts/The control agenda.md', '/Concepts/Inner and outer alignment.md']);
     const topic = plan.items.find((i) => i.path.endsWith('/The control agenda.md'))!;
     expect(topic.target).toBe('/Concepts/The control agenda.md');
-    expect(topic.after).toContain('parent:\n  - "[[AI Control]]"');
+    expect(topic.after).toContain('parent-concepts:\n  - "[[AI Control]]"');
     expect(plan.items.find((i) => i.path.endsWith('7 AI Control/_domain_metadata.md'))!.target).toBe('/Concepts/AI Control.md');
   });
 
@@ -281,7 +282,7 @@ describe('planMigration', () => {
 describe('merge into an existing concept', () => {
   it('mergeIntoConcept adds frontmatter with id and parents, idempotently', () => {
     const r = mergeIntoConcept('# Debate\n\nText.\n', 'p1', ['Scalable oversight']);
-    expect(r.content).toBe('---\nid: p1\nparent:\n  - "[[Scalable oversight]]"\n---\n# Debate\n\nText.\n');
+    expect(r.content).toBe('---\nid: p1\nparent-concepts:\n  - "[[Scalable oversight]]"\n---\n# Debate\n\nText.\n');
     expect(mergeIntoConcept(r.content, 'p1', ['Scalable oversight']).content).toBe(r.content);
     expect(() => mergeIntoConcept(r.content, 'p1', ['Other'])).toThrow(TransformError);
   });
@@ -295,7 +296,7 @@ describe('merge into an existing concept', () => {
     const it = plan.items.find((i) => i.path === '/Learning Outcomes/Debate.md')!;
     expect(it.kind).toBe('merge-placeholder');
     expect(it.merge).toMatchObject({ conceptPath: '/Concepts/Debate.md', id: 'p1', parentNames: ['Scalable oversight'] });
-    expect(it.after).toContain('parent:\n  - "[[Scalable oversight]]"');
+    expect(it.after).toContain('parent-concepts:\n  - "[[Scalable oversight]]"');
   });
 });
 
@@ -303,17 +304,126 @@ describe('verifyMigrated', () => {
   it('passes on a migrated tree and flags leftovers', () => {
     const ok = snapshot({
       '/Concepts/Alignment.md': '---\nskill-tree: domain\norder: 3\n---\n',
-      '/Concepts/Scalable oversight.md': '---\nid: t1\nskill-tree: topic\nparent:\n  - "[[Alignment]]"\n---\n',
-      '/Concepts/Debate.md': '---\nid: p1\nparent:\n  - "[[Scalable oversight]]"\n---\n',
+      '/Concepts/Scalable oversight.md': '---\nid: t1\nskill-tree: topic\nparent-concepts:\n  - "[[Alignment]]"\n---\n',
+      '/Concepts/Debate.md': '---\nid: p1\nparent-concepts:\n  - "[[Scalable oversight]]"\n---\n',
       '/Learning Outcomes/Real.md': '---\nconcept: "[[../Concepts/Scalable oversight]]"\n---\n## Test:\n',
     });
     expect(verifyMigrated(ok).problems).toEqual([]);
     expect(verifyMigrated(ok).stats).toMatchObject({ concepts: 3, domains: 1, topics: 1, parentLinks: 2, loConceptLinks: 1 });
     const bad = snapshot({
-      '/Concepts/Debate.md': '---\nparent:\n  - "[[Nope]]"\n---\n',
+      '/Concepts/Debate.md': '---\nparent-concepts:\n  - "[[Nope]]"\n---\n',
       '/Learning Outcomes/Real.md': '---\ntopic: "[[x]]"\n---\n',
       '/Domains and Topics/3 A/x.md': '',
     });
     expect(verifyMigrated(bad).problems).toHaveLength(3);
+  });
+});
+
+describe('review fixes', () => {
+  it('flow lists are parsed as YAML: commas inside quoted or wikilinked items are kept', () => {
+    const r = transformPlaceholder('---\nid: a\ntopic: ["[[../X/Labs, incentives, and race dynamics]]", "[[../Y/B]]"]\ntags: [skill-tree-placeholder]\n---\n');
+    expect(r.content).toBe('---\nid: a\nparent-concepts:\n  - "[[../X/Labs, incentives, and race dynamics]]"\n  - "[[../Y/B]]"\n---\n');
+  });
+
+  it('hunkEdits makes one edit per changed hunk, back to front, touching only what differs', () => {
+    const a = '---\nid: x\nlearning-outcome: "x"\ntopic: "[[a]]"\nkeep: me\nstage: s\ntags:\n  - skill-tree-placeholder\n---\nBody line\n';
+    const b = transformPlaceholder(a).content;
+    const edits = hunkEdits(a, b);
+    expect(applyEdits(a, edits)).toBe(b);
+    expect(edits.length).toBeGreaterThan(1);
+    for (let i = 1; i < edits.length; i++) expect(edits[i].index).toBeLessThan(edits[i - 1].index);
+    // the key rename touches only the key, not the link after it
+    const ren = hunkEdits('---\ntopic: "[[a]]"\n---\n', '---\nconcept: "[[a]]"\n---\n');
+    expect(ren).toHaveLength(1);
+    expect(ren[0].insert + ren[0].deleteCount).not.toContain('[[a]]');
+    expect(applyEdits('x\ny', hunkEdits('x\ny', 'x\nz\n'))).toBe('x\nz\n');
+    expect(hunkEdits('same', 'same')).toEqual([]);
+  });
+
+  it('runs domain by domain: each domain file is followed by its own topics', () => {
+    const plan = planMigration(snapshot(base()));
+    const order = plan.items.filter((i) => i.kind === 'domain' || i.kind === 'topic').map((i) => `${i.kind}:${i.domainNumber}`);
+    expect(order).toEqual(['domain:3', 'topic:3', 'topic:3', 'domain:7', 'topic:7']);
+    expect([...plan.items].sort(compareItems)).toEqual(plan.items);
+  });
+
+  it('resumes when a domain moved but its topics did not (no _domain_metadata.md left in the folder)', () => {
+    const files = base();
+    const meta = files['/Domains and Topics/7 AI Control/_domain_metadata.md'];
+    delete files['/Domains and Topics/7 AI Control/_domain_metadata.md'];
+    files['/Concepts/AI Control.md'] = transformDomain(meta, 7).content;
+    const plan = planMigration(snapshot(files));
+    expect(plan.problems).toEqual([]);
+    expect(plan.items.find((i) => i.path.endsWith('/The control agenda.md'))!.params).toEqual({ domainName: 'AI Control' });
+    // ...but not when the moved file is not that domain
+    files['/Concepts/AI Control.md'] = '---\nskill-tree: domain\norder: 8\n---\n';
+    expect(planMigration(snapshot(files)).problems.map((p) => p.reason).join()).toMatch(/no _domain_metadata/);
+  });
+
+  it('relay mode: reports links missing from the backlink index, and inbound links to a trashed placeholder', () => {
+    const files = base();
+    files['/Learning Outcomes/Scalable oversight.md'] = '---\nid: p9\ntopic: "[[../Domains and Topics/3 Alignment/Scalable oversight]]"\ntags:\n  - skill-tree-placeholder\n---\n';
+    files['/notes/n.md'] = '[[../Learning Outcomes/Scalable oversight]]';
+    const snap = snapshot(files);
+    snap.backlinks = new Map([
+      ['id-/Domains and Topics/3 Alignment/Scalable oversight.md', ['id-/Learning Outcomes/Tagged real.md']],
+      ['id-/Learning Outcomes/Scalable oversight.md', ['id-/notes/n.md']],
+    ]);
+    const reasons = planMigration(snap, { dropRedundantPlaceholders: true }).problems.map((p) => `${p.path}: ${p.reason}`);
+    expect(reasons.some((r) => r.startsWith('/Learning Outcomes/Debate.md') && /backlink index/.test(r))).toBe(true);
+    expect(reasons.some((r) => r.startsWith('/Learning Outcomes/Real one.md') && /backlink index/.test(r))).toBe(true);
+    expect(reasons.some((r) => r.startsWith('/Learning Outcomes/Tagged real.md'))).toBe(false);
+    expect(reasons.some((r) => /would be trashed, but 1 file\(s\) link to it: notes\/n.md/.test(r))).toBe(true);
+  });
+
+  it('journal: finishes a topic: none placeholder whose edit landed but whose move did not', () => {
+    const files = base();
+    const before = files['/Learning Outcomes/Nowhere.md'];
+    files['/Learning Outcomes/Nowhere.md'] = transformPlaceholder(before).content; // now "an LO without topic:"
+    const snap = snapshot(files);
+    const plan = planMigration(snap);
+    expect(plan.items.some((i) => i.path === '/Learning Outcomes/Nowhere.md')).toBe(false);
+    const journal: Journal = { relayUrl: 'r', folderId: 'f', entries: {
+      'id-/Learning Outcomes/Nowhere.md': { kind: 'placeholder', uuid: 'id-/Learning Outcomes/Nowhere.md', source: '/Learning Outcomes/Nowhere.md', target: '/Concepts/Nowhere.md', state: 'started', at: '' },
+    } };
+    const r = resumeItems(journal, snap, plan);
+    expect(r.problems).toEqual([]);
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0]).toMatchObject({ kind: 'placeholder', path: '/Learning Outcomes/Nowhere.md', target: '/Concepts/Nowhere.md' });
+    expect(r.items[0].after).toBe(r.items[0].before);
+    // verify flags it while it is still in Learning Outcomes/
+    expect(verifyMigrated(snap, new Set(['id-/Learning Outcomes/Nowhere.md'])).problems.some((p) => /per the journal/.test(p.reason))).toBe(true);
+  });
+
+  it('journal: finishes a merge whose trash went through but whose concept edit did not', () => {
+    const files = base();
+    files['/Concepts/Debate.md'] = '# Debate\n';
+    delete files['/Learning Outcomes/Debate.md'];
+    const snap = snapshot(files);
+    const merge = { conceptPath: '/Concepts/Debate.md', conceptId: 'id-/Concepts/Debate.md', id: 'p1', parentNames: ['Scalable oversight'] };
+    const journal: Journal = { relayUrl: 'r', folderId: 'f', entries: {
+      u1: { kind: 'merge-placeholder', uuid: 'u1', source: '/Learning Outcomes/Debate.md', merge, state: 'started', at: '' },
+    } };
+    const r = resumeItems(journal, snap, planMigration(snap));
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0]).toMatchObject({ kind: 'merge-placeholder', alreadyTrashed: true });
+    expect(r.items[0].after).toContain('parent-concepts:\n  - "[[Scalable oversight]]"');
+    expect(transformFor(r.items[0], r.items[0].after)).toBe(r.items[0].after);
+  });
+
+  it('a redundant placeholder is still trashed (not merged) after its namesake topic already moved', () => {
+    const files = base();
+    delete files['/Domains and Topics/3 Alignment/Scalable oversight.md'];
+    files['/Concepts/Scalable oversight.md'] = '---\nid: t1\nskill-tree: topic\nparent-concepts:\n  - "[[Alignment]]"\n---\n';
+    for (const k of Object.keys(files)) files[k] = files[k].replace('../Domains and Topics/3 Alignment/Scalable oversight', '../Concepts/Scalable oversight');
+    files['/Learning Outcomes/Scalable oversight.md'] = '---\nid: p9\ntopic: "[[../Concepts/Scalable oversight]]"\ntags:\n  - skill-tree-placeholder\n---\n';
+    const plan = planMigration(snapshot(files), { dropRedundantPlaceholders: true, mergeIntoExistingConcepts: true });
+    expect(plan.problems).toEqual([]);
+    expect(plan.items.find((i) => i.path === '/Learning Outcomes/Scalable oversight.md')!.kind).toBe('drop-placeholder');
+  });
+
+  it('verify accepts only parent-concepts:', () => {
+    const snap = snapshot({ '/Concepts/A.md': '---\nparent:\n  - "[[B]]"\n---\n', '/Concepts/B.md': '' });
+    expect(verifyMigrated(snap).problems.map((p) => p.reason)).toEqual(['concept file uses parent:; the field is parent-concepts:']);
   });
 });

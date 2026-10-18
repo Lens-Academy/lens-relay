@@ -24,3 +24,7 @@ test-results
 *.sln
 *.sw?
 .superpowers/
+
+# content-migration apply journals (scripts/migrate-topics-to-concepts.ts)
+*.journal.json
+*.journal.json.tmp
