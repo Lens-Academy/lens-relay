@@ -14,6 +14,10 @@
 //! stripped so curators can annotate the file for each other — note this is
 //! naive and also fires on `%%` inside code fences.
 //!
+//! For tokens that reach the `Lens Edu` folder, a fixed paragraph about
+//! concept relationships ([`CONCEPT_ROWS_NOTE`], see `concept_rows`) follows the
+//! curator intro: it explains a block that `read` adds, so it is server text.
+//!
 //! Trust model: anyone with direct edit access to a folder (Obsidian/editor)
 //! controls what agents are told for that folder. MCP agents cannot
 //! self-inject — their writes stay pending until a human accepts them.
@@ -30,8 +34,15 @@ pub const INTRO_PATH: &str = "AI Guide/_intro.md";
 /// Hard cap per folder so a runaway intro can't blow up every session.
 const MAX_INTRO_CHARS: usize = 4000;
 
+/// Folder whose sessions get [`CONCEPT_ROWS_NOTE`].
+const CONCEPT_ROWS_FOLDER: &str = "Lens Edu";
+
+/// How `read` shows concept rows, for sessions that can reach Lens Edu.
+pub const CONCEPT_ROWS_NOTE: &str = "Concept relationships: concept files (Lens Edu/Concepts/<name>.md) record what we know about which articles, videos and lenses relate to a concept. Each entry is a \"### [[relative/link/to/file]]\" row under the concept file's \"## Relationships\" heading, followed by free text. An entry means \"we have information about this pair\", which may be a negative judgment (\"considered, but not a match\"), not that they match. When you read an article, video transcript or lens, its concept relationships (and for a lens, those of its sources) come first in a block marked as context, not part of the file. To change or add a relationship, read and edit the concept file; never copy them into the article, video or lens.";
+
 /// Collect intro texts for every folder the token can access.
-/// Returns `None` when no accessible folder has a non-empty intro.
+/// Returns `None` when no accessible folder has a non-empty intro and the
+/// token cannot reach Lens Edu (which adds [`CONCEPT_ROWS_NOTE`]).
 pub async fn session_intro(server: &Arc<Server>, access: &McpAccess) -> Option<String> {
     let folders: Vec<String> = match (&access.folder_name, &access.folder_uuid) {
         (Some(name), _) => vec![name.clone()],
@@ -39,6 +50,7 @@ pub async fn session_intro(server: &Arc<Server>, access: &McpAccess) -> Option<S
         (None, None) => server.all_folder_names(),
     };
 
+    let concept_note = folders.iter().any(|f| f == CONCEPT_ROWS_FOLDER);
     let mut parts = Vec::new();
     for folder in folders {
         if let Some(text) = read_intro(server, &folder).await {
@@ -46,7 +58,7 @@ pub async fn session_intro(server: &Arc<Server>, access: &McpAccess) -> Option<S
         }
     }
 
-    match parts.len() {
+    let intro = match parts.len() {
         0 => None,
         1 => Some(parts.remove(0).1),
         // Multi-folder tokens: label each intro so the agent knows which
@@ -58,6 +70,11 @@ pub async fn session_intro(server: &Arc<Server>, access: &McpAccess) -> Option<S
                 .collect::<Vec<_>>()
                 .join("\n\n"),
         ),
+    };
+    match (intro, concept_note) {
+        (Some(intro), true) => Some(format!("{intro}\n\n{CONCEPT_ROWS_NOTE}")),
+        (None, true) => Some(CONCEPT_ROWS_NOTE.to_string()),
+        (intro, false) => intro,
     }
 }
 
@@ -221,5 +238,22 @@ mod tests {
         let out = truncate_chars(&long, MAX_INTRO_CHARS);
         assert!(out.ends_with("[intro truncated]"));
         assert_eq!(out.chars().count(), MAX_INTRO_CHARS + 18);
+    }
+
+    // Prevents: agents in Lens Edu not knowing what the concept-notes block
+    // in `read` is, or editing notes into the article instead of the concept
+    #[tokio::test]
+    async fn lens_edu_sessions_get_the_concept_rows_note() {
+        let server = build_test_server_in("Lens Edu", &[]).await;
+        let access = y_sweet_core::share_token::McpAccess {
+            folder_name: Some("Lens Edu".to_string()),
+            ..lens_scoped_access()
+        };
+        let resp =
+            crate::mcp::tools::dispatch_tool(&server, "create_session", &json!({}), &access).await;
+        let text = response_text(&resp);
+        let (sid, rest) = text.split_once("\n\n").expect("sid + note");
+        assert!(server.mcp_sessions.get_session(sid).is_some());
+        assert_eq!(rest, CONCEPT_ROWS_NOTE);
     }
 }

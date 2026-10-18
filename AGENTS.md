@@ -331,6 +331,16 @@ frame. While audio plays a click jumps to the sentence; otherwise clicks behave 
   and its in-file "Highlight recent changes" overlay. Page excerpts are built server-side
   (`crates/relay/src/recent_excerpts.rs`) on every index refresh.
 
+**Concept relationships in MCP `read`** (`crates/relay/src/mcp/tools/concept_rows.rs`): a `read` of a
+`Lens Edu/articles/`, `video_transcripts/` or `Lenses/` file starts (first chunk only) with a block of the rows about it
+from `Lens Edu/Concepts/` files (`### [[link]]` headings under `## Relationships`, found through backlinks and matched by
+resolved document); a lens also gets the rows about its `source::` articles and videos. The parser mirrors the editor's
+`lens-editor/src/lib/concept-rows.ts` and lens-platform's `content_processor/src/concepts.ts`: change the row rules in all
+three, and keep the tests tagged "canonical concept-row rules v1 #N" in step. The data model and the rules are in
+`docs/concept-relationships.md`. The block never shifts the file's cat -n
+numbering and edits match only the file's own text. A read with no concept backlinker (on the file or its sources) skips
+the folder-tree walk; otherwise each concept file is parsed and resolved once per read.
+
 **Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
 `edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's
 Jev writing checks on the paragraphs it changed (`POST /api/content/course-checks`), after the

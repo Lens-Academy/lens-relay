@@ -1,4 +1,5 @@
 pub mod blob;
+pub mod concept_rows;
 pub mod course_checks;
 pub mod create_doc;
 pub mod critic_diff;
@@ -73,7 +74,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }),
         json!({
             "name": "read",
-            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256; .svg attachments come back as their XML text.",
+            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256; .svg attachments come back as their XML text. Concept relationships: reading a file under Lens Edu/articles/, Lens Edu/video_transcripts/ or Lens Edu/Lenses/ starts (first chunk only) with a block marked \"Concept relationships for this file\" — the rows about it from Lens Edu/Concepts/ files (each row is a \"### [[link]]\" heading under \"## Relationships\" in a concept file, plus free text; for a lens also the rows about the articles and videos it uses as source::). An entry means \"we have information about this pair\", which may be a negative judgment, not that they match. The block is not part of the file: its line numbers are the concept files' own, the cat -n lines after it are the file's, and edits to a relationship go to the concept file (read it first), never to the article, video or lens.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
