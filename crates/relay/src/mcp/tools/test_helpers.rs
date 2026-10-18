@@ -89,15 +89,13 @@ pub(crate) async fn build_test_server_in(
     server
 }
 
-/// [`build_test_server_in`], but with the folder doc loaded in
-/// `server.docs()` and its `backlinks_v0` built by the link indexer from the
-/// documents' wikilinks, as in production (for features that read backlinks).
-pub(crate) async fn build_indexed_test_server_in(
+/// Load folder 0 named `folder` with `entries` as Markdown files into
+/// `server.docs()` and the resolver, as in production.
+async fn insert_indexed_folder_doc(
+    server: &Arc<Server>,
     folder: &str,
     entries: &[(&str, &str, &str)],
-) -> Arc<Server> {
-    let server = build_test_server_in(folder, entries).await;
-
+) {
     let folder_doc_id = folder0_id();
     let dwskv = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
         .await
@@ -121,8 +119,12 @@ pub(crate) async fn build_indexed_test_server_in(
     server
         .doc_resolver()
         .update_folder(&folder_doc_id, server.docs());
+}
 
-    let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+/// Build folder 0's `backlinks_v0` with the link indexer from the wikilinks
+/// of `entries` (all loaded in `server.docs()`).
+fn index_entries(server: &Arc<Server>, entries: &[(&str, &str, &str)]) {
+    let folder_awareness = server.docs().get(&folder0_id()).unwrap().awareness();
     for (_, uuid, _) in entries {
         let doc_id = format!("{}-{}", RELAY_ID, uuid);
         let content_awareness = server.docs().get(&doc_id).unwrap().awareness();
@@ -135,6 +137,18 @@ pub(crate) async fn build_indexed_test_server_in(
         )
         .expect("indexing should succeed");
     }
+}
+
+/// [`build_test_server_in`], but with the folder doc loaded in
+/// `server.docs()` and its `backlinks_v0` built by the link indexer from the
+/// documents' wikilinks, as in production (for features that read backlinks).
+pub(crate) async fn build_indexed_test_server_in(
+    folder: &str,
+    entries: &[(&str, &str, &str)],
+) -> Arc<Server> {
+    let server = build_test_server_in(folder, entries).await;
+    insert_indexed_folder_doc(&server, folder, entries).await;
+    index_entries(&server, entries);
     server
 }
 
@@ -146,31 +160,7 @@ pub(crate) async fn build_indexed_store_test_server_in(
     entries: &[(&str, &str, &str)],
 ) -> Arc<Server> {
     let server = server_with_store(MemoryStore::with_delay(Duration::ZERO)).await;
-    let folder_doc_id = folder0_id();
-    let dwskv = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
-        .await
-        .expect("Failed to create folder DocWithSyncKv");
-    {
-        let awareness = dwskv.awareness();
-        let guard = awareness.write().unwrap();
-        let mut txn = guard.doc.transact_mut();
-        let filemeta = txn.get_or_insert_map("filemeta_v0");
-        for (path, uuid, _) in entries {
-            let mut map = HashMap::new();
-            map.insert("id".to_string(), Any::String((*uuid).into()));
-            map.insert("type".to_string(), Any::String("markdown".into()));
-            map.insert("version".to_string(), Any::Number(0.0));
-            filemeta.insert(&mut txn, *path, Any::Map(map.into()));
-        }
-        let config = txn.get_or_insert_map("folder_config");
-        config.insert(&mut txn, "name", Any::String(folder.into()));
-    }
-    server.docs().insert(folder_doc_id.clone(), dwskv);
-    server
-        .doc_resolver()
-        .update_folder(&folder_doc_id, server.docs());
-
-    let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+    insert_indexed_folder_doc(&server, folder, entries).await;
     for (_, uuid, content) in entries {
         let doc_id = format!("{}-{}", RELAY_ID, uuid);
         server.load_doc(&doc_id, None).await.expect("load_doc");
@@ -183,15 +173,8 @@ pub(crate) async fn build_indexed_store_test_server_in(
         }
         let sync_kv = server.docs().get(&doc_id).unwrap().sync_kv();
         sync_kv.persist().await.expect("persist");
-        let content = awareness.read().unwrap();
-        let folder_guard = folder_awareness.read().unwrap();
-        y_sweet_core::link_indexer::index_content_into_folders(
-            uuid,
-            &content.doc,
-            &[&folder_guard.doc],
-        )
-        .expect("indexing should succeed");
     }
+    index_entries(&server, entries);
     server
 }
 

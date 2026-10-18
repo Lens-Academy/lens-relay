@@ -31,7 +31,7 @@ use futures::StreamExt;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
-use y_sweet_core::link_indexer::{without_terminal_md, VirtualEntry, VirtualTreeIndex};
+use y_sweet_core::link_indexer::{self, without_terminal_md, VirtualEntry, VirtualTreeIndex};
 use yrs::{GetString, ReadTxn, Transact};
 
 /// "For a file in `opened_in`, show the rows about it from the files in
@@ -137,22 +137,10 @@ struct ConceptRow {
     target: String,
     /// 1-based line of the heading.
     line: usize,
-    /// Start and end (before the newline) of the heading line; tests only.
-    heading_from: usize,
-    heading_to: usize,
-    /// The free text: from the line after the heading, trailing whitespace left out.
+    /// The free text: from the line after the heading to the next heading of
+    /// level ≤ 3 (or the section's end), trailing whitespace left out.
     body_from: usize,
     body_to: usize,
-    /// Where the row ends: the next heading of level ≤ 3, or the end; tests only.
-    to: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct ParsedConceptFile {
-    /// Each rows section: `(heading_from, to)`, `to` being the next heading
-    /// of level ≤ 2 or the end of the text; tests only.
-    sections: Vec<(usize, usize)>,
-    rows: Vec<ConceptRow>,
 }
 
 struct Heading {
@@ -283,17 +271,16 @@ fn headings_of(text: &str) -> Vec<Heading> {
     out
 }
 
-/// The rows sections and their rows, by the canonical concept-row rules v1
+/// The rows of a concept file, by the canonical concept-row rules v1
 /// (#1–#4): every level-2 heading that is exactly `section` starts a section,
 /// which ends at the next heading of level ≤ 2; a row is a level-3 heading in
 /// it that is exactly one wikilink (`|alias` and `#anchor` allowed; an
 /// `![[embed]]` or an empty page is not a row); its body runs to the next
 /// heading of level ≤ 3.
-fn parse_concept_file(text: &str, section: &str) -> ParsedConceptFile {
+fn parse_concept_file(text: &str, section: &str) -> Vec<ConceptRow> {
     static SINGLE_LINK: OnceLock<Regex> = OnceLock::new();
     let single_link = regex(&SINGLE_LINK, r"^\[\[([^\[\]\n]+)\]\]$");
     let headings = headings_of(text);
-    let mut sections = Vec::new();
     let mut rows = Vec::new();
     for (start, h) in headings.iter().enumerate() {
         if h.level != 2 || h.text != section {
@@ -304,7 +291,6 @@ fn parse_concept_file(text: &str, section: &str) -> ParsedConceptFile {
             .enumerate()
             .position(|(i, n)| i > start && n.level <= 2);
         let section_to = end_index.map_or(text.len(), |i| headings[i].from);
-        sections.push((h.from, section_to));
         let inside = &headings[start + 1..end_index.unwrap_or(headings.len())];
         for (i, r) in inside.iter().enumerate() {
             if r.level != 3 {
@@ -326,15 +312,12 @@ fn parse_concept_file(text: &str, section: &str) -> ParsedConceptFile {
             rows.push(ConceptRow {
                 target: target.to_string(),
                 line: r.line,
-                heading_from: r.from,
-                heading_to: r.to,
                 body_from,
                 body_to,
-                to,
             });
         }
     }
-    ParsedConceptFile { sections, rows }
+    rows
 }
 
 /// The link targets of every `source::` field in a lens (canonical
@@ -423,23 +406,29 @@ struct LensRowGroups {
     /// One per lens row, with its concept's rows about the sources (only on
     /// the concept's first lens row, and only sources that have a row there).
     lens: Vec<(RowEntry, Vec<SourceRows>)>,
-    /// Per source, the rows of concepts with no lens row; sources left with
-    /// none are dropped.
-    source_only: Vec<SourceRows>,
+    /// One per concept with rows about the sources but none about the lens:
+    /// its concept file and those rows per source, by concept name.
+    source_only: Vec<(String, Vec<SourceRows>)>,
 }
 
 /// A lens's rows grouped by concept, as the editor's `groupLensRows`: a
-/// concept with a lens row shows once, its source rows under the lens row;
-/// the rest of the source rows stay apart. Both keep the order they come in.
+/// concept with a lens row shows once, its source rows under the lens row; a
+/// concept with only source rows also shows once, however many of the
+/// sources it has rows for. Lens rows keep their order; the others go by
+/// concept name.
 fn group_lens_rows(own: &[RowEntry], sources: &[SourceRows]) -> LensRowGroups {
-    let with_lens_row: HashSet<&str> = own.iter().map(|r| r.concept_id.as_str()).collect();
-    let rows_where = |pred: &dyn Fn(&RowEntry) -> bool| -> Vec<SourceRows> {
+    let for_concept = |concept_id: &str| -> Vec<SourceRows> {
         sources
             .iter()
             .map(|s| SourceRows {
                 source_path: s.source_path.clone(),
                 kind: s.kind,
-                rows: s.rows.iter().filter(|r| pred(r)).cloned().collect(),
+                rows: s
+                    .rows
+                    .iter()
+                    .filter(|r| r.concept_id == concept_id)
+                    .cloned()
+                    .collect(),
             })
             .filter(|s| !s.rows.is_empty())
             .collect()
@@ -449,14 +438,26 @@ fn group_lens_rows(own: &[RowEntry], sources: &[SourceRows]) -> LensRowGroups {
         .iter()
         .map(|entry| {
             let source_rows = if seen.insert(entry.concept_id.as_str()) {
-                rows_where(&|r| r.concept_id == entry.concept_id)
+                for_concept(&entry.concept_id)
             } else {
                 Vec::new()
             };
             (entry.clone(), source_rows)
         })
         .collect();
-    let source_only = rows_where(&|r| !with_lens_row.contains(r.concept_id.as_str()));
+    // Concepts with source rows only: (id, name, path), once each.
+    let mut others: Vec<(&str, &str, &str)> = Vec::new();
+    for row in sources.iter().flat_map(|s| &s.rows) {
+        let id = row.concept_id.as_str();
+        if !seen.contains(id) && !others.iter().any(|o| o.0 == id) {
+            others.push((id, &row.concept_name, &row.concept_path));
+        }
+    }
+    others.sort_by(|a, b| by_concept_name(a.1, b.1).then_with(|| a.2.cmp(b.2)));
+    let source_only = others
+        .into_iter()
+        .map(|(id, _, path)| (path.to_string(), for_concept(id)))
+        .collect();
     LensRowGroups { lens, source_only }
 }
 
@@ -467,9 +468,12 @@ fn file_name(path: &str) -> String {
 
 /// Concept names in display order: lower case first (rule #9), then as written.
 fn by_concept_name(a: &str, b: &str) -> std::cmp::Ordering {
+    // Names equal but for case: lower case first, as the editor's
+    // `localeCompare` orders them. Non-ASCII names may sort slightly
+    // differently from the editor (cosmetic).
     a.to_lowercase()
         .cmp(&b.to_lowercase())
-        .then_with(|| a.cmp(b))
+        .then_with(|| b.cmp(a))
 }
 
 /// A row of a concept file, its heading link resolved once per `read`.
@@ -544,7 +548,6 @@ impl<'a> ConceptLoader<'a> {
     fn parse(&self, path: String, text: &str) -> ParsedConcept {
         let source_virtual = format!("/{}", path);
         let rows = parse_concept_file(text, self.section)
-            .rows
             .into_iter()
             .map(|row| ResolvedRow {
                 target_id: self
@@ -693,7 +696,13 @@ const PREAMBLE: &str = "Each row lives in the named concept file under ## Relati
 
 /// A row's text indented by `indent`, cut at [`MAX_ROW_CHARS`].
 fn render_body(out: &mut String, entry: &RowEntry, indent: &str) {
-    let body = entry.body.trim();
+    // Leading blank lines and trailing whitespace go; the first line keeps
+    // its indentation.
+    let body = entry.body.trim_end();
+    let body = match body.find(|c: char| !c.is_whitespace()) {
+        Some(first) => &body[body[..first].rfind('\n').map_or(0, |i| i + 1)..],
+        None => "",
+    };
     if body.is_empty() {
         out.push_str(indent);
         out.push_str("(empty)\n");
@@ -795,29 +804,18 @@ fn render_lens(
     render_mentions(&mut out, &own.mentions, opened_label);
     render_skipped(&mut out, own.skipped, opened_label);
 
-    // One entry per concept, with a sub-entry per source it has a row about;
-    // concepts by name, sub-entries in source order (the sort is stable).
-    let mut only: Vec<(&SourceRows, &RowEntry)> = groups
-        .source_only
-        .iter()
-        .flat_map(|source| source.rows.iter().map(move |row| (source, row)))
-        .collect();
-    only.sort_by(|a, b| {
-        by_concept_name(&a.1.concept_name, &b.1.concept_name)
-            .then_with(|| a.1.concept_path.cmp(&b.1.concept_path))
-    });
-    if !only.is_empty() {
+    if !groups.source_only.is_empty() {
         out.push_str(
             "\nConcepts linked only via this lens's sources (rows about a source — context, not about this lens; no row for this lens yet):\n",
         );
     }
-    let mut previous: Option<&str> = None;
-    for (source, row) in only {
-        if previous != Some(row.concept_id.as_str()) {
-            out.push_str(&format!("\n[Concept] {}\n", row.concept_path));
-            previous = Some(row.concept_id.as_str());
+    for (concept_path, source_rows) in &groups.source_only {
+        out.push_str(&format!("\n[Concept] {concept_path}\n"));
+        for source in source_rows {
+            for row in &source.rows {
+                render_source_row(&mut out, source, row);
+            }
         }
-        render_source_row(&mut out, source, row);
     }
     for (source, skipped) in sources {
         render_skipped(&mut out, *skipped, &source.source_path);
@@ -840,6 +838,42 @@ fn cap_block(body: String) -> String {
         "{}\n(… truncated at {MAX_BLOCK_CHARS} characters — read the concept files listed above, or use get_links, for the rest.)\n",
         &body[..cut]
     )
+}
+
+/// Whether a concept file may link to one of a lens's sources, found before
+/// the link index is built: each source is looked up by its exact path
+/// (relative to the lens, then from the folder root) in the resolver's path
+/// map, and widgets and other files without rows are passed over. A source
+/// not found that way (other case, or missing) is left to the index. Only a
+/// file whose name differs from a found one by case alone could be missed.
+async fn sources_may_have_rows(
+    server: &Arc<Server>,
+    rule: &ConceptRowRule,
+    lens_virtual: &str,
+    targets: &[String],
+) -> bool {
+    let resolver = server.doc_resolver();
+    for target in targets {
+        let paths = [
+            link_indexer::resolve_relative(lens_virtual, target),
+            format!("/{}.md", without_terminal_md(target)),
+        ];
+        let found = paths.iter().find_map(|p| {
+            let p = p.trim_start_matches('/');
+            resolver.resolve_path(p).map(|info| (p.to_string(), info))
+        });
+        let Some((path, info)) = found else {
+            return true;
+        };
+        if source_kind(&path).is_some()
+            && !concept_backlinkers(server, rule, &info.folder_doc_id, &info.uuid)
+                .await
+                .is_empty()
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// A lens source (an article or video) and its concept backlinkers.
@@ -868,7 +902,10 @@ pub(crate) async fn concept_rows_block(
     } else {
         Vec::new()
     };
-    if own_candidates.is_empty() && source_targets.is_empty() {
+    let lens_virtual = format!("/{}", path);
+    if own_candidates.is_empty()
+        && !sources_may_have_rows(server, rule, &lens_virtual, &source_targets).await
+    {
         return None;
     }
 
@@ -876,7 +913,6 @@ pub(crate) async fn concept_rows_block(
     let resolver = server.doc_resolver();
     let entries = resolver_entries(server);
     let index = VirtualTreeIndex::new(&entries);
-    let lens_virtual = format!("/{}", path);
     let mut sources: Vec<Source> = Vec::new();
     let mut sources_over_cap = 0;
     for target in &source_targets {
@@ -979,7 +1015,6 @@ Not a row: outside the Relationships section.
 
     fn targets(text: &str) -> Vec<String> {
         parse_concept_file(text, "Relationships")
-            .rows
             .into_iter()
             .map(|r| r.target)
             .collect()
@@ -987,10 +1022,6 @@ Not a row: outside the Relationships section.
 
     #[test]
     fn finds_level3_link_headings_under_relationships() {
-        assert_eq!(
-            parse_concept_file(CONCEPT, "Relationships").sections.len(),
-            1
-        );
         assert_eq!(
             targets(CONCEPT),
             vec![
@@ -1003,7 +1034,7 @@ Not a row: outside the Relationships section.
 
     #[test]
     fn row_runs_to_next_heading_of_level_3_or_less_keeping_deeper_headings() {
-        let rows = parse_concept_file(CONCEPT, "Relationships").rows;
+        let rows = parse_concept_file(CONCEPT, "Relationships");
         let (first, last) = (&rows[0], &rows[2]);
         assert_eq!(
             &CONCEPT[first.body_from..first.body_to],
@@ -1013,19 +1044,14 @@ Not a row: outside the Relationships section.
             &CONCEPT[last.body_from..last.body_to],
             "Uses §1–3 of the Redwood article."
         );
-        assert!(CONCEPT[last.to..].starts_with("## See also"));
     }
 
     #[test]
     fn records_the_heading_line() {
-        let first = &parse_concept_file(CONCEPT, "Relationships").rows[0];
+        let first = &parse_concept_file(CONCEPT, "Relationships")[0];
         assert_eq!(
             CONCEPT.split('\n').nth(first.line - 1),
             Some("### [[../articles/ai-control-redwood]]")
-        );
-        assert_eq!(
-            &CONCEPT[first.heading_from..first.heading_to],
-            "### [[../articles/ai-control-redwood]]"
         );
     }
 
@@ -1043,22 +1069,15 @@ Not a row: outside the Relationships section.
 
     #[test]
     fn no_rows_without_a_relationships_section() {
-        assert_eq!(
-            parse_concept_file("# C\n\n### [[x]]\n", "Relationships"),
-            ParsedConceptFile {
-                sections: vec![],
-                rows: vec![]
-            }
-        );
+        assert!(parse_concept_file("# C\n\n### [[x]]\n", "Relationships").is_empty());
     }
 
     #[test]
     fn an_empty_row_has_an_empty_body() {
         let text = "## Relationships\n\n### [[x]]\n\n### [[y]]";
-        let rows = parse_concept_file(text, "Relationships").rows;
+        let rows = parse_concept_file(text, "Relationships");
         let (x, y) = (&rows[0], &rows[1]);
         assert_eq!(x.body_from, x.body_to);
-        assert_eq!(&text[x.heading_from..x.heading_to], "### [[x]]");
         assert_eq!(y.body_from, text.len());
     }
 
@@ -1067,7 +1086,7 @@ Not a row: outside the Relationships section.
     #[test]
     fn counts_only_level3_headings_under_relationships() {
         let text = "# C\n\n### [[../articles/ai_control_redwood]]\nbefore\n\n## Relationships\n\n### [[../articles/ai_control_redwood]]\nNotes.\n\n#### [[../articles/ai_control_redwood]]\nDeeper.\n\n### [[../articles/ai_control_redwood]]\nAgain.\n\n## See also\n\n### [[../articles/ai_control_redwood]]\n";
-        let rows = parse_concept_file(text, "Relationships").rows;
+        let rows = parse_concept_file(text, "Relationships");
         assert_eq!(rows.iter().map(|r| r.line).collect::<Vec<_>>(), vec![8, 14]);
         assert_eq!(rows[0].target, "../articles/ai_control_redwood");
     }
@@ -1075,7 +1094,7 @@ Not a row: outside the Relationships section.
     #[test]
     fn crlf_line_endings() {
         let text = "## Relationships\r\n\r\n### [[a]]\r\nNote.\r\n";
-        let rows = parse_concept_file(text, "Relationships").rows;
+        let rows = parse_concept_file(text, "Relationships");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].target, "a");
         // As in the editor, the body starts after the heading's `\r`; the
@@ -1149,7 +1168,6 @@ Not a row: outside the Relationships section.
     fn canonical_1_every_relationships_section_counts() {
         let text = "## Relationships\n### [[a]]\n## Notes\n### [[x]]\n## Relationships ##\n### [[b]]\n## *Relationships*\n### [[y]]\n";
         assert_eq!(targets(text), vec!["a", "b"]);
-        assert_eq!(parse_concept_file(text, "Relationships").sections.len(), 2);
     }
 
     // canonical concept-row rules v1 #2
@@ -1172,7 +1190,7 @@ Not a row: outside the Relationships section.
     #[test]
     fn canonical_4_row_body_runs_to_next_heading_of_level_3_or_less() {
         let text = "## Relationships\n### [[a]]\nOne\n#### Sub\nTwo\n### [[b]]\nThree\n";
-        let a = &parse_concept_file(text, "Relationships").rows[0];
+        let a = &parse_concept_file(text, "Relationships")[0];
         assert_eq!(&text[a.body_from..a.body_to], "One\n#### Sub\nTwo");
     }
 
@@ -1239,7 +1257,6 @@ Not a row: outside the Relationships section.
         let index = VirtualTreeIndex::new(&entries);
         let text = "## Relationships\n### [[../ARTICLES/Ai-Control-Redwood]]\n### [[Lens Edu/articles/lw-post-on-monitoring]]\n";
         let ids: Vec<Option<String>> = parse_concept_file(text, "Relationships")
-            .rows
             .iter()
             .map(|r| {
                 index
@@ -1283,6 +1300,10 @@ Not a row: outside the Relationships section.
         let mut names = vec!["beta", "Alpha"];
         names.sort_by(|a, b| by_concept_name(a, b));
         assert_eq!(names, vec!["Alpha", "beta"]);
+        // Equal but for case: lower case first, as localeCompare.
+        let mut names = vec!["Alpha", "alpha"];
+        names.sort_by(|a, b| by_concept_name(a, b));
+        assert_eq!(names, vec!["alpha", "Alpha"]);
     }
 
     fn entry(concept_id: &str, body: &str) -> RowEntry {
@@ -1351,7 +1372,10 @@ Not a row: outside the Relationships section.
             ]
         );
         assert_eq!(groups.source_only.len(), 1);
-        assert_eq!(groups.source_only[0].rows[0].concept_id, "Corrigibility");
+        assert_eq!(
+            groups.source_only[0].0,
+            "Lens Edu/Concepts/Corrigibility.md"
+        );
     }
 
     #[test]
@@ -1365,15 +1389,40 @@ Not a row: outside the Relationships section.
     }
 
     #[test]
-    fn group_keeps_every_source_row_apart_when_the_lens_has_none() {
-        let groups = group_lens_rows(&[], &[source("A", vec![entry("B", ""), entry("A", "")])]);
+    fn group_shows_each_source_only_concept_once_by_name() {
+        let groups = group_lens_rows(
+            &[],
+            &[
+                source("S1", vec![entry("b", "1"), entry("A", "2")]),
+                source("S2", vec![entry("b", "3")]),
+            ],
+        );
         assert!(groups.lens.is_empty());
-        let ids: Vec<&str> = groups.source_only[0]
-            .rows
+        let shape: Vec<(&str, Vec<&str>)> = groups
+            .source_only
             .iter()
-            .map(|r| r.concept_id.as_str())
+            .map(|(path, sources)| {
+                (
+                    path.as_str(),
+                    sources.iter().map(|s| s.source_path.as_str()).collect(),
+                )
+            })
             .collect();
-        assert_eq!(ids, vec!["B", "A"]);
+        assert_eq!(
+            shape,
+            vec![
+                ("Lens Edu/Concepts/A.md", vec!["S1"]),
+                ("Lens Edu/Concepts/b.md", vec!["S1", "S2"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn row_text_keeps_the_first_lines_indentation() {
+        let e = entry("C", "\n\n    code line\nnext\n\n");
+        let mut out = String::new();
+        render_body(&mut out, &e, "  ");
+        assert_eq!(out, "      code line\n  next\n");
     }
 
     #[test]

@@ -91,10 +91,10 @@ async fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
     }
     // Read content into owned String, then drop all guards
     let content: String = {
-        let Some(doc_ref) = server.docs().get(doc_id) else {
+        // Clone the awareness Arc out, so no DashMap guard is held across its lock
+        let Some(awareness) = server.docs().get(doc_id).map(|d| d.awareness()) else {
             return Vec::new();
         };
-        let awareness = doc_ref.awareness();
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         match txn.get_text("contents") {

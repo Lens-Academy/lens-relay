@@ -71,4 +71,5 @@ implementations and their tagged tests in the same piece of work.
    keep targets in `articles/` or `video_transcripts/`, with or without `.md`. They skip
    widgets. They use the first wikilink in the value. The MCP server follows at most 8
    sources.
-9. **Sort order.** Displays sort concepts by name, without regard to case.
+9. **Sort order.** Displays sort concepts by name, case-insensitive; the order of non-ASCII
+   names may differ slightly between the editor and the MCP block. This is cosmetic.
