@@ -34,15 +34,13 @@ pub const INTRO_PATH: &str = "AI Guide/_intro.md";
 /// Hard cap per folder so a runaway intro can't blow up every session.
 const MAX_INTRO_CHARS: usize = 4000;
 
-/// Folder whose sessions get [`CONCEPT_ROWS_NOTE`].
-const CONCEPT_ROWS_FOLDER: &str = "Lens Edu";
-
 /// How `read` shows concept rows, for sessions that can reach Lens Edu.
-pub const CONCEPT_ROWS_NOTE: &str = "Concept relationships: concept files (Lens Edu/Concepts/<name>.md) record what we know about which articles, videos and lenses relate to a concept. Each entry is a \"### [[relative/link/to/file]]\" row under the concept file's \"## Relationships\" heading, followed by free text. An entry means \"we have information about this pair\", which may be a negative judgment (\"considered, but not a match\"), not that they match. When you read an article, video transcript or lens, its concept relationships (and for a lens, those of its sources) come first in a block marked as context, not part of the file. To change or add a relationship, read and edit the concept file; never copy them into the article, video or lens.";
+pub const CONCEPT_ROWS_NOTE: &str = "Concept relationships: concept files (Lens Edu/Concepts/<name>.md) record what we know about which articles, videos and lenses relate to a concept. Each entry is a row: a \"### [[relative/link/to/file]]\" heading under the concept file's \"## Relationships\" heading, followed by free text. An entry means \"we have information about this pair\", which may be a negative judgment (\"considered, but not a match\"), not that they match. When you read an article, video transcript or lens, its rows (and for a lens, those about its articles and videos) come first in a block marked as context, not part of the file; its line numbers are the concept files'. To change a row, read and edit the concept file at that line; to add one, add a row like the above to the concept file. Never copy rows into the article, video or lens.";
 
 /// Collect intro texts for every folder the token can access.
 /// Returns `None` when no accessible folder has a non-empty intro and the
-/// token cannot reach Lens Edu (which adds [`CONCEPT_ROWS_NOTE`]).
+/// token cannot reach a folder with concept rows (which adds
+/// [`CONCEPT_ROWS_NOTE`]).
 pub async fn session_intro(server: &Arc<Server>, access: &McpAccess) -> Option<String> {
     let folders: Vec<String> = match (&access.folder_name, &access.folder_uuid) {
         (Some(name), _) => vec![name.clone()],
@@ -50,7 +48,9 @@ pub async fn session_intro(server: &Arc<Server>, access: &McpAccess) -> Option<S
         (None, None) => server.all_folder_names(),
     };
 
-    let concept_note = folders.iter().any(|f| f == CONCEPT_ROWS_FOLDER);
+    let concept_note = folders
+        .iter()
+        .any(|f| super::concept_rows::rows_shared_folders().contains(&f.as_str()));
     let mut parts = Vec::new();
     for folder in folders {
         if let Some(text) = read_intro(server, &folder).await {
@@ -240,8 +240,8 @@ mod tests {
         assert_eq!(out.chars().count(), MAX_INTRO_CHARS + 18);
     }
 
-    // Prevents: agents in Lens Edu not knowing what the concept-notes block
-    // in `read` is, or editing notes into the article instead of the concept
+    // Prevents: agents in Lens Edu not knowing what the concept-relationships block
+    // in `read` is, or editing rows into the article instead of the concept
     #[tokio::test]
     async fn lens_edu_sessions_get_the_concept_rows_note() {
         let server = build_test_server_in("Lens Edu", &[]).await;

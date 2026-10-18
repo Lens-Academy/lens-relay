@@ -42,7 +42,8 @@ pub fn parse_doc_id(doc_id: &str) -> Option<(&str, &str)> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn without_terminal_md(path: &str) -> &str {
+/// `path` without a final `.md` (any case).
+pub fn without_terminal_md(path: &str) -> &str {
     let suffix_start = path.len().saturating_sub(3);
     match path.get(suffix_start..) {
         Some(suffix) if suffix.eq_ignore_ascii_case(".md") => &path[..suffix_start],

@@ -193,16 +193,17 @@ pub async fn execute(
     let accepted = super::critic_markup::accepted_view(&spans);
     let footer = super::critic_markup::render_pending_summary(&spans, &accepted);
 
-    // Concept rows about this file (articles and lenses) come before the
-    // first chunk of a paged read, as a labelled block. They are context
-    // from the concept files, not this file's text: the cat -n numbering
-    // below is unchanged, and edits match only the file's own text.
-    let notes = if offset <= 1 {
+    // Concept relationships (rows in Lens Edu/Concepts/ files) about this
+    // file, for articles, video transcripts and lenses, come before the first
+    // chunk of a paged read as a labelled block. They are context from the
+    // concept files, not this file's text: the cat -n numbering below is
+    // unchanged, and edits match only the file's own text.
+    let rows_block = if offset <= 1 {
         let path = server
             .doc_resolver()
             .path_for_uuid(&doc_info.uuid)
             .unwrap_or_else(|| file_path.to_string());
-        super::concept_rows::concept_notes_block(
+        super::concept_rows::concept_rows_block(
             server,
             &path,
             &doc_info.uuid,
@@ -215,8 +216,8 @@ pub async fn execute(
     };
 
     let mut output = String::new();
-    if let Some(notes) = notes {
-        output.push_str(&notes);
+    if let Some(rows_block) = rows_block {
+        output.push_str(&rows_block);
         output.push_str("\n\n");
     }
     output.push_str(&format_cat_n(&accepted, offset, limit));

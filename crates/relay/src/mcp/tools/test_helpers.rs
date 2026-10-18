@@ -138,6 +138,63 @@ pub(crate) async fn build_indexed_test_server_in(
     server
 }
 
+/// [`build_indexed_test_server_in`] on a server with an in-memory store: each
+/// document is loaded through `load_doc` and persisted, so a test can evict
+/// it from `server.docs()` (as GC does) and have `ensure_doc_loaded` reload it.
+pub(crate) async fn build_indexed_store_test_server_in(
+    folder: &str,
+    entries: &[(&str, &str, &str)],
+) -> Arc<Server> {
+    let server = server_with_store(MemoryStore::with_delay(Duration::ZERO)).await;
+    let folder_doc_id = folder0_id();
+    let dwskv = DocWithSyncKv::new(&folder_doc_id, None, || (), None)
+        .await
+        .expect("Failed to create folder DocWithSyncKv");
+    {
+        let awareness = dwskv.awareness();
+        let guard = awareness.write().unwrap();
+        let mut txn = guard.doc.transact_mut();
+        let filemeta = txn.get_or_insert_map("filemeta_v0");
+        for (path, uuid, _) in entries {
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), Any::String((*uuid).into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            map.insert("version".to_string(), Any::Number(0.0));
+            filemeta.insert(&mut txn, *path, Any::Map(map.into()));
+        }
+        let config = txn.get_or_insert_map("folder_config");
+        config.insert(&mut txn, "name", Any::String(folder.into()));
+    }
+    server.docs().insert(folder_doc_id.clone(), dwskv);
+    server
+        .doc_resolver()
+        .update_folder(&folder_doc_id, server.docs());
+
+    let folder_awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+    for (_, uuid, content) in entries {
+        let doc_id = format!("{}-{}", RELAY_ID, uuid);
+        server.load_doc(&doc_id, None).await.expect("load_doc");
+        let awareness = server.docs().get(&doc_id).unwrap().awareness();
+        {
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, content);
+        }
+        let sync_kv = server.docs().get(&doc_id).unwrap().sync_kv();
+        sync_kv.persist().await.expect("persist");
+        let content = awareness.read().unwrap();
+        let folder_guard = folder_awareness.read().unwrap();
+        y_sweet_core::link_indexer::index_content_into_folders(
+            uuid,
+            &content.doc,
+            &[&folder_guard.doc],
+        )
+        .expect("indexing should succeed");
+    }
+    server
+}
+
 /// Create a session with a doc marked as already read.
 pub(crate) fn setup_session_with_read(server: &Arc<Server>, doc_id: &str) -> String {
     let sid = server

@@ -35,6 +35,9 @@ Three implementations parse the rows. They must agree.
 | Relay MCP | `crates/relay/src/mcp/tools/concept_rows.rs` | Adds a "Concept relationships" block before the file text when an agent reads an article, video transcript or lens. |
 | Platform validator | `content_processor/src/concepts.ts` in lens-platform | Reports two rows for the same file in one concept file as an error. |
 
+The MCP block is bounded: at most 40 concept files per file and 80 per read, at most 8 lens
+sources, 1,500 characters per row and 20,000 per block. It says what it left out.
+
 Each implementation has one test for each rule below. The tests are tagged
 "canonical concept-row rules v1 #N". When you change a rule, change all three
 implementations and their tagged tests in the same piece of work.

@@ -1,9 +1,9 @@
-//! Concept relationships ("concept rows", "junction rows") in `read` output.
+//! Concept relationships ("concept rows") in `read` output.
 //!
 //! What the team knows about a concept and a source is stored once, in the
 //! concept file (`Lens Edu/Concepts/<name>.md`): under its `## Relationships`
-//! heading, each level-3 heading that is exactly one wikilink is a "row"
-//! about the linked file, and runs until the next heading of level ≤ 3:
+//! heading, each level-3 heading that is exactly one wikilink is a row about
+//! the linked file, and runs until the next heading of level ≤ 3:
 //!
 //! ```text
 //! ## Relationships
@@ -13,20 +13,17 @@
 //! ```
 //!
 //! A row means "we have information about this pair", not "this is a match".
-//! The Lens Editor shows a file's rows in a panel at the top of the file; this
-//! module gives an MCP `read` of the same file (an article, video transcript
-//! or lens) the same rows, as a labelled "concept relationships" block before
-//! the file's text (first chunk only); a lens also gets the rows about the
-//! articles and videos it uses as `source::`. The rows stay in the
-//! concept files: grep, search and glob see them only there, and edits go to
-//! the concept file.
+//! The Lens Editor shows a file's rows in a panel at the top of the file; an
+//! MCP `read` of an article, video transcript or lens gets the same rows as a
+//! labelled block before the file's text (first chunk only); a lens also gets
+//! the rows about the articles and videos it uses as `source::`. The rows
+//! stay in the concept files: grep, search and glob see them only there, and
+//! edits go to the concept file. See `docs/concept-relationships.md`.
 //!
-//! The parser mirrors the editor's `lens-editor/src/lib/concept-rows.ts` and
-//! the platform validator's `content_processor/src/concepts.ts` (including
-//! CommonMark closing hashes on headings); their test cases are ported below
-//! so the three agree. Rows are matched by the
-//! document their heading link resolves to (the link indexer's resolution),
-//! not by name.
+//! The parser follows the canonical concept-row rules v1, shared with the
+//! editor (`lens-editor/src/lib/concept-rows.ts`) and the platform validator
+//! (`content_processor/src/concepts.ts`); the tests tagged "canonical
+//! concept-row rules v1 #N" use the editor's inputs so the three agree.
 
 use super::{critic_markup, get_links};
 use crate::server::Server;
@@ -34,88 +31,93 @@ use futures::StreamExt;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
-use y_sweet_core::link_indexer::{self, VirtualEntry, VirtualTreeIndex};
+use y_sweet_core::link_indexer::{without_terminal_md, VirtualEntry, VirtualTreeIndex};
 use yrs::{GetString, ReadTxn, Transact};
 
 /// "For a file in `opened_in`, show the rows about it from the files in
-/// `rows_in`" — the editor's `CONCEPT_ROW_RULES`.
-#[derive(Debug)]
-pub struct ConceptRowRule {
+/// `rows_in`": the editor's `CONCEPT_ROW_RULES`.
+struct ConceptRowRule {
     /// Shared folder the rule applies in.
-    pub shared_folder: &'static str,
+    shared_folder: &'static str,
     /// Folder of the opened file, relative to the shared folder.
-    pub opened_in: &'static str,
+    opened_in: &'static str,
     /// Folder whose files hold the rows, relative to the shared folder.
-    pub rows_in: &'static str,
-    /// Heading (level 2) of the section that holds the rows.
-    pub section: &'static str,
-    /// What the opened file is called in the output ("this article").
-    pub opened_label: &'static str,
-    /// Placeholder name for the opened file in the add-a-note instruction.
-    pub file_kind: &'static str,
-    /// Also show the rows of the articles and video transcripts the opened
-    /// file uses as `source::` (lenses).
-    pub source_context: bool,
+    rows_in: &'static str,
+    /// Heading (level 2) of the sections that hold the rows.
+    section: &'static str,
+    /// What a file in `opened_in` is called: "article", "video", "lens".
+    kind: &'static str,
+    /// Also show the rows of the files the opened file uses as `source::`
+    /// (lenses). The files of the other rules are the sources that count.
+    source_context: bool,
 }
 
-pub const CONCEPT_ROW_RULES: &[ConceptRowRule] = &[
+const fn relationships_rule(
+    opened_in: &'static str,
+    kind: &'static str,
+    source_context: bool,
+) -> ConceptRowRule {
     ConceptRowRule {
         shared_folder: "Lens Edu",
-        opened_in: "articles",
+        opened_in,
         rows_in: "Concepts",
         section: "Relationships",
-        opened_label: "this article",
-        file_kind: "this-article",
-        source_context: false,
-    },
-    ConceptRowRule {
-        shared_folder: "Lens Edu",
-        opened_in: "video_transcripts",
-        rows_in: "Concepts",
-        section: "Relationships",
-        opened_label: "this video",
-        file_kind: "this-video",
-        source_context: false,
-    },
-    ConceptRowRule {
-        shared_folder: "Lens Edu",
-        opened_in: "Lenses",
-        rows_in: "Concepts",
-        section: "Relationships",
-        opened_label: "this lens",
-        file_kind: "this-lens",
-        source_context: true,
-    },
+        kind,
+        source_context,
+    }
+}
+
+const CONCEPT_ROW_RULES: &[ConceptRowRule] = &[
+    relationships_rule("articles", "article", false),
+    relationships_rule("video_transcripts", "video", false),
+    relationships_rule("Lenses", "lens", true),
 ];
 
 /// Longest row text shown in full, in characters.
 const MAX_ROW_CHARS: usize = 1500;
-/// Concept files read per target file (an article or lens).
+/// Longest block, in characters (before the header and end marker).
+const MAX_BLOCK_CHARS: usize = 20_000;
+/// Concept files read per target file (an article, video or lens).
 const MAX_CONCEPT_FILES_PER_TARGET: usize = 40;
 /// Concept files read per `read` call in all.
 const MAX_CONCEPT_FILES_TOTAL: usize = 80;
-/// Sources (articles, video transcripts) of a lens whose rows are shown
-/// (canonical concept-row rules v1 #8 allows R to cap them).
+/// Sources of a lens whose rows are shown (rule #8 lets the relay cap them).
 const MAX_LENS_SOURCES: usize = 8;
 /// Concept files loaded at once.
 const LOAD_CONCURRENCY: usize = 4;
 
-fn ends_with_md(path: &str) -> bool {
-    path.len() >= 3
-        && path
-            .get(path.len() - 3..)
-            .is_some_and(|ext| ext.eq_ignore_ascii_case(".md"))
+fn is_md(path: &str) -> bool {
+    without_terminal_md(path).len() != path.len()
+}
+
+/// The shared folders that have concept rows, for the session intro.
+pub(crate) fn rows_shared_folders() -> Vec<&'static str> {
+    let mut folders: Vec<&'static str> =
+        CONCEPT_ROW_RULES.iter().map(|r| r.shared_folder).collect();
+    folders.dedup();
+    folders
 }
 
 /// The rule for the file at `path` (a resolver path such as
 /// `Lens Edu/articles/x.md`), or None.
-pub fn match_rule(path: &str) -> Option<&'static ConceptRowRule> {
-    if !ends_with_md(path) {
+fn match_rule(path: &str) -> Option<&'static ConceptRowRule> {
+    if !is_md(path) {
         return None;
     }
     CONCEPT_ROW_RULES
         .iter()
         .find(|r| path.starts_with(&format!("{}/{}/", r.shared_folder, r.opened_in)))
+}
+
+/// What a lens source at resolver path `path` is ("article", "video"), or
+/// None for a file that has no rows of its own (a widget, say): the folders
+/// of the rules without source context.
+fn source_kind(path: &str) -> Option<&'static str> {
+    CONCEPT_ROW_RULES
+        .iter()
+        .filter(|r| !r.source_context)
+        .find(|r| path.starts_with(&format!("{}/{}/", r.shared_folder, r.opened_in)))
+        .map(|r| r.kind)
 }
 
 /// Resolver-path prefix (with trailing slash) of the files holding the rule's rows.
@@ -124,33 +126,33 @@ fn rows_folder(rule: &ConceptRowRule) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Parsing (port of concept-rows.ts)
+// Parsing (port of the editor's concept-rows.ts)
 // ---------------------------------------------------------------------------
 
-/// One row: a `### [[target]]` heading under `## Relationships`. Offsets are
-/// byte offsets into the parsed text.
+/// One row: a `### [[target]]` heading in a `## Relationships` section.
+/// Offsets are byte offsets into the parsed text.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ConceptRow {
+struct ConceptRow {
     /// The heading's link target, without `|alias` or `#heading`.
-    pub target: String,
+    target: String,
     /// 1-based line of the heading.
-    pub line: usize,
-    pub heading_from: usize,
-    /// End of the heading line (before its newline).
-    pub heading_to: usize,
+    line: usize,
+    /// Start and end (before the newline) of the heading line; tests only.
+    heading_from: usize,
+    heading_to: usize,
     /// The free text: from the line after the heading, trailing whitespace left out.
-    pub body_from: usize,
-    pub body_to: usize,
-    /// Where the row ends: the next heading of level ≤ 3, or the section's end.
-    pub to: usize,
+    body_from: usize,
+    body_to: usize,
+    /// Where the row ends: the next heading of level ≤ 3, or the end; tests only.
+    to: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParsedConceptFile {
+struct ParsedConceptFile {
     /// Each rows section: `(heading_from, to)`, `to` being the next heading
-    /// of level ≤ 2 or the end of the text. Every `## Relationships` counts.
-    pub sections: Vec<(usize, usize)>,
-    pub rows: Vec<ConceptRow>,
+    /// of level ≤ 2 or the end of the text; tests only.
+    sections: Vec<(usize, usize)>,
+    rows: Vec<ConceptRow>,
 }
 
 struct Heading {
@@ -161,111 +163,116 @@ struct Heading {
     line: usize,
 }
 
+fn regex(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
+    cell.get_or_init(|| Regex::new(pattern).expect("static pattern"))
+}
+
 /// An ATX heading: up to 3 spaces of indent, 1–6 `#`, then space or the end.
 fn heading_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$").expect("static pattern")
-    })
+    regex(&RE, r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
 }
 
-/// A fence opener: up to 3 spaces of indent, then 3+ backticks or tildes.
-fn fence_open_re() -> &'static Regex {
+/// The opening `---` of frontmatter, as the editor reads it.
+fn frontmatter_open_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^ {0,3}(`{3,}|~{3,})(.*)$").expect("static pattern"))
+    regex(&RE, r"^---[ \t]*\r?(\n|$)")
 }
 
-fn single_link_re() -> &'static Regex {
+/// A line that is `---` with optional trailing whitespace.
+fn frontmatter_close_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^\[\[([^\[\]\n]+)\]\]$").expect("static pattern"))
+    regex(&RE, r"^---[ \t]*$")
 }
 
 /// A wikilink's page part: `a/b#H|Alias` → `a/b`.
-pub fn link_page(inner: &str) -> &str {
+fn link_page(inner: &str) -> &str {
     let page = inner.split('|').next().unwrap_or("");
     page.split('#').next().unwrap_or("").trim()
 }
 
-/// A heading's text without its CommonMark closing sequence: `[[x]] ###` →
-/// `[[x]]` (the hashes must follow a space; `[[x]]#` keeps its `#`).
+/// A heading's text without its closing run of `#`s: `[[x]] ###` → `[[x]]`
+/// (the hashes must follow a space; `[[x]]#` keeps its `#`).
 fn strip_closing_hashes(text: &str) -> &str {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"(?:^|[ \t]+)#+$").expect("static pattern"));
-    match re.find(text) {
+    match regex(&RE, r"(?:^|[ \t]+)#+$").find(text) {
         Some(m) => &text[..m.start()],
         None => text,
     }
 }
 
-/// The fence a line opens: its character and length. A backtick fence's
-/// info string may not contain a backtick (CommonMark).
-fn fence_opener(line: &str) -> Option<(char, usize)> {
-    let m = fence_open_re().captures(line)?;
-    let run = m.get(1)?.as_str();
-    let c = run.chars().next()?;
-    if c == '`' && m.get(2).is_some_and(|g| g.as_str().contains('`')) {
-        return None;
-    }
-    Some((c, run.len()))
-}
-
-/// Whether `line` closes a fence of `len` × `c`: up to 3 spaces of indent,
-/// at least `len` of the same character, then only whitespace.
-fn closes_fence(line: &str, c: char, len: usize) -> bool {
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    if indent > 3 {
-        return false;
-    }
-    let rest = &line[indent..];
-    let run = rest.len() - rest.trim_start_matches(c).len();
-    run >= len && rest[run..].trim_matches([' ', '\t']).is_empty()
-}
-
-/// Headings of `text` outside the regions where none count: frontmatter
-/// (closed by `---` with optional trailing whitespace), fenced code, and
-/// Obsidian `%% … %%` comments. Only a `#` after at most 3 spaces makes a
-/// heading, so headings in list items and block quotes do not count.
+/// ATX headings of `text`, by the canonical concept-row rules v1 (#3, #5): up
+/// to 3 spaces of indent; a closing run of `#`s is not part of the text; none
+/// inside frontmatter (closing `---` may have trailing whitespace), fenced
+/// code (CommonMark opening and closing), `%% %%` comments, list items or
+/// block quotes. Setext headings and HTML blocks are not handled. A line by
+/// line port of the editor's `headingsOf`.
 fn headings_of(text: &str) -> Vec<Heading> {
+    static FENCE_OPEN: OnceLock<Regex> = OnceLock::new();
+    static FENCE_CLOSE: OnceLock<Regex> = OnceLock::new();
+    static LIST_ITEM: OnceLock<Regex> = OnceLock::new();
+    let fence_open = regex(&FENCE_OPEN, r"^ {0,3}(`{3,}|~{3,})(.*)$");
+    let fence_close = regex(&FENCE_CLOSE, r"^ {0,3}(`{3,}|~{3,})[ \t]*$");
+    let list_item = regex(&LIST_ITEM, r"^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)");
+    let indented = |line: &str| line.starts_with([' ', '\t']);
+
     let mut out = Vec::new();
     let mut pos = 0usize;
     let mut line = 0usize;
     let mut fence: Option<(char, usize)> = None;
     let mut in_comment = false;
-    let mut in_frontmatter = text.starts_with("---\n") || text.starts_with("---\r\n");
+    let mut in_list = false;
+    let mut in_frontmatter = frontmatter_open_re().is_match(text);
     loop {
         let nl = text[pos..].find('\n').map(|i| pos + i);
         let end = nl.unwrap_or(text.len());
         let full = &text[pos..end];
         let raw = full.strip_suffix('\r').unwrap_or(full);
         line += 1;
-        let toggles_comment = raw.matches("%%").count() % 2 == 1;
         if in_frontmatter {
-            if line > 1 && raw.trim_end() == "---" {
+            if line > 1 && frontmatter_close_re().is_match(raw) {
                 in_frontmatter = false;
             }
         } else if let Some((c, len)) = fence {
-            if closes_fence(raw, c, len) {
-                fence = None;
+            if let Some(close) = fence_close.captures(raw) {
+                let run = &close[1];
+                if run.starts_with(c) && run.len() >= len {
+                    fence = None;
+                }
             }
-        } else if in_comment {
-            if toggles_comment {
-                in_comment = false;
-            }
-        } else if let Some(opener) = fence_opener(raw) {
-            fence = Some(opener);
         } else {
-            if let Some(m) = heading_re().captures(raw) {
-                out.push(Heading {
-                    level: m[1].len(),
-                    text: strip_closing_hashes(m.get(2).map_or("", |g| g.as_str()).trim())
-                        .to_string(),
-                    from: pos,
-                    to: pos + raw.len(),
-                    line,
-                });
+            let open = fence_open.captures(raw);
+            let comment_at_start = in_comment;
+            // `%%` toggles an Obsidian comment, inline or across lines.
+            if raw.matches("%%").count() % 2 == 1 {
+                in_comment = !in_comment;
             }
-            if toggles_comment {
-                in_comment = true;
+            let opener = open.as_ref().and_then(|m| {
+                let run = &m[1];
+                let c = run.chars().next()?;
+                (!(c == '`' && m[2].contains('`'))).then_some((c, run.len()))
+            });
+            if let (Some(opener), false) = (opener, comment_at_start) {
+                fence = Some(opener);
+            } else if !comment_at_start {
+                if list_item.is_match(raw) {
+                    in_list = true;
+                } else if !raw.trim().is_empty() && !indented(raw) {
+                    in_list = false;
+                }
+                // An indented heading under a list item belongs to the item.
+                let in_item = in_list && indented(raw);
+                if let (Some(m), false) = (heading_re().captures(raw), in_item) {
+                    out.push(Heading {
+                        level: m[1].len(),
+                        text: strip_closing_hashes(m.get(2).map_or("", |g| g.as_str()))
+                            .trim()
+                            .to_string(),
+                        from: pos,
+                        to: pos + raw.len(),
+                        line,
+                    });
+                }
             }
         }
         match nl {
@@ -277,159 +284,102 @@ fn headings_of(text: &str) -> Vec<Heading> {
 }
 
 /// The rows sections and their rows, by the canonical concept-row rules v1
-/// (shared with the editor and the platform validator): every level-2
-/// heading whose text is exactly `section` opens a rows section, which ends
-/// at the next heading of level ≤ 2; a row is a level-3 heading in one whose
-/// text is exactly one wikilink (`|alias` and `#anchor` allowed, closing
-/// hashes allowed, nothing else; `![[…]]` is not a row) and runs to the next
+/// (#1–#4): every level-2 heading that is exactly `section` starts a section,
+/// which ends at the next heading of level ≤ 2; a row is a level-3 heading in
+/// it that is exactly one wikilink (`|alias` and `#anchor` allowed; an
+/// `![[embed]]` or an empty page is not a row); its body runs to the next
 /// heading of level ≤ 3.
-pub fn parse_concept_file(text: &str, section: &str) -> ParsedConceptFile {
+fn parse_concept_file(text: &str, section: &str) -> ParsedConceptFile {
+    static SINGLE_LINK: OnceLock<Regex> = OnceLock::new();
+    let single_link = regex(&SINGLE_LINK, r"^\[\[([^\[\]\n]+)\]\]$");
     let headings = headings_of(text);
-    let mut sections: Vec<(usize, usize)> = Vec::new();
-    let mut in_section = false;
+    let mut sections = Vec::new();
     let mut rows = Vec::new();
-    for (i, h) in headings.iter().enumerate() {
-        if h.level <= 2 {
-            if in_section {
-                if let Some(last) = sections.last_mut() {
-                    last.1 = h.from;
-                }
-            }
-            in_section = h.level == 2 && h.text == section;
-            if in_section {
-                sections.push((h.from, text.len()));
-            }
+    for (start, h) in headings.iter().enumerate() {
+        if h.level != 2 || h.text != section {
             continue;
         }
-        if !in_section || h.level != 3 {
-            continue;
-        }
-        let Some(link) = single_link_re().captures(&h.text) else {
-            continue;
-        };
-        let target = link_page(&link[1]);
-        if target.is_empty() {
-            continue;
-        }
-        let to = headings[i + 1..]
+        let end_index = headings
             .iter()
-            .find(|n| n.level <= 3)
-            .map_or(text.len(), |n| n.from);
-        let body_from = (h.to + 1).min(to);
-        let body_to = body_from + text[body_from..to].trim_end().len();
-        rows.push(ConceptRow {
-            target: target.to_string(),
-            line: h.line,
-            heading_from: h.from,
-            heading_to: h.to,
-            body_from,
-            body_to,
-            to,
-        });
+            .enumerate()
+            .position(|(i, n)| i > start && n.level <= 2);
+        let section_to = end_index.map_or(text.len(), |i| headings[i].from);
+        sections.push((h.from, section_to));
+        let inside = &headings[start + 1..end_index.unwrap_or(headings.len())];
+        for (i, r) in inside.iter().enumerate() {
+            if r.level != 3 {
+                continue;
+            }
+            let Some(link) = single_link.captures(&r.text) else {
+                continue;
+            };
+            let target = link_page(&link[1]);
+            if target.is_empty() {
+                continue;
+            }
+            let to = inside[i + 1..]
+                .iter()
+                .find(|n| n.level <= 3)
+                .map_or(section_to, |n| n.from);
+            let body_from = (r.to + 1).min(to);
+            let body_to = body_from + text[body_from..to].trim_end().len();
+            rows.push(ConceptRow {
+                target: target.to_string(),
+                line: r.line,
+                heading_from: r.from,
+                heading_to: r.to,
+                body_from,
+                body_to,
+                to,
+            });
+        }
     }
     ParsedConceptFile { sections, rows }
 }
 
-/// The link targets of every `source::` field of a lens, in order, without
-/// repeats: any section (also before the first heading) except `#### Text`
-/// sections, several per section, the first wikilink of each value.
-/// Sections and fields are read as the editor's `parseSections` +
-/// `parseFields` read them: a heading is `^#{1,4}\s+.+$` outside the
-/// frontmatter, and a field's value runs on until the next field or heading.
-/// Which targets count (articles and video transcripts, not widgets) is
-/// decided once they are resolved (canonical concept-row rules v1 #8).
-pub fn lens_source_targets(text: &str) -> Vec<String> {
-    static HEADER: OnceLock<Regex> = OnceLock::new();
+/// The link targets of every `source::` field in a lens (canonical
+/// concept-row rules v1 #8): several per section, before the first heading,
+/// in CRLF files too, but not inside `#### Text` sections; the first
+/// wikilink of each value. A line by line port of the editor's
+/// `lensSourceTargets`; [`source_kind`] then keeps articles and videos.
+fn lens_source_targets(text: &str) -> Vec<String> {
     static FIELD: OnceLock<Regex> = OnceLock::new();
     static LINK: OnceLock<Regex> = OnceLock::new();
-    // `\s` as in the editor's pattern (JavaScript's `\s` also matches a newline).
-    let header =
-        HEADER.get_or_init(|| Regex::new(r"(?m)^(#{1,4})\s+(.+)$").expect("static pattern"));
-    let field = FIELD.get_or_init(|| {
-        Regex::new(r"^([A-Za-z0-9_][A-Za-z0-9_-]*)::(?:\s(.*))?$").expect("static pattern")
-    });
-    let link = LINK.get_or_init(|| Regex::new(r"\[\[([^\[\]\n]+)\]\]").expect("static pattern"));
-
-    // Skip frontmatter, as parseSections does.
-    let mut start = 0;
-    if text.starts_with("---\n") || text.starts_with("---\r\n") {
-        if let Some(end_marker) = text[3..].find("\n---").map(|i| i + 3) {
-            start = text[end_marker + 4..]
-                .find('\n')
-                .map_or(text.len(), |i| end_marker + 4 + i + 1);
-        }
-    }
-    // Sections: (from, whether it is a Text section); the body before the
-    // first heading is one too.
-    let mut sections: Vec<(usize, bool)> = vec![(start, false)];
-    for c in header.captures_iter(text) {
-        let Some(m) = c.get(0) else { continue };
-        if m.start() <= start {
+    let field = regex(&FIELD, r"^source::(.*)$");
+    let link = regex(&LINK, r"\[\[([^\[\]\n]+)\]\]");
+    let mut targets: Vec<String> = Vec::new();
+    let mut in_text = false;
+    let mut in_frontmatter = frontmatter_open_re().is_match(text);
+    for (i, raw) in text.split('\n').enumerate() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if in_frontmatter {
+            if i > 0 && frontmatter_close_re().is_match(line) {
+                in_frontmatter = false;
+            }
             continue;
         }
-        let lower = c[2].trim().to_lowercase();
-        let is_text = lower.strip_suffix(':').unwrap_or(&lower).trim() == "text";
-        sections.push((m.start(), is_text));
-    }
-
-    let mut targets: Vec<String> = Vec::new();
-    let mut push = |key: &str, lines: &[String]| {
-        if key != "source" {
-            return;
+        if let Some(h) = heading_re().captures(line) {
+            in_text = h[1].len() == 4
+                && h.get(2).map_or("", |g| g.as_str()).trim().to_lowercase() == "text";
+            continue;
         }
-        let value = lines.join("\n");
-        let target = link
-            .captures(&value)
-            .map(|c| link_page(c.get(1).map_or("", |g| g.as_str())).to_string())
+        if in_text {
+            continue;
+        }
+        let target = field
+            .captures(line)
+            .and_then(|f| {
+                link.captures(f.get(1).map_or("", |g| g.as_str()))
+                    .map(|l| l[1].to_string())
+            })
+            .map(|inner| link_page(&inner).to_string())
             .unwrap_or_default();
         if !target.is_empty() && !targets.contains(&target) {
             targets.push(target);
         }
-    };
-    for (i, &(from, is_text)) in sections.iter().enumerate() {
-        if is_text {
-            continue;
-        }
-        let to = sections.get(i + 1).map_or(text.len(), |s| s.0);
-        let mut current: Option<(String, Vec<String>)> = None;
-        for line in text[from..to].split('\n') {
-            let line = line.strip_suffix('\r').unwrap_or(line);
-            if let Some(c) = field.captures(line) {
-                if let Some((key, lines)) = current.take() {
-                    push(&key, &lines);
-                }
-                let rest = c.get(2).map_or("", |g| g.as_str()).trim();
-                let lines = if rest.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![rest.to_string()]
-                };
-                current = Some((c[1].to_string(), lines));
-            } else if let Some((_, lines)) = current.as_mut() {
-                lines.push(line.to_string());
-            }
-        }
-        if let Some((key, lines)) = current.take() {
-            push(&key, &lines);
-        }
     }
     targets
 }
-
-/// What a lens source is called in the output, by its folder; None for a
-/// file that is not a source whose rows are shown (e.g. a widget).
-fn source_kind(path: &str) -> Option<&'static str> {
-    SOURCE_KINDS
-        .iter()
-        .find(|(prefix, _)| path.starts_with(prefix) && ends_with_md(path))
-        .map(|(_, kind)| *kind)
-}
-
-/// Folders of the sources a lens's context rows come from, and their names.
-const SOURCE_KINDS: &[(&str, &str)] = &[
-    ("Lens Edu/articles/", "article"),
-    ("Lens Edu/video_transcripts/", "video"),
-];
 
 // ---------------------------------------------------------------------------
 // Collecting rows
@@ -437,103 +387,89 @@ const SOURCE_KINDS: &[(&str, &str)] = &[
 
 /// One row about a target, ready to print.
 #[derive(Debug, Clone)]
-pub struct RowEntry {
+struct RowEntry {
     /// Concept file uuid.
-    pub concept_id: String,
+    concept_id: String,
     /// Resolver path, e.g. `Lens Edu/Concepts/Low-stakes control.md`.
-    pub concept_path: String,
-    pub concept_name: String,
+    concept_path: String,
+    concept_name: String,
     /// 1-based line of the row heading in the concept file (its `read` view).
-    pub line: usize,
-    pub index: usize,
-    pub body: String,
+    line: usize,
+    body: String,
 }
 
 /// The rows about one target file.
 #[derive(Debug, Default)]
-pub struct CollectedRows {
-    pub rows: Vec<RowEntry>,
+struct CollectedRows {
+    rows: Vec<RowEntry>,
     /// Concept files that link the target only outside a row heading.
-    pub mentions: Vec<String>,
-    /// Concept files linking the target that were not read (over the cap).
-    pub skipped: usize,
+    mentions: Vec<String>,
+    /// Concept files linking the target that were not read: over a cap, or
+    /// they could not be loaded.
+    skipped: usize,
 }
 
-/// The rows about one of a lens's sources (an article or video transcript).
+/// The rows about one of a lens's sources (an article or a video).
 #[derive(Debug, Clone)]
-pub struct SourceRows {
-    pub source_path: String,
+struct SourceRows {
+    source_path: String,
     /// "article" or "video".
-    pub kind: &'static str,
-    pub rows: Vec<RowEntry>,
+    kind: &'static str,
+    rows: Vec<RowEntry>,
 }
 
 #[derive(Debug)]
-pub struct LensRowGroups {
-    /// One per lens row, with its concept's article rows (only on the
-    /// concept's first lens row, and only articles that have a row there).
-    pub lens: Vec<(RowEntry, Vec<SourceRows>)>,
-    /// Per article, the rows of concepts with no lens row; articles left with
+struct LensRowGroups {
+    /// One per lens row, with its concept's rows about the sources (only on
+    /// the concept's first lens row, and only sources that have a row there).
+    lens: Vec<(RowEntry, Vec<SourceRows>)>,
+    /// Per source, the rows of concepts with no lens row; sources left with
     /// none are dropped.
-    pub source_only: Vec<SourceRows>,
+    source_only: Vec<SourceRows>,
 }
 
 /// A lens's rows grouped by concept, as the editor's `groupLensRows`: a
-/// concept with a lens row shows once, its article rows under the lens row;
-/// the rest of the article rows stay apart. Both keep the order they come in.
-pub fn group_lens_rows(own: &[RowEntry], articles: &[SourceRows]) -> LensRowGroups {
+/// concept with a lens row shows once, its source rows under the lens row;
+/// the rest of the source rows stay apart. Both keep the order they come in.
+fn group_lens_rows(own: &[RowEntry], sources: &[SourceRows]) -> LensRowGroups {
     let with_lens_row: HashSet<&str> = own.iter().map(|r| r.concept_id.as_str()).collect();
+    let rows_where = |pred: &dyn Fn(&RowEntry) -> bool| -> Vec<SourceRows> {
+        sources
+            .iter()
+            .map(|s| SourceRows {
+                source_path: s.source_path.clone(),
+                kind: s.kind,
+                rows: s.rows.iter().filter(|r| pred(r)).cloned().collect(),
+            })
+            .filter(|s| !s.rows.is_empty())
+            .collect()
+    };
     let mut seen: HashSet<&str> = HashSet::new();
     let lens = own
         .iter()
         .map(|entry| {
-            let first = seen.insert(entry.concept_id.as_str());
-            let article_rows = if first {
-                articles
-                    .iter()
-                    .map(|a| SourceRows {
-                        source_path: a.source_path.clone(),
-                        kind: a.kind,
-                        rows: a
-                            .rows
-                            .iter()
-                            .filter(|r| r.concept_id == entry.concept_id)
-                            .cloned()
-                            .collect(),
-                    })
-                    .filter(|a| !a.rows.is_empty())
-                    .collect()
+            let source_rows = if seen.insert(entry.concept_id.as_str()) {
+                rows_where(&|r| r.concept_id == entry.concept_id)
             } else {
                 Vec::new()
             };
-            (entry.clone(), article_rows)
+            (entry.clone(), source_rows)
         })
         .collect();
-    let source_only = articles
-        .iter()
-        .map(|a| SourceRows {
-            source_path: a.source_path.clone(),
-            kind: a.kind,
-            rows: a
-                .rows
-                .iter()
-                .filter(|r| !with_lens_row.contains(r.concept_id.as_str()))
-                .cloned()
-                .collect(),
-        })
-        .filter(|a| !a.rows.is_empty())
-        .collect();
+    let source_only = rows_where(&|r| !with_lens_row.contains(r.concept_id.as_str()));
     LensRowGroups { lens, source_only }
 }
 
 /// `Concepts/Low-stakes control.md` → `Low-stakes control`.
 fn file_name(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    if ends_with_md(name) {
-        name[..name.len() - 3].to_string()
-    } else {
-        name.to_string()
-    }
+    without_terminal_md(path.rsplit('/').next().unwrap_or(path)).to_string()
+}
+
+/// Concept names in display order: lower case first (rule #9), then as written.
+fn by_concept_name(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
 }
 
 /// A row of a concept file, its heading link resolved once per `read`.
@@ -548,8 +484,8 @@ struct ResolvedRow {
 /// the file's `read` view (pending suggestions accepted, canonical
 /// concept-row rules v1 #6), so row line numbers match a `read` of the
 /// concept file. A heading that exists only inside a pending suggestion is
-/// therefore a row here but not in the editor, which parses the raw text: an
-/// accepted divergence.
+/// therefore a row in the editor (which parses the raw text) but not here:
+/// an accepted divergence.
 struct ParsedConcept {
     path: String,
     name: String,
@@ -557,7 +493,8 @@ struct ParsedConcept {
 }
 
 /// Loads, parses and resolves concept files once per `read`, within
-/// [`MAX_CONCEPT_FILES_TOTAL`]; per-target collection then only filters.
+/// [`MAX_CONCEPT_FILES_TOTAL`]; per-target collection then only filters. A
+/// file that could not be loaded is kept as `None`.
 struct ConceptLoader<'a> {
     server: &'a Arc<Server>,
     index: &'a VirtualTreeIndex<'a>,
@@ -579,31 +516,29 @@ impl<'a> ConceptLoader<'a> {
         }
     }
 
-    /// Load the given concept files (those not loaded yet) and return how
-    /// many of them could not be read because the total cap was reached.
-    async fn load(&mut self, concepts: &[(String, String)]) -> usize {
+    /// Load the given concept files that are not loaded yet, as many as the
+    /// total cap leaves room for.
+    async fn load(&mut self, concepts: &[(String, String)]) {
         let room = MAX_CONCEPT_FILES_TOTAL.saturating_sub(self.loaded.len());
         let wanted: Vec<(String, String)> = concepts
             .iter()
             .filter(|(id, _)| !self.loaded.contains_key(id))
+            .take(room)
             .cloned()
             .collect();
-        let over = wanted.len().saturating_sub(room);
         let server = self.server;
-        let texts: Vec<(String, String, Option<String>)> =
-            futures::stream::iter(wanted.into_iter().take(room))
-                .map(|(id, path)| async move {
-                    let text = load_text(server, &path).await;
-                    (id, path, text)
-                })
-                .buffer_unordered(LOAD_CONCURRENCY)
-                .collect()
-                .await;
+        let texts: Vec<(String, String, Option<String>)> = futures::stream::iter(wanted)
+            .map(|(id, path)| async move {
+                let text = load_text(server, &path).await;
+                (id, path, text)
+            })
+            .buffer_unordered(LOAD_CONCURRENCY)
+            .collect()
+            .await;
         for (id, path, text) in texts {
             let parsed = text.map(|text| self.parse(path, &text));
             self.loaded.insert(id, parsed);
         }
-        over
     }
 
     fn parse(&self, path: String, text: &str) -> ParsedConcept {
@@ -629,7 +564,8 @@ impl<'a> ConceptLoader<'a> {
 }
 
 /// The accepted view of the Markdown document at resolver path `path`, loaded
-/// as `read` loads it (reloaded from storage after GC eviction).
+/// as `read` loads it (reloaded from storage after GC eviction); None if it
+/// could not be loaded.
 async fn load_text(server: &Arc<Server>, path: &str) -> Option<String> {
     let info = server.doc_resolver().resolve_path(path)?;
     if let Err(e) = server.ensure_doc_loaded(&info.doc_id).await {
@@ -665,7 +601,7 @@ async fn concept_backlinkers(
             .filter(|id| id != target_uuid)
             .filter_map(|id| {
                 let path = resolver.path_for_uuid(&id)?;
-                (path.starts_with(&folder) && ends_with_md(&path)).then_some((id, path))
+                (path.starts_with(&folder) && is_md(&path)).then_some((id, path))
             })
             .collect();
     candidates.sort_by(|a, b| a.1.cmp(&b.1));
@@ -687,75 +623,80 @@ async fn collect_rows(
         ..Default::default()
     };
     candidates.truncate(MAX_CONCEPT_FILES_PER_TARGET);
-    out.skipped += loader.load(&candidates).await;
+    loader.load(&candidates).await;
 
     for (id, _) in &candidates {
+        // Over the total cap, or it could not be loaded: say so.
         let Some(Some(concept)) = loader.loaded.get(id) else {
+            out.skipped += 1;
             continue;
         };
-        let rows: Vec<&ResolvedRow> = concept
-            .rows
-            .iter()
-            .filter(|row| row.target_id.as_deref() == Some(target_uuid))
-            .collect();
-        if rows.is_empty() {
-            out.mentions.push(concept.path.clone());
-        }
-        for (index, row) in rows.into_iter().enumerate() {
+        let mut found = false;
+        for row in &concept.rows {
+            if row.target_id.as_deref() != Some(target_uuid) {
+                continue;
+            }
+            found = true;
             out.rows.push(RowEntry {
                 concept_id: id.clone(),
                 concept_path: concept.path.clone(),
                 concept_name: concept.name.clone(),
                 line: row.line,
-                index,
                 body: row.body.clone(),
             });
         }
+        if !found {
+            out.mentions.push(concept.path.clone());
+        }
     }
-    out.rows.sort_by(|a, b| {
-        a.concept_name
-            .to_lowercase()
-            .cmp(&b.concept_name.to_lowercase())
-            .then_with(|| a.concept_name.cmp(&b.concept_name))
-            .then(a.index.cmp(&b.index))
-    });
-    out.mentions.sort_by_key(|p| p.to_lowercase());
+    // Stable: a concept's rows keep their order in the file.
+    out.rows
+        .sort_by(|a, b| by_concept_name(&a.concept_name, &b.concept_name));
+    out.mentions.sort_by(|a, b| by_concept_name(a, b));
     out
 }
 
-#[cfg(test)]
-thread_local! {
-    /// How often this thread walked the folder trees (tests run on one thread).
-    static TREE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Every file of every folder as a [`VirtualEntry`]: the tree links resolve in.
-fn tree_entries(server: &Arc<Server>) -> Vec<VirtualEntry> {
-    #[cfg(test)]
-    TREE_WALKS.with(|c| c.set(c.get() + 1));
-    get_links::all_virtual_entries(server)
+/// Every Markdown document and HTML page the resolver knows, as the tree
+/// wikilinks resolve in. Built from the resolver's path map, so it takes no
+/// document locks. A Markdown document is a `.md` path without a blob hash,
+/// as filemeta's "markdown" entries are; sorted by path, so that of two paths
+/// differing only in case the same one always wins.
+fn resolver_entries(server: &Arc<Server>) -> Vec<VirtualEntry> {
+    let mut entries: Vec<VirtualEntry> = server
+        .doc_resolver()
+        .entries_under("")
+        .into_iter()
+        .map(|(path, info)| VirtualEntry {
+            entry_type: if info.hash.is_none() && is_md(&path) {
+                "markdown"
+            } else {
+                "file"
+            }
+            .to_string(),
+            virtual_path: format!("/{path}"),
+            id: info.uuid,
+            folder_idx: 0,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+    entries
 }
 
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
-pub const BLOCK_START: &str =
+const BLOCK_START: &str =
     "── Concept relationships for this file (context — NOT part of this file's text) ──";
-pub const BLOCK_END: &str = "── end of concept relationships ──";
-
-fn preamble(file_kind: &str) -> String {
-    format!(
-        "Each concept relationship below is a row in a concept file: a \"### [[...]]\" heading under \"## Relationships\", followed by free text. An entry means \"we have information about this pair\" (which may be a negative judgment, such as \"considered, but not a match\"), not that they match. To edit a relationship, read and edit the concept file at the given line, never this file. To add one, add a \"### [[relative/path/to/{file_kind}]]\" row (followed by free text) under \"## Relationships\" in the concept file. The line numbers below the end marker are this file's own."
-    )
-}
+const BLOCK_END: &str = "── end of concept relationships ──";
+const PREAMBLE: &str = "Each row lives in the named concept file under ## Relationships; edit it there, never here. Line numbers below the end marker are this file's own.";
 
 /// A row's text indented by `indent`, cut at [`MAX_ROW_CHARS`].
 fn render_body(out: &mut String, entry: &RowEntry, indent: &str) {
     let body = entry.body.trim();
     if body.is_empty() {
         out.push_str(indent);
-        out.push_str("(empty relationship)\n");
+        out.push_str("(empty)\n");
         return;
     }
     let (shown, cut) = match body.char_indices().nth(MAX_ROW_CHARS) {
@@ -763,17 +704,15 @@ fn render_body(out: &mut String, entry: &RowEntry, indent: &str) {
         None => (body, false),
     };
     for line in shown.lines() {
-        if line.is_empty() {
-            out.push('\n');
-        } else {
+        if !line.is_empty() {
             out.push_str(indent);
             out.push_str(line);
-            out.push('\n');
         }
+        out.push('\n');
     }
     if cut {
         out.push_str(&format!(
-            "{indent}[… relationship text cut at {MAX_ROW_CHARS} characters — read {} from line {} for the rest]\n",
+            "{indent}[… cut at {MAX_ROW_CHARS} characters — read {} from line {} for the rest]\n",
             entry.concept_path, entry.line
         ));
     }
@@ -783,6 +722,15 @@ fn render_skipped(out: &mut String, skipped: usize, what: &str) {
     if skipped > 0 {
         out.push_str(&format!(
             "({skipped} more concept file(s) link to {what} but were not read; use get_links to list them.)\n"
+        ));
+    }
+}
+
+fn render_mentions(out: &mut String, mentions: &[String], opened_label: &str) {
+    if !mentions.is_empty() {
+        out.push_str(&format!(
+            "\nAlso mentioned (a link to {opened_label} outside any row) in: {}\n",
+            mentions.join(", ")
         ));
     }
 }
@@ -802,15 +750,6 @@ fn render_simple(own: &CollectedRows, opened_label: &str) -> String {
     out
 }
 
-fn render_mentions(out: &mut String, mentions: &[String], opened_label: &str) {
-    if !mentions.is_empty() {
-        out.push_str(&format!(
-            "\nAlso mentioned (a link to {opened_label} outside any row) in: {}\n",
-            mentions.join(", ")
-        ));
-    }
-}
-
 /// A row about one of a lens's sources, as a sub-entry under its concept.
 fn render_source_row(out: &mut String, source: &SourceRows, row: &RowEntry) {
     out.push_str(&format!(
@@ -823,8 +762,13 @@ fn render_source_row(out: &mut String, source: &SourceRows, row: &RowEntry) {
 /// The block for a lens: per concept its lens row, then its rows about the
 /// lens's sources; then, once each, the concepts that have rows only about
 /// the lens's sources.
-fn render_lens(own: &CollectedRows, sources: &[(SourceRows, usize)], opened_label: &str) -> String {
-    let source_rows: Vec<SourceRows> = sources.iter().map(|(a, _)| a.clone()).collect();
+fn render_lens(
+    own: &CollectedRows,
+    sources: &[(SourceRows, usize)],
+    sources_over_cap: usize,
+    opened_label: &str,
+) -> String {
+    let source_rows: Vec<SourceRows> = sources.iter().map(|(s, _)| s.clone()).collect();
     let groups = group_lens_rows(&own.rows, &source_rows);
     let mut out = String::new();
     for (entry, source_rows) in &groups.lens {
@@ -852,17 +796,15 @@ fn render_lens(own: &CollectedRows, sources: &[(SourceRows, usize)], opened_labe
     render_skipped(&mut out, own.skipped, opened_label);
 
     // One entry per concept, with a sub-entry per source it has a row about;
-    // concepts by name, sub-entries in source order.
+    // concepts by name, sub-entries in source order (the sort is stable).
     let mut only: Vec<(&SourceRows, &RowEntry)> = groups
         .source_only
         .iter()
         .flat_map(|source| source.rows.iter().map(move |row| (source, row)))
         .collect();
     only.sort_by(|a, b| {
-        let (a, b) = (&a.1.concept_name, &b.1.concept_name);
-        a.to_lowercase()
-            .cmp(&b.to_lowercase())
-            .then_with(|| a.cmp(b))
+        by_concept_name(&a.1.concept_name, &b.1.concept_name)
+            .then_with(|| a.1.concept_path.cmp(&b.1.concept_path))
     });
     if !only.is_empty() {
         out.push_str(
@@ -880,13 +822,39 @@ fn render_lens(own: &CollectedRows, sources: &[(SourceRows, usize)], opened_labe
     for (source, skipped) in sources {
         render_skipped(&mut out, *skipped, &source.source_path);
     }
+    if sources_over_cap > 0 {
+        out.push_str(&format!(
+            "({sources_over_cap} more source(s) of this lens not shown; at most {MAX_LENS_SOURCES} are followed.)\n"
+        ));
+    }
     out
 }
 
-/// The concept-notes block for the Markdown file `path` (resolver path) with
-/// uuid `uuid` in folder doc `folder_doc_id`, whose `read` text is `text`;
-/// None when no rule covers the file or nothing links to it from a concept.
-pub async fn concept_notes_block(
+/// `body` cut at a line end within [`MAX_BLOCK_CHARS`], with a note.
+fn cap_block(body: String) -> String {
+    let Some((limit, _)) = body.char_indices().nth(MAX_BLOCK_CHARS) else {
+        return body;
+    };
+    let cut = body[..limit].rfind('\n').map_or(limit, |i| i + 1);
+    format!(
+        "{}\n(… truncated at {MAX_BLOCK_CHARS} characters — read the concept files listed above, or use get_links, for the rest.)\n",
+        &body[..cut]
+    )
+}
+
+/// A lens source (an article or video) and its concept backlinkers.
+struct Source {
+    path: String,
+    kind: &'static str,
+    id: String,
+    candidates: Vec<(String, String)>,
+}
+
+/// The concept-relationships block for the Markdown file `path` (resolver
+/// path) with uuid `uuid` in folder doc `folder_doc_id`, whose `read` text is
+/// `text`; None when no rule covers the file or no concept file links to it
+/// (or, for a lens, to one of its articles and videos).
+pub(crate) async fn concept_rows_block(
     server: &Arc<Server>,
     path: &str,
     uuid: &str,
@@ -894,96 +862,84 @@ pub async fn concept_notes_block(
     text: &str,
 ) -> Option<String> {
     let rule = match_rule(path)?;
+    let own_candidates = concept_backlinkers(server, rule, folder_doc_id, uuid).await;
     let source_targets = if rule.source_context {
         lens_source_targets(text)
     } else {
         Vec::new()
     };
-    let resolver = server.doc_resolver();
-    let lens_virtual = format!("/{}", path);
-
-    // First, without walking the folder trees: is there any concept file
-    // linking to this file or (as far as a plain lookup can tell) to one of
-    // its sources? Backlinks are a map lookup; a source is looked up by its
-    // relative path, and only a source that lookup cannot find (other case,
-    // root fallback, missing) needs the tree to be sure.
-    let own_candidates = concept_backlinkers(server, rule, folder_doc_id, uuid).await;
-    let mut maybe_rows = !own_candidates.is_empty();
-    for target in source_targets.iter().take(MAX_LENS_SOURCES * 2) {
-        if maybe_rows {
-            break;
-        }
-        let relative = link_indexer::resolve_relative(&lens_virtual, target);
-        match resolver.resolve_path(relative.trim_start_matches('/')) {
-            Some(info) => {
-                if !concept_backlinkers(server, rule, &info.folder_doc_id, &info.uuid)
-                    .await
-                    .is_empty()
-                {
-                    maybe_rows = true;
-                }
-            }
-            None => maybe_rows = true,
-        }
-    }
-    if !maybe_rows {
+    if own_candidates.is_empty() && source_targets.is_empty() {
         return None;
     }
 
-    let entries = tree_entries(server);
+    // The lens's articles and videos, each with its concept backlinkers.
+    let resolver = server.doc_resolver();
+    let entries = resolver_entries(server);
     let index = VirtualTreeIndex::new(&entries);
+    let lens_virtual = format!("/{}", path);
+    let mut sources: Vec<Source> = Vec::new();
+    let mut sources_over_cap = 0;
+    for target in &source_targets {
+        let Some(entry) = index.resolve(target, Some(&lens_virtual)) else {
+            continue;
+        };
+        let source_path = entry.virtual_path[1..].to_string();
+        let Some(kind) = source_kind(&source_path) else {
+            continue; // a widget, or anything else without rows of its own
+        };
+        if entry.id == uuid || sources.iter().any(|s| s.id == entry.id) {
+            continue;
+        }
+        if sources.len() >= MAX_LENS_SOURCES {
+            sources_over_cap += 1;
+            continue;
+        }
+        let Some(info) = resolver.resolve_path(&source_path) else {
+            continue;
+        };
+        let candidates = concept_backlinkers(server, rule, &info.folder_doc_id, &entry.id).await;
+        sources.push(Source {
+            path: source_path,
+            kind,
+            id: entry.id.clone(),
+            candidates,
+        });
+    }
+    // No concept file links here or to a source: nothing to load.
+    if own_candidates.is_empty() && sources.iter().all(|s| s.candidates.is_empty()) {
+        return None;
+    }
+
     let mut loader = ConceptLoader::new(server, &index, rule.section);
     let own = collect_rows(&mut loader, own_candidates, uuid).await;
-
-    let mut sources: Vec<(SourceRows, usize)> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for target in source_targets {
-        if seen.len() >= MAX_LENS_SOURCES {
-            break;
-        }
-        let Some(entry) = index.resolve(&target, Some(&lens_virtual)) else {
-            continue;
-        };
-        if entry.id == uuid || seen.contains(&entry.id) {
-            continue;
-        }
-        let Some(source_path) = resolver.path_for_uuid(&entry.id) else {
-            continue;
-        };
-        // Articles and video transcripts; widgets and the rest are skipped.
-        let Some(kind) = source_kind(&source_path) else {
-            continue;
-        };
-        let Some(source_info) = resolver.resolve_path(&source_path) else {
-            continue;
-        };
-        seen.insert(entry.id.clone());
-        let candidates =
-            concept_backlinkers(server, rule, &source_info.folder_doc_id, &entry.id).await;
-        let rows = collect_rows(&mut loader, candidates, &entry.id).await;
-        sources.push((
+    let mut source_rows: Vec<(SourceRows, usize)> = Vec::new();
+    for source in sources {
+        let rows = collect_rows(&mut loader, source.candidates, &source.id).await;
+        source_rows.push((
             SourceRows {
-                source_path,
-                kind,
+                source_path: source.path,
+                kind: source.kind,
                 rows: rows.rows,
             },
             rows.skipped,
         ));
     }
 
-    let any_source_rows = sources.iter().any(|(a, _)| !a.rows.is_empty());
-    if own.rows.is_empty() && own.mentions.is_empty() && !any_source_rows {
+    let any_source_rows = source_rows
+        .iter()
+        .any(|(s, n)| !s.rows.is_empty() || *n > 0);
+    if own.rows.is_empty() && own.mentions.is_empty() && own.skipped == 0 && !any_source_rows {
         return None;
     }
+    let opened_label = format!("this {}", rule.kind);
     let body = if rule.source_context {
-        render_lens(&own, &sources, rule.opened_label)
+        render_lens(&own, &source_rows, sources_over_cap, &opened_label)
     } else {
-        render_simple(&own, rule.opened_label)
+        render_simple(&own, &opened_label)
     };
     Some(format!(
-        "{BLOCK_START}\n{}\n{}\n{BLOCK_END}",
-        preamble(rule.file_kind),
-        body
+        "{BLOCK_START}\n{PREAMBLE}\n{}\n{BLOCK_END}",
+        cap_block(body)
     ))
 }
 
@@ -1031,8 +987,10 @@ Not a row: outside the Relationships section.
 
     #[test]
     fn finds_level3_link_headings_under_relationships() {
-        let parsed = parse_concept_file(CONCEPT, "Relationships");
-        assert_eq!(parsed.sections.len(), 1);
+        assert_eq!(
+            parse_concept_file(CONCEPT, "Relationships").sections.len(),
+            1
+        );
         assert_eq!(
             targets(CONCEPT),
             vec![
@@ -1079,26 +1037,8 @@ Not a row: outside the Relationships section.
     }
 
     #[test]
-    fn tilde_fences_and_mismatched_fence_markers() {
-        // A ``` line inside a ~~~ fence does not close it.
-        let text = "## Relationships\n\n~~~\n```\n### [[y]]\n~~~\n### [[z]]\n";
-        assert_eq!(targets(text), vec!["z"]);
-    }
-
-    #[test]
     fn matches_the_relationships_heading_case_sensitively() {
-        assert!(
-            parse_concept_file("## relationships\n\n### [[x]]\n", "Relationships")
-                .sections
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn takes_only_a_heading_that_is_exactly_one_link_outside_lists_and_quotes() {
-        let text =
-            "## Relationships\n\n### [[a]] (draft)\n\n- ### [[b]]\n> ### [[c]]\n### [[d|D]]\n";
-        assert_eq!(targets(text), vec!["d"]);
+        assert!(targets("## relationships\n\n### [[x]]\n").is_empty());
     }
 
     #[test]
@@ -1122,23 +1062,13 @@ Not a row: outside the Relationships section.
         assert_eq!(y.body_from, text.len());
     }
 
-    #[test]
-    fn section_ends_at_a_level_1_heading_too() {
-        let text = "## Relationships\n\n### [[a]]\nA\n# Next\n### [[b]]\n";
-        let parsed = parse_concept_file(text, "Relationships");
-        assert_eq!(targets(text), vec!["a"]);
-        assert!(text[parsed.sections[0].1..].starts_with("# Next"));
-    }
-
-    // From the platform validator: only level-3 headings under ## Relationships count.
+    // From the platform validator: only level-3 headings in the section count,
+    // and an underscore in a path survives.
     #[test]
     fn counts_only_level3_headings_under_relationships() {
         let text = "# C\n\n### [[../articles/ai_control_redwood]]\nbefore\n\n## Relationships\n\n### [[../articles/ai_control_redwood]]\nNotes.\n\n#### [[../articles/ai_control_redwood]]\nDeeper.\n\n### [[../articles/ai_control_redwood]]\nAgain.\n\n## See also\n\n### [[../articles/ai_control_redwood]]\n";
         let rows = parse_concept_file(text, "Relationships").rows;
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].line, 8);
-        assert_eq!(rows[1].line, 14);
-        // Underscores survive (the platform reads the source text, not the rendered text).
+        assert_eq!(rows.iter().map(|r| r.line).collect::<Vec<_>>(), vec![8, 14]);
         assert_eq!(rows[0].target, "../articles/ai_control_redwood");
     }
 
@@ -1147,10 +1077,10 @@ Not a row: outside the Relationships section.
         let text = "## Relationships\r\n\r\n### [[a]]\r\nNote.\r\n";
         let rows = parse_concept_file(text, "Relationships").rows;
         assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target, "a");
         // As in the editor, the body starts after the heading's `\r`; the
         // block trims it.
         assert_eq!(text[rows[0].body_from..rows[0].body_to].trim(), "Note.");
-        assert_eq!(rows[0].target, "a");
     }
 
     #[test]
@@ -1163,189 +1093,209 @@ Not a row: outside the Relationships section.
     #[test]
     fn match_rule_matches_articles_videos_and_lenses_in_lens_edu_only() {
         assert_eq!(
-            match_rule("Lens Edu/articles/x.md").map(|r| r.opened_in),
-            Some("articles")
+            match_rule("Lens Edu/articles/x.md").map(|r| r.kind),
+            Some("article")
+        );
+        assert_eq!(
+            match_rule("Lens Edu/video_transcripts/x.md").map(|r| r.kind),
+            Some("video")
         );
         assert!(match_rule("Lens Edu/Lenses/x.md").is_some_and(|r| r.source_context));
-        assert_eq!(
-            match_rule("Lens Edu/video_transcripts/x.md").map(|r| r.opened_label),
-            Some("this video")
-        );
         assert!(match_rule("Lens Edu/Concepts/x.md").is_none());
         assert!(match_rule("Lens Edu/widgets/x.md").is_none());
         assert!(match_rule("Lens/articles/x.md").is_none());
         assert!(match_rule("Lens Edu/articles/x.html").is_none());
+        assert_eq!(rows_shared_folders(), vec!["Lens Edu"]);
     }
 
     #[test]
-    fn lens_source_targets_reads_every_source_field_outside_text_sections() {
-        let lens = "---
-title: Demo
----
-
-#### Article
-source:: [[../articles/one|One]]
-from:: \"Start\"
-
-#### Text
-content::
-source:: [[../articles/not-an-article]]
-
-#### Article
-source:: [[../articles/two]]
-
-#### Article
-source:: [[../articles/one]]
-";
+    fn source_kinds_come_from_the_rules() {
+        assert_eq!(source_kind("Lens Edu/articles/a.md"), Some("article"));
         assert_eq!(
-            lens_source_targets(lens),
-            vec!["../articles/one", "../articles/two"]
-        );
-    }
-
-    #[test]
-    fn lens_source_targets_ignores_frontmatter() {
-        let lens = "---\n#### Article\nsource:: [[../articles/fm]]\n---\n#### Article\nsource:: \"[[../articles/real]]\"\n";
-        assert_eq!(lens_source_targets(lens), vec!["../articles/real"]);
-    }
-
-    #[test]
-    fn lens_source_targets_reads_video_and_widget_sources() {
-        let lens = "#### Video\nsource:: [[../video_transcripts/talk]]\nfrom:: 0:00\n\n#### Widget\nsource:: [[../widgets/quiz]]\n";
-        assert_eq!(
-            lens_source_targets(lens),
-            vec!["../video_transcripts/talk", "../widgets/quiz"]
-        );
-        assert_eq!(
-            source_kind("Lens Edu/video_transcripts/talk.md"),
+            source_kind("Lens Edu/video_transcripts/v.md"),
             Some("video")
         );
-        assert_eq!(source_kind("Lens Edu/articles/a.md"), Some("article"));
-        assert_eq!(source_kind("Lens Edu/widgets/quiz.md"), None);
+        assert_eq!(source_kind("Lens Edu/Lenses/l.md"), None);
         assert_eq!(source_kind("Lens Edu/widgets/quiz.html"), None);
     }
 
     #[test]
-    fn lens_source_value_runs_until_the_next_field_or_heading() {
-        // A value on the next line still counts; a heading ends the field.
-        let lens = "#### Article\nsource::\n[[../articles/next-line]]\n#### Text\n[[../articles/not-a-source]]\n";
-        assert_eq!(lens_source_targets(lens), vec!["../articles/next-line"]);
+    fn lens_source_targets_editor_line_scanner_details() {
+        // No space after `::`; a link on the next line is ignored; only a
+        // level-4 "Text" heading marks a text section; frontmatter whose
+        // opening `---` has trailing whitespace is skipped.
+        let lens = "--- \nsource:: [[../articles/in-frontmatter]]\n---\nsource::[[../articles/no-space]]\nsource::\n[[../articles/next-line]]\n### Text\nsource:: [[../articles/level-3-text-is-not-text]]\n#### Text:\nsource:: [[../articles/text-colon-is-not-text]]\n#### Text\nsource:: [[../articles/in-text]]\n";
+        assert_eq!(
+            lens_source_targets(lens),
+            vec![
+                "../articles/no-space",
+                "../articles/level-3-text-is-not-text",
+                "../articles/text-colon-is-not-text"
+            ]
+        );
     }
 
     #[test]
-    fn closing_hashes_end_a_heading_as_in_commonmark() {
+    fn closing_hashes_end_a_heading() {
         let text =
             "## Relationships ##\n\n### [[a]] ###\nA\n### [[b]]#\nnot a row\n### [[c|C]] #  \nC\n";
         assert_eq!(targets(text), vec!["a", "c"]);
         assert_eq!(strip_closing_hashes("###"), "");
         assert_eq!(strip_closing_hashes("[[x]]#"), "[[x]]#");
-        assert_eq!(strip_closing_hashes("[[x]] \t##"), "[[x]]");
     }
 
     // canonical concept-row rules v1 #1
     #[test]
-    fn canonical_1_every_exact_relationships_level2_heading_is_a_section() {
-        let text =
-            "## Relationships\n### [[a]]\n## Other\n### [[x]]\n## Relationships ##\n### [[b]]\n";
-        let parsed = parse_concept_file(text, "Relationships");
-        assert_eq!(parsed.sections.len(), 2);
+    fn canonical_1_every_relationships_section_counts() {
+        let text = "## Relationships\n### [[a]]\n## Notes\n### [[x]]\n## Relationships ##\n### [[b]]\n## *Relationships*\n### [[y]]\n";
         assert_eq!(targets(text), vec!["a", "b"]);
-        // No setext headings, no emphasis, exact text.
-        assert!(targets("Relationships\n---\n### [[a]]\n").is_empty());
-        assert!(targets("## *Relationships*\n### [[a]]\n").is_empty());
-        assert!(targets("## Relationships:\n### [[a]]\n").is_empty());
+        assert_eq!(parse_concept_file(text, "Relationships").sections.len(), 2);
     }
 
     // canonical concept-row rules v1 #2
     #[test]
     fn canonical_2_section_ends_at_next_level_1_or_2_heading() {
         assert_eq!(
-            targets("## Relationships\n### [[a]]\n# Top\n### [[b]]\n"),
+            targets("## Relationships\n#### deep\n### [[a]]\n# Top\n### [[b]]\n"),
             vec!["a"]
-        );
-        assert_eq!(
-            targets("## Relationships\n### [[a]]\n## Next\n### [[b]]\n"),
-            vec!["a"]
-        );
-        assert_eq!(
-            targets("## Relationships\n### [[a]]\n#### Deeper\n### [[b]]\n"),
-            vec!["a", "b"]
         );
     }
 
     // canonical concept-row rules v1 #3
     #[test]
-    fn canonical_3_row_is_an_indented_up_to_3_level3_single_link_heading() {
-        let text = "## Relationships\n   ### [[a]]\n    ### [[four-spaces]]\n### [[b|B]] ##\n### ![[embed]]\n### [[#only-anchor]]\n### [[x[y]]\n### [[c#Part]]\n### [[d]] extra\n";
-        assert_eq!(targets(text), vec!["a", "b", "c"]);
+    fn canonical_3_row_is_a_level3_single_link_heading() {
+        let text = "## Relationships\n   ### [[a|A]] ###\n    ### [[indented-code]]\n### ![[embed]]\n### [[#heading]]\n### [[b#Part]]\n### [[c]] notes\n";
+        assert_eq!(targets(text), vec!["a", "b"]);
     }
 
     // canonical concept-row rules v1 #4
     #[test]
     fn canonical_4_row_body_runs_to_next_heading_of_level_3_or_less() {
-        let text = "## Relationships\n### [[a]]\nA1\n#### Sub\nA2\n### [[b]]\nB\n## End\n";
-        let rows = parse_concept_file(text, "Relationships").rows;
-        assert_eq!(
-            &text[rows[0].body_from..rows[0].body_to],
-            "A1\n#### Sub\nA2"
-        );
-        assert_eq!(&text[rows[1].body_from..rows[1].body_to], "B");
-        assert!(text[rows[1].to..].starts_with("## End"));
+        let text = "## Relationships\n### [[a]]\nOne\n#### Sub\nTwo\n### [[b]]\nThree\n";
+        let a = &parse_concept_file(text, "Relationships").rows[0];
+        assert_eq!(&text[a.body_from..a.body_to], "One\n#### Sub\nTwo");
     }
 
     // canonical concept-row rules v1 #5
     #[test]
-    fn canonical_5_ignored_regions() {
-        // A fence closes only on the same character, at least as long, with
-        // only whitespace after it.
-        let fences = "## Relationships\n````\n```\n### [[in-fence-1]]\n```` info\n### [[in-fence-2]]\n````  \n### [[a]]\n";
-        assert_eq!(targets(fences), vec!["a"]);
-        // A fence line indented 4+ spaces is not a fence.
-        assert_eq!(targets("## Relationships\n    ```\n### [[b]]\n"), vec!["b"]);
-        // A backtick fence opener cannot have a backtick in its info string.
-        assert_eq!(targets("## Relationships\n``` a`b\n### [[c]]\n"), vec!["c"]);
-        // Obsidian comments, inline and over several lines.
-        let comments =
-            "## Relationships\n%%\n### [[hidden]]\n%%\n### [[d]]\n%% note %%\n### [[e]]\n";
-        assert_eq!(targets(comments), vec!["d", "e"]);
-        // List items and block quotes.
-        assert!(targets("## Relationships\n- ### [[l]]\n> ### [[q]]\n1. ### [[n]]\n").is_empty());
-        // Frontmatter, whose closing --- may have trailing whitespace.
-        let fm =
-            "---\ntopic: x\n## Relationships\n### [[in-fm]]\n--- \t\n## Relationships\n### [[f]]\n";
-        assert_eq!(targets(fm), vec!["f"]);
+    fn canonical_5_no_headings_in_ignored_regions() {
+        let text = [
+            "---",
+            "title: x",
+            "### [[fm]]",
+            "---  ",
+            "## Relationships",
+            "````",
+            "### [[f1]]",
+            "```",
+            "### [[f2]]",
+            "```` x",
+            "### [[f3]]",
+            "````", // only a bare, long-enough fence closes
+            "    ```",
+            "### [[after-indented-fence]]",
+            "%% a comment",
+            "### [[c1]]",
+            "%%",
+            "Inline %%### [[c2]]%% text",
+            "- item",
+            "  ### [[in-list]]",
+            "> ### [[quoted]]",
+            "~~~ js",
+            "### [[t1]]",
+            "~~~",
+            "### [[real]]",
+        ]
+        .join("\n");
+        assert_eq!(targets(&text), vec!["after-indented-fence", "real"]);
+    }
+
+    // canonical concept-row rules v1 #6: the relay parses the read view, with
+    // pending suggestions accepted, so a heading that a pending deletion
+    // removes is not a row here (the editor, parsing raw text, keeps it: an
+    // accepted divergence).
+    #[test]
+    fn canonical_6_rows_come_from_the_accepted_view() {
+        let text = "## Relationships\n{--\n### [[deleted-but-pending]]\n--}\n";
+        let accepted = critic_markup::accepted_view(&critic_markup::parse(text));
+        assert!(targets(&accepted).is_empty());
+        assert_eq!(targets(text), vec!["deleted-but-pending"]);
+    }
+
+    // canonical concept-row rules v1 #7
+    #[test]
+    fn canonical_7_rows_match_by_resolved_document() {
+        let entry = |path: &str, id: &str| VirtualEntry {
+            virtual_path: path.into(),
+            entry_type: "markdown".into(),
+            id: id.into(),
+            folder_idx: 0,
+        };
+        let entries = vec![
+            entry("/Lens Edu/Concepts/Low-stakes control.md", "c1"),
+            entry("/Lens Edu/articles/ai-control-redwood.md", "a1"),
+            entry("/Lens Edu/articles/lw-post-on-monitoring.md", "a2"),
+        ];
+        let index = VirtualTreeIndex::new(&entries);
+        let text = "## Relationships\n### [[../ARTICLES/Ai-Control-Redwood]]\n### [[Lens Edu/articles/lw-post-on-monitoring]]\n";
+        let ids: Vec<Option<String>> = parse_concept_file(text, "Relationships")
+            .rows
+            .iter()
+            .map(|r| {
+                index
+                    .resolve(&r.target, Some("/Lens Edu/Concepts/Low-stakes control.md"))
+                    .map(|e| e.id.clone())
+            })
+            .collect();
+        assert_eq!(ids, vec![Some("a1".to_string()), Some("a2".to_string())]);
     }
 
     // canonical concept-row rules v1 #8
     #[test]
-    fn canonical_8_lens_sources_every_source_field_except_text_sections() {
-        let lens = "---\ntitle: x\n---\nsource:: [[../articles/before-heading]]\r\n#### Article\r\nsource:: [[../articles/a.md]]\r\nsource:: [[../video_transcripts/v]]\r\n#### Text\r\nsource:: [[../articles/in-text]]\r\n#### Widget\r\nsource:: [[../widgets/w]] and [[../articles/second-link]]\r\n";
+    fn canonical_8_lens_sources() {
+        let lens = [
+            "source:: [[../articles/before-heading]]",
+            "#### Article",
+            "source:: [[../articles/one.md|One]]",
+            "source:: [[../video_transcripts/talk]] and [[../articles/second-link-ignored]]",
+            "#### Text",
+            "content::",
+            "source:: [[../articles/prose]]",
+            "#### Widget",
+            "source:: [[../widgets/quiz]]",
+        ]
+        .join("\r\n");
         assert_eq!(
-            lens_source_targets(lens),
+            lens_source_targets(&lens),
             vec![
                 "../articles/before-heading",
-                "../articles/a.md",
-                "../video_transcripts/v",
-                "../widgets/w"
+                "../articles/one.md",
+                "../video_transcripts/talk",
+                "../widgets/quiz"
             ]
         );
-        // Widgets are dropped once resolved; .md or not, sources are kept.
-        assert_eq!(source_kind("Lens Edu/widgets/w.md"), None);
-        assert_eq!(source_kind("Lens Edu/articles/a.md"), Some("article"));
+        assert_eq!(source_kind("Lens Edu/widgets/quiz.html"), None);
     }
 
-    fn entry(concept_id: &str, index: usize, body: &str) -> RowEntry {
+    // canonical concept-row rules v1 #9
+    #[test]
+    fn canonical_9_rows_sort_case_insensitively_by_concept_name() {
+        let mut names = vec!["beta", "Alpha"];
+        names.sort_by(|a, b| by_concept_name(a, b));
+        assert_eq!(names, vec!["Alpha", "beta"]);
+    }
+
+    fn entry(concept_id: &str, body: &str) -> RowEntry {
         RowEntry {
             concept_id: concept_id.to_string(),
             concept_path: format!("Lens Edu/Concepts/{concept_id}.md"),
             concept_name: concept_id.to_string(),
             line: 1,
-            index,
             body: body.to_string(),
         }
     }
 
-    fn article(name: &str, rows: Vec<RowEntry>) -> SourceRows {
+    fn source(name: &str, rows: Vec<RowEntry>) -> SourceRows {
         SourceRows {
             source_path: name.to_string(),
             kind: "article",
@@ -1354,38 +1304,37 @@ source:: [[../articles/one]]
     }
 
     #[test]
-    fn group_puts_concept_with_lens_and_article_rows_once() {
+    fn group_puts_concept_with_lens_and_source_rows_once() {
         let own = vec![
-            entry("Feedback", 0, "Feedback"),
-            entry("Low-stakes", 0, "Low-stakes"),
+            entry("Feedback", "Feedback"),
+            entry("Low-stakes", "Low-stakes"),
         ];
-        let articles = vec![
-            article(
+        let sources = vec![
+            source(
                 "One",
                 vec![
-                    entry("Corrigibility", 0, "c"),
-                    entry("Feedback", 0, "article note"),
+                    entry("Corrigibility", "c"),
+                    entry("Feedback", "article note"),
                 ],
             ),
-            article("Two", vec![entry("Feedback", 0, "second article")]),
+            source("Two", vec![entry("Feedback", "second article")]),
         ];
-        let groups = group_lens_rows(&own, &articles);
+        let groups = group_lens_rows(&own, &sources);
         type Grouped = Vec<(String, Vec<(String, Vec<String>)>)>;
         let lens: Grouped = groups
             .lens
             .iter()
             .map(|(e, a)| {
-                (
-                    e.concept_id.clone(),
-                    a.iter()
-                        .map(|a| {
-                            (
-                                a.source_path.clone(),
-                                a.rows.iter().map(|r| r.body.clone()).collect(),
-                            )
-                        })
-                        .collect(),
-                )
+                let a = a
+                    .iter()
+                    .map(|a| {
+                        (
+                            a.source_path.clone(),
+                            a.rows.iter().map(|r| r.body.clone()).collect(),
+                        )
+                    })
+                    .collect();
+                (e.concept_id.clone(), a)
             })
             .collect();
         assert_eq!(
@@ -1401,38 +1350,24 @@ source:: [[../articles/one]]
                 ("Low-stakes".to_string(), vec![]),
             ]
         );
-        let only: Vec<(String, Vec<String>)> = groups
-            .source_only
-            .iter()
-            .map(|a| {
-                (
-                    a.source_path.clone(),
-                    a.rows.iter().map(|r| r.concept_id.clone()).collect(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            only,
-            vec![("One".to_string(), vec!["Corrigibility".to_string()])]
-        );
+        assert_eq!(groups.source_only.len(), 1);
+        assert_eq!(groups.source_only[0].rows[0].concept_id, "Corrigibility");
     }
 
     #[test]
-    fn group_attaches_article_rows_to_the_first_of_several_lens_rows_only() {
+    fn group_attaches_source_rows_to_the_first_of_several_lens_rows_only() {
         let groups = group_lens_rows(
-            &[entry("C", 0, ""), entry("C", 1, "")],
-            &[article("A", vec![entry("C", 0, "")])],
+            &[entry("C", ""), entry("C", "")],
+            &[source("A", vec![entry("C", "")])],
         );
         let counts: Vec<usize> = groups.lens.iter().map(|(_, a)| a.len()).collect();
         assert_eq!(counts, vec![1, 0]);
     }
 
     #[test]
-    fn group_keeps_every_article_row_apart_when_the_lens_has_none() {
-        let articles = vec![article("A", vec![entry("B", 0, ""), entry("A", 0, "")])];
-        let groups = group_lens_rows(&[], &articles);
+    fn group_keeps_every_source_row_apart_when_the_lens_has_none() {
+        let groups = group_lens_rows(&[], &[source("A", vec![entry("B", ""), entry("A", "")])]);
         assert!(groups.lens.is_empty());
-        assert_eq!(groups.source_only.len(), 1);
         let ids: Vec<&str> = groups.source_only[0]
             .rows
             .iter()
@@ -1443,14 +1378,25 @@ source:: [[../articles/one]]
 
     #[test]
     fn long_row_text_is_cut_with_a_pointer() {
-        let mut e = entry("C", 0, &"é".repeat(MAX_ROW_CHARS + 50));
-        e.concept_path = "Lens Edu/Concepts/C.md".into();
+        let mut e = entry("C", &"é".repeat(MAX_ROW_CHARS + 50));
         e.line = 7;
         let mut out = String::new();
         render_body(&mut out, &e, "  ");
         assert!(out.contains(&"é".repeat(MAX_ROW_CHARS)));
         assert!(!out.contains(&"é".repeat(MAX_ROW_CHARS + 1)));
         assert!(out.contains("read Lens Edu/Concepts/C.md from line 7"));
+    }
+
+    #[test]
+    fn block_is_cut_at_a_line_end_within_the_cap() {
+        let line = format!("{}\n", "x".repeat(99));
+        let body = line.repeat(MAX_BLOCK_CHARS / 100 + 10);
+        let out = cap_block(body);
+        let (kept, note) = out.split_once("\n(… truncated").expect("note");
+        assert!(kept.chars().count() <= MAX_BLOCK_CHARS);
+        assert!(kept.ends_with(&line));
+        assert!(note.contains("use get_links"));
+        assert_eq!(cap_block("short\n".to_string()), "short\n");
     }
 }
 
@@ -1487,7 +1433,7 @@ The talk covers low-stakes control at 12:00.
 ## Relationships
 
 ### [[../Lenses/Low-stakes control intro]]
-FEEDBACK-LENS-NOTE: the chat prompt asks for feedback.
+FEEDBACK-LENS-ROW: the chat prompt asks for feedback.
 
 ### [[../articles/ai-control-redwood.md]]
 Feedback is discussed in §3.
@@ -1504,74 +1450,77 @@ Only mentions the term once. Not an explanation.
 The talk defines corrigibility briefly.
 
 ### [[../widgets/quiz]]
-WIDGET-NOTE: must not show.
+WIDGET-ROW: must not show.
 ";
 
     const ARTICLE: &str = "# Redwood\n\nArticle body line.\n";
     const LENS: &str = "---\nid: x\n---\n#### Article\nsource:: [[../articles/ai-control-redwood]]\n\n#### Text\ncontent:: Intro words.\n\n#### Video\nsource:: [[../video_transcripts/control-talk]]\n\n#### Widget\nsource:: [[../widgets/quiz]]\n";
 
-    const C_LOW_ID: &str = "c0000000-0000-4000-8000-000000000001";
-    const LENS_ID: &str = "l0000000-0000-4000-8000-000000000001";
+    const C_FEEDBACK_ID: &str = "c0000000-0000-4000-8000-000000000002";
+
+    fn fixture() -> Vec<(&'static str, &'static str, &'static str)> {
+        vec![
+            (
+                "/Concepts/Low-stakes control.md",
+                "c0000000-0000-4000-8000-000000000001",
+                C_LOW,
+            ),
+            ("/Concepts/Feedback.md", C_FEEDBACK_ID, C_FEEDBACK),
+            (
+                "/Concepts/Corrigibility.md",
+                "c0000000-0000-4000-8000-000000000003",
+                C_CORRIGIBILITY,
+            ),
+            (
+                "/articles/ai-control-redwood.md",
+                "a0000000-0000-4000-8000-000000000001",
+                ARTICLE,
+            ),
+            (
+                "/articles/lw-post-on-monitoring.md",
+                "a0000000-0000-4000-8000-000000000002",
+                "# LW post\n",
+            ),
+            (
+                "/Lenses/Low-stakes control intro.md",
+                "l0000000-0000-4000-8000-000000000001",
+                LENS,
+            ),
+            (
+                "/video_transcripts/control-talk.md",
+                "v0000000-0000-4000-8000-000000000001",
+                "Transcript line one.\n",
+            ),
+            (
+                "/widgets/quiz.md",
+                "w0000000-0000-4000-8000-000000000001",
+                "Quiz.\n",
+            ),
+            (
+                "/Lenses/Lonely lens.md",
+                "l0000000-0000-4000-8000-000000000002",
+                "#### Article\nsource:: [[../articles/missing]]\n\nLonely text.\n",
+            ),
+            (
+                "/Lenses/Quiet lens.md",
+                "l0000000-0000-4000-8000-000000000004",
+                "#### Article\nsource:: [[../articles/quiet]]\n#### Widget\nsource:: [[../widgets/quiz]]\n",
+            ),
+            (
+                "/articles/quiet.md",
+                "a0000000-0000-4000-8000-000000000004",
+                "Nobody links here.\n",
+            ),
+            (
+                "/Lenses/Corrigible lens.md",
+                "l0000000-0000-4000-8000-000000000003",
+                "#### Article\nsource:: [[../articles/ai-control-redwood]]\n",
+            ),
+        ]
+    }
 
     async fn server() -> Arc<Server> {
-        build_indexed_test_server_in(
-            "Lens Edu",
-            &[
-                ("/Concepts/Low-stakes control.md", C_LOW_ID, C_LOW),
-                (
-                    "/Concepts/Feedback.md",
-                    "c0000000-0000-4000-8000-000000000002",
-                    C_FEEDBACK,
-                ),
-                (
-                    "/Concepts/Corrigibility.md",
-                    "c0000000-0000-4000-8000-000000000003",
-                    C_CORRIGIBILITY,
-                ),
-                (
-                    "/articles/ai-control-redwood.md",
-                    "a0000000-0000-4000-8000-000000000001",
-                    ARTICLE,
-                ),
-                (
-                    "/articles/lw-post-on-monitoring.md",
-                    "a0000000-0000-4000-8000-000000000002",
-                    "# LW post\n",
-                ),
-                ("/Lenses/Low-stakes control intro.md", LENS_ID, LENS),
-                (
-                    "/video_transcripts/control-talk.md",
-                    "v0000000-0000-4000-8000-000000000001",
-                    "Transcript line one.\n",
-                ),
-                (
-                    "/widgets/quiz.md",
-                    "w0000000-0000-4000-8000-000000000001",
-                    "Quiz.\n",
-                ),
-                (
-                    "/Lenses/Lonely lens.md",
-                    "l0000000-0000-4000-8000-000000000002",
-                    "#### Article\nsource:: [[../articles/missing]]\n\nLonely text.\n",
-                ),
-                (
-                    "/Lenses/Quiet lens.md",
-                    "l0000000-0000-4000-8000-000000000004",
-                    "#### Article\nsource:: [[../articles/quiet]]\n",
-                ),
-                (
-                    "/articles/quiet.md",
-                    "a0000000-0000-4000-8000-000000000004",
-                    "Nobody links here.\n",
-                ),
-                (
-                    "/Lenses/Corrigible lens.md",
-                    "l0000000-0000-4000-8000-000000000003",
-                    "#### Article\nsource:: [[../articles/ai-control-redwood]]\n",
-                ),
-            ],
-        )
-        .await
+        build_indexed_test_server_in("Lens Edu", &fixture()).await
     }
 
     async fn read_at(server: &Arc<Server>, sid: &str, path: &str, offset: Option<u64>) -> String {
@@ -1580,6 +1529,11 @@ WIDGET-NOTE: must not show.
             args["offset"] = json!(offset);
         }
         read::execute(server, sid, &args).await.unwrap()
+    }
+
+    async fn read(server: &Arc<Server>, path: &str) -> String {
+        let sid = setup_session_no_reads(server);
+        read_at(server, &sid, path, None).await
     }
 
     /// The text after the block: the file's own cat -n lines.
@@ -1593,20 +1547,11 @@ WIDGET-NOTE: must not show.
     #[tokio::test]
     async fn article_read_starts_with_its_concept_rows() {
         let server = server().await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(
-            &server,
-            &sid,
-            "Lens Edu/articles/ai-control-redwood.md",
-            None,
-        )
-        .await;
-        println!("{out}");
-
-        assert!(out.starts_with(BLOCK_START), "got: {out}");
-        assert!(out.contains("NOT part of this file's text"));
-        assert!(out
-            .contains("\"we have information about this pair\" (which may be a negative judgment"));
+        let out = read(&server, "Lens Edu/articles/ai-control-redwood.md").await;
+        assert!(
+            out.starts_with(&format!("{BLOCK_START}\n{PREAMBLE}\n")),
+            "got: {out}"
+        );
         // Sorted by concept name; line numbers are the concept files' own.
         let corr = out
             .find("[Concept] Lens Edu/Concepts/Corrigibility.md (row at line 5)\n  Only mentions the term once.")
@@ -1618,10 +1563,8 @@ WIDGET-NOTE: must not show.
             .find("[Concept] Lens Edu/Concepts/Low-stakes control.md (row at line 11)\n  Best intro we have.")
             .expect("low-stakes row (file with frontmatter)");
         assert!(corr < feedback && feedback < low);
-        // Rows about other files stay out.
-        assert!(!out.contains("FEEDBACK-LENS-NOTE"));
+        assert!(!out.contains("FEEDBACK-LENS-ROW"));
         assert!(!out.contains("Lens uses"));
-        // The file's own text keeps its numbering.
         assert_eq!(
             file_part(&out),
             "     1\t# Redwood\n     2\t\n     3\tArticle body line."
@@ -1629,22 +1572,16 @@ WIDGET-NOTE: must not show.
     }
 
     #[tokio::test]
-    async fn lens_read_groups_its_rows_with_its_articles_rows() {
+    async fn lens_read_groups_its_rows_with_its_sources_rows() {
         let server = server().await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(
-            &server,
-            &sid,
-            "Lens Edu/Lenses/Low-stakes control intro.md",
-            None,
-        )
-        .await;
-        println!("{out}");
+        let out = read(&server, "Lens Edu/Lenses/Low-stakes control intro.md").await;
+        let expected = format!(
+            "{BLOCK_START}
+{PREAMBLE}
 
-        let expected_body = "
 [Concept] Lens Edu/Concepts/Feedback.md
   ▸ Row about this lens (line 5):
-    FEEDBACK-LENS-NOTE: the chat prompt asks for feedback.
+    FEEDBACK-LENS-ROW: the chat prompt asks for feedback.
   ▸ Row about its article Lens Edu/articles/ai-control-redwood.md (line 8) — context, not about this lens:
     Feedback is discussed in §3.
 
@@ -1664,26 +1601,22 @@ Concepts linked only via this lens's sources (rows about a source — context, n
   ▸ Row about its video Lens Edu/video_transcripts/control-talk.md (line 8) — context, not about this lens:
     The talk defines corrigibility briefly.
 
-── end of concept relationships ──";
-        assert!(out.contains(expected_body), "got:\n{out}");
-        assert!(out.contains("[[relative/path/to/this-lens]]"));
-        assert!(out.contains("under \"## Relationships\""));
-        // A widget source is not followed; Corrigibility shows once.
-        assert!(!out.contains("WIDGET-NOTE"));
-        assert_eq!(out.matches("Corrigibility.md").count(), 1);
-        assert!(file_part(&out).starts_with("     1\t---\n     2\tid: x\n"));
+{BLOCK_END}
+
+     1\t---
+     2\tid: x
+"
+        );
+        assert!(out.starts_with(&expected), "got:\n{out}");
+        assert!(!out.contains("WIDGET-ROW"));
     }
 
     #[tokio::test]
-    async fn lens_without_own_rows_shows_only_the_article_group() {
+    async fn lens_without_own_rows_shows_only_the_source_group() {
         let server = server().await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(&server, &sid, "Lens Edu/Lenses/Corrigible lens.md", None).await;
+        let out = read(&server, "Lens Edu/Lenses/Corrigible lens.md").await;
         assert!(out.starts_with(BLOCK_START), "got: {out}");
         assert!(out.contains("Concepts linked only via this lens's sources"));
-        assert!(out.contains(
-            "  ▸ Row about its article Lens Edu/articles/ai-control-redwood.md (line 5)"
-        ));
         for concept in ["Corrigibility", "Feedback", "Low-stakes control"] {
             assert!(
                 out.contains(&format!("[Concept] Lens Edu/Concepts/{concept}.md\n")),
@@ -1691,36 +1624,24 @@ Concepts linked only via this lens's sources (rows about a source — context, n
             );
         }
         assert!(!out.contains("Row about this lens"));
-        assert!(!out.contains("FEEDBACK-LENS-NOTE"));
     }
 
     #[tokio::test]
     async fn file_without_rows_has_no_block() {
         let server = server().await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(&server, &sid, "Lens Edu/Lenses/Lonely lens.md", None).await;
+        let out = read(&server, "Lens Edu/Lenses/Lonely lens.md").await;
         assert!(out.starts_with("     1\t#### Article"), "got: {out}");
-        assert!(!out.contains("Concept relationships"));
-        // A concept file itself gets no block.
-        let out = read_at(&server, &sid, "Lens Edu/Concepts/Feedback.md", None).await;
+        let out = read(&server, "Lens Edu/Concepts/Feedback.md").await;
         assert!(out.starts_with("     1\t# Feedback"), "got: {out}");
     }
 
     #[tokio::test]
     async fn plain_mention_only_lists_the_concept_file() {
         let server = server().await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(
-            &server,
-            &sid,
-            "Lens Edu/articles/lw-post-on-monitoring.md",
-            None,
-        )
-        .await;
-        assert!(out.starts_with(BLOCK_START), "got: {out}");
+        let out = read(&server, "Lens Edu/articles/lw-post-on-monitoring.md").await;
         assert!(out.contains(
             "Also mentioned (a link to this article outside any row) in: Lens Edu/Concepts/Low-stakes control.md"
-        ));
+        ), "got: {out}");
         assert!(!out.contains("[Concept]"));
     }
 
@@ -1729,10 +1650,25 @@ Concepts linked only via this lens's sources (rows about a source — context, n
         let server = server().await;
         let sid = setup_session_no_reads(&server);
         let path = "Lens Edu/articles/ai-control-redwood.md";
-        let first = read_at(&server, &sid, path, Some(1)).await;
-        assert!(first.starts_with(BLOCK_START));
+        assert!(read_at(&server, &sid, path, Some(1))
+            .await
+            .starts_with(BLOCK_START));
         let second = read_at(&server, &sid, path, Some(2)).await;
         assert_eq!(second, "     2\t\n     3\tArticle body line.");
+    }
+
+    #[tokio::test]
+    async fn video_transcript_read_shows_its_rows() {
+        let server = server().await;
+        let out = read(&server, "Lens Edu/video_transcripts/control-talk.md").await;
+        assert!(out.contains(
+            "[Concept] Lens Edu/Concepts/Corrigibility.md (row at line 8)\n  The talk defines corrigibility briefly."
+        ), "got: {out}");
+        // The row heading with closing hashes counts.
+        assert!(out.contains(
+            "[Concept] Lens Edu/Concepts/Low-stakes control.md (row at line 17)\n  The talk covers low-stakes control at 12:00."
+        ));
+        assert_eq!(file_part(&out), "     1\tTranscript line one.");
     }
 
     #[tokio::test]
@@ -1741,39 +1677,27 @@ Concepts linked only via this lens's sources (rows about a source — context, n
         let sid = setup_session_no_reads(&server);
         let lens = "Lens Edu/Lenses/Low-stakes control intro.md";
         let concept = "Lens Edu/Concepts/Feedback.md";
-        let concept_doc = format!("{RELAY_ID}-c0000000-0000-4000-8000-000000000002");
-        let out = read_at(&server, &sid, lens, None).await;
-        assert!(out.contains("FEEDBACK-LENS-NOTE"));
+        let concept_doc = format!("{RELAY_ID}-{C_FEEDBACK_ID}");
+        let edit_args = |path: &str, old: &str, new: &str| json!({"file_path": path, "session_id": sid, "old_string": old, "new_string": new});
+        assert!(read_at(&server, &sid, lens, None)
+            .await
+            .contains("FEEDBACK-LENS-ROW"));
 
         // Reading the lens does not count as reading the concept files.
-        let err = edit::execute(
-            &server,
-            &sid,
-            &json!({
-                "file_path": concept, "session_id": sid,
-                "old_string": "FEEDBACK-LENS-NOTE", "new_string": "CHANGED",
-            }),
-        )
-        .await
-        .expect_err("concept file was not read");
+        let err = edit::execute(&server, &sid, &edit_args(concept, "FEEDBACK-LENS-ROW", "X"))
+            .await
+            .expect_err("concept file was not read");
         assert!(err.contains("must read this document"), "got: {err}");
 
         // Text shown in the block is not part of the lens.
         for old in [
-            "FEEDBACK-LENS-NOTE",
+            "FEEDBACK-LENS-ROW",
             "end of concept relationships",
             "[Concept]",
         ] {
-            let err = edit::execute(
-                &server,
-                &sid,
-                &json!({
-                    "file_path": lens, "session_id": sid,
-                    "old_string": old, "new_string": "X",
-                }),
-            )
-            .await
-            .expect_err("block text must not match the lens");
+            let err = edit::execute(&server, &sid, &edit_args(lens, old, "X"))
+                .await
+                .expect_err("block text must not match the lens");
             assert!(err.contains("not found"), "got: {err}");
         }
         assert_eq!(read_doc_content(&server, &concept_doc), C_FEEDBACK);
@@ -1782,31 +1706,24 @@ Concepts linked only via this lens's sources (rows about a source — context, n
         edit::execute(
             &server,
             &sid,
-            &json!({
-                "file_path": lens, "session_id": sid,
-                "old_string": "Intro words.", "new_string": "Intro words, now longer.",
-            }),
+            &edit_args(lens, "Intro words.", "Intro words, now longer."),
         )
         .await
         .expect("edit of the lens's own text");
         let after = read_at(&server, &sid, lens, None).await;
-        assert!(
-            file_part(&after).contains("     8\tcontent:: Intro words, now longer."),
-            "got: {after}"
-        );
-        assert!(after.contains("FEEDBACK-LENS-NOTE"));
+        assert!(file_part(&after).contains("     8\tcontent:: Intro words, now longer."));
 
-        // Editing the note goes through the concept file at the given line.
+        // Editing the row goes through the concept file at the given line.
         let concept_out = read_at(&server, &sid, concept, None).await;
-        assert!(concept_out.contains("     6\tFEEDBACK-LENS-NOTE"));
+        assert!(concept_out.contains("     6\tFEEDBACK-LENS-ROW"));
         edit::execute(
             &server,
             &sid,
-            &json!({
-                "file_path": concept, "session_id": sid,
-                "old_string": "the chat prompt asks for feedback.",
-                "new_string": "the chat prompt asks for feedback. Checked again.",
-            }),
+            &edit_args(
+                concept,
+                "asks for feedback.",
+                "asks for feedback. Checked again.",
+            ),
         )
         .await
         .expect("edit of the concept file");
@@ -1820,15 +1737,13 @@ Concepts linked only via this lens's sources (rows about a source — context, n
     // canonical concept-row rules v1 #6
     #[tokio::test]
     async fn rows_follow_the_concept_files_pending_suggestions_as_read_does() {
-        // The concept file's read view (pending suggestions applied) decides
-        // the row text and line numbers.
         let server = build_indexed_test_server_in(
             "Lens Edu",
             &[
                 (
                     "/Concepts/C.md",
                     "c0000000-0000-4000-8000-000000000009",
-                    "# C\n\n## Relationships\n\n### [[../articles/a]]\n{--Old--}{++New++} note.\n",
+                    "# C\n\n## Relationships\n\n### [[../articles/a]]\n{--Old--}{++New++} row.\n",
                 ),
                 (
                     "/articles/a.md",
@@ -1838,165 +1753,261 @@ Concepts linked only via this lens's sources (rows about a source — context, n
             ],
         )
         .await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(&server, &sid, "Lens Edu/articles/a.md", None).await;
+        let out = read(&server, "Lens Edu/articles/a.md").await;
         assert!(
-            out.contains("[Concept] Lens Edu/Concepts/C.md (row at line 5)\n  New note."),
-            "got: {out}"
-        );
-    }
-
-    #[tokio::test]
-    async fn many_backlinking_concepts_are_capped_and_counted() {
-        let n = MAX_CONCEPT_FILES_PER_TARGET + 3;
-        let concepts: Vec<(String, String, String)> = (0..n)
-            .map(|i| {
-                (
-                    format!("/Concepts/C{i:02}.md"),
-                    format!("c0000000-0000-4000-8000-{i:012}"),
-                    format!("## Relationships\n\n### [[../articles/a]]\nNote {i}.\n"),
-                )
-            })
-            .collect();
-        let mut entries: Vec<(&str, &str, &str)> = concepts
-            .iter()
-            .map(|(p, u, t)| (p.as_str(), u.as_str(), t.as_str()))
-            .collect();
-        entries.push((
-            "/articles/a.md",
-            "a0000000-0000-4000-8000-000000000009",
-            "A\n",
-        ));
-        let server = build_indexed_test_server_in("Lens Edu", &entries).await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(&server, &sid, "Lens Edu/articles/a.md", None).await;
-        assert_eq!(
-            out.matches("[Concept]").count(),
-            MAX_CONCEPT_FILES_PER_TARGET
-        );
-        assert!(
-            out.contains("(3 more concept file(s) link to this article but were not read; use get_links to list them.)"),
-            "got: {out}"
-        );
-    }
-
-    #[tokio::test]
-    async fn video_transcript_read_shows_its_rows() {
-        let server = server().await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(
-            &server,
-            &sid,
-            "Lens Edu/video_transcripts/control-talk.md",
-            None,
-        )
-        .await;
-        assert!(out.starts_with(BLOCK_START), "got: {out}");
-        assert!(out.contains("[[relative/path/to/this-video]]"));
-        assert!(out.contains(
-            "[Concept] Lens Edu/Concepts/Corrigibility.md (row at line 8)\n  The talk defines corrigibility briefly."
-        ));
-        // The row heading with closing hashes counts.
-        assert!(out.contains(
-            "[Concept] Lens Edu/Concepts/Low-stakes control.md (row at line 17)\n  The talk covers low-stakes control at 12:00."
-        ));
-        assert_eq!(file_part(&out), "     1\tTranscript line one.");
-    }
-
-    #[tokio::test]
-    async fn lens_without_concept_backlinkers_skips_the_tree_walk() {
-        let server = server().await;
-        let sid = setup_session_no_reads(&server);
-        let before = TREE_WALKS.with(|c| c.get());
-        let out = read_at(&server, &sid, "Lens Edu/Lenses/Quiet lens.md", None).await;
-        assert!(out.starts_with("     1\t#### Article"), "got: {out}");
-        let out = read_at(&server, &sid, "Lens Edu/articles/quiet.md", None).await;
-        assert!(out.starts_with("     1\tNobody links here."), "got: {out}");
-        assert_eq!(
-            TREE_WALKS.with(|c| c.get()),
-            before,
-            "no tree walk expected"
-        );
-        // A lens with rows does walk it, once.
-        read_at(
-            &server,
-            &sid,
-            "Lens Edu/Lenses/Low-stakes control intro.md",
-            None,
-        )
-        .await;
-        assert_eq!(TREE_WALKS.with(|c| c.get()), before + 1);
-    }
-
-    async fn small_server() -> Arc<Server> {
-        build_indexed_test_server_in(
-            "Lens Edu",
-            &[
-                // Root fallback, other case (rule #7); lower-case name (rule #9).
-                (
-                    "/Concepts/alpha.md",
-                    "c0000000-0000-4000-8000-000000000011",
-                    "## Relationships\n### [[Lens Edu/articles/AI-CONTROL-REDWOOD]]\nAlpha note.\n",
-                ),
-                (
-                    "/Concepts/Beta.md",
-                    "c0000000-0000-4000-8000-000000000012",
-                    "## Relationships\n### [[../articles/ai-control-redwood.md]]\nBeta note.\n",
-                ),
-                (
-                    "/articles/ai-control-redwood.md",
-                    "a0000000-0000-4000-8000-000000000011",
-                    "A\n",
-                ),
-                (
-                    "/Lenses/L.md",
-                    "l0000000-0000-4000-8000-000000000011",
-                    "#### Article\nsource:: [[../articles/ai-control-redwood.md]]\n",
-                ),
-            ],
-        )
-        .await
-    }
-
-    // canonical concept-row rules v1 #7
-    #[tokio::test]
-    async fn canonical_7_rows_match_by_resolved_document_case_insensitive_root_fallback() {
-        let server = small_server().await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(
-            &server,
-            &sid,
-            "Lens Edu/articles/ai-control-redwood.md",
-            None,
-        )
-        .await;
-        assert!(
-            out.contains("[Concept] Lens Edu/Concepts/alpha.md (row at line 2)\n  Alpha note."),
-            "got: {out}"
-        );
-        assert!(out.contains("[Concept] Lens Edu/Concepts/Beta.md (row at line 2)"));
-        // A source link with .md is followed too.
-        let out = read_at(&server, &sid, "Lens Edu/Lenses/L.md", None).await;
-        assert!(
-            out.contains("Row about its article Lens Edu/articles/ai-control-redwood.md"),
+            out.contains("[Concept] Lens Edu/Concepts/C.md (row at line 5)\n  New row."),
             "got: {out}"
         );
     }
 
     // canonical concept-row rules v1 #9
     #[tokio::test]
-    async fn canonical_9_rows_sort_by_lower_case_concept_name() {
-        let server = small_server().await;
-        let sid = setup_session_no_reads(&server);
-        let out = read_at(
-            &server,
-            &sid,
-            "Lens Edu/articles/ai-control-redwood.md",
-            None,
+    async fn canonical_9_rows_sort_case_insensitively_in_read() {
+        let row = "## Relationships\n### [[../articles/x]]\n";
+        let server = build_indexed_test_server_in(
+            "Lens Edu",
+            &[
+                (
+                    "/Concepts/beta.md",
+                    "c0000000-0000-4000-8000-0000000000cb",
+                    row,
+                ),
+                (
+                    "/Concepts/Alpha.md",
+                    "c0000000-0000-4000-8000-0000000000ca",
+                    row,
+                ),
+                (
+                    "/articles/x.md",
+                    "a0000000-0000-4000-8000-0000000000ax",
+                    "X\n",
+                ),
+            ],
         )
         .await;
-        let alpha = out.find("Concepts/alpha.md").expect("alpha");
-        let beta = out.find("Concepts/Beta.md").expect("Beta");
+        let out = read(&server, "Lens Edu/articles/x.md").await;
+        let alpha = out.find("Concepts/Alpha.md").expect("Alpha");
+        let beta = out.find("Concepts/beta.md").expect("beta");
         assert!(alpha < beta, "got: {out}");
+    }
+
+    /// Concept files `C000.md`… each with a row about every target in
+    /// `about` (paths relative to Concepts/), plus the given other files.
+    fn many_concepts(n: usize, offset: usize, about: &[&str]) -> Vec<(String, String, String)> {
+        (0..n)
+            .map(|i| {
+                let i = i + offset;
+                let rows: String = about
+                    .iter()
+                    .map(|t| format!("### [[{t}]]\nRow {i}.\n"))
+                    .collect();
+                (
+                    format!("/Concepts/C{i:03}.md"),
+                    format!("c0000000-0000-4000-8000-{i:012}"),
+                    format!("## Relationships\n\n{rows}"),
+                )
+            })
+            .collect()
+    }
+
+    fn as_entries(files: &[(String, String, String)]) -> Vec<(&str, &str, &str)> {
+        files
+            .iter()
+            .map(|(p, u, t)| (p.as_str(), u.as_str(), t.as_str()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn many_backlinking_concepts_are_capped_per_target_and_counted() {
+        let mut files = many_concepts(MAX_CONCEPT_FILES_PER_TARGET + 3, 0, &["../articles/a"]);
+        files.push((
+            "/articles/a.md".into(),
+            "a0000000-0000-4000-8000-0000000000aa".into(),
+            "A\n".into(),
+        ));
+        let server = build_indexed_test_server_in("Lens Edu", &as_entries(&files)).await;
+        let out = read(&server, "Lens Edu/articles/a.md").await;
+        assert_eq!(
+            out.matches("[Concept]").count(),
+            MAX_CONCEPT_FILES_PER_TARGET
+        );
+        assert!(out.contains(
+            "(3 more concept file(s) link to this article but were not read; use get_links to list them.)"
+        ), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn concept_files_are_capped_per_read_in_all() {
+        // Three sources with 30 concept files each: 80 are read, the last
+        // source's other 10 are counted.
+        let mut files = Vec::new();
+        for (k, name) in ["s1", "s2", "s3"].iter().enumerate() {
+            files.extend(many_concepts(30, k * 30, &[&format!("../articles/{name}")]));
+            files.push((
+                format!("/articles/{name}.md"),
+                format!("a0000000-0000-4000-8000-0000000000{k:02}"),
+                "S\n".into(),
+            ));
+        }
+        files.push((
+            "/Lenses/L.md".into(),
+            "l0000000-0000-4000-8000-0000000000ff".into(),
+            "source:: [[../articles/s1]]\nsource:: [[../articles/s2]]\nsource:: [[../articles/s3]]\n".into(),
+        ));
+        let server = build_indexed_test_server_in("Lens Edu", &as_entries(&files)).await;
+        let out = read(&server, "Lens Edu/Lenses/L.md").await;
+        assert!(out.contains(
+            "(10 more concept file(s) link to Lens Edu/articles/s3.md but were not read; use get_links to list them.)"
+        ), "got: {out}");
+        assert_eq!(
+            out.matches("  ▸ Row about its article").count(),
+            MAX_CONCEPT_FILES_TOTAL
+        );
+    }
+
+    #[tokio::test]
+    async fn sources_over_the_cap_are_counted() {
+        let n = MAX_LENS_SOURCES + 2;
+        let mut files: Vec<(String, String, String)> = (0..n)
+            .map(|i| {
+                (
+                    format!("/articles/s{i:02}.md"),
+                    format!("a0000000-0000-4000-8000-0000000001{i:02}"),
+                    "S\n".to_string(),
+                )
+            })
+            .collect();
+        let about: Vec<String> = (0..n).map(|i| format!("../articles/s{i:02}")).collect();
+        let about: Vec<&str> = about.iter().map(String::as_str).collect();
+        files.extend(many_concepts(1, 0, &about));
+        let lens: String = about
+            .iter()
+            .map(|t| format!("source:: [[{t}]]\n"))
+            .collect();
+        files.push((
+            "/Lenses/L.md".into(),
+            "l0000000-0000-4000-8000-0000000000ff".into(),
+            lens,
+        ));
+        let server = build_indexed_test_server_in("Lens Edu", &as_entries(&files)).await;
+        let out = read(&server, "Lens Edu/Lenses/L.md").await;
+        assert_eq!(
+            out.matches("  ▸ Row about its article").count(),
+            MAX_LENS_SOURCES
+        );
+        assert!(
+            out.contains("(2 more source(s) of this lens not shown; at most 8 are followed.)"),
+            "got: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn block_is_capped_in_size() {
+        let long = "y".repeat(MAX_ROW_CHARS);
+        let files: Vec<(String, String, String)> = (0..20)
+            .map(|i| {
+                (
+                    format!("/Concepts/C{i:02}.md"),
+                    format!("c0000000-0000-4000-8000-{i:012}"),
+                    format!("## Relationships\n### [[../articles/a]]\n{long}\n"),
+                )
+            })
+            .chain(std::iter::once((
+                "/articles/a.md".to_string(),
+                "a0000000-0000-4000-8000-0000000000aa".to_string(),
+                "A\n".to_string(),
+            )))
+            .collect();
+        let server = build_indexed_test_server_in("Lens Edu", &as_entries(&files)).await;
+        let out = read(&server, "Lens Edu/articles/a.md").await;
+        let block = out.split_once(BLOCK_END).expect("block").0;
+        assert!(block.chars().count() < MAX_BLOCK_CHARS + 1000);
+        assert!(
+            block.contains("(… truncated at 20000 characters"),
+            "got: {block}"
+        );
+        assert!(file_part(&out).starts_with("     1\tA"));
+    }
+
+    #[tokio::test]
+    async fn read_without_concept_backlinkers_loads_no_concept_file() {
+        // Concept files evicted from memory stay evicted: a read that no
+        // concept file links to (nor to its article; the widget source is
+        // not followed) loads none of them.
+        let server = build_indexed_store_test_server_in("Lens Edu", &fixture()).await;
+        let concept_ids: Vec<String> = fixture()
+            .iter()
+            .filter(|(p, _, _)| p.starts_with("/Concepts/"))
+            .map(|(_, u, _)| format!("{RELAY_ID}-{u}"))
+            .collect();
+        for id in &concept_ids {
+            server.docs().remove(id);
+        }
+        let out = read(&server, "Lens Edu/Lenses/Quiet lens.md").await;
+        assert!(out.starts_with("     1\t#### Article"), "got: {out}");
+        let out = read(&server, "Lens Edu/articles/quiet.md").await;
+        assert!(out.starts_with("     1\tNobody links here."), "got: {out}");
+        for id in &concept_ids {
+            assert!(server.docs().get(id).is_none(), "{id} was loaded");
+        }
+    }
+
+    #[tokio::test]
+    async fn gc_evicted_concept_files_are_reloaded() {
+        let server = build_indexed_store_test_server_in("Lens Edu", &fixture()).await;
+        let feedback = format!("{RELAY_ID}-{C_FEEDBACK_ID}");
+        server.docs().remove(&feedback);
+        let out = read(&server, "Lens Edu/articles/ai-control-redwood.md").await;
+        assert!(out.contains(
+            "[Concept] Lens Edu/Concepts/Feedback.md (row at line 8)\n  Feedback is discussed in §3."
+        ), "got: {out}");
+        assert!(server.docs().get(&feedback).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_concept_file_that_cannot_be_loaded_is_counted() {
+        let server = server().await;
+        let entries = resolver_entries(&server);
+        let index = VirtualTreeIndex::new(&entries);
+        let mut loader = ConceptLoader::new(&server, &index, "Relationships");
+        // As load leaves a file whose load failed.
+        loader.loaded.insert(C_FEEDBACK_ID.to_string(), None);
+        let rule = match_rule("Lens Edu/articles/x.md").unwrap();
+        let info = server
+            .doc_resolver()
+            .resolve_path("Lens Edu/articles/ai-control-redwood.md")
+            .unwrap();
+        let candidates = concept_backlinkers(&server, rule, &info.folder_doc_id, &info.uuid).await;
+        assert_eq!(candidates.len(), 3);
+        let rows = collect_rows(&mut loader, candidates, &info.uuid).await;
+        assert_eq!(rows.rows.len(), 2);
+        assert_eq!(rows.skipped, 1);
+        let out = render_simple(&rows, "this article");
+        assert!(out.contains("(1 more concept file(s) link to this article but were not read"));
+    }
+
+    #[tokio::test]
+    async fn resolver_entries_match_the_link_indexer_tree() {
+        // The resolver-built tree resolves every fixture link as the
+        // folder-doc tree does.
+        let server = server().await;
+        let ours = resolver_entries(&server);
+        let theirs = get_links::all_virtual_entries(&server);
+        let (ours, theirs) = (VirtualTreeIndex::new(&ours), VirtualTreeIndex::new(&theirs));
+        let from = Some("/Lens Edu/Concepts/Feedback.md");
+        for link in [
+            "../articles/ai-control-redwood",
+            "../articles/AI-control-redwood.md",
+            "Lens Edu/Lenses/Low-stakes control intro",
+            "../widgets/quiz",
+            "../articles/missing",
+            "../articles",
+        ] {
+            assert_eq!(
+                ours.resolve(link, from).map(|e| &e.id),
+                theirs.resolve(link, from).map(|e| &e.id),
+                "{link}"
+            );
+        }
     }
 }
