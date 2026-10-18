@@ -1,58 +1,59 @@
 //! The concept graph in `read` output.
 //!
 //! Each concept file (`Lens Edu/Concepts/<name>.md`) names its broader
-//! concepts in a `parent:` frontmatter list of wikilinks; the first is the
-//! primary one. "Part of" goes upward only, and the graph should be a DAG
-//! (shortcut edges are fine; cycles are invalid content, which the platform
-//! validator reports):
+//! concepts in a `parent-concepts:` frontmatter list of wikilinks; the first
+//! is the primary one. "Part of" goes upward only, and the graph should be a
+//! DAG (shortcut edges are fine; cycles are invalid content, which the
+//! platform validator reports):
 //!
 //! ```text
 //! ---
-//! parent:
+//! parent-concepts:
 //!   - "[[Control protocols]]"
 //!   - "[[Monitoring and interpretability]]"
 //! ---
 //! ```
 //!
 //! An MCP `read` of a concept file starts (first chunk only) with a short
-//! block: the main path upward (first parents), the other paths, the direct
-//! parents and the direct children (concept files whose `parent:` resolves to
-//! this one). The rules and caps are the editor's
-//! (`lens-editor/src/lib/concept-graph.ts`); see
-//! `docs/concept-relationships.md`, "Concept graph".
+//! block: its parent concepts, each with its main path up to the top, and its
+//! child concepts (concept files whose parents include this one) with how
+//! many concepts are below each. The parsing rules ("concept graph rules v1
+//! #N") and caps are the editor's (`lens-editor/src/lib/concept-graph.ts`);
+//! see `docs/concept-relationships.md`, "Concept graph".
 
-use super::concept_rows::{by_concept_name, file_name, is_md, load_text, resolver_entries};
-use super::get_links;
+use super::concept_rows::{concepts_linking_to, load_text, resolver_entries, LOAD_CONCURRENCY};
 use crate::server::Server;
 use futures::StreamExt;
 use regex::Regex;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
-use y_sweet_core::link_indexer::VirtualTreeIndex;
+use y_sweet_core::link_indexer::{without_terminal_md, VirtualTreeIndex};
 
 /// Resolver-path prefix of concept files.
 const CONCEPTS_FOLDER: &str = "Lens Edu/Concepts/";
-/// Levels followed upward.
+/// The frontmatter key that lists a concept's parents.
+const PARENTS_KEY: &str = "parent-concepts";
+/// Levels followed upward or downward.
 const MAX_DEPTH: usize = 20;
-/// Concept files visited by one walk (ancestors; children), besides the read one.
+/// Ancestors walked.
+const MAX_ANCESTORS: usize = 30;
+/// Concepts visited by the walk below (for the "+N below" counts).
 const MAX_NODES: usize = 200;
-/// Ancestor paths enumerated (main path included).
-const MAX_PATHS: usize = 50;
-/// Other paths listed in the block.
-const MAX_OTHER_PATHS_SHOWN: usize = 5;
-/// Concept files loaded at once.
-const LOAD_CONCURRENCY: usize = 4;
+/// Backlinkers of one concept read when looking for its children.
+const MAX_CHILD_CANDIDATES: usize = 80;
+/// Concept files loaded by one `read` in all (ancestors and below).
+const MAX_FILES_PER_READ: usize = 200;
 
 /// Whether the file at resolver path `path` is a concept file.
 pub(crate) fn is_concept_path(path: &str) -> bool {
-    path.starts_with(CONCEPTS_FOLDER) && is_md(path)
+    path.starts_with(CONCEPTS_FOLDER) && without_terminal_md(path).len() != path.len()
 }
 
 // ---------------------------------------------------------------------------
-// Parsing (port of the editor's concept-graph.ts)
+// Parsing (concept graph rules v1, as in the editor's concept-graph.ts)
 // ---------------------------------------------------------------------------
 
-/// One `parent:` entry: the wikilink page (`link`), or None when the entry is
+/// One parent entry: the wikilink page (`link`), or None when the entry is
 /// not a single wikilink (`raw` is then what was written).
 #[derive(Debug, Clone, PartialEq)]
 struct ParentEntry {
@@ -64,44 +65,46 @@ fn regex(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).unwrap())
 }
 
-fn unquote(value: &str) -> &str {
+/// A value with a trailing YAML comment removed and its quotes taken off
+/// (rules #4, #5). A `#` inside quotes is kept.
+fn scalar(value: &str) -> String {
+    static COMMENT: OnceLock<Regex> = OnceLock::new();
     let v = value.trim();
-    let quoted = v.len() >= 2
-        && ((v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\'')));
-    if quoted {
-        v[1..v.len() - 1].trim()
-    } else {
-        v
+    if let Some(q) = v.chars().next().filter(|c| *c == '"' || *c == '\'') {
+        if let Some(close) = v[1..].find(q) {
+            return v[1..1 + close].trim().to_string();
+        }
     }
+    regex(&COMMENT, r"[ \t]+#.*$")
+        .replace(v, "")
+        .trim()
+        .to_string()
 }
 
 fn entry_of(value: &str) -> Option<ParentEntry> {
     static WIKILINK: OnceLock<Regex> = OnceLock::new();
-    let raw = unquote(value);
+    let raw = scalar(value);
     if raw.is_empty() {
         return None;
     }
     let link = regex(&WIKILINK, r"^\[\[([^\[\]\n]+)\]\]$")
-        .captures(raw)
+        .captures(&raw)
         .map(|c| {
             let inner = c.get(1).unwrap().as_str();
             let page = inner.split('|').next().unwrap_or("");
             page.split('#').next().unwrap_or("").trim().to_string()
         })
         .filter(|l| !l.is_empty());
-    Some(ParentEntry {
-        raw: raw.to_string(),
-        link,
-    })
+    Some(ParentEntry { raw, link })
 }
 
-/// The `parent:` entries of a file's frontmatter, in order: a block list
-/// (`- "[[A]]"`, quoted or not), one value, or a flow list
-/// (`["[[A]]", "[[B]]"]`). Line-based, as in the editor.
+/// The `parent-concepts:` entries of a file's frontmatter, in order: a block
+/// list (#1), one value (#2) or a flow list (#3); quoted or unquoted `[[X]]`
+/// (#4); trailing comments (#5); only the frontmatter and its first such key
+/// (#6). Line-based, as in the editor.
 fn parse_parents(text: &str) -> Vec<ParentEntry> {
     static DELIM: OnceLock<Regex> = OnceLock::new();
     static KEY: OnceLock<Regex> = OnceLock::new();
-    static COMMENT: OnceLock<Regex> = OnceLock::new();
     static FLOW_PART: OnceLock<Regex> = OnceLock::new();
     static ITEM: OnceLock<Regex> = OnceLock::new();
     let delim = regex(&DELIM, r"^---[ \t]*$");
@@ -120,6 +123,7 @@ fn parse_parents(text: &str) -> Vec<ParentEntry> {
     else {
         return Vec::new();
     };
+    let key = regex(&KEY, &format!(r"^{PARENTS_KEY}[ \t]*:(.*)$"));
     let mut out = Vec::new();
     let mut push = |value: &str| {
         if let Some(entry) = entry_of(value) {
@@ -127,22 +131,24 @@ fn parse_parents(text: &str) -> Vec<ParentEntry> {
         }
     };
     for i in 1..end {
-        let Some(key) = regex(&KEY, r"^parent[ \t]*:(.*)$").captures(lines[i]) else {
+        let Some(m) = key.captures(lines[i]) else {
             continue;
         };
-        let inline = regex(&COMMENT, r"[ \t]+#.*$").replace(key.get(1).unwrap().as_str(), "");
-        let inline = inline.trim();
+        let inline = m.get(1).unwrap().as_str().trim();
         if inline.starts_with('[') && !inline.starts_with("[[") {
-            let inner = inline.strip_prefix('[').unwrap_or(inline);
-            let inner = inner.strip_suffix(']').unwrap_or(inner);
-            for part in
-                regex(&FLOW_PART, r#""[^"]*"|'[^']*'|\[\[[^\]]*\]\]|[^,]+"#).find_iter(inner)
-            {
+            // Flow list (#3): up to its closing `]`.
+            let inner = match inline.rfind(']') {
+                Some(close) if close > 0 => &inline[1..close],
+                _ => &inline[1..],
+            };
+            let parts = regex(&FLOW_PART, r#""[^"]*"|'[^']*'|\[\[[^\]]*\]\]|[^,]+"#);
+            for part in parts.find_iter(inner) {
                 push(part.as_str());
             }
-        } else if !inline.is_empty() {
+        } else if !inline.is_empty() && !inline.starts_with('#') {
             push(inline);
         }
+        // Block list items (#1): until the next key.
         for line in &lines[i + 1..end] {
             if line.trim().is_empty() {
                 continue;
@@ -155,7 +161,7 @@ fn parse_parents(text: &str) -> Vec<ParentEntry> {
                 break;
             }
         }
-        break; // the first `parent:` key counts
+        break; // only the first key counts (#6)
     }
     out
 }
@@ -169,7 +175,7 @@ struct ResolvedParents {
 }
 
 /// [`parse_parents`] of the file at resolver path `path`, each link resolved
-/// like the link indexer resolves, kept when it is a concept file.
+/// like the link indexer resolves (#7), kept when it is a concept file.
 fn resolve_parents(text: &str, path: &str, index: &VirtualTreeIndex<'_>) -> ResolvedParents {
     let source_virtual = format!("/{path}");
     let mut out = ResolvedParents::default();
@@ -189,19 +195,13 @@ fn resolve_parents(text: &str, path: &str, index: &VirtualTreeIndex<'_>) -> Reso
 }
 
 // ---------------------------------------------------------------------------
-// Graph walks (pure; the editor's buildAncestors)
+// Graph walks (pure; the editor's buildAncestors, mainPath, countBelow)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default, PartialEq)]
 struct Ancestors {
-    /// First parents followed upward, top-level concept first, the direct
-    /// parent last (the read file left out).
-    main: Vec<String>,
-    /// Every other path from a top-level concept down to a direct parent.
-    others: Vec<Vec<String>>,
-    paths_cut: bool,
     nodes: Vec<String>,
-    /// A cycle through `parent:` links, first id repeated at the end.
+    /// A cycle through parent links, first id repeated at the end.
     cycle: Option<Vec<String>>,
     /// A cap (depth or files) cut the walk.
     cut: bool,
@@ -210,7 +210,7 @@ struct Ancestors {
 }
 
 /// Ancestors of `start`, breadth-first through `parents_of` (None: not
-/// loaded yet) within [`MAX_DEPTH`] levels and [`MAX_NODES`] files.
+/// loaded yet) within [`MAX_DEPTH`] levels and [`MAX_ANCESTORS`] files.
 fn build_ancestors<'a>(
     start: &str,
     parents_of: impl Fn(&str) -> Option<&'a ResolvedParents>,
@@ -229,7 +229,7 @@ fn build_ancestors<'a>(
             if depth.contains_key(p) {
                 continue;
             }
-            if d + 1 > MAX_DEPTH || depth.len() > MAX_NODES {
+            if d + 1 > MAX_DEPTH || depth.len() > MAX_ANCESTORS {
                 out.cut = true;
                 continue;
             }
@@ -238,7 +238,7 @@ fn build_ancestors<'a>(
             queue.push_back(p.clone());
         }
     }
-    let parents = |id: &str| -> Vec<String> {
+    let next = |id: &str| -> Vec<String> {
         parents_of(id)
             .map(|i| {
                 i.parents
@@ -249,69 +249,32 @@ fn build_ancestors<'a>(
             })
             .unwrap_or_default()
     };
-
-    let mut seen: HashSet<String> = HashSet::from([start.to_string()]);
-    let mut cur = start.to_string();
-    while let Some(first) = parents_of(&cur).and_then(|i| i.parents.first()) {
-        if seen.contains(first) || !depth.contains_key(first) {
-            break;
-        }
-        out.main.push(first.clone());
-        seen.insert(first.clone());
-        cur = first.clone();
-    }
-    out.main.reverse();
-
-    // All simple paths upward, depth first, first parents first.
-    struct Walk<'p, F: Fn(&str) -> Vec<String>> {
-        parents: &'p F,
-        stack: Vec<String>,
-        paths: Vec<Vec<String>>,
-        cut: bool,
-        steps: usize,
-    }
-    fn walk<F: Fn(&str) -> Vec<String>>(w: &mut Walk<'_, F>, id: &str) {
-        if w.cut {
-            return;
-        }
-        w.steps += 1;
-        if w.steps > MAX_NODES * MAX_PATHS {
-            w.cut = true;
-            return;
-        }
-        let next: Vec<String> = (w.parents)(id)
-            .into_iter()
-            .filter(|p| !w.stack.contains(p))
-            .collect();
-        if next.is_empty() {
-            if w.stack.len() > 1 {
-                if w.paths.len() >= MAX_PATHS {
-                    w.cut = true;
-                } else {
-                    w.paths.push(w.stack[1..].iter().rev().cloned().collect());
-                }
-            }
-            return;
-        }
-        for p in next {
-            w.stack.push(p.clone());
-            walk(w, &p);
-            w.stack.pop();
-        }
-    }
-    let mut w = Walk {
-        parents: &parents,
-        stack: vec![start.to_string()],
-        paths: Vec::new(),
-        cut: false,
-        steps: 0,
-    };
-    walk(&mut w, start);
-    out.paths_cut = w.cut;
-    out.others = w.paths.into_iter().filter(|p| *p != out.main).collect();
-    out.cycle = find_cycle(&order, &parents);
+    out.cycle = find_cycle(&order, &next);
     out.nodes = order.into_iter().filter(|id| id != start).collect();
     out
+}
+
+/// First parents followed upward from `start`, top-level concept first, the
+/// direct parent last (`start` left out); stops at a repeat.
+fn main_path<'a>(
+    start: &str,
+    parents_of: impl Fn(&str) -> Option<&'a ResolvedParents>,
+) -> Vec<String> {
+    let mut path = Vec::new();
+    let mut seen: HashSet<String> = HashSet::from([start.to_string()]);
+    let mut cur = start.to_string();
+    while path.len() < MAX_DEPTH {
+        let Some(first) = parents_of(&cur).and_then(|i| i.parents.first()) else {
+            break;
+        };
+        if !seen.insert(first.clone()) {
+            break;
+        }
+        path.push(first.clone());
+        cur = first.clone();
+    }
+    path.reverse();
+    path
 }
 
 /// A cycle among `nodes` through `next`, first id repeated at the end.
@@ -361,30 +324,65 @@ fn find_cycle(nodes: &[String], next: &impl Fn(&str) -> Vec<String>) -> Option<V
     None
 }
 
+/// Distinct concepts below `id` in `kids` (`start` left out); `cut` when the
+/// walk did not expand all of them.
+fn count_below(id: &str, kids: &HashMap<String, Vec<String>>, start: &str) -> (usize, bool) {
+    let mut seen: HashSet<&str> = HashSet::from([id, start]);
+    let mut queue = VecDeque::from([id]);
+    let mut cut = false;
+    while let Some(cur) = queue.pop_front() {
+        let Some(next) = kids.get(cur) else {
+            if cur != id {
+                cut = true;
+            }
+            continue;
+        };
+        for k in next {
+            if seen.insert(k.as_str()) {
+                queue.push_back(k.as_str());
+            }
+        }
+    }
+    (seen.len() - if id == start { 1 } else { 2 }, cut)
+}
+
 // ---------------------------------------------------------------------------
 // Loading and rendering
 // ---------------------------------------------------------------------------
 
 const BLOCK_START: &str = "── Concept graph (context — NOT part of this file's text) ──";
 const BLOCK_END: &str = "── end of concept graph ──";
-const PREAMBLE: &str = "Broader concepts are this file's `parent:` frontmatter (wikilinks; the first is the main one), and \"part of\" goes upward only. Line numbers below the end marker are this file's own.";
+const EDIT_HINT: &str = "Edit this file's parents in its `parent-concepts:` frontmatter (the first is the primary one); each child lists this file in its own. \"Part of\" goes upward only. Line numbers below the end marker are this file's own.";
 
-/// Loads concept files and resolves their parents, each once per `read`.
+/// Loads concept files and resolves their parents, each once per `read`,
+/// at most [`MAX_FILES_PER_READ`] in all.
 struct GraphLoader<'a> {
     server: &'a Arc<Server>,
     index: &'a VirtualTreeIndex<'a>,
     parents: HashMap<String, ResolvedParents>,
+    loaded: usize,
     failed: usize,
+    /// Files passed over because the per-read total was reached.
+    unread: usize,
 }
 
 impl GraphLoader<'_> {
     async fn load(&mut self, ids: &[String]) {
         let server = self.server;
-        let wanted: Vec<(String, Option<String>)> = ids
-            .iter()
-            .filter(|id| !self.parents.contains_key(*id))
-            .map(|id| (id.clone(), server.doc_resolver().path_for_uuid(id)))
-            .collect();
+        let mut wanted: Vec<(String, Option<String>)> = Vec::new();
+        for id in ids {
+            if self.parents.contains_key(id) || wanted.iter().any(|(w, _)| w == id) {
+                continue;
+            }
+            if self.loaded + wanted.len() >= MAX_FILES_PER_READ {
+                // Over the total: counted as having no parents.
+                self.unread += 1;
+                self.parents.insert(id.clone(), ResolvedParents::default());
+                continue;
+            }
+            wanted.push((id.clone(), server.doc_resolver().path_for_uuid(id)));
+        }
+        self.loaded += wanted.len();
         let loaded: Vec<(String, Option<(String, String)>)> = futures::stream::iter(wanted)
             .map(|(id, path)| async move {
                 let Some(path) = path else {
@@ -409,29 +407,90 @@ impl GraphLoader<'_> {
     }
 }
 
+/// Everything below the read file: the children of each concept reached.
+struct Below {
+    kids: HashMap<String, Vec<String>>,
+    cut: bool,
+    cycle: bool,
+    /// Concept files linking to the read file that were not read (over
+    /// [`MAX_CHILD_CANDIDATES`]).
+    candidates_over_cap: usize,
+}
+
+/// Breadth-first below `start`: each concept's backlinkers in the concepts
+/// folder ([`MAX_CHILD_CANDIDATES`] at most), kept when their parents
+/// include it, within [`MAX_DEPTH`] levels and [`MAX_NODES`] concepts.
+async fn walk_below(
+    server: &Arc<Server>,
+    loader: &mut GraphLoader<'_>,
+    folder_doc_id: &str,
+    start: &str,
+) -> Below {
+    let mut out = Below {
+        kids: HashMap::new(),
+        cut: false,
+        cycle: false,
+        candidates_over_cap: 0,
+    };
+    let mut depth: HashMap<String, usize> = HashMap::from([(start.to_string(), 0)]);
+    let mut queue = VecDeque::from([start.to_string()]);
+    while let Some(id) = queue.pop_front() {
+        let mut candidates: Vec<String> = concepts_linking_to(server, folder_doc_id, &id)
+            .await
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect();
+        let over = candidates.len().saturating_sub(MAX_CHILD_CANDIDATES);
+        if over > 0 {
+            if id == start {
+                out.candidates_over_cap = over;
+            } else {
+                out.cut = true;
+            }
+        }
+        candidates.truncate(MAX_CHILD_CANDIDATES);
+        let unread_before = loader.unread;
+        loader.load(&candidates).await;
+        if loader.unread > unread_before {
+            out.cut = true;
+        }
+        let mut kids: Vec<String> = Vec::new();
+        for c in candidates {
+            if !loader
+                .parents
+                .get(&c)
+                .is_some_and(|p| p.parents.contains(&id))
+            {
+                continue;
+            }
+            if c == start {
+                out.cycle = true;
+                continue;
+            }
+            kids.push(c);
+        }
+        for k in &kids {
+            if depth.contains_key(k) {
+                continue;
+            }
+            if depth[&id] + 1 > MAX_DEPTH || depth.len() > MAX_NODES {
+                out.cut = true;
+                continue;
+            }
+            depth.insert(k.clone(), depth[&id] + 1);
+            queue.push_back(k.clone());
+        }
+        out.kids.insert(id, kids);
+    }
+    out
+}
+
 /// Resolver path of `id`, or the id itself.
 fn path_of(server: &Arc<Server>, id: &str) -> String {
     server
         .doc_resolver()
         .path_for_uuid(id)
         .unwrap_or_else(|| id.to_string())
-}
-
-/// `Lens Edu/Concepts/AI Control.md` → `…/AI Control.md` after the first.
-fn render_path(server: &Arc<Server>, path: &[String]) -> String {
-    let mut parts: Vec<String> = path
-        .iter()
-        .enumerate()
-        .map(|(i, id)| {
-            let p = path_of(server, id);
-            match p.strip_prefix(CONCEPTS_FOLDER) {
-                Some(rest) if i > 0 => format!("…/{rest}"),
-                _ => p,
-            }
-        })
-        .collect();
-    parts.push("this".to_string());
-    parts.join(" › ")
 }
 
 /// The concept-graph block for the concept file at resolver path `path`
@@ -453,7 +512,9 @@ pub(crate) async fn concept_graph_block(
         server,
         index: &index,
         parents: HashMap::new(),
+        loaded: 0,
         failed: 0,
+        unread: 0,
     };
     let own = resolve_parents(text, path, &index);
     loader.parents.insert(uuid.to_string(), own.clone());
@@ -466,97 +527,98 @@ pub(crate) async fn concept_graph_block(
         }
         loader.load(&a.pending).await;
     };
-
-    // Children: backlinkers in the concepts folder that name this file in `parent:`.
-    let mut candidates: Vec<String> = get_links::read_backlink_uuids(server, folder_doc_id, uuid)
-        .await
-        .into_iter()
-        .filter(|id| id != uuid)
-        .filter(|id| {
-            server
-                .doc_resolver()
-                .path_for_uuid(id)
-                .is_some_and(|p| is_concept_path(&p))
-        })
-        .collect();
-    candidates.sort();
-    candidates.dedup();
-    let candidates_over_cap = candidates.len().saturating_sub(MAX_NODES);
-    candidates.truncate(MAX_NODES);
-    loader.load(&candidates).await;
-    let mut children: Vec<String> = candidates
-        .iter()
-        .filter(|c| {
-            loader
-                .parents
-                .get(*c)
-                .is_some_and(|p| p.parents.iter().any(|x| x == uuid))
-        })
-        .map(|c| path_of(server, c))
-        .collect();
-    children.sort_by(|a, b| by_concept_name(&file_name(a), &file_name(b)));
+    let below = walk_below(server, &mut loader, folder_doc_id, uuid).await;
 
     let mut out = String::new();
     if own.parents.is_empty() {
-        out.push_str("Part of: nothing — a top-level concept (no `parent:` entries).\n");
+        out.push_str(if own.unresolved.is_empty() {
+            "Parent concepts: none (top-level concept)\n"
+        } else {
+            "Parent concepts: none resolved\n"
+        });
     } else {
-        out.push_str(&format!(
-            "Part of (main path): {}{}\n",
-            render_path(server, &ancestors.main),
-            if ancestors.cut { " (… cut)" } else { "" }
-        ));
-    }
-    if !ancestors.others.is_empty() {
-        out.push_str("Other paths:\n");
-        for p in ancestors.others.iter().take(MAX_OTHER_PATHS_SHOWN) {
-            out.push_str(&format!("  {}\n", render_path(server, p)));
-        }
-        let more = ancestors.others.len().saturating_sub(MAX_OTHER_PATHS_SHOWN);
-        if more > 0 || ancestors.paths_cut {
+        out.push_str("Parent concepts:\n");
+        for (i, p) in own.parents.iter().enumerate() {
+            let mut up = main_path(p, |id| loader.parents.get(id));
+            up.reverse();
+            let up: Vec<String> = up.iter().map(|id| path_of(server, id)).collect();
             out.push_str(&format!(
-                "  (+{more}{} more)\n",
-                if ancestors.paths_cut { "+" } else { "" }
+                "  - {}{}{}\n",
+                path_of(server, p),
+                if i == 0 && own.parents.len() > 1 {
+                    " (primary)"
+                } else {
+                    ""
+                },
+                if up.is_empty() {
+                    " — top-level".to_string()
+                } else {
+                    format!(" — up: {}", up.join(" › "))
+                }
             ));
         }
     }
-    if !own.parents.is_empty() {
-        let parents: Vec<String> = own.parents.iter().map(|id| path_of(server, id)).collect();
+    for raw in &own.unresolved {
         out.push_str(&format!(
-            "Direct parents: {} (edit them in this file's `parent:` frontmatter)\n",
-            parents.join(", ")
+            "Parent not found: {raw} (not a wikilink to a file in {})\n",
+            CONCEPTS_FOLDER.trim_end_matches('/')
         ));
     }
-    if !own.unresolved.is_empty() {
-        let quoted: Vec<String> = own.unresolved.iter().map(|r| format!("\"{r}\"")).collect();
+    let mut children: Vec<(String, usize, bool)> = below
+        .kids
+        .get(uuid)
+        .map(|kids| {
+            kids.iter()
+                .map(|k| {
+                    let (n, cut) = count_below(k, &below.kids, uuid);
+                    (path_of(server, k), n, cut || below.cut)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    children.sort_by_key(|(p, _, _)| p.to_lowercase());
+    if !children.is_empty() {
+        out.push_str("Child concepts:\n");
+        for (p, n, cut) in &children {
+            let count = match (*n, *cut) {
+                (0, false) => String::new(),
+                (n, cut) => format!(" (+{n}{} below)", if cut { "+" } else { "" }),
+            };
+            out.push_str(&format!("  - {p}{count}\n"));
+        }
+    }
+    if below.candidates_over_cap > 0 {
         out.push_str(&format!(
-            "Unresolved `parent:` entries (not a wikilink to a file in {}): {}\n",
-            CONCEPTS_FOLDER.trim_end_matches('/'),
-            quoted.join(", ")
+            "({} more concept file(s) link here but were not read; use get_links to list them.)\n",
+            below.candidates_over_cap
         ));
     }
-    if children.is_empty() {
-        out.push_str("Direct children: none\n");
-    } else {
-        out.push_str(&format!(
-            "Direct children: {} (each child lists this file in its own `parent:`)\n",
-            children.join(", ")
-        ));
-    }
-    if candidates_over_cap > 0 {
-        out.push_str(&format!(
-            "({candidates_over_cap} more concept file(s) link here but were not read; use get_links to list them.)\n"
-        ));
-    }
+    let through_self = below.cycle
+        || ancestors
+            .cycle
+            .as_ref()
+            .is_some_and(|c| c.iter().any(|id| id == uuid));
     if let Some(cycle) = &ancestors.cycle {
         let names: Vec<String> = cycle.iter().map(|id| path_of(server, id)).collect();
         out.push_str(&format!(
-            "Cycle in `parent:` links (invalid — a concept cannot be part of itself): {}\n",
+            "A cycle runs {} this file (invalid — a concept cannot be part of itself): {}\n",
+            if through_self { "through" } else { "above" },
             names.join(" › ")
         ));
+    } else if through_self {
+        out.push_str(
+            "A cycle runs through this file (invalid — a concept cannot be part of itself).\n",
+        );
     }
     if ancestors.cut {
         out.push_str(&format!(
-            "(Walk cut at {MAX_DEPTH} levels or {MAX_NODES} concept files.)\n"
+            "(Ancestors cut at {MAX_DEPTH} levels or {MAX_ANCESTORS} concepts.)\n"
+        ));
+    }
+    if loader.unread > 0 {
+        out.push_str(&format!(
+            "({} concept file(s) not read: at most {MAX_FILES_PER_READ} per read; counts marked + may be higher.)\n",
+            loader.unread
         ));
     }
     if loader.failed > 0 {
@@ -565,12 +627,13 @@ pub(crate) async fn concept_graph_block(
             loader.failed
         ));
     }
-    Some(format!("{BLOCK_START}\n{PREAMBLE}\n{out}{BLOCK_END}"))
+    Some(format!("{BLOCK_START}\n{out}{EDIT_HINT}\n{BLOCK_END}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use y_sweet_core::link_indexer::VirtualEntry;
 
     fn links(text: &str) -> Vec<Option<String>> {
         parse_parents(text).into_iter().map(|e| e.link).collect()
@@ -580,48 +643,89 @@ mod tests {
         v.iter().map(|s| Some(s.to_string())).collect()
     }
 
+    // The inputs below are the editor's (concept-graph.test.ts), so the two agree.
+
     #[test]
-    fn parses_block_list_quoted_or_not() {
+    fn concept_graph_rules_v1_1_block_list_until_the_next_key() {
         let text =
-            "---\nparent:\n  - \"[[A]]\"\n  - [[B|alias]]\n  - '[[../Concepts/C#x]]'\n---\n# T\n";
-        assert_eq!(links(text), some(&["A", "B", "../Concepts/C"]));
+            "---\nparent-concepts:\n  - \"[[A]]\"\n  - \"[[B]]\"\ntags:\n  - \"[[C]]\"\n---\n";
+        assert_eq!(links(text), some(&["A", "B"]));
     }
 
     #[test]
-    fn parses_single_value_and_flow_list() {
-        assert_eq!(links("---\nparent: \"[[A]]\"\n---\n"), some(&["A"]));
-        assert_eq!(links("---\nparent: [[A]]\n---\n"), some(&["A"]));
+    fn concept_graph_rules_v1_2_single_value() {
         assert_eq!(
-            links("---\nparent: [\"[[A]]\", \"[[B]]\"]\n---\n"),
+            links("---\nparent-concepts: \"[[A]]\"\n---\n"),
+            some(&["A"])
+        );
+    }
+
+    #[test]
+    fn concept_graph_rules_v1_3_flow_list() {
+        assert_eq!(
+            links("---\nparent-concepts: [\"[[A]]\", '[[B]]']\n---\n"),
             some(&["A", "B"])
         );
     }
 
     #[test]
-    fn stops_at_next_key_and_keeps_non_links_raw() {
-        let text = "---\ntitle: x\nparent:\n- \"[[A]]\"\n- Effective altruism\nskill-tree: topic\ntags:\n  - \"[[Not a parent]]\"\n---\n";
+    fn concept_graph_rules_v1_4_quoted_and_unquoted_links() {
+        let text =
+            "---\nparent-concepts:\n- [[A|alias]]\n- '[[B#h]]'\n- \"[[../Concepts/C]]\"\n---\n";
+        assert_eq!(links(text), some(&["A", "B", "../Concepts/C"]));
+        assert_eq!(links("---\nparent-concepts: [[A]]\n---\n"), some(&["A"]));
+    }
+
+    #[test]
+    fn concept_graph_rules_v1_5_trailing_comments() {
+        let text = "---\nparent-concepts:\n  - \"[[A]]\" # main\n  - [[B]]  # second\n  - \"[[C #x]]\"\n---\n";
+        assert_eq!(links(text), some(&["A", "B", "C"]));
         assert_eq!(
-            parse_parents(text),
-            vec![
-                ParentEntry {
-                    raw: "[[A]]".into(),
-                    link: Some("A".into())
-                },
-                ParentEntry {
-                    raw: "Effective altruism".into(),
-                    link: None
-                },
-            ]
+            links("---\nparent-concepts: \"[[A]]\" # only one\n---\n"),
+            some(&["A"])
         );
     }
 
     #[test]
-    fn only_frontmatter_counts() {
-        assert!(parse_parents("# T\nparent: \"[[A]]\"\n").is_empty());
-        assert!(parse_parents("---\nparent: \"[[A]]\"\n").is_empty());
+    fn concept_graph_rules_v1_6_frontmatter_only_first_key_raw_non_links() {
+        let text = "---\nparent-concepts:\n  - Plain text\n  - \"\"\nparent-concepts: \"[[Z]]\"\n---\nparent-concepts: \"[[Y]]\"\n";
         assert_eq!(
-            links("---\r\nparent:\r\n  - \"[[A]]\"\r\n---  \r\nx"),
+            parse_parents(text),
+            vec![ParentEntry {
+                raw: "Plain text".into(),
+                link: None
+            }]
+        );
+        assert!(parse_parents("# T\nparent-concepts: \"[[A]]\"\n").is_empty());
+        assert!(parse_parents("---\nparent-concepts: \"[[A]]\"\n").is_empty());
+        assert!(parse_parents("---\nparent: \"[[A]]\"\n---\n").is_empty());
+        assert_eq!(
+            links("---\r\nparent-concepts:\r\n  - \"[[A]]\"\r\n---  \r\nx"),
             some(&["A"])
+        );
+    }
+
+    #[test]
+    fn concept_graph_rules_v1_7_resolution_like_the_link_indexer() {
+        let entry = |path: &str, id: &str| VirtualEntry {
+            entry_type: "markdown".into(),
+            virtual_path: path.into(),
+            id: id.into(),
+            folder_idx: 0,
+        };
+        let entries = vec![
+            entry("/Lens Edu/Concepts/AI Control.md", "control"),
+            entry("/Lens Edu/Concepts/Monitoring.md", "mon"),
+            entry("/Lens Edu/articles/X.md", "art"),
+        ];
+        let index = VirtualTreeIndex::new(&entries);
+        let text = "---\nparent-concepts:\n  - \"[[ai control]]\"\n  - \"[[Lens Edu/Concepts/Monitoring]]\"\n  - \"[[AI Control]]\"\n  - \"[[../articles/X]]\"\n  - \"[[Missing]]\"\n---\n";
+        assert_eq!(
+            resolve_parents(text, "Lens Edu/Concepts/Low-stakes control.md", &index),
+            ResolvedParents {
+                parents: vec!["control".into(), "mon".into()],
+                unresolved: vec!["[[../articles/X]]".into(), "[[Missing]]".into()],
+            }
         );
     }
 
@@ -651,53 +755,40 @@ mod tests {
     }
 
     #[test]
-    fn multiple_parents_main_path_and_other_paths() {
+    fn multiple_parents_and_shortcut_edges() {
         let g = graph(&[
-            ("tm", &["low", "mon"]),
+            ("tm", &["low", "mon", "protocols"]),
             ("low", &["protocols"]),
             ("protocols", &["control"]),
         ]);
         let a = ancestors("tm", &g);
-        assert_eq!(a.main, ids(&["control", "protocols", "low"]));
-        assert_eq!(a.others, vec![ids(&["mon"])]);
+        let mut nodes = a.nodes.clone();
+        nodes.sort();
+        assert_eq!(nodes, ids(&["control", "low", "mon", "protocols"]));
         assert_eq!(a.cycle, None);
-        assert!(!a.cut);
-    }
-
-    #[test]
-    fn shortcut_edge_is_a_second_path() {
-        let g = graph(&[("A", &["B", "D"]), ("B", &["D"])]);
-        let a = ancestors("A", &g);
-        assert_eq!(a.main, ids(&["D", "B"]));
-        assert_eq!(a.others, vec![ids(&["D"])]);
-        assert_eq!(a.cycle, None);
+        assert_eq!(
+            main_path("tm", |id| g.get(id)),
+            ids(&["control", "protocols", "low"])
+        );
     }
 
     #[test]
     fn cycles_are_reported_and_never_hang() {
         let g = graph(&[("A", &["B"]), ("B", &["C"]), ("C", &["A"])]);
-        let a = ancestors("A", &g);
-        assert_eq!(a.main, ids(&["C", "B"]));
-        assert_eq!(a.cycle, Some(ids(&["A", "B", "C", "A"])));
-
+        assert_eq!(ancestors("A", &g).cycle, Some(ids(&["A", "B", "C", "A"])));
+        assert_eq!(main_path("A", |id| g.get(id)), ids(&["C", "B"]));
         let g = graph(&[("A", &["A", "B"])]);
-        let a = ancestors("A", &g);
-        assert_eq!(a.main, Vec::<String>::new());
-        assert_eq!(a.cycle, Some(ids(&["A", "A"])));
+        assert_eq!(ancestors("A", &g).cycle, Some(ids(&["A", "A"])));
     }
 
     #[test]
     fn caps_depth_and_files() {
-        let chain: Vec<(String, Vec<String>)> = (0..30)
-            .map(|i| (format!("n{i}"), vec![format!("n{}", i + 1)]))
-            .collect();
-        let g: HashMap<String, ResolvedParents> = chain
-            .into_iter()
-            .map(|(id, ps)| {
+        let g: HashMap<String, ResolvedParents> = (0..30)
+            .map(|i| {
                 (
-                    id,
+                    format!("n{i}"),
                     ResolvedParents {
-                        parents: ps,
+                        parents: vec![format!("n{}", i + 1)],
                         unresolved: vec![],
                     },
                 )
@@ -705,9 +796,9 @@ mod tests {
             .collect();
         let a = ancestors("n0", &g);
         assert!(a.cut);
-        assert_eq!(a.main.len(), MAX_DEPTH);
+        assert_eq!(a.nodes.len(), MAX_DEPTH);
 
-        let wide: Vec<String> = (0..MAX_NODES + 50).map(|i| format!("p{i}")).collect();
+        let wide: Vec<String> = (0..MAX_ANCESTORS + 10).map(|i| format!("p{i}")).collect();
         let g = HashMap::from([(
             "A".to_string(),
             ResolvedParents {
@@ -717,15 +808,32 @@ mod tests {
         )]);
         let a = ancestors("A", &g);
         assert!(a.cut);
-        assert!(a.nodes.len() <= MAX_NODES);
-        assert!(a.paths_cut);
+        assert!(a.nodes.len() <= MAX_ANCESTORS);
     }
 
     #[test]
     fn unloaded_files_are_pending() {
         let g = graph(&[("A", &["B"])]);
-        let a = build_ancestors("A", |id| g.get(id));
-        assert_eq!(a.pending, ids(&["B"]));
+        assert_eq!(build_ancestors("A", |id| g.get(id)).pending, ids(&["B"]));
+    }
+
+    #[test]
+    fn counts_distinct_concepts_below() {
+        let kids: HashMap<String, Vec<String>> = [
+            ("start", vec!["b", "c"]),
+            ("b", vec!["d"]),
+            ("c", vec!["d"]),
+            ("d", vec![]),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.into_iter().map(String::from).collect()))
+        .collect();
+        assert_eq!(count_below("start", &kids, "start"), (3, false));
+        assert_eq!(count_below("b", &kids, "start"), (1, false));
+        // "e" was never expanded: the count may be higher.
+        let mut cut = kids.clone();
+        cut.insert("d".into(), vec!["e".into()]);
+        assert_eq!(count_below("b", &cut, "start"), (2, true));
     }
 }
 
@@ -738,7 +846,7 @@ mod read_tests {
     use serde_json::json;
 
     fn fm(parents: &[&str], body: &str) -> String {
-        let mut s = String::from("---\nparent:\n");
+        let mut s = String::from("---\nparent-concepts:\n");
         for p in parents {
             s.push_str(&format!("  - \"[[{p}]]\"\n"));
         }
@@ -747,8 +855,11 @@ mod read_tests {
         s
     }
 
+    fn c(n: u32) -> String {
+        format!("c0000000-0000-4000-8000-{n:012}")
+    }
+
     fn fixture() -> Vec<(String, String, String)> {
-        let c = |n: u32| format!("c0000000-0000-4000-8000-0000000000{n:02}");
         vec![
             (
                 "/Concepts/AI Control.md".into(),
@@ -802,6 +913,11 @@ mod read_tests {
                 fm(&["Cycle A"], "# B\n"),
             ),
             (
+                "/Concepts/Only broken.md".into(),
+                c(9),
+                fm(&["Nowhere"], "# Only broken\n"),
+            ),
+            (
                 "/articles/Some article.md".into(),
                 "a0000000-0000-4000-8000-000000000001".into(),
                 "# Art\n\n[[../Concepts/Low-stakes control]]\n".into(),
@@ -809,8 +925,7 @@ mod read_tests {
         ]
     }
 
-    async fn server() -> Arc<Server> {
-        let files = fixture();
+    async fn server_with(files: &[(String, String, String)]) -> Arc<Server> {
         let entries: Vec<(&str, &str, &str)> = files
             .iter()
             .map(|(p, i, t)| (p.as_str(), i.as_str(), t.as_str()))
@@ -834,23 +949,28 @@ mod read_tests {
 
     #[tokio::test]
     async fn concept_read_starts_with_the_graph() {
-        let server = server().await;
+        let server = server_with(&fixture()).await;
         let out = read(&server, "Lens Edu/Concepts/Trusted monitoring.md", None).await;
         assert!(
-            out.starts_with(&format!("{BLOCK_START}\n{PREAMBLE}\n")),
+            out.starts_with(&format!("{BLOCK_START}\nParent concepts:\n")),
             "got: {out}"
         );
         let b = block(&out);
         assert!(
-            b.contains("Part of (main path): Lens Edu/Concepts/AI Control.md › …/Control protocols.md › …/Low-stakes control.md › this\n"),
+            b.contains(
+                "Parent concepts:\n  - Lens Edu/Concepts/Low-stakes control.md (primary) — up: Lens Edu/Concepts/Control protocols.md › Lens Edu/Concepts/AI Control.md\n  - Lens Edu/Concepts/Monitoring and interpretability.md — top-level\n  - Lens Edu/Concepts/Control protocols.md — up: Lens Edu/Concepts/AI Control.md\n"
+            ),
             "got: {b}"
         );
-        // The second parent (top-level) and the shortcut to Control protocols.
-        assert!(b.contains("Other paths:\n  Lens Edu/Concepts/Monitoring and interpretability.md › this\n  Lens Edu/Concepts/AI Control.md › …/Control protocols.md › this\n"), "got: {b}");
-        assert!(b.contains("Direct parents: Lens Edu/Concepts/Low-stakes control.md, Lens Edu/Concepts/Monitoring and interpretability.md, Lens Edu/Concepts/Control protocols.md (edit them"), "got: {b}");
-        assert!(b.contains("Unresolved `parent:` entries (not a wikilink to a file in Lens Edu/Concepts): \"[[Missing concept]]\""), "got: {b}");
-        assert!(b.contains("Direct children: none\n"));
-        assert!(b.ends_with(BLOCK_END) || out.contains(&format!("{BLOCK_END}\n\n     1\t---")));
+        assert!(
+            b.contains("Parent not found: [[Missing concept]] (not a wikilink to a file in Lens Edu/Concepts)"),
+            "got: {b}"
+        );
+        assert!(!b.contains("Child concepts"), "got: {b}");
+        assert!(
+            out.contains(&format!("{EDIT_HINT}\n{BLOCK_END}")),
+            "got: {out}"
+        );
         // The file's own lines are numbered as without the block.
         assert!(
             out.contains(&format!("{BLOCK_END}\n\n     1\t---\n")),
@@ -859,57 +979,92 @@ mod read_tests {
     }
 
     #[tokio::test]
-    async fn children_are_backlinkers_that_name_it_as_parent() {
-        let server = server().await;
+    async fn children_are_backlinkers_that_name_it_as_parent_with_counts() {
+        let server = server_with(&fixture()).await;
         let out = read(&server, "Lens Edu/Concepts/Control protocols.md", None).await;
-        let b = block(&out);
-        // Sorted by name; Low-stakes links High-stakes in its text, which does not make it a child there.
+        // Low-stakes links High-stakes in its text, which does not make it a child there.
         assert!(
-            b.contains("Direct children: Lens Edu/Concepts/High-stakes control.md, Lens Edu/Concepts/Low-stakes control.md, Lens Edu/Concepts/Trusted monitoring.md (each child"),
+            block(&out).contains(
+                "Child concepts:\n  - Lens Edu/Concepts/High-stakes control.md\n  - Lens Edu/Concepts/Low-stakes control.md (+1 below)\n  - Lens Edu/Concepts/Trusted monitoring.md\n"
+            ),
+            "got: {out}"
+        );
+        let out = read(&server, "Lens Edu/Concepts/AI Control.md", None).await;
+        let b = block(&out);
+        assert!(
+            b.contains("Parent concepts: none (top-level concept)\n"),
             "got: {b}"
         );
-        let out = read(&server, "Lens Edu/Concepts/High-stakes control.md", None).await;
         assert!(
-            block(&out).contains("Direct children: none\n"),
-            "got: {out}"
+            b.contains("Child concepts:\n  - Lens Edu/Concepts/Control protocols.md (+3 below)\n"),
+            "got: {b}"
         );
         // An article linking a concept is not its child.
         let out = read(&server, "Lens Edu/Concepts/Low-stakes control.md", None).await;
         assert!(
-            block(&out).contains("Direct children: Lens Edu/Concepts/Trusted monitoring.md ("),
+            block(&out).contains("Child concepts:\n  - Lens Edu/Concepts/Trusted monitoring.md\n"),
             "got: {out}"
         );
     }
 
     #[tokio::test]
-    async fn top_level_concept() {
-        let server = server().await;
-        let out = read(&server, "Lens Edu/Concepts/AI Control.md", None).await;
-        let b = block(&out);
+    async fn only_unresolved_parents_is_not_top_level() {
+        let server = server_with(&fixture()).await;
+        let b = read(&server, "Lens Edu/Concepts/Only broken.md", None).await;
         assert!(
-            b.contains("Part of: nothing — a top-level concept"),
+            b.contains("Parent concepts: none resolved\nParent not found: [[Nowhere]]"),
             "got: {b}"
         );
-        assert!(!b.contains("Direct parents"));
-        assert!(b.contains("Direct children: Lens Edu/Concepts/Control protocols.md ("));
+        assert!(!b.contains("top-level"), "got: {b}");
     }
 
     #[tokio::test]
     async fn cycle_is_shown_not_followed() {
-        let server = server().await;
+        let server = server_with(&fixture()).await;
         let out = read(&server, "Lens Edu/Concepts/Cycle A.md", None).await;
         let b = block(&out);
-        assert!(b.contains("Cycle in `parent:` links (invalid"), "got: {b}");
-        assert!(b.contains("Lens Edu/Concepts/Cycle A.md › Lens Edu/Concepts/Cycle B.md › Lens Edu/Concepts/Cycle A.md"), "got: {b}");
         assert!(
-            b.contains("Part of (main path): Lens Edu/Concepts/Cycle B.md › this\n"),
+            b.contains("A cycle runs through this file (invalid — a concept cannot be part of itself): Lens Edu/Concepts/Cycle A.md › Lens Edu/Concepts/Cycle B.md › Lens Edu/Concepts/Cycle A.md\n"),
             "got: {b}"
+        );
+        assert!(
+            b.contains("  - Lens Edu/Concepts/Cycle B.md — up: Lens Edu/Concepts/Cycle A.md\n"),
+            "got: {b}"
+        );
+    }
+
+    #[tokio::test]
+    async fn child_candidates_are_capped_with_a_note() {
+        let mut files = vec![(
+            "/Concepts/Hub.md".to_string(),
+            c(100),
+            "# Hub\n".to_string(),
+        )];
+        for i in 0..MAX_CHILD_CANDIDATES + 5 {
+            files.push((
+                format!("/Concepts/Spoke {i:03}.md"),
+                c(200 + i as u32),
+                fm(&["Hub"], "# Spoke\n"),
+            ));
+        }
+        let server = server_with(&files).await;
+        let out = read(&server, "Lens Edu/Concepts/Hub.md", None).await;
+        let b = block(&out);
+        assert!(
+            b.contains(
+                "(5 more concept file(s) link here but were not read; use get_links to list them.)"
+            ),
+            "got: {b}"
+        );
+        assert_eq!(
+            b.matches("  - Lens Edu/Concepts/Spoke").count(),
+            MAX_CHILD_CANDIDATES
         );
     }
 
     #[tokio::test]
     async fn only_first_chunk_and_only_concept_files() {
-        let server = server().await;
+        let server = server_with(&fixture()).await;
         let out = read(&server, "Lens Edu/Concepts/Trusted monitoring.md", Some(3)).await;
         assert!(!out.contains(BLOCK_START), "got: {out}");
         let out = read(&server, "Lens Edu/articles/Some article.md", None).await;

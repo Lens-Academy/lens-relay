@@ -84,7 +84,7 @@ const MAX_CONCEPT_FILES_TOTAL: usize = 80;
 /// Sources of a lens whose rows are shown (rule #8 lets the relay cap them).
 const MAX_LENS_SOURCES: usize = 8;
 /// Concept files loaded at once.
-const LOAD_CONCURRENCY: usize = 4;
+pub(super) const LOAD_CONCURRENCY: usize = 4;
 
 pub(super) fn is_md(path: &str) -> bool {
     without_terminal_md(path).len() != path.len()
@@ -610,6 +610,16 @@ async fn concept_backlinkers(
     candidates.sort_by(|a, b| a.1.cmp(&b.1));
     candidates.dedup();
     candidates
+}
+
+/// The concept files (uuid, resolver path) linking to `target_uuid`, sorted
+/// by path: [`concept_backlinkers`] for the concepts folder.
+pub(super) async fn concepts_linking_to(
+    server: &Arc<Server>,
+    folder_doc_id: &str,
+    target_uuid: &str,
+) -> Vec<(String, String)> {
+    concept_backlinkers(server, &CONCEPT_ROW_RULES[0], folder_doc_id, target_uuid).await
 }
 
 /// The rows about the file `target_uuid` among its concept backlinkers

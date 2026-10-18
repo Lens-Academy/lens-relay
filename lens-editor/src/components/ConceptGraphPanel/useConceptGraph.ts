@@ -5,19 +5,17 @@ import { useBacklinksVersion } from '../../hooks/useBacklinksVersion';
 import { backlinkSources } from '../../lib/backlinks';
 import { uuidToPathIndex } from '../../lib/uuid-to-path';
 import { basenameOf } from '../../lib/course-tree';
+import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import {
-  CONCEPTS_FOLDER,
   buildAncestors,
-  buildDescendants,
-  childrenOf,
   isConceptPath,
   resolveParents,
+  sameParents,
+  walkBelow,
   type Ancestors,
-  type Children,
-  type Descendants,
+  type Below,
   type ParentsOf,
   type ResolvedParents,
-  type TreeNode,
 } from '../../lib/concept-graph';
 import { useSnapshots } from '../ConceptRowsPanel/useConceptRows';
 
@@ -25,44 +23,42 @@ export interface ConceptGraph {
   /** The opened file's own parents (live from its text). */
   own: ResolvedParents;
   ancestors: Ancestors;
-  children: Children;
-  /** Only while `withDescendants`. */
-  descendants: Descendants | null;
+  /** Everything below, within the caps (children of each concept reached). */
+  below: Below;
   /** Concept files that could not be read (counted as having no parents). */
   failed: number;
+  parentsOf: ParentsOf;
   nameOf: (id: string) => string;
   pathOf: (id: string) => string | undefined;
 }
 
-/** The opened file's text, kept live. */
-function useLiveText(ytext: Y.Text): string {
-  const [text, setText] = useState(() => ytext.toString());
+/**
+ * The opened file's parents, from its live text, as state that changes only
+ * when the resolved or unresolved lists change, so typing elsewhere in the
+ * file does not recompute the graph.
+ */
+function useOwnParents(ytext: Y.Text, path: string, metadata: FolderMetadata): ResolvedParents {
+  const [own, setOwn] = useState<ResolvedParents>(() => resolveParents(ytext.toString(), path, metadata));
   useEffect(() => {
-    const update = () => setText(ytext.toString());
+    const update = () => {
+      const next = resolveParents(ytext.toString(), path, metadata);
+      setOwn((prev) => (sameParents(prev, next) ? prev : next));
+    };
     update();
     ytext.observe(update);
     return () => ytext.unobserve(update);
-  }, [ytext]);
-  return text;
-}
-
-function treeIds(nodes: readonly TreeNode[], out: string[] = []): string[] {
-  for (const n of nodes) {
-    if (n.repeat) continue;
-    out.push(n.id);
-    treeIds(n.children, out);
-  }
-  return out;
+  }, [ytext, path, metadata]);
+  return own;
 }
 
 /**
  * The concept graph around the opened concept file `self` (bare uuid) at
- * `path`: its parents from its own (live) text; ancestors, children and, on
- * request, descendants from the other concept files, read as the relationships
- * panel reads them (cached snapshots, lib/embed-docs.ts). Children are the
- * file's backlinkers in the concepts folder whose `parent:` resolves to it.
- * Files are read as the walks reach them, so the result fills in over a few
- * renders; every walk is capped (lib/concept-graph.ts).
+ * `path`: its parents from its own (live) text; ancestors and everything
+ * below from the other concept files, read as the relationships panel reads
+ * them (cached snapshots, lib/embed-docs.ts). Children are the backlinkers in
+ * the concepts folder whose parents include the file, looked up as the walk
+ * reaches each concept. Files are read as the walks reach them, so the result
+ * fills in over a few renders; every walk is capped (lib/concept-graph.ts).
  */
 export function useConceptGraph(
   self: string,
@@ -70,25 +66,16 @@ export function useConceptGraph(
   ytext: Y.Text,
   /** The panel is open: keep the files fresh. */
   refreshing: boolean,
-  withDescendants: boolean,
 ): ConceptGraph {
   const { metadata, folderDocs } = useNavigation();
   const backlinksVersion = useBacklinksVersion(folderDocs);
   const pathIndex = uuidToPathIndex(metadata);
-  const ownText = useLiveText(ytext);
-  const own = useMemo(() => resolveParents(ownText, path, metadata), [ownText, path, metadata]);
+  const own = useOwnParents(ytext, path, metadata);
 
-  // Concept backlinkers of every concept file, computed once per change.
-  const candidatesById = useMemo(() => {
+  const candidatesOf = useMemo(() => {
     void backlinksVersion;
-    const concepts = Object.entries(metadata).filter(([p]) => isConceptPath(p)).map(([, m]) => m.id);
-    const isConcept = (id: string) => {
-      const p = pathIndex.get(id);
-      return !!p && p.startsWith(CONCEPTS_FOLDER) && isConceptPath(p);
-    };
-    return new Map(concepts.map((id) => [id, backlinkSources(id, folderDocs.values()).filter(isConcept)]));
-  }, [metadata, folderDocs, backlinksVersion, pathIndex]);
-  const candidatesOf = useCallback((id: string) => candidatesById.get(id) ?? [], [candidatesById]);
+    return (id: string) => backlinkSources(id, folderDocs.values()).filter((s) => isConceptPath(pathIndex.get(s)));
+  }, [folderDocs, backlinksVersion, pathIndex]);
 
   // Which files to read grows as the walks reach further (texts → ids → texts).
   const [ids, setIds] = useState<string[]>([]);
@@ -111,33 +98,20 @@ export function useConceptGraph(
     return undefined;
   }, [self, own, parentsById, failed, pathIndex]);
 
-  const nameOf = useMemo(() => (id: string) => {
+  const nameOf = useCallback((id: string) => {
     const p = pathIndex.get(id);
     return p ? basenameOf(p) : id;
   }, [pathIndex]);
 
   const ancestors = useMemo(() => buildAncestors(self, parentsOf), [self, parentsOf]);
-  const children = useMemo(() => {
-    const out = childrenOf(self, candidatesOf(self), parentsOf);
-    out.ids.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
-    return out;
-  }, [self, candidatesOf, parentsOf, nameOf]);
-  const descendants = useMemo(
-    () => (withDescendants ? buildDescendants(self, candidatesOf, parentsOf, nameOf) : null),
-    [withDescendants, self, candidatesOf, parentsOf, nameOf],
-  );
+  const below = useMemo(() => walkBelow(self, candidatesOf, parentsOf, nameOf), [self, candidatesOf, parentsOf, nameOf]);
 
   const wanted = useMemo(() => {
-    const set = new Set<string>([...ancestors.nodes, ...candidatesOf(self)]);
-    if (descendants) {
-      for (const id of treeIds(descendants.tree)) {
-        set.add(id);
-        for (const c of candidatesOf(id)) set.add(c);
-      }
-    }
+    const set = new Set<string>(ancestors.nodes);
+    for (const id of below.kids.keys()) for (const c of candidatesOf(id)) set.add(c);
     set.delete(self);
     return [...set].sort();
-  }, [ancestors, descendants, candidatesOf, self]);
+  }, [ancestors, below, candidatesOf, self]);
   // Adjusted during render (React's "storing information from previous
   // renders"), so no extra effect pass per level.
   if (ids.join(',') !== wanted.join(',')) setIds(wanted);
@@ -145,9 +119,9 @@ export function useConceptGraph(
   return {
     own,
     ancestors,
-    children,
-    descendants,
+    below,
     failed: ids.filter((id) => failed.has(id) && !texts.has(id)).length,
+    parentsOf,
     nameOf,
     pathOf: (id) => pathIndex.get(id),
   };

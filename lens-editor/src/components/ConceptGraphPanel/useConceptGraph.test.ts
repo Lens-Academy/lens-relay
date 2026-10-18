@@ -12,10 +12,10 @@ afterEach(() => {
 
 const md = (id: string) => ({ id, type: 'markdown' as const, version: 0 });
 const fm = (...parents: string[]) =>
-  `---\nparent:\n${parents.map((p) => `  - "[[${p}]]"`).join('\n')}\n---\n# x\n`;
+  `---\nparent-concepts:\n${parents.map((p) => `  - "[[${p}]]"`).join('\n')}\n---\n# x\n`;
 
 describe('useConceptGraph', () => {
-  it('reads ancestors level by level, keeps only real children, and walks descendants on request', async () => {
+  it('reads ancestors level by level, keeps only real children, and walks below', async () => {
     // tm ⊂ low ⊂ protocols ⊂ control, tm ⊂ mon; high links low in its text only;
     // an article links low.
     const texts: Record<string, string> = {
@@ -50,21 +50,24 @@ describe('useConceptGraph', () => {
     const ytext = new Y.Doc().getText('contents');
     ytext.insert(0, fm('Control protocols'));
 
-    const { result, rerender } = renderHook(
-      ({ below }) => useConceptGraph('low', '/Lens Edu/Concepts/Low-stakes control.md', ytext, true, below),
-      { wrapper, initialProps: { below: false } },
+    const { result } = renderHook(
+      () => useConceptGraph('low', '/Lens Edu/Concepts/Low-stakes control.md', ytext, true),
+      { wrapper },
     );
     await waitFor(() => expect(result.current.ancestors.main).toEqual(['control', 'protocols']));
-    await waitFor(() => expect(result.current.children.pending).toEqual([]));
-    expect(result.current.children.ids).toEqual(['tm']); // not high (text link), not the article
-    expect(result.current.descendants).toBeNull();
+    await waitFor(() => expect(result.current.below.pending).toEqual([]));
+    expect(result.current.below.kids.get('low')).toEqual(['tm']); // not high (text link), not the article
+    expect(result.current.below.kids.get('tm')).toEqual([]);
 
-    rerender({ below: true });
-    await waitFor(() => expect(result.current.descendants?.count).toBe(1));
+    // Typing outside the frontmatter keeps the same parents object (no recompute).
+    const before = result.current.own;
+    ytext.insert(ytext.length, 'More text.\n');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(result.current.own).toBe(before);
 
     // The opened file's parents follow its live text.
     ytext.insert(ytext.toString().indexOf('---\n# x'), '  - "[[Monitoring]]"\n');
     await waitFor(() => expect(result.current.own.parents).toEqual(['protocols', 'mon']));
-    expect(result.current.ancestors.others).toEqual([['mon']]);
+    expect(new Set(result.current.ancestors.nodes)).toEqual(new Set(['protocols', 'control', 'mon']));
   });
 });

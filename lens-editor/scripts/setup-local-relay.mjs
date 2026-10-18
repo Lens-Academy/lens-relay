@@ -862,7 +862,7 @@ source::
         type: 'markdown',
         version: 0,
         content: `---
-parent:
+parent-concepts:
   - "[[Control protocols]]"
 ---
 # Low-stakes control
@@ -919,7 +919,7 @@ An AI system that lets itself be corrected. Not covered by [[../articles/sample-
 ## Relationships
 `,
       },
-      // Concept graph: concept files list their broader concepts in `parent:`
+      // Concept graph: concept files list their broader concepts in `parent-concepts:`
       // frontmatter (a DAG with multiple parents, a shortcut edge — Trusted
       // monitoring is also directly under Control protocols — and depth 4
       // from Collusion), shown in the concept graph header (src/lib/concept-graph.ts).
@@ -942,7 +942,7 @@ Making AI systems safe to use even if they are trying to subvert our safety meas
         type: 'markdown',
         version: 0,
         content: `---
-parent:
+parent-concepts:
   - "[[AI Control]]"
 skill-tree: topic
 ---
@@ -957,7 +957,7 @@ Procedures that combine trusted and untrusted models, monitoring and auditing to
         type: 'markdown',
         version: 0,
         content: `---
-parent:
+parent-concepts:
   - "[[Control protocols]]"
 ---
 # High-stakes control
@@ -984,7 +984,7 @@ Watching what a model does and looking inside it to tell when it misbehaves.
         type: 'markdown',
         version: 0,
         content: `---
-parent:
+parent-concepts:
   - "[[Low-stakes control]]"
   - "[[Monitoring and interpretability]]"
   - "[[Control protocols]]"
@@ -1000,7 +1000,7 @@ A weaker, trusted model scores each action of the untrusted model; the most susp
         type: 'markdown',
         version: 0,
         content: `---
-parent:
+parent-concepts:
   - "[[Low-stakes control]]"
   - "[[Monitoring and interpretability]]"
 ---
@@ -1015,7 +1015,7 @@ Another copy of the untrusted model acts as the monitor. Stronger than trusted m
         type: 'markdown',
         version: 0,
         content: `---
-parent:
+parent-concepts:
   - "[[Untrusted monitoring]]"
 ---
 # Collusion
@@ -1108,7 +1108,7 @@ Untrusted models coordinating, for example a monitor letting its copy's bad acti
         id: 'ed00002a-0000-4000-8000-0000000000ca',
         type: 'markdown',
         version: 0,
-        content: "---\nparent:\n  - \"[[AI Control]]\"\n---\n# Conservative assumptions in AI control\n\nControl research assumes the model is actively trying to subvert safety measures, and asks what still works.\n\n## Relationships\n\n### [[../articles/roger-rogue-internal-deployments-via-external-apis]]\nApplies the conservative assumption to one concrete threat. Good second reading after an intro.\n\n### [[../Lenses/shlegeris-thoughts-on-the-conservative-assumptions-in-ai-control]]\nThe lens is the intro we were missing: it states the assumption, says why it is conservative rather than pessimistic, and only then turns to the Roger article as a worked example.\n\nKeep the order. An earlier draft put the article first and readers took \"assume the model is scheming\" as a prediction rather than a design choice.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nOne paragraph says the assumptions are being tested now. Quotable, not teachable.\n\n### [[../video_transcripts/3blue1brown-but-what-is-a-neural-network-deep-learning-chapter-1]]\nBackground only: nothing on control. Listed so nobody searches it again.\n",
+        content: "---\nparent-concepts:\n  - \"[[AI Control]]\"\n---\n# Conservative assumptions in AI control\n\nControl research assumes the model is actively trying to subvert safety measures, and asks what still works.\n\n## Relationships\n\n### [[../articles/roger-rogue-internal-deployments-via-external-apis]]\nApplies the conservative assumption to one concrete threat. Good second reading after an intro.\n\n### [[../Lenses/shlegeris-thoughts-on-the-conservative-assumptions-in-ai-control]]\nThe lens is the intro we were missing: it states the assumption, says why it is conservative rather than pessimistic, and only then turns to the Roger article as a worked example.\n\nKeep the order. An earlier draft put the article first and readers took \"assume the model is scheming\" as a prediction rather than a design choice.\n\n### [[../articles/greenblatt-if-mythos-actually-made-anthropic-employees-4x-more-productive-i-would-radically-shorten-my-timelines]]\nOne paragraph says the assumptions are being tested now. Quotable, not teachable.\n\n### [[../video_transcripts/3blue1brown-but-what-is-a-neural-network-deep-learning-chapter-1]]\nBackground only: nothing on control. Listed so nobody searches it again.\n",
       },
       // A video transcript with rows, and a lens that has it and an article as sources.
       {
