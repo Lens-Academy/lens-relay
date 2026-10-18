@@ -137,8 +137,9 @@ export const noteEmbeds = [
 export const MAX_PREVIEW_CHARS = 20_000;
 
 /** How an embedded file is rendered, read-only or live: the main editor's
- *  Markdown live preview, so it reads as part of the page. */
-function embedViewExtensions(canAcceptReject: boolean) {
+ *  Markdown live preview, so it reads as part of the page. Concept rows
+ *  (components/ConceptRowsPanel) render the same way. */
+export function embedViewExtensions(canAcceptReject: boolean) {
   return [
     indentUnit.of('\t'),
     EditorState.tabSize.of(4),

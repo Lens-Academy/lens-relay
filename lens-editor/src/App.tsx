@@ -587,7 +587,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
             <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef, openQuickSwitcher }}>
           <div ref={outerRef as RefObject<HTMLDivElement>} className="h-dvh flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}
-            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
+            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between gap-4 px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
               <div className="flex items-center gap-6 min-w-0">
                 {!isMobile && <button
                   onClick={() => manager.toggle('left-sidebar')}
@@ -603,7 +603,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                 {(headerStage === 'full' || headerStage === 'compact-toggles') && (
                   <h1 className="whitespace-nowrap text-lg font-semibold text-gray-900">Lens Relay Editor</h1>
                 )}
-                <div id="header-breadcrumb" />
+                <div id="header-breadcrumb" className="flex min-w-0" />
               </div>
               <div className="flex items-center gap-4 flex-shrink-0">
                 <div id="header-controls" className="flex items-center gap-4" />

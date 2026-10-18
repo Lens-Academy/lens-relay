@@ -247,6 +247,13 @@
 }
 .cm-note-embed-more[hidden] { display: none; }
 
+/* Concepts panel (components/ConceptRowsPanel), a block widget in the main
+   editor: normal text flow, and its long, ellipsised names must not widen the
+   editor's content (their full width would count as its minimum width). The
+   row editors' own styles are in rowEditorTheme (ConceptRowCard.tsx). */
+.concept-rows-panel { white-space: normal; contain: inline-size; }
+.concept-row-body .cm-gutters { display: none; }
+
 /* Image preview widget */
 .cm-image-widget {
   display: inline-block;

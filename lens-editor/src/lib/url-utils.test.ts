@@ -6,6 +6,7 @@ import {
   docIdFromUrlParam,
   shortUuid,
   openDocInNewTab,
+  isPlainLeftClick,
 } from './url-utils';
 
 const RELAY_ID = 'cb696037-0f72-4e93-8717-4e433129d789';
@@ -87,5 +88,21 @@ describe('docIdFromUrlParam', () => {
 
   it('builds short compound ID from short URL param UUID', () => {
     expect(docIdFromUrlParam(SHORT, RELAY_ID)).toBe(`${RELAY_ID}-${SHORT}`);
+  });
+});
+
+describe('isPlainLeftClick', () => {
+  const click = { button: 0, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false };
+
+  it('is true for a left click without modifiers', () => {
+    expect(isPlainLeftClick(click)).toBe(true);
+  });
+
+  it('leaves modified and middle clicks to the browser', () => {
+    expect(isPlainLeftClick({ ...click, ctrlKey: true })).toBe(false);
+    expect(isPlainLeftClick({ ...click, metaKey: true })).toBe(false);
+    expect(isPlainLeftClick({ ...click, shiftKey: true })).toBe(false);
+    expect(isPlainLeftClick({ ...click, altKey: true })).toBe(false);
+    expect(isPlainLeftClick({ ...click, button: 1 })).toBe(false);
   });
 });

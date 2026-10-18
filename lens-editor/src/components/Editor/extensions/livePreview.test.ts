@@ -213,6 +213,36 @@ describe('livePreview - horizontal rules', () => {
   });
 });
 
+describe('livePreview - wikilinks in headings', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  /** The heading level each rendered wikilink sits in (null: none). */
+  function linkHeadingLevels(content: string): Array<string | null> {
+    const { view, cleanup: c } = createTestEditor(content, content.length);
+    cleanup = c;
+    return [...view.dom.querySelectorAll('.cm-wikilink-widget')].map(
+      (el) => el.closest('[class*="cm-heading-"]:not(.cm-line)')?.className.match(/cm-heading-\d/)?.[0] ?? null,
+    );
+  }
+
+  it('sizes a heading that is only a wikilink like the heading', () => {
+    expect(linkHeadingLevels('### [[../articles/x]]\n\nText')).toEqual(['cm-heading-3']);
+  });
+
+  it('sizes a wikilink with text before or after it, or a trailing space', () => {
+    expect(linkHeadingLevels('## a [[x]]\n\n### [[y]] b\n\n#### [[z]] \n\nText'))
+      .toEqual(['cm-heading-2', 'cm-heading-3', 'cm-heading-4']);
+  });
+
+  it('sizes an aliased wikilink heading', () => {
+    expect(linkHeadingLevels('# [[x|Alias]]\n\nText')).toEqual(['cm-heading-1']);
+  });
+});
+
 describe('livePreview - hashtags', () => {
   let cleanup: () => void;
 

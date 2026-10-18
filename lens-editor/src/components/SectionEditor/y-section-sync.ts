@@ -30,17 +30,43 @@ export class YSectionSyncConfig {
   public readonly ytext: Y.Text;
   public readonly undoManager: Y.UndoManager;
   public readonly awareness: Awareness | null;
+  /** Insert a line break before or after the section with the first local
+   *  edit (in the same transaction), then never again. */
+  public lineBreakOnFirstEdit: 'before' | 'after' | null;
+  /** Inserts by others at the section's end that start a new line are outside it. */
+  public readonly endExclusive: boolean;
 
-  constructor(ytext: Y.Text, sectionFrom: number, sectionTo: number, awareness?: Awareness) {
+  constructor(ytext: Y.Text, sectionFrom: number, sectionTo: number, awareness?: Awareness, opts: SectionSyncOptions = {}) {
     this.ytext = ytext;
     this.sectionFrom = sectionFrom;
     this.sectionTo = sectionTo;
     this.awareness = awareness ?? null;
+    this.lineBreakOnFirstEdit = opts.lineBreakOnFirstEdit ?? null;
+    this.endExclusive = opts.endExclusive ?? false;
     this.undoManager = new Y.UndoManager(ytext, {
       // Only track changes within our section origin
       trackedOrigins: new Set([this]),
     });
   }
+}
+
+export interface SectionSyncOptions {
+  /**
+   * A section with no line of its own (an empty concept row right before the
+   * next heading, or at the end of its own heading line at the end of the
+   * file) gets one with the first edit: a line break inserted 'after' it
+   * (before the next heading) or 'before' it (after its heading). Opening it
+   * without editing writes nothing.
+   */
+  lineBreakOnFirstEdit?: 'before' | 'after';
+  /**
+   * Inserts by others exactly at the section's end that start a new line go
+   * after it, not into it: a row appended at the end of the file, or one
+   * inserted right before the next heading, stays out of an open row. Text
+   * that continues the section's last line (" world" after "Hello") still
+   * counts as inside, as does this editor's own undo.
+   */
+  endExclusive?: boolean;
 }
 
 /** Facet to retrieve the config from editor state. */
@@ -114,7 +140,10 @@ class YSectionSyncPluginValue {
             typeof d.insert === 'string' ? d.insert : '';
           const insertLen = insertText.length;
 
-          if (pos >= this.conf.sectionFrom && pos <= this.conf.sectionTo) {
+          const atEnd = pos === this.conf.sectionTo;
+          const endIsOutside = this.conf.endExclusive && tr.origin !== this.conf.undoManager
+            && insertText.startsWith('\n');
+          if (pos >= this.conf.sectionFrom && (pos < this.conf.sectionTo || (atEnd && !endIsOutside))) {
             // Insert within section (inclusive boundaries so undo of
             // deletes at section start/end correctly updates the view)
             const cmPos = pos - this.conf.sectionFrom;
@@ -154,6 +183,14 @@ class YSectionSyncPluginValue {
     const conf = this.conf;
 
     ytext.doc!.transact(() => {
+      if (conf.lineBreakOnFirstEdit === 'after') {
+        ytext.insert(conf.sectionTo, '\n');
+      } else if (conf.lineBreakOnFirstEdit === 'before') {
+        ytext.insert(conf.sectionFrom, '\n');
+        conf.sectionFrom += 1;
+        conf.sectionTo += 1;
+      }
+      conf.lineBreakOnFirstEdit = null;
       let adj = 0;
       update.changes.iterChanges((fromA, toA, _fromB, _toB, insert) => {
         const insertText = insert.sliceString(0, insert.length, '\n');
@@ -185,9 +222,9 @@ export function ySectionSync(
   ytext: Y.Text,
   sectionFrom: number,
   sectionTo: number,
-  opts?: { awareness?: Awareness },
+  opts?: { awareness?: Awareness } & SectionSyncOptions,
 ): Extension {
-  const conf = new YSectionSyncConfig(ytext, sectionFrom, sectionTo, opts?.awareness);
+  const conf = new YSectionSyncConfig(ytext, sectionFrom, sectionTo, opts?.awareness, opts);
   const extensions: Extension[] = [ySectionSyncFacet.of(conf), ySectionSyncPlugin];
 
   if (opts?.awareness) {
