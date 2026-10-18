@@ -331,6 +331,10 @@ frame. While audio plays a click jumps to the sentence; otherwise clicks behave 
   and its in-file "Highlight recent changes" overlay. Page excerpts are built server-side
   (`crates/relay/src/recent_excerpts.rs`) on every index refresh.
 
+**Concept relationships in MCP `read`** (`crates/relay/src/mcp/tools/concept_rows.rs`): a `read` of a Lens Edu article,
+video transcript or lens starts with the rows about it from `Lens Edu/Concepts/` files. The row rules are shared with the
+editor and the platform validator; see `docs/concept-relationships.md` before changing them.
+
 **Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
 `edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's
 Jev writing checks on the paragraphs it changed (`POST /api/content/course-checks`), after the

@@ -1,4 +1,5 @@
 pub mod blob;
+pub mod concept_rows;
 pub mod course_checks;
 pub mod create_doc;
 pub mod critic_diff;
@@ -73,7 +74,7 @@ pub fn tool_definitions(writable: bool, can_delete: bool) -> Vec<Value> {
         }),
         json!({
             "name": "read",
-            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256; .svg attachments come back as their XML text.",
+            "description": "Reads a document from the knowledge base. Returns content with line numbers (cat -n format). Supports partial reads via offset and limit. Image attachments (png, jpg, jpeg, gif, webp up to 5 MiB) come back as an image content block you can look at, preceded by a line with the path, byte size and sha256; .svg attachments come back as their XML text. In Lens Edu, reading an article, video transcript or lens first shows its concept relationships (rows from Lens Edu/Concepts/ files) in a block marked as context, not part of the file; edit them in the concept file.",
             "inputSchema": {
                 "type": "object",
                 "required": ["file_path", "session_id"],
