@@ -24,6 +24,7 @@ import { PresencePanel } from '../PresencePanel/PresencePanel';
 import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
+import { ConceptRowsPanel } from '../ConceptRowsPanel';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
@@ -520,6 +521,9 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
             <div className="mx-6 border-b border-gray-200" />
           </div>
           <SyncedFileBanner />
+          <div className="max-w-[700px] mx-auto w-full">
+            <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} />
+          </div>
           {isSourceMode && isSuggestionMode && (
             <SourceSuggestionBanner />
           )}

@@ -846,6 +846,63 @@ content::
 source:: 
 `,
       },
+      // Concept files: rows ("### [[link]]" under "## Considered") about the
+      // sample article and the Demo Lens, shown in the Concepts panel at the
+      // top of those files (src/lib/concept-rows.ts).
+      {
+        path: '/Concepts',
+        id: 'ed000018-0000-4000-8000-0000000000b8',
+        type: 'folder',
+        version: 0,
+        content: null,
+      },
+      {
+        path: '/Concepts/Low-stakes control.md',
+        id: 'ed000019-0000-4000-8000-0000000000b9',
+        type: 'markdown',
+        version: 0,
+        content: `# Low-stakes control
+
+Control where no single bad action is catastrophic. Contrast [[High-stakes control]].
+
+## Considered
+
+### [[../articles/sample-existing-article]]
+Best intro we have. §2 is the explanation; §4 drifts into high-stakes territory and should be cut from any excerpt we use.
+
+Checked again in October: still the clearest framing.
+
+### [[../Lenses/Demo Lens]]
+Uses §1–3 of the sample article. Chat prompt needs work.
+`,
+      },
+      {
+        path: '/Concepts/Feedback loops.md',
+        id: 'ed00001a-0000-4000-8000-0000000000ba',
+        type: 'markdown',
+        version: 0,
+        content: `# Feedback loops
+
+How outputs of a process feed back into its inputs. The [[../Lenses/Demo Lens]] touches on it in passing.
+
+## Considered
+
+### [[../articles/sample-existing-article|Sample article]]
+Uses the term once in passing. Came up in search; not an explanation.
+`,
+      },
+      {
+        path: '/Concepts/Corrigibility.md',
+        id: 'ed00001b-0000-4000-8000-0000000000bb',
+        type: 'markdown',
+        version: 0,
+        content: `# Corrigibility
+
+An AI system that lets itself be corrected. Not covered by [[../articles/sample-existing-article]] at all.
+
+## Considered
+`,
+      },
     ],
   },
 ];
