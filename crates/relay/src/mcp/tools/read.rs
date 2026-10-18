@@ -198,26 +198,37 @@ pub async fn execute(
     // chunk of a paged read as a labelled block. They are context from the
     // concept files, not this file's text: the cat -n numbering below is
     // unchanged, and edits match only the file's own text.
-    let rows_block = if offset <= 1 {
+    // A concept file gets its place in the concept graph (`parent:` links)
+    // the same way.
+    let (graph_block, rows_block) = if offset <= 1 {
         let path = server
             .doc_resolver()
             .path_for_uuid(&doc_info.uuid)
             .unwrap_or_else(|| file_path.to_string());
-        super::concept_rows::concept_rows_block(
+        let graph = super::concept_graph::concept_graph_block(
             server,
             &path,
             &doc_info.uuid,
             &doc_info.folder_doc_id,
             &accepted,
         )
-        .await
+        .await;
+        let rows = super::concept_rows::concept_rows_block(
+            server,
+            &path,
+            &doc_info.uuid,
+            &doc_info.folder_doc_id,
+            &accepted,
+        )
+        .await;
+        (graph, rows)
     } else {
-        None
+        (None, None)
     };
 
     let mut output = String::new();
-    if let Some(rows_block) = rows_block {
-        output.push_str(&rows_block);
+    for block in [graph_block, rows_block].into_iter().flatten() {
+        output.push_str(&block);
         output.push_str("\n\n");
     }
     output.push_str(&format_cat_n(&accepted, offset, limit));

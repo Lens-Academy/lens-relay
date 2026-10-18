@@ -86,7 +86,7 @@ const MAX_LENS_SOURCES: usize = 8;
 /// Concept files loaded at once.
 const LOAD_CONCURRENCY: usize = 4;
 
-fn is_md(path: &str) -> bool {
+pub(super) fn is_md(path: &str) -> bool {
     without_terminal_md(path).len() != path.len()
 }
 
@@ -462,12 +462,12 @@ fn group_lens_rows(own: &[RowEntry], sources: &[SourceRows]) -> LensRowGroups {
 }
 
 /// `Concepts/Low-stakes control.md` → `Low-stakes control`.
-fn file_name(path: &str) -> String {
+pub(super) fn file_name(path: &str) -> String {
     without_terminal_md(path.rsplit('/').next().unwrap_or(path)).to_string()
 }
 
 /// Concept names in display order: lower case first (rule #9), then as written.
-fn by_concept_name(a: &str, b: &str) -> std::cmp::Ordering {
+pub(super) fn by_concept_name(a: &str, b: &str) -> std::cmp::Ordering {
     // Names equal but for case: lower case first, as the editor's
     // `localeCompare` orders them. Non-ASCII names may sort slightly
     // differently from the editor (cosmetic).
@@ -569,7 +569,7 @@ impl<'a> ConceptLoader<'a> {
 /// The accepted view of the Markdown document at resolver path `path`, loaded
 /// as `read` loads it (reloaded from storage after GC eviction); None if it
 /// could not be loaded.
-async fn load_text(server: &Arc<Server>, path: &str) -> Option<String> {
+pub(super) async fn load_text(server: &Arc<Server>, path: &str) -> Option<String> {
     let info = server.doc_resolver().resolve_path(path)?;
     if let Err(e) = server.ensure_doc_loaded(&info.doc_id).await {
         tracing::warn!("concept rows: failed to load {}: {}", path, e);
@@ -664,7 +664,7 @@ async fn collect_rows(
 /// document locks. A Markdown document is a `.md` path without a blob hash,
 /// as filemeta's "markdown" entries are; sorted by path, so that of two paths
 /// differing only in case the same one always wins.
-fn resolver_entries(server: &Arc<Server>) -> Vec<VirtualEntry> {
+pub(super) fn resolver_entries(server: &Arc<Server>) -> Vec<VirtualEntry> {
     let mut entries: Vec<VirtualEntry> = server
         .doc_resolver()
         .entries_under("")
@@ -1680,8 +1680,10 @@ Concepts linked only via this lens's sources (rows about a source — context, n
         let server = server().await;
         let out = read(&server, "Lens Edu/Lenses/Lonely lens.md").await;
         assert!(out.starts_with("     1\t#### Article"), "got: {out}");
+        // A concept file gets the concept graph block (concept_graph.rs), not rows.
         let out = read(&server, "Lens Edu/Concepts/Feedback.md").await;
-        assert!(out.starts_with("     1\t# Feedback"), "got: {out}");
+        assert!(!out.contains(BLOCK_START), "got: {out}");
+        assert!(out.starts_with("── Concept graph"), "got: {out}");
     }
 
     #[tokio::test]

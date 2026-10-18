@@ -73,3 +73,82 @@ implementations and their tagged tests in the same piece of work.
    sources.
 9. **Sort order.** Displays sort concepts by name, case-insensitive; the order of non-ASCII
    names may differ slightly between the editor and the MCP block. This is cosmetic.
+
+## Concept graph
+
+Concepts form a hierarchy. A concept file can name its broader concepts. Every node is a
+concept file in `Lens Edu/Concepts/`, which is a flat folder. Domains, topics and concepts
+are all concept files. They differ only in how broad they are.
+
+### Format
+
+A concept file lists its broader concepts ("part of") in its frontmatter:
+
+```yaml
+---
+parent:
+  - "[[Control protocols]]"
+  - "[[Monitoring and interpretability]]"
+skill-tree: topic        # optional: domain | topic
+---
+```
+
+- `parent:` is a list of wikilinks. A single value, `parent: "[[X]]"`, also works. Links
+  are bare names or relative paths, and they resolve as the link indexer resolves them
+  (case-insensitive, with a fallback from the folder root). Each must resolve to a file in
+  `Concepts/`.
+- A concept can have several parents. The **first** parent is the primary one. It gives
+  the "main path" in displays, and later it will place the concept in the skill tree.
+- `skill-tree:` marks the nodes the skill tree will show: `domain` is a row and `topic` is
+  a group. Leave it out for a plain concept. v1 code only checks the value. The skill tree
+  still reads `Domains and Topics/` until a later migration.
+
+### Rules
+
+- **No cycles.** The graph must be a DAG. A concept cannot be its own parent, directly or
+  through other concepts.
+- **Shortcut edges are fine.** If A is part of B, B is part of D, and A also lists D, that
+  is allowed and gets no warning.
+- **"Part of" goes upward only.** A row about a narrower concept is implicitly about every
+  concept above it. It is never about the concepts below it.
+- **Write each relationship row at the most specific level that is true.** The hierarchy
+  supplies the broader implications, so do not copy a row up to the parents. Rollups of
+  rows from narrower concepts are a later feature. v1 only shows the graph.
+
+### Who reads it
+
+| Implementation | File | What it does |
+|---|---|---|
+| Lens Editor | `lens-editor/src/lib/concept-graph.ts`, `src/components/ConceptGraphPanel/` | Shows a "Concept graph" header on every concept file: the main path upward ("Part of"), other paths, direct parents, and direct children ("Contains"). On request it also shows a tree of everything below. All names are links. The header is read-only, so you change parents in the frontmatter. |
+| Relay MCP | `crates/relay/src/mcp/tools/concept_graph.rs` | A `read` of a concept file starts (first chunk only) with a "Concept graph" context block: the main path, other paths, direct parents, unresolved `parent:` entries, and direct children. |
+| Platform validator | `content_processor` in lens-platform | Reports the errors below. |
+
+The editor and the MCP server compute the graph in the same way:
+
+- **Ancestors.** They follow `parent:` upward, breadth first, at most 20 levels and 200
+  files. If a cap cuts the walk, they say so. The main path follows first parents. The
+  other paths are all other simple paths from a top-level concept down to the file
+  (at most 50).
+- **Children.** These are the file's backlinks inside `Concepts/`, kept only when that
+  file's own `parent:` resolves to this file. A plain link from another concept's text or
+  rows does not make it a child. Descendants (editor only, loaded when you expand them)
+  are found breadth first over children, with the same caps. A concept that has two
+  parents is expanded once and marked at its other place.
+- **Invalid content.** A cycle is shown with a note and is never followed. A `parent:`
+  entry that is not a wikilink, or that does not resolve to a concept file, is shown as
+  unresolved.
+- **Parsing.** `parent:` is read line by line from the frontmatter. Both read block lists
+  (`- "[[A]]"`, quoted or unquoted), single values and flow lists (`["[[A]]", "[[B]]"]`).
+  Only the first `parent:` key counts. The MCP server reads the file with pending
+  suggestions accepted, and the editor reads the raw text.
+
+### Validator errors
+
+For `Concepts/*.md` the platform validator reports these errors. It adds no new warnings.
+
+1. `concept.parent-unresolved`: a `parent:` entry is not a wikilink, or it does not
+   resolve to a file in `Concepts/`.
+2. `concept.parent-self`: a concept lists itself as a parent.
+3. `concept.parent-cycle`: there is a cycle through `parent:` links. It is reported once
+   per cycle, on the file that sorts first, and names the files in order (A → B → C → A).
+4. `skill-tree:` has a value other than `domain` or `topic`.

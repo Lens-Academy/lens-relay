@@ -334,6 +334,8 @@ frame. While audio plays a click jumps to the sentence; otherwise clicks behave 
 **Concept relationships in MCP `read`** (`crates/relay/src/mcp/tools/concept_rows.rs`): a `read` of a Lens Edu article,
 video transcript or lens starts with the rows about it from `Lens Edu/Concepts/` files. The row rules are shared with the
 editor and the platform validator; see `docs/concept-relationships.md` before changing them.
+A `read` of a concept file starts with its place in the concept graph (`parent:` frontmatter: main path, other paths,
+parents, children; `crates/relay/src/mcp/tools/concept_graph.rs`), computed like the editor's header; same doc, "Concept graph".
 
 **Course checks in MCP replies** (`crates/relay/src/mcp/tools/course_checks.rs`): an MCP
 `edit` or `create` of a `Lens Edu/**/*.md` file other than an article ends with lens-platform's
