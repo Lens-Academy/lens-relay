@@ -17,8 +17,6 @@
  */
 import type { FolderMetadata } from '../hooks/useFolderMetadata';
 import { resolvePageName } from './document-resolver';
-import { parseSections } from '../components/SectionEditor/parseSections';
-import { parseFields } from './parseFields';
 
 export interface ConceptRowRule {
   /** Shared folder the rule applies in (the first path segment). */
@@ -88,13 +86,16 @@ export interface ConceptRow {
 }
 
 export interface ParsedConceptFile {
-  /** The rows section: `to` is where it ends (next heading of level ≤ 2, or the end). */
-  section: { headingFrom: number; to: number } | null;
+  /** Every rows section, in order: `to` is where it ends (the next heading of
+   *  level ≤ 2, or the end). New rows go to the first. */
+  sections: Array<{ headingFrom: number; to: number }>;
   rows: ConceptRow[];
 }
 
-const HEADING = /^(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/;
-const FENCE = /^[ \t]*(```|~~~)/;
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/;
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const SINGLE_LINK = /^\[\[([^[\]\n]+)\]\]$/;
 
 /** A wikilink's page part: `[[a/b#H|Alias]]` → `a/b`. */
@@ -104,30 +105,53 @@ export function linkPage(inner: string): string {
 
 interface Heading { level: number; text: string; from: number; to: number; line: number }
 
-/** Headings of `text`, outside frontmatter and fenced code. */
+/**
+ * ATX headings of `text`, by the canonical concept-row rules (v1, shared with
+ * the relay's MCP tools and the platform validator): up to 3 spaces of indent;
+ * a closing run of #s is not part of the text; none inside frontmatter
+ * (closing `---` may have trailing whitespace), fenced code (CommonMark
+ * opening and closing), `%% %%` comments, list items or block quotes. Setext
+ * headings and HTML blocks are not handled.
+ *
+ * The editor parses the raw text, pending CriticMarkup included, because it
+ * edits at raw offsets: a heading that exists only inside a pending
+ * suggestion is a known, accepted divergence from the relay (rule 6).
+ */
 function headingsOf(text: string): Heading[] {
   const out: Heading[] = [];
   let pos = 0;
   let line = 0;
-  let fence: string | null = null;
-  let inFrontmatter = text.startsWith('---\n') || text.startsWith('---\r\n');
+  let fence: { char: string; len: number } | null = null;
+  let inComment = false;
+  let inList = false;
+  let inFrontmatter = /^---[ \t]*\r?(\n|$)/.test(text);
   while (pos <= text.length) {
     const nl = text.indexOf('\n', pos);
     const end = nl === -1 ? text.length : nl;
     const raw = text.slice(pos, end).replace(/\r$/, '');
     line++;
     if (inFrontmatter) {
-      if (line > 1 && raw === '---') inFrontmatter = false;
+      if (line > 1 && /^---[ \t]*$/.test(raw)) inFrontmatter = false;
+    } else if (fence) {
+      const close = FENCE_CLOSE.exec(raw);
+      if (close && close[1][0] === fence.char && close[1].length >= fence.len) fence = null;
     } else {
-      const fenceMatch = FENCE.exec(raw);
-      if (fenceMatch) {
-        if (fence === null) fence = fenceMatch[1];
-        else if (fence === fenceMatch[1]) fence = null;
-      } else if (fence === null) {
+      const open = FENCE_OPEN.exec(raw);
+      const commentAtStart = inComment;
+      // `%%` toggles an Obsidian comment, inline or across lines.
+      if ((raw.match(/%%/g)?.length ?? 0) % 2 === 1) inComment = !inComment;
+      if (open && !(open[1][0] === '`' && open[2].includes('`')) && !commentAtStart) {
+        fence = { char: open[1][0], len: open[1].length };
+      } else if (!commentAtStart) {
+        if (LIST_ITEM.test(raw)) inList = true;
+        else if (raw.trim() && !/^[ \t]/.test(raw)) inList = false;
         const m = HEADING.exec(raw);
-        // A closing sequence of #s (`### [[x]] ###`) is not part of the text.
-        const headingText = (m?.[2] ?? '').replace(/(^|[ \t]+)#+$/, '').trim();
-        if (m) out.push({ level: m[1].length, text: headingText, from: pos, to: pos + raw.length, line });
+        // An indented heading under a list item belongs to the item.
+        const inItem = inList && /^[ \t]/.test(raw);
+        if (m && !inItem) {
+          const headingText = (m[2] ?? '').replace(/(^|[ \t]+)#+$/, '').trim();
+          out.push({ level: m[1].length, text: headingText, from: pos, to: pos + raw.length, line });
+        }
       }
     }
     if (nl === -1) break;
@@ -137,34 +161,73 @@ function headingsOf(text: string): Heading[] {
 }
 
 /**
- * The rows section and its rows, by the same rules as the platform's content
- * validator: the level-2 heading matches `section` exactly (case-sensitive);
- * a row is a level-3 heading that is exactly one wikilink (`|alias` and
- * `#anchor` allowed, nothing else); headings in code, lists and quotes do
- * not count (only a `#` at the start of a line makes a heading).
+ * The rows sections and their rows, by the canonical concept-row rules (v1):
+ * every level-2 heading that is exactly `section` (case-sensitive) starts a
+ * section, which ends at the next heading of level ≤ 2; a row is a level-3
+ * heading in it that is exactly one wikilink (`|alias` and `#anchor` inside
+ * the brackets allowed; an `![[embed]]` or an empty page is not a row); its
+ * body runs to the next heading of level ≤ 3.
  */
 export function parseConceptFile(text: string, section = 'Relationships'): ParsedConceptFile {
   const headings = headingsOf(text);
-  const start = headings.findIndex((h) => h.level === 2 && h.text === section);
-  if (start === -1) return { section: null, rows: [] };
-  const endIndex = headings.findIndex((h, i) => i > start && h.level <= 2);
-  const sectionTo = endIndex === -1 ? text.length : headings[endIndex].from;
-  const inside = headings.slice(start + 1, endIndex === -1 ? undefined : endIndex);
-
+  const sections: ParsedConceptFile['sections'] = [];
   const rows: ConceptRow[] = [];
-  inside.forEach((h, i) => {
-    if (h.level !== 3) return;
-    const link = SINGLE_LINK.exec(h.text);
-    const target = link ? linkPage(link[1]) : '';
-    if (!target) return;
-    const next = inside.slice(i + 1).find((n) => n.level <= 3);
-    const to = next ? next.from : sectionTo;
-    const bodyFrom = Math.min(h.to + 1, to);
-    let bodyTo = to;
-    while (bodyTo > bodyFrom && /\s/.test(text[bodyTo - 1])) bodyTo--;
-    rows.push({ target, line: h.line, headingFrom: h.from, headingTo: h.to, bodyFrom, bodyTo, to });
+  headings.forEach((h, start) => {
+    if (h.level !== 2 || h.text !== section) return;
+    const endIndex = headings.findIndex((n, i) => i > start && n.level <= 2);
+    const sectionTo = endIndex === -1 ? text.length : headings[endIndex].from;
+    sections.push({ headingFrom: h.from, to: sectionTo });
+    const inside = headings.slice(start + 1, endIndex === -1 ? undefined : endIndex);
+    inside.forEach((r, i) => {
+      if (r.level !== 3) return;
+      const link = SINGLE_LINK.exec(r.text);
+      const target = link ? linkPage(link[1]) : '';
+      if (!target) return;
+      const next = inside.slice(i + 1).find((n) => n.level <= 3);
+      const to = next ? next.from : sectionTo;
+      const bodyFrom = Math.min(r.to + 1, to);
+      let bodyTo = to;
+      while (bodyTo > bodyFrom && /\s/.test(text[bodyTo - 1])) bodyTo--;
+      rows.push({ target, line: r.line, headingFrom: r.from, headingTo: r.to, bodyFrom, bodyTo, to });
+    });
   });
-  return { section: { headingFrom: headings[start].from, to: sectionTo }, rows };
+  return { sections, rows };
+}
+
+/**
+ * Where to insert a newline so that an empty row has a line of its own to be
+ * edited on, or null when it has one. Without it the row's (empty) text sits
+ * at the very start of the next heading's line, or at the end of its own
+ * heading line, and typing there would run into a heading.
+ */
+export function bodyLineFix(row: ConceptRow): number | null {
+  return row.bodyFrom === row.to ? row.to : null;
+}
+
+/**
+ * The live row an edit is for: `entry` was found in a snapshot that may be
+ * stale, so match its heading's target and text rather than trusting its
+ * position alone.
+ */
+export function findLiveRow(
+  liveRows: readonly ConceptRow[],
+  liveText: string,
+  entry: Pick<RowEntry, 'row' | 'index' | 'body'>,
+): ConceptRow | null {
+  if (liveRows.length <= 1) return liveRows[0] ?? null;
+  // Several rows about the same file (the validator flags it): tell them
+  // apart by their text, then by position.
+  return liveRows.find((r) => liveText.slice(r.bodyFrom, r.bodyTo) === entry.body)
+    ?? liveRows[entry.index]
+    ?? null;
+}
+
+/** Why a row heading cannot link to `link` (a path with characters that end
+ *  or split a wikilink), or null. */
+export function rowLinkProblem(link: string): string | null {
+  return /[#|[\]]/.test(link)
+    ? 'A file whose name or folder contains #, |, [ or ] cannot be linked from a concept row. Rename it first.'
+    : null;
 }
 
 /** The rows of a concept file about the document `targetId`: its heading's
@@ -197,21 +260,42 @@ export interface RowInsertion {
 
 /**
  * A new row `### [[link]]` with `body` (empty: just an empty line under it),
- * appended to the end of the rows section, which is added at the end of the
- * file when missing.
+ * appended to the end of the (first) rows section, which is added at the end
+ * of the file when missing.
  */
 export function planRowInsertion(text: string, link: string, body = '', section = 'Relationships'): RowInsertion {
   const heading = `### [[${link}]]\n`;
   const row = `${heading}${body}\n`;
-  const parsed = parseConceptFile(text, section);
-  const at = parsed.section ? parsed.section.to : text.length;
+  const first = parseConceptFile(text, section).sections[0];
+  const at = first ? first.to : text.length;
   const before = text.slice(0, at);
   const gap = before === '' || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
-  const head = parsed.section ? '' : `## ${section}\n\n`;
+  const head = first ? '' : `## ${section}\n\n`;
   // A heading follows: keep a blank line before it.
   const tail = at < text.length ? '\n' : '';
   const bodyFrom = at + gap.length + head.length + heading.length;
   return { at, insert: gap + head + row + tail, bodyFrom, bodyTo: bodyFrom + body.length };
+}
+
+/**
+ * Add a row about `targetId` to the concept file `text` (live), unless one is
+ * already there: the live text, not a snapshot, decides. Returns which of the
+ * file's rows about the target to open, and whether one was inserted.
+ */
+export function insertRowUnlessPresent(
+  text: { toString(): string; insert(index: number, content: string): void },
+  conceptPath: string,
+  targetId: string,
+  link: string,
+  body: string,
+  metadata: FolderMetadata,
+  section = 'Relationships',
+): { index: number; inserted: boolean } {
+  if (rowsAbout(text.toString(), conceptPath, targetId, metadata, section).length > 0) return { index: 0, inserted: false };
+  const plan = planRowInsertion(text.toString(), link, body, section);
+  text.insert(plan.at, plan.insert);
+  const index = rowsAbout(text.toString(), conceptPath, targetId, metadata, section).findIndex((r) => r.bodyFrom === plan.bodyFrom);
+  return { index: Math.max(0, index), inserted: true };
 }
 
 /** A new concept file with its first row. */
@@ -219,17 +303,33 @@ export function newConceptText(name: string, link: string, body = '', section = 
   return `# ${name}\n\n## ${section}\n\n### [[${link}]]\n${body}\n`;
 }
 
-/** The link targets of every `source::` in a lens (articles, videos, and
- *  whatever else; `sourceKind` sorts them), outside its text sections. */
+/**
+ * The link targets of every `source::` field in a lens (canonical concept-row
+ * rules v1 #8): several per section, before the first heading, in CRLF files
+ * too, but not inside `#### Text` sections (their content is prose). The
+ * first wikilink of each value; `sourceKind` keeps articles and videos.
+ */
 export function lensSourceTargets(text: string): string[] {
   const targets: string[] = [];
-  for (const section of parseSections(text)) {
-    if (section.type === 'text' || section.type === 'frontmatter') continue;
-    const source = parseFields(section.content).get('source') ?? '';
-    const m = /\[\[([^[\]\n]+)\]\]/.exec(source);
-    const target = m ? linkPage(m[1]) : '';
+  let inText = false;
+  let inFrontmatter = /^---[ \t]*\r?(\n|$)/.test(text);
+  text.split('\n').forEach((rawLine, i) => {
+    const line = rawLine.replace(/\r$/, '');
+    if (inFrontmatter) {
+      if (i > 0 && /^---[ \t]*$/.test(line)) inFrontmatter = false;
+      return;
+    }
+    const heading = HEADING.exec(line);
+    if (heading) {
+      inText = heading[1].length === 4 && (heading[2] ?? '').trim().toLowerCase() === 'text';
+      return;
+    }
+    if (inText) return;
+    const field = /^source::(.*)$/.exec(line);
+    const link = field && /\[\[([^[\]\n]+)\]\]/.exec(field[1]);
+    const target = link ? linkPage(link[1]) : '';
     if (target && !targets.includes(target)) targets.push(target);
-  }
+  });
   return targets;
 }
 

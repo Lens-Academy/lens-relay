@@ -6,11 +6,21 @@ import { NavigationContext } from '../../contexts/NavigationContext';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { parseConceptFile, type RowEntry } from '../../lib/concept-rows';
 import { ConceptRowCard, type RowCardProps } from './ConceptRowCard';
+import { EditorView } from '@codemirror/view';
+import { waitFor } from '@testing-library/react';
+import { __embedDocsTesting } from '../../lib/embed-docs';
+import type { DocConnection } from '../../hooks/useDocConnection';
+
+vi.mock('../../hooks/useDocConnection', () => ({
+  connectDoc: vi.fn(),
+  teardownProvider: vi.fn(),
+}));
 
 const ARTICLE = 'pan-a-taxonomy-of-barriers-to-trading-with-early-misaligned-ais';
 const metadata: FolderMetadata = {
   '/Lens Edu/Concepts/Trading.md': { id: 'c1', type: 'markdown', version: 0 },
   [`/Lens Edu/articles/${ARTICLE}.md`]: { id: 'a1', type: 'markdown', version: 0 },
+  '/Lens Edu/articles/other.md': { id: 'a2', type: 'markdown', version: 0 },
 };
 const text = `## Relationships\n\n### [[../articles/${ARTICLE}]]\nFirst line of the note.\n`;
 const entry: RowEntry = {
@@ -116,5 +126,31 @@ describe('ConceptRowCard', () => {
     expect(screen.getByText('Video')).toHaveAttribute('title', 'a-long-video-transcript-name');
     expect(screen.getByText('Video: a-long-video-transcript-name')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Add for this lens too' })).toHaveLength(1);
+  });
+
+  it('edits an empty row followed directly by a heading without touching that heading (keyboard path)', async () => {
+    const live = `## Relationships\n### [[../articles/${ARTICLE}]]\n### [[../articles/other]]\n`;
+    const doc = new Y.Doc();
+    doc.getText('contents').insert(0, live);
+    const provider = { hasLocalChanges: false, on: () => {}, off: () => {} };
+    __embedDocsTesting.setConnector(async () => ({ doc, provider } as unknown as DocConnection));
+    const row = parseConceptFile(live).rows[0];
+    render(<Card canEdit entry={{ ...entry, row, body: '' }} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    const textButton = screen.getByRole('button', { name: `Edit notes on ${entry.conceptName}` });
+    fireEvent.keyDown(textButton, { key: 'Enter' });
+    await waitFor(() => expect(document.querySelector('.concept-row')).toHaveAttribute('data-state', 'live'));
+
+    const view = EditorView.findFromDOM(document.querySelector('.concept-row [contenteditable=true]') as HTMLElement)!;
+    view.dispatch({ changes: { from: view.state.doc.length, insert: 'TYPED' } });
+    expect(doc.getText('contents').toString())
+      .toBe(`## Relationships\n### [[../articles/${ARTICLE}]]\nTYPED\n### [[../articles/other]]\n`);
+
+    // Escape ends the edit and gives the keyboard back to the row's toggle
+    fireEvent.keyDown(view.contentDOM, { key: 'Escape' });
+    await waitFor(() => expect(document.querySelector('.concept-row')).toHaveAttribute('data-state', 'idle'));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Collapse row' })));
+    __embedDocsTesting.reset();
   });
 });

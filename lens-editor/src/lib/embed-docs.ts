@@ -83,6 +83,12 @@ export function readSnapshot(fullDocId: string, now = Date.now()): Promise<strin
   return read;
 }
 
+/** Read `fullDocId` again even if its snapshot is fresh (the Concepts panel
+ *  refreshes on focus and on a timer); shares a read already in flight. */
+export function refreshSnapshot(fullDocId: string): Promise<string> {
+  return readSnapshot(fullDocId, Infinity);
+}
+
 export interface LiveEmbed {
   fullDocId: string;
   connection: DocConnection;
@@ -186,6 +192,21 @@ export function closeLive(owner?: object): void {
     release(ended.fullDocId, ended.connection);
   }
   ended.onEnd();
+}
+
+/**
+ * Run `fn` on `fullDocId` opened live (ending whichever embed was live), then
+ * close it, also when `fn` throws: its edits are saved and flushed like an
+ * embed's. Resolves to null when another open overtook this one.
+ */
+export async function withLiveDoc<T>(fullDocId: string, fn: (connection: DocConnection) => T): Promise<T | null> {
+  const owner = {};
+  try {
+    const opened = await openLive(fullDocId, owner, () => {});
+    return opened ? fn(opened.connection) : null;
+  } finally {
+    closeLive(owner);
+  }
 }
 
 /** Whether `owner` is the live embed (or is connecting). */

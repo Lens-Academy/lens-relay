@@ -3,18 +3,18 @@ import type * as Y from 'yjs';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
-import { closeLive, openLive, setSnapshot } from '../../lib/embed-docs';
+import { setSnapshot, withLiveDoc } from '../../lib/embed-docs';
 import { attachProvenanceRegistration, humanActor } from '../../lib/provenance';
 import { createDocument, createFolder } from '../../lib/relay-api';
 import { computeRelativePath, resolvePageName } from '../../lib/document-resolver';
 import {
   fileName,
+  insertRowUnlessPresent,
   groupLensRows,
   lensSourceTargets,
   matchRule,
   newConceptText,
-  planRowInsertion,
-  rowsAbout,
+  rowLinkProblem,
   rowsFolder,
   sourceKind,
   type CollectedRows,
@@ -145,6 +145,13 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
   /** Add a row about the opened file to a concept file (made when `name` is
    *  new), then open it for editing. */
   const addRow = useCallback(async (choice: { id: string } | { name: string }, body = '') => {
+    // The row heading links here by relative path: a path that cannot be a
+    // wikilink would make a row that never shows (and a retry, a second one).
+    const problem = rowLinkProblem(computeRelativePath(`${folder}/x.md`, path));
+    if (problem) {
+      setError(problem);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -154,18 +161,19 @@ function Panel({ docId, path, ytext, rule }: PanelProps & { path: string; rule: 
         conceptId = choice.id;
         const conceptPath = Object.entries(metadata).find(([, m]) => m.id === conceptId)?.[0];
         if (!conceptPath) throw new Error('concept file not found');
-        const owner = {};
-        const opened = await openLive(`${RELAY_ID}-${conceptId}`, owner, () => {});
-        if (!opened) return;
-        const { doc } = opened.connection;
-        const text = doc.getText('contents');
-        const detach = attachProvenanceRegistration(doc, getActor);
-        const plan = planRowInsertion(text.toString(), computeRelativePath(conceptPath, path), body, rule.section);
-        text.insert(plan.at, plan.insert);
-        detach();
-        index = Math.max(0, rowsAbout(text.toString(), conceptPath, target, metadata, rule.section)
-          .findIndex((r) => r.bodyFrom === plan.bodyFrom));
-        closeLive(owner); // records the new text for the panel
+        // Checked against the live text, not the (possibly stale) snapshot:
+        // a row about this file already there is opened, not doubled.
+        const result = await withLiveDoc(`${RELAY_ID}-${conceptId}`, ({ doc }) => {
+          const detach = attachProvenanceRegistration(doc, getActor);
+          try {
+            return insertRowUnlessPresent(doc.getText('contents'), conceptPath, target,
+              computeRelativePath(conceptPath, path), body, metadata, rule.section);
+          } finally {
+            detach();
+          }
+        });
+        if (!result) return;
+        index = result.index;
       } else {
         const folderDoc = folderDocs.get(rule.sharedFolder);
         if (!folderDoc) throw new Error(`folder ${rule.sharedFolder} not loaded`);

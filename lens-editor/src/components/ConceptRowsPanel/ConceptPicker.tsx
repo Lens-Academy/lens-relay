@@ -9,8 +9,9 @@ export interface PickerConcept {
 
 type Option = { kind: 'existing'; concept: PickerConcept } | { kind: 'new'; name: string };
 
-/** Characters a file name cannot hold (as generateNewDocPath strips them). */
-const BAD_NAME = /[/\\?%*:|"<>]/;
+/** Characters a concept name cannot hold: those a file name cannot (as
+ *  generateNewDocPath strips them), and those that end or split a wikilink. */
+const BAD_NAME = /[/\\?%*:|"<>#[\]]/;
 
 /** "+ Add concept": pick a concept file, or name a new one. */
 export function ConceptPicker({
@@ -77,7 +78,7 @@ export function ConceptPicker({
       <ul className="max-h-48 overflow-auto py-1" role="listbox">
         {options.length === 0 && (
           <li className="px-2 py-1 text-sm text-gray-400">
-            {BAD_NAME.test(query) ? 'A concept name cannot contain / \\ ? % * : | " < >' : 'No concepts yet: type a name'}
+            {BAD_NAME.test(query) ? 'A concept name cannot contain / \\ ? % * : | " < > # [ ]' : 'No concepts yet: type a name'}
           </li>
         )}
         {options.map((option, i) => (

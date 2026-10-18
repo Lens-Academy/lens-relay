@@ -3,7 +3,7 @@ import { useNavigation } from '../../contexts/NavigationContext';
 import { useBacklinksVersion } from '../../hooks/useBacklinksVersion';
 import { backlinkSources } from '../../lib/backlinks';
 import { uuidToPathIndex } from '../../lib/uuid-to-path';
-import { cachedSnapshot, onSnapshot, readSnapshot } from '../../lib/embed-docs';
+import { cachedSnapshot, onSnapshot, readSnapshot, refreshSnapshot } from '../../lib/embed-docs';
 import { collectRows, rowsFolder, type CollectedRows, type ConceptRowRule } from '../../lib/concept-rows';
 import { RELAY_ID } from '../../App';
 
@@ -13,12 +13,17 @@ export interface AddedSource {
   source: string;
 }
 
+/** While the panel is open and the page visible, concept files are read
+ *  again this often (and whenever the window regains focus). */
+export const SNAPSHOT_REFRESH_MS = 45_000;
+
 /**
- * Text of each document in `ids` (bare uuids), read as embeds read: once,
- * cached, at most three at a time (lib/embed-docs.ts), and updated whenever
- * an edit made here is closed.
+ * Text of each document in `ids` (bare uuids), read as embeds read: cached,
+ * at most three at a time (lib/embed-docs.ts), updated whenever an edit made
+ * here is closed, and read again on window focus and every
+ * SNAPSHOT_REFRESH_MS, so edits made elsewhere show up.
  */
-function useSnapshots(ids: readonly string[]): { texts: Map<string, string>; failed: Set<string> } {
+export function useSnapshots(ids: readonly string[]): { texts: Map<string, string>; failed: Set<string> } {
   const key = ids.join(',');
   const [texts, setTexts] = useState<Map<string, string>>(() => new Map());
   const [failed, setFailed] = useState<Set<string>>(() => new Set());
@@ -36,7 +41,21 @@ function useSnapshots(ids: readonly string[]): { texts: Map<string, string>; fai
       );
       return onSnapshot(fullId, (text) => set(id, text));
     });
-    return () => unsubscribe.forEach((fn) => fn());
+    const refresh = () => {
+      if (document.visibilityState === 'hidden') return;
+      for (const id of key.split(',').filter(Boolean)) {
+        refreshSnapshot(`${RELAY_ID}-${id}`).catch(() => {});
+      }
+    };
+    const timer = setInterval(refresh, SNAPSHOT_REFRESH_MS);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      unsubscribe.forEach((fn) => fn());
+      clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
   }, [key]);
 
   return { texts, failed };

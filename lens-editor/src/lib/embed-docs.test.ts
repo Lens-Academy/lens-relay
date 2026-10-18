@@ -12,6 +12,8 @@ import {
   onUnsaved,
   openLive,
   readSnapshot,
+  refreshSnapshot,
+  withLiveDoc,
 } from './embed-docs';
 import { teardownProvider, type DocConnection } from '../hooks/useDocConnection';
 
@@ -79,6 +81,17 @@ describe('readSnapshot', () => {
     await readSnapshot('a');
     await readSnapshot('a', Date.now() + SNAPSHOT_TTL_MS + 1);
     expect(reader).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshSnapshot reads again while the snapshot is fresh, and tells listeners', async () => {
+    let n = 0;
+    __embedDocsTesting.setReader(async () => `v${++n}`);
+    const seen: string[] = [];
+    onSnapshot('a', (text) => seen.push(text));
+    await readSnapshot('a');
+    await refreshSnapshot('a');
+    expect(cachedSnapshot('a')).toBe('v2');
+    expect(seen).toEqual(['v1', 'v2']);
   });
 });
 
@@ -167,5 +180,18 @@ describe('closing an embed with unsent edits', () => {
     expect(connector).toHaveBeenCalledTimes(1);
     expect(b!.connection).toBe(a!.connection);
     expect(__embedDocsTesting.flushing).toEqual([]);
+  });
+});
+
+describe('withLiveDoc', () => {
+  it('closes the live connection and saves its text even when the edit throws', async () => {
+    const connection = fakeConnection('before');
+    __embedDocsTesting.setConnector(async () => connection);
+    await expect(withLiveDoc('a', ({ doc }) => {
+      doc.getText('contents').insert(0, 'edited ');
+      throw new Error('boom');
+    })).rejects.toThrow('boom');
+    expect(cachedSnapshot('a')).toBe('edited before');
+    expect(teardownProvider).toHaveBeenCalledTimes(1);
   });
 });

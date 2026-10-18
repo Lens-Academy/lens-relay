@@ -6,7 +6,7 @@ import { embedViewExtensions } from '../Editor/extensions/noteEmbed';
 import { ySectionSync, ySectionUndoManagerKeymap } from '../SectionEditor/y-section-sync';
 import { closeLive, isLive, openLive } from '../../lib/embed-docs';
 import { attachProvenanceRegistration } from '../../lib/provenance';
-import { rowPreview, rowsAbout, type RowEntry, type SourceRows } from '../../lib/concept-rows';
+import { bodyLineFix, findLiveRow, rowPreview, rowsAbout, type RowEntry, type SourceRows } from '../../lib/concept-rows';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 import { DocLink } from './DocLink';
@@ -118,6 +118,9 @@ export function ConceptRowCard(props: RowCardProps) {
   const [owner] = useState(() => ({}));
   const liveHost = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  /** Escape ended the edit: give the keyboard back to the row's toggle. */
+  const refocusToggle = useRef(false);
   const live = useRef<{ view: EditorView; detach: () => void; onOutside: (e: MouseEvent) => void } | null>(null);
   const unmounted = useRef(false);
   const editable = canEdit && !context;
@@ -131,7 +134,12 @@ export function ConceptRowCard(props: RowCardProps) {
       current.detach();
       current.view.destroy();
     }
-    if (!unmounted.current) setState('idle');
+    if (unmounted.current) return;
+    setState('idle');
+    if (refocusToggle.current) {
+      refocusToggle.current = false;
+      requestAnimationFrame(() => toggleRef.current?.focus());
+    }
   }, []);
 
   const startEdit = useCallback(async () => {
@@ -154,11 +162,16 @@ export function ConceptRowCard(props: RowCardProps) {
     const { doc } = opened.connection;
     const ytext = doc.getText('contents');
     const detach = attachProvenanceRegistration(doc, getActor);
-    let row = rowsAbout(ytext.toString(), entry.conceptPath, target, metadata, section)[entry.index];
-    if (row && row.bodyFrom === row.headingTo) {
-      // The heading ends the file: give the text a line of its own.
-      ytext.insert(row.headingTo, '\n');
-      row = rowsAbout(ytext.toString(), entry.conceptPath, target, metadata, section)[entry.index];
+    const liveRow = () => findLiveRow(
+      rowsAbout(ytext.toString(), entry.conceptPath, target, metadata, section), ytext.toString(), entry);
+    let row = liveRow();
+    const fix = row ? bodyLineFix(row) : null;
+    if (fix !== null) {
+      // An empty row right before the next heading (or at the end of its own
+      // heading line): give it a line of its own, so nothing typed here can
+      // run into a heading.
+      ytext.insert(fix, '\n');
+      row = liveRow();
     }
     if (!row) {
       detach();
@@ -173,7 +186,7 @@ export function ConceptRowCard(props: RowCardProps) {
         extensions: [
           ...embedViewExtensions(canAcceptReject),
           rowEditorTheme,
-          keymap.of([{ key: 'Escape', run: () => { closeLive(owner); return true; } }]),
+          keymap.of([{ key: 'Escape', run: () => { refocusToggle.current = true; closeLive(owner); return true; } }]),
           ySectionUndoManagerKeymap,
           keymap.of(defaultKeymap),
           ySectionSync(ytext, row.bodyFrom, row.bodyTo),
@@ -237,6 +250,7 @@ export function ConceptRowCard(props: RowCardProps) {
       >
         {/* 24px hit box around a small triangle */}
         <button
+          ref={toggleRef}
           type="button"
           onClick={toggle}
           className="-my-1 -ml-1.5 -mr-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center self-center rounded text-xs text-gray-400 hover:bg-gray-100"
@@ -278,8 +292,15 @@ export function ConceptRowCard(props: RowCardProps) {
       )}
       {expanded && state === 'idle' && !context && (
         <div
-          className={`concept-row-body ml-5 mt-1 ${editable ? 'cursor-text' : ''}`}
-          title={editable ? 'Click to edit' : undefined}
+          className={`concept-row-body ml-5 mt-1 ${editable ? 'cursor-text rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-300' : ''}`}
+          title={editable ? 'Click or press Enter to edit' : undefined}
+          // Keyboard: Tab reaches the text, Enter or Space edits it.
+          {...(editable ? { tabIndex: 0, role: 'button', 'aria-label': `Edit notes on ${entry.conceptName}` } : {})}
+          onKeyDown={(e) => {
+            if (!editable || e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+            e.preventDefault();
+            void startEdit();
+          }}
           onMouseDown={(e) => {
             if (!editable) return;
             if ((e.target as HTMLElement).closest('a, .cm-wikilink-widget')) return;
