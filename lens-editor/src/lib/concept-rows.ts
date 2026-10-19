@@ -216,7 +216,10 @@ export function bodyLineFix(row: ConceptRow, textLength: number): 'before' | 'af
 /**
  * The live row an edit is for. `liveRows` are the live file's rows about the
  * target (rowsAbout); `entry` was found in a snapshot that may be stale, so
- * when there are several, they are told apart by their text, then by position.
+ * when there are several: the row at the same position if its text is
+ * unchanged (two rows with the same text, or two empty ones, are told apart
+ * by position), else the first with the same text, else the one at the
+ * same position.
  */
 export function findLiveRow(
   liveRows: readonly ConceptRow[],
@@ -224,9 +227,10 @@ export function findLiveRow(
   entry: Pick<RowEntry, 'index' | 'body'>,
 ): ConceptRow | null {
   if (liveRows.length <= 1) return liveRows[0] ?? null;
-  return liveRows.find((r) => liveText.slice(r.bodyFrom, r.bodyTo) === entry.body)
-    ?? liveRows[entry.index]
-    ?? null;
+  const bodyOf = (r: ConceptRow) => liveText.slice(r.bodyFrom, r.bodyTo);
+  const atIndex = liveRows[entry.index];
+  if (atIndex && bodyOf(atIndex) === entry.body) return atIndex;
+  return liveRows.find((r) => bodyOf(r) === entry.body) ?? atIndex ?? null;
 }
 
 /** Why a row heading cannot link to `link` (a path with characters that end

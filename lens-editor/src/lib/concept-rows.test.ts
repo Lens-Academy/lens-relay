@@ -529,6 +529,16 @@ describe('findLiveRow', () => {
     expect(findLiveRow(rows, live, entry(1, 'changed since'))).toBe(rows[1]);
     expect(findLiveRow([], live, entry(0, 'x'))).toBeNull();
   });
+
+  it('takes the row at the same position when its text is unchanged: identical or empty rows', () => {
+    const same = '## Relationships\n### [[x]]\nsame\n### [[x]]\nsame\n';
+    const sameRows = parseConceptFile(same).rows;
+    expect(findLiveRow(sameRows, same, entry(1, 'same'))).toBe(sameRows[1]);
+    expect(findLiveRow(sameRows, same, entry(0, 'same'))).toBe(sameRows[0]);
+    const empty = '## Relationships\n### [[x]]\n\n### [[x]]\n\n';
+    const emptyRows = parseConceptFile(empty).rows;
+    expect(findLiveRow(emptyRows, empty, entry(1, ''))).toBe(emptyRows[1]);
+  });
 });
 
 describe('rowLinkProblem', () => {

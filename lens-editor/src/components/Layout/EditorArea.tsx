@@ -1,3 +1,4 @@
+import { PanelErrorBoundary } from '../PanelErrorBoundary';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -541,9 +542,15 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <SyncedFileBanner />
           {showPanelHost && createPortal(
             <>
-              {showConceptGraph && <ConceptGraphPanel docId={currentDocId} path={currentFilePath} ytext={yText} />}
+              {showConceptGraph && (
+                <PanelErrorBoundary name="Concept graph" resetKey={currentDocId}>
+                  <ConceptGraphPanel docId={currentDocId} path={currentFilePath} ytext={yText} />
+                </PanelErrorBoundary>
+              )}
               {showConceptPanel && (
-                <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} suggestionMode={isSuggestionMode} />
+                <PanelErrorBoundary name="Concept relationships" resetKey={currentDocId}>
+                  <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} suggestionMode={isSuggestionMode} />
+                </PanelErrorBoundary>
               )}
             </>,
             conceptPanelHost,

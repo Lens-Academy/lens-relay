@@ -76,7 +76,9 @@ implementation it applies to and their tagged tests in the same piece of work.
 6. **Text view.** The MCP server parses the text with pending CriticMarkup suggestions
    accepted. The editor parses the raw text, because it edits at raw positions. The validator
    uses its normal validation view. A heading that exists only in a pending suggestion is a
-   known difference. Do not add code for it.
+   known difference. Do not add code for it. The same goes for `source::` lines
+   (rules #8 and #10): the MCP server reads a lens with pending suggestions accepted,
+   the editor reads its raw text.
 7. **Matching.** A row belongs to the file that its link resolves to. The editor and the MCP
    server resolve links like the link indexer (case-insensitive, with a fallback from the
    folder root). The validator uses the platform resolver, which is stricter. It warns about
@@ -95,7 +97,11 @@ implementation it applies to and their tagged tests in the same piece of work.
     per concept like rule #8, mirrored: a concept with a row about the file shows its lens
     rows with it, and concepts reached only through a lens come last. The editor shows
     every such lens, and its lens rows stay editable. The MCP server follows at most 8
-    lenses.
+    lenses. Both pass over a lens that no concept file links to before reading it, since
+    it cannot add rows. The editor lists lenses by name (case-insensitive) and the MCP
+    server by path; all lenses are in `Lenses/`, so the two orders differ only in case.
+    The MCP server's caps take lenses in path order: it reads the first 40 lens files
+    that a concept file links to, and shows the first 8 that use the file.
 
 ## Concept graph
 

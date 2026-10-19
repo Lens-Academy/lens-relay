@@ -129,7 +129,7 @@ export function useConceptRows(
 /**
  * The lenses that use the article or video `target` (bare uuid) as a
  * `source::`, for rules with lens context: its backlinkers in the lenses
- * folder, read (cached and refreshed as concept files are, useSnapshots) and
+ * folder that some concept file links to (others can add no rows), read (cached and refreshed as concept files are, useSnapshots) and
  * kept when one of their `source::` links resolves to it. Every such lens,
  * no cap; `pending` counts lenses not read yet.
  */
@@ -146,13 +146,17 @@ export function useLensesUsing(
   const candidates = useMemo(() => {
     void backlinksVersion;
     if (!enabled) return [];
-    return backlinkSources(target, folderDocs.values())
+    const docs = [...folderDocs.values()];
+    const conceptFolder = `${rowsFolder(rule)}/`;
+    return backlinkSources(target, docs)
       .filter((id) => {
         const path = pathIndex.get(id);
-        return !!path && isLensPath(path, rule.sharedFolder);
+        if (!path || !isLensPath(path, rule.sharedFolder)) return false;
+        // A lens no concept file links to can add no rows: not read.
+        return backlinkSources(id, docs).some((c) => pathIndex.get(c)?.startsWith(conceptFolder));
       })
       .sort();
-  }, [enabled, target, folderDocs, backlinksVersion, pathIndex, rule.sharedFolder]);
+  }, [enabled, target, folderDocs, backlinksVersion, pathIndex, rule]);
 
   const { texts, failed } = useSnapshots(candidates, refreshing);
 

@@ -945,16 +945,24 @@ struct Source {
     candidates: Vec<(String, String)>,
 }
 
-/// The lens files (uuid, resolver path) among the documents linking to
-/// `target_uuid`, from the backlinks index, sorted by path. Nothing is read.
+/// A lens that may use the opened file, with its concept backlinkers.
+struct LensCandidate {
+    id: String,
+    path: String,
+    concepts: Vec<(String, String)>,
+}
+
+/// The lens files among the documents linking to `target_uuid`, from the
+/// backlinks index, sorted by path, keeping only those that some concept
+/// file links to (a lens without one can add no rows). Nothing is read.
 async fn lens_backlinkers(
     server: &Arc<Server>,
     rule: &ConceptRowRule,
     folder_doc_id: &str,
     target_uuid: &str,
-) -> Vec<(String, String)> {
+) -> Vec<LensCandidate> {
     let resolver = server.doc_resolver();
-    let mut candidates: Vec<(String, String)> =
+    let mut paths: Vec<(String, String)> =
         get_links::read_backlink_uuids(server, folder_doc_id, target_uuid)
             .await
             .into_iter()
@@ -964,48 +972,66 @@ async fn lens_backlinkers(
                 is_lens_path(&path, rule.shared_folder).then_some((id, path))
             })
             .collect();
-    candidates.sort_by(|a, b| a.1.cmp(&b.1));
-    candidates.dedup();
-    candidates
+    paths.sort_by(|a, b| a.1.cmp(&b.1));
+    paths.dedup();
+    let mut out = Vec::new();
+    for (id, path) in paths {
+        let Some(info) = resolver.resolve_path(&path) else {
+            continue;
+        };
+        let concepts = concept_backlinkers(server, rule, &info.folder_doc_id, &id).await;
+        if !concepts.is_empty() {
+            out.push(LensCandidate { id, path, concepts });
+        }
+    }
+    out
 }
 
-/// The lenses among `candidates` (lens backlinkers, in path order) that use
-/// the file `uuid` as a `source::` (rule #10): one of their
-/// [`lens_source_targets`] resolves to it. Reads at most
-/// [`MAX_LENS_FILES_READ`] lens files; returns the lenses found (path, id)
-/// and how many lens files were not read.
+/// The lenses among `candidates` (in path order) that use the file `uuid` as
+/// a `source::` (rule #10). Reads at most [`MAX_LENS_FILES_READ`] lens files
+/// (their `read` view, pending suggestions accepted); returns the lenses
+/// found, in path order, and how many lens files were not read.
 async fn lenses_using(
     server: &Arc<Server>,
     index: &VirtualTreeIndex<'_>,
-    mut candidates: Vec<(String, String)>,
+    mut candidates: Vec<LensCandidate>,
     uuid: &str,
-) -> (Vec<(String, String)>, usize) {
-    let unread = candidates.len().saturating_sub(MAX_LENS_FILES_READ);
+) -> (Vec<LensCandidate>, usize) {
+    let over = candidates.len().saturating_sub(MAX_LENS_FILES_READ);
     candidates.truncate(MAX_LENS_FILES_READ);
-    let mut texts: Vec<(String, String, Option<String>)> = futures::stream::iter(candidates)
-        .map(|(id, path)| async move {
-            let text = load_text(server, &path).await;
-            (id, path, text)
+    let loaded: Vec<(LensCandidate, Option<String>)> = futures::stream::iter(candidates)
+        .map(|c| async move {
+            let text = load_text(server, &c.path).await;
+            (c, text)
         })
-        .buffer_unordered(LOAD_CONCURRENCY)
+        .buffered(LOAD_CONCURRENCY)
         .collect()
         .await;
-    texts.sort_by(|a, b| a.1.cmp(&b.1));
-    let mut unread = unread;
+    pick_lenses(index, loaded, uuid, over)
+}
+
+/// [`lenses_using`] once the lens texts are loaded (None: could not be
+/// loaded, counted as not read, on top of `unread`).
+fn pick_lenses(
+    index: &VirtualTreeIndex<'_>,
+    loaded: Vec<(LensCandidate, Option<String>)>,
+    uuid: &str,
+    mut unread: usize,
+) -> (Vec<LensCandidate>, usize) {
     let mut lenses = Vec::new();
-    for (id, path, text) in texts {
+    for (lens, text) in loaded {
         let Some(text) = text else {
             unread += 1;
             continue;
         };
-        let lens_virtual = format!("/{path}");
+        let lens_virtual = format!("/{}", lens.path);
         let uses = lens_source_targets(&text).iter().any(|t| {
             index
                 .resolve(t, Some(&lens_virtual))
                 .is_some_and(|e| e.id == uuid)
         });
         if uses {
-            lenses.push((path, id));
+            lenses.push(lens);
         }
     }
     (lenses, unread)
@@ -1048,7 +1074,9 @@ pub(crate) async fn concept_rows_block(
     let resolver = server.doc_resolver();
     let entries = resolver_entries(server);
     let index = VirtualTreeIndex::new(&entries);
-    let mut related: Vec<(String, &'static str, String)> = Vec::new(); // (path, kind, id)
+    // (path, kind, id, concept backlinkers if already known)
+    let mut related: Vec<(String, &'static str, String, Option<Vec<(String, String)>>)> =
+        Vec::new();
     let mut over_cap = 0;
     for target in &source_targets {
         let Some(entry) = index.resolve(target, Some(&lens_virtual)) else {
@@ -1065,22 +1093,27 @@ pub(crate) async fn concept_rows_block(
             over_cap += 1;
             continue;
         }
-        related.push((source_path, kind, entry.id.clone()));
+        related.push((source_path, kind, entry.id.clone(), None));
     }
     let (lenses, lenses_unread) = lenses_using(server, &index, lens_candidates, uuid).await;
-    for (lens_path, lens_id) in lenses {
+    for lens in lenses {
         if related.len() >= MAX_LENS_SOURCES {
             over_cap += 1;
             continue;
         }
-        related.push((lens_path, "lens", lens_id));
+        related.push((lens.path, "lens", lens.id, Some(lens.concepts)));
     }
     let mut sources: Vec<Source> = Vec::new();
-    for (source_path, kind, id) in related {
-        let Some(info) = resolver.resolve_path(&source_path) else {
-            continue;
+    for (source_path, kind, id, known) in related {
+        let candidates = match known {
+            Some(c) => c,
+            None => {
+                let Some(info) = resolver.resolve_path(&source_path) else {
+                    continue;
+                };
+                concept_backlinkers(server, rule, &info.folder_doc_id, &id).await
+            }
         };
-        let candidates = concept_backlinkers(server, rule, &info.folder_doc_id, &id).await;
         sources.push(Source {
             path: source_path,
             kind,
@@ -1097,7 +1130,8 @@ pub(crate) async fn concept_rows_block(
     let own = collect_rows(&mut loader, own_candidates, uuid).await;
     // What the total cap leaves is split fairly over the related files
     // (in order), so the first cannot take it all; files already loaded
-    // cost nothing.
+    // cost nothing. Each share is worked out just before its file is
+    // collected, so what an earlier file left unused carries forward.
     let mut wanted: Vec<(Vec<(String, String)>, usize)> = Vec::new(); // (to read, over the per-file cap)
     for source in &sources {
         let mut candidates = source.candidates.clone();
@@ -1107,18 +1141,19 @@ pub(crate) async fn concept_rows_block(
         candidates.truncate(MAX_CONCEPT_FILES_PER_TARGET);
         wanted.push((candidates, over));
     }
-    let new_counts: Vec<usize> = wanted
-        .iter()
-        .map(|(c, _)| {
-            c.iter()
-                .filter(|(id, _)| !loader.loaded.contains_key(id))
-                .count()
-        })
-        .collect();
-    let room = MAX_CONCEPT_FILES_TOTAL.saturating_sub(loader.loaded.len());
-    let shares = super::concept_graph::fair_shares(&new_counts, room);
     let mut source_rows: Vec<(SourceRows, usize)> = Vec::new();
-    for ((source, (candidates, over)), share) in sources.into_iter().zip(wanted).zip(shares) {
+    for (i, source) in sources.into_iter().enumerate() {
+        let new_counts: Vec<usize> = wanted[i..]
+            .iter()
+            .map(|(c, _)| {
+                c.iter()
+                    .filter(|(id, _)| !loader.loaded.contains_key(id))
+                    .count()
+            })
+            .collect();
+        let room = MAX_CONCEPT_FILES_TOTAL.saturating_sub(loader.loaded.len());
+        let share = super::concept_graph::fair_shares(&new_counts, room)[0];
+        let (candidates, over) = std::mem::take(&mut wanted[i]);
         let mut new_left = share;
         let (taken, left_out): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|(id, _)| {
             if loader.loaded.contains_key(id) {
@@ -1880,7 +1915,9 @@ Concepts linked only via the lenses that use this video (rows about a lens — c
             (
                 "/Concepts/C.md",
                 "c1000000-0000-4000-8000-000000000001",
-                "source:: [[../articles/x]]\n",
+                // Rows about every lens, so none is left out for lacking
+                // concept rows; and a source:: line, though not a lens.
+                "source:: [[../articles/x]]\n## Relationships\n### [[../Lenses/Uses X]]\n### [[../Lenses/A first]]\n### [[../Lenses/Text only]]\n### [[../Lenses/Mentions]]\n",
             ),
         ];
         let server = build_indexed_test_server_in("Lens Edu", &fixture).await;
@@ -1900,12 +1937,110 @@ Concepts linked only via the lenses that use this video (rows about a lens — c
         let entries = resolver_entries(&server);
         let index = VirtualTreeIndex::new(&entries);
         let (lenses, unread) = lenses_using(&server, &index, candidates, &info.uuid).await;
-        let paths: Vec<&str> = lenses.iter().map(|(p, _)| p.as_str()).collect();
+        let paths: Vec<&str> = lenses.iter().map(|l| l.path.as_str()).collect();
         assert_eq!(
             paths,
             ["Lens Edu/Lenses/A first.md", "Lens Edu/Lenses/Uses X.md"]
         );
         assert_eq!(unread, 0);
+    }
+
+    #[tokio::test]
+    async fn lenses_without_concept_rows_are_not_read_or_counted() {
+        // 45 lenses that use the article sort first, but no concept file
+        // links to them: they are passed over before anything is read, so
+        // the one lens with a concept row still shows.
+        let mut owned: Vec<(String, String, String)> = vec![
+            (
+                "/articles/a.md".into(),
+                "a3000000-0000-4000-8000-000000000000".into(),
+                "A.\n".into(),
+            ),
+            (
+                "/Lenses/ZZ real.md".into(),
+                "l3000000-0000-4000-8000-000000000999".into(),
+                "source:: [[../articles/a]]\n".into(),
+            ),
+            (
+                "/Concepts/Real.md".into(),
+                "c3000000-0000-4000-8000-000000000001".into(),
+                "## Relationships\n### [[../Lenses/ZZ real]]\nREAL-LENS-ROW\n".into(),
+            ),
+        ];
+        for l in 0..45 {
+            owned.push((
+                format!("/Lenses/A{l:02}.md"),
+                format!("l3000000-0000-4000-8000-000000000{l:03}"),
+                "source:: [[../articles/a]]\n".into(),
+            ));
+        }
+        let fixture: Vec<(&str, &str, &str)> = owned
+            .iter()
+            .map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str()))
+            .collect();
+        let server = build_indexed_test_server_in("Lens Edu", &fixture).await;
+        let out = read(&server, "Lens Edu/articles/a.md").await;
+        assert!(out.contains("REAL-LENS-ROW"), "got: {out}");
+        assert!(!out.contains("not read"), "got: {out}");
+        assert!(!out.contains("not shown"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn lens_files_over_the_read_cap_or_unloadable_are_counted() {
+        // 42 lenses with a concept row each use the article: 40 are read.
+        let mut owned: Vec<(String, String, String)> = vec![(
+            "/articles/a.md".into(),
+            "a4000000-0000-4000-8000-000000000000".into(),
+            "A.\n".into(),
+        )];
+        for l in 0..42 {
+            owned.push((
+                format!("/Lenses/L{l:02}.md"),
+                format!("l4000000-0000-4000-8000-000000000{l:03}"),
+                "source:: [[../articles/a]]\n".into(),
+            ));
+            owned.push((
+                format!("/Concepts/C{l:02}.md"),
+                format!("c4000000-0000-4000-8000-000000000{l:03}"),
+                format!("## Relationships\n### [[../Lenses/L{l:02}]]\nROW-{l:02}\n"),
+            ));
+        }
+        let fixture: Vec<(&str, &str, &str)> = owned
+            .iter()
+            .map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str()))
+            .collect();
+        let server = build_indexed_test_server_in("Lens Edu", &fixture).await;
+        let out = read(&server, "Lens Edu/articles/a.md").await;
+        assert!(
+            out.contains("(2 more lens file(s) link to this article but were not read"),
+            "got: {out}"
+        );
+        assert!(out
+            .contains("(32 more lens(es) using this article not shown; at most 8 are followed.)"));
+
+        // A lens file that could not be loaded is counted too.
+        let entries = resolver_entries(&server);
+        let index = VirtualTreeIndex::new(&entries);
+        let info = server
+            .doc_resolver()
+            .resolve_path("Lens Edu/articles/a.md")
+            .unwrap();
+        let rule = match_rule("Lens Edu/articles/a.md").unwrap();
+        let mut candidates = lens_backlinkers(&server, rule, &info.folder_doc_id, &info.uuid).await;
+        candidates.truncate(2);
+        let loaded = candidates
+            .into_iter()
+            .zip([Some("source:: [[../articles/a]]\n".to_string()), None])
+            .collect();
+        let (lenses, unread) = pick_lenses(&index, loaded, &info.uuid, 0);
+        assert_eq!(lenses.len(), 1);
+        assert_eq!(unread, 1);
+        let caps = RelatedOverCap {
+            over_cap: 0,
+            lenses_unread: unread,
+        };
+        let text = render_grouped(&CollectedRows::default(), &[], caps, "this article", true);
+        assert!(text.contains("(1 more lens file(s) link to this article but were not read"));
     }
 
     #[tokio::test]

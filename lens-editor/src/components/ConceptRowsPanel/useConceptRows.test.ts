@@ -89,11 +89,15 @@ describe('useLensesUsing', () => {
   it('finds the lenses among an article\'s backlinkers whose source:: points at it, with no cap', async () => {
     const folder = new Y.Doc();
     const lensIds = Array.from({ length: 12 }, (_, i) => `l${String(i).padStart(2, '0')}`);
-    folder.getMap<string[]>('backlinks_v0').set('article', [...lensIds, 'mention', 'concept']);
+    const backlinks = folder.getMap<string[]>('backlinks_v0');
+    backlinks.set('article', [...lensIds, 'mention', 'bare', 'concept']);
+    // Every lens but 'bare' has a concept file linking to it.
+    for (const id of [...lensIds, 'mention']) backlinks.set(id, ['concept']);
     const md = (id: string) => ({ id, type: 'markdown' as const, version: 0 });
     const metadata: Record<string, ReturnType<typeof md>> = {
       '/Lens Edu/articles/a.md': md('article'),
       '/Lens Edu/Lenses/Mention.md': md('mention'),
+      '/Lens Edu/Lenses/Bare.md': md('bare'),
       '/Lens Edu/Concepts/C.md': md('concept'),
     };
     for (const id of lensIds) metadata[`/Lens Edu/Lenses/${id}.md`] = md(id);
@@ -105,8 +109,9 @@ describe('useLensesUsing', () => {
     const { result } = renderHook(() => useLensesUsing(CONCEPT_ROW_RULES[0], 'article', true), { wrapper });
     await waitFor(() => expect(result.current.pending).toBe(0));
     expect(result.current.lenses.map((l) => l.id)).toEqual(lensIds);
-    // The concept file is not read as a lens.
-    expect(reader.mock.calls.map(([id]) => id).some((id) => id.endsWith('concept'))).toBe(false);
+    // Neither the concept file nor a lens without concept rows is read.
+    const read = reader.mock.calls.map(([id]) => id);
+    expect(read.some((id) => id.endsWith('concept') || id.endsWith('bare'))).toBe(false);
   });
 
   it('reads nothing for a lens (no lens context)', () => {

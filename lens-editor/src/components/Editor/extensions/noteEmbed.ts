@@ -394,16 +394,17 @@ class EmbedCard {
   }
 
   private previewState(text: string): EditorState {
-    return EditorState.create({
+    const state = EditorState.create({
       doc: text,
-      // The cursor of a live preview shows its line raw: park it at the end.
-      selection: { anchor: text.length },
       extensions: [
         ...embedViewExtensions(false),
         EditorState.readOnly.of(true),
         EditorView.editable.of(false),
       ],
     });
+    // The cursor of a live preview shows its line raw: park it at the end
+    // (the state's length: CodeMirror turns \r\n into one line break).
+    return state.update({ selection: { anchor: state.doc.length } }).state;
   }
 
   private updateMore(): void {

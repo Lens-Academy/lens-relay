@@ -48,6 +48,8 @@ export interface RowCardProps {
   /** Draws one of `sourceRows`' rows itself (an editable card), instead of
    *  the read-only block. */
   renderSourceRow?: (source: SourceRows, row: RowEntry) => ReactNode;
+  /** Collapsed, show this instead of the row's first line. */
+  summary?: string;
   /** A row about a related file, nested in its concept's card: the header
    *  names that file ("Lens: <name>", a link) instead of the concept. */
   label?: { kind: string; docId: string; name: string };
@@ -102,12 +104,13 @@ function RowPreview({ text }: { text: string }) {
   const view = useRef<EditorView | null>(null);
   useEffect(() => {
     // The live preview shows the cursor's line raw: park it on a line of its own.
-    const doc = `${text}\n`;
-    const state = EditorState.create({
-      doc,
-      selection: { anchor: doc.length },
+    // CodeMirror turns \r\n into one line break, so the end is the state's
+    // doc length, not the text's (else: "Selection points outside of document").
+    const created = EditorState.create({
+      doc: `${text}\n`,
       extensions: [...embedViewExtensions(false), rowEditorTheme, EditorState.readOnly.of(true), EditorView.editable.of(false)],
     });
+    const state = created.update({ selection: { anchor: created.doc.length } }).state;
     if (!view.current) view.current = new EditorView({ parent: host.current!, state });
     else view.current.setState(state);
   }, [text]);
@@ -138,7 +141,10 @@ export function ConceptRowCard(props: RowCardProps) {
   const refocusToggle = useRef(false);
   const live = useRef<{ view: EditorView; detach: () => void; onOutside: (e: MouseEvent) => void } | null>(null);
   const unmounted = useRef(false);
-  const editable = canEdit && !context;
+  // CodeMirror counts \r\n as one character, so y-section-sync's offsets
+  // would drift in a row with \r: such a row is edited in its concept file.
+  const crlf = entry.body.includes('\r');
+  const editable = canEdit && !context && !crlf;
   const fullId = `${RELAY_ID}-${entry.conceptId}`;
 
   const ended = useCallback(() => {
@@ -191,10 +197,11 @@ export function ConceptRowCard(props: RowCardProps) {
       setState('error');
       return;
     }
+    const body = ytext.toString().slice(row.bodyFrom, row.bodyTo);
     const view = new EditorView({
       parent: liveHost.current,
       state: EditorState.create({
-        doc: ytext.toString().slice(row.bodyFrom, row.bodyTo),
+        doc: body,
         extensions: [
           ...embedViewExtensions(canAcceptReject),
           rowEditorTheme,
@@ -244,10 +251,11 @@ export function ConceptRowCard(props: RowCardProps) {
     return () => clearTimeout(timer);
   }, [autoEdit, onAutoEdited, startEdit]);
 
-  const preview = rowPreview(entry.body);
+  const preview = props.summary ?? rowPreview(entry.body);
   // Opening or editing keeps the row open; a failed open does not.
   const showBody = expanded || state === 'connecting' || state === 'live';
   const sourceRows = props.sourceRows ?? [];
+  const nestedCount = sourceRows.reduce((sum, src) => sum + src.rows.length, 0);
   /** Expand or collapse (finishing an edit first): the triangle, or a click
    *  anywhere on the header bar but the concept link and its own buttons. */
   const toggle = () => {
@@ -306,6 +314,11 @@ export function ConceptRowCard(props: RowCardProps) {
             {preview || 'No notes yet'}
           </span>
         )}
+        {!showBody && !context && props.renderSourceRow && nestedCount > 0 && (
+          <span className="concept-row-nested-hint shrink-0 text-xs text-gray-400">
+            +{nestedCount} lens row{nestedCount === 1 ? '' : 's'}
+          </span>
+        )}
         <span className="ml-auto shrink-0 text-xs text-gray-400">
           {state === 'connecting' && 'Opening…'}
           {state === 'live' && 'Editing · Esc to finish'}
@@ -350,6 +363,9 @@ export function ConceptRowCard(props: RowCardProps) {
           {entry.body
             ? <RowPreview text={entry.body} />
             : <div className="italic text-gray-400">{editable ? 'No notes yet · click to write' : 'No notes yet'}</div>}
+          {crlf && canEdit && !context && (
+            <div className="mt-0.5 text-xs text-gray-400">Windows line endings: edit this row in the concept file.</div>
+          )}
         </div>
       )}
       {/* Always mounted: the editor goes in as soon as the connection is up. */}
