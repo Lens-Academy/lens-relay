@@ -384,6 +384,34 @@ class BulletWidget extends WidgetType {
 }
 
 /**
+ * HiddenFenceWidget - Hides a code block's opening fence (``` plus language)
+ * while the cursor is outside the block, as one hidden text node. A hidden mark
+ * would hold one span per highlight token (``` and js), and CodeMirror ignores
+ * an element's empty boxes when it has several. Beside the copy button (a point
+ * widget, which it skips), a click or ArrowDown on that line then left it
+ * nothing to measure, and it threw.
+ */
+class HiddenFenceWidget extends WidgetType {
+  private text: string;
+
+  constructor(text: string) {
+    super();
+    this.text = text;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = HIDDEN_CLASS;
+    span.textContent = this.text;
+    return span;
+  }
+
+  eq(other: HiddenFenceWidget): boolean {
+    return this.text === other.text;
+  }
+}
+
+/**
  * CheckboxWidget - Renders checklist markers as interactive checkboxes.
  * Clicking toggles [ ] <-> [x] in the document.
  */
@@ -784,14 +812,26 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               // Hide fence markers and language info when cursor is outside
               if (!cursorInside) {
                 // Hide opening fence line content (``` + optional language)
+                // with one widget (see HiddenFenceWidget), indentation included.
+                // A container prefix (`> `, a list marker) keeps its own
+                // decorations and is hidden with a mark, as before.
                 const openLine = view.state.doc.lineAt(node.from);
-                if (openLine.from < openLine.to) {
+                const prefix = view.state.doc.sliceString(openLine.from, node.from);
+                const fenceFrom = prefix.trim() ? node.from : openLine.from;
+                if (openLine.from < fenceFrom) {
                   decorations.push({
                     from: openLine.from,
-                    to: openLine.to,
+                    to: fenceFrom,
                     deco: Decoration.mark({ class: HIDDEN_CLASS }),
                   });
                 }
+                decorations.push({
+                  from: fenceFrom,
+                  to: openLine.to,
+                  deco: Decoration.replace({
+                    widget: new HiddenFenceWidget(view.state.doc.sliceString(fenceFrom, openLine.to)),
+                  }),
+                });
 
                 // Hide closing fence line content (```)
                 const closeLine = view.state.doc.lineAt(node.to);
