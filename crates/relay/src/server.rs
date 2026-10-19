@@ -343,6 +343,36 @@ fn validate_file_path(path: &str) -> std::result::Result<(), &'static str> {
     Ok(())
 }
 
+/// The checks `Server::move_document` makes of a destination before it looks
+/// at any folder doc.
+fn validate_document_destination(new_path: &str) -> std::result::Result<(), MoveDocumentError> {
+    validate_file_path(new_path)
+        .map_err(|message| MoveDocumentError::BadRequest(message.to_string()))?;
+    if !new_path.starts_with('/') {
+        return Err(MoveDocumentError::BadRequest(
+            "new_path must start with '/'".into(),
+        ));
+    }
+    // HTML pages move here too, and a Markdown document may become one (a
+    // widget converted from widgets/x.md to widgets/x.html keeps its id);
+    // see move_document.
+    if !new_path.ends_with(".md") && !new_path.ends_with(".html") {
+        return Err(MoveDocumentError::BadRequest(
+            "new_path must end with '.md' or '.html'".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The id of the content doc `uuid` in a folder of the relay `relay_id`.
+fn relay_content_doc_id(relay_id: &str, uuid: &str) -> String {
+    if relay_id.is_empty() {
+        uuid.to_string()
+    } else {
+        format!("{}-{}", relay_id, uuid)
+    }
+}
+
 #[derive(Deserialize)]
 struct FileDownloadQueryParams {
     hash: Option<String>,
@@ -405,6 +435,27 @@ struct MoveDocResponse {
     old_folder: String,
     new_folder: String,
     links_rewritten: usize,
+}
+
+/// The most documents a folder move moves under one hold of the link
+/// indexer's step lock. The lock is let go between batches, so the worker,
+/// the startup reindex and other moves wait for one batch, not the folder.
+const FOLDER_MOVE_DOCS_PER_STEP: usize = 32;
+
+/// How many content docs a move writes to the store at once.
+const MOVE_CONTENT_WRITES_AT_ONCE: usize = 8;
+
+/// What server-side moves have changed in memory and still have to write to
+/// the store. Moves write only once they have let go of the step lock, and
+/// each doc once, however many of a folder move's documents touched it.
+#[derive(Default)]
+struct MoveWrites {
+    folder_docs: std::collections::BTreeMap<String, Arc<SyncKv>>,
+    content_docs: std::collections::BTreeMap<String, Arc<SyncKv>>,
+    /// Content doc ids of the moved documents, for the search index.
+    moved: Vec<String>,
+    /// Folder docs whose filemeta changed, for the derived indexes.
+    changed_folders: std::collections::BTreeSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -654,6 +705,7 @@ async fn search_worker(
                 &recent_changes_index,
                 titles.as_ref(),
                 update_suggestions,
+                true,
             );
             link_indexer::acknowledge_generation(&pending, &doc_id, queued.generation);
         }
@@ -778,6 +830,7 @@ pub(crate) fn search_handle_content_update(
         recent_changes_index,
         None,
         true,
+        true,
     )
 }
 
@@ -785,7 +838,9 @@ pub(crate) fn search_handle_content_update(
 /// prebuilt per-tick cache when one is given (the worker's heavy lane), so a
 /// backlog of N content docs costs one all-folders scan instead of N, and
 /// optionally skips the suggestions rescan when the fast lane already
-/// covered this generation.
+/// covered this generation. Without `commit` the doc is only added to the
+/// index's buffer, for a caller that commits a batch at once
+/// (`SearchIndex::flush`).
 #[allow(clippy::too_many_arguments)]
 fn search_handle_content_update_inner(
     doc_id: &str,
@@ -795,6 +850,7 @@ fn search_handle_content_update_inner(
     recent_changes_index: &RecentChangesIndex,
     titles: Option<&std::collections::HashMap<String, (String, String)>>,
     update_suggestions: bool,
+    commit: bool,
 ) {
     let Some((_relay_id, doc_uuid)) = link_indexer::parse_doc_id(doc_id) else {
         return;
@@ -846,7 +902,12 @@ fn search_handle_content_update_inner(
         None => search_find_title_and_folder(doc_uuid, docs),
     };
 
-    match search_index.add_document(doc_uuid, &title, &body, &folder_name) {
+    let added = if commit {
+        search_index.add_document(doc_uuid, &title, &body, &folder_name)
+    } else {
+        search_index.add_document_buffered(doc_uuid, &title, &body, &folder_name)
+    };
+    match added {
         Ok(()) => tracing::debug!("Search indexed content doc: {} ({})", doc_uuid, title),
         Err(e) => tracing::error!("Search index failed for {}: {:?}", doc_uuid, e),
     }
@@ -968,6 +1029,7 @@ async fn search_handle_folder_update(
                         recent_changes_index,
                         Some(&titles),
                         true,
+                        true,
                     );
                 }
             }
@@ -987,6 +1049,7 @@ async fn search_handle_folder_update(
                     suggestions_index,
                     recent_changes_index,
                     Some(&titles),
+                    true,
                     true,
                 );
             }
@@ -2613,37 +2676,7 @@ impl Server {
         new_path: &str,
         target_folder: Option<&str>,
     ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
-        self.move_document_impl(uuid, new_path, target_folder, None)
-            .await
-    }
-
-    /// `move_document`. `unreached_linkers` is given only by a caller that
-    /// has already looked them up (a folder move does it once for all its
-    /// documents); otherwise the move looks for itself.
-    async fn move_document_impl(
-        &self,
-        uuid: &str,
-        new_path: &str,
-        target_folder: Option<&str>,
-        unreached_linkers: Option<Vec<String>>,
-    ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
-        validate_file_path(new_path)
-            .map_err(|message| MoveDocumentError::BadRequest(message.to_string()))?;
-
-        // Validate new_path format
-        if !new_path.starts_with('/') {
-            return Err(MoveDocumentError::BadRequest(
-                "new_path must start with '/'".into(),
-            ));
-        }
-        // HTML pages move here too, and a Markdown document may become one (a
-        // widget converted from widgets/x.md to widgets/x.html keeps its id);
-        // see move_document.
-        if !new_path.ends_with(".md") && !new_path.ends_with(".html") {
-            return Err(MoveDocumentError::BadRequest(
-                "new_path must end with '.md' or '.html'".into(),
-            ));
-        }
+        validate_document_destination(new_path)?;
 
         // Sync block 1: Gather metadata from folder docs.
         // Non-Send guards must not cross .await points, so we extract owned data here.
@@ -2754,15 +2787,6 @@ impl Server {
             )
         }; // All DashMap refs and awareness guards dropped here
 
-        // Helper: prefix a UUID with the relay_id to form a content doc ID.
-        let to_content_id = |uuid: &str| -> String {
-            if relay_id.is_empty() {
-                uuid.to_string()
-            } else {
-                format!("{}-{}", relay_id, uuid)
-            }
-        };
-
         // A move rewrites filemeta, backlinkers' wikilinks and backlinks in
         // one go, so it is a step of its own: without the indexer's step
         // lock, a link indexer or startup reindex step could read a
@@ -2782,178 +2806,41 @@ impl Server {
                 Some(indexer) => Some(indexer.lock_step().await),
                 None => None,
             };
-            let unreached = match &unreached_linkers {
-                Some(linkers) => linkers.clone(),
-                None => self
-                    .unreached_linkers(vec![uuid.to_string()], &folder_doc_ids)
-                    .await
-                    .linkers
-                    .remove(uuid)
-                    .unwrap_or_default(),
-            };
+            let unreached = self
+                .unreached_linkers(vec![uuid.to_string()], &folder_doc_ids)
+                .await
+                .linkers
+                .remove(uuid)
+                .unwrap_or_default();
             let mut needed_uuids = self.moved_doc_and_backlinkers(uuid, &folder_doc_ids);
             for linker in unreached {
                 if !needed_uuids.contains(&linker) {
                     needed_uuids.push(linker);
                 }
             }
-            let missing: Vec<String> = needed_uuids
-                .iter()
-                .map(|u| to_content_id(u))
-                .filter(|content_id| !self.docs.contains_key(content_id))
-                .collect();
+            let missing = self.docs_not_in_memory(&relay_id, &needed_uuids);
             if missing.is_empty() || loaded_missing {
                 break (step, needed_uuids);
             }
             drop(step);
-            for content_id in &missing {
-                if let Err(e) = self.load_doc(content_id, None).await {
-                    tracing::warn!(
-                        "Failed to load backlinker doc {} from storage: {:?}",
-                        content_id,
-                        e
-                    );
-                }
-            }
+            self.load_docs_for_move(&missing).await;
             loaded_missing = true;
         };
 
-        // Sync block 2: Clone Arcs out of DashMap, then acquire write locks.
-        // Phase 1: Extract awareness Arcs and sync_kv Arcs from DashMap refs.
-        let (
-            folder_awareness,
-            folder_sync_kvs,
-            content_doc_ids,
-            content_awareness,
-            content_sync_kvs,
-        ) = {
-            let docs = &self.docs;
-
-            let (folder_awareness, folder_sync_kvs): (Vec<_>, Vec<_>) = folder_doc_ids
-                .iter()
-                .filter_map(|id| {
-                    let doc_ref = docs.get(id)?;
-                    Some((doc_ref.awareness(), doc_ref.sync_kv()))
-                })
-                .unzip();
-
-            let mut content_doc_ids: Vec<String> =
-                needed_uuids.iter().map(|u| to_content_id(u)).collect();
-            // Sort to ensure consistent lock ordering across concurrent calls,
-            // preventing ABBA deadlocks when acquiring awareness write locks.
-            content_doc_ids.sort();
-
-            let (content_awareness, content_sync_kvs): (Vec<_>, Vec<_>) = content_doc_ids
-                .iter()
-                .filter_map(|id| {
-                    let doc_ref = docs.get(id)?;
-                    Some((doc_ref.awareness(), doc_ref.sync_kv()))
-                })
-                .unzip();
-
-            (
-                folder_awareness,
-                folder_sync_kvs,
-                content_doc_ids,
-                content_awareness,
-                content_sync_kvs,
-            )
-        }; // All DashMap shard locks released
-
-        // Phase 2: Acquire awareness write locks (no DashMap guards held).
-        let result = {
-            let doc_resolver = self.doc_resolver.clone();
-
-            let folder_guards: Vec<_> = folder_awareness
-                .iter()
-                .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
-                .collect();
-
-            let folder_doc_refs: Vec<&yrs::Doc> = folder_guards.iter().map(|g| &g.doc).collect();
-            let folder_name_strings: Vec<String> = folder_doc_ids
-                .iter()
-                .zip(folder_guards.iter())
-                .map(|(id, g)| y_sweet_core::doc_resolver::read_folder_name(&g.doc, id))
-                .collect();
-            let folder_name_refs: Vec<&str> =
-                folder_name_strings.iter().map(|s| s.as_str()).collect();
-
-            let source_idx = folder_doc_ids
-                .iter()
-                .position(|id| id == &source_folder_doc_id)
-                .ok_or_else(|| {
-                    MoveDocumentError::Internal("Source folder doc not in folder list".into())
-                })?;
-            let target_idx = folder_doc_ids
-                .iter()
-                .position(|id| id == &target_folder_doc_id)
-                .ok_or_else(|| {
-                    MoveDocumentError::Internal("Target folder doc not in folder list".into())
-                })?;
-
-            let content_guards: Vec<_> = content_awareness
-                .iter()
-                .map(|a| a.write().unwrap_or_else(|e| e.into_inner()))
-                .collect();
-
-            let mut content_docs: std::collections::HashMap<String, &yrs::Doc> =
-                std::collections::HashMap::new();
-            for (i, guard) in content_guards.iter().enumerate() {
-                let doc_id = &content_doc_ids[i];
-                if let Some((_r, u)) = link_indexer::parse_doc_id(doc_id) {
-                    content_docs.insert(u.to_string(), &guard.doc);
-                }
-            }
-
-            let result = link_indexer::move_document(
-                uuid,
-                new_path,
-                folder_doc_refs[source_idx],
-                folder_doc_refs[target_idx],
-                &folder_doc_refs,
-                &folder_name_refs,
-                &doc_resolver,
-                &content_docs,
-            )
-            .map_err(|e| MoveDocumentError::Internal(e.to_string()))?;
-            self.queue_folder_change(&source_folder_doc_id, &folder_awareness[source_idx]);
-            if target_idx != source_idx {
-                self.queue_folder_change(&target_folder_doc_id, &folder_awareness[target_idx]);
-            }
-            result
-        }; // All awareness write guards dropped here
+        let mut writes = MoveWrites::default();
+        let result = self.apply_document_move(
+            uuid,
+            new_path,
+            &source_folder_doc_id,
+            &target_folder_doc_id,
+            &folder_doc_ids,
+            &needed_uuids,
+            &relay_id,
+            &mut writes,
+        );
         drop(step);
-
-        // Persist all mutated folder docs and content docs
-        for sync_kv in &folder_sync_kvs {
-            if let Err(e) = sync_kv.persist().await {
-                tracing::error!("Failed to persist folder doc after move: {:?}", e);
-            }
-        }
-        for sync_kv in &content_sync_kvs {
-            if let Err(e) = sync_kv.persist().await {
-                tracing::error!("Failed to persist content doc after move: {:?}", e);
-            }
-        }
-
-        // Update search index for the moved document
-        if let Some(ref search_index) = self.search_index {
-            let content_doc_id = to_content_id(uuid);
-            search_handle_content_update(
-                &content_doc_id,
-                &self.docs,
-                search_index,
-                &self.suggestions_index,
-                &self.recent_changes_index,
-            );
-        }
-
-        // LINK_INDEXER_ORIGIN writes bypass the leased callback path, so
-        // queue explicitly (helper attaches the GC lease).
-        self.queue_derived_index_with_lease(&source_folder_doc_id);
-        if source_folder_doc_id != target_folder_doc_id {
-            self.queue_derived_index_with_lease(&target_folder_doc_id);
-        }
+        let result = result?;
+        self.finish_moves(writes).await;
 
         tracing::info!(
             "Document {} moved: {} -> {} (folder: {} -> {}, {} links rewritten)",
@@ -2966,6 +2853,232 @@ impl Server {
         );
 
         Ok(result)
+    }
+
+    /// The content doc ids, among `uuids`, of docs that are not in memory.
+    fn docs_not_in_memory(&self, relay_id: &str, uuids: &[String]) -> Vec<String> {
+        uuids
+            .iter()
+            .map(|u| relay_content_doc_id(relay_id, u))
+            .filter(|content_id| !self.docs.contains_key(content_id))
+            .collect()
+    }
+
+    /// Load docs a move is to rewrite from the store, with the step lock let
+    /// go (it reads the store).
+    async fn load_docs_for_move(&self, content_ids: &[String]) {
+        for content_id in content_ids {
+            if let Err(e) = self.load_doc(content_id, None).await {
+                tracing::warn!(
+                    "Failed to load backlinker doc {} from storage: {:?}",
+                    content_id,
+                    e
+                );
+            }
+        }
+    }
+
+    /// One document's move in memory, with the step lock held by the caller:
+    /// takes the write locks of every folder doc and then of the content docs
+    /// `needed_uuids` (sorted), moves the filemeta entry unless the
+    /// destination has been taken since it was checked, rewrites the links
+    /// to and from the document (`link_indexer::move_document`), and queues
+    /// the folders it changed while their locks are still held. Writes
+    /// nothing to the store: the docs it held are added to `writes`.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_document_move(
+        &self,
+        uuid: &str,
+        new_path: &str,
+        source_folder_doc_id: &str,
+        target_folder_doc_id: &str,
+        folder_doc_ids: &[String],
+        needed_uuids: &[String],
+        relay_id: &str,
+        writes: &mut MoveWrites,
+    ) -> std::result::Result<link_indexer::MoveResult, MoveDocumentError> {
+        // Phase 1: Extract awareness Arcs and sync_kv Arcs from DashMap refs.
+        let (folders, contents) = {
+            let docs = &self.docs;
+            let arcs = |id: &String| {
+                let doc_ref = docs.get(id)?;
+                Some((id.clone(), doc_ref.awareness(), doc_ref.sync_kv()))
+            };
+
+            let folders: Vec<_> = folder_doc_ids.iter().filter_map(arcs).collect();
+
+            let mut content_doc_ids: Vec<String> = needed_uuids
+                .iter()
+                .map(|u| relay_content_doc_id(relay_id, u))
+                .collect();
+            // Sort to ensure consistent lock ordering across concurrent calls,
+            // preventing ABBA deadlocks when acquiring awareness write locks.
+            content_doc_ids.sort();
+            content_doc_ids.dedup();
+            let contents: Vec<_> = content_doc_ids.iter().filter_map(arcs).collect();
+
+            (folders, contents)
+        }; // All DashMap shard locks released
+
+        let source_idx = folders
+            .iter()
+            .position(|(id, _, _)| id == source_folder_doc_id)
+            .ok_or_else(|| {
+                MoveDocumentError::Internal("Source folder doc not in folder list".into())
+            })?;
+        let target_idx = folders
+            .iter()
+            .position(|(id, _, _)| id == target_folder_doc_id)
+            .ok_or_else(|| {
+                MoveDocumentError::Internal("Target folder doc not in folder list".into())
+            })?;
+
+        // Phase 2: Acquire awareness write locks (no DashMap guards held).
+        let result = {
+            let folder_guards: Vec<_> = folders
+                .iter()
+                .map(|(_, a, _)| a.write().unwrap_or_else(|e| e.into_inner()))
+                .collect();
+
+            let folder_doc_refs: Vec<&yrs::Doc> = folder_guards.iter().map(|g| &g.doc).collect();
+            // The destination was free when the move was checked, without
+            // these locks; a file created there since must not be replaced.
+            {
+                let txn = folder_doc_refs[target_idx].transact();
+                if txn
+                    .get_map("filemeta_v0")
+                    .is_some_and(|filemeta| filemeta.get(&txn, new_path).is_some())
+                {
+                    return Err(MoveDocumentError::Conflict(format!(
+                        "Path '{}' already exists in target folder",
+                        new_path
+                    )));
+                }
+            }
+            let folder_name_strings: Vec<String> = folders
+                .iter()
+                .zip(folder_guards.iter())
+                .map(|((id, _, _), g)| y_sweet_core::doc_resolver::read_folder_name(&g.doc, id))
+                .collect();
+            let folder_name_refs: Vec<&str> =
+                folder_name_strings.iter().map(|s| s.as_str()).collect();
+
+            let content_guards: Vec<_> = contents
+                .iter()
+                .map(|(_, a, _)| a.write().unwrap_or_else(|e| e.into_inner()))
+                .collect();
+
+            let mut content_docs: std::collections::HashMap<String, &yrs::Doc> =
+                std::collections::HashMap::new();
+            for ((doc_id, _, _), guard) in contents.iter().zip(content_guards.iter()) {
+                if let Some((_r, u)) = link_indexer::parse_doc_id(doc_id) {
+                    content_docs.insert(u.to_string(), &guard.doc);
+                }
+            }
+
+            let result = link_indexer::move_document(
+                uuid,
+                new_path,
+                folder_doc_refs[source_idx],
+                folder_doc_refs[target_idx],
+                &folder_doc_refs,
+                &folder_name_refs,
+                &self.doc_resolver,
+                &content_docs,
+            )
+            .map_err(|e| MoveDocumentError::Internal(e.to_string()))?;
+            self.queue_folder_change(source_folder_doc_id, &folders[source_idx].1);
+            if target_idx != source_idx {
+                self.queue_folder_change(target_folder_doc_id, &folders[target_idx].1);
+            }
+            result
+        }; // All awareness write guards dropped here
+
+        for (id, _, sync_kv) in folders {
+            writes.folder_docs.entry(id).or_insert(sync_kv);
+        }
+        for (id, _, sync_kv) in contents {
+            writes.content_docs.entry(id).or_insert(sync_kv);
+        }
+        writes.moved.push(relay_content_doc_id(relay_id, uuid));
+        writes
+            .changed_folders
+            .insert(source_folder_doc_id.to_string());
+        writes
+            .changed_folders
+            .insert(target_folder_doc_id.to_string());
+        Ok(result)
+    }
+
+    /// The rest of one or more moves, once they have let go of the step lock:
+    /// write each doc they changed to the store, the folder docs first, and
+    /// queue the moved documents for the search index and the changed
+    /// folders for the derived indexes.
+    async fn finish_moves(&self, writes: MoveWrites) {
+        for (doc_id, sync_kv) in &writes.folder_docs {
+            if let Err(e) = sync_kv.persist().await {
+                tracing::error!(
+                    "Failed to persist folder doc {} after move: {:?}",
+                    doc_id,
+                    e
+                );
+            }
+        }
+        // Each content doc is a write of its own (a folder move can change
+        // hundreds): a few at a time.
+        futures::stream::iter(&writes.content_docs)
+            .for_each_concurrent(
+                MOVE_CONTENT_WRITES_AT_ONCE,
+                |(doc_id, sync_kv)| async move {
+                    if let Err(e) = sync_kv.persist().await {
+                        tracing::error!(
+                            "Failed to persist content doc {} after move: {:?}",
+                            doc_id,
+                            e
+                        );
+                    }
+                },
+            )
+            .await;
+
+        // Update search index for the moved documents: one document is
+        // committed at once, as before; the documents of a folder move are
+        // committed together, with their titles found in one pass.
+        if let Some(ref search_index) = self.search_index {
+            if let [content_doc_id] = writes.moved.as_slice() {
+                search_handle_content_update(
+                    content_doc_id,
+                    &self.docs,
+                    search_index,
+                    &self.suggestions_index,
+                    &self.recent_changes_index,
+                );
+            } else if !writes.moved.is_empty() {
+                let titles = build_title_folder_cache(&self.docs);
+                for content_doc_id in &writes.moved {
+                    search_handle_content_update_inner(
+                        content_doc_id,
+                        &self.docs,
+                        search_index,
+                        &self.suggestions_index,
+                        &self.recent_changes_index,
+                        Some(&titles),
+                        true,
+                        false,
+                    );
+                    tokio::task::yield_now().await;
+                }
+                if let Err(e) = search_index.flush() {
+                    tracing::error!("Failed to commit the search index after a move: {:?}", e);
+                }
+            }
+        }
+
+        // LINK_INDEXER_ORIGIN writes bypass the leased callback path, so
+        // queue explicitly (helper attaches the GC lease).
+        for folder_doc_id in &writes.changed_folders {
+            self.queue_derived_index_with_lease(folder_doc_id);
+        }
     }
 
     /// [`Server::move_document`] for a user-requested move: a video transcript
@@ -3388,10 +3501,10 @@ impl Server {
         let mut old_in_folder_path = None;
 
         for folder_doc_id in &folder_doc_ids {
-            let Some(doc_ref) = self.docs.get(folder_doc_id) else {
+            // ⚠️ LOCK ORDERING: drop the shard ref before locking awareness.
+            let Some(awareness) = self.docs.get(folder_doc_id).map(|d| d.awareness()) else {
                 continue;
             };
-            let awareness = doc_ref.awareness();
             let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
             let name = y_sweet_core::doc_resolver::read_folder_name(&guard.doc, folder_doc_id);
             let prefix = format!("{}/", name);
@@ -3421,18 +3534,17 @@ impl Server {
             }
         }
 
-        let entries_to_move: Vec<(
-            String,
-            String,
-            String,
-            String,
-            std::collections::HashMap<String, yrs::Any>,
-        )> = {
+        // Clone the Arcs out and drop the shard guard before the blocking
+        // awareness lock (see the lock-ordering rule in AGENTS.md).
+        let (folder_sync_kv, folder_awareness) = {
             let doc_ref = self.docs.get(&source_folder_doc_id).ok_or_else(|| {
                 MoveDocumentError::Internal("Source folder doc not loaded".into())
             })?;
-            let awareness = doc_ref.awareness();
-            let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+            (doc_ref.sync_kv(), doc_ref.awareness())
+        };
+
+        let entries_to_move: Vec<FolderMoveEntry> = {
+            let guard = folder_awareness.read().unwrap_or_else(|e| e.into_inner());
             let txn = guard.doc.transact();
             let filemeta = txn
                 .get_map("filemeta_v0")
@@ -3493,6 +3605,41 @@ impl Server {
                 }
             }
             moves.sort_by(|a, b| a.0.cmp(&b.0));
+
+            // The documents move one by one, and the checks move_document
+            // makes on each would stop the move halfway: they are made here,
+            // for every document, before anything moves.
+            for (source, destination, entry_type, id, _) in &moves {
+                if moves_as_document(source, destination, entry_type) && !id.is_empty() {
+                    validate_document_destination(destination).map_err(|e| {
+                        MoveDocumentError::BadRequest(format!(
+                            "Cannot move {}{}: {}",
+                            source_folder_name, source, e
+                        ))
+                    })?;
+                }
+            }
+            match refused_document_move(&filemeta, &txn, &moves) {
+                Some(DocumentMoveRefusal::Taken(destination)) => {
+                    return Err(MoveDocumentError::Conflict(format!(
+                        "Path '{}' already exists in target folder",
+                        destination
+                    )));
+                }
+                Some(DocumentMoveRefusal::Twin(destination, twin)) => {
+                    return Err(MoveDocumentError::Conflict(format!(
+                        "Cannot move '{}' to '{}{}': '{}{}' would be in the same folder as '{}{}'. A .md and a .html file cannot share a name, because a link like [[name]] could not tell them apart.",
+                        path,
+                        source_folder_name,
+                        new_path,
+                        source_folder_name,
+                        destination,
+                        source_folder_name,
+                        twin
+                    )));
+                }
+                None => {}
+            }
             moves
         };
 
@@ -3509,37 +3656,39 @@ impl Server {
 
         // One look through the docs the startup reindex has not reached for
         // the whole folder, rather than one per document.
-        let mut unreached_linkers = {
+        let unreached_linkers = {
             let step = match &self.link_indexer {
                 Some(indexer) => Some(indexer.lock_step().await),
                 None => None,
             };
             let uuids: Vec<String> = document_moves.iter().map(|(id, _)| id.clone()).collect();
-            let folder_doc_ids = link_indexer::find_all_folder_docs(&self.docs);
             let linkers = self.unreached_linkers(uuids, &folder_doc_ids).await.linkers;
             drop(step);
             linkers
         };
 
-        let mut links_rewritten = 0usize;
-        for (uuid, destination) in document_moves {
-            let linkers = unreached_linkers.remove(&uuid).unwrap_or_default();
-            let result = self
-                .move_document_impl(&uuid, &destination, None, Some(linkers))
-                .await?;
-            links_rewritten += result.links_rewritten;
-        }
-
-        // Clone the Arcs out and drop the shard guard before the blocking
-        // awareness lock (see the lock-ordering rule in AGENTS.md).
-        let (sync_kv, awareness) = {
-            let doc_ref = self.docs.get(&source_folder_doc_id).ok_or_else(|| {
-                MoveDocumentError::Internal("Source folder doc not loaded".into())
-            })?;
-            (doc_ref.sync_kv(), doc_ref.awareness())
+        let mut writes = MoveWrites::default();
+        let links_rewritten = match self
+            .move_folder_documents(
+                &document_moves,
+                &source_folder_doc_id,
+                &folder_doc_ids,
+                unreached_linkers,
+                &mut writes,
+            )
+            .await
+        {
+            Ok(links_rewritten) => links_rewritten,
+            Err(e) => {
+                // The documents moved before the error stay moved, each
+                // completely, as before: they are written all the same.
+                self.finish_moves(writes).await;
+                return Err(e);
+            }
         };
-        let folder_sync_kv = {
-            let guard = awareness.write().unwrap_or_else(|e| e.into_inner());
+
+        {
+            let guard = folder_awareness.write().unwrap_or_else(|e| e.into_inner());
             let mut txn = guard
                 .doc
                 .transact_mut_with(link_indexer::LINK_INDEXER_ORIGIN);
@@ -3574,16 +3723,17 @@ impl Server {
                     continue;
                 }
             }
-            self.queue_folder_change(&source_folder_doc_id, &awareness);
-            sync_kv
-        };
-
-        if let Err(e) = folder_sync_kv.persist().await {
-            tracing::error!("Failed to persist folder doc after folder move: {:?}", e);
+            self.queue_folder_change(&source_folder_doc_id, &folder_awareness);
         }
+        writes
+            .folder_docs
+            .entry(source_folder_doc_id.clone())
+            .or_insert(folder_sync_kv);
+        writes.changed_folders.insert(source_folder_doc_id.clone());
 
         self.doc_resolver.rebuild(&self.docs);
-        self.queue_derived_index_with_lease(&source_folder_doc_id);
+        // One write of each doc for the whole folder.
+        self.finish_moves(writes).await;
 
         Ok(link_indexer::MoveResult {
             old_path,
@@ -3592,6 +3742,84 @@ impl Server {
             new_folder_name: source_folder_name,
             links_rewritten,
         })
+    }
+
+    /// The documents of a folder move (`document_moves`: uuid, destination),
+    /// each moved as `move_document` moves one, `FOLDER_MOVE_DOCS_PER_STEP`
+    /// to a hold of the step lock. The lock is let go between batches; every
+    /// document moved by then has moved completely, as a single move leaves
+    /// it. Writes nothing to the store: the docs the moves change are added
+    /// to `writes`. Returns the number of links rewritten.
+    async fn move_folder_documents(
+        &self,
+        document_moves: &[(String, String)],
+        folder_doc_id: &str,
+        folder_doc_ids: &[String],
+        mut unreached_linkers: std::collections::HashMap<String, Vec<String>>,
+        writes: &mut MoveWrites,
+    ) -> std::result::Result<usize, MoveDocumentError> {
+        let relay_id = link_indexer::parse_doc_id(folder_doc_id)
+            .map(|(r, _)| r.to_string())
+            .unwrap_or_default();
+        let mut links_rewritten = 0usize;
+        for batch in document_moves.chunks(FOLDER_MOVE_DOCS_PER_STEP) {
+            // As in move_document: the docs to rewrite are found under the
+            // step lock, and those not in memory are loaded with it let go.
+            let mut loaded_missing = false;
+            let step = loop {
+                let step = match &self.link_indexer {
+                    Some(indexer) => Some(indexer.lock_step().await),
+                    None => None,
+                };
+                let mut needed: Vec<String> = Vec::new();
+                for (uuid, _) in batch {
+                    needed.extend(self.moved_doc_and_backlinkers(uuid, folder_doc_ids));
+                    needed.extend(unreached_linkers.get(uuid).into_iter().flatten().cloned());
+                }
+                needed.sort();
+                needed.dedup();
+                let missing = self.docs_not_in_memory(&relay_id, &needed);
+                if missing.is_empty() || loaded_missing {
+                    break step;
+                }
+                drop(step);
+                self.load_docs_for_move(&missing).await;
+                loaded_missing = true;
+            };
+
+            for (uuid, destination) in batch {
+                let mut needed_uuids = self.moved_doc_and_backlinkers(uuid, folder_doc_ids);
+                for linker in unreached_linkers.remove(uuid).unwrap_or_default() {
+                    if !needed_uuids.contains(&linker) {
+                        needed_uuids.push(linker);
+                    }
+                }
+                let result = self.apply_document_move(
+                    uuid,
+                    destination,
+                    folder_doc_id,
+                    folder_doc_id,
+                    folder_doc_ids,
+                    &needed_uuids,
+                    &relay_id,
+                    writes,
+                )?;
+                tracing::info!(
+                    "Document {} moved: {} -> {} (folder: {} -> {}, {} links rewritten)",
+                    uuid,
+                    result.old_path,
+                    result.new_path,
+                    result.old_folder_name,
+                    result.new_folder_name,
+                    result.links_rewritten,
+                );
+                links_rewritten += result.links_rewritten;
+                // Other tasks run between documents; steps wait for the batch.
+                tokio::task::yield_now().await;
+            }
+            drop(step);
+        }
+        Ok(links_rewritten)
     }
 
     /// Convenience wrapper for tests: creates a Server and discards the WorkerReceivers.
@@ -6160,6 +6388,79 @@ fn moves_as_document(path: &str, new_path: &str, entry_type: &str) -> bool {
         "folder" => false,
         _ => link_indexer::is_link_target(path, entry_type) && new_path.ends_with(".html"),
     }
+}
+
+/// An entry a folder move moves: its path, destination, type, id and
+/// filemeta fields.
+type FolderMoveEntry = (
+    String,
+    String,
+    String,
+    String,
+    std::collections::HashMap<String, yrs::Any>,
+);
+
+/// Why `move_document` would refuse one of a folder move's documents.
+#[derive(Debug, PartialEq)]
+enum DocumentMoveRefusal {
+    /// Its destination is taken.
+    Taken(String),
+    /// Its destination, and the twin there (`x.md` beside `x.html`, which a
+    /// link like `[[x]]` could not tell apart).
+    Twin(String, String),
+}
+
+/// The first of a folder move's documents that `move_document` would refuse
+/// when its turn came, with the documents before it (`moves` order) moved
+/// already: its destination taken, or a twin there. Found before anything
+/// moves, so that the whole move is refused instead of stopping halfway.
+fn refused_document_move(
+    filemeta: &yrs::MapRef,
+    txn: &impl ReadTxn,
+    moves: &[FolderMoveEntry],
+) -> Option<DocumentMoveRefusal> {
+    // The folder as each turn finds it: its paths, and the (path, id) of the
+    // entries under each lower-cased path, as twins are found by.
+    let mut paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut by_lower: std::collections::HashMap<String, Vec<(String, String)>> =
+        std::collections::HashMap::new();
+    for (path, value) in filemeta.iter(txn) {
+        let id = link_indexer::extract_id_from_filemeta_entry(&value, txn).unwrap_or_default();
+        paths.insert(path.to_string());
+        by_lower
+            .entry(path.to_lowercase())
+            .or_default()
+            .push((path.to_string(), id));
+    }
+    for (source, destination, entry_type, id, _) in moves {
+        if !moves_as_document(source, destination, entry_type) || id.is_empty() {
+            continue;
+        }
+        if paths.contains(destination) {
+            return Some(DocumentMoveRefusal::Taken(destination.clone()));
+        }
+        // As find_twin_in_filemeta: a file is not its own twin.
+        let twin = link_indexer::twin_path(destination).and_then(|twin| {
+            by_lower
+                .get(&twin.to_lowercase())?
+                .iter()
+                .find(|(_, twin_id)| twin_id != id)
+                .map(|(twin_path, _)| twin_path.clone())
+        });
+        if let Some(twin) = twin {
+            return Some(DocumentMoveRefusal::Twin(destination.clone(), twin));
+        }
+        paths.remove(source);
+        paths.insert(destination.clone());
+        if let Some(entries) = by_lower.get_mut(&source.to_lowercase()) {
+            entries.retain(|(path, _)| path != source);
+        }
+        by_lower
+            .entry(destination.to_lowercase())
+            .or_default()
+            .push((destination.clone(), id.clone()));
+    }
+    None
 }
 
 /// Move a document to a new path within or across folders.
@@ -11983,7 +12284,6 @@ mod test {
         Arc<std::sync::atomic::AtomicBool>,
         Arc<tokio::sync::Semaphore>,
     ) {
-        let folder_doc_id = format!("{}-{}", TEST_RELAY_ID, folder_uuid);
         let writing = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         let store: Arc<Box<dyn Store>> = Arc::new(Box::new(GatedStore {
@@ -11991,6 +12291,23 @@ mod test {
             writing: writing.clone(),
             gate: gate.clone(),
         }));
+        let folder_doc_id =
+            insert_folder_doc_in_store(server, store, folder_uuid, entries, backlinks).await;
+        writing.store(false, std::sync::atomic::Ordering::SeqCst);
+        (folder_doc_id, writing, gate)
+    }
+
+    /// A folder "Notes" kept in `store`, with the given filemeta entries
+    /// (path, uuid, type) and persisted backlinks (target, source). Returns
+    /// its doc id.
+    async fn insert_folder_doc_in_store(
+        server: &Arc<Server>,
+        store: Arc<Box<dyn Store>>,
+        folder_uuid: &str,
+        entries: &[(&str, &str, &str)],
+        backlinks: &[(&str, &str)],
+    ) -> String {
+        let folder_doc_id = format!("{}-{}", TEST_RELAY_ID, folder_uuid);
         let folder = DocWithSyncKv::new(&folder_doc_id, Some(store), || (), None)
             .await
             .unwrap();
@@ -12018,8 +12335,7 @@ mod test {
             }
         }
         server.docs().insert(folder_doc_id.clone(), folder);
-        writing.store(false, std::sync::atomic::Ordering::SeqCst);
-        (folder_doc_id, writing, gate)
+        folder_doc_id
     }
 
     async fn until_writing(writing: &std::sync::atomic::AtomicBool) {
@@ -12277,6 +12593,431 @@ mod test {
             test_backlinks(&server, &folder_doc_id, OLD_UUID),
             vec![X_UUID]
         );
+    }
+
+    /// A store that counts the writes to each key.
+    struct CountingStore {
+        data: DashMap<String, Vec<u8>>,
+        writes: Arc<DashMap<String, usize>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Store for CountingStore {
+        async fn init(&self) -> y_sweet_core::store::Result<()> {
+            Ok(())
+        }
+        async fn get(&self, key: &str) -> y_sweet_core::store::Result<Option<Vec<u8>>> {
+            Ok(self.data.get(key).map(|v| v.clone()))
+        }
+        async fn set(&self, key: &str, value: Vec<u8>) -> y_sweet_core::store::Result<()> {
+            *self.writes.entry(key.to_owned()).or_insert(0) += 1;
+            self.data.insert(key.to_owned(), value);
+            Ok(())
+        }
+        async fn remove(&self, key: &str) -> y_sweet_core::store::Result<()> {
+            self.data.remove(key);
+            Ok(())
+        }
+        async fn exists(&self, key: &str) -> y_sweet_core::store::Result<bool> {
+            Ok(self.data.contains_key(key))
+        }
+    }
+
+    /// `insert_test_content_doc`, kept in `store`.
+    async fn insert_content_doc_in_store(
+        server: &Arc<Server>,
+        store: Arc<Box<dyn Store>>,
+        uuid: &str,
+        content: &str,
+    ) {
+        let doc_id = format!("{}-{}", TEST_RELAY_ID, uuid);
+        let dwskv = DocWithSyncKv::new(&doc_id, Some(store), || (), None)
+            .await
+            .unwrap();
+        {
+            let awareness = dwskv.awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let text = txn.get_or_insert_text("contents");
+            text.insert(&mut txn, 0, content);
+        }
+        server.docs().insert(doc_id, dwskv);
+    }
+
+    // Prevents: a folder move writing the folder doc to the store once per
+    // document it moved, and a backlinker once per document it links to.
+    // Moving "Lens/Meeting Transcripts" on 19 Oct 2026 that way timed out
+    // after about 116 files and left the folder half moved.
+    #[tokio::test]
+    async fn folder_move_writes_each_doc_once() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-00000000000c";
+        const INDEX_UUID: &str = "a0a0a0a0-0000-4000-8000-00000000001c";
+        let files = [
+            (
+                "/Old/A.md",
+                "a0a0a0a0-0000-4000-8000-00000000002c",
+                "markdown",
+            ),
+            (
+                "/Old/B.md",
+                "a0a0a0a0-0000-4000-8000-00000000003c",
+                "markdown",
+            ),
+            (
+                "/Old/sub/C.md",
+                "a0a0a0a0-0000-4000-8000-00000000004c",
+                "markdown",
+            ),
+            (
+                "/Old/page.html",
+                "a0a0a0a0-0000-4000-8000-00000000005c",
+                "file",
+            ),
+        ];
+        let server = attachment_test_server("Lens").await;
+        let writes = Arc::new(DashMap::new());
+        let store: Arc<Box<dyn Store>> = Arc::new(Box::new(CountingStore {
+            data: DashMap::new(),
+            writes: writes.clone(),
+        }));
+        let mut entries = vec![
+            ("/Old", "a0a0a0a0-0000-4000-8000-00000000006c", "folder"),
+            (
+                "/Old/pic.png",
+                "a0a0a0a0-0000-4000-8000-00000000007c",
+                "file",
+            ),
+            ("/Index.md", INDEX_UUID, "markdown"),
+        ];
+        entries.extend(files);
+        let backlinks: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(_, uuid, _)| (*uuid, INDEX_UUID))
+            .collect();
+        let folder_doc_id =
+            insert_folder_doc_in_store(&server, store.clone(), FOLDER_UUID, &entries, &backlinks)
+                .await;
+        for (_, uuid, _) in files {
+            insert_content_doc_in_store(&server, store.clone(), uuid, "No links.").await;
+        }
+        insert_content_doc_in_store(
+            &server,
+            store.clone(),
+            INDEX_UUID,
+            "[[Old/A]] [[Old/B]] [[Old/sub/C]] [[Old/page]]",
+        )
+        .await;
+        server.doc_resolver().rebuild(server.docs());
+        // Only the move's own writes count.
+        let sync_kvs: Vec<_> = server.docs().iter().map(|doc| doc.sync_kv()).collect();
+        for sync_kv in sync_kvs {
+            sync_kv.persist().await.unwrap();
+        }
+        writes.clear();
+
+        let result = server
+            .move_path("Notes/Old", "/New", None)
+            .await
+            .expect("folder move");
+
+        assert_eq!(result.links_rewritten, 4);
+        assert_eq!(
+            test_doc_text(&server, INDEX_UUID),
+            "[[New/A]] [[New/B]] [[New/sub/C]] [[New/page]]"
+        );
+        let written = |uuid: &str| {
+            let key = format!("{}-{}/data.ysweet", TEST_RELAY_ID, uuid);
+            writes.get(&key).map_or(0, |n| *n)
+        };
+        assert_eq!(written(FOLDER_UUID), 1, "the folder doc is written once");
+        assert_eq!(
+            written(INDEX_UUID),
+            1,
+            "the doc with 4 links rewritten is written once"
+        );
+        for (_, uuid, _) in files {
+            assert_eq!(written(uuid), 0, "a moved doc whose text is unchanged");
+        }
+
+        // That one write holds the whole move.
+        let stored = DocWithSyncKv::new(&folder_doc_id, Some(store.clone()), || (), None)
+            .await
+            .unwrap();
+        let awareness = stored.awareness();
+        let guard = awareness.read().unwrap();
+        let txn = guard.doc.transact();
+        let filemeta = txn.get_map("filemeta_v0").unwrap();
+        let mut paths: Vec<String> = filemeta.keys(&txn).map(|k| k.to_string()).collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "/Index.md",
+                "/New",
+                "/New/A.md",
+                "/New/B.md",
+                "/New/page.html",
+                "/New/pic.png",
+                "/New/sub",
+                "/New/sub/C.md"
+            ]
+        );
+    }
+
+    // Prevents: a twin (x.md beside x.html) stopping a folder move halfway.
+    // Each document was checked only when its turn came, after the files
+    // before it had moved. Now nothing moves, whether the twin is at the
+    // destination already or moves there with the folder.
+    #[tokio::test]
+    async fn folder_move_refuses_a_twin_before_anything_moves() {
+        const A_UUID: &str = "33333333-3333-4333-8333-333333333333";
+        const Z1_UUID: &str = "44444444-4444-4444-8444-444444444444";
+        const Z2_UUID: &str = "55555555-5555-4555-8555-555555555555";
+        const LINKER_UUID: &str = "66666666-6666-4666-8666-666666666666";
+        for (twin_entries, (path, twin)) in [
+            // A page is in /New already (which has no folder entry).
+            (
+                [
+                    ("/Old/z.md", Z1_UUID, "markdown"),
+                    ("/New/z.html", Z2_UUID, "file"),
+                ],
+                ("/New/z.md", "/New/z.html"),
+            ),
+            // A twin pair that moves together.
+            (
+                [
+                    ("/Old/z.html", Z1_UUID, "file"),
+                    ("/Old/z.md", Z2_UUID, "markdown"),
+                ],
+                ("/New/z.html", "/New/z.md"),
+            ),
+        ] {
+            let server = Server::new_for_test();
+            let mut entries = vec![
+                ("/Old", "22222222-2222-4222-8222-222222222222", "folder"),
+                ("/Old/a.md", A_UUID, "markdown"),
+                ("/Linker.md", LINKER_UUID, "markdown"),
+            ];
+            entries.extend(twin_entries);
+            let folder_doc_id = insert_test_folder_doc(&server, "Relay Folder 1", &entries).await;
+            insert_test_content_doc(&server, A_UUID, "a").await;
+            insert_test_content_doc(&server, Z1_UUID, "z").await;
+            insert_test_content_doc(&server, Z2_UUID, "z").await;
+            insert_test_content_doc(&server, LINKER_UUID, "See [[Old/a]].").await;
+            insert_backlink(&server, &folder_doc_id, A_UUID, LINKER_UUID);
+
+            let result = server.move_path("Relay Folder 1/Old", "/New", None).await;
+
+            // Nothing moved, a.md (first in line) included.
+            assert!(filemeta_has(&server, &folder_doc_id, "/Old/a.md"));
+            assert!(!filemeta_has(&server, &folder_doc_id, "/New/a.md"));
+            assert!(filemeta_has(&server, &folder_doc_id, "/Old"));
+            assert_eq!(content_text(&server, LINKER_UUID), "See [[Old/a]].");
+            match result {
+                Err(MoveDocumentError::Conflict(message)) => assert!(
+                    message.contains(&format!("'Relay Folder 1{path}'"))
+                        && message.contains(&format!("'Relay Folder 1{twin}'")),
+                    "got: {message}"
+                ),
+                other => panic!("expected a conflict, got {:?}", other.map(|r| r.new_path)),
+            }
+        }
+    }
+
+    // A folder moved into its parent (here one without a folder entry) can
+    // put a file on the path of one that moves only after it. move_document
+    // refused that file on its turn, after the files before it had moved;
+    // the whole move is now refused first, and no file is ever replaced.
+    #[tokio::test]
+    async fn folder_move_refuses_a_destination_a_later_file_still_holds() {
+        const A_UUID: &str = "33333333-3333-4333-8333-333333333333";
+        const QZ_UUID: &str = "44444444-4444-4444-8444-444444444444";
+        const Z_UUID: &str = "55555555-5555-4555-8555-555555555555";
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Relay Folder 1",
+            &[
+                ("/p/q", "22222222-2222-4222-8222-222222222222", "folder"),
+                ("/p/q/a.md", A_UUID, "markdown"),
+                ("/p/q/q/z.md", QZ_UUID, "markdown"),
+                ("/p/q/z.md", Z_UUID, "markdown"),
+            ],
+        )
+        .await;
+        for uuid in [A_UUID, QZ_UUID, Z_UUID] {
+            insert_test_content_doc(&server, uuid, "text").await;
+        }
+
+        // /p/q/q/z.md would move to /p/q/z.md before that file moves on.
+        let result = server.move_path("Relay Folder 1/p/q", "/p", None).await;
+
+        assert!(filemeta_has(&server, &folder_doc_id, "/p/q/a.md"));
+        assert!(!filemeta_has(&server, &folder_doc_id, "/p/a.md"));
+        assert_eq!(
+            filemeta_id(&server, &folder_doc_id, "/p/q/z.md").as_deref(),
+            Some(Z_UUID)
+        );
+        match result {
+            Err(MoveDocumentError::Conflict(message)) => {
+                assert!(message.contains("'/p/q/z.md'"), "got: {message}")
+            }
+            other => panic!("expected a conflict, got {:?}", other.map(|r| r.new_path)),
+        }
+    }
+
+    // Prevents: a move replacing a file created at its destination while it
+    // waited for the step lock; it checks the destination before the wait.
+    // The file replaced would drop out of the folder.
+    #[tokio::test]
+    async fn move_document_refuses_a_destination_taken_while_it_waited() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-00000000000e";
+        const A_UUID: &str = "a0a0a0a0-0000-4000-8000-00000000000e";
+        const B_UUID: &str = "a0a0a0a0-0000-4000-8000-00000000001e";
+        let server = attachment_test_server("Lens").await;
+        let folder_doc_id = insert_test_folder_doc_with_uuid(
+            &server,
+            FOLDER_UUID,
+            "Notes",
+            &[("/Old.md", A_UUID, "markdown")],
+        )
+        .await;
+        insert_test_content_doc(&server, A_UUID, "No links.").await;
+        let indexer = server.link_indexer().clone().expect("link indexer");
+
+        let step = indexer.lock_step().await;
+        let moving = {
+            let server = server.clone();
+            tokio::spawn(async move { server.move_document(A_UUID, "/New.md", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!moving.is_finished(), "the move must wait for the step");
+        // A client creates /New.md meanwhile.
+        {
+            let awareness = server.docs().get(&folder_doc_id).unwrap().awareness();
+            let guard = awareness.write().unwrap();
+            let mut txn = guard.doc.transact_mut();
+            let filemeta = txn.get_or_insert_map("filemeta_v0");
+            let mut map = std::collections::HashMap::new();
+            map.insert("id".to_string(), Any::String(B_UUID.into()));
+            map.insert("type".to_string(), Any::String("markdown".into()));
+            filemeta.insert(&mut txn, "/New.md", Any::Map(map.into()));
+        }
+        drop(step);
+
+        let result = tokio::time::timeout(Duration::from_secs(10), moving)
+            .await
+            .expect("the move should finish")
+            .unwrap();
+        assert!(
+            matches!(result, Err(MoveDocumentError::Conflict(_))),
+            "got: {:?}",
+            result.map(|r| r.new_path)
+        );
+        assert_eq!(
+            filemeta_id(&server, &folder_doc_id, "/New.md").as_deref(),
+            Some(B_UUID)
+        );
+        assert_eq!(
+            filemeta_id(&server, &folder_doc_id, "/Old.md").as_deref(),
+            Some(A_UUID)
+        );
+    }
+
+    // A folder move takes the step lock one batch of documents at a time:
+    // nothing moves before it has the lock, and a step that comes while it
+    // moves waits for the batch, not for the whole folder.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn folder_move_takes_the_step_lock_one_batch_at_a_time() {
+        const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-00000000000d";
+        const X_UUID: &str = "a0a0a0a0-0000-4000-8000-00000000001d";
+        let count = FOLDER_MOVE_DOCS_PER_STEP + 1;
+        let files: Vec<(String, String)> = (0..count)
+            .map(|i| {
+                (
+                    format!("/Old/doc{:02}.md", i),
+                    format!("d0d0d0d0-0000-4000-8000-{:012}", i),
+                )
+            })
+            .collect();
+        let server = attachment_test_server("Lens").await;
+        let mut entries = vec![
+            ("/Old", "a0a0a0a0-0000-4000-8000-00000000002d", "folder"),
+            ("/X.md", X_UUID, "markdown"),
+        ];
+        entries.extend(
+            files
+                .iter()
+                .map(|(path, uuid)| (path.as_str(), uuid.as_str(), "markdown")),
+        );
+        let folder_doc_id =
+            insert_test_folder_doc_with_uuid(&server, FOLDER_UUID, "Notes", &entries).await;
+        for (_, uuid) in &files {
+            insert_test_content_doc(&server, uuid, "No links.").await;
+        }
+        insert_test_content_doc(&server, X_UUID, "See [[Old/doc00]].").await;
+        insert_backlink(&server, &folder_doc_id, &files[0].1, X_UUID);
+        let indexer = server.link_indexer().clone().expect("link indexer");
+
+        // Another step is under way: the move waits for it.
+        let step = indexer.lock_step().await;
+        let moving = {
+            let server = server.clone();
+            tokio::spawn(async move { server.move_path("Notes/Old", "/New", None).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!moving.is_finished(), "the move must wait for the step");
+        assert!(filemeta_has(&server, &folder_doc_id, "/Old/doc00.md"));
+
+        // With X read-locked, the move stops at its first document (X links
+        // to it), inside its first batch.
+        let x_awareness = server
+            .docs()
+            .get(&format!("{}-{}", TEST_RELAY_ID, X_UUID))
+            .unwrap()
+            .awareness();
+        let x_held = x_awareness.read().unwrap();
+        drop(step);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), indexer.lock_step())
+                .await
+                .is_err(),
+            "the move holds the step lock in its first batch"
+        );
+        let waiting = {
+            let (server, indexer, folder_doc_id) =
+                (server.clone(), indexer.clone(), folder_doc_id.clone());
+            tokio::spawn(async move {
+                let _step = indexer.lock_step().await;
+                (0..count)
+                    .filter(|i| {
+                        filemeta_has(&server, &folder_doc_id, &format!("/New/doc{:02}.md", i))
+                    })
+                    .count()
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!waiting.is_finished(), "a step waits for the batch");
+
+        drop(x_held);
+        let moved_when_the_step_got_in = tokio::time::timeout(Duration::from_secs(10), waiting)
+            .await
+            .expect("the step should get in after the first batch")
+            .unwrap();
+        assert_eq!(moved_when_the_step_got_in, FOLDER_MOVE_DOCS_PER_STEP);
+        let result = tokio::time::timeout(Duration::from_secs(10), moving)
+            .await
+            .expect("the move should finish")
+            .unwrap()
+            .expect("folder move");
+        assert_eq!(result.links_rewritten, 1);
+        assert_eq!(test_doc_text(&server, X_UUID), "See [[New/doc00]].");
+        assert!(filemeta_has(
+            &server,
+            &folder_doc_id,
+            &format!("/New/doc{:02}.md", count - 1)
+        ));
     }
 
     // The other way round from a missing backlink: one that was persisted

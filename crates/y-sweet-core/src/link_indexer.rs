@@ -1131,6 +1131,10 @@ pub fn move_document(
             }
         }
     }
+    // The links below are resolved through an index of the tree, not by a
+    // pass over every entry each: a backlinker such as a MOC can hold
+    // hundreds, and a folder move rewrites it once per document it links to.
+    let tree = VirtualTreeIndex::new(&entries);
 
     // 5. Read backlinks for the moved UUID from all folder docs
     let mut all_backlinker_uuids: Vec<String> = Vec::new();
@@ -1172,7 +1176,7 @@ pub fn move_document(
                     svp,
                     &old_virtual_path,
                     &new_virtual_path,
-                    &entries,
+                    &tree,
                 ) {
                     Ok(count) => total_rewritten += count,
                     Err(e) => {
@@ -1194,7 +1198,7 @@ pub fn move_document(
             content_doc,
             &old_virtual_path,
             &new_virtual_path,
-            &entries,
+            &tree,
         ) {
             Ok(count) => total_rewritten += count,
             Err(e) => tracing::error!("Failed to rewrite outgoing links: {:?}", e),
@@ -1361,7 +1365,7 @@ fn rewrite_wikilinks_for_move(
     source_virtual_path: &str,
     old_target_virtual_path: &str,
     new_target_virtual_path: &str,
-    entries: &[VirtualEntry],
+    tree: &VirtualTreeIndex<'_>,
 ) -> anyhow::Result<usize> {
     let plain_text = {
         let txn = content_doc.transact();
@@ -1377,7 +1381,7 @@ fn rewrite_wikilinks_for_move(
     let edits = compute_wikilink_move_edits(
         &plain_text,
         |link_name| {
-            resolve_in_virtual_tree(link_name, Some(source_virtual_path), entries)
+            tree.resolve(link_name, Some(source_virtual_path))
                 .map(|e| e.virtual_path.to_lowercase() == old_target_lower)
                 .unwrap_or(false)
         },
@@ -1408,7 +1412,7 @@ fn rewrite_outgoing_links_for_move(
     content_doc: &Doc,
     old_source_virtual_path: &str,
     new_source_virtual_path: &str,
-    entries: &[VirtualEntry],
+    tree: &VirtualTreeIndex<'_>,
 ) -> anyhow::Result<usize> {
     let plain_text = {
         let txn = content_doc.transact();
@@ -1422,7 +1426,7 @@ fn rewrite_outgoing_links_for_move(
         &plain_text,
         |link_name| {
             // Resolve from OLD location — does this link find a target?
-            let target = resolve_in_virtual_tree(link_name, Some(old_source_virtual_path), entries);
+            let target = tree.resolve(link_name, Some(old_source_virtual_path));
             if let Some(t) = target {
                 // Compute what the link text should be from the NEW location
                 let new_link = with_written_extension(
@@ -1438,7 +1442,8 @@ fn rewrite_outgoing_links_for_move(
         },
         |link_name| {
             // Resolve from OLD location to find the target
-            let target = resolve_in_virtual_tree(link_name, Some(old_source_virtual_path), entries)
+            let target = tree
+                .resolve(link_name, Some(old_source_virtual_path))
                 .expect("should_edit already confirmed resolution");
             with_written_extension(
                 compute_relative_wikilink(new_source_virtual_path, &target.virtual_path),
