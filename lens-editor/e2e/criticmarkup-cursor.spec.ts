@@ -107,6 +107,10 @@ test.describe('Live preview: the cursor and hidden CriticMarkup syntax', () => {
   test.beforeEach(async ({ page }) => {
     pageErrors = [];
     page.on('pageerror', (error) => pageErrors.push(error.message));
+    // CodeMirror catches what a key binding throws and only logs it
+    page.on('console', (message) => {
+      if (message.type() === 'error') pageErrors.push(message.text());
+    });
     await page.setViewportSize({ width: 900, height: 900 });
     await page.goto('/e2e/fixtures/criticmarkup-cursor.html');
     await expect(page.locator('.cm-content > .cm-line')).toHaveCount(LINES);
