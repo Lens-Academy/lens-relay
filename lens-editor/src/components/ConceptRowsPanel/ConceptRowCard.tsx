@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
@@ -7,7 +7,7 @@ import { toggleSuggestionMode } from '../Editor/extensions/criticmarkup';
 import { ySectionSync, ySectionUndoManagerKeymap } from '../SectionEditor/y-section-sync';
 import { closeLive, isLive, openLive } from '../../lib/embed-docs';
 import { attachProvenanceRegistration } from '../../lib/provenance';
-import { bodyLineFix, findLiveRow, rowPreview, rowsAbout, type RowEntry, type SourceRows } from '../../lib/concept-rows';
+import { bodyLineFix, findLiveRow, rowHasCR, rowPreview, rowsAbout, type RowEntry, type SourceRows } from '../../lib/concept-rows';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 import { DocLink } from '../DocLink';
@@ -37,11 +37,22 @@ export interface RowCardProps {
   /** Open for editing on mount, cursor at the end (a row just added). */
   autoEdit?: boolean;
   onAutoEdited?: () => void;
-  /** Context rows: add a row for the lens, prefilled with this one's text. */
+  /** Context rows: add a row for the opened file, prefilled with this one's text. */
   onAddForLens?: () => void;
+  /** The button's text for `onAddForLens` (default "Add for this lens too"). */
+  addLabel?: string;
   /** On a lens: the concept's rows about the lens's sources, shown read-only
-   *  under the lens row (or alone, for `context`). */
+   *  under the lens row (or alone, for `context`). On an article or video:
+   *  its rows about the lenses that use the file, drawn by `renderSourceRow`. */
   sourceRows?: SourceRows[];
+  /** Draws one of `sourceRows`' rows itself (an editable card), instead of
+   *  the read-only block. */
+  renderSourceRow?: (source: SourceRows, row: RowEntry) => ReactNode;
+  /** Collapsed, show this instead of the row's first line. */
+  summary?: string;
+  /** A row about a related file, nested in its concept's card: the header
+   *  names that file ("Lens: <name>", a link) instead of the concept. */
+  label?: { kind: string; docId: string; name: string };
 }
 
 type CardState = 'idle' | 'connecting' | 'live' | 'error';
@@ -93,12 +104,13 @@ function RowPreview({ text }: { text: string }) {
   const view = useRef<EditorView | null>(null);
   useEffect(() => {
     // The live preview shows the cursor's line raw: park it on a line of its own.
-    const doc = `${text}\n`;
-    const state = EditorState.create({
-      doc,
-      selection: { anchor: doc.length },
+    // CodeMirror turns \r\n into one line break, so the end is the state's
+    // doc length, not the text's (else: "Selection points outside of document").
+    const created = EditorState.create({
+      doc: `${text}\n`,
       extensions: [...embedViewExtensions(false), rowEditorTheme, EditorState.readOnly.of(true), EditorView.editable.of(false)],
     });
+    const state = created.update({ selection: { anchor: created.doc.length } }).state;
     if (!view.current) view.current = new EditorView({ parent: host.current!, state });
     else view.current.setState(state);
   }, [text]);
@@ -129,7 +141,9 @@ export function ConceptRowCard(props: RowCardProps) {
   const refocusToggle = useRef(false);
   const live = useRef<{ view: EditorView; detach: () => void; onOutside: (e: MouseEvent) => void } | null>(null);
   const unmounted = useRef(false);
-  const editable = canEdit && !context;
+  // A row in \r\n lines is edited in its concept file (rowHasCR).
+  const crlf = !!entry.crlf || entry.body.includes('\r');
+  const editable = canEdit && !context && !crlf;
   const fullId = `${RELAY_ID}-${entry.conceptId}`;
 
   const ended = useCallback(() => {
@@ -176,16 +190,18 @@ export function ConceptRowCard(props: RowCardProps) {
     // first edit, so nothing typed here can run into a heading; opening it
     // and leaving writes nothing.
     const lineBreak = row ? bodyLineFix(row, ytext.length) : null;
-    if (!row) {
+    // Checked again on the live text: the file may have changed since.
+    if (!row || rowHasCR(ytext.toString(), row)) {
       detach();
       closeLive(owner);
       setState('error');
       return;
     }
+    const body = ytext.toString().slice(row.bodyFrom, row.bodyTo);
     const view = new EditorView({
       parent: liveHost.current,
       state: EditorState.create({
-        doc: ytext.toString().slice(row.bodyFrom, row.bodyTo),
+        doc: body,
         extensions: [
           ...embedViewExtensions(canAcceptReject),
           rowEditorTheme,
@@ -235,10 +251,11 @@ export function ConceptRowCard(props: RowCardProps) {
     return () => clearTimeout(timer);
   }, [autoEdit, onAutoEdited, startEdit]);
 
-  const preview = rowPreview(entry.body);
+  const preview = props.summary ?? rowPreview(entry.body);
   // Opening or editing keeps the row open; a failed open does not.
   const showBody = expanded || state === 'connecting' || state === 'live';
   const sourceRows = props.sourceRows ?? [];
+  const nestedCount = sourceRows.reduce((sum, src) => sum + src.rows.length, 0);
   /** Expand or collapse (finishing an edit first): the triangle, or a click
    *  anywhere on the header bar but the concept link and its own buttons. */
   const toggle = () => {
@@ -272,17 +289,34 @@ export function ConceptRowCard(props: RowCardProps) {
         >
           {showBody ? '▾' : '▸'}
         </button>
-        <DocLink
-          docId={entry.conceptId}
-          // Collapsed, the name leaves at least half the line to the preview.
-          className={`min-w-0 shrink-0 truncate font-medium hover:underline ${showBody ? '' : 'max-w-[50%]'} ${context ? 'text-gray-500' : 'text-indigo-700'}`}
-          title={entry.conceptName}
-        >
-          {entry.conceptName}
-        </DocLink>
+        {props.label ? (
+          <span
+            className={`concept-row-label min-w-0 shrink-0 truncate text-gray-500 ${showBody ? '' : 'max-w-[50%]'}`}
+            title={`${props.label.kind}: ${props.label.name}`}
+          >
+            {props.label.kind}:{' '}
+            <DocLink docId={props.label.docId} className="font-medium text-indigo-700 hover:underline">
+              {props.label.name}
+            </DocLink>
+          </span>
+        ) : (
+          <DocLink
+            docId={entry.conceptId}
+            // Collapsed, the name leaves at least half the line to the preview.
+            className={`min-w-0 shrink-0 truncate font-medium hover:underline ${showBody ? '' : 'max-w-[50%]'} ${context ? 'text-gray-500' : 'text-indigo-700'}`}
+            title={entry.conceptName}
+          >
+            {entry.conceptName}
+          </DocLink>
+        )}
         {!showBody && (
           <span className={`min-w-0 flex-1 truncate ${preview ? '' : 'italic text-gray-400'}`}>
             {preview || 'No notes yet'}
+          </span>
+        )}
+        {!showBody && !context && props.renderSourceRow && nestedCount > 0 && (
+          <span className="concept-row-nested-hint shrink-0 text-xs text-gray-400">
+            +{nestedCount} lens row{nestedCount === 1 ? '' : 's'}
           </span>
         )}
         <span className="ml-auto shrink-0 text-xs text-gray-400">
@@ -301,7 +335,7 @@ export function ConceptRowCard(props: RowCardProps) {
             onClick={props.onAddForLens}
             className="shrink-0 text-xs text-indigo-600 hover:underline cursor-pointer"
           >
-            Add for this lens too
+            {props.addLabel ?? 'Add for this lens too'}
           </button>
         )}
       </div>
@@ -329,11 +363,19 @@ export function ConceptRowCard(props: RowCardProps) {
           {entry.body
             ? <RowPreview text={entry.body} />
             : <div className="italic text-gray-400">{editable ? 'No notes yet · click to write' : 'No notes yet'}</div>}
+          {crlf && canEdit && !context && (
+            <div className="mt-0.5 text-xs text-gray-400">Windows line endings: edit this row in the concept file.</div>
+          )}
         </div>
       )}
       {/* Always mounted: the editor goes in as soon as the connection is up. */}
       <div ref={liveHost} className="concept-row-body ml-5 mt-1" hidden={state !== 'connecting' && state !== 'live'} />
-      {showBody && sourceRows.map((src, i) => (
+      {showBody && props.renderSourceRow && sourceRows.map((src) => (
+        <div key={src.sourceId} className="ml-4 mt-1" data-testid="concept-row-source">
+          {src.rows.map((row) => props.renderSourceRow!(src, row))}
+        </div>
+      ))}
+      {showBody && !props.renderSourceRow && sourceRows.map((src, i) => (
         <div key={src.sourceId} className={`${context && i === 0 ? 'mt-1' : 'mt-2'} text-gray-400`} data-testid="concept-row-source">
           <PairHeader
             concept={entry.conceptName}

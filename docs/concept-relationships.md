@@ -25,22 +25,37 @@ Uses the term once. Not an explanation.
 
 Concept files are in `Lens Edu/Concepts/`. The text under a row heading is free text.
 
+A concept file can start with frontmatter holding an `id:`, a uuid that stays the same when
+the file is renamed. The editor writes one into every concept file it creates (from the
+"Create new concept" choice in the panel), and the MCP session intro asks agents to do the
+same. It is optional: the validator does not warn when it is missing.
+
+```markdown
+---
+id: 0b6f3c2e-5d4a-4f1e-9c8b-7a6d5e4f3a2b
+---
+# Low-stakes control
+```
+
 ## Who reads the rows
 
 Three implementations parse the rows. They must agree.
 
 | Implementation | File | What it does |
 |---|---|---|
-| Lens Editor | `lens-editor/src/lib/concept-rows.ts` | Shows the "Concept relationships" panel on articles, video transcripts and lenses. You can edit a row in the panel. The edit goes to the concept file. |
+| Lens Editor | `lens-editor/src/lib/concept-rows.ts` | Shows the "Concept relationships" panel on articles, video transcripts and lenses. You can edit a row in the panel, including a lens's row shown on an article (rule #10). The edit goes to the concept file. |
 | Relay MCP | `crates/relay/src/mcp/tools/concept_rows.rs` | Adds a "Concept relationships" block before the file text when an agent reads an article, video transcript or lens. |
-| Platform validator | `content_processor/src/concepts.ts` in lens-platform | Reports two rows for the same file in one concept file as an error. |
+| Platform validator | `content_processor/src/concepts.ts` in lens-platform | Reports two rows for the same file in one concept file as an error. Rules #8 and #10 are display only, so it does not implement them. |
 
 The MCP block is bounded: at most 40 concept files per file and 80 per read, at most 8 lens
-sources, 1,500 characters per row and 20,000 per block. It says what it left out.
+sources (for a lens) or 8 lenses (for an article or video, from at most 40 lens files read),
+1,500 characters per row and 20,000 per block. What the 80 leaves after the file's own rows
+is split fairly over those related files, in order. It says what it left out.
 
 Each implementation has one test for each rule below. The tests are tagged
-"canonical concept-row rules v1 #N". When you change a rule, change all three
-implementations and their tagged tests in the same piece of work.
+"canonical concept-row rules v1 #N". Rules #8 to #10 only change what a display shows,
+so the validator has no tests for them. When you change a rule, change every
+implementation it applies to and their tagged tests in the same piece of work.
 
 ## Rules (v1)
 
@@ -61,7 +76,9 @@ implementations and their tagged tests in the same piece of work.
 6. **Text view.** The MCP server parses the text with pending CriticMarkup suggestions
    accepted. The editor parses the raw text, because it edits at raw positions. The validator
    uses its normal validation view. A heading that exists only in a pending suggestion is a
-   known difference. Do not add code for it.
+   known difference. Do not add code for it. The same goes for `source::` lines
+   (rules #8 and #10): the MCP server reads a lens with pending suggestions accepted,
+   the editor reads its raw text.
 7. **Matching.** A row belongs to the file that its link resolves to. The editor and the MCP
    server resolve links like the link indexer (case-insensitive, with a fallback from the
    folder root). The validator uses the platform resolver, which is stricter. It warns about
@@ -73,6 +90,19 @@ implementations and their tagged tests in the same piece of work.
    sources.
 9. **Sort order.** Displays sort concepts by name, case-insensitive; the order of non-ASCII
    names may differ slightly between the editor and the MCP block. This is cosmetic.
+10. **Lenses that use a file.** For an article or a video transcript, the editor and the
+    MCP server also show the rows about each lens that uses it. Those lenses are the
+    file's backlinkers in `Lenses/` whose `source::` targets (read as in rule #8) include
+    a link that resolves to the file (rule #7). The rows are labelled per lens and grouped
+    per concept like rule #8, mirrored: a concept with a row about the file shows its lens
+    rows with it, and concepts reached only through a lens come last. The editor shows
+    every such lens, and its lens rows stay editable. The MCP server follows at most 8
+    lenses. Both pass over a lens that no concept file links to before reading it, since
+    it cannot add rows. The editor lists lenses by name with `localeCompare` and the MCP
+    server by path in byte order; all lenses are in `Lenses/`, but case, punctuation and
+    accents can still order them differently. This affects display only.
+    The MCP server's caps take lenses in path order: it reads the first 40 lens files
+    that a concept file links to, and shows the first 8 that use the file.
 
 ## Concept graph
 

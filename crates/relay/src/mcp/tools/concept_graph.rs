@@ -413,7 +413,14 @@ async fn candidates_of(server: &Arc<Server>, folder_doc_id: &str, id: &str) -> V
 /// the children still to come that have any (at least 1 while any is left),
 /// so unused shares carry forward. The editor's `countShares`.
 fn count_shares(candidate_counts: &[usize]) -> Vec<usize> {
-    let mut left = MAX_COUNT_FILES;
+    fair_shares(candidate_counts, MAX_COUNT_FILES)
+}
+
+/// `budget` split over `candidate_counts` (in order) as [`count_shares`]
+/// splits [`MAX_COUNT_FILES`]: an even share of what is left for each that
+/// has any (at least 1 while any is left); unused shares carry forward.
+pub(super) fn fair_shares(candidate_counts: &[usize], budget: usize) -> Vec<usize> {
+    let mut left = budget;
     candidate_counts
         .iter()
         .enumerate()

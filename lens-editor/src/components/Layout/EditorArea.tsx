@@ -28,6 +28,7 @@ import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPa
 import { matchRule } from '../../lib/concept-rows';
 import { ConceptGraphPanel } from '../ConceptGraphPanel';
 import { isConceptPath } from '../../lib/concept-graph';
+import { PanelErrorBoundary } from '../PanelErrorBoundary';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
@@ -541,9 +542,15 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <SyncedFileBanner />
           {showPanelHost && createPortal(
             <>
-              {showConceptGraph && <ConceptGraphPanel docId={currentDocId} path={currentFilePath} ytext={yText} />}
+              {showConceptGraph && (
+                <PanelErrorBoundary name="Concept graph" resetKey={currentDocId}>
+                  <ConceptGraphPanel docId={currentDocId} path={currentFilePath} ytext={yText} />
+                </PanelErrorBoundary>
+              )}
               {showConceptPanel && (
-                <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} suggestionMode={isSuggestionMode} />
+                <PanelErrorBoundary name="Concept relationships" resetKey={currentDocId}>
+                  <ConceptRowsPanel docId={currentDocId} path={currentFilePath} ytext={yText} suggestionMode={isSuggestionMode} />
+                </PanelErrorBoundary>
               )}
             </>,
             conceptPanelHost,

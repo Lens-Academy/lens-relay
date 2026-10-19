@@ -5,7 +5,7 @@ import { createElement, type ReactNode } from 'react';
 import * as Y from 'yjs';
 import { NavigationContext } from '../../contexts/NavigationContext';
 import { CONCEPT_ROW_RULES } from '../../lib/concept-rows';
-import { SNAPSHOT_REFRESH_MS, useConceptRows, useSnapshots } from './useConceptRows';
+import { SNAPSHOT_REFRESH_MS, useConceptRows, useLensesUsing, useSnapshots } from './useConceptRows';
 
 afterEach(() => {
   __embedDocsTesting.reset();
@@ -82,5 +82,46 @@ describe('useConceptRows', () => {
     expect(result.current.failedFor('lens')).toBe(0);
     expect(result.current.failedFor('article')).toBe(1);
     expect(result.current.byTarget.get('lens')!.pending - result.current.failedFor('lens')).toBe(0);
+  });
+});
+
+describe('useLensesUsing', () => {
+  it('finds the lenses among an article\'s backlinkers whose source:: points at it, with no cap', async () => {
+    const folder = new Y.Doc();
+    const lensIds = Array.from({ length: 12 }, (_, i) => `l${String(i).padStart(2, '0')}`);
+    const backlinks = folder.getMap<string[]>('backlinks_v0');
+    backlinks.set('article', [...lensIds, 'mention', 'bare', 'concept']);
+    // Every lens but 'bare' has a concept file linking to it.
+    for (const id of [...lensIds, 'mention']) backlinks.set(id, ['concept']);
+    const md = (id: string) => ({ id, type: 'markdown' as const, version: 0 });
+    const metadata: Record<string, ReturnType<typeof md>> = {
+      '/Lens Edu/articles/a.md': md('article'),
+      '/Lens Edu/Lenses/Mention.md': md('mention'),
+      '/Lens Edu/Lenses/Bare.md': md('bare'),
+      '/Lens Edu/Concepts/C.md': md('concept'),
+    };
+    for (const id of lensIds) metadata[`/Lens Edu/Lenses/${id}.md`] = md(id);
+    const reader = vi.fn(async (id: string) => (id.endsWith('mention') ? 'See [[../articles/a]].\n' : 'source:: [[../articles/a]]\n'));
+    __embedDocsTesting.setReader(reader);
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(NavigationContext.Provider, {
+      value: { metadata, folderDocs: new Map([['Lens Edu', folder]]), folderNames: ['Lens Edu'], errors: new Map(), onNavigate: vi.fn(), justCreatedRef: { current: false } },
+    }, children);
+    const { result } = renderHook(() => useLensesUsing(CONCEPT_ROW_RULES[0], 'article', true), { wrapper });
+    await waitFor(() => expect(result.current.pending).toBe(0));
+    expect(result.current.lenses.map((l) => l.id)).toEqual(lensIds);
+    // Neither the concept file nor a lens without concept rows is read.
+    const read = reader.mock.calls.map(([id]) => id);
+    expect(read.some((id) => id.endsWith('concept') || id.endsWith('bare'))).toBe(false);
+  });
+
+  it('reads nothing for a lens (no lens context)', () => {
+    const reader = vi.fn(async () => '');
+    __embedDocsTesting.setReader(reader);
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(NavigationContext.Provider, {
+      value: { metadata: {}, folderDocs: new Map(), folderNames: [], errors: new Map(), onNavigate: vi.fn(), justCreatedRef: { current: false } },
+    }, children);
+    const { result } = renderHook(() => useLensesUsing(CONCEPT_ROW_RULES[2], 'lens', true), { wrapper });
+    expect(result.current).toEqual({ lenses: [], pending: 0 });
+    expect(reader).not.toHaveBeenCalled();
   });
 });

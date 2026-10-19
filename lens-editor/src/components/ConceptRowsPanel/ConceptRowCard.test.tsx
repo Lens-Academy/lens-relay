@@ -224,4 +224,24 @@ describe('ConceptRowCard', () => {
     expect(doc.getText('contents').toString()).toBe(`${suggested.slice(0, -1)} Direct\n`);
     __embedDocsTesting.reset();
   });
+
+  it('nests related rows drawn by renderSourceRow, labelled "Lens: <name>" with a real link', () => {
+    metadata['/Lens Edu/Lenses/Trading intro.md'] = { id: 'l1', type: 'markdown', version: 0 };
+    const lensRow = { ...entry, body: 'Lens note.' };
+    render(<Card
+      sourceRows={[{ sourceId: 'l1', sourceName: 'Trading intro', kind: 'Lens', rows: [lensRow] }]}
+      renderSourceRow={(src, row) => (
+        <Card key="nested" entry={row} target={src.sourceId} targetName={src.sourceName} targetKeyword="Lens"
+          label={{ kind: src.kind, docId: src.sourceId, name: src.sourceName }} />
+      )}
+    />);
+    expect(screen.queryByText('Lens note.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand row' }));
+    // Collapsed to its first line, under a "Lens:" label linking to the lens.
+    const link = screen.getByRole('link', { name: 'Trading intro' });
+    expect(link.getAttribute('href')).toBeTruthy();
+    expect(link.closest('.concept-row-label')?.textContent).toBe('Lens: Trading intro');
+    expect(screen.getByText('Lens note.')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Expand row' })).toHaveLength(1);
+  });
 });

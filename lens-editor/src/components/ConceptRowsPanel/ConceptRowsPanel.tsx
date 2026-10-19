@@ -5,10 +5,13 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { setSnapshot, withLiveDoc } from '../../lib/embed-docs';
 import { attachProvenanceRegistration, humanActor } from '../../lib/provenance';
-import { createDocument, createFolder } from '../../lib/relay-api';
+import { createDocument, createFolder, generateUUID } from '../../lib/relay-api';
 import { computeRelativePath, resolvePageName } from '../../lib/document-resolver';
 import {
+  draftFromRow,
+  hasCRLF,
   insertRowUnlessPresent,
+  rowsAbout,
   groupLensRows,
   lensSourceTargets,
   matchRule,
@@ -19,13 +22,14 @@ import {
   type CollectedRows,
   type ConceptRowRule,
   type RowEntry,
+  type SourceRows,
 } from '../../lib/concept-rows';
 import { RELAY_ID } from '../../App';
 import { basenameOf } from '../../lib/course-tree';
 import { docUuidFromCompoundId } from '../../lib/url-utils';
 import { ConceptRowCard } from './ConceptRowCard';
 import { ConceptPicker, type PickerConcept } from './ConceptPicker';
-import { useConceptRows, type AddedSource } from './useConceptRows';
+import { useConceptRows, useLensesUsing, type AddedSource } from './useConceptRows';
 import { DocLink } from '../DocLink';
 
 const OPEN_KEY = 'lens-editor:concept-rows-open';
@@ -106,10 +110,18 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
   const getActor = useCallback(() => humanActor(displayNameRef.current ?? ''), []);
 
   const target = docUuidFromCompoundId(docId);
-  const sources = useSources(rule, ytext, path);
-  const targets = useMemo(() => [target, ...sources.map((a) => a.id)], [target, sources]);
-  const [added, setAdded] = useState<AddedSource[]>([]);
   const [open, setOpen] = useState(readOpen);
+  const sources = useSources(rule, ytext, path);
+  // An article or video: the lenses that use it (rule #10), in place of sources.
+  const lensUse = useLensesUsing(rule, target, open);
+  const related = useMemo(
+    () => (rule.lensContext
+      ? lensUse.lenses.map((l) => ({ id: l.id, path: l.path, kind: 'Lens' }))
+      : sources),
+    [rule.lensContext, lensUse.lenses, sources],
+  );
+  const targets = useMemo(() => [target, ...related.map((a) => a.id)], [target, related]);
+  const [added, setAdded] = useState<AddedSource[]>([]);
   const { byTarget, failed, failedFor } = useConceptRows(rule, targets, added, open);
   const own: CollectedRows = byTarget.get(target) ?? { rows: [], mentions: [], pending: 0 };
 
@@ -120,7 +132,11 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
   const clearAutoEdit = useCallback(() => setAutoEdit(null), []);
   // Expanded rows, by card key: held here so "Expand all" reaches every row.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  // "Expand all" stays in force for rows that arrive later (lens rows read
+  // after the click), until a row is collapsed.
+  const [expandAll, setExpandAll] = useState(false);
   const setRowExpanded = useCallback((key: string, value: boolean) => {
+    if (!value) setExpandAll(false);
     setExpanded((prev) => {
       if (prev.has(key) === value) return prev;
       const next = new Set(prev);
@@ -147,7 +163,9 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
 
   /** Add a row about the opened file to a concept file (made when `name` is
    *  new), then open it for editing. */
-  const addRow = useCallback(async (choice: { id: string } | { name: string }, body = '') => {
+  const addRow = useCallback(async (choice: { id: string } | { name: string }, draft = '') => {
+    // A draft copied from another row: \n line breaks, no leading blank line.
+    const body = draftFromRow(draft);
     // The row heading links here by relative path: a path that cannot be a
     // wikilink would make a row that never shows (and a retry, a second one).
     const problem = rowLinkProblem(computeRelativePath(`${folder}/x.md`, path));
@@ -167,6 +185,13 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
         // Checked against the live text, not the (possibly stale) snapshot:
         // a row about this file already there is opened, not doubled.
         const result = await withLiveDoc(`${RELAY_ID}-${conceptId}`, ({ doc }) => {
+          const text = doc.getText('contents');
+          // A row added to a \r\n file could not be edited here (rowHasCR):
+          // left to the file itself, unless one is already there to open.
+          if (hasCRLF(text.toString())
+            && rowsAbout(text.toString(), conceptPath, target, metadata, rule.section).length === 0) {
+            return { crlf: true as const };
+          }
           const detach = attachProvenanceRegistration(doc, getActor);
           try {
             return insertRowUnlessPresent(doc.getText('contents'), conceptPath, target,
@@ -179,13 +204,17 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
           setError('Another file was opened for editing meanwhile. Try again.');
           return;
         }
+        if ('crlf' in result) {
+          setError(`${basenameOf(conceptPath)} has Windows line endings: add the row in the concept file itself.`);
+          return;
+        }
         index = result.index;
       } else {
         const folderDoc = folderDocs.get(rule.sharedFolder);
         if (!folderDoc) throw new Error(`folder ${rule.sharedFolder} not loaded`);
         if (!folderDoc.getMap('filemeta_v0').has(`/${rule.rowsIn}`)) createFolder(folderDoc, `/${rule.rowsIn}`);
         const conceptPath = `${folder}/${choice.name}.md`;
-        const text = newConceptText(choice.name, computeRelativePath(conceptPath, path), body, rule.section);
+        const text = newConceptText(choice.name, generateUUID(), computeRelativePath(conceptPath, path), body, rule.section);
         conceptId = await createDocument(folderDoc, `/${rule.rowsIn}/${choice.name}.md`, 'markdown', text);
         setSnapshot(`${RELAY_ID}-${conceptId}`, text);
       }
@@ -216,9 +245,10 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
     onExpandedChange: (value: boolean) => setRowExpanded(key, value),
   });
 
-  const loading = own.pending - failedFor(target) > 0;
-  // Lenses: each concept shows once, with its rows about the lens's sources.
-  const groups = groupLensRows(own.rows, sources.map((src) => ({
+  const loading = own.pending - failedFor(target) > 0 || lensUse.pending > 0;
+  // Each concept shows once: on a lens with its rows about the lens's
+  // sources, on an article or video with its rows about the lenses using it.
+  const groups = groupLensRows(own.rows, related.map((src) => ({
     sourceId: src.id,
     sourceName: basenameOf(src.path),
     kind: src.kind,
@@ -226,14 +256,41 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
   })));
   const ownKey = (entry: RowEntry) => `${entry.conceptId}:${entry.index}`;
   const sourceOnlyKey = (conceptId: string) => `sources:${conceptId}`;
+  const lensRowKey = (src: SourceRows, row: RowEntry) => `lens:${src.sourceId}:${row.conceptId}:${row.index}`;
+  const lensRowKeys = (sourceRows: SourceRows[]) => (rule.lensContext
+    ? sourceRows.flatMap((src) => src.rows.map((row) => lensRowKey(src, row)))
+    : []);
   const allKeys = [
-    ...groups.lens.map(({ entry }) => ownKey(entry)),
-    ...groups.sourceOnly.map((c) => sourceOnlyKey(c.conceptId)),
+    ...groups.lens.flatMap(({ entry, sourceRows }) => [ownKey(entry), ...lensRowKeys(sourceRows)]),
+    ...groups.sourceOnly.flatMap((c) => [sourceOnlyKey(c.conceptId), ...lensRowKeys(c.sourceRows)]),
   ];
-  const sourceOnlyHeading = sources.length === 1
-    ? `Only linked to ${sources[0].kind}: ${basenameOf(sources[0].path)}`
-    : 'Only linked to its sources';
+  const sourceOnlyHeading = related.length === 1
+    ? `Only linked to ${related[0].kind}: ${basenameOf(related[0].path)}`
+    : rule.lensContext ? 'Only linked to the lenses that use it' : 'Only linked to its sources';
+  const lensSummary = (sourceRows: SourceRows[]) => {
+    const n = sourceRows.reduce((sum, src) => sum + src.rows.length, 0);
+    return `${n} lens row${n === 1 ? '' : 's'}: ${sourceRows.map((src) => src.sourceName).join(', ')}`;
+  };
+  /** On an article or video: a lens's row, editable, nested in its concept's card. */
+  const renderLensRow = rule.lensContext
+    ? (src: SourceRows, row: RowEntry) => {
+      const key = lensRowKey(src, row);
+      return (
+        <ConceptRowCard
+          key={key}
+          {...cardProps(key, row, src.sourceId, src.sourceName, 'Lens')}
+          label={{ kind: src.kind, docId: src.sourceId, name: src.sourceName }}
+        />
+      );
+    }
+    : undefined;
   const allExpanded = allKeys.length > 0 && allKeys.every((k) => expanded.has(k));
+  const allKeysJoined = allKeys.join('\n');
+  useEffect(() => {
+    if (!expandAll) return;
+    const keys = allKeysJoined.split('\n').filter(Boolean);
+    setExpanded((prev) => (keys.every((k) => prev.has(k)) ? prev : new Set([...prev, ...keys])));
+  }, [expandAll, allKeysJoined]);
   const targetName = basenameOf(path);
 
   return (
@@ -256,7 +313,10 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
         {open && allKeys.length > 0 && (
           <button
             type="button"
-            onClick={() => setExpanded(allExpanded ? new Set() : new Set(allKeys))}
+            onClick={() => {
+              setExpandAll(!allExpanded);
+              setExpanded(allExpanded ? new Set() : new Set(allKeys));
+            }}
             className="ml-auto text-xs text-gray-500 hover:underline cursor-pointer"
           >
             {allExpanded ? 'Collapse all' : 'Expand all'}
@@ -290,14 +350,21 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
               <ConceptRowCard
                 key={key}
                 {...cardProps(key, entry, target, targetName, rule.openedLabel)}
-                sourceRows={rule.sourceContext ? sourceRows : undefined}
+                sourceRows={rule.sourceContext || rule.lensContext ? sourceRows : undefined}
+                renderSourceRow={renderLensRow}
                 autoEdit={autoEdit === key}
                 onAutoEdited={clearAutoEdit}
               />
             );
           })}
           {own.rows.length === 0 && (
-            <div className="px-2 py-1 text-gray-400">{loading ? 'Loading…' : 'No concept relationships yet'}</div>
+            <div className="px-2 py-1 text-gray-400">
+              {loading
+                ? 'Loading…'
+                : groups.sourceOnly.length > 0
+                  ? `No relationships for ${rule.openedLabel.replace(/^This /, 'this ')} yet`
+                  : 'No concept relationships yet'}
+            </div>
           )}
           {failed > 0 && (
             <div className="px-2 py-1 text-xs text-red-700">
@@ -332,8 +399,13 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
                     {...cardProps(key, entry, first.sourceId, first.sourceName, first.kind)}
                     context
                     sourceRows={sourceRows}
+                    renderSourceRow={renderLensRow}
+                    // Its rows show nested once expanded: collapsed, name the
+                    // lenses rather than repeat the first row's text.
+                    summary={rule.lensContext ? lensSummary(sourceRows) : undefined}
                     // Prefilled with the first source's notes, as a draft.
                     onAddForLens={canEdit && !busy ? () => void addRow({ id: conceptId }, entry.body) : undefined}
+                    addLabel={rule.lensContext ? `Add for this ${rule.openedLabel.replace(/^This /, '').toLowerCase()} too` : undefined}
                   />
                 );
               })}

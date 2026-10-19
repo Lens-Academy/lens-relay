@@ -9,7 +9,12 @@ import {
   bodyLineFix,
   collectRows,
   findLiveRow,
+  draftFromRow,
+  hasCRLF,
   insertRowUnlessPresent,
+  isLensPath,
+  rowHasCR,
+  lensesUsing,
   rowLinkProblem,
   groupLensRows,
   CONCEPT_ROW_RULES,
@@ -224,9 +229,10 @@ describe('planRowInsertion', () => {
 });
 
 describe('newConceptText', () => {
-  it('starts with the title, the Relationships section and the row', () => {
-    const text = newConceptText('Corrigibility', '../articles/x');
-    expect(text).toBe('# Corrigibility\n\n## Relationships\n\n### [[../articles/x]]\n\n');
+  it('starts with frontmatter holding the id, then the title, the Relationships section and the row', () => {
+    const id = '0b6f3c2e-5d4a-4f1e-9c8b-7a6d5e4f3a2b';
+    const text = newConceptText('Corrigibility', id, '../articles/x');
+    expect(text).toBe(`---\nid: ${id}\n---\n# Corrigibility\n\n## Relationships\n\n### [[../articles/x]]\n\n`);
     expect(parseConceptFile(text).rows).toHaveLength(1);
   });
 });
@@ -390,6 +396,46 @@ describe('canonical concept-row rules v1', () => {
       (id) => Object.entries(md2).find(([, m]) => m.id === id)?.[0] ?? null);
     expect(out.rows.map((r) => r.conceptName)).toEqual(['Alpha', 'beta']);
   });
+
+  it('#10: an article shows the rows of the lenses whose source:: resolves to it', () => {
+    // canonical concept-row rules v1 #10
+    const md3: FolderMetadata = {
+      '/Lens Edu/articles/x.md': md('ax'),
+      '/Lens Edu/articles/other.md': md('ao'),
+      '/Lens Edu/Lenses/Uses X.md': md('lu'),
+      '/Lens Edu/Lenses/A first.md': md('la'),
+      '/Lens Edu/Lenses/Text only.md': md('lt'),
+      '/Lens Edu/Lenses/Mentions.md': md('lm'),
+      '/Lens Edu/Concepts/C.md': md('cc'),
+    };
+    const texts = new Map([
+      ['lu', '#### Article\nsource:: [[../articles/X|Shown]]\n'],
+      ['la', 'source:: [[Lens Edu/articles/x]]\n'],
+      ['lt', '#### Text\ncontent::\nsource:: [[../articles/x]]\n'],
+      ['lm', 'See [[../articles/x]].\n#### Article\nsource:: [[../articles/other]]\n'],
+      ['cc', 'source:: [[../articles/x]]\n'],
+    ]);
+    const pathOf = (id: string) => Object.entries(md3).find(([, m]) => m.id === id)?.[0] ?? null;
+    const out = lensesUsing('ax', ['lu', 'lt', 'lm', 'cc', 'la'], texts, md3, 'Lens Edu', pathOf);
+    expect(out.lenses.map((l) => l.path)).toEqual(['/Lens Edu/Lenses/A first.md', '/Lens Edu/Lenses/Uses X.md']);
+    expect(out.pending).toBe(0);
+    expect(matchRule('/Lens Edu/articles/x.md')?.lensContext).toBe(true);
+    expect(matchRule('/Lens Edu/video_transcripts/x.md')?.lensContext).toBe(true);
+    expect(matchRule('/Lens Edu/Lenses/x.md')?.lensContext).toBeFalsy();
+  });
+});
+
+describe('lensesUsing', () => {
+  it('counts lenses not read yet as pending and leaves other files out', () => {
+    const pathOf = (id: string) => Object.entries(metadata).find(([, m]) => m.id === id)?.[0] ?? null;
+    expect(lensesUsing('a1', ['l1', 'c1'], new Map(), metadata, 'Lens Edu', pathOf)).toEqual({ lenses: [], pending: 1 });
+  });
+
+  it('tells lenses by folder', () => {
+    expect(isLensPath('/Lens Edu/Lenses/x.md', 'Lens Edu')).toBe(true);
+    expect(isLensPath('/Lens Edu/articles/x.md', 'Lens Edu')).toBe(false);
+    expect(isLensPath('/Lens/Lenses/x.md', 'Lens Edu')).toBe(false);
+  });
 });
 
 describe('planRowInsertion with several Relationships sections', () => {
@@ -486,6 +532,16 @@ describe('findLiveRow', () => {
     expect(findLiveRow(rows, live, entry(1, 'changed since'))).toBe(rows[1]);
     expect(findLiveRow([], live, entry(0, 'x'))).toBeNull();
   });
+
+  it('takes the row at the same position when its text is unchanged: identical or empty rows', () => {
+    const same = '## Relationships\n### [[x]]\nsame\n### [[x]]\nsame\n';
+    const sameRows = parseConceptFile(same).rows;
+    expect(findLiveRow(sameRows, same, entry(1, 'same'))).toBe(sameRows[1]);
+    expect(findLiveRow(sameRows, same, entry(0, 'same'))).toBe(sameRows[0]);
+    const empty = '## Relationships\n### [[x]]\n\n### [[x]]\n\n';
+    const emptyRows = parseConceptFile(empty).rows;
+    expect(findLiveRow(emptyRows, empty, entry(1, ''))).toBe(emptyRows[1]);
+  });
 });
 
 describe('rowLinkProblem', () => {
@@ -512,5 +568,33 @@ describe('insertRowUnlessPresent', () => {
     expect(insertRowUnlessPresent(text, CONCEPT_PATH, 'a1', '../articles/ai-control-redwood', 'draft', metadata))
       .toEqual({ index: 0 });
     expect(rowsAbout(text.value, CONCEPT_PATH, 'a1', metadata)).toHaveLength(1);
+  });
+});
+
+describe('rowHasCR (rows in \\r\\n files are edited in the concept file)', () => {
+  it('finds \\r in empty and one-line rows, whose body has none', () => {
+    const text = '## Relationships\r\n### [[a]]\r\n### [[b]]\r\nOne line.\r\n### [[c]]\r\nTwo\r\nlines.\r\n';
+    const rows = parseConceptFile(text).rows;
+    expect(rows.map((r) => r.target)).toEqual(['a', 'b', 'c']);
+    expect(rows.map((r) => text.slice(r.bodyFrom, r.bodyTo).includes('\r'))).toEqual([false, false, true]);
+    expect(rows.map((r) => rowHasCR(text, r))).toEqual([true, true, true]);
+    const lf = '## Relationships\n### [[a]]\n### [[b]]\nOne line.\n';
+    expect(parseConceptFile(lf).rows.map((r) => rowHasCR(lf, r))).toEqual([false, false]);
+  });
+
+  it('marks collected rows from a CRLF file', () => {
+    const md4: FolderMetadata = { '/Lens Edu/Concepts/C.md': md('c'), '/Lens Edu/articles/x.md': md('x') };
+    const text = '## Relationships\r\n### [[../articles/x]]\r\n### [[../articles/x]]\r\nOne line.\r\n';
+    const out = collectRows('x', ['c'], new Map([['c', text]]), md4, CONCEPT_ROW_RULES[0],
+      (id) => Object.entries(md4).find(([, m]) => m.id === id)?.[0] ?? null);
+    expect(out.rows.map((r) => r.crlf)).toEqual([true, true]);
+  });
+
+  it('turns another row into a draft without \\r or a leading blank line', () => {
+    expect(draftFromRow('\nOne line.')).toBe('One line.');
+    expect(draftFromRow('\r\n\r\nTwo\r\nlines.\r\n')).toBe('Two\nlines.');
+    expect(draftFromRow('  indented\nnext')).toBe('  indented\nnext');
+    expect(hasCRLF('a\r\nb')).toBe(true);
+    expect(hasCRLF('a\nb')).toBe(false);
   });
 });

@@ -16,7 +16,8 @@
 //! The Lens Editor shows a file's rows in a panel at the top of the file; an
 //! MCP `read` of an article, video transcript or lens gets the same rows as a
 //! labelled block before the file's text (first chunk only); a lens also gets
-//! the rows about the articles and videos it uses as `source::`. The rows
+//! the rows about the articles and videos it uses as `source::`, and an
+//! article or video the rows about the lenses that use it. The rows
 //! stay in the concept files: grep, search and glob see them only there, and
 //! edits go to the concept file. See `docs/concept-relationships.md`.
 //!
@@ -48,8 +49,13 @@ struct ConceptRowRule {
     /// What a file in `opened_in` is called: "article", "video", "lens".
     kind: &'static str,
     /// Also show the rows of the files the opened file uses as `source::`
-    /// (lenses). The files of the other rules are the sources that count.
+    /// (lenses). The files of the rules with lens context are the sources
+    /// that count.
     source_context: bool,
+    /// Also show the rows of the files that use the opened file as a
+    /// `source::` (rule #10: an article's or video's lenses). The files of
+    /// the rule with source context are the ones that count.
+    lens_context: bool,
 }
 
 const fn relationships_rule(
@@ -64,6 +70,7 @@ const fn relationships_rule(
         section: "Relationships",
         kind,
         source_context,
+        lens_context: !source_context,
     }
 }
 
@@ -81,8 +88,11 @@ const MAX_BLOCK_CHARS: usize = 20_000;
 const MAX_CONCEPT_FILES_PER_TARGET: usize = 40;
 /// Concept files read per `read` call in all.
 const MAX_CONCEPT_FILES_TOTAL: usize = 80;
-/// Sources of a lens whose rows are shown (rule #8 lets the relay cap them).
+/// Sources of a lens whose rows are shown (rule #8 lets the relay cap them),
+/// and lenses using an article or video whose rows are shown (rule #10).
 const MAX_LENS_SOURCES: usize = 8;
+/// Lens files read to find the lenses that use an article or video.
+const MAX_LENS_FILES_READ: usize = 40;
 /// Concept files loaded at once.
 pub(super) const LOAD_CONCURRENCY: usize = 4;
 
@@ -118,6 +128,12 @@ fn source_kind(path: &str) -> Option<&'static str> {
         .filter(|r| !r.source_context)
         .find(|r| path.starts_with(&format!("{}/{}/", r.shared_folder, r.opened_in)))
         .map(|r| r.kind)
+}
+
+/// Whether resolver path `path` is a lens in `shared_folder`: a Markdown file
+/// of the rule with source context there.
+fn is_lens_path(path: &str, shared_folder: &str) -> bool {
+    match_rule(path).is_some_and(|r| r.source_context && r.shared_folder == shared_folder)
 }
 
 /// Resolver-path prefix (with trailing slash) of the files holding the rule's rows.
@@ -392,11 +408,12 @@ struct CollectedRows {
     skipped: usize,
 }
 
-/// The rows about one of a lens's sources (an article or a video).
+/// The rows about one of a lens's sources (an article or a video), or, for
+/// an article or video, about one of the lenses that use it.
 #[derive(Debug, Clone)]
 struct SourceRows {
     source_path: String,
-    /// "article" or "video".
+    /// "article", "video" or "lens".
     kind: &'static str,
     rows: Vec<RowEntry>,
 }
@@ -415,7 +432,8 @@ struct LensRowGroups {
 /// concept with a lens row shows once, its source rows under the lens row; a
 /// concept with only source rows also shows once, however many of the
 /// sources it has rows for. Lens rows keep their order; the others go by
-/// concept name.
+/// concept name. Mirrored for an article or video (rule #10): `own` are its
+/// rows and `sources` the rows about the lenses that use it.
 fn group_lens_rows(own: &[RowEntry], sources: &[SourceRows]) -> LensRowGroups {
     let for_concept = |concept_id: &str| -> Vec<SourceRows> {
         sources
@@ -703,6 +721,8 @@ const BLOCK_START: &str =
     "── Concept relationships for this file (context — NOT part of this file's text) ──";
 const BLOCK_END: &str = "── end of concept relationships ──";
 const PREAMBLE: &str = "Each row lives in the named concept file under ## Relationships; edit it there, never here. Line numbers below the end marker are this file's own.";
+/// Added to the preamble for an article or video (rule #10).
+const LENS_CONTEXT_NOTE: &str = "Rows \"about lens …\" are about a lens that uses this file as a source::, shown per lens with their concept — context, not about this file.";
 
 /// A row's text indented by `indent`, cut at [`MAX_ROW_CHARS`].
 fn render_body(out: &mut String, entry: &RowEntry, indent: &str) {
@@ -769,23 +789,43 @@ fn render_simple(own: &CollectedRows, opened_label: &str) -> String {
     out
 }
 
-/// A row about one of a lens's sources, as a sub-entry under its concept.
-fn render_source_row(out: &mut String, source: &SourceRows, row: &RowEntry) {
-    out.push_str(&format!(
-        "  ▸ Row about its {} {} (line {}) — context, not about this lens:\n",
-        source.kind, source.source_path, row.line
-    ));
+/// A row about a related file (one of a lens's sources, or a lens that uses
+/// the article or video), as a sub-entry under its concept.
+fn render_source_row(out: &mut String, source: &SourceRows, row: &RowEntry, opened_label: &str) {
+    if source.kind == "lens" {
+        out.push_str(&format!(
+            "  ▸ Row about lens {} (line {}), which uses {opened_label} as a source — context, not about {opened_label}:\n",
+            source.source_path, row.line
+        ));
+    } else {
+        out.push_str(&format!(
+            "  ▸ Row about its {} {} (line {}) — context, not about {opened_label}:\n",
+            source.kind, source.source_path, row.line
+        ));
+    }
     render_body(out, row, "    ");
+}
+
+/// What the related files are, for a lens (`its sources`) or for an article
+/// or video (`lenses`): files followed beyond the cap, and files not read.
+struct RelatedOverCap {
+    /// Related files not shown (over [`MAX_LENS_SOURCES`]).
+    over_cap: usize,
+    /// Lens files linking here that were not read (over [`MAX_LENS_FILES_READ`]).
+    lenses_unread: usize,
 }
 
 /// The block for a lens: per concept its lens row, then its rows about the
 /// lens's sources; then, once each, the concepts that have rows only about
-/// the lens's sources.
-fn render_lens(
+/// the lens's sources. Mirrored for an article or video (`lens_context`):
+/// per concept its own row, then its rows about the lenses that use it;
+/// then the concepts with rows only about those lenses.
+fn render_grouped(
     own: &CollectedRows,
     sources: &[(SourceRows, usize)],
-    sources_over_cap: usize,
+    caps: RelatedOverCap,
     opened_label: &str,
+    lens_context: bool,
 ) -> String {
     let source_rows: Vec<SourceRows> = sources.iter().map(|(s, _)| s.clone()).collect();
     let groups = group_lens_rows(&own.rows, &source_rows);
@@ -807,7 +847,7 @@ fn render_lens(
         render_body(&mut out, entry, "    ");
         for source in source_rows {
             for row in &source.rows {
-                render_source_row(&mut out, source, row);
+                render_source_row(&mut out, source, row, opened_label);
             }
         }
     }
@@ -815,24 +855,34 @@ fn render_lens(
     render_skipped(&mut out, own.skipped, opened_label);
 
     if !groups.source_only.is_empty() {
-        out.push_str(
-            "\nConcepts linked only via this lens's sources (rows about a source — context, not about this lens; no row for this lens yet):\n",
-        );
+        out.push_str(&if lens_context {
+            format!("\nConcepts linked only via the lenses that use {opened_label} (rows about a lens — context, not about {opened_label}; no row for {opened_label} yet):\n")
+        } else {
+            format!("\nConcepts linked only via this lens's sources (rows about a source — context, not about {opened_label}; no row for {opened_label} yet):\n")
+        });
     }
     for (concept_path, source_rows) in &groups.source_only {
         out.push_str(&format!("\n[Concept] {concept_path}\n"));
         for source in source_rows {
             for row in &source.rows {
-                render_source_row(&mut out, source, row);
+                render_source_row(&mut out, source, row, opened_label);
             }
         }
     }
     for (source, skipped) in sources {
         render_skipped(&mut out, *skipped, &source.source_path);
     }
-    if sources_over_cap > 0 {
+    if caps.over_cap > 0 {
+        out.push_str(&if lens_context {
+            format!("({} more lens(es) using {opened_label} not shown; at most {MAX_LENS_SOURCES} are followed.)\n", caps.over_cap)
+        } else {
+            format!("({} more source(s) of this lens not shown; at most {MAX_LENS_SOURCES} are followed.)\n", caps.over_cap)
+        });
+    }
+    if caps.lenses_unread > 0 {
         out.push_str(&format!(
-            "({sources_over_cap} more source(s) of this lens not shown; at most {MAX_LENS_SOURCES} are followed.)\n"
+            "({} more lens file(s) link to {opened_label} but were not read; use get_links to list them.)\n",
+            caps.lenses_unread
         ));
     }
     out
@@ -886,7 +936,8 @@ async fn sources_may_have_rows(
     false
 }
 
-/// A lens source (an article or video) and its concept backlinkers.
+/// A related file (a lens's article or video, or a lens using the article
+/// or video) and its concept backlinkers.
 struct Source {
     path: String,
     kind: &'static str,
@@ -894,10 +945,103 @@ struct Source {
     candidates: Vec<(String, String)>,
 }
 
+/// A lens that may use the opened file, with its concept backlinkers.
+struct LensCandidate {
+    id: String,
+    path: String,
+    concepts: Vec<(String, String)>,
+}
+
+/// The lens files among the documents linking to `target_uuid`, from the
+/// backlinks index, sorted by path, keeping only those that some concept
+/// file links to (a lens without one can add no rows). Nothing is read.
+async fn lens_backlinkers(
+    server: &Arc<Server>,
+    rule: &ConceptRowRule,
+    folder_doc_id: &str,
+    target_uuid: &str,
+) -> Vec<LensCandidate> {
+    let resolver = server.doc_resolver();
+    let mut paths: Vec<(String, String)> =
+        get_links::read_backlink_uuids(server, folder_doc_id, target_uuid)
+            .await
+            .into_iter()
+            .filter(|id| id != target_uuid)
+            .filter_map(|id| {
+                let path = resolver.path_for_uuid(&id)?;
+                is_lens_path(&path, rule.shared_folder).then_some((id, path))
+            })
+            .collect();
+    paths.sort_by(|a, b| a.1.cmp(&b.1));
+    paths.dedup();
+    let mut out = Vec::new();
+    for (id, path) in paths {
+        let Some(info) = resolver.resolve_path(&path) else {
+            continue;
+        };
+        let concepts = concept_backlinkers(server, rule, &info.folder_doc_id, &id).await;
+        if !concepts.is_empty() {
+            out.push(LensCandidate { id, path, concepts });
+        }
+    }
+    out
+}
+
+/// The lenses among `candidates` (in path order) that use the file `uuid` as
+/// a `source::` (rule #10). Reads at most [`MAX_LENS_FILES_READ`] lens files
+/// (their `read` view, pending suggestions accepted); returns the lenses
+/// found, in path order, and how many lens files were not read.
+async fn lenses_using(
+    server: &Arc<Server>,
+    index: &VirtualTreeIndex<'_>,
+    mut candidates: Vec<LensCandidate>,
+    uuid: &str,
+) -> (Vec<LensCandidate>, usize) {
+    let over = candidates.len().saturating_sub(MAX_LENS_FILES_READ);
+    candidates.truncate(MAX_LENS_FILES_READ);
+    let loaded: Vec<(LensCandidate, Option<String>)> = futures::stream::iter(candidates)
+        .map(|c| async move {
+            let text = load_text(server, &c.path).await;
+            (c, text)
+        })
+        .buffered(LOAD_CONCURRENCY)
+        .collect()
+        .await;
+    pick_lenses(index, loaded, uuid, over)
+}
+
+/// [`lenses_using`] once the lens texts are loaded (None: could not be
+/// loaded, counted as not read, on top of `unread`).
+fn pick_lenses(
+    index: &VirtualTreeIndex<'_>,
+    loaded: Vec<(LensCandidate, Option<String>)>,
+    uuid: &str,
+    mut unread: usize,
+) -> (Vec<LensCandidate>, usize) {
+    let mut lenses = Vec::new();
+    for (lens, text) in loaded {
+        let Some(text) = text else {
+            unread += 1;
+            continue;
+        };
+        let lens_virtual = format!("/{}", lens.path);
+        let uses = lens_source_targets(&text).iter().any(|t| {
+            index
+                .resolve(t, Some(&lens_virtual))
+                .is_some_and(|e| e.id == uuid)
+        });
+        if uses {
+            lenses.push(lens);
+        }
+    }
+    (lenses, unread)
+}
+
 /// The concept-relationships block for the Markdown file `path` (resolver
 /// path) with uuid `uuid` in folder doc `folder_doc_id`, whose `read` text is
 /// `text`; None when no rule covers the file or no concept file links to it
-/// (or, for a lens, to one of its articles and videos).
+/// (or, for a lens, to one of its articles and videos; for an article or
+/// video, to one of the lenses that use it).
 pub(crate) async fn concept_rows_block(
     server: &Arc<Server>,
     path: &str,
@@ -912,19 +1056,28 @@ pub(crate) async fn concept_rows_block(
     } else {
         Vec::new()
     };
+    let lens_candidates = if rule.lens_context {
+        lens_backlinkers(server, rule, folder_doc_id, uuid).await
+    } else {
+        Vec::new()
+    };
     let lens_virtual = format!("/{}", path);
     if own_candidates.is_empty()
+        && lens_candidates.is_empty()
         && !sources_may_have_rows(server, rule, &lens_virtual, &source_targets).await
     {
         return None;
     }
 
-    // The lens's articles and videos, each with its concept backlinkers.
+    // The related files, each with its concept backlinkers: a lens's
+    // articles and videos, or the lenses that use an article or video.
     let resolver = server.doc_resolver();
     let entries = resolver_entries(server);
     let index = VirtualTreeIndex::new(&entries);
-    let mut sources: Vec<Source> = Vec::new();
-    let mut sources_over_cap = 0;
+    // (path, kind, id, concept backlinkers if already known)
+    let mut related: Vec<(String, &'static str, String, Option<Vec<(String, String)>>)> =
+        Vec::new();
+    let mut over_cap = 0;
     for target in &source_targets {
         let Some(entry) = index.resolve(target, Some(&lens_virtual)) else {
             continue;
@@ -933,41 +1086,93 @@ pub(crate) async fn concept_rows_block(
         let Some(kind) = source_kind(&source_path) else {
             continue; // a widget, or anything else without rows of its own
         };
-        if entry.id == uuid || sources.iter().any(|s| s.id == entry.id) {
+        if entry.id == uuid || related.iter().any(|s| s.2 == entry.id) {
             continue;
         }
-        if sources.len() >= MAX_LENS_SOURCES {
-            sources_over_cap += 1;
+        if related.len() >= MAX_LENS_SOURCES {
+            over_cap += 1;
             continue;
         }
-        let Some(info) = resolver.resolve_path(&source_path) else {
+        related.push((source_path, kind, entry.id.clone(), None));
+    }
+    let (lenses, lenses_unread) = lenses_using(server, &index, lens_candidates, uuid).await;
+    for lens in lenses {
+        if related.len() >= MAX_LENS_SOURCES {
+            over_cap += 1;
             continue;
+        }
+        related.push((lens.path, "lens", lens.id, Some(lens.concepts)));
+    }
+    let mut sources: Vec<Source> = Vec::new();
+    for (source_path, kind, id, known) in related {
+        let candidates = match known {
+            Some(c) => c,
+            None => {
+                let Some(info) = resolver.resolve_path(&source_path) else {
+                    continue;
+                };
+                concept_backlinkers(server, rule, &info.folder_doc_id, &id).await
+            }
         };
-        let candidates = concept_backlinkers(server, rule, &info.folder_doc_id, &entry.id).await;
         sources.push(Source {
             path: source_path,
             kind,
-            id: entry.id.clone(),
+            id,
             candidates,
         });
     }
-    // No concept file links here or to a source: nothing to load.
+    // No concept file links here or to a related file: nothing to load.
     if own_candidates.is_empty() && sources.iter().all(|s| s.candidates.is_empty()) {
         return None;
     }
 
     let mut loader = ConceptLoader::new(server, &index, rule.section);
     let own = collect_rows(&mut loader, own_candidates, uuid).await;
+    // What the total cap leaves is split fairly over the related files
+    // (in order), so the first cannot take it all; files already loaded
+    // cost nothing. Each share is worked out just before its file is
+    // collected, so what an earlier file left unused carries forward.
+    let mut wanted: Vec<(Vec<(String, String)>, usize)> = Vec::new(); // (to read, over the per-file cap)
+    for source in &sources {
+        let mut candidates = source.candidates.clone();
+        let over = candidates
+            .len()
+            .saturating_sub(MAX_CONCEPT_FILES_PER_TARGET);
+        candidates.truncate(MAX_CONCEPT_FILES_PER_TARGET);
+        wanted.push((candidates, over));
+    }
     let mut source_rows: Vec<(SourceRows, usize)> = Vec::new();
-    for source in sources {
-        let rows = collect_rows(&mut loader, source.candidates, &source.id).await;
+    for (i, source) in sources.into_iter().enumerate() {
+        let new_counts: Vec<usize> = wanted[i..]
+            .iter()
+            .map(|(c, _)| {
+                c.iter()
+                    .filter(|(id, _)| !loader.loaded.contains_key(id))
+                    .count()
+            })
+            .collect();
+        let room = MAX_CONCEPT_FILES_TOTAL.saturating_sub(loader.loaded.len());
+        let share = super::concept_graph::fair_shares(&new_counts, room)[0];
+        let (candidates, over) = std::mem::take(&mut wanted[i]);
+        let mut new_left = share;
+        let (taken, left_out): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|(id, _)| {
+            if loader.loaded.contains_key(id) {
+                true
+            } else if new_left > 0 {
+                new_left -= 1;
+                true
+            } else {
+                false
+            }
+        });
+        let rows = collect_rows(&mut loader, taken, &source.id).await;
         source_rows.push((
             SourceRows {
                 source_path: source.path,
                 kind: source.kind,
                 rows: rows.rows,
             },
-            rows.skipped,
+            rows.skipped + over + left_out.len(),
         ));
     }
 
@@ -978,13 +1183,24 @@ pub(crate) async fn concept_rows_block(
         return None;
     }
     let opened_label = format!("this {}", rule.kind);
-    let body = if rule.source_context {
-        render_lens(&own, &source_rows, sources_over_cap, &opened_label)
+    let caps = RelatedOverCap {
+        over_cap,
+        lenses_unread,
+    };
+    let grouped =
+        rule.source_context || !source_rows.is_empty() || over_cap > 0 || lenses_unread > 0;
+    let body = if grouped {
+        render_grouped(&own, &source_rows, caps, &opened_label, rule.lens_context)
     } else {
         render_simple(&own, &opened_label)
     };
+    let preamble = if rule.lens_context {
+        format!("{PREAMBLE} {LENS_CONTEXT_NOTE}")
+    } else {
+        PREAMBLE.to_string()
+    };
     Some(format!(
-        "{BLOCK_START}\n{PREAMBLE}\n{}\n{BLOCK_END}",
+        "{BLOCK_START}\n{preamble}\n{}\n{BLOCK_END}",
         cap_block(body)
     ))
 }
@@ -1608,7 +1824,7 @@ WIDGET-ROW: must not show.
         let server = server().await;
         let out = read(&server, "Lens Edu/articles/ai-control-redwood.md").await;
         assert!(
-            out.starts_with(&format!("{BLOCK_START}\n{PREAMBLE}\n")),
+            out.starts_with(&format!("{BLOCK_START}\n{PREAMBLE} {LENS_CONTEXT_NOTE}\n")),
             "got: {out}"
         );
         // Sorted by concept name; line numbers are the concept files' own.
@@ -1616,18 +1832,261 @@ WIDGET-ROW: must not show.
             .find("[Concept] Lens Edu/Concepts/Corrigibility.md (row at line 5)\n  Only mentions the term once.")
             .expect("corrigibility row");
         let feedback = out
-            .find("[Concept] Lens Edu/Concepts/Feedback.md (row at line 8)\n  Feedback is discussed in §3.")
+            .find("[Concept] Lens Edu/Concepts/Feedback.md\n  ▸ Row about this article (line 8):\n    Feedback is discussed in §3.")
             .expect("feedback row (link with .md)");
         let low = out
-            .find("[Concept] Lens Edu/Concepts/Low-stakes control.md (row at line 11)\n  Best intro we have.")
+            .find("[Concept] Lens Edu/Concepts/Low-stakes control.md\n  ▸ Row about this article (line 11):\n    Best intro we have.")
             .expect("low-stakes row (file with frontmatter)");
         assert!(corr < feedback && feedback < low);
-        assert!(!out.contains("FEEDBACK-LENS-ROW"));
-        assert!(!out.contains("Lens uses"));
+        // Rule #10: the rows of the lenses that use it, under their concept.
+        assert!(out.contains("[Concept] Lens Edu/Concepts/Feedback.md\n  ▸ Row about this article (line 8):\n    Feedback is discussed in §3.\n  ▸ Row about lens Lens Edu/Lenses/Low-stakes control intro.md (line 5), which uses this article as a source — context, not about this article:\n    FEEDBACK-LENS-ROW"), "got: {out}");
+        assert!(out.contains("(line 14), which uses this article as a source — context, not about this article:\n    Lens uses §1–3."));
+        assert!(!out.contains("Concepts linked only via"));
         assert_eq!(
             file_part(&out),
             "     1\t# Redwood\n     2\t\n     3\tArticle body line."
         );
+    }
+
+    #[tokio::test]
+    async fn video_read_groups_its_rows_with_the_rows_of_the_lenses_that_use_it() {
+        let server = server().await;
+        let out = read(&server, "Lens Edu/video_transcripts/control-talk.md").await;
+        let expected = format!(
+            "{BLOCK_START}
+{PREAMBLE} {LENS_CONTEXT_NOTE}
+
+[Concept] Lens Edu/Concepts/Corrigibility.md (row at line 8)
+  The talk defines corrigibility briefly.
+
+[Concept] Lens Edu/Concepts/Low-stakes control.md
+  ▸ Row about this video (line 17):
+    The talk covers low-stakes control at 12:00.
+  ▸ Row about lens Lens Edu/Lenses/Low-stakes control intro.md (line 14), which uses this video as a source — context, not about this video:
+    Lens uses §1–3.
+
+Concepts linked only via the lenses that use this video (rows about a lens — context, not about this video; no row for this video yet):
+
+[Concept] Lens Edu/Concepts/Feedback.md
+  ▸ Row about lens Lens Edu/Lenses/Low-stakes control intro.md (line 5), which uses this video as a source — context, not about this video:
+    FEEDBACK-LENS-ROW: the chat prompt asks for feedback.
+
+{BLOCK_END}
+
+     1\tTranscript line one."
+        );
+        assert_eq!(out, expected);
+    }
+
+    // canonical concept-row rules v1 #10 (the editor's inputs)
+    #[tokio::test]
+    async fn canonical_10_lenses_that_use_a_file() {
+        let fixture = [
+            (
+                "/articles/x.md",
+                "a1000000-0000-4000-8000-000000000001",
+                "X.\n",
+            ),
+            (
+                "/articles/other.md",
+                "a1000000-0000-4000-8000-000000000002",
+                "Other.\n",
+            ),
+            (
+                "/Lenses/Uses X.md",
+                "l1000000-0000-4000-8000-000000000001",
+                "#### Article\nsource:: [[../articles/X|Shown]]\n",
+            ),
+            (
+                "/Lenses/A first.md",
+                "l1000000-0000-4000-8000-000000000002",
+                "source:: [[Lens Edu/articles/x]]\n",
+            ),
+            (
+                "/Lenses/Text only.md",
+                "l1000000-0000-4000-8000-000000000003",
+                "#### Text\ncontent::\nsource:: [[../articles/x]]\n",
+            ),
+            (
+                "/Lenses/Mentions.md",
+                "l1000000-0000-4000-8000-000000000004",
+                "See [[../articles/x]].\n#### Article\nsource:: [[../articles/other]]\n",
+            ),
+            (
+                "/Concepts/C.md",
+                "c1000000-0000-4000-8000-000000000001",
+                // Rows about every lens, so none is left out for lacking
+                // concept rows; and a source:: line, though not a lens.
+                "source:: [[../articles/x]]\n## Relationships\n### [[../Lenses/Uses X]]\n### [[../Lenses/A first]]\n### [[../Lenses/Text only]]\n### [[../Lenses/Mentions]]\n",
+            ),
+        ];
+        let server = build_indexed_test_server_in("Lens Edu", &fixture).await;
+        let info = server
+            .doc_resolver()
+            .resolve_path("Lens Edu/articles/x.md")
+            .unwrap();
+        let rule = match_rule("Lens Edu/articles/x.md").unwrap();
+        assert!(rule.lens_context && !rule.source_context);
+        assert!(
+            match_rule("Lens Edu/video_transcripts/x.md")
+                .unwrap()
+                .lens_context
+        );
+        assert!(!match_rule("Lens Edu/Lenses/x.md").unwrap().lens_context);
+        let candidates = lens_backlinkers(&server, rule, &info.folder_doc_id, &info.uuid).await;
+        let entries = resolver_entries(&server);
+        let index = VirtualTreeIndex::new(&entries);
+        let (lenses, unread) = lenses_using(&server, &index, candidates, &info.uuid).await;
+        let paths: Vec<&str> = lenses.iter().map(|l| l.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["Lens Edu/Lenses/A first.md", "Lens Edu/Lenses/Uses X.md"]
+        );
+        assert_eq!(unread, 0);
+    }
+
+    #[tokio::test]
+    async fn lenses_without_concept_rows_are_not_read_or_counted() {
+        // 45 lenses that use the article sort first, but no concept file
+        // links to them: they are passed over before anything is read, so
+        // the one lens with a concept row still shows.
+        let mut owned: Vec<(String, String, String)> = vec![
+            (
+                "/articles/a.md".into(),
+                "a3000000-0000-4000-8000-000000000000".into(),
+                "A.\n".into(),
+            ),
+            (
+                "/Lenses/ZZ real.md".into(),
+                "l3000000-0000-4000-8000-000000000999".into(),
+                "source:: [[../articles/a]]\n".into(),
+            ),
+            (
+                "/Concepts/Real.md".into(),
+                "c3000000-0000-4000-8000-000000000001".into(),
+                "## Relationships\n### [[../Lenses/ZZ real]]\nREAL-LENS-ROW\n".into(),
+            ),
+        ];
+        for l in 0..45 {
+            owned.push((
+                format!("/Lenses/A{l:02}.md"),
+                format!("l3000000-0000-4000-8000-000000000{l:03}"),
+                "source:: [[../articles/a]]\n".into(),
+            ));
+        }
+        let fixture: Vec<(&str, &str, &str)> = owned
+            .iter()
+            .map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str()))
+            .collect();
+        let server = build_indexed_test_server_in("Lens Edu", &fixture).await;
+        let out = read(&server, "Lens Edu/articles/a.md").await;
+        assert!(out.contains("REAL-LENS-ROW"), "got: {out}");
+        assert!(!out.contains("not read"), "got: {out}");
+        assert!(!out.contains("not shown"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn lens_files_over_the_read_cap_or_unloadable_are_counted() {
+        // 42 lenses with a concept row each use the article: 40 are read.
+        let mut owned: Vec<(String, String, String)> = vec![(
+            "/articles/a.md".into(),
+            "a4000000-0000-4000-8000-000000000000".into(),
+            "A.\n".into(),
+        )];
+        for l in 0..42 {
+            owned.push((
+                format!("/Lenses/L{l:02}.md"),
+                format!("l4000000-0000-4000-8000-000000000{l:03}"),
+                "source:: [[../articles/a]]\n".into(),
+            ));
+            owned.push((
+                format!("/Concepts/C{l:02}.md"),
+                format!("c4000000-0000-4000-8000-000000000{l:03}"),
+                format!("## Relationships\n### [[../Lenses/L{l:02}]]\nROW-{l:02}\n"),
+            ));
+        }
+        let fixture: Vec<(&str, &str, &str)> = owned
+            .iter()
+            .map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str()))
+            .collect();
+        let server = build_indexed_test_server_in("Lens Edu", &fixture).await;
+        let out = read(&server, "Lens Edu/articles/a.md").await;
+        assert!(
+            out.contains("(2 more lens file(s) link to this article but were not read"),
+            "got: {out}"
+        );
+        assert!(out
+            .contains("(32 more lens(es) using this article not shown; at most 8 are followed.)"));
+
+        // A lens file that could not be loaded is counted too.
+        let entries = resolver_entries(&server);
+        let index = VirtualTreeIndex::new(&entries);
+        let info = server
+            .doc_resolver()
+            .resolve_path("Lens Edu/articles/a.md")
+            .unwrap();
+        let rule = match_rule("Lens Edu/articles/a.md").unwrap();
+        let mut candidates = lens_backlinkers(&server, rule, &info.folder_doc_id, &info.uuid).await;
+        candidates.truncate(2);
+        let loaded = candidates
+            .into_iter()
+            .zip([Some("source:: [[../articles/a]]\n".to_string()), None])
+            .collect();
+        let (lenses, unread) = pick_lenses(&index, loaded, &info.uuid, 0);
+        assert_eq!(lenses.len(), 1);
+        assert_eq!(unread, 1);
+        let caps = RelatedOverCap {
+            over_cap: 0,
+            lenses_unread: unread,
+        };
+        let text = render_grouped(&CollectedRows::default(), &[], caps, "this article", true);
+        assert!(text.contains("(1 more lens file(s) link to this article but were not read"));
+    }
+
+    #[tokio::test]
+    async fn article_follows_at_most_8_lenses_and_splits_the_concept_budget_fairly() {
+        // 10 lenses use the article; each has 12 concept files with a row
+        // about it. Own rows take nothing, so 80 concept files are split
+        // over the 8 lenses followed: 10 each, never 12 for the first ones.
+        let mut owned: Vec<(String, String, String)> = vec![(
+            "/articles/big.md".into(),
+            "a2000000-0000-4000-8000-000000000000".into(),
+            "Big.\n".into(),
+        )];
+        for l in 0..10 {
+            owned.push((
+                format!("/Lenses/L{l:02}.md"),
+                format!("l2000000-0000-4000-8000-0000000000{l:02}"),
+                "#### Article\nsource:: [[../articles/big]]\n".into(),
+            ));
+            for c in 0..12 {
+                owned.push((
+                    format!("/Concepts/C{l:02}-{c:02}.md"),
+                    format!("c2000000-0000-4000-8000-0000000{l:02}{c:03}"),
+                    format!("## Relationships\n### [[../Lenses/L{l:02}]]\nROW-{l:02}-{c:02}\n"),
+                ));
+            }
+        }
+        let fixture: Vec<(&str, &str, &str)> = owned
+            .iter()
+            .map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str()))
+            .collect();
+        let server = build_indexed_test_server_in("Lens Edu", &fixture).await;
+        let out = read(&server, "Lens Edu/articles/big.md").await;
+        for l in 0..8 {
+            let shown = (0..12)
+                .filter(|c| out.contains(&format!("ROW-{l:02}-{c:02}")))
+                .count();
+            assert_eq!(shown, 10, "lens {l}: {out}");
+            assert!(out.contains(&format!(
+                "(2 more concept file(s) link to Lens Edu/Lenses/L{l:02}.md but were not read"
+            )));
+        }
+        assert!(!out.contains("ROW-08-"));
+        assert!(
+            out.contains("(2 more lens(es) using this article not shown; at most 8 are followed.)")
+        );
+        assert!(out.contains("Concepts linked only via the lenses that use this article"));
     }
 
     #[tokio::test]
@@ -1727,7 +2186,7 @@ Concepts linked only via this lens's sources (rows about a source — context, n
         ), "got: {out}");
         // The row heading with closing hashes counts.
         assert!(out.contains(
-            "[Concept] Lens Edu/Concepts/Low-stakes control.md (row at line 17)\n  The talk covers low-stakes control at 12:00."
+            "[Concept] Lens Edu/Concepts/Low-stakes control.md\n  ▸ Row about this video (line 17):\n    The talk covers low-stakes control at 12:00."
         ));
         assert_eq!(file_part(&out), "     1\tTranscript line one.");
     }
@@ -1899,8 +2358,8 @@ Concepts linked only via this lens's sources (rows about a source — context, n
 
     #[tokio::test]
     async fn concept_files_are_capped_per_read_in_all() {
-        // Three sources with 30 concept files each: 80 are read, the last
-        // source's other 10 are counted.
+        // Three sources with 30 concept files each: 80 are read, split
+        // fairly (26, 27, 27), and the rest of each source is counted.
         let mut files = Vec::new();
         for (k, name) in ["s1", "s2", "s3"].iter().enumerate() {
             files.extend(many_concepts(30, k * 30, &[&format!("../articles/{name}")]));
@@ -1917,9 +2376,11 @@ Concepts linked only via this lens's sources (rows about a source — context, n
         ));
         let server = build_indexed_test_server_in("Lens Edu", &as_entries(&files)).await;
         let out = read(&server, "Lens Edu/Lenses/L.md").await;
-        assert!(out.contains(
-            "(10 more concept file(s) link to Lens Edu/articles/s3.md but were not read; use get_links to list them.)"
-        ), "got: {out}");
+        for (name, more) in [("s1", 4), ("s2", 3), ("s3", 3)] {
+            assert!(out.contains(&format!(
+                "({more} more concept file(s) link to Lens Edu/articles/{name}.md but were not read; use get_links to list them.)"
+            )), "got: {out}");
+        }
         assert_eq!(
             out.matches("  ▸ Row about its article").count(),
             MAX_CONCEPT_FILES_TOTAL
@@ -2020,7 +2481,7 @@ Concepts linked only via this lens's sources (rows about a source — context, n
         server.docs().remove(&feedback);
         let out = read(&server, "Lens Edu/articles/ai-control-redwood.md").await;
         assert!(out.contains(
-            "[Concept] Lens Edu/Concepts/Feedback.md (row at line 8)\n  Feedback is discussed in §3."
+            "[Concept] Lens Edu/Concepts/Feedback.md\n  ▸ Row about this article (line 8):\n    Feedback is discussed in §3."
         ), "got: {out}");
         assert!(server.docs().get(&feedback).is_some());
     }

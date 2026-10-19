@@ -35,14 +35,17 @@ export interface ConceptRowRule {
   /** Also show, greyed, the rows of the sources the opened file wraps
    *  (a lens's `source::` articles and videos). */
   sourceContext?: boolean;
+  /** Also show the rows of the lenses that use the opened file as a
+   *  `source::` (an article's or a video's lenses), editable. */
+  lensContext?: boolean;
 }
 
 const RELATIONSHIPS = { sharedFolder: 'Lens Edu', rowsIn: 'Concepts', section: 'Relationships', title: 'Concept relationships' };
 
 /** "For a file in `openedIn`, embed the rows about it from the files in `rowsIn`." */
 export const CONCEPT_ROW_RULES: readonly ConceptRowRule[] = [
-  { ...RELATIONSHIPS, openedIn: 'articles', openedLabel: 'This article' },
-  { ...RELATIONSHIPS, openedIn: 'video_transcripts', openedLabel: 'This video' },
+  { ...RELATIONSHIPS, openedIn: 'articles', openedLabel: 'This article', lensContext: true },
+  { ...RELATIONSHIPS, openedIn: 'video_transcripts', openedLabel: 'This video', lensContext: true },
   { ...RELATIONSHIPS, openedIn: 'Lenses', openedLabel: 'This lens', sourceContext: true },
 ];
 
@@ -56,6 +59,13 @@ const SOURCE_KINDS: ReadonlyArray<{ folder: string; label: string }> = [
 /** "Article" or "Video" for a source at `path` (merged path), or null. */
 export function sourceKind(path: string, sharedFolder: string): string | null {
   return SOURCE_KINDS.find((k) => path.startsWith(`/${sharedFolder}/${k.folder}/`))?.label ?? null;
+}
+
+/** Whether `path` (merged path) is a lens in `sharedFolder`: a file of the
+ *  rule with source context there. */
+export function isLensPath(path: string, sharedFolder: string): boolean {
+  const rule = matchRule(path);
+  return !!rule?.sourceContext && rule.sharedFolder === sharedFolder;
 }
 
 /** The rule for the file at `path` (a merged, folder-prefixed path), or null. */
@@ -206,7 +216,10 @@ export function bodyLineFix(row: ConceptRow, textLength: number): 'before' | 'af
 /**
  * The live row an edit is for. `liveRows` are the live file's rows about the
  * target (rowsAbout); `entry` was found in a snapshot that may be stale, so
- * when there are several, they are told apart by their text, then by position.
+ * when there are several: the row at the same position if its text is
+ * unchanged (two rows with the same text, or two empty ones, are told apart
+ * by position), else the first with the same text, else the one at the
+ * same position.
  */
 export function findLiveRow(
   liveRows: readonly ConceptRow[],
@@ -214,9 +227,21 @@ export function findLiveRow(
   entry: Pick<RowEntry, 'index' | 'body'>,
 ): ConceptRow | null {
   if (liveRows.length <= 1) return liveRows[0] ?? null;
-  return liveRows.find((r) => liveText.slice(r.bodyFrom, r.bodyTo) === entry.body)
-    ?? liveRows[entry.index]
-    ?? null;
+  const bodyOf = (r: ConceptRow) => liveText.slice(r.bodyFrom, r.bodyTo);
+  const atIndex = liveRows[entry.index];
+  if (atIndex && bodyOf(atIndex) === entry.body) return atIndex;
+  return liveRows.find((r) => bodyOf(r) === entry.body) ?? atIndex ?? null;
+}
+
+/**
+ * Whether the row's lines end in \r\n (from the end of its heading through
+ * its end). CodeMirror counts \r\n as one character, so a row editor bound
+ * to such a row (y-section-sync) would write at drifting offsets, even into
+ * an empty or one-line row, whose body has no \r of its own: it is edited
+ * in the concept file instead.
+ */
+export function rowHasCR(text: string, row: ConceptRow): boolean {
+  return text.slice(row.headingTo, row.to).includes('\r');
 }
 
 /** Why a row heading cannot link to `link` (a path with characters that end
@@ -295,9 +320,26 @@ export function insertRowUnlessPresent(
   return { index: Math.max(0, index) };
 }
 
-/** A new concept file with its first row. */
-export function newConceptText(name: string, link: string, body = '', section = 'Relationships'): string {
-  return `# ${name}\n\n## ${section}\n\n### [[${link}]]\n${body}\n`;
+/**
+ * Another row's text as the first draft of a new row: line breaks as \n,
+ * leading blank lines and trailing whitespace dropped (a row body as read
+ * starts with the line break after its heading in a CRLF file).
+ */
+export function draftFromRow(body: string): string {
+  return body.replace(/\r\n?/g, '\n').replace(/^\s*\n/, '').trimEnd();
+}
+
+/** Whether a concept file's text uses \r\n line breaks (a row added to it
+ *  could not be edited in place). */
+export function hasCRLF(text: string): boolean {
+  return text.includes('\r');
+}
+
+/** A new concept file with its first row, under frontmatter holding its
+ *  `id:` (a new uuid, from relay-api's generateUUID; it stays when the file
+ *  is renamed). */
+export function newConceptText(name: string, id: string, link: string, body = '', section = 'Relationships'): string {
+  return `---\nid: ${id}\n---\n# ${name}\n\n## ${section}\n\n### [[${link}]]\n${body}\n`;
 }
 
 /**
@@ -340,6 +382,8 @@ export interface RowEntry {
   /** Which of the file's rows about the target this is (they are told apart by order). */
   index: number;
   body: string;
+  /** Its lines end in \r\n (rowHasCR): shown read-only. */
+  crlf?: boolean;
 }
 
 export interface CollectedRows {
@@ -377,7 +421,11 @@ export function collectRows(
     const rows = rowsAbout(text, conceptPath, targetId, metadata, rule.section);
     if (rows.length === 0) out.mentions.push({ conceptId, conceptPath, conceptName });
     rows.forEach((row, index) => {
-      out.rows.push({ conceptId, conceptPath, conceptName, row, index, body: text.slice(row.bodyFrom, row.bodyTo) });
+      out.rows.push({
+        conceptId, conceptPath, conceptName, row, index,
+        body: text.slice(row.bodyFrom, row.bodyTo),
+        crlf: rowHasCR(text, row),
+      });
     });
   }
   out.rows.sort((a, b) => a.conceptName.localeCompare(b.conceptName) || a.index - b.index);
@@ -385,11 +433,12 @@ export function collectRows(
   return out;
 }
 
-/** The rows about one of a lens's sources (an article or a video). */
+/** The rows about one of a lens's sources (an article or a video), or, on
+ *  an article or video, about one of the lenses that use it. */
 export interface SourceRows {
   sourceId: string;
   sourceName: string;
-  /** "Article" or "Video". */
+  /** "Article", "Video" or "Lens". */
   kind: string;
   rows: RowEntry[];
 }
@@ -404,10 +453,44 @@ export interface LensRowGroups {
 }
 
 /**
+ * The lenses among `candidateIds` (the opened file's backlinkers) that use
+ * `targetId` as a `source::` (canonical concept-row rules v1 #10): files in
+ * the lenses folder whose `lensSourceTargets` resolve to it. A lens not read
+ * yet (`texts` lacks it) counts as pending. By lens name.
+ */
+export function lensesUsing(
+  targetId: string,
+  candidateIds: readonly string[],
+  texts: ReadonlyMap<string, string>,
+  metadata: FolderMetadata,
+  sharedFolder: string,
+  pathOf: (id: string) => string | null,
+): { lenses: Array<{ id: string; path: string }>; pending: number } {
+  const lenses: Array<{ id: string; path: string }> = [];
+  let pending = 0;
+  for (const id of new Set(candidateIds)) {
+    const path = pathOf(id);
+    if (!path || id === targetId || !isLensPath(path, sharedFolder)) continue;
+    const text = texts.get(id);
+    if (text === undefined) {
+      pending++;
+      continue;
+    }
+    const uses = lensSourceTargets(text).some((t) => resolvePageName(t, metadata, path)?.docId === targetId);
+    if (uses) lenses.push({ id, path });
+  }
+  lenses.sort((a, b) => basenameOf(a.path).localeCompare(basenameOf(b.path)) || a.path.localeCompare(b.path));
+  return { lenses, pending };
+}
+
+/**
  * A lens's rows grouped by concept: a concept with a lens row shows once,
  * its source rows under the lens row; a concept with only source rows also
  * shows once, however many of the sources it has rows for. Lens rows keep
  * the order they come in; the others go by concept name.
+ *
+ * Mirrored on an article or video (rule #10): `own` are its rows and
+ * `sources` the rows about the lenses that use it.
  */
 export function groupLensRows(own: readonly RowEntry[], sources: readonly SourceRows[]): LensRowGroups {
   const forConcept = (conceptId: string) => sources
