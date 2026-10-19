@@ -35,14 +35,17 @@ export interface ConceptRowRule {
   /** Also show, greyed, the rows of the sources the opened file wraps
    *  (a lens's `source::` articles and videos). */
   sourceContext?: boolean;
+  /** Also show the rows of the lenses that use the opened file as a
+   *  `source::` (an article's or a video's lenses), editable. */
+  lensContext?: boolean;
 }
 
 const RELATIONSHIPS = { sharedFolder: 'Lens Edu', rowsIn: 'Concepts', section: 'Relationships', title: 'Concept relationships' };
 
 /** "For a file in `openedIn`, embed the rows about it from the files in `rowsIn`." */
 export const CONCEPT_ROW_RULES: readonly ConceptRowRule[] = [
-  { ...RELATIONSHIPS, openedIn: 'articles', openedLabel: 'This article' },
-  { ...RELATIONSHIPS, openedIn: 'video_transcripts', openedLabel: 'This video' },
+  { ...RELATIONSHIPS, openedIn: 'articles', openedLabel: 'This article', lensContext: true },
+  { ...RELATIONSHIPS, openedIn: 'video_transcripts', openedLabel: 'This video', lensContext: true },
   { ...RELATIONSHIPS, openedIn: 'Lenses', openedLabel: 'This lens', sourceContext: true },
 ];
 
@@ -56,6 +59,13 @@ const SOURCE_KINDS: ReadonlyArray<{ folder: string; label: string }> = [
 /** "Article" or "Video" for a source at `path` (merged path), or null. */
 export function sourceKind(path: string, sharedFolder: string): string | null {
   return SOURCE_KINDS.find((k) => path.startsWith(`/${sharedFolder}/${k.folder}/`))?.label ?? null;
+}
+
+/** Whether `path` (merged path) is a lens in `sharedFolder`: a file of the
+ *  rule with source context there. */
+export function isLensPath(path: string, sharedFolder: string): boolean {
+  const rule = matchRule(path);
+  return !!rule?.sourceContext && rule.sharedFolder === sharedFolder;
 }
 
 /** The rule for the file at `path` (a merged, folder-prefixed path), or null. */
@@ -295,9 +305,11 @@ export function insertRowUnlessPresent(
   return { index: Math.max(0, index) };
 }
 
-/** A new concept file with its first row. */
-export function newConceptText(name: string, link: string, body = '', section = 'Relationships'): string {
-  return `# ${name}\n\n## ${section}\n\n### [[${link}]]\n${body}\n`;
+/** A new concept file with its first row, under frontmatter holding its
+ *  `id:` (a new uuid, from relay-api's generateUUID; it stays when the file
+ *  is renamed). */
+export function newConceptText(name: string, id: string, link: string, body = '', section = 'Relationships'): string {
+  return `---\nid: ${id}\n---\n# ${name}\n\n## ${section}\n\n### [[${link}]]\n${body}\n`;
 }
 
 /**
@@ -385,11 +397,12 @@ export function collectRows(
   return out;
 }
 
-/** The rows about one of a lens's sources (an article or a video). */
+/** The rows about one of a lens's sources (an article or a video), or, on
+ *  an article or video, about one of the lenses that use it. */
 export interface SourceRows {
   sourceId: string;
   sourceName: string;
-  /** "Article" or "Video". */
+  /** "Article", "Video" or "Lens". */
   kind: string;
   rows: RowEntry[];
 }
@@ -404,10 +417,44 @@ export interface LensRowGroups {
 }
 
 /**
+ * The lenses among `candidateIds` (the opened file's backlinkers) that use
+ * `targetId` as a `source::` (canonical concept-row rules v1 #10): files in
+ * the lenses folder whose `lensSourceTargets` resolve to it. A lens not read
+ * yet (`texts` lacks it) counts as pending. By lens name.
+ */
+export function lensesUsing(
+  targetId: string,
+  candidateIds: readonly string[],
+  texts: ReadonlyMap<string, string>,
+  metadata: FolderMetadata,
+  sharedFolder: string,
+  pathOf: (id: string) => string | null,
+): { lenses: Array<{ id: string; path: string }>; pending: number } {
+  const lenses: Array<{ id: string; path: string }> = [];
+  let pending = 0;
+  for (const id of new Set(candidateIds)) {
+    const path = pathOf(id);
+    if (!path || id === targetId || !isLensPath(path, sharedFolder)) continue;
+    const text = texts.get(id);
+    if (text === undefined) {
+      pending++;
+      continue;
+    }
+    const uses = lensSourceTargets(text).some((t) => resolvePageName(t, metadata, path)?.docId === targetId);
+    if (uses) lenses.push({ id, path });
+  }
+  lenses.sort((a, b) => basenameOf(a.path).localeCompare(basenameOf(b.path)) || a.path.localeCompare(b.path));
+  return { lenses, pending };
+}
+
+/**
  * A lens's rows grouped by concept: a concept with a lens row shows once,
  * its source rows under the lens row; a concept with only source rows also
  * shows once, however many of the sources it has rows for. Lens rows keep
  * the order they come in; the others go by concept name.
+ *
+ * Mirrored on an article or video (rule #10): `own` are its rows and
+ * `sources` the rows about the lenses that use it.
  */
 export function groupLensRows(own: readonly RowEntry[], sources: readonly SourceRows[]): LensRowGroups {
   const forConcept = (conceptId: string) => sources

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { defaultKeymap } from '@codemirror/commands';
@@ -37,11 +37,20 @@ export interface RowCardProps {
   /** Open for editing on mount, cursor at the end (a row just added). */
   autoEdit?: boolean;
   onAutoEdited?: () => void;
-  /** Context rows: add a row for the lens, prefilled with this one's text. */
+  /** Context rows: add a row for the opened file, prefilled with this one's text. */
   onAddForLens?: () => void;
+  /** The button's text for `onAddForLens` (default "Add for this lens too"). */
+  addLabel?: string;
   /** On a lens: the concept's rows about the lens's sources, shown read-only
-   *  under the lens row (or alone, for `context`). */
+   *  under the lens row (or alone, for `context`). On an article or video:
+   *  its rows about the lenses that use the file, drawn by `renderSourceRow`. */
   sourceRows?: SourceRows[];
+  /** Draws one of `sourceRows`' rows itself (an editable card), instead of
+   *  the read-only block. */
+  renderSourceRow?: (source: SourceRows, row: RowEntry) => ReactNode;
+  /** A row about a related file, nested in its concept's card: the header
+   *  names that file ("Lens: <name>", a link) instead of the concept. */
+  label?: { kind: string; docId: string; name: string };
 }
 
 type CardState = 'idle' | 'connecting' | 'live' | 'error';
@@ -272,14 +281,26 @@ export function ConceptRowCard(props: RowCardProps) {
         >
           {showBody ? '▾' : '▸'}
         </button>
-        <DocLink
-          docId={entry.conceptId}
-          // Collapsed, the name leaves at least half the line to the preview.
-          className={`min-w-0 shrink-0 truncate font-medium hover:underline ${showBody ? '' : 'max-w-[50%]'} ${context ? 'text-gray-500' : 'text-indigo-700'}`}
-          title={entry.conceptName}
-        >
-          {entry.conceptName}
-        </DocLink>
+        {props.label ? (
+          <span
+            className={`concept-row-label min-w-0 shrink-0 truncate text-gray-500 ${showBody ? '' : 'max-w-[50%]'}`}
+            title={`${props.label.kind}: ${props.label.name}`}
+          >
+            {props.label.kind}:{' '}
+            <DocLink docId={props.label.docId} className="font-medium text-indigo-700 hover:underline">
+              {props.label.name}
+            </DocLink>
+          </span>
+        ) : (
+          <DocLink
+            docId={entry.conceptId}
+            // Collapsed, the name leaves at least half the line to the preview.
+            className={`min-w-0 shrink-0 truncate font-medium hover:underline ${showBody ? '' : 'max-w-[50%]'} ${context ? 'text-gray-500' : 'text-indigo-700'}`}
+            title={entry.conceptName}
+          >
+            {entry.conceptName}
+          </DocLink>
+        )}
         {!showBody && (
           <span className={`min-w-0 flex-1 truncate ${preview ? '' : 'italic text-gray-400'}`}>
             {preview || 'No notes yet'}
@@ -301,7 +322,7 @@ export function ConceptRowCard(props: RowCardProps) {
             onClick={props.onAddForLens}
             className="shrink-0 text-xs text-indigo-600 hover:underline cursor-pointer"
           >
-            Add for this lens too
+            {props.addLabel ?? 'Add for this lens too'}
           </button>
         )}
       </div>
@@ -333,7 +354,12 @@ export function ConceptRowCard(props: RowCardProps) {
       )}
       {/* Always mounted: the editor goes in as soon as the connection is up. */}
       <div ref={liveHost} className="concept-row-body ml-5 mt-1" hidden={state !== 'connecting' && state !== 'live'} />
-      {showBody && sourceRows.map((src, i) => (
+      {showBody && props.renderSourceRow && sourceRows.map((src) => (
+        <div key={src.sourceId} className="ml-4 mt-1" data-testid="concept-row-source">
+          {src.rows.map((row) => props.renderSourceRow!(src, row))}
+        </div>
+      ))}
+      {showBody && !props.renderSourceRow && sourceRows.map((src, i) => (
         <div key={src.sourceId} className={`${context && i === 0 ? 'mt-1' : 'mt-2'} text-gray-400`} data-testid="concept-row-source">
           <PairHeader
             concept={entry.conceptName}

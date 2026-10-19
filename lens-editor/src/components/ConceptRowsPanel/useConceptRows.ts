@@ -4,7 +4,7 @@ import { useBacklinksVersion } from '../../hooks/useBacklinksVersion';
 import { backlinkSources } from '../../lib/backlinks';
 import { uuidToPathIndex } from '../../lib/uuid-to-path';
 import { cachedSnapshot, onSnapshot, readSnapshot, refreshSnapshot } from '../../lib/embed-docs';
-import { collectRows, rowsFolder, type CollectedRows, type ConceptRowRule } from '../../lib/concept-rows';
+import { collectRows, isLensPath, lensesUsing, rowsFolder, type CollectedRows, type ConceptRowRule } from '../../lib/concept-rows';
 import { RELAY_ID } from '../../App';
 
 /** A row just added here: the backlinks index learns of it a moment later. */
@@ -124,4 +124,42 @@ export function useConceptRows(
     failed: ids.filter(unread).length,
     failedFor: (target) => (sourcesByTarget.get(target) ?? []).filter(unread).length,
   };
+}
+
+/**
+ * The lenses that use the article or video `target` (bare uuid) as a
+ * `source::`, for rules with lens context: its backlinkers in the lenses
+ * folder, read (cached and refreshed as concept files are, useSnapshots) and
+ * kept when one of their `source::` links resolves to it. Every such lens,
+ * no cap; `pending` counts lenses not read yet.
+ */
+export function useLensesUsing(
+  rule: ConceptRowRule,
+  target: string,
+  refreshing: boolean,
+): { lenses: Array<{ id: string; path: string }>; pending: number } {
+  const enabled = !!rule.lensContext;
+  const { metadata, folderDocs } = useNavigation();
+  const backlinksVersion = useBacklinksVersion(folderDocs);
+  const pathIndex = uuidToPathIndex(metadata);
+
+  const candidates = useMemo(() => {
+    void backlinksVersion;
+    if (!enabled) return [];
+    return backlinkSources(target, folderDocs.values())
+      .filter((id) => {
+        const path = pathIndex.get(id);
+        return !!path && isLensPath(path, rule.sharedFolder);
+      })
+      .sort();
+  }, [enabled, target, folderDocs, backlinksVersion, pathIndex, rule.sharedFolder]);
+
+  const { texts, failed } = useSnapshots(candidates, refreshing);
+
+  return useMemo(() => {
+    const out = lensesUsing(target, candidates, texts, metadata, rule.sharedFolder, (id) => pathIndex.get(id) ?? null);
+    // A lens that could not be read is not waited for.
+    const unread = candidates.filter((id) => failed.has(id) && !texts.has(id)).length;
+    return { lenses: out.lenses, pending: Math.max(0, out.pending - unread) };
+  }, [target, candidates, texts, failed, metadata, rule.sharedFolder, pathIndex]);
 }

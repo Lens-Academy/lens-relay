@@ -5,7 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useDisplayName } from '../../contexts/DisplayNameContext';
 import { setSnapshot, withLiveDoc } from '../../lib/embed-docs';
 import { attachProvenanceRegistration, humanActor } from '../../lib/provenance';
-import { createDocument, createFolder } from '../../lib/relay-api';
+import { createDocument, createFolder, generateUUID } from '../../lib/relay-api';
 import { computeRelativePath, resolvePageName } from '../../lib/document-resolver';
 import {
   insertRowUnlessPresent,
@@ -19,13 +19,14 @@ import {
   type CollectedRows,
   type ConceptRowRule,
   type RowEntry,
+  type SourceRows,
 } from '../../lib/concept-rows';
 import { RELAY_ID } from '../../App';
 import { basenameOf } from '../../lib/course-tree';
 import { docUuidFromCompoundId } from '../../lib/url-utils';
 import { ConceptRowCard } from './ConceptRowCard';
 import { ConceptPicker, type PickerConcept } from './ConceptPicker';
-import { useConceptRows, type AddedSource } from './useConceptRows';
+import { useConceptRows, useLensesUsing, type AddedSource } from './useConceptRows';
 import { DocLink } from '../DocLink';
 
 const OPEN_KEY = 'lens-editor:concept-rows-open';
@@ -106,10 +107,18 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
   const getActor = useCallback(() => humanActor(displayNameRef.current ?? ''), []);
 
   const target = docUuidFromCompoundId(docId);
-  const sources = useSources(rule, ytext, path);
-  const targets = useMemo(() => [target, ...sources.map((a) => a.id)], [target, sources]);
-  const [added, setAdded] = useState<AddedSource[]>([]);
   const [open, setOpen] = useState(readOpen);
+  const sources = useSources(rule, ytext, path);
+  // An article or video: the lenses that use it (rule #10), in place of sources.
+  const lensUse = useLensesUsing(rule, target, open);
+  const related = useMemo(
+    () => (rule.lensContext
+      ? lensUse.lenses.map((l) => ({ id: l.id, path: l.path, kind: 'Lens' }))
+      : sources),
+    [rule.lensContext, lensUse.lenses, sources],
+  );
+  const targets = useMemo(() => [target, ...related.map((a) => a.id)], [target, related]);
+  const [added, setAdded] = useState<AddedSource[]>([]);
   const { byTarget, failed, failedFor } = useConceptRows(rule, targets, added, open);
   const own: CollectedRows = byTarget.get(target) ?? { rows: [], mentions: [], pending: 0 };
 
@@ -185,7 +194,7 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
         if (!folderDoc) throw new Error(`folder ${rule.sharedFolder} not loaded`);
         if (!folderDoc.getMap('filemeta_v0').has(`/${rule.rowsIn}`)) createFolder(folderDoc, `/${rule.rowsIn}`);
         const conceptPath = `${folder}/${choice.name}.md`;
-        const text = newConceptText(choice.name, computeRelativePath(conceptPath, path), body, rule.section);
+        const text = newConceptText(choice.name, generateUUID(), computeRelativePath(conceptPath, path), body, rule.section);
         conceptId = await createDocument(folderDoc, `/${rule.rowsIn}/${choice.name}.md`, 'markdown', text);
         setSnapshot(`${RELAY_ID}-${conceptId}`, text);
       }
@@ -216,9 +225,10 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
     onExpandedChange: (value: boolean) => setRowExpanded(key, value),
   });
 
-  const loading = own.pending - failedFor(target) > 0;
-  // Lenses: each concept shows once, with its rows about the lens's sources.
-  const groups = groupLensRows(own.rows, sources.map((src) => ({
+  const loading = own.pending - failedFor(target) > 0 || lensUse.pending > 0;
+  // Each concept shows once: on a lens with its rows about the lens's
+  // sources, on an article or video with its rows about the lenses using it.
+  const groups = groupLensRows(own.rows, related.map((src) => ({
     sourceId: src.id,
     sourceName: basenameOf(src.path),
     kind: src.kind,
@@ -226,13 +236,30 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
   })));
   const ownKey = (entry: RowEntry) => `${entry.conceptId}:${entry.index}`;
   const sourceOnlyKey = (conceptId: string) => `sources:${conceptId}`;
+  const lensRowKey = (src: SourceRows, row: RowEntry) => `lens:${src.sourceId}:${row.conceptId}:${row.index}`;
+  const lensRowKeys = (sourceRows: SourceRows[]) => (rule.lensContext
+    ? sourceRows.flatMap((src) => src.rows.map((row) => lensRowKey(src, row)))
+    : []);
   const allKeys = [
-    ...groups.lens.map(({ entry }) => ownKey(entry)),
-    ...groups.sourceOnly.map((c) => sourceOnlyKey(c.conceptId)),
+    ...groups.lens.flatMap(({ entry, sourceRows }) => [ownKey(entry), ...lensRowKeys(sourceRows)]),
+    ...groups.sourceOnly.flatMap((c) => [sourceOnlyKey(c.conceptId), ...lensRowKeys(c.sourceRows)]),
   ];
-  const sourceOnlyHeading = sources.length === 1
-    ? `Only linked to ${sources[0].kind}: ${basenameOf(sources[0].path)}`
-    : 'Only linked to its sources';
+  const sourceOnlyHeading = related.length === 1
+    ? `Only linked to ${related[0].kind}: ${basenameOf(related[0].path)}`
+    : rule.lensContext ? 'Only linked to the lenses that use it' : 'Only linked to its sources';
+  /** On an article or video: a lens's row, editable, nested in its concept's card. */
+  const renderLensRow = rule.lensContext
+    ? (src: SourceRows, row: RowEntry) => {
+      const key = lensRowKey(src, row);
+      return (
+        <ConceptRowCard
+          key={key}
+          {...cardProps(key, row, src.sourceId, src.sourceName, 'Lens')}
+          label={{ kind: src.kind, docId: src.sourceId, name: src.sourceName }}
+        />
+      );
+    }
+    : undefined;
   const allExpanded = allKeys.length > 0 && allKeys.every((k) => expanded.has(k));
   const targetName = basenameOf(path);
 
@@ -290,7 +317,8 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
               <ConceptRowCard
                 key={key}
                 {...cardProps(key, entry, target, targetName, rule.openedLabel)}
-                sourceRows={rule.sourceContext ? sourceRows : undefined}
+                sourceRows={rule.sourceContext || rule.lensContext ? sourceRows : undefined}
+                renderSourceRow={renderLensRow}
                 autoEdit={autoEdit === key}
                 onAutoEdited={clearAutoEdit}
               />
@@ -332,8 +360,10 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
                     {...cardProps(key, entry, first.sourceId, first.sourceName, first.kind)}
                     context
                     sourceRows={sourceRows}
+                    renderSourceRow={renderLensRow}
                     // Prefilled with the first source's notes, as a draft.
                     onAddForLens={canEdit && !busy ? () => void addRow({ id: conceptId }, entry.body) : undefined}
+                    addLabel={rule.lensContext ? `Add for this ${rule.openedLabel.replace(/^This /, '').toLowerCase()} too` : undefined}
                   />
                 );
               })}

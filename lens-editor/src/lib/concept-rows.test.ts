@@ -10,6 +10,8 @@ import {
   collectRows,
   findLiveRow,
   insertRowUnlessPresent,
+  isLensPath,
+  lensesUsing,
   rowLinkProblem,
   groupLensRows,
   CONCEPT_ROW_RULES,
@@ -224,9 +226,10 @@ describe('planRowInsertion', () => {
 });
 
 describe('newConceptText', () => {
-  it('starts with the title, the Relationships section and the row', () => {
-    const text = newConceptText('Corrigibility', '../articles/x');
-    expect(text).toBe('# Corrigibility\n\n## Relationships\n\n### [[../articles/x]]\n\n');
+  it('starts with frontmatter holding the id, then the title, the Relationships section and the row', () => {
+    const id = '0b6f3c2e-5d4a-4f1e-9c8b-7a6d5e4f3a2b';
+    const text = newConceptText('Corrigibility', id, '../articles/x');
+    expect(text).toBe(`---\nid: ${id}\n---\n# Corrigibility\n\n## Relationships\n\n### [[../articles/x]]\n\n`);
     expect(parseConceptFile(text).rows).toHaveLength(1);
   });
 });
@@ -389,6 +392,46 @@ describe('canonical concept-row rules v1', () => {
     const out = collectRows('ax', ['cb', 'ca'], new Map([['cb', row], ['ca', row]]), md2, CONCEPT_ROW_RULES[0],
       (id) => Object.entries(md2).find(([, m]) => m.id === id)?.[0] ?? null);
     expect(out.rows.map((r) => r.conceptName)).toEqual(['Alpha', 'beta']);
+  });
+
+  it('#10: an article shows the rows of the lenses whose source:: resolves to it', () => {
+    // canonical concept-row rules v1 #10
+    const md3: FolderMetadata = {
+      '/Lens Edu/articles/x.md': md('ax'),
+      '/Lens Edu/articles/other.md': md('ao'),
+      '/Lens Edu/Lenses/Uses X.md': md('lu'),
+      '/Lens Edu/Lenses/A first.md': md('la'),
+      '/Lens Edu/Lenses/Text only.md': md('lt'),
+      '/Lens Edu/Lenses/Mentions.md': md('lm'),
+      '/Lens Edu/Concepts/C.md': md('cc'),
+    };
+    const texts = new Map([
+      ['lu', '#### Article\nsource:: [[../articles/X|Shown]]\n'],
+      ['la', 'source:: [[Lens Edu/articles/x]]\n'],
+      ['lt', '#### Text\ncontent::\nsource:: [[../articles/x]]\n'],
+      ['lm', 'See [[../articles/x]].\n#### Article\nsource:: [[../articles/other]]\n'],
+      ['cc', 'source:: [[../articles/x]]\n'],
+    ]);
+    const pathOf = (id: string) => Object.entries(md3).find(([, m]) => m.id === id)?.[0] ?? null;
+    const out = lensesUsing('ax', ['lu', 'lt', 'lm', 'cc', 'la'], texts, md3, 'Lens Edu', pathOf);
+    expect(out.lenses.map((l) => l.path)).toEqual(['/Lens Edu/Lenses/A first.md', '/Lens Edu/Lenses/Uses X.md']);
+    expect(out.pending).toBe(0);
+    expect(matchRule('/Lens Edu/articles/x.md')?.lensContext).toBe(true);
+    expect(matchRule('/Lens Edu/video_transcripts/x.md')?.lensContext).toBe(true);
+    expect(matchRule('/Lens Edu/Lenses/x.md')?.lensContext).toBeFalsy();
+  });
+});
+
+describe('lensesUsing', () => {
+  it('counts lenses not read yet as pending and leaves other files out', () => {
+    const pathOf = (id: string) => Object.entries(metadata).find(([, m]) => m.id === id)?.[0] ?? null;
+    expect(lensesUsing('a1', ['l1', 'c1'], new Map(), metadata, 'Lens Edu', pathOf)).toEqual({ lenses: [], pending: 1 });
+  });
+
+  it('tells lenses by folder', () => {
+    expect(isLensPath('/Lens Edu/Lenses/x.md', 'Lens Edu')).toBe(true);
+    expect(isLensPath('/Lens Edu/articles/x.md', 'Lens Edu')).toBe(false);
+    expect(isLensPath('/Lens/Lenses/x.md', 'Lens Edu')).toBe(false);
   });
 });
 
