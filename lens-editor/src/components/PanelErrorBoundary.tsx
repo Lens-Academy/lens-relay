@@ -36,7 +36,10 @@ export class PanelErrorBoundary extends Component<Props, State> {
     return this.state.failed
       ? (
         <div className="mb-3 mt-1 rounded-md border border-gray-200 bg-gray-50/70 px-2 py-1.5 text-xs text-gray-500" role="status">
-          {this.props.name} could not be shown.
+          {this.props.name} could not be shown.{' '}
+          <button type="button" className="cursor-pointer underline" onClick={() => this.setState({ failed: false })}>
+            Retry
+          </button>
         </div>
       )
       : this.props.children;

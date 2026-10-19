@@ -5,6 +5,7 @@ import { NavigationContext } from '../../contexts/NavigationContext';
 import { DisplayNameProvider } from '../../contexts/DisplayNameContext';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { __embedDocsTesting } from '../../lib/embed-docs';
+import type { DocConnection } from '../../hooks/useDocConnection';
 import { RELAY_ID } from '../../App';
 import { ConceptRowsPanel } from './ConceptRowsPanel';
 
@@ -100,5 +101,36 @@ describe('ConceptRowsPanel on an article', () => {
     // Shown, read-only (edited in the concept file), both rows.
     expect(screen.getAllByText(/Windows line endings/)).toHaveLength(2);
     expect(screen.getByText('Second line.')).toBeInTheDocument();
+  });
+
+  it('keeps empty and one-line rows of a CRLF file read-only', async () => {
+    const crlf = '## Relationships\n### [[../articles/a]]\n### [[../Lenses/Lens One]]\nOne line.\n'.replace(/\n/g, '\r\n');
+    renderPanel({ l1: 'source:: [[../articles/a]]\n', l2: '', cs: crlf, co: '' });
+    await waitFor(() => expect(within(card('Shared')).getByText('+1 lens row')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    expect(screen.getAllByText(/Windows line endings/)).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /Edit notes on/ })).toBeNull();
+    expect(screen.queryByText(/click to write/)).toBeNull();
+    expect(screen.getByText('One line.')).toBeInTheDocument();
+  });
+
+  it('adds a lens row for the article as a clean draft, and not to a CRLF concept file', async () => {
+    const doc = new Y.Doc();
+    const provider = { hasLocalChanges: false, on: () => {}, off: () => {} };
+    __embedDocsTesting.setConnector(async () => ({ doc, provider } as unknown as DocConnection));
+    // Lens row read from a CRLF concept file: its body starts with \n and holds \r.
+    const onlyLensCrlf = '## Relationships\r\n### [[../Lenses/Lens Two]]\r\nTwo\r\nlines.\r\n';
+    doc.getText('contents').insert(0, onlyLensCrlf);
+    renderPanel({ l1: '', l2: 'source:: [[../articles/a]]\n', cs: '# Shared\n', co: onlyLensCrlf });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add for this article too' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Add for this article too' }));
+    await waitFor(() => expect(screen.getByText(/Only lens has Windows line endings: add the row in the concept file itself\./)).toBeInTheDocument());
+    expect(doc.getText('contents').toString()).toBe(onlyLensCrlf);
+
+    // An LF concept file gets the draft with \n line breaks and no leading blank line.
+    doc.getText('contents').delete(0, doc.getText('contents').length);
+    doc.getText('contents').insert(0, '## Relationships\n### [[../Lenses/Lens Two]]\nx\n');
+    fireEvent.click(screen.getByRole('button', { name: 'Add for this article too' }));
+    await waitFor(() => expect(doc.getText('contents').toString()).toContain('### [[../articles/a]]\nTwo\nlines.\n'));
   });
 });

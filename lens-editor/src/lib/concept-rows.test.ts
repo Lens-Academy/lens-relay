@@ -9,8 +9,11 @@ import {
   bodyLineFix,
   collectRows,
   findLiveRow,
+  draftFromRow,
+  hasCRLF,
   insertRowUnlessPresent,
   isLensPath,
+  rowHasCR,
   lensesUsing,
   rowLinkProblem,
   groupLensRows,
@@ -565,5 +568,33 @@ describe('insertRowUnlessPresent', () => {
     expect(insertRowUnlessPresent(text, CONCEPT_PATH, 'a1', '../articles/ai-control-redwood', 'draft', metadata))
       .toEqual({ index: 0 });
     expect(rowsAbout(text.value, CONCEPT_PATH, 'a1', metadata)).toHaveLength(1);
+  });
+});
+
+describe('rowHasCR (rows in \\r\\n files are edited in the concept file)', () => {
+  it('finds \\r in empty and one-line rows, whose body has none', () => {
+    const text = '## Relationships\r\n### [[a]]\r\n### [[b]]\r\nOne line.\r\n### [[c]]\r\nTwo\r\nlines.\r\n';
+    const rows = parseConceptFile(text).rows;
+    expect(rows.map((r) => r.target)).toEqual(['a', 'b', 'c']);
+    expect(rows.map((r) => text.slice(r.bodyFrom, r.bodyTo).includes('\r'))).toEqual([false, false, true]);
+    expect(rows.map((r) => rowHasCR(text, r))).toEqual([true, true, true]);
+    const lf = '## Relationships\n### [[a]]\n### [[b]]\nOne line.\n';
+    expect(parseConceptFile(lf).rows.map((r) => rowHasCR(lf, r))).toEqual([false, false]);
+  });
+
+  it('marks collected rows from a CRLF file', () => {
+    const md4: FolderMetadata = { '/Lens Edu/Concepts/C.md': md('c'), '/Lens Edu/articles/x.md': md('x') };
+    const text = '## Relationships\r\n### [[../articles/x]]\r\n### [[../articles/x]]\r\nOne line.\r\n';
+    const out = collectRows('x', ['c'], new Map([['c', text]]), md4, CONCEPT_ROW_RULES[0],
+      (id) => Object.entries(md4).find(([, m]) => m.id === id)?.[0] ?? null);
+    expect(out.rows.map((r) => r.crlf)).toEqual([true, true]);
+  });
+
+  it('turns another row into a draft without \\r or a leading blank line', () => {
+    expect(draftFromRow('\nOne line.')).toBe('One line.');
+    expect(draftFromRow('\r\n\r\nTwo\r\nlines.\r\n')).toBe('Two\nlines.');
+    expect(draftFromRow('  indented\nnext')).toBe('  indented\nnext');
+    expect(hasCRLF('a\r\nb')).toBe(true);
+    expect(hasCRLF('a\nb')).toBe(false);
   });
 });

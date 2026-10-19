@@ -233,6 +233,17 @@ export function findLiveRow(
   return liveRows.find((r) => bodyOf(r) === entry.body) ?? atIndex ?? null;
 }
 
+/**
+ * Whether the row's lines end in \r\n (from the end of its heading through
+ * its end). CodeMirror counts \r\n as one character, so a row editor bound
+ * to such a row (y-section-sync) would write at drifting offsets, even into
+ * an empty or one-line row, whose body has no \r of its own: it is edited
+ * in the concept file instead.
+ */
+export function rowHasCR(text: string, row: ConceptRow): boolean {
+  return text.slice(row.headingTo, row.to).includes('\r');
+}
+
 /** Why a row heading cannot link to `link` (a path with characters that end
  *  or split a wikilink), or null. */
 export function rowLinkProblem(link: string): string | null {
@@ -309,6 +320,21 @@ export function insertRowUnlessPresent(
   return { index: Math.max(0, index) };
 }
 
+/**
+ * Another row's text as the first draft of a new row: line breaks as \n,
+ * leading blank lines and trailing whitespace dropped (a row body as read
+ * starts with the line break after its heading in a CRLF file).
+ */
+export function draftFromRow(body: string): string {
+  return body.replace(/\r\n?/g, '\n').replace(/^\s*\n/, '').trimEnd();
+}
+
+/** Whether a concept file's text uses \r\n line breaks (a row added to it
+ *  could not be edited in place). */
+export function hasCRLF(text: string): boolean {
+  return text.includes('\r');
+}
+
 /** A new concept file with its first row, under frontmatter holding its
  *  `id:` (a new uuid, from relay-api's generateUUID; it stays when the file
  *  is renamed). */
@@ -356,6 +382,8 @@ export interface RowEntry {
   /** Which of the file's rows about the target this is (they are told apart by order). */
   index: number;
   body: string;
+  /** Its lines end in \r\n (rowHasCR): shown read-only. */
+  crlf?: boolean;
 }
 
 export interface CollectedRows {
@@ -393,7 +421,11 @@ export function collectRows(
     const rows = rowsAbout(text, conceptPath, targetId, metadata, rule.section);
     if (rows.length === 0) out.mentions.push({ conceptId, conceptPath, conceptName });
     rows.forEach((row, index) => {
-      out.rows.push({ conceptId, conceptPath, conceptName, row, index, body: text.slice(row.bodyFrom, row.bodyTo) });
+      out.rows.push({
+        conceptId, conceptPath, conceptName, row, index,
+        body: text.slice(row.bodyFrom, row.bodyTo),
+        crlf: rowHasCR(text, row),
+      });
     });
   }
   out.rows.sort((a, b) => a.conceptName.localeCompare(b.conceptName) || a.index - b.index);

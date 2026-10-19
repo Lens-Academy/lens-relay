@@ -7,7 +7,7 @@ import { toggleSuggestionMode } from '../Editor/extensions/criticmarkup';
 import { ySectionSync, ySectionUndoManagerKeymap } from '../SectionEditor/y-section-sync';
 import { closeLive, isLive, openLive } from '../../lib/embed-docs';
 import { attachProvenanceRegistration } from '../../lib/provenance';
-import { bodyLineFix, findLiveRow, rowPreview, rowsAbout, type RowEntry, type SourceRows } from '../../lib/concept-rows';
+import { bodyLineFix, findLiveRow, rowHasCR, rowPreview, rowsAbout, type RowEntry, type SourceRows } from '../../lib/concept-rows';
 import type { FolderMetadata } from '../../hooks/useFolderMetadata';
 import { RELAY_ID } from '../../App';
 import { DocLink } from '../DocLink';
@@ -141,9 +141,8 @@ export function ConceptRowCard(props: RowCardProps) {
   const refocusToggle = useRef(false);
   const live = useRef<{ view: EditorView; detach: () => void; onOutside: (e: MouseEvent) => void } | null>(null);
   const unmounted = useRef(false);
-  // CodeMirror counts \r\n as one character, so y-section-sync's offsets
-  // would drift in a row with \r: such a row is edited in its concept file.
-  const crlf = entry.body.includes('\r');
+  // A row in \r\n lines is edited in its concept file (rowHasCR).
+  const crlf = !!entry.crlf || entry.body.includes('\r');
   const editable = canEdit && !context && !crlf;
   const fullId = `${RELAY_ID}-${entry.conceptId}`;
 
@@ -191,7 +190,8 @@ export function ConceptRowCard(props: RowCardProps) {
     // first edit, so nothing typed here can run into a heading; opening it
     // and leaving writes nothing.
     const lineBreak = row ? bodyLineFix(row, ytext.length) : null;
-    if (!row) {
+    // Checked again on the live text: the file may have changed since.
+    if (!row || rowHasCR(ytext.toString(), row)) {
       detach();
       closeLive(owner);
       setState('error');

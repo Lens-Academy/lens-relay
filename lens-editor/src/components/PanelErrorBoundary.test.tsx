@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { PanelErrorBoundary } from './PanelErrorBoundary';
 
 function Boom({ fail }: { fail: boolean }) {
@@ -16,7 +16,10 @@ describe('PanelErrorBoundary', () => {
         <p>Editor</p>
       </div>,
     );
-    expect(screen.getByText('Concept relationships could not be shown.')).toBeInTheDocument();
+    expect(screen.getByText(/Concept relationships could not be shown\./)).toBeInTheDocument();
+    // Retry renders the panel again (here it fails again).
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.getByText('Editor')).toBeInTheDocument();
     rerender(
       <div>

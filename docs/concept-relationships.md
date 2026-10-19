@@ -98,8 +98,9 @@ implementation it applies to and their tagged tests in the same piece of work.
     rows with it, and concepts reached only through a lens come last. The editor shows
     every such lens, and its lens rows stay editable. The MCP server follows at most 8
     lenses. Both pass over a lens that no concept file links to before reading it, since
-    it cannot add rows. The editor lists lenses by name (case-insensitive) and the MCP
-    server by path; all lenses are in `Lenses/`, so the two orders differ only in case.
+    it cannot add rows. The editor lists lenses by name with `localeCompare` and the MCP
+    server by path in byte order; all lenses are in `Lenses/`, but case, punctuation and
+    accents can still order them differently. This affects display only.
     The MCP server's caps take lenses in path order: it reads the first 40 lens files
     that a concept file links to, and shows the first 8 that use the file.
 

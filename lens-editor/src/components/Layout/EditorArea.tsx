@@ -1,4 +1,3 @@
-import { PanelErrorBoundary } from '../PanelErrorBoundary';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -29,6 +28,7 @@ import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPa
 import { matchRule } from '../../lib/concept-rows';
 import { ConceptGraphPanel } from '../ConceptGraphPanel';
 import { isConceptPath } from '../../lib/concept-graph';
+import { PanelErrorBoundary } from '../PanelErrorBoundary';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';

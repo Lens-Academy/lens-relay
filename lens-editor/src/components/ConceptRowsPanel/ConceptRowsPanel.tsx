@@ -8,7 +8,10 @@ import { attachProvenanceRegistration, humanActor } from '../../lib/provenance';
 import { createDocument, createFolder, generateUUID } from '../../lib/relay-api';
 import { computeRelativePath, resolvePageName } from '../../lib/document-resolver';
 import {
+  draftFromRow,
+  hasCRLF,
   insertRowUnlessPresent,
+  rowsAbout,
   groupLensRows,
   lensSourceTargets,
   matchRule,
@@ -160,7 +163,9 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
 
   /** Add a row about the opened file to a concept file (made when `name` is
    *  new), then open it for editing. */
-  const addRow = useCallback(async (choice: { id: string } | { name: string }, body = '') => {
+  const addRow = useCallback(async (choice: { id: string } | { name: string }, draft = '') => {
+    // A draft copied from another row: \n line breaks, no leading blank line.
+    const body = draftFromRow(draft);
     // The row heading links here by relative path: a path that cannot be a
     // wikilink would make a row that never shows (and a retry, a second one).
     const problem = rowLinkProblem(computeRelativePath(`${folder}/x.md`, path));
@@ -180,6 +185,13 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
         // Checked against the live text, not the (possibly stale) snapshot:
         // a row about this file already there is opened, not doubled.
         const result = await withLiveDoc(`${RELAY_ID}-${conceptId}`, ({ doc }) => {
+          const text = doc.getText('contents');
+          // A row added to a \r\n file could not be edited here (rowHasCR):
+          // left to the file itself, unless one is already there to open.
+          if (hasCRLF(text.toString())
+            && rowsAbout(text.toString(), conceptPath, target, metadata, rule.section).length === 0) {
+            return { crlf: true as const };
+          }
           const detach = attachProvenanceRegistration(doc, getActor);
           try {
             return insertRowUnlessPresent(doc.getText('contents'), conceptPath, target,
@@ -190,6 +202,10 @@ function Panel({ docId, path, ytext, rule, suggestionMode }: PanelProps & { path
         });
         if (!result) {
           setError('Another file was opened for editing meanwhile. Try again.');
+          return;
+        }
+        if ('crlf' in result) {
+          setError(`${basenameOf(conceptPath)} has Windows line endings: add the row in the concept file itself.`);
           return;
         }
         index = result.index;

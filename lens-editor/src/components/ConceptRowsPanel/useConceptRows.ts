@@ -153,7 +153,10 @@ export function useLensesUsing(
         const path = pathIndex.get(id);
         if (!path || !isLensPath(path, rule.sharedFolder)) return false;
         // A lens no concept file links to can add no rows: not read.
-        return backlinkSources(id, docs).some((c) => pathIndex.get(c)?.startsWith(conceptFolder));
+        return backlinkSources(id, docs).some((c) => {
+          const conceptPath = pathIndex.get(c);
+          return !!conceptPath && conceptPath.startsWith(conceptFolder) && /\.md$/i.test(conceptPath);
+        });
       })
       .sort();
   }, [enabled, target, folderDocs, backlinksVersion, pathIndex, rule]);
