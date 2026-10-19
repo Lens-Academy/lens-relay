@@ -175,15 +175,23 @@ function onCursorRow(view: EditorView, start: SelectionRange, end: number, forwa
  * send it past: after a suggestion's opening delimiter, or after a comment
  * badge.
  */
-export function lineBoundaryTarget(view: EditorView, start: SelectionRange, forward: boolean): SelectionRange {
+export function lineBoundaryTarget(
+  view: EditorView,
+  start: SelectionRange,
+  forward: boolean,
+  spans: readonly HiddenSpan[],
+): SelectionRange {
   const line = view.lineBlockAt(start.head);
-  const end = forward ? line.to : line.from;
+  // The line's start or end, or, where hidden syntax runs over it from the line
+  // before or after (a comment written over two lines), where its text shows
+  const hidden = spanAround(spans, forward ? line.to : line.from);
+  const end = hidden ? (forward ? hidden.from : hidden.to) : forward ? line.to : line.from;
   let moved = view.moveToLineBoundary(start, forward);
   if (moved.head !== end && onCursorRow(view, start, end, forward)) {
     moved = EditorSelection.cursor(end, forward ? -1 : 1);
   } else if (moved.head === start.head && moved.head !== end) {
     // At a wrapped row's start or end already: on to the line's
-    moved = view.moveToLineBoundary(start, forward, false);
+    moved = EditorSelection.cursor(end, forward ? -1 : 1);
   }
   // Home goes to the end of the indentation first
   if (!forward && moved.head === line.from && line.length) {
@@ -194,10 +202,11 @@ export function lineBoundaryTarget(view: EditorView, start: SelectionRange, forw
 }
 
 /** Home or End (`forward`), selecting with `extend` */
-function cursorToLineBoundary(view: EditorView, forward: boolean, extend: boolean): boolean {
+function cursorToLineBoundary(view: EditorView, rangesOf: RangesOf, forward: boolean, extend: boolean): boolean {
   const { selection } = view.state;
+  const { spans } = hiddenIn(rangesOf(view.state));
   const next = EditorSelection.create(selection.ranges.map((range) => {
-    const moved = lineBoundaryTarget(view, range, forward);
+    const moved = lineBoundaryTarget(view, range, forward, spans);
     return extend ? EditorSelection.range(range.anchor, moved.head, moved.goalColumn, moved.bidiLevel ?? undefined) : moved;
   }), selection.mainIndex);
   if (next.eq(selection, true)) return false;
@@ -209,12 +218,12 @@ function cursorToLineBoundary(view: EditorView, forward: boolean, extend: boolea
 export function hiddenSyntaxCursor(rangesOf: RangesOf): Extension {
   const back = (view: EditorView) => stepOverHiddenSyntax(view, rangesOf, false);
   const forward = (view: EditorView) => stepOverHiddenSyntax(view, rangesOf, true);
-  const home = (extend: boolean) => (view: EditorView) => cursorToLineBoundary(view, false, extend);
-  const end = (extend: boolean) => (view: EditorView) => cursorToLineBoundary(view, true, extend);
+  const home = (extend: boolean) => (view: EditorView) => cursorToLineBoundary(view, rangesOf, false, extend);
+  const end = (extend: boolean) => (view: EditorView) => cursorToLineBoundary(view, rangesOf, true, extend);
   // Cmd+Left/Right go to the line's visual left and right
   const ltr = (view: EditorView) => view.textDirectionAt(view.state.selection.main.head) === Direction.LTR;
-  const left = (extend: boolean) => (view: EditorView) => cursorToLineBoundary(view, !ltr(view), extend);
-  const right = (extend: boolean) => (view: EditorView) => cursorToLineBoundary(view, ltr(view), extend);
+  const left = (extend: boolean) => (view: EditorView) => cursorToLineBoundary(view, rangesOf, !ltr(view), extend);
+  const right = (extend: boolean) => (view: EditorView) => cursorToLineBoundary(view, rangesOf, ltr(view), extend);
   return [
     EditorView.atomicRanges.of((view) => hiddenIn(rangesOf(view.state)).set),
     EditorState.transactionFilter.of((tr) => {

@@ -14,10 +14,11 @@ type FixtureWindow = Window & {
   setSourceMode: (on: boolean) => void;
 };
 
-const LINES = 11; // e2e/fixtures/criticmarkup-cursor.ts
+const LINES = 13; // e2e/fixtures/criticmarkup-cursor.ts
 const OPENS_WITH_SUGGESTION = [2, 3, 4, 5, 6];
 const ENDS_WITH_SUGGESTION = [2, 3, 4, 7];
 const WRAPPED = 10;
+const TWO_LINE_COMMENT = 11; // and 12
 // Suggestion mode wraps typing in {++{"author":"Mark","timestamp":…}@@…++}
 const MARK = '\\{"author":"Mark","timestamp":\\d+\\}@@';
 
@@ -150,6 +151,18 @@ test.describe('Live preview: the cursor and hidden CriticMarkup syntax', () => {
     }
   });
 
+  test('Home and End stay on their row beside a comment written over two lines', async ({ page }) => {
+    // Its first line ends, and its second starts, inside the hidden comment
+    const first = await lineText(page, TWO_LINE_COMMENT);
+    await place(page, TWO_LINE_COMMENT, 0);
+    await page.keyboard.press('End');
+    expect(await cursor(page)).toMatchObject({ line: TWO_LINE_COMMENT, col: first.indexOf('{>>') });
+    const second = await lineText(page, TWO_LINE_COMMENT + 1);
+    await place(page, TWO_LINE_COMMENT + 1, -1);
+    await page.keyboard.press('Home');
+    expect(await cursor(page)).toMatchObject({ line: TWO_LINE_COMMENT + 1, col: second.indexOf('<<}') + 3 });
+  });
+
   test('ArrowRight and ArrowLeft cross a delimiter, with its metadata, in one press', async ({ page }) => {
     // {++An added line++}: content 3-16
     await place(page, 2, 0);
@@ -262,14 +275,14 @@ test.describe('Live preview: the cursor and hidden CriticMarkup syntax', () => {
 
   test('in suggestion mode, Backspace after your own addition takes the character off it', async ({ page }) => {
     await page.evaluate(() => (window as unknown as FixtureWindow).setSuggestionMode(true));
-    await place(page, 11, -1);
+    await place(page, LINES, -1);
     await page.keyboard.type(' More');
-    const own = await lineText(page, 11);
+    const own = await lineText(page, LINES);
     expect(own).toMatch(new RegExp(`^Last line\\.\\{\\+\\+${MARK} More\\+\\+\\}$`));
     await page.keyboard.press('Home');
     await page.keyboard.press('End');
     await page.keyboard.press('Backspace');
-    expect(await lineText(page, 11)).toBe(own.replace(' More++}', ' Mor++}'));
+    expect(await lineText(page, LINES)).toBe(own.replace(' More++}', ' Mor++}'));
   });
 
   test('the accept button accepts its own suggestion, also in a deletion+addition pair', async ({ page }) => {

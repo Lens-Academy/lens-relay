@@ -32,6 +32,9 @@ const documentText = [
     + `{--${meta('Elias')}@@a phrase to remove--} a little further on, and a `
     + `{==highlight==}{>>${meta('Elias')}@@Why this one?<<} before the text carries on `
     + 'for a while longer so that the line wraps at least twice in the editor column.',
+  // An older comment, written over two lines
+  `A comment over two lines{>>${meta('Elias')}@@its first line`,
+  'and its second<<} then text.',
   'Last line.',
 ].join('\n');
 
