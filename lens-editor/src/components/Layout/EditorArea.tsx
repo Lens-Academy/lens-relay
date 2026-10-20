@@ -25,6 +25,8 @@ import { OverflowMenu } from '../OverflowMenu';
 import { TableOfContents } from '../TableOfContents';
 import { BacklinksPanel } from '../BacklinksPanel';
 import { ConceptRowsPanel, panelHostField, setPanelHost } from '../ConceptRowsPanel';
+import { JevCheckPanel } from '../JevCheckPanel/JevCheckPanel';
+import { isCheckPath } from '../../lib/jev-check';
 import { matchRule } from '../../lib/concept-rows';
 import { ConceptGraphPanel } from '../ConceptGraphPanel';
 import { isConceptPath } from '../../lib/concept-graph';
@@ -261,7 +263,8 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
   const [conceptPanelHost] = useState(() => document.createElement('div'));
   const showConceptPanel = matchRule(currentFilePath) !== null;
   const showConceptGraph = isConceptPath(currentFilePath);
-  const showPanelHost = showConceptPanel || showConceptGraph;
+  const showJevCheck = isCheckPath(currentFilePath);
+  const showPanelHost = showConceptPanel || showConceptGraph || showJevCheck;
   useEffect(() => {
     if (!editorView) return;
     if (editorView.state.field(panelHostField, false) === undefined) {
@@ -542,6 +545,11 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
           <SyncedFileBanner />
           {showPanelHost && createPortal(
             <>
+              {showJevCheck && (
+                <PanelErrorBoundary name="Jev check workbench" resetKey={currentDocId}>
+                  <JevCheckPanel ytext={yText} />
+                </PanelErrorBoundary>
+              )}
               {showConceptGraph && (
                 <PanelErrorBoundary name="Concept graph" resetKey={currentDocId}>
                   <ConceptGraphPanel docId={currentDocId} path={currentFilePath} ytext={yText} />

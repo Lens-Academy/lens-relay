@@ -7,6 +7,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { bridgeBundlePlugin } from './vite-plugin-bridge-bundle';
+import { jevDevPlugin } from './server/jev-dev';
 
 // Extract workspace number from directory name (e.g., "lens-editor-ws2" → 2)
 // or parent directory (e.g., "ws2/lens-editor" → 2).
@@ -21,7 +22,7 @@ const defaultRelayPort = 8090 + portOffset;
 const defaultBridgePort = 8091 + portOffset;
 
 // https://vite.dev/config/
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
   // Use local relay-server when VITE_LOCAL_RELAY is set
   const useLocalRelay = process.env.VITE_LOCAL_RELAY === 'true';
   const relayPort = parseInt(process.env.RELAY_PORT || String(defaultRelayPort), 10);
@@ -438,7 +439,7 @@ export default defineConfig(() => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), ...(command === 'serve' ? [jevDevPlugin()] : []), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,
