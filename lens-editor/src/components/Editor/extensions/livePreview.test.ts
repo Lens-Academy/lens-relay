@@ -1,4 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { EditorState } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
+import { markdown } from '@codemirror/lang-markdown';
+import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import {
   createTestEditor,
   moveCursor,
@@ -6,7 +10,7 @@ import {
   countClass,
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { livePreview, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -987,6 +991,51 @@ describe('livePreview - fenced code blocks', () => {
 
     expect(hasClass(view, 'cm-code-block')).toBe(true);
     expect(hasClass(view, 'cm-hidden-syntax')).toBe(true);
+  });
+
+  // Hidden with a mark, ```js was one span per highlight token, and beside the
+  // copy button CodeMirror found nothing to measure on that row: a click or
+  // ArrowDown there threw (e2e/live-preview-code-fences.spec.ts)
+  it('hides the opening fence and its language as one text node', () => {
+    const content = 'before\n```javascript\ncode line\n```\nafter';
+    const view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: content,
+        extensions: [syntaxHighlighting(defaultHighlightStyle), markdown(), livePreview()],
+      }),
+    });
+    cleanup = () => view.destroy();
+
+    const fence = view.contentDOM.querySelectorAll('.cm-line')[1].querySelector('.cm-hidden-syntax')!;
+    expect(fence.textContent).toBe('```javascript');
+    expect(Array.from(fence.childNodes, (node) => node.nodeType)).toEqual([Node.TEXT_NODE]);
+  });
+
+  it('hides all of an opening fence line, with indentation, a quote marker or a list number', () => {
+    const blocks = [
+      '```js\nx\n```',
+      '~~~python\nx\n~~~',
+      '  ```bash\n  x\n  ```',
+      '> ```js\n> x\n> ```',
+      '1. ```js\n   x\n   ```',
+    ];
+    for (const block of blocks) {
+      const doc = `before\n\n${block}\n\nafter`;
+      const { view, cleanup: c } = createTestEditor(doc, 0);
+      try {
+        const line = view.contentDOM.querySelectorAll('.cm-line')[2];
+        expect(line.textContent).toBe(block.split('\n')[0]);
+        const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+        const shown: string[] = [];
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!node.parentElement?.closest('.cm-hidden-syntax')) shown.push(node.textContent ?? '');
+        }
+        expect(shown.join('')).toBe('');
+      } finally {
+        c();
+      }
+    }
   });
 
   it('multiple code blocks styled independently', () => {
