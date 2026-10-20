@@ -8,6 +8,7 @@ import {
   EditorState,
   Compartment,
   Transaction,
+  Prec,
 } from '@codemirror/state';
 import type { ChangeSpec } from '@codemirror/state';
 import {
@@ -1266,9 +1267,10 @@ export const criticMarkupCompartment = new Compartment();
 
 /**
  * Extension that provides CriticMarkup parsing and decoration support.
- * Includes keyboard shortcuts:
- * - Mod-Enter: Accept change at cursor
- * - Mod-Backspace: Reject change at cursor
+ * Includes keyboard shortcuts (criticMarkupKeymap, at Prec.high so that they
+ * beat defaultKeymap's bindings for the same keys):
+ * - Mod-Enter: Accept the suggestion at the cursor
+ * - Mod-Backspace: Reject it
  */
 interface CriticMarkupOptions {
   canAcceptReject?: boolean;
@@ -1285,6 +1287,6 @@ export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
     suggestionModeFilter,
     criticMarkupCompartment.of(criticMarkupPlugin),
     stickyButtonsPlugin,
-    keymap.of(criticMarkupKeymap),
+    Prec.high(keymap.of(criticMarkupKeymap)),
   ];
 }

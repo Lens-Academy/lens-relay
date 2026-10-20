@@ -1,7 +1,7 @@
 // src/components/Editor/extensions/criticmarkup-commands.ts
 import type { EditorView, KeyBinding } from '@codemirror/view';
-import { criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
-import type { CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+import { criticMarkupField, canAcceptRejectFacet, suggestionModeField, getCurrentAuthor } from './criticmarkup';
+import { isAdjacentEditPair, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 /**
  * Find the CriticMarkup range containing the given position.
@@ -178,24 +178,72 @@ export function rejectChangeAtCursor(view: EditorView): boolean {
   return true;
 }
 
+const isSuggestion = (r: CriticMarkupRange) =>
+  r.type === 'addition' || r.type === 'deletion' || r.type === 'substitution';
+
+/** The innermost suggestion around `pos`: inside it, not at its edge */
+function suggestionAround(ranges: CriticMarkupRange[], pos: number): CriticMarkupRange | null {
+  let found: CriticMarkupRange | null = null;
+  for (const r of ranges) {
+    if (r.from < pos && pos < r.to && isSuggestion(r) && (!found || r.to <= found.to)) found = r;
+  }
+  return found;
+}
+
+/**
+ * The suggestions Mod-Enter accepts (or Mod-Backspace rejects) here: those a
+ * selection overlaps, or the one the cursor is in. A deletion+addition pair
+ * goes as one, as its single ✓ ✗ do.
+ *
+ * Empty where the key keeps its usual meaning: away from suggestions; right
+ * before or after one, where you type next to it (and Mod-Backspace deletes
+ * the word before the cursor); beside a comment badge or in highlighted text
+ * (accepting or rejecting a comment deletes it); for users who can't accept
+ * or reject; and for Mod-Backspace in suggestion mode when they are all your
+ * own: the cursor sits in the suggestion you are typing, so the key goes on
+ * deleting the word before it.
+ */
+export function suggestionsForKey(view: EditorView, action: 'accept' | 'reject'): CriticMarkupRange[] {
+  if (!view.state.facet(canAcceptRejectFacet)) return [];
+  const ranges = view.state.field(criticMarkupField);
+  const { main } = view.state.selection;
+  const picked = main.empty ? [suggestionAround(ranges, main.head)] : findRangesInSelection(view);
+  const targets = new Set<CriticMarkupRange>();
+  for (const range of picked) {
+    if (!range || !isSuggestion(range)) continue;
+    const i = ranges.indexOf(range);
+    if (i > 0 && isAdjacentEditPair(ranges[i - 1], range)) targets.add(ranges[i - 1]);
+    targets.add(range);
+    if (i + 1 < ranges.length && isAdjacentEditPair(range, ranges[i + 1])) targets.add(ranges[i + 1]);
+  }
+  const sorted = [...targets].sort((a, b) => a.from - b.from);
+  if (action === 'reject' && view.state.field(suggestionModeField, false)) {
+    const author = getCurrentAuthor();
+    if (sorted.every((r) => r.metadata?.author === author)) return [];
+  }
+  return sorted;
+}
+
+function acceptOrRejectByKey(view: EditorView, action: 'accept' | 'reject'): boolean {
+  const targets = suggestionsForKey(view, action);
+  if (targets.length === 0) return false;
+  view.dispatch({ changes: targets.flatMap((r) => surgicalChangesFor(view, r, action)) });
+  return true;
+}
+
 /**
  * Keymap for CriticMarkup accept/reject.
- * - Mod-Enter: Accept change at cursor
- * - Mod-Backspace: Reject change at cursor
+ * - Mod-Enter: Accept the suggestion at the cursor (or in the selection)
+ * - Mod-Backspace: Reject it
+ *
+ * criticMarkupExtension installs it at Prec.high. At default precedence it
+ * loses to defaultKeymap wherever an editor lists that first, as Editor.tsx
+ * does: CodeMirror's own Mod-Enter (insertBlankLine) and Mod-Backspace
+ * (deleteGroupBackward; deleteLineBoundaryBackward on a Mac) then take the
+ * key. Where suggestionsForKey is empty these commands return false, and
+ * CodeMirror's run as before.
  */
 export const criticMarkupKeymap: KeyBinding[] = [
-  {
-    key: 'Mod-Enter',
-    run: (view) => {
-      if (!view.state.facet(canAcceptRejectFacet)) return false;
-      return acceptChangeAtCursor(view);
-    },
-  },
-  {
-    key: 'Mod-Backspace',
-    run: (view) => {
-      if (!view.state.facet(canAcceptRejectFacet)) return false;
-      return rejectChangeAtCursor(view);
-    },
-  },
+  { key: 'Mod-Enter', run: (view) => acceptOrRejectByKey(view, 'accept') },
+  { key: 'Mod-Backspace', run: (view) => acceptOrRejectByKey(view, 'reject') },
 ];

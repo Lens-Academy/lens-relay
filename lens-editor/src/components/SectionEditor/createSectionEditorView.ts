@@ -19,7 +19,6 @@ import {
   toggleSuggestionMode,
 } from '../Editor/extensions/criticmarkup';
 import type { CriticMarkupCommentBadgeInfo } from '../Editor/extensions/criticmarkup';
-import { criticMarkupKeymap } from '../Editor/extensions/criticmarkup-commands';
 
 /**
  * Trim trailing newlines from section range so CM doesn't show an empty
@@ -117,7 +116,6 @@ export function createSectionEditorView(opts: {
         criticMarkupExtension({ canAcceptReject: true, commentBadgeMap }),
         commentOffsetTranslator.of((localPos) => offsetBase + localPos),
         ...(onCommentClick ? [commentClickCallback.of(onCommentClick)] : []),
-        keymap.of(criticMarkupKeymap),
       ]
     : [];
 

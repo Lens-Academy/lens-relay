@@ -1,9 +1,13 @@
-import { EditorState, Prec } from '@codemirror/state';
+import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
-import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { defaultHighlightStyle, foldKeymap, syntaxHighlighting } from '@codemirror/language';
 import { Autolink, Strikethrough, TaskList } from '@lezer/markdown';
-import { defaultKeymap } from '@codemirror/commands';
+import { defaultKeymap, indentLess, indentMore } from '@codemirror/commands';
+import { closeBracketsKeymap, completionKeymap } from '@codemirror/autocomplete';
+import { searchKeymap } from '@codemirror/search';
+import { lintKeymap } from '@codemirror/lint';
+import { yUndoManagerKeymap } from 'y-codemirror.next';
 import { WikilinkExtension } from '../components/Editor/extensions/wikilinkParser';
 import { livePreview } from '../components/Editor/extensions/livePreview';
 import type { WikilinkContext } from '../components/Editor/extensions/livePreview';
@@ -11,6 +15,8 @@ import { criticMarkupExtension } from '../components/Editor/extensions/criticmar
 import { tightMarkdownKeymap } from '../components/Editor/extensions/tightListEnter';
 import { checklistKeymap } from '../components/Editor/extensions/checklistToggle';
 import { markdownFormattingKeymap } from '../components/Editor/extensions/markdownFormatting';
+import { frontmatterKeymap } from '../components/Editor/extensions/frontmatter';
+import { segmentIdKeymap } from '../components/Editor/extensions/segmentIds';
 
 /**
  * Create an EditorView with live preview extension for testing.
@@ -218,6 +224,46 @@ export function createMarkdownEditor(
     view,
     cleanup: () => view.destroy(),
   };
+}
+
+/**
+ * The keymaps of Editor.tsx, in its order, with criticMarkupExtension (which
+ * brings its own) where Editor.tsx lists it: well after CodeMirror's
+ * defaultKeymap, whose Mod-Enter and Mod-Backspace bindings it has to beat.
+ * Keep in step with Editor.tsx. For tests and e2e fixtures that press keys.
+ */
+export function editorKeymaps(
+  opts: { readOnly?: boolean; canAcceptReject?: boolean } = {}
+): Extension[] {
+  const { readOnly = false, canAcceptReject = true } = opts;
+  return [
+    keymap.of([
+      ...closeBracketsKeymap,
+      ...defaultKeymap.filter(
+        (b) =>
+          b.key !== 'Alt-ArrowLeft' &&
+          b.key !== 'Alt-ArrowRight' &&
+          b.key !== 'Shift-Alt-ArrowLeft' &&
+          b.key !== 'Shift-Alt-ArrowRight',
+      ),
+      ...searchKeymap,
+      ...yUndoManagerKeymap,
+      ...foldKeymap,
+      ...completionKeymap,
+      ...lintKeymap,
+    ]),
+    Prec.high(keymap.of(frontmatterKeymap)),
+    ...(readOnly ? [] : [Prec.high(keymap.of(segmentIdKeymap(() => 'Lens/Notes.md')))]),
+    Prec.high(keymap.of(tightMarkdownKeymap)),
+    Prec.high(keymap.of(checklistKeymap)),
+    Prec.high(keymap.of(markdownFormattingKeymap)),
+    keymap.of([
+      { key: 'Tab', run: indentMore },
+      { key: 'Shift-Tab', run: indentLess },
+    ]),
+    criticMarkupExtension({ canAcceptReject }),
+    Prec.highest(keymap.of([{ key: 'Mod-Shift-m', run: () => true }])),
+  ];
 }
 
 /**
