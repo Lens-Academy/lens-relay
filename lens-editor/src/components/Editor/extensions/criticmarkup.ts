@@ -18,8 +18,9 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
-import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
+import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection, rejectsOnWordDeletion } from './criticmarkup-commands';
 import { hiddenSyntaxCursor } from './criticmarkup-cursor';
+import { hiddenSyntaxDeletion } from './criticmarkup-delete';
 import { parse, parseThreads, isAdjacentEditPair, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 export interface CriticMarkupCommentBadgeInfo {
@@ -644,9 +645,17 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
   },
   {
     decorations: (v) => v.decorations,
-    // The cursor steps over the syntax this hides (not in source mode, which
-    // swaps this plugin out)
-    provide: () => hiddenSyntaxCursor((state) => state.field(criticMarkupField)),
+    // The cursor steps over the syntax this hides, and deleting leaves it
+    // whole (not in source mode, which swaps this plugin out)
+    provide: () => [
+      hiddenSyntaxCursor((state) => state.field(criticMarkupField)),
+      hiddenSyntaxDeletion({
+        rangesOf: (state) => state.field(criticMarkupField),
+        suggesting: (state) => state.field(suggestionModeField, false) ?? false,
+        inOwnAddition: (state) => cursorInOwnAddition(state),
+        rejectsOnWordDeletion: (view) => rejectsOnWordDeletion(view),
+      }),
+    ],
   }
 );
 
@@ -955,6 +964,14 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
     }),
   }
 );
+
+/** Whether the cursor is inside an addition of the current author (as `ownAddition` below) */
+function cursorInOwnAddition(state: EditorState): boolean {
+  const head = state.selection.main.head;
+  return state.field(criticMarkupField).some(
+    (r) => r.type === 'addition' && r.metadata?.author === currentAuthor && head > r.from && head < r.to,
+  );
+}
 
 /**
  * Transaction filter that wraps insertions in CriticMarkup when suggestion mode is ON.
