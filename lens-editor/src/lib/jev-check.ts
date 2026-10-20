@@ -1,6 +1,6 @@
 // A jev check file (Lens Edu/Checks/*.md) and the arithmetic the check workbench shows.
 // The frontmatter fields mirror lens-platform core/course_checks/checks.py `Check`.
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, parseDocument } from 'yaml';
 
 export interface JevCheck {
   id: string;
@@ -82,4 +82,15 @@ export function auroc(bad: number[], good: number[]): number | null {
   let s = 0;
   for (const b of bad) for (const g of good) s += b > g ? 1 : b === g ? 0.5 : 0;
   return s / (bad.length * good.length);
+}
+
+/** Set fields in a check file's frontmatter, keeping the body and the YAML's other
+ *  keys and comments. `path` is a key or a nested key path such as ['criteria', 'true']. */
+export function setCheckFields(text: string, edits: { path: string[]; value: string | number }[]): string {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) throw new Error('no frontmatter');
+  const doc = parseDocument(m[1]);
+  for (const { path, value } of edits) doc.setIn(path, value);
+  const yaml = doc.toString().replace(/\n$/, '');
+  return `---\n${yaml}\n---` + text.slice(m[0].length);
 }

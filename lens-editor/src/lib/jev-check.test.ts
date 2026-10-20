@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { auroc, isCheckPath, parseCheck, parsePercentiles, percentileRows, histogram } from './jev-check';
+import { auroc, isCheckPath, parseCheck, parsePercentiles, percentileRows, histogram, setCheckFields } from './jev-check';
 
 const T1 = `---
 id: T1
@@ -74,5 +74,18 @@ describe('auroc', () => {
     expect(auroc([0.9, 0.8], [0.1, 0.2])).toBe(1);
     expect(auroc([0.5], [0.5])).toBe(0.5);
     expect(auroc([], [0.1])).toBeNull();
+  });
+});
+
+describe('setCheckFields', () => {
+  it('changes only the named fields and keeps the body', () => {
+    const out = setCheckFields(T1, [{ path: ['question'], value: 'New?' }, { path: ['criteria', 'true'], value: 'Yes.' }]);
+    const c = parseCheck(out);
+    expect([c.question, c.criteria?.true, c.criteria?.false, c.fail_at]).toEqual(['New?', 'Yes.', 'It does not.', 0.8]);
+    expect(out.endsWith('\nnotes')).toBe(true);
+  });
+  it('adds criteria when the file had none', () => {
+    const c = parseCheck(setCheckFields('---\nid: X\nquestion: Q?\n---\n', [{ path: ['criteria', 'true'], value: 'a' }, { path: ['criteria', 'false'], value: 'b' }]));
+    expect(c.criteria).toEqual({ true: 'a', false: 'b' });
   });
 });
