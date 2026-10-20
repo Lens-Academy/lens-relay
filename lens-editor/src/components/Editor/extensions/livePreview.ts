@@ -384,17 +384,18 @@ class BulletWidget extends WidgetType {
 }
 
 /**
- * HiddenFenceWidget - Hides a code block's opening fence (``` plus language)
- * and closing fence while the cursor is outside the block, as one hidden text
- * node. A hidden mark would hold one span per highlight token (``` and js), and
- * CodeMirror ignores an element's empty boxes when it has several. Beside the
- * copy button (a point widget, which it skips), a click or ArrowDown on the
- * opening line then left it nothing to measure, and it threw. CodeMirror also
- * measures a widget as a whole, so a click on the row lands before or after
- * the fence. Inside a mark, every hidden character has the same x, and a click
- * on the closing fence's row landed between its backticks.
+ * HiddenSyntaxWidget - Hides syntax as one hidden text node while the cursor is
+ * elsewhere: a code block's opening fence (``` plus language) and closing
+ * fence, a divider (---), and a setext heading's ===/--- line. A hidden mark
+ * would hold one span per highlight token (``` and js), and CodeMirror ignores
+ * an element's empty boxes when it has several. Beside the copy button (a point
+ * widget, which it skips), a click or ArrowDown on the opening line then left
+ * it nothing to measure, and it threw. CodeMirror also measures a widget as a
+ * whole, so a click on the row lands before or after the syntax. Inside a mark,
+ * every hidden character has the same x, and a click on the row of a closing
+ * fence, a divider or an underline landed between its backticks or dashes.
  */
-class HiddenFenceWidget extends WidgetType {
+class HiddenSyntaxWidget extends WidgetType {
   private text: string;
 
   constructor(text: string) {
@@ -409,9 +410,26 @@ class HiddenFenceWidget extends WidgetType {
     return span;
   }
 
-  eq(other: HiddenFenceWidget): boolean {
+  eq(other: HiddenSyntaxWidget): boolean {
     return this.text === other.text;
   }
+}
+
+/**
+ * Hide from `from` to the end of its line with one HiddenSyntaxWidget: a
+ * divider, or a setext heading's ===/--- line. Indentation before it goes into
+ * the widget too: CodeMirror prefers a box at the click's height, and the
+ * widget's has none, so visible spaces there would take clicks anywhere on the
+ * row. A container prefix (`> `, a list marker) keeps its own decorations.
+ */
+function hideToLineEnd(view: EditorView, from: number): { from: number; to: number; deco: Decoration } {
+  const line = view.state.doc.lineAt(from);
+  const start = line.text.slice(0, from - line.from).trim() ? from : line.from;
+  return {
+    from: start,
+    to: line.to,
+    deco: Decoration.replace({ widget: new HiddenSyntaxWidget(view.state.doc.sliceString(start, line.to)) }),
+  };
 }
 
 /**
@@ -604,19 +622,25 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             if (node.name === 'HeaderMark') {
               if (!cursorOnLine(view, node.from)) {
                 const line = view.state.doc.lineAt(node.from);
-                // Hide # and trailing space
-                const end = Math.min(node.to + 1, line.to);
-                decorations.push({
-                  from: node.from,
-                  to: end,
-                  deco: Decoration.mark({ class: HIDDEN_CLASS }),
-                });
+                if (node.node.parent?.name.startsWith('SetextHeading')) {
+                  // A setext heading's ===/--- line: all of it, as one widget
+                  decorations.push(hideToLineEnd(view, node.from));
+                } else {
+                  // Hide # and trailing space
+                  const end = Math.min(node.to + 1, line.to);
+                  decorations.push({
+                    from: node.from,
+                    to: end,
+                    deco: Decoration.mark({ class: HIDDEN_CLASS }),
+                  });
+                }
               }
             }
 
             // HorizontalRule (---, ***, ___): divider line when cursor not on line.
             // The line class draws the rule (index.css) and the characters are
-            // hidden. The leading --- of frontmatter is left to frontmatter.ts.
+            // hidden, as one widget (see HiddenSyntaxWidget). The leading --- of
+            // frontmatter is left to frontmatter.ts.
             if (node.name === 'HorizontalRule') {
               const hrLine = view.state.doc.lineAt(node.from);
               hrLines.add(hrLine.number);
@@ -626,11 +650,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   to: hrLine.from,
                   deco: Decoration.line({ class: 'cm-hr-line' }),
                 });
-                decorations.push({
-                  from: node.from,
-                  to: node.to,
-                  deco: Decoration.mark({ class: HIDDEN_CLASS }),
-                });
+                decorations.push(hideToLineEnd(view, node.from));
               }
             }
 
@@ -815,7 +835,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               // Hide fence markers and language info when cursor is outside
               if (!cursorInside) {
                 // Hide opening fence line content (``` + optional language)
-                // with one widget (see HiddenFenceWidget), indentation included.
+                // with one widget (see HiddenSyntaxWidget), indentation included.
                 // A container prefix (`> `, a list marker) keeps its own
                 // decorations and is hidden with a mark, as before.
                 const openLine = view.state.doc.lineAt(node.from);
@@ -832,7 +852,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   from: fenceFrom,
                   to: openLine.to,
                   deco: Decoration.replace({
-                    widget: new HiddenFenceWidget(view.state.doc.sliceString(fenceFrom, openLine.to)),
+                    widget: new HiddenSyntaxWidget(view.state.doc.sliceString(fenceFrom, openLine.to)),
                   }),
                 });
 
@@ -849,7 +869,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                     from: closeLine.from,
                     to: closeLine.to,
                     deco: closed
-                      ? Decoration.replace({ widget: new HiddenFenceWidget(closeLine.text) })
+                      ? Decoration.replace({ widget: new HiddenSyntaxWidget(closeLine.text) })
                       : Decoration.mark({ class: HIDDEN_CLASS }),
                   });
                 }
@@ -1106,8 +1126,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         decorations = decorations.filter((_, i) => !removeDeco.has(i));
       }
 
-      // Sort decorations by position (required for RangeSetBuilder)
-      decorations.sort((a, b) => a.from - b.from || a.to - b.to);
+      // Sort decorations by position, then by startSide (both required for
+      // RangeSetBuilder: a widget replacing a range goes before a mark that
+      // starts at the same place), then by end
+      decorations.sort((a, b) => a.from - b.from || a.deco.startSide - b.deco.startSide || a.to - b.to);
 
       // Add to builder in sorted order
       for (const d of decorations) {

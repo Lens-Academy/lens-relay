@@ -215,6 +215,65 @@ describe('livePreview - horizontal rules', () => {
     expect(hasClass(view, 'cm-hr-line')).toBe(false);
     expect(hasClass(view, 'cm-bullet')).toBe(false);
   });
+
+  /** Line `n` (from 0) of `doc` with the cursor on its first line, highlighted as in Editor.tsx */
+  function renderLine(doc: string, n: number): { line: Element; destroy: () => void } {
+    const view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc,
+        extensions: [syntaxHighlighting(defaultHighlightStyle), markdown(), livePreview()],
+      }),
+    });
+    return { line: view.contentDOM.querySelectorAll('.cm-line')[n], destroy: () => view.destroy() };
+  }
+
+  // Hidden with a mark, every character had the same x, and a click on the
+  // row (or ArrowDown onto it) landed between them
+  // (e2e/live-preview-dividers.spec.ts)
+  it('hides a divider line as one text node, with its indentation', () => {
+    const rules = [
+      ['---', '---'],
+      ['* * *', '* * *'],
+      ['--- ', '--- '],
+      ['   ---', '   ---'],
+      ['> ---', '---'], // the quote marker is hidden on its own
+    ];
+    for (const [rule, hiddenText] of rules) {
+      const { line, destroy } = renderLine(`Above\n\n${rule}\n\nBelow`, 2);
+      try {
+        expect(line.classList.contains('cm-hr-line')).toBe(true);
+        expect(line.textContent).toBe(rule);
+        const hidden = line.querySelectorAll('.cm-hidden-syntax');
+        const widget = hidden[hidden.length - 1];
+        expect(widget.textContent).toBe(hiddenText);
+        expect(Array.from(widget.childNodes, (node) => node.nodeType)).toEqual([Node.TEXT_NODE]);
+      } finally {
+        destroy();
+      }
+    }
+  });
+
+  it('hides the ===/--- line under a setext heading as one text node', () => {
+    const headings = [
+      ['Title', '====='],
+      ['Section', '-------'],
+      ['Section', '---  '],
+      ['- List item title', '  ---'],
+    ];
+    for (const [text, underline] of headings) {
+      const { line, destroy } = renderLine(`Above\n\n${text}\n${underline}\n\nBelow`, 3);
+      try {
+        expect(line.textContent).toBe(underline);
+        const hidden = line.querySelectorAll('.cm-hidden-syntax');
+        expect(hidden).toHaveLength(1);
+        expect(hidden[0].textContent).toBe(underline);
+        expect(Array.from(hidden[0].childNodes, (node) => node.nodeType)).toEqual([Node.TEXT_NODE]);
+      } finally {
+        destroy();
+      }
+    }
+  });
 });
 
 describe('livePreview - wikilinks in headings', () => {
