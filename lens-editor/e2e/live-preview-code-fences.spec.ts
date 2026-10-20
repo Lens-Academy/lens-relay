@@ -7,7 +7,7 @@ import type { EditorView } from '@codemirror/view';
 // on it, or ArrowDown onto it, threw "Cannot read properties of undefined
 // (reading 'top')". Every character of a hidden closing fence had the same x,
 // and a click on its row put the cursor between the backticks, where typing
-// breaks the fence (HiddenFenceWidget in
+// breaks the fence (HiddenSyntaxWidget in
 // src/components/Editor/extensions/livePreview.ts).
 
 type FixtureWindow = Window & { view: EditorView };
