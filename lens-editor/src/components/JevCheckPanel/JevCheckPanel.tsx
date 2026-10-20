@@ -1,12 +1,13 @@
 // Check workbench, shown above a Lens Edu/Checks/*.md file. Read top-down:
-//   the check's words (Field.tsx) are written back into the file's frontmatter (checkFile.ts);
+//   the check's words (Field.tsx) are edited as a `draft:` block in the file's frontmatter
+//   (checkFile.ts, lib/jev-check.ts); Save makes the draft live, Discard drops it;
 //   the run bar picks a sample (useCorpus.ts, InputPicker.tsx) and asks jev via /api/jev/ask (server/jev-dev.ts);
-//   results (Results.tsx) compare each run with the one before it.
+//   results (Results.tsx) compare the draft with the live check, or a run with the one before it.
 import { useMemo, useState } from 'react';
 import type * as Y from 'yjs';
-import { parseCheck, parsePercentiles, type Band, type JevCheck } from '../../lib/jev-check';
+import { discardDraft, parseCheckFile, parsePercentiles, saveDraft, setDraftField, type Band, type JevCheck } from '../../lib/jev-check';
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
-import { useLiveText, writeFields } from './checkFile';
+import { useLiveText, writeText } from './checkFile';
 import { useCorpus } from './useCorpus';
 import { Field, Small, keyHint } from './Field';
 import { InputPicker } from './InputPicker';
@@ -31,7 +32,7 @@ async function ask(check: JevCheck, sample: Para[]): Promise<Run> {
 
 export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const text = useLiveText(ytext);
-  const parsed = useMemo(() => attempt(() => parseCheck(text)), [text]);
+  const parsed = useMemo(() => attempt(() => parseCheckFile(text)), [text]);
   const [err, setErr] = useState<string | null>(null);
   const corpus = useCorpus(setErr);
   const [n, setN] = useState(200);
@@ -39,23 +40,27 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const pcts = useMemo(() => attempt(() => parsePercentiles(pctSpec)), [pctSpec]);
   const [cmap, setCmap] = useState<ColormapName>('inferno');
   const [running, setRunning] = useState(false);
-  const [runs, setRuns] = useState<Run[]>([]);
+  // The newest run, the run to compare it with, and what that comparison is called.
+  const [result, setResult] = useState<{ run: Run; base?: { label: string; run: Run } } | null>(null);
   const [band, setBand] = useState<Band | null>(null);
 
-  const c = parsed.ok;
+  const live = parsed.ok?.live;
+  const draft = parsed.ok?.draft ?? null;
+  const c = draft ?? live;  // what the fields show and Run tests
   const pool = corpus.pool;
   async function run() {
-    if (!c || !pool) return;
+    if (!c || !live || !pool) return;
     setRunning(true); setErr(null);
     try {
-      const r = await ask(c, pool.slice(0, n));
-      setRuns((rs) => [r, ...rs].slice(0, 2));
+      const sample = pool.slice(0, n);
+      const [r, l] = await Promise.all([ask(c, sample), draft ? ask(live, sample) : null]);
+      setResult((old) => ({ run: r, base: l ? { label: 'live', run: l } : old ? { label: 'was', run: old.run } : undefined }));
     } catch (e: any) { setErr(e.message); } finally { setRunning(false); }
   }
 
-  const set = (path: string[]) => (v: string) => writeFields(ytext, [{ path, value: v }]);
-  const setNum = (path: string[]) => (v: string) => { const x = Number(v); if (Number.isFinite(x)) writeFields(ytext, [{ path, value: x }]); };
-  const [latest, prev] = runs;
+  const set = (path: string[]) => (v: string) => writeText(ytext, (t) => setDraftField(t, path, v));
+  const setNum = (path: string[]) => (v: string) => { const x = Number(v); if (Number.isFinite(x)) writeText(ytext, (t) => setDraftField(t, path, x)); };
+  const latest = result?.run;
   const stale = latest && c && JSON.stringify(latest.check) !== JSON.stringify(c);
   const color = COLORMAPS[cmap];
 
@@ -67,15 +72,17 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
         {!c && <span className="text-red-700">{parsed.error}</span>}
       </header>
 
-      {c && (
+      {c && live && (
         <div className="space-y-3 px-4 py-3">
-          <Field label="Question" value={c.question} onCommit={set(['question'])} hint={keyHint(c.question)} />
-          <Field label="Yes means" value={c.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} />
-          <Field label="No means" value={c.criteria?.false ?? ''} onCommit={set(['criteria', 'false'])} />
+          {draft ? <DraftBar onSave={() => writeText(ytext, saveDraft)} onDiscard={() => writeText(ytext, discardDraft)} />
+            : <div className="text-[12px] text-gray-400">Edits here make a draft beside the live check; the live check changes only when you Save.</div>}
+          <Field label="Question" value={c.question} live={live.question} onCommit={set(['question'])} hint={keyHint(c.question)} />
+          <Field label="Yes means" value={c.criteria?.true ?? ''} live={live.criteria?.true ?? ''} onCommit={set(['criteria', 'true'])} />
+          <Field label="No means" value={c.criteria?.false ?? ''} live={live.criteria?.false ?? ''} onCommit={set(['criteria', 'false'])} />
           <div className="flex flex-wrap items-end gap-4 text-[13px] text-gray-600">
-            <Small label="model" value={c.model} onCommit={set(['model'])} width="w-28" />
-            <Small label="fail at" value={String(c.fail_at)} onCommit={setNum(['fail_at'])} width="w-14" />
-            <Small label="pass below" value={String(c.pass_below)} onCommit={setNum(['pass_below'])} width="w-14" />
+            <Small label="model" value={c.model} live={live.model} onCommit={set(['model'])} width="w-28" />
+            <Small label="fail at" value={String(c.fail_at)} live={String(live.fail_at)} onCommit={setNum(['fail_at'])} width="w-14" />
+            <Small label="pass below" value={String(c.pass_below)} live={String(live.pass_below)} onCommit={setNum(['pass_below'])} width="w-14" />
           </div>
         </div>
       )}
@@ -101,7 +108,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       {latest && (
         <div className="px-4 pb-4 pt-3">
           {stale && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-amber-800">The check changed since this run. Run again to see the new phrasing.</div>}
-          <Summary run={latest} prev={prev} band={band} onBand={(b) => setBand(band === b ? null : b)} />
+          <Summary run={latest} base={result?.base} band={band} onBand={(b) => setBand(band === b ? null : b)} />
           <Histogram run={latest} color={color} />
           {band
             ? <BandList run={latest} band={band} color={color} onClear={() => setBand(null)} />
@@ -109,5 +116,15 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
         </div>
       )}
     </section>
+  );
+}
+
+function DraftBar({ onSave, onDiscard }: { onSave: () => void; onDiscard: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 px-3 py-2 text-[13px] text-amber-900">
+      <span className="flex-1">This file has a draft. Run tests it beside the live check; nothing else uses it until you Save.</span>
+      <button onClick={onDiscard} className="rounded border border-amber-300 px-3 py-1 hover:bg-amber-100">Discard draft</button>
+      <button onClick={onSave} className="rounded bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800">Save as live</button>
+    </div>
   );
 }

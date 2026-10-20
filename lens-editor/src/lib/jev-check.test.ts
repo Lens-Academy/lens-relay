@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { auroc, bandOf, bandRule, isCheckPath, parseCheck, parsePercentiles, percentileRows, histogram, setCheckFields, shares } from './jev-check';
+import { auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares } from './jev-check';
 
 const T1 = `---
 id: T1
@@ -98,5 +98,43 @@ describe('bands', () => {
   it('states each rule and counts shares', () => {
     expect(bandRule(c, 'unsure')).toBe('0.5 ≤ p < 0.8');
     expect(shares(c, [0.9, 0.6, 0.1, 0.2])).toEqual({ fail: 0.25, unsure: 0.25, pass: 0.5 });
+  });
+});
+
+describe('drafts', () => {
+  it('has no draft until a field differs from the live one', () => {
+    expect(parseCheckFile(T1).draft).toBeNull();
+    expect(setDraftField(T1, ['question'], parseCheck(T1).question)).toBe(T1);
+  });
+  it('keeps only the changed fields in the draft and overlays them on the live check', () => {
+    const t = setDraftField(T1, ['criteria', 'true'], 'Yes it does.');
+    const { live, draft } = parseCheckFile(t);
+    expect(live.criteria?.true).toBe('It uses one.');
+    expect(draft?.criteria).toEqual({ true: 'Yes it does.', false: 'It does not.' });
+    expect(draft?.question).toBe(live.question);
+    expect(t.endsWith('\nnotes')).toBe(true);
+  });
+  it('drops the draft when it is edited back to the live text', () => {
+    const t = setDraftField(T1, ['question'], 'New?');
+    expect(parseCheckFile(setDraftField(t, ['question'], parseCheck(T1).question)).draft).toBeNull();
+  });
+  it('save makes the draft live; discard removes it', () => {
+    const t = setDraftField(setDraftField(T1, ['question'], 'New?'), ['fail_at'], 0.9);
+    const saved = parseCheckFile(saveDraft(t));
+    expect([saved.live.question, saved.live.fail_at, saved.draft]).toEqual(['New?', 0.9, null]);
+    expect(discardDraft(t)).toBe(T1);
+  });
+  it('refuses a draft key the check does not have', () => {
+    expect(() => parseCheckFile(T1.replace('---\nnotes', 'draft:\n  questoin: x\n---\nnotes'))).toThrow(/questoin/);
+  });
+});
+
+describe('frontmatter edits', () => {
+  it('never re-wraps long lines', () => {
+    const long = 'word '.repeat(40).trim();
+    const t = T1.replace('It does not.', long);
+    const out = setDraftField(t, ['question'], 'Q?');
+    expect(out.split('\n').length - t.split('\n').length).toBe(2);
+    expect(out).toContain(long);
   });
 });

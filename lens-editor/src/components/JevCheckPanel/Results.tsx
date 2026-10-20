@@ -7,10 +7,11 @@ const BINS = 20;
 const TONE: Record<Band, string> = { fail: 'text-gray-900', unsure: 'text-gray-600', pass: 'text-gray-400' };
 const pct = (x: number) => `${Math.round(100 * x)}%`;
 
-/** fail / unsure / pass as cards: share now, the previous run's share, the rule. Click to list that band. */
-export function Summary({ run, prev, band, onBand }: { run: Run; prev?: Run; band: Band | null; onBand: (b: Band) => void }) {
+/** fail / unsure / pass as cards: this run's share, the rule, and the share in `base` (the live check
+ *  when a draft ran, else the previous run). Click a card to list that band. */
+export function Summary({ run, base, band, onBand }: { run: Run; base?: { label: string; run: Run }; band: Band | null; onBand: (b: Band) => void }) {
   const now = shares(run.check, run.scored.map((s) => s.p));
-  const before = prev && prev.scored.length === run.scored.length ? shares(prev.check, prev.scored.map((s) => s.p)) : null;
+  const before = base && base.run.scored.length === run.scored.length ? shares(base.run.check, base.run.scored.map((s) => s.p)) : null;
   return (
     <div>
       <div className="flex flex-wrap gap-2">
@@ -20,7 +21,7 @@ export function Summary({ run, prev, band, onBand }: { run: Run; prev?: Run; ban
             <div className="whitespace-nowrap text-[11px] uppercase tracking-wide text-gray-500">{b}</div>
             <div className="whitespace-nowrap font-mono text-[10px] text-gray-400">{bandRule(run.check, b)}</div>
             <div className={`text-lg font-semibold tabular-nums ${TONE[b]}`}>{pct(now[b])}</div>
-            {before && <div className="text-[11px] tabular-nums text-gray-400">was {pct(before[b])}</div>}
+            {before && <div className="text-[11px] tabular-nums text-gray-400">{base!.label} {pct(before[b])}</div>}
           </button>
         ))}
       </div>

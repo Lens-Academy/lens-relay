@@ -87,12 +87,7 @@ export function auroc(bad: number[], good: number[]): number | null {
 /** Set fields in a check file's frontmatter, keeping the body and the YAML's other
  *  keys and comments. `path` is a key or a nested key path such as ['criteria', 'true']. */
 export function setCheckFields(text: string, edits: { path: string[]; value: string | number }[]): string {
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!m) throw new Error('no frontmatter');
-  const doc = parseDocument(m[1]);
-  for (const { path, value } of edits) doc.setIn(path, value);
-  const yaml = doc.toString().replace(/\n$/, '');
-  return `---\n${yaml}\n---` + text.slice(m[0].length);
+  return editFrontmatter(text, (doc) => { for (const { path, value } of edits) doc.setIn(path, value); });
 }
 
 export type Band = 'fail' | 'unsure' | 'pass';
@@ -111,4 +106,61 @@ export function shares(check: JevCheck, ps: number[]): Record<Band, number> {
   const out = { fail: 0, unsure: 0, pass: 0 };
   for (const p of ps) out[bandOf(check, p)] += 1 / ps.length;
   return out;
+}
+
+// Drafts. A check file may carry a `draft:` block in its frontmatter holding only the fields
+// being tried; the draft check is the live one with those fields overlaid. The block lives in
+// the file, so it survives a closed tab and reaches git like every other edit.
+const DRAFTABLE = ['question', 'criteria', 'model', 'fail_at', 'pass_below'];
+
+/** Edit the frontmatter as a YAML document; `f` returning false means no change, and the text comes back untouched. */
+function editFrontmatter(text: string, f: (doc: ReturnType<typeof parseDocument>) => boolean | void): string {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) throw new Error('no frontmatter');
+  const doc = parseDocument(m[1]);
+  if (f(doc) === false) return text;
+  return `---\n${doc.toString({ lineWidth: 0 }).replace(/\n$/, '')}\n---` + text.slice(m[0].length);
+}
+
+export function parseCheckFile(text: string): { live: JevCheck; draft: JevCheck | null } {
+  const live = parseCheck(text);
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)!;
+  const fm = (parseYaml(m[1]) ?? {}) as Record<string, unknown>;
+  const d = fm.draft as Record<string, unknown> | undefined;
+  if (!d) return { live, draft: null };
+  const bad = Object.keys(d).filter((k) => !DRAFTABLE.includes(k));
+  if (bad.length) throw new Error(`draft has fields a check does not: ${bad.join(', ')}`);
+  const merged: Record<string, unknown> = { ...fm, ...d, criteria: d.criteria ? { ...(fm.criteria as object), ...(d.criteria as object) } : fm.criteria };
+  delete merged.draft;
+  const head = Object.entries(merged).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
+  return { live, draft: parseCheck(`---\n${head}\n---\n`) };
+}
+
+/** Set one draft field; a field equal to the live one leaves the draft, and an empty draft goes. */
+export function setDraftField(text: string, path: string[], value: string | number): string {
+  return editFrontmatter(text, (doc) => {
+    const dpath = ['draft', ...path];
+    if (doc.getIn(path) !== value) doc.setIn(dpath, value);
+    else if (doc.hasIn(dpath)) doc.deleteIn(dpath);
+    else return false;
+    for (let i = dpath.length - 1; i > 0; i--) {
+      const node = doc.getIn(dpath.slice(0, i)) as { items?: unknown[] } | undefined;
+      if (node && node.items?.length === 0) doc.deleteIn(dpath.slice(0, i));
+    }
+  });
+}
+
+export function saveDraft(text: string): string {
+  return editFrontmatter(text, (doc) => {
+    const d = (doc.toJS().draft ?? {}) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(d)) {
+      if (k === 'criteria') for (const [ck, cv] of Object.entries(v as object)) doc.setIn(['criteria', ck], cv);
+      else doc.setIn([k], v);
+    }
+    doc.deleteIn(['draft']);
+  });
+}
+
+export function discardDraft(text: string): string {
+  return editFrontmatter(text, (doc) => doc.deleteIn(['draft']));
 }

@@ -1,7 +1,6 @@
-// The check file's live text, and writing frontmatter fields back into it.
+// The check file's live text, and writing changes back into it.
 import { useEffect, useState } from 'react';
 import type * as Y from 'yjs';
-import { setCheckFields } from '../../lib/jev-check';
 
 export function useLiveText(ytext: Y.Text) {
   const [text, setText] = useState(() => ytext.toString());
@@ -13,10 +12,10 @@ export function useLiveText(ytext: Y.Text) {
   return text;
 }
 
-/** Replace only the changed span, so collaborators' cursors in the body are untouched. */
-export function writeFields(ytext: Y.Text, edits: { path: string[]; value: string | number }[]) {
+/** Apply `change` to the file, replacing only the changed span so collaborators' cursors are untouched. */
+export function writeText(ytext: Y.Text, change: (text: string) => string) {
   const before = ytext.toString();
-  const after = setCheckFields(before, edits);
+  const after = change(before);
   if (after === before) return;
   let a = 0;
   while (a < before.length && before[a] === after[a]) a++;
