@@ -6,9 +6,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import { histogram, parseCheck, parsePercentiles, percentileRows, setCheckFields, type JevCheck } from '../../lib/jev-check';
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
+import { useNavigation } from '../../contexts/NavigationContext';
+import { urlForDoc } from '../../lib/url-utils';
+import { RELAY_ID } from '../../App';
 
-interface Para { id: string; page: string; course: string; text: string }
-interface CorpusMeta { title: string; taken: string; source: string; sampling: string; courses: Record<string, { paragraphs: number; pages: number }> }
+interface Para { id: string; path: string; line: number; kind: string; title: string | null; courses: string[]; text: string }
+interface CourseInfo { title: string; live: boolean; paragraphs: number; files: number }
+interface CorpusMeta { title: string; taken: string; commit: string; source: string; kinds: Record<string, number>; courses: Record<string, CourseInfo> }
 
 // The keys of the state jev is shown. Backticked names in a question refer to these keys.
 const STATE_KEYS = ['paragraph'];
@@ -110,6 +114,8 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const [corpus, setCorpus] = useState<Para[] | null>(null);
   const [meta, setMeta] = useState<CorpusMeta | null>(null);
   const [cmap, setCmap] = useState<ColormapName>('inferno');
+  const [courseSel, setCourseSel] = useState<Set<string> | null>(null);
+  const [kindSel, setKindSel] = useState<Set<string> | null>(null);
   const [n, setN] = useState(200);
   const [pctSpec, setPctSpec] = useState(DEFAULT_PCTS);
   const [running, setRunning] = useState(false);
@@ -121,15 +127,21 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     fetch('/api/jev/corpus').then((r) => r.json()).then((d: { meta: CorpusMeta; rows: Para[] }) => {
       setMeta(d.meta);
       setCorpus([...d.rows].sort((a, b) => fnv(a.id) - fnv(b.id)));
+      setCourseSel(new Set(Object.entries(d.meta.courses).filter(([, c]) => c.live).map(([k]) => k)));
+      setKindSel(new Set(Object.keys(d.meta.kinds)));
     }).catch((e) => setErr(`corpus: ${e.message}`));
   }, []);
 
   const pcts = useMemo(() => { try { return { ps: parsePercentiles(pctSpec) }; } catch (e: any) { return { error: e.message as string }; } }, [pctSpec]);
 
+  const pool = useMemo(() => (corpus && courseSel && kindSel)
+    ? corpus.filter((p) => kindSel.has(p.kind) && p.courses.some((c) => courseSel.has(c)))
+    : null, [corpus, courseSel, kindSel]);
+
   async function run() {
-    if (!parsed.check || !corpus) return;
+    if (!parsed.check || !pool) return;
     const check = parsed.check;
-    const sample = corpus.slice(0, n);
+    const sample = pool.slice(0, n);
     setRunning(true); setErr(null);
     try {
       const res = await fetch('/api/jev/ask', {
@@ -168,17 +180,20 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
         </div>
       )}
       <div className="flex flex-wrap items-end gap-4 border-t border-gray-100 bg-gray-50/60 px-4 py-2.5 text-[13px] text-gray-600">
-        <label>sample <input type="number" min={1} max={corpus?.length ?? 1000} value={n}
+        <label>sample <input type="number" min={1} max={pool?.length ?? 1000} value={n}
           onChange={(e) => setN(Math.max(1, parseInt(e.target.value || '1', 10)))} className="ml-1 w-20 rounded border border-gray-200 px-1.5 py-0.5" />
-          {corpus && <span className="text-gray-400"> / {corpus.length}</span>}</label>
+          {pool && <span className="text-gray-400"> / {pool.length}</span>}</label>
         <label className="min-w-[240px] flex-1">percentiles
           <input value={pctSpec} onChange={(e) => setPctSpec(e.target.value)} title='a list like [0, 0.5, 1], or "9 even"'
             className={`ml-1 w-[calc(100%-5.5rem)] rounded border px-1.5 py-0.5 font-mono text-xs ${pcts.error ? 'border-red-400' : 'border-gray-200'}`} /></label>
-        <button onClick={run} disabled={running || !c || !corpus || !!pcts.error} title="Ctrl/Cmd+Enter"
+        <button onClick={run} disabled={running || !c || !pool?.length || !!pcts.error} title="Ctrl/Cmd+Enter"
           className="rounded-md bg-gray-900 px-4 py-1.5 font-medium text-white hover:bg-gray-700 disabled:opacity-40">{running ? 'Asking jev…' : 'Run'}</button>
         <label>colours <select value={cmap} onChange={(e) => setCmap(e.target.value as ColormapName)} className="ml-1 rounded border border-gray-200">
           {Object.keys(COLORMAPS).map((k) => <option key={k}>{k}</option>)}</select></label>
-        {meta && corpus && <CorpusInfo meta={meta} corpus={corpus} n={n} />}
+        {meta && courseSel && kindSel && pool && (
+          <InputPicker meta={meta} pool={pool} n={n} courseSel={courseSel} kindSel={kindSel}
+            onCourses={setCourseSel} onKinds={setKindSel} />
+        )}
       </div>
       {err && <div className="px-4 py-2 text-red-700">{err}</div>}
       {latest && (
@@ -229,17 +244,16 @@ function Summary({ run, prev, band, onBand }: { run: Run; prev?: Run; band: Band
   const before = prev && prev.scored.length === run.scored.length ? shares(prev) : null;
   const cell = (name: Band, tone: string) => (
     <button onClick={() => onBand(name)} title={band === name ? 'show percentiles again' : `list the ${name} paragraphs`}
-      className={`flex-1 rounded-md border px-3 py-2 text-left transition-colors ${band === name ? 'border-gray-500 bg-gray-50' : 'border-gray-100 hover:border-gray-300'}`}>
-      <div className="flex items-baseline justify-between text-[11px] uppercase tracking-wide text-gray-500">
-        {name}<span className="font-mono normal-case tracking-normal text-gray-300">{bandRule(run.check, name)}</span>
-      </div>
+      className={`min-w-[6.5rem] flex-1 rounded-md border px-2.5 py-2 text-left transition-colors ${band === name ? 'border-gray-500 bg-gray-50' : 'border-gray-100 hover:border-gray-300'}`}>
+      <div className="whitespace-nowrap text-[11px] uppercase tracking-wide text-gray-500">{name}</div>
+      <div className="whitespace-nowrap font-mono text-[10px] text-gray-400">{bandRule(run.check, name)}</div>
       <div className={`text-lg font-semibold tabular-nums ${tone}`}>{Math.round(100 * now[name])}%</div>
       {before && <div className="text-[11px] tabular-nums text-gray-400">was {Math.round(100 * before[name])}%</div>}
     </button>
   );
   return (
     <div>
-      <div className="flex gap-2">{cell('fail', 'text-gray-900')}{cell('unsure', 'text-gray-600')}{cell('pass', 'text-gray-400')}</div>
+      <div className="flex flex-wrap gap-2">{cell('fail', 'text-gray-900')}{cell('unsure', 'text-gray-600')}{cell('pass', 'text-gray-400')}</div>
       <div className="mt-1 text-[11px] text-gray-400">{run.scored.length} paragraphs, {run.cached} from cache</div>
     </div>
   );
@@ -257,7 +271,7 @@ function BandList({ run, band, color, onClear }: { run: Run; band: Band; color: 
         {items.map((item) => (
           <li key={item.id} className="grid grid-cols-[3.5rem_1fr] gap-3 py-2">
             <span className="self-start rounded px-1.5 py-0.5 text-center font-mono text-xs tabular-nums" style={{ background: color(item.p), color: item.p > 0.6 ? '#111' : '#fff' }}>{item.p.toFixed(2)}</span>
-            <ParaText text={item.text} page={item.page} />
+            <ParaText text={item.text} para={item} />
           </li>
         ))}
       </ol>
@@ -298,14 +312,22 @@ function Percentiles({ run, pcts, color }: { run: Run; pcts: number[]; color: (p
           <span className="self-start rounded px-1.5 py-0.5 text-center font-mono text-xs tabular-nums" style={{ background: color(item.p), color: item.p > 0.6 ? '#111' : '#fff' }}>
             {item.p.toFixed(2)}
           </span>
-          <ParaText text={item.text} page={item.page} />
+          <ParaText text={item.text} para={item} />
         </li>
       ))}
     </ol>
   );
 }
 
-function ParaText({ text, page }: { text: string; page: string }) {
+function SourceLink({ path, line, title }: { path: string; line: number; title: string | null }) {
+  const { metadata } = useNavigation();
+  const id = metadata?.['/' + path]?.id;
+  const label = `${title ? title + ' · ' : ''}${path.replace(/^Lens Edu\//, '')}:${line}`;
+  if (!id) return <span>{label}</span>;
+  return <a href={urlForDoc(`${RELAY_ID}-${id}`, metadata)} target="_blank" rel="noreferrer" className="hover:text-gray-700 hover:underline">{label}</a>;
+}
+
+function ParaText({ text, para }: { text: string; para: Para }) {
   const [open, setOpen] = useState(false);
   const long = text.length > 280;
   return (
@@ -313,30 +335,60 @@ function ParaText({ text, page }: { text: string; page: string }) {
       <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-gray-800 ${long ? 'cursor-pointer' : ''}`} onClick={() => long && setOpen(!open)}>
         {long && !open ? text.slice(0, 280) + '…' : text}
       </div>
-      <div className="mt-0.5 truncate text-[10px] text-gray-400">{page}</div>
+      <div className="mt-0.5 truncate text-[10px] text-gray-400"><span className="mr-1 rounded bg-gray-100 px-1">{para.kind}</span><SourceLink path={para.path} line={para.line} title={para.title} /></div>
     </div>
   );
 }
 
-/** What the sample is, so it can be understood without knowing how it was made. */
-function CorpusInfo({ meta, corpus, n }: { meta: CorpusMeta; corpus: Para[]; n: number }) {
+function toggled(set: Set<string>, k: string) {
+  const out = new Set(set);
+  if (out.has(k)) out.delete(k); else out.add(k);
+  return out;
+}
+
+/** Which text goes into a run: courses and kinds of text, chosen here; the first N of the
+ *  chosen paragraphs, in one fixed shuffled order, are the sample. */
+function InputPicker({ meta, pool, n, courseSel, kindSel, onCourses, onKinds }: {
+  meta: CorpusMeta; pool: Para[]; n: number; courseSel: Set<string>; kindSel: Set<string>;
+  onCourses: (s: Set<string>) => void; onKinds: (s: Set<string>) => void;
+}) {
+  const [all, setAll] = useState(false);
+  const courses = Object.entries(meta.courses).filter(([k, c]) => c.paragraphs && (all || c.live || courseSel.has(k)))
+    .sort(([, a], [, b]) => Number(b.live) - Number(a.live) || b.paragraphs - a.paragraphs);
   const inSample: Record<string, number> = {};
-  for (const p of corpus.slice(0, n)) inSample[p.course] = (inSample[p.course] ?? 0) + 1;
+  for (const p of pool.slice(0, n)) for (const c of p.courses) if (courseSel.has(c)) inSample[c] = (inSample[c] ?? 0) + 1;
+  const box = 'mr-1 align-middle';
   return (
-    <details className="w-full text-[12px] text-gray-600">
-      <summary className="cursor-pointer text-gray-500">
-        {Math.min(n, corpus.length)} of {corpus.length} paragraphs from a {meta.taken} snapshot of {Object.keys(meta.courses).length} live courses: what is this?
-      </summary>
-      <div className="mt-2 space-y-1.5 leading-relaxed">
-        <p>{meta.source} {meta.sampling}</p>
-        <p>The paragraphs are in one fixed shuffled order, so the first N are the same on every run, and a larger N only adds paragraphs.</p>
-        <table className="text-[12px]"><tbody>
-          {Object.entries(meta.courses).map(([course, c]) => (
-            <tr key={course}><td className="pr-4">{course}</td><td className="pr-4 tabular-nums">{inSample[course] ?? 0} in this sample</td>
-              <td className="tabular-nums text-gray-400">{c.paragraphs} paragraphs from {c.pages} pages</td></tr>
-          ))}
-        </tbody></table>
+    <div className="w-full space-y-2 text-[12px] text-gray-600">
+      <div>
+        <span className="mr-2 text-gray-500">courses</span>
+        {courses.map(([k, c]) => (
+          <label key={k} className="mr-3 inline-block whitespace-nowrap" title={`${c.paragraphs} paragraphs in ${c.files} files${c.live ? '; has a running cohort' : ''}`}>
+            <input type="checkbox" className={box} checked={courseSel.has(k)} onChange={() => onCourses(toggled(courseSel, k))} />
+            {c.title}{c.live && <span className="text-emerald-600"> ●</span>}
+            <span className="text-gray-400"> {courseSel.has(k) ? `${inSample[k] ?? 0}/` : ''}{c.paragraphs}</span>
+          </label>
+        ))}
+        <button onClick={() => setAll(!all)} className="text-gray-400 underline-offset-2 hover:underline">{all ? 'fewer' : `all ${Object.keys(meta.courses).length}`}</button>
       </div>
-    </details>
+      <div>
+        <span className="mr-2 text-gray-500">text</span>
+        {Object.entries(meta.kinds).map(([k, count]) => (
+          <label key={k} className="mr-3 inline-block whitespace-nowrap">
+            <input type="checkbox" className={box} checked={kindSel.has(k)} onChange={() => onKinds(toggled(kindSel, k))} />
+            {k}<span className="text-gray-400"> {count}</span>
+          </label>
+        ))}
+      </div>
+      <details>
+        <summary className="cursor-pointer text-gray-500">where this text comes from</summary>
+        <p className="mt-1 leading-relaxed">{meta.source} Built {meta.taken}. ● marks a course with a running cohort. The
+          numbers after a course are paragraphs in this sample / in the course. Paragraphs are in one fixed shuffled order,
+          so the first N are the same on every run and a larger N only adds paragraphs.</p>
+        <p className="mt-1 font-mono text-[11px] leading-relaxed text-gray-500">
+          staging course → its pages (staging API) → each file at lens-edu-staging {meta.commit} → the live check's
+          paragraph splitter → sample → /api/jev/ask (answers cached on disk) → jev → score per paragraph</p>
+      </details>
+    </div>
   );
 }
