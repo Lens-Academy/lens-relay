@@ -19,6 +19,7 @@ import {
 } from '@codemirror/view';
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
 import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection, rejectsOnWordDeletion } from './criticmarkup-commands';
+import { hiddenSyntaxCopy } from './criticmarkup-copy';
 import { hiddenSyntaxCursor } from './criticmarkup-cursor';
 import { hiddenSyntaxDeletion } from './criticmarkup-delete';
 import { parse, parseThreads, isAdjacentEditPair, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
@@ -645,8 +646,8 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
   },
   {
     decorations: (v) => v.decorations,
-    // The cursor steps over the syntax this hides, and deleting leaves it
-    // whole (not in source mode, which swaps this plugin out)
+    // The cursor steps over the syntax this hides, and deleting and copying
+    // leave it whole (not in source mode, which swaps this plugin out)
     provide: () => [
       hiddenSyntaxCursor((state) => state.field(criticMarkupField)),
       hiddenSyntaxDeletion({
@@ -655,6 +656,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         inOwnAddition: (state) => cursorInOwnAddition(state),
         rejectsOnWordDeletion: (view) => rejectsOnWordDeletion(view),
       }),
+      hiddenSyntaxCopy((state) => state.field(criticMarkupField)),
     ],
   }
 );

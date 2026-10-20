@@ -22,6 +22,8 @@ import {
 import { forgetCopied } from '../../../lib/carried-authorship';
 import { keepAuthorship, copiedAuthoredText } from './keepAuthorship';
 import { rememberCopied } from '../../../lib/carried-authorship';
+import { criticMarkupExtension } from './criticmarkup';
+import { copyEvent, dragStartEvent } from '../../../test/codemirror-helpers';
 
 const LUC_DAY = new Date('2026-09-01T10:00:00').getTime();
 const AI_DAY = new Date('2026-09-02T10:00:00').getTime();
@@ -276,6 +278,71 @@ describe('keepAuthorship', () => {
         .filter((r) => r.from < inserted.length)
         .map((r) => `${actors.get(r.client)}: ${text.slice(r.from, Math.min(r.to, inserted.length))}`);
       expect(pieces).toEqual([`human:Ann: ${markup}`, 'ai:fable-5:Luc: AI line two', 'human:Ann: ++}']);
+    });
+  });
+
+  describe('copying or dragging part of a suggestion (live preview)', () => {
+    const META = '{"author":"ai:fable-5:Luc","timestamp":1000}';
+
+    /** "Luc line {++…@@AI words++} end": Luc's line, with a suggestion by his AI */
+    function suggestionSetup() {
+      const ydoc = new Y.Doc();
+      const ytext = ydoc.getText('contents');
+      ydoc.clientID = 1001;
+      ytext.insert(0, 'Luc line  end');
+      ydoc.clientID = 1002;
+      ytext.insert('Luc line '.length, `{++${META}@@AI words++}`);
+      registerClientMapping(ydoc, 'human:Luc', LUC_DAY, 1001);
+      registerClientMapping(ydoc, 'ai:fable-5:Luc', AI_DAY, 1002);
+      ydoc.clientID = 2000;
+      registerClientMapping(ydoc, 'human:Ann', Date.now(), 2000);
+      const view = new EditorView({
+        state: EditorState.create({
+          doc: ytext.toString(),
+          extensions: [keepAuthorship(ydoc, ytext), yCollab(ytext, null, { undoManager: false }), criticMarkupExtension()],
+        }),
+        parent: document.body,
+      });
+      // "Luc [line AI wo]rds end"
+      view.dispatch({ selection: { anchor: 'Luc '.length, head: ytext.toString().indexOf('AI words') + 'AI wo'.length } });
+      return { ydoc, ytext, view };
+    }
+
+    /** Who wrote the last `length` characters of the doc, as "author: text" per run */
+    function endAuthors(ydoc: Y.Doc, ytext: Y.Text, length: number): string[] {
+      const actors = getClientActorMap(ydoc);
+      const text = ytext.toString();
+      const from = text.length - length;
+      return getAuthorshipRuns(ytext)
+        .filter((r) => r.to > from)
+        .map((r) => `${actors.get(r.client) ?? 'unknown'}: ${text.slice(Math.max(r.from, from), r.to)}`);
+    }
+
+    it('a copy takes the text shown, and its paste keeps the authors', () => {
+      const { ydoc, ytext, view } = suggestionSetup();
+      const { text } = copyEvent(view);
+      expect(text).toBe('line AI wo');
+      view.dispatch({ changes: { from: view.state.doc.length, insert: text }, userEvent: 'input.paste' });
+      expect(endAuthors(ydoc, ytext, text.length)).toEqual(['human:Luc: line ', 'ai:fable-5:Luc: AI wo']);
+    });
+
+    it('a drag that moves it keeps the authors of the text it carries', () => {
+      const { ydoc, ytext, view } = suggestionSetup();
+      const { from, to } = view.state.selection.main;
+      const text = dragStartEvent(view);
+      // CodeMirror's drop of a drag from the same editor
+      view.dispatch({ changes: [{ from, to }, { from: view.state.doc.length, insert: text }], userEvent: 'move.drop' });
+      expect(ytext.toString()).toBe(`Luc {++${META}@@rds++} endline AI wo`);
+      expect(endAuthors(ydoc, ytext, text.length)).toEqual(['human:Luc: line ', 'ai:fable-5:Luc: AI wo']);
+    });
+
+    it('an ordinary drag still moves the text under the clientIDs it was written with', () => {
+      const { ytext, view } = setup(true);
+      view.dispatch({ changes: { from: 0, insert: 'Ann ' }, selection: { anchor: 0, head: 4 }, userEvent: 'input.type' });
+      const text = dragStartEvent(view);
+      view.dispatch({ changes: [{ from: 0, to: 4 }, { from: view.state.doc.length, insert: text }], userEvent: 'move.drop' });
+      expect(ytext.toString().endsWith('Luc line threeAnn ')).toBe(true);
+      expect(getAuthorshipRuns(ytext).at(-1)!.client).toBe(2000);
     });
   });
 });

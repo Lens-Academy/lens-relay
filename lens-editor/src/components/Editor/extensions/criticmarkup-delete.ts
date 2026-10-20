@@ -59,11 +59,11 @@ function without(spans: readonly HiddenSpan[], cut: readonly HiddenSpan[]): Hidd
 }
 
 /**
- * What of `deleted` (the document ranges an edit deletes) may go, so that no
- * suggestion or comment loses part of its hidden syntax. Of one that the
- * deletion covers only partly, the delimiters and metadata stay (a comment,
- * which shows as a badge, stays whole) and only its shown text goes. With
- * `removeEmptied`, a suggestion whose shown text all goes is removed whole.
+ * What of `deleted` (the document ranges an edit deletes, or a copy takes) may
+ * go, so that no suggestion or comment loses part of its hidden syntax. Of one
+ * that the deletion covers only partly, the delimiters and metadata stay (a
+ * comment, which shows as a badge, stays whole) and only its shown text goes.
+ * With `removeEmptied`, a suggestion whose shown text all goes is removed whole.
  */
 export function keepHiddenSyntax(
   deleted: readonly HiddenSpan[],

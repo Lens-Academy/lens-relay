@@ -44,6 +44,38 @@ export function createTestEditor(
 }
 
 /**
+ * Copy (Ctrl+C) with a real copy event, through CodeMirror's copy handler and
+ * those of the editor's extensions. Returns what went on the clipboard, and
+ * whether the editor handled the copy (if not, the browser copies the page's
+ * selection).
+ */
+export function copyEvent(view: EditorView): { text: string; handled: boolean } {
+  // CodeMirror copies only while the page's selection is in the editor. In
+  // happy-dom, focusing can read that back as the selection, losing all but
+  // the main range.
+  const { selection } = view.state;
+  view.focus();
+  if (!view.state.selection.eq(selection)) view.dispatch({ selection });
+  const clipboardData = new DataTransfer();
+  const event = new ClipboardEvent('copy', { clipboardData, bubbles: true, cancelable: true });
+  view.contentDOM.dispatchEvent(event);
+  // happy-dom reports selection changes during later updates at once, which
+  // CodeMirror, focused, would read in the middle of them
+  view.contentDOM.blur();
+  return { text: clipboardData.getData('text/plain'), handled: event.defaultPrevented };
+}
+
+/** Start dragging the selection with a real dragstart event. Returns the text the drag carries. */
+export function dragStartEvent(view: EditorView): string {
+  const dataTransfer = new DataTransfer();
+  const event = new DragEvent('dragstart', { bubbles: true, cancelable: true });
+  // happy-dom leaves an initial dataTransfer off the event
+  Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
+  view.contentDOM.dispatchEvent(event);
+  return dataTransfer.getData('Text');
+}
+
+/**
  * Check if a CSS class exists in the editor's content DOM.
  */
 export function hasClass(view: EditorView, className: string): boolean {
