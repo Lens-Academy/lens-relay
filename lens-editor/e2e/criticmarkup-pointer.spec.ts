@@ -154,13 +154,19 @@ test.describe('Live preview: pointing at a line with a suggestion', () => {
     expect(missed).toEqual([]);
   });
 
-  test('with a suggestion\'s ✓ ✗ buttons showing, a click on the text after them puts the cursor under the pointer', async ({ page }) => {
-    // [line, a point in the suggestion's text, the target after the buttons]
+  test('with a suggestion\'s ✓ ✗ buttons showing, a click before or after them puts the cursor under the pointer', async ({ page }) => {
+    // [line, the cursor in the suggestion's text, the target]
     const cases: Array<[number, [string, number], [string, number]]> = [
       [2, ['inserted', 3], ['the middle', 2]],
+      [2, ['inserted', 3], ['Plain', 3]],
       [3, ['added', 2], ['middle of', 3]],
+      [3, ['added', 2], ['some added', 2]],
       [4, ['new words', 2], ['replaces', 3]],
       [4, ['old words', 2], [' text.', 3]],
+      [4, ['new words', 2], ['old words', 4]],
+      // A highlight with a comment: after the buttons comes the badge
+      [5, ['highlighted', 3], ['after it', 2]],
+      [5, ['highlighted', 3], ['text==', 2]],
       [7, ['phrase to', 2], ['a little', 3]],
     ];
     const missed: string[] = [];
