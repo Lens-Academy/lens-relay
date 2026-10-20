@@ -1037,12 +1037,60 @@ function placeAddition(
 }
 
 /**
+ * The innermost suggestion or comment that `from`-`to` lies strictly inside:
+ * an edit's range, or an insertion's position when they're equal.
+ */
+function innermostAround(
+  ranges: readonly CriticMarkupRange[],
+  from: number,
+  to: number,
+): CriticMarkupRange | undefined {
+  let inner: CriticMarkupRange | undefined;
+  for (const r of ranges) {
+    if (r.from < from && to < r.to && (!inner || r.from > inner.from)) inner = r;
+  }
+  return inner;
+}
+
+/** Where a substitution's `~>` starts */
+function arrowOf(sub: CriticMarkupRange): number {
+  return sub.contentFrom + (sub.oldContent?.length ?? 0);
+}
+
+/** Whether `from`-`to` is in a substitution's old text or in its new text, not across its `~>` */
+function inSubstitutionText(sub: CriticMarkupRange, from: number, to: number): boolean {
+  const arrow = arrowOf(sub);
+  return (from >= sub.contentFrom && to <= arrow) || (from >= arrow + 2 && to <= sub.contentTo);
+}
+
+/**
+ * Whether the character at `pos` is markup of a suggestion or comment: a
+ * delimiter, metadata, a substitution's `~>`, or any of a comment (shown as a
+ * badge). Taking it into a deletion breaks that suggestion.
+ */
+function isMarkupAt(ranges: readonly CriticMarkupRange[], pos: number): boolean {
+  return ranges.some((r) => {
+    if (pos < r.from || pos >= r.to) return false;
+    if (r.type === 'comment' || pos < r.contentFrom || pos >= r.contentTo) return true;
+    return r.type === 'substitution' && pos >= arrowOf(r) && pos < arrowOf(r) + 2;
+  });
+}
+
+/**
  * Transaction filter that wraps insertions in CriticMarkup when suggestion mode is ON.
  * Insertions are wrapped in {++metadata@@content++} format.
  *
  * Continuous typing optimization: If cursor is inside an existing addition by the same
  * author, let the edit through without wrapping to avoid per-character markup.
  * Inside another author's addition, see placeAddition.
+ *
+ * The text of another author's deletion is already suggested for deletion:
+ * Backspace or Delete there changes nothing but moves the cursor over it, and
+ * what you type there goes just before their deletion, as inside one of yours.
+ * A replacement inside a substitution is written as a deletion+addition pair,
+ * the same change in markup that can sit inside a substitution. Nesting the
+ * same kind of suggestion broke the outer one: the parsers (this one, the
+ * relay's and the review page's) end it at the first closing delimiter.
  */
 const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) => {
   // Only process document changes
@@ -1194,10 +1242,22 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
 
       if (deleted && !added) {
         const isForwardDelete = fromA >= cursorPos;
+        // What Backspace takes from before the block (Delete: after it): up to
+        // the document's edge, and never another suggestion's markup (the
+        // `--}` of a deletion just before this one), which that would break
+        const room = isForwardDelete ? tr.startState.doc.length - ownDeletion.to : ownDeletion.from;
+        let grabLen = 0;
+        while (grabLen < Math.min(toA - fromA, room)
+          && !isMarkupAt(ranges, isForwardDelete ? ownDeletion.to + grabLen : ownDeletion.from - 1 - grabLen)) {
+          grabLen++;
+        }
 
-        if (!isForwardDelete && ownDeletion.from > 0) {
+        if (grabLen === 0) {
+          // Nothing to take: the cursor goes to that edge of your deleted
+          // text, from where the next Backspace or Delete reaches past it
+          extCursorPos = isForwardDelete ? ownDeletion.contentTo : ownDeletion.contentFrom;
+        } else if (!isForwardDelete) {
           // Backspace: grab text from before the block and prepend to content
-          const grabLen = Math.min(toA - fromA, ownDeletion.from);
           const grabbed = tr.startState.doc.sliceString(
             ownDeletion.from - grabLen,
             ownDeletion.from
@@ -1209,12 +1269,8 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
             insert: grabbed,
           });
           extCursorPos = ownDeletion.contentFrom - grabLen;
-        } else if (isForwardDelete && ownDeletion.to < tr.startState.doc.length) {
+        } else {
           // Forward delete: grab text from after the block and append to content
-          const grabLen = Math.min(
-            toA - fromA,
-            tr.startState.doc.length - ownDeletion.to
-          );
           const grabbed = tr.startState.doc.sliceString(
             ownDeletion.to,
             ownDeletion.to + grabLen
@@ -1238,7 +1294,7 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
       }
     });
 
-    if (extChanges.length > 0) {
+    if (extChanges.length > 0 || extCursorPos !== undefined) {
       return {
         changes: extChanges,
         selection: extCursorPos !== undefined
@@ -1255,12 +1311,37 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
 
   const newChanges: ChangeSpec[] = [];
   let newCursorPos: number | undefined;
+  // Where the cursor goes if all the edit deletes is someone else's deleted text
+  let movedOver: number | undefined;
 
   tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
     const deleted = tr.startState.doc.sliceString(fromA, toA);
     const added = inserted.toString();
+    const around = innermostAround(ranges, fromA, toA);
 
-    if (deleted && added) {
+    if (
+      around?.type === 'deletion' &&
+      around.metadata?.author !== currentAuthor &&
+      (!deleted || (fromA >= around.contentFrom && toA <= around.contentTo))
+    ) {
+      // In someone else's deletion: what this deletes there is already
+      // suggested for deletion, and what it adds goes just before theirs
+      // (inside, accepting their deletion would drop it)
+      if (added) {
+        const placed = placeAddition(tr.startState, ranges, around.from, added, meta);
+        newChanges.push(placed.change);
+        newCursorPos = placed.cursor;
+      } else {
+        movedOver = cursorPos <= fromA ? toA : fromA;
+      }
+    } else if (deleted && added && around?.type === 'substitution' && inSubstitutionText(around, fromA, toA)) {
+      // Replacement in a substitution -> a deletion+addition pair there (a
+      // substitution would end the outer one at its own `~~}`), with the
+      // cursor in the new text, where further typing goes
+      const pair = `{--${meta}@@${deleted}--}{++${meta}@@${added}++}`;
+      newChanges.push({ from: fromA, to: toA, insert: pair });
+      newCursorPos = fromA + pair.length - 3;
+    } else if (deleted && added) {
       // Replacement -> substitution
       const replacement = `{~~${meta}@@${deleted}~>${added}~~}`;
       newChanges.push({
@@ -1333,7 +1414,11 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
     }
   });
 
-  if (newChanges.length === 0) return tr;
+  if (newChanges.length === 0) {
+    if (movedOver === undefined) return tr;
+    // Nothing to suggest: the cursor moves over their deleted text
+    return { selection: EditorSelection.cursor(movedOver), effects: tr.effects, scrollIntoView: tr.scrollIntoView };
+  }
 
   return {
     changes: newChanges,

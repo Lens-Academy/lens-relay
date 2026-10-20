@@ -61,6 +61,16 @@ describe('buildMarkdownReading', () => {
     expect(texts(doc)).toEqual(['An extra added line.']);
   });
 
+  it("reads replacements in someone else's substitution, and an addition before their deletion, as shown", () => {
+    // Suggestion mode writes Mark's replacements in Elias's substitution as
+    // deletion+addition pairs in it, and puts what he typed in Elias's deletion before it
+    const elias = '{"author":"Elias"}';
+    const mark = '{"author":"Mark"}';
+    const sub = `{~~${elias}@@O{--${mark}@@ld--}{++${mark}@@LD++}~>The n{--${mark}@@ew--}{++${mark}@@ext++} line~~}`;
+    const doc = `${sub} {++${mark}@@reads++}{--${elias}@@ was--} on.`;
+    expect(texts(doc)).toEqual(['The next line reads on.']);
+  });
+
   it('keeps abbreviations inside one sentence', () => {
     expect(texts('Dr. Smith said so, e.g. today. Then he left.')).toEqual([
       'Dr. Smith said so, e.g. today.',

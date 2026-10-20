@@ -623,13 +623,12 @@ describe('CriticMarkup Extension', () => {
       });
     });
 
-    describe("inside someone else's addition", () => {
-      // Mark edits in suggestion mode; the additions are Elias's
-      const elias = '{"author":"Elias","timestamp":1760000000000}';
-      const mark = '{"author":"Mark","timestamp":1770000000000}';
-      const theirs = `{++${elias}@@An added line++}`;
-      const textFrom = `{++${elias}@@`.length;
+    // Mark edits in suggestion mode inside suggestions of Elias's
+    const elias = '{"author":"Elias","timestamp":1760000000000}';
+    const mark = '{"author":"Mark","timestamp":1770000000000}';
 
+    /** Mark is the author, and his metadata is `mark` */
+    function editingAsMark() {
       beforeEach(() => {
         setCurrentAuthor('Mark');
         vi.spyOn(Date, 'now').mockReturnValue(1770000000000);
@@ -639,27 +638,45 @@ describe('CriticMarkup Extension', () => {
         setCurrentAuthor('anonymous');
         vi.restoreAllMocks();
       });
+    }
 
-      function suggesting(doc: string, anchor: number, head = anchor) {
-        const made = createCriticMarkupEditorWithSelection(doc, anchor, head);
-        cleanup = made.cleanup;
-        made.view.dispatch({ effects: toggleSuggestionMode.of(true) });
-        return made.view;
-      }
+    function suggesting(doc: string, anchor: number, head = anchor) {
+      const made = createCriticMarkupEditorWithSelection(doc, anchor, head);
+      cleanup = made.cleanup;
+      made.view.dispatch({ effects: toggleSuggestionMode.of(true) });
+      return made.view;
+    }
 
-      /** What typing `text` dispatches: the selection replaced, the cursor after it */
-      function type(view: EditorView, text: string, userEvent = 'input.type') {
-        const { from, to } = view.state.selection.main;
-        view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent });
-      }
+    /** What typing `text` dispatches: the selection replaced, the cursor after it */
+    function type(view: EditorView, text: string, userEvent = 'input.type') {
+      const { from, to } = view.state.selection.main;
+      view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent });
+    }
 
-      function backspace(view: EditorView) {
-        const head = view.state.selection.main.head;
-        view.dispatch({ changes: { from: head - 1, to: head }, selection: { anchor: head - 1 }, userEvent: 'delete.backward' });
-      }
+    /** Backspace, or with `forward` Delete, at the cursor (deleteCharBackward / deleteCharForward) */
+    function backspace(view: EditorView, forward = false) {
+      const head = view.state.selection.main.head;
+      const [from, to] = forward ? [head, head + 1] : [head - 1, head];
+      view.dispatch({
+        changes: { from, to },
+        selection: { anchor: from },
+        userEvent: forward ? 'delete.forward' : 'delete.backward',
+      });
+    }
 
-      const parts = (view: EditorView) =>
-        view.state.field(criticMarkupField).map((r) => [r.type, r.metadata?.author, r.content]);
+    const parts = (view: EditorView) =>
+      view.state.field(criticMarkupField).map((r) => [r.type, r.metadata?.author, r.content]);
+
+    /** Clicks the ✓ (or ✗) of the change starting at `from`, which the cursor must be in */
+    function press(view: EditorView, from: number, button: 'accept' | 'reject') {
+      const buttons = view.contentDOM.querySelector(`.cm-criticmarkup-buttons[data-range-from="${from}"]`);
+      (buttons!.querySelector(`.cm-criticmarkup-${button}`) as HTMLButtonElement).click();
+    }
+
+    describe("inside someone else's addition", () => {
+      editingAsMark();
+      const theirs = `{++${elias}@@An added line++}`;
+      const textFrom = `{++${elias}@@`.length;
 
       it('splits their addition around what you type: their part, yours, their part', () => {
         const view = suggesting(theirs, textFrom + 1);
@@ -819,6 +836,238 @@ describe('CriticMarkup Extension', () => {
         expect(view.state.doc.toString()).toBe(
           `{++${elias}@@An ++}{++${mark}@@Z++}{++${elias}@@{--${mark}@@added--} line++}`,
         );
+      });
+    });
+
+    describe("inside someone else's deletion", () => {
+      editingAsMark();
+      const theirs = `{--${elias}@@Deleted--}`;
+      const textFrom = `{--${elias}@@`.length;
+
+      it('moves the cursor over their deleted text on Backspace and Delete, changing nothing', () => {
+        const view = suggesting(theirs, textFrom + 3);
+        backspace(view);
+
+        expect(view.state.doc.toString()).toBe(theirs);
+        expect(view.state.selection.main.head).toBe(textFrom + 2);
+
+        backspace(view, true);
+        backspace(view, true);
+
+        expect(view.state.doc.toString()).toBe(theirs);
+        expect(view.state.selection.main.head).toBe(textFrom + 4);
+      });
+
+      it('moves to the start of a selection of their deleted text that you delete', () => {
+        const view = suggesting(theirs, textFrom + 1, textFrom + 5);
+        view.dispatch({ changes: { from: textFrom + 1, to: textFrom + 5 }, userEvent: 'delete.selection' });
+
+        expect(view.state.doc.toString()).toBe(theirs);
+        expect(view.state.selection.main.head).toBe(textFrom + 1);
+      });
+
+      it('suggests deleting just the text beyond their deletion when a deletion reaches past it', () => {
+        // A selection from their text into the next: the pieces left to delete
+        // when their closing delimiter is kept
+        const doc = `${theirs} and more`;
+        const view = suggesting(doc, textFrom + 3, theirs.length + 4);
+        view.dispatch({
+          changes: [{ from: textFrom + 3, to: textFrom + 7 }, { from: theirs.length, to: theirs.length + 4 }],
+          userEvent: 'delete.selection',
+        });
+
+        expect(view.state.doc.toString()).toBe(`${theirs}{--${mark}@@ and--} more`);
+      });
+
+      it('puts what you type in their deleted text just before their deletion', () => {
+        const view = suggesting(theirs, textFrom + 3);
+        type(view, 'Z');
+        type(view, 'Y');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@ZY++}${theirs}`);
+        expect(parts(view)).toEqual([
+          ['addition', 'Mark', 'ZY'],
+          ['deletion', 'Elias', 'Deleted'],
+        ]);
+        expect(view.state.selection.main.head).toBe(`{++${mark}@@ZY`.length);
+        expect(visibleText(view)).toBe('ZYDeleted');
+      });
+
+      it.each([
+        ['start', 0],
+        ['end', 'Deleted'.length],
+      ])('does the same at the %s of their deleted text', (_, offset) => {
+        const view = suggesting(`Text ${theirs}`, 'Text '.length + textFrom + offset);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`Text {++${mark}@@Z++}${theirs}`);
+      });
+
+      it('puts what you type over some of their deleted text before it, and leaves their text whole', () => {
+        const view = suggesting(theirs, textFrom + 1, textFrom + 5);
+        type(view, 'Q');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Q++}${theirs}`);
+      });
+
+      it('keeps what you typed when their deletion is accepted', () => {
+        const view = suggesting(theirs, textFrom + 3);
+        type(view, 'Z');
+        const theirsFrom = `{++${mark}@@Z++}`.length;
+        view.dispatch({ selection: { anchor: theirsFrom + textFrom + 3 } });
+        press(view, theirsFrom, 'accept');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++}`);
+      });
+
+      it('keeps their deletion+addition pair together when you type at the end of its deleted text', () => {
+        // Where ArrowRight first stops at the pair's boundary; at the next
+        // stop, the start of the new text, yours goes before the pair too
+        const pair = `{--${elias}@@old words--}{++${elias}@@new words++}`;
+        const view = suggesting(pair, pair.indexOf('--}'));
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++}${pair}`);
+        const [, deletion, addition] = view.state.field(criticMarkupField);
+        expect(isAdjacentEditPair(deletion, addition)).toBe(true);
+      });
+
+      it("splits someone else's addition that their deletion is in, where the deletion starts", () => {
+        const luc = '{"author":"Luc","timestamp":1750000000000}';
+        const nested = `{++${luc}@@An {--${elias}@@extra--} line++}`;
+        const view = suggesting(nested, nested.indexOf('extra') + 2);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(
+          `{++${luc}@@An ++}{++${mark}@@Z++}{++${luc}@@{--${elias}@@extra--} line++}`,
+        );
+      });
+
+      it('treats a deletion without metadata as someone else\'s', () => {
+        const view = suggesting('{--Deleted--}', 6);
+        backspace(view);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++}{--Deleted--}`);
+      });
+    });
+
+    describe("inside someone else's substitution", () => {
+      editingAsMark();
+      const theirs = `{~~${elias}@@old text~>new text~~}`;
+      const oldFrom = `{~~${elias}@@`.length;
+      const newFrom = theirs.indexOf('new text');
+      /** Theirs after Mark replaced "ew" in its new text with "Q" */
+      const replaced = `{~~${elias}@@old text~>n{--${mark}@@ew--}{++${mark}@@Q++} text~~}`;
+
+      it('writes what you type over some of their new text as a deletion+addition pair of yours in it', () => {
+        const view = suggesting(theirs, newFrom + 1, newFrom + 3);
+        type(view, 'Q');
+        type(view, 'R');
+
+        expect(view.state.doc.toString()).toBe(replaced.replace('@@Q', '@@QR'));
+        expect(parts(view)).toEqual([
+          ['substitution', 'Elias', `old text~>n{--${mark}@@ew--}{++${mark}@@QR++} text`],
+          ['deletion', 'Mark', 'ew'],
+          ['addition', 'Mark', 'QR'],
+        ]);
+        expect(visibleText(view)).toBe('old text~>newQR text');
+      });
+
+      it('does the same over some of their old text', () => {
+        const view = suggesting(theirs, oldFrom + 1, oldFrom + 3);
+        type(view, 'Q');
+
+        expect(view.state.doc.toString()).toBe(`{~~${elias}@@o{--${mark}@@ld--}{++${mark}@@Q++} text~>new text~~}`);
+        expect(parts(view)).toEqual([
+          ['substitution', 'Elias', `o{--${mark}@@ld--}{++${mark}@@Q++} text~>new text`],
+          ['deletion', 'Mark', 'ld'],
+          ['addition', 'Mark', 'Q'],
+        ]);
+      });
+
+      it("does the same in your own substitution's old text", () => {
+        const yours = `{~~${mark}@@old~>new~~}`;
+        const view = suggesting(yours, yours.indexOf('old') + 1, yours.indexOf('old') + 3);
+        type(view, 'Q');
+
+        expect(view.state.doc.toString()).toBe(`{~~${mark}@@o{--${mark}@@ld--}{++${mark}@@Q++}~>new~~}`);
+      });
+
+      it("gives your pair one ✓ ✗ of its own, acting on just it", () => {
+        let view = suggesting(replaced, replaced.indexOf('@@Q') + 3);
+        const pairFrom = replaced.indexOf('{--');
+        expect(view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons')).toHaveLength(2);
+        press(view, pairFrom, 'accept');
+        expect(view.state.doc.toString()).toBe(`{~~${elias}@@old text~>nQ text~~}`);
+        cleanup!();
+
+        view = suggesting(replaced, replaced.indexOf('@@Q') + 3);
+        press(view, pairFrom, 'reject');
+        expect(view.state.doc.toString()).toBe(theirs);
+      });
+
+      it('keeps your pair pending when theirs is accepted, and drops it when theirs is rejected', () => {
+        let view = suggesting(replaced, replaced.indexOf('@@Q') + 3);
+        press(view, 0, 'accept');
+        expect(view.state.doc.toString()).toBe(`n{--${mark}@@ew--}{++${mark}@@Q++} text`);
+        cleanup!();
+
+        view = suggesting(replaced, replaced.indexOf('@@Q') + 3);
+        press(view, 0, 'reject');
+        expect(view.state.doc.toString()).toBe('old text');
+      });
+    });
+
+    describe('in a deletion of yours beside other markup', () => {
+      editingAsMark();
+
+      it('still takes the character before it on Backspace, and after it on Delete', () => {
+        let view = suggesting(`Text {--${mark}@@more--}`, `Text {--${mark}@@more`.length);
+        backspace(view);
+        expect(view.state.doc.toString()).toBe(`Text{--${mark}@@ more--}`);
+        expect(view.state.selection.main.head).toBe(`Text{--${mark}@@`.length);
+        cleanup!();
+
+        view = suggesting(`{--${mark}@@more--} text`, `{--${mark}@@`.length);
+        backspace(view, true);
+        expect(view.state.doc.toString()).toBe(`{--${mark}@@more --}text`);
+        expect(view.state.selection.main.head).toBe(`{--${mark}@@more `.length);
+      });
+
+      it("leaves the markup of someone else's deletion just before it on Backspace", () => {
+        const doc = `{--${elias}@@Deleted--}{--${mark}@@ more--}`;
+        const view = suggesting(doc, doc.length - 3);
+        backspace(view);
+
+        expect(view.state.doc.toString()).toBe(doc);
+        expect(view.state.selection.main.head).toBe(doc.indexOf(' more'));
+      });
+
+      it("leaves the markup of someone else's deletion just after it on Delete", () => {
+        const doc = `{--${mark}@@Old --}{--${elias}@@Deleted--}`;
+        const view = suggesting(doc, doc.indexOf('Old'));
+        backspace(view, true);
+
+        expect(view.state.doc.toString()).toBe(doc);
+        expect(view.state.selection.main.head).toBe(doc.indexOf('Old ') + 4);
+      });
+
+      it("leaves the `~>` of a substitution it starts the new text of", () => {
+        const doc = `{~~${elias}@@old~>{--${mark}@@new--} text~~}`;
+        const view = suggesting(doc, doc.indexOf('new--}') + 3);
+        backspace(view);
+
+        expect(view.state.doc.toString()).toBe(doc);
+      });
+
+      it('never nests a deletion in it at the start of the document', () => {
+        const doc = `{--${mark}@@more--} text`;
+        const view = suggesting(doc, `{--${mark}@@mo`.length);
+        backspace(view);
+
+        expect(view.state.doc.toString()).toBe(doc);
+        expect(view.state.selection.main.head).toBe(`{--${mark}@@`.length);
       });
     });
   });
