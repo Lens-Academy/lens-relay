@@ -1,172 +1,72 @@
-// Check workbench: shown above a Lens Edu/Checks/*.md file. The words being tuned
-// (question, what yes means, what no means) are edited here and written back into the
-// file's frontmatter, so the file stays the only source. Run asks jev over a stable sample
-// of course paragraphs; each run is compared with the one before it.
-import { useEffect, useMemo, useRef, useState } from 'react';
+// Check workbench, shown above a Lens Edu/Checks/*.md file. Read top-down:
+//   the check's words (Field.tsx) are written back into the file's frontmatter (checkFile.ts);
+//   the run bar picks a sample (useCorpus.ts, InputPicker.tsx) and asks jev via /api/jev/ask (server/jev-dev.ts);
+//   results (Results.tsx) compare each run with the one before it.
+import { useMemo, useState } from 'react';
 import type * as Y from 'yjs';
-import { histogram, parseCheck, parsePercentiles, percentileRows, setCheckFields, type JevCheck } from '../../lib/jev-check';
+import { parseCheck, parsePercentiles, type Band, type JevCheck } from '../../lib/jev-check';
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
-import { useNavigation } from '../../contexts/NavigationContext';
-import { urlForDoc } from '../../lib/url-utils';
-import { RELAY_ID } from '../../App';
-
-interface Para { id: string; path: string; line: number; kind: string; title: string | null; courses: string[]; text: string }
-interface CourseInfo { title: string; live: boolean; paragraphs: number; files: number }
-interface CorpusMeta { title: string; taken: string; commit: string; source: string; kinds: Record<string, number>; courses: Record<string, CourseInfo> }
-
-// The keys of the state jev is shown. Backticked names in a question refer to these keys.
-const STATE_KEYS = ['paragraph'];
-interface Scored extends Para { p: number }
-interface Run { check: JevCheck; scored: Scored[]; cached: number }
+import { useLiveText, writeFields } from './checkFile';
+import { useCorpus } from './useCorpus';
+import { Field, Small, keyHint } from './Field';
+import { InputPicker } from './InputPicker';
+import { BandList, Histogram, Percentiles, Summary } from './Results';
+import type { Para, Run } from './types';
 
 const DEFAULT_PCTS = '[0, 0.01, 0.03, 0.1, 0.3, 0.5, 0.7, 0.9, 0.97, 0.99, 1]';
 
-// Stable, nested sample: order by a hash of the id, take the first N.
-function fnv(s: string) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193) >>> 0;
-  return h;
+function attempt<T>(f: () => T): { ok?: T; error?: string } {
+  try { return { ok: f() }; } catch (e: any) { return { error: e.message }; }
 }
 
-function useLiveText(ytext: Y.Text) {
-  const [text, setText] = useState(() => ytext.toString());
-  useEffect(() => {
-    const f = () => setText(ytext.toString());
-    ytext.observe(f);
-    return () => ytext.unobserve(f);
-  }, [ytext]);
-  return text;
-}
-
-function writeFields(ytext: Y.Text, edits: { path: string[]; value: string | number }[]) {
-  const before = ytext.toString();
-  const after = setCheckFields(before, edits);
-  if (after === before) return;
-  // Replace only the changed span, so collaborators' cursors in the body are untouched.
-  let a = 0;
-  while (a < before.length && before[a] === after[a]) a++;
-  let b = 0;
-  while (b < before.length - a && before[before.length - 1 - b] === after[after.length - 1 - b]) b++;
-  ytext.doc!.transact(() => {
-    ytext.delete(a, before.length - a - b);
-    ytext.insert(a, after.slice(a, after.length - b));
+async function ask(check: JevCheck, sample: Para[]): Promise<Run> {
+  const res = await fetch('/api/jev/ask', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: check.model, question: { instructions: check.question, criteria: check.criteria }, texts: sample.map((s) => s.text) }),
   });
-}
-
-/** Split text into plain runs and `backticked` names, marking names that are not state keys. */
-function keyRuns(text: string) {
-  return text.split(/(`[^`\n]*`)/).map((t) => {
-    const m = t.match(/^`([^`]*)`$/);
-    return m ? { t, key: true, known: STATE_KEYS.includes(m[1]) } : { t, key: false, known: false };
-  });
-}
-
-/** A field that edits locally and writes to the file when you pause or leave it. It grows
- *  with its text, and shows `backticked` names (jev reads them as keys of its input) as chips. */
-function Field({ label, value, onCommit, hint }: { label: string; value: string; onCommit: (v: string) => void; hint?: string }) {
-  const [draft, setDraft] = useState(value);
-  const focused = useRef(false);
-  const timer = useRef<number | undefined>(undefined);
-  useEffect(() => { if (!focused.current) setDraft(value); }, [value]);
-  const commit = (v: string) => { window.clearTimeout(timer.current); if (v !== value) onCommit(v); };
-  const box = 'col-start-1 row-start-1 whitespace-pre-wrap break-words px-3 py-2 text-[15px] leading-relaxed';
-  return (
-    <label className="block">
-      <span className="flex items-baseline justify-between text-[11px] font-medium uppercase tracking-wide text-gray-500">
-        {label}{hint && <span className="normal-case tracking-normal text-amber-700">{hint}</span>}
-      </span>
-      <div className="mt-1 grid rounded-md border border-gray-200 bg-white focus-within:border-gray-400">
-        <div aria-hidden className={`${box} text-transparent`}>
-          {keyRuns(draft).map((r, i) => r.key
-            ? <span key={i} className={`rounded ${r.known ? 'bg-sky-100 ring-1 ring-sky-300' : 'bg-red-100 ring-1 ring-red-300'}`}>{r.t}</span>
-            : <span key={i}>{r.t}</span>)}{' '}
-        </div>
-        <textarea
-          value={draft}
-          onFocus={() => { focused.current = true; }}
-          onBlur={() => { focused.current = false; commit(draft); }}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            window.clearTimeout(timer.current);
-            const v = e.target.value;
-            timer.current = window.setTimeout(() => commit(v), 800);
-          }}
-          className={`${box} resize-none overflow-hidden bg-transparent text-gray-900 focus:outline-none`}
-        />
-      </div>
-    </label>
-  );
-}
-
-/** What the question needs to say about the state, as a hint above the field. */
-function keyHint(text: string): string | undefined {
-  const runs = keyRuns(text).filter((r) => r.key);
-  if (!runs.some((r) => r.known)) return `jev only knows the text as \`${STATE_KEYS[0]}\`; name it in backticks`;
-  if (runs.some((r) => !r.known)) return `jev's input has only ${STATE_KEYS.map((k) => '`' + k + '`').join(', ')}`;
-  return undefined;
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error);
+  return { check, cached: data.cached, scored: sample.map((s, i) => ({ ...s, p: data.ps[i] })) };
 }
 
 export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const text = useLiveText(ytext);
-  const parsed = useMemo((): { check?: JevCheck; error?: string } => {
-    try { return { check: parseCheck(text) }; } catch (e: any) { return { error: e.message }; }
-  }, [text]);
-  const [corpus, setCorpus] = useState<Para[] | null>(null);
-  const [meta, setMeta] = useState<CorpusMeta | null>(null);
-  const [cmap, setCmap] = useState<ColormapName>('inferno');
-  const [courseSel, setCourseSel] = useState<Set<string> | null>(null);
-  const [kindSel, setKindSel] = useState<Set<string> | null>(null);
+  const parsed = useMemo(() => attempt(() => parseCheck(text)), [text]);
+  const [err, setErr] = useState<string | null>(null);
+  const corpus = useCorpus(setErr);
   const [n, setN] = useState(200);
   const [pctSpec, setPctSpec] = useState(DEFAULT_PCTS);
+  const pcts = useMemo(() => attempt(() => parsePercentiles(pctSpec)), [pctSpec]);
+  const [cmap, setCmap] = useState<ColormapName>('inferno');
   const [running, setRunning] = useState(false);
   const [runs, setRuns] = useState<Run[]>([]);
   const [band, setBand] = useState<Band | null>(null);
-  const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch('/api/jev/corpus').then((r) => r.json()).then((d: { meta: CorpusMeta; rows: Para[] }) => {
-      setMeta(d.meta);
-      setCorpus([...d.rows].sort((a, b) => fnv(a.id) - fnv(b.id)));
-      setCourseSel(new Set(Object.entries(d.meta.courses).filter(([, c]) => c.live).map(([k]) => k)));
-      setKindSel(new Set(Object.keys(d.meta.kinds)));
-    }).catch((e) => setErr(`corpus: ${e.message}`));
-  }, []);
-
-  const pcts = useMemo(() => { try { return { ps: parsePercentiles(pctSpec) }; } catch (e: any) { return { error: e.message as string }; } }, [pctSpec]);
-
-  const pool = useMemo(() => (corpus && courseSel && kindSel)
-    ? corpus.filter((p) => kindSel.has(p.kind) && p.courses.some((c) => courseSel.has(c)))
-    : null, [corpus, courseSel, kindSel]);
-
+  const c = parsed.ok;
+  const pool = corpus.pool;
   async function run() {
-    if (!parsed.check || !pool) return;
-    const check = parsed.check;
-    const sample = pool.slice(0, n);
+    if (!c || !pool) return;
     setRunning(true); setErr(null);
     try {
-      const res = await fetch('/api/jev/ask', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: check.model, question: { instructions: check.question, criteria: check.criteria }, texts: sample.map((s) => s.text) }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setRuns((rs) => [{ check, cached: data.cached, scored: sample.map((s, i) => ({ ...s, p: data.ps[i] })) }, ...rs].slice(0, 2));
+      const r = await ask(c, pool.slice(0, n));
+      setRuns((rs) => [r, ...rs].slice(0, 2));
     } catch (e: any) { setErr(e.message); } finally { setRunning(false); }
   }
 
-  const c = parsed.check;
   const set = (path: string[]) => (v: string) => writeFields(ytext, [{ path, value: v }]);
   const setNum = (path: string[]) => (v: string) => { const x = Number(v); if (Number.isFinite(x)) writeFields(ytext, [{ path, value: x }]); };
-  const latest = runs[0];
+  const [latest, prev] = runs;
   const stale = latest && c && JSON.stringify(latest.check) !== JSON.stringify(c);
+  const color = COLORMAPS[cmap];
 
   return (
     <section className="mx-6 my-4 rounded-lg border border-gray-200 bg-white text-sm shadow-sm" data-testid="jev-check-panel"
       onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); run(); } }}>
       <header className="flex items-baseline justify-between border-b border-gray-100 px-4 py-2.5">
-        <span className="text-[13px] font-semibold text-gray-800">Jev check {c ? <span className="font-normal text-gray-500">· {c.id}</span> : null}</span>
+        <span className="text-[13px] font-semibold text-gray-800">Jev check {c && <span className="font-normal text-gray-500">· {c.id}</span>}</span>
         {!c && <span className="text-red-700">{parsed.error}</span>}
       </header>
+
       {c && (
         <div className="space-y-3 px-4 py-3">
           <Field label="Question" value={c.question} onCommit={set(['question'])} hint={keyHint(c.question)} />
@@ -179,6 +79,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           </div>
         </div>
       )}
+
       <div className="flex flex-wrap items-end gap-4 border-t border-gray-100 bg-gray-50/60 px-4 py-2.5 text-[13px] text-gray-600">
         <label>sample <input type="number" min={1} max={pool?.length ?? 1000} value={n}
           onChange={(e) => setN(Math.max(1, parseInt(e.target.value || '1', 10)))} className="ml-1 w-20 rounded border border-gray-200 px-1.5 py-0.5" />
@@ -190,205 +91,23 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           className="rounded-md bg-gray-900 px-4 py-1.5 font-medium text-white hover:bg-gray-700 disabled:opacity-40">{running ? 'Asking jev…' : 'Run'}</button>
         <label>colours <select value={cmap} onChange={(e) => setCmap(e.target.value as ColormapName)} className="ml-1 rounded border border-gray-200">
           {Object.keys(COLORMAPS).map((k) => <option key={k}>{k}</option>)}</select></label>
-        {meta && courseSel && kindSel && pool && (
-          <InputPicker meta={meta} pool={pool} n={n} courseSel={courseSel} kindSel={kindSel}
-            onCourses={setCourseSel} onKinds={setKindSel} />
+        {corpus.meta && pool && (
+          <InputPicker meta={corpus.meta} pool={pool} n={n} courses={corpus.courses} kinds={corpus.kinds}
+            onCourses={corpus.setCourses} onKinds={corpus.setKinds} />
         )}
       </div>
+
       {err && <div className="px-4 py-2 text-red-700">{err}</div>}
       {latest && (
         <div className="px-4 pb-4 pt-3">
           {stale && <div className="mb-2 rounded bg-amber-50 px-2 py-1 text-amber-800">The check changed since this run. Run again to see the new phrasing.</div>}
-          <Summary run={latest} prev={runs[1]} band={band} onBand={(b) => setBand(band === b ? null : b)} />
-          <Histogram run={latest} color={COLORMAPS[cmap]} />
+          <Summary run={latest} prev={prev} band={band} onBand={(b) => setBand(band === b ? null : b)} />
+          <Histogram run={latest} color={color} />
           {band
-            ? <BandList run={latest} band={band} color={COLORMAPS[cmap]} onClear={() => setBand(null)} />
-            : <Percentiles run={latest} pcts={pcts.ps ?? []} color={COLORMAPS[cmap]} />}
+            ? <BandList run={latest} band={band} color={color} onClear={() => setBand(null)} />
+            : <Percentiles run={latest} pcts={pcts.ok ?? []} color={color} />}
         </div>
       )}
     </section>
-  );
-}
-
-function Small({ label, value, onCommit, width }: { label: string; value: string; onCommit: (v: string) => void; width: string }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  return (
-    <label>{label}
-      <input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={() => draft !== value && onCommit(draft)}
-        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-        className={`ml-1.5 ${width} rounded border border-gray-200 px-1.5 py-0.5 font-mono text-xs`} />
-    </label>
-  );
-}
-
-type Band = 'fail' | 'unsure' | 'pass';
-
-function bandOf(check: JevCheck, p: number): Band {
-  return p >= check.fail_at ? 'fail' : p < check.pass_below ? 'pass' : 'unsure';
-}
-
-function bandRule(check: JevCheck, b: Band) {
-  return b === 'fail' ? `p ≥ ${check.fail_at}` : b === 'pass' ? `p < ${check.pass_below}` : `${check.pass_below} ≤ p < ${check.fail_at}`;
-}
-
-function shares(run: Run) {
-  const k = run.scored.length;
-  const out = { fail: 0, unsure: 0, pass: 0 };
-  for (const s of run.scored) out[bandOf(run.check, s.p)] += 1 / k;
-  return out;
-}
-
-function Summary({ run, prev, band, onBand }: { run: Run; prev?: Run; band: Band | null; onBand: (b: Band) => void }) {
-  const now = shares(run);
-  const before = prev && prev.scored.length === run.scored.length ? shares(prev) : null;
-  const cell = (name: Band, tone: string) => (
-    <button onClick={() => onBand(name)} title={band === name ? 'show percentiles again' : `list the ${name} paragraphs`}
-      className={`min-w-[6.5rem] flex-1 rounded-md border px-2.5 py-2 text-left transition-colors ${band === name ? 'border-gray-500 bg-gray-50' : 'border-gray-100 hover:border-gray-300'}`}>
-      <div className="whitespace-nowrap text-[11px] uppercase tracking-wide text-gray-500">{name}</div>
-      <div className="whitespace-nowrap font-mono text-[10px] text-gray-400">{bandRule(run.check, name)}</div>
-      <div className={`text-lg font-semibold tabular-nums ${tone}`}>{Math.round(100 * now[name])}%</div>
-      {before && <div className="text-[11px] tabular-nums text-gray-400">was {Math.round(100 * before[name])}%</div>}
-    </button>
-  );
-  return (
-    <div>
-      <div className="flex flex-wrap gap-2">{cell('fail', 'text-gray-900')}{cell('unsure', 'text-gray-600')}{cell('pass', 'text-gray-400')}</div>
-      <div className="mt-1 text-[11px] text-gray-400">{run.scored.length} paragraphs, {run.cached} from cache</div>
-    </div>
-  );
-}
-
-function BandList({ run, band, color, onClear }: { run: Run; band: Band; color: (p: number) => string; onClear: () => void }) {
-  const items = run.scored.filter((s) => bandOf(run.check, s.p) === band).sort((a, b) => b.p - a.p);
-  return (
-    <div className="mt-4 border-t border-gray-100">
-      <div className="flex items-baseline justify-between py-2 text-[12px] text-gray-500">
-        <span>{items.length} {band} paragraphs ({bandRule(run.check, band)}), highest first</span>
-        <button onClick={onClear} className="text-gray-400 hover:text-gray-700">show percentiles</button>
-      </div>
-      <ol className="divide-y divide-gray-100">
-        {items.map((item) => (
-          <li key={item.id} className="grid grid-cols-[3.5rem_1fr] gap-3 py-2">
-            <span className="self-start rounded px-1.5 py-0.5 text-center font-mono text-xs tabular-nums" style={{ background: color(item.p), color: item.p > 0.6 ? '#111' : '#fff' }}>{item.p.toFixed(2)}</span>
-            <ParaText text={item.text} para={item} />
-          </li>
-        ))}
-      </ol>
-    </div>
-  );
-}
-
-function Histogram({ run, color }: { run: Run; color: (p: number) => string }) {
-  const bins = histogram(run.scored.map((s) => s.p), 20);
-  const max = Math.max(...bins, 1);
-  const { pass_below: lo, fail_at: hi } = run.check;
-  return (
-    <div className="relative mt-4 h-28" aria-label="histogram of p(yes)">
-      <div className="absolute inset-y-0 border-l border-dashed border-gray-300" style={{ left: `${lo * 100}%` }} />
-      <div className="absolute inset-y-0 border-l border-dashed border-gray-400" style={{ left: `${hi * 100}%` }} />
-      <div className="absolute inset-y-0 bg-gray-100/70" style={{ left: `${lo * 100}%`, width: `${(hi - lo) * 100}%` }} />
-      <div className="relative flex h-24 items-end gap-px">
-        {bins.map((b, i) => (
-          <div key={i} title={`${(i / 20).toFixed(2)}–${((i + 1) / 20).toFixed(2)}: ${b}`} className="flex-1 rounded-t-sm" style={{ height: `${(100 * b) / max}%`, opacity: b ? 1 : 0, background: color((i + 0.5) / 20) }} />
-        ))}
-      </div>
-      <div className="relative mt-1 h-4 text-[10px] text-gray-400">
-        <span className="absolute left-0">0</span>
-        <span className="absolute -translate-x-1/2" style={{ left: `${lo * 100}%` }}>pass &lt; {lo}</span>
-        <span className="absolute -translate-x-1/2" style={{ left: `${hi * 100}%` }}>fail ≥ {hi}</span>
-        <span className="absolute right-0">1</span>
-      </div>
-    </div>
-  );
-}
-
-function Percentiles({ run, pcts, color }: { run: Run; pcts: number[]; color: (p: number) => string }) {
-  return (
-    <ol className="mt-4 divide-y divide-gray-100 border-t border-gray-100">
-      {percentileRows(run.scored, pcts).map(({ at, item }) => (
-        <li key={`${at}-${item.id}`} className="grid grid-cols-[3.5rem_3.5rem_1fr] gap-3 py-2">
-          <span className="font-mono text-[11px] text-gray-400">{at}</span>
-          <span className="self-start rounded px-1.5 py-0.5 text-center font-mono text-xs tabular-nums" style={{ background: color(item.p), color: item.p > 0.6 ? '#111' : '#fff' }}>
-            {item.p.toFixed(2)}
-          </span>
-          <ParaText text={item.text} para={item} />
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function SourceLink({ path, line, title }: { path: string; line: number; title: string | null }) {
-  const { metadata } = useNavigation();
-  const id = metadata?.['/' + path]?.id;
-  const label = `${title ? title + ' · ' : ''}${path.replace(/^Lens Edu\//, '')}:${line}`;
-  if (!id) return <span>{label}</span>;
-  return <a href={urlForDoc(`${RELAY_ID}-${id}`, metadata)} target="_blank" rel="noreferrer" className="hover:text-gray-700 hover:underline">{label}</a>;
-}
-
-function ParaText({ text, para }: { text: string; para: Para }) {
-  const [open, setOpen] = useState(false);
-  const long = text.length > 280;
-  return (
-    <div className="min-w-0">
-      <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-gray-800 ${long ? 'cursor-pointer' : ''}`} onClick={() => long && setOpen(!open)}>
-        {long && !open ? text.slice(0, 280) + '…' : text}
-      </div>
-      <div className="mt-0.5 truncate text-[10px] text-gray-400"><span className="mr-1 rounded bg-gray-100 px-1">{para.kind}</span><SourceLink path={para.path} line={para.line} title={para.title} /></div>
-    </div>
-  );
-}
-
-function toggled(set: Set<string>, k: string) {
-  const out = new Set(set);
-  if (out.has(k)) out.delete(k); else out.add(k);
-  return out;
-}
-
-/** Which text goes into a run: courses and kinds of text, chosen here; the first N of the
- *  chosen paragraphs, in one fixed shuffled order, are the sample. */
-function InputPicker({ meta, pool, n, courseSel, kindSel, onCourses, onKinds }: {
-  meta: CorpusMeta; pool: Para[]; n: number; courseSel: Set<string>; kindSel: Set<string>;
-  onCourses: (s: Set<string>) => void; onKinds: (s: Set<string>) => void;
-}) {
-  const [all, setAll] = useState(false);
-  const courses = Object.entries(meta.courses).filter(([k, c]) => c.paragraphs && (all || c.live || courseSel.has(k)))
-    .sort(([, a], [, b]) => Number(b.live) - Number(a.live) || b.paragraphs - a.paragraphs);
-  const inSample: Record<string, number> = {};
-  for (const p of pool.slice(0, n)) for (const c of p.courses) if (courseSel.has(c)) inSample[c] = (inSample[c] ?? 0) + 1;
-  const box = 'mr-1 align-middle';
-  return (
-    <div className="w-full space-y-2 text-[12px] text-gray-600">
-      <div>
-        <span className="mr-2 text-gray-500">courses</span>
-        {courses.map(([k, c]) => (
-          <label key={k} className="mr-3 inline-block whitespace-nowrap" title={`${c.paragraphs} paragraphs in ${c.files} files${c.live ? '; has a running cohort' : ''}`}>
-            <input type="checkbox" className={box} checked={courseSel.has(k)} onChange={() => onCourses(toggled(courseSel, k))} />
-            {c.title}{c.live && <span className="text-emerald-600"> ●</span>}
-            <span className="text-gray-400"> {courseSel.has(k) ? `${inSample[k] ?? 0}/` : ''}{c.paragraphs}</span>
-          </label>
-        ))}
-        <button onClick={() => setAll(!all)} className="text-gray-400 underline-offset-2 hover:underline">{all ? 'fewer' : `all ${Object.keys(meta.courses).length}`}</button>
-      </div>
-      <div>
-        <span className="mr-2 text-gray-500">text</span>
-        {Object.entries(meta.kinds).map(([k, count]) => (
-          <label key={k} className="mr-3 inline-block whitespace-nowrap">
-            <input type="checkbox" className={box} checked={kindSel.has(k)} onChange={() => onKinds(toggled(kindSel, k))} />
-            {k}<span className="text-gray-400"> {count}</span>
-          </label>
-        ))}
-      </div>
-      <details>
-        <summary className="cursor-pointer text-gray-500">where this text comes from</summary>
-        <p className="mt-1 leading-relaxed">{meta.source} Built {meta.taken}. ● marks a course with a running cohort. The
-          numbers after a course are paragraphs in this sample / in the course. Paragraphs are in one fixed shuffled order,
-          so the first N are the same on every run and a larger N only adds paragraphs.</p>
-        <p className="mt-1 font-mono text-[11px] leading-relaxed text-gray-500">
-          staging course → its pages (staging API) → each file at lens-edu-staging {meta.commit} → the live check's
-          paragraph splitter → sample → /api/jev/ask (answers cached on disk) → jev → score per paragraph</p>
-      </details>
-    </div>
   );
 }

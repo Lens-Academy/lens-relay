@@ -94,3 +94,21 @@ export function setCheckFields(text: string, edits: { path: string[]; value: str
   const yaml = doc.toString().replace(/\n$/, '');
   return `---\n${yaml}\n---` + text.slice(m[0].length);
 }
+
+export type Band = 'fail' | 'unsure' | 'pass';
+export const BANDS: Band[] = ['fail', 'unsure', 'pass'];
+
+export function bandOf(check: JevCheck, p: number): Band {
+  return p >= check.fail_at ? 'fail' : p < check.pass_below ? 'pass' : 'unsure';
+}
+
+export function bandRule(check: JevCheck, b: Band): string {
+  return b === 'fail' ? `p ≥ ${check.fail_at}` : b === 'pass' ? `p < ${check.pass_below}` : `${check.pass_below} ≤ p < ${check.fail_at}`;
+}
+
+/** The share of scores in each band. */
+export function shares(check: JevCheck, ps: number[]): Record<Band, number> {
+  const out = { fail: 0, unsure: 0, pass: 0 };
+  for (const p of ps) out[bandOf(check, p)] += 1 / ps.length;
+  return out;
+}

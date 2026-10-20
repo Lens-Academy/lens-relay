@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { auroc, isCheckPath, parseCheck, parsePercentiles, percentileRows, histogram, setCheckFields } from './jev-check';
+import { auroc, bandOf, bandRule, isCheckPath, parseCheck, parsePercentiles, percentileRows, histogram, setCheckFields, shares } from './jev-check';
 
 const T1 = `---
 id: T1
@@ -87,5 +87,16 @@ describe('setCheckFields', () => {
   it('adds criteria when the file had none', () => {
     const c = parseCheck(setCheckFields('---\nid: X\nquestion: Q?\n---\n', [{ path: ['criteria', 'true'], value: 'a' }, { path: ['criteria', 'false'], value: 'b' }]));
     expect(c.criteria).toEqual({ true: 'a', false: 'b' });
+  });
+});
+
+describe('bands', () => {
+  const c = parseCheck(T1);
+  it('puts the thresholds in the right band', () => {
+    expect([0.8, 0.79, 0.5, 0.49].map((p) => bandOf(c, p))).toEqual(['fail', 'unsure', 'unsure', 'pass']);
+  });
+  it('states each rule and counts shares', () => {
+    expect(bandRule(c, 'unsure')).toBe('0.5 ≤ p < 0.8');
+    expect(shares(c, [0.9, 0.6, 0.1, 0.2])).toEqual({ fail: 0.25, unsure: 0.25, pass: 0.5 });
   });
 });
