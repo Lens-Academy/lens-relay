@@ -198,6 +198,38 @@ describe('CriticMarkup Extension', () => {
       expect(additionElements.length).toBe(1);
       expect(additionElements[0].textContent).toBe('hello');
     });
+
+    it('draws hidden syntax beside the text it shows without a box, for clicks to pass over', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'A pair: {--{"author":"alice"}@@old--}{++{"author":"alice"}@@new++} end',
+        0
+      );
+      cleanup = c;
+
+      const hidden = Array.from(view.contentDOM.querySelectorAll('.cm-hidden-syntax'));
+      // The deletion's --} and the addition's {++…@@ touch, and are one element
+      expect(hidden.map((el) => el.textContent)).toEqual([
+        '{--{"author":"alice"}@@',
+        '--}{++{"author":"alice"}@@',
+        '++}',
+      ]);
+      expect(hidden.every((el) => el.classList.contains('cm-hidden-syntax-boxless'))).toBe(true);
+    });
+
+    it('keeps the box of hidden syntax on a line that shows none of its suggestion', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(
+        'Text {++\nan added line\n++} after',
+        0
+      );
+      cleanup = c;
+
+      // With no box on those lines, CodeMirror's click search finds nothing to measure
+      const hidden = Array.from(view.contentDOM.querySelectorAll('.cm-hidden-syntax'));
+      expect(hidden.map((el) => [el.textContent, el.classList.contains('cm-hidden-syntax-boxless')])).toEqual([
+        ['{++', false],
+        ['++}', false],
+      ]);
+    });
   });
 
   describe('Suggestion Mode', () => {
