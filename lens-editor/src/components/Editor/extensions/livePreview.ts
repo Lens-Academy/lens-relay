@@ -385,11 +385,14 @@ class BulletWidget extends WidgetType {
 
 /**
  * HiddenFenceWidget - Hides a code block's opening fence (``` plus language)
- * while the cursor is outside the block, as one hidden text node. A hidden mark
- * would hold one span per highlight token (``` and js), and CodeMirror ignores
- * an element's empty boxes when it has several. Beside the copy button (a point
- * widget, which it skips), a click or ArrowDown on that line then left it
- * nothing to measure, and it threw.
+ * and closing fence while the cursor is outside the block, as one hidden text
+ * node. A hidden mark would hold one span per highlight token (``` and js), and
+ * CodeMirror ignores an element's empty boxes when it has several. Beside the
+ * copy button (a point widget, which it skips), a click or ArrowDown on the
+ * opening line then left it nothing to measure, and it threw. CodeMirror also
+ * measures a widget as a whole, so a click on the row lands before or after
+ * the fence. Inside a mark, every hidden character has the same x, and a click
+ * on the closing fence's row landed between its backticks.
  */
 class HiddenFenceWidget extends WidgetType {
   private text: string;
@@ -833,13 +836,21 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                   }),
                 });
 
-                // Hide closing fence line content (```)
+                // Hide the closing fence line (```) with one widget too. It
+                // takes the whole line: a container prefix there (`> `) belongs
+                // to this node, whose children are skipped, so nothing else
+                // decorates it. A block with no closing fence keeps the mark on
+                // its last line.
                 const closeLine = view.state.doc.lineAt(node.to);
                 if (closeLine.from < closeLine.to && closeLine.number !== openLine.number) {
+                  const closeMark = node.node.lastChild;
+                  const closed = closeMark?.name === 'CodeMark' && closeMark.from >= closeLine.from;
                   decorations.push({
                     from: closeLine.from,
                     to: closeLine.to,
-                    deco: Decoration.mark({ class: HIDDEN_CLASS }),
+                    deco: closed
+                      ? Decoration.replace({ widget: new HiddenFenceWidget(closeLine.text) })
+                      : Decoration.mark({ class: HIDDEN_CLASS }),
                   });
                 }
 
