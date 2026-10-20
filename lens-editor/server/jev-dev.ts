@@ -1,5 +1,5 @@
 // Dev-only jev endpoints for the check workbench. Production will call lens-platform instead.
-//   GET  /api/jev/corpus            -> [{id, page, text}]   (~/.cache/jev-workbench/corpus.json)
+//   GET  /api/jev/corpus            -> {meta, rows:[{id, page, course, text}]}   (~/.cache/jev-workbench/corpus.json)
 //   POST /api/jev/ask {model, question:{instructions, criteria?}, texts:[...]} -> {ps:[...], cached:n}
 // Every answer is appended to ~/.cache/jev-workbench/answers.jsonl and reused when the same
 // (model, question, text) is asked again. Key: JEV_KEY or ~/.typesafe.ai-apikey.txt.
