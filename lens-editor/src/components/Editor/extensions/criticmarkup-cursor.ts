@@ -58,7 +58,7 @@ export function hiddenSyntaxSpans(ranges: readonly CriticMarkupRange[]): HiddenS
 }
 
 /** The span that `pos` is strictly inside, if any. `spans` are sorted and apart. */
-function spanAround(spans: readonly HiddenSpan[], pos: number): HiddenSpan | null {
+export function spanAround(spans: readonly HiddenSpan[], pos: number): HiddenSpan | null {
   let lo = 0;
   let hi = spans.length;
   while (lo < hi) {
@@ -114,13 +114,13 @@ export function moveOutOfHiddenSyntax(
 class HiddenSyntax extends RangeValue {}
 const hiddenSyntax = new HiddenSyntax();
 
-type RangesOf = (state: EditorState) => readonly CriticMarkupRange[];
+export type RangesOf = (state: EditorState) => readonly CriticMarkupRange[];
 type Hidden = { spans: HiddenSpan[]; set: RangeSet<HiddenSyntax> };
 
 // Per parse: the ranges array changes only when the document does
 const hiddenCache = new WeakMap<readonly CriticMarkupRange[], Hidden>();
 
-function hiddenIn(ranges: readonly CriticMarkupRange[]): Hidden {
+export function hiddenIn(ranges: readonly CriticMarkupRange[]): Hidden {
   let hidden = hiddenCache.get(ranges);
   if (!hidden) {
     const spans = hiddenSyntaxSpans(ranges);

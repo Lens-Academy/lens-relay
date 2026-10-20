@@ -1,5 +1,7 @@
 // src/components/Editor/extensions/criticmarkup-commands.ts
+import { keymap } from '@codemirror/view';
 import type { EditorView, KeyBinding } from '@codemirror/view';
+import { deleteGroupBackward } from '@codemirror/commands';
 import { criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
 import type { CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
@@ -199,3 +201,25 @@ export const criticMarkupKeymap: KeyBinding[] = [
     },
   },
 ];
+
+// CodeMirror's Mod is Cmd on a Mac (and iOS), where its word deletion is Alt-Backspace
+const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+
+/**
+ * Whether Ctrl+Backspace, CodeMirror's word deletion key outside a Mac,
+ * rejects the change at the cursor here instead (as Mod-Backspace above).
+ * The editor's keymap order decides which runs: embedded notes list this
+ * keymap ahead of CodeMirror's default one, the main editor and the course
+ * section editors after it, so there the key deletes a word.
+ */
+export function rejectsOnWordDeletion(view: EditorView): boolean {
+  if (mac || !view.state.facet(canAcceptRejectFacet)) return false;
+  if (!findRangesInSelection(view).length && !findRangeAtCursor(view)) return false;
+  for (const bindings of view.state.facet(keymap)) {
+    for (const binding of bindings) {
+      if (criticMarkupKeymap.includes(binding)) return true;
+      if (binding.run === deleteGroupBackward) return false;
+    }
+  }
+  return false;
+}
