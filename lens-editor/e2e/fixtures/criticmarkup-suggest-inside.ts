@@ -22,6 +22,8 @@ const documentText = [
   `Plain text {++${meta('Elias')}@@inserted words++} in the middle.`,
   `A pair: {--${meta('Elias')}@@old words--}{++${meta('Elias')}@@new words++} replaces text.`,
   '{++An added line without metadata++}',
+  `A deletion: {--${meta('Elias')}@@Deleted words--} and more.`,
+  `A substitution: {~~${meta('Elias')}@@old text~>new text~~} here.`,
   'Last line.',
 ].join('\n');
 
