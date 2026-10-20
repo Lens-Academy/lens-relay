@@ -2636,8 +2636,9 @@ impl Server {
                 "new_path must start with '/'".into(),
             ));
         }
-        // A Markdown document may also become an HTML page (a widget converted
-        // from widgets/x.md to widgets/x.html keeps its id); see move_document.
+        // HTML pages move here too, and a Markdown document may become one (a
+        // widget converted from widgets/x.md to widgets/x.html keeps its id);
+        // see move_document.
         if !new_path.ends_with(".md") && !new_path.ends_with(".html") {
             return Err(MoveDocumentError::BadRequest(
                 "new_path must end with '.md' or '.html'".into(),
@@ -3079,8 +3080,8 @@ impl Server {
             .map_or(false, |m| m.get(&txn, path).is_some())
     }
 
-    /// Move a markdown document, rename a metadata-only folder, or rename a
-    /// non-markdown file metadata entry by user-facing path.
+    /// Move a markdown document or HTML page, rename a metadata-only folder,
+    /// or rename another file's metadata entry by user-facing path.
     pub async fn move_path(
         &self,
         path: &str,
@@ -3275,6 +3276,14 @@ impl Server {
             .strip_prefix(&prefix)
             .map(|rest| format!("/{}", rest.trim_start_matches('/')))
             .ok_or_else(|| MoveDocumentError::NotFound(format!("Path not found: {}", path)))?;
+
+        // An HTML page that stays one moves like a Markdown document, so the
+        // wikilinks that point at it are rewritten. (move_document refuses a
+        // destination that is taken or has a twin, as below.)
+        let entry_type = self.filemeta_type_for_uuid(&info.uuid).unwrap_or_default();
+        if moves_as_document(&old_path, new_path, &entry_type) {
+            return self.move_document(&info.uuid, new_path, None).await;
+        }
 
         // Clone the Arcs out and drop the shard guard before the blocking
         // awareness lock (see the lock-ordering rule in AGENTS.md).
@@ -3487,10 +3496,14 @@ impl Server {
             moves
         };
 
-        let markdown_moves: Vec<(String, String)> = entries_to_move
+        // Markdown documents and HTML pages move one by one, so that the
+        // wikilinks that point at them are rewritten; the other entries
+        // (folders, attachments) are re-keyed together below.
+        let document_moves: Vec<(String, String)> = entries_to_move
             .iter()
-            .filter_map(|(_, dst, entry_type, id, _)| {
-                (entry_type == "markdown" && !id.is_empty()).then(|| (id.clone(), dst.clone()))
+            .filter_map(|(source, dst, entry_type, id, _)| {
+                (moves_as_document(source, dst, entry_type) && !id.is_empty())
+                    .then(|| (id.clone(), dst.clone()))
             })
             .collect();
 
@@ -3501,7 +3514,7 @@ impl Server {
                 Some(indexer) => Some(indexer.lock_step().await),
                 None => None,
             };
-            let uuids: Vec<String> = markdown_moves.iter().map(|(id, _)| id.clone()).collect();
+            let uuids: Vec<String> = document_moves.iter().map(|(id, _)| id.clone()).collect();
             let folder_doc_ids = link_indexer::find_all_folder_docs(&self.docs);
             let linkers = self.unreached_linkers(uuids, &folder_doc_ids).await.linkers;
             drop(step);
@@ -3509,7 +3522,7 @@ impl Server {
         };
 
         let mut links_rewritten = 0usize;
-        for (uuid, destination) in markdown_moves {
+        for (uuid, destination) in document_moves {
             let linkers = unreached_linkers.remove(&uuid).unwrap_or_default();
             let result = self
                 .move_document_impl(&uuid, &destination, None, Some(linkers))
@@ -3533,14 +3546,14 @@ impl Server {
             let filemeta = txn.get_or_insert_map("filemeta_v0");
             let docs_map = txn.get_or_insert_map("docs");
 
-            for (source, _, entry_type, _, _) in &entries_to_move {
-                if entry_type != "markdown" {
+            for (source, destination, entry_type, _, _) in &entries_to_move {
+                if !moves_as_document(source, destination, entry_type) {
                     filemeta.remove(&mut txn, source);
                     docs_map.remove(&mut txn, source);
                 }
             }
             for (source, destination, entry_type, id, fields) in &entries_to_move {
-                if entry_type == "markdown" {
+                if moves_as_document(source, destination, entry_type) {
                     continue;
                 }
                 filemeta.insert(
@@ -6135,6 +6148,18 @@ fn timestamps_sidecar_path(md_path: &str) -> Option<String> {
         .get(stem_len..)
         .filter(|ext| ext.eq_ignore_ascii_case(".md"))
         .map(|_| format!("{}.timestamps.json", &md_path[..stem_len]))
+}
+
+/// Whether a filemeta entry moves through [`Server::move_document`], which
+/// also rewrites the wikilinks that point at it: a Markdown document, or an
+/// HTML page (type "file") that stays one. move_document takes a page's
+/// destination only with a lower-case ".html".
+fn moves_as_document(path: &str, new_path: &str, entry_type: &str) -> bool {
+    match entry_type {
+        "markdown" => true,
+        "folder" => false,
+        _ => link_indexer::is_link_target(path, entry_type) && new_path.ends_with(".html"),
+    }
 }
 
 /// Move a document to a new path within or across folders.
@@ -9923,6 +9948,168 @@ mod test {
         assert_eq!(result.links_rewritten, 0);
     }
 
+    const CHAT_PAGE_UUID: &str = "66666666-6666-4666-8666-666666666666";
+    const CHAT_LINKER_UUID: &str = "77777777-7777-4777-8777-777777777777";
+
+    /// Folder "Lens" with the HTML page /Transcripts/platform/chat.html and
+    /// /MOC/Index.md linking to it without and with ".html", the way
+    /// `MOC; Luc` links to the AI chat transcripts. Returns the folder doc id.
+    async fn insert_html_page_and_linker(server: &Arc<Server>) -> String {
+        let folder_doc_id = insert_test_folder_doc(
+            server,
+            "Lens",
+            &[
+                (
+                    "/Transcripts",
+                    "22222222-2222-4222-8222-222222222222",
+                    "folder",
+                ),
+                ("/Transcripts/platform/chat.html", CHAT_PAGE_UUID, "file"),
+                ("/MOC/Index.md", CHAT_LINKER_UUID, "markdown"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(server, CHAT_PAGE_UUID, "<p>A chat</p>").await;
+        insert_test_content_doc(
+            server,
+            CHAT_LINKER_UUID,
+            "[[../Transcripts/platform/chat|A chat]] and [[../Transcripts/platform/chat.html]]",
+        )
+        .await;
+        insert_backlink(server, &folder_doc_id, CHAT_PAGE_UUID, CHAT_LINKER_UUID);
+        folder_doc_id
+    }
+
+    // Prevents: a folder move leaving every link to its HTML pages behind.
+    // Moving "Lens/AI Chat Transcripts" (85 .html transcripts and a .md
+    // guide) rewrote the 2 links to the guide and none of the 26 to the
+    // transcripts in `MOC; Luc`: only Markdown entries moved with their
+    // links, and the link indexer follows a page only when its name changes.
+    #[tokio::test]
+    async fn folder_move_rewrites_links_to_its_html_pages() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_html_page_and_linker(&server).await;
+
+        let result = server
+            .move_path("Lens/Transcripts", "/09-AI/Transcripts", None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            content_text(&server, CHAT_LINKER_UUID),
+            "[[../09-AI/Transcripts/platform/chat|A chat]] and [[../09-AI/Transcripts/platform/chat.html]]"
+        );
+        assert_eq!(result.links_rewritten, 2);
+        assert!(!filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/Transcripts/platform/chat.html"
+        ));
+        assert_eq!(
+            filemeta_id(
+                &server,
+                &folder_doc_id,
+                "/09-AI/Transcripts/platform/chat.html"
+            )
+            .as_deref(),
+            Some(CHAT_PAGE_UUID)
+        );
+        assert_eq!(
+            server.filemeta_type_for_uuid(CHAT_PAGE_UUID).as_deref(),
+            Some("file")
+        );
+        assert_eq!(
+            legacy_docs_value(
+                &server,
+                &folder_doc_id,
+                "/09-AI/Transcripts/platform/chat.html"
+            ),
+            None
+        );
+    }
+
+    // Prevents: moving one HTML page leaving the links to it behind. The
+    // link indexer only rewrote the name in a link ([[a/x]] -> [[a/y]]), so
+    // a page moved to another directory kept every link at the old place.
+    #[tokio::test]
+    async fn move_path_rewrites_links_to_a_moved_html_page() {
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_html_page_and_linker(&server).await;
+
+        let result = server
+            .move_path(
+                "Lens/Transcripts/platform/chat.html",
+                "/Archive/old-chat.html",
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            content_text(&server, CHAT_LINKER_UUID),
+            "[[../Archive/old-chat|A chat]] and [[../Archive/old-chat.html]]"
+        );
+        assert_eq!(result.links_rewritten, 2);
+        assert_eq!(result.old_path, "/Transcripts/platform/chat.html");
+        assert_eq!(result.new_path, "/Archive/old-chat.html");
+        assert!(!filemeta_has(
+            &server,
+            &folder_doc_id,
+            "/Transcripts/platform/chat.html"
+        ));
+        assert_eq!(
+            filemeta_id(&server, &folder_doc_id, "/Archive/old-chat.html").as_deref(),
+            Some(CHAT_PAGE_UUID)
+        );
+        assert_eq!(
+            server.filemeta_type_for_uuid(CHAT_PAGE_UUID).as_deref(),
+            Some("file")
+        );
+    }
+
+    // A link between two files that move together keeps its text. The guide
+    // moves first, so its link points back into the old folder until the
+    // page follows; neither step may lose the ".html" it was written with.
+    #[tokio::test]
+    async fn folder_move_keeps_links_between_its_files_as_written() {
+        const GUIDE_UUID: &str = "88888888-8888-4888-8888-888888888888";
+        let server = Server::new_for_test();
+        let folder_doc_id = insert_test_folder_doc(
+            &server,
+            "Lens",
+            &[
+                (
+                    "/Transcripts",
+                    "22222222-2222-4222-8222-222222222222",
+                    "folder",
+                ),
+                ("/Transcripts/Guide.md", GUIDE_UUID, "markdown"),
+                ("/Transcripts/platform/chat.html", CHAT_PAGE_UUID, "file"),
+            ],
+        )
+        .await;
+        insert_test_content_doc(&server, CHAT_PAGE_UUID, "<p>A chat</p>").await;
+        let guide = "See [[platform/chat]] and [[platform/chat.html|the chat]].";
+        insert_test_content_doc(&server, GUIDE_UUID, guide).await;
+        insert_backlink(&server, &folder_doc_id, CHAT_PAGE_UUID, GUIDE_UUID);
+
+        server
+            .move_path("Lens/Transcripts", "/09-AI/Transcripts", None)
+            .await
+            .unwrap();
+
+        assert_eq!(content_text(&server, GUIDE_UUID), guide);
+        assert_eq!(
+            filemeta_id(
+                &server,
+                &folder_doc_id,
+                "/09-AI/Transcripts/platform/chat.html"
+            )
+            .as_deref(),
+            Some(CHAT_PAGE_UUID)
+        );
+    }
+
     #[tokio::test]
     async fn move_path_rejects_folder_destination_collision_without_mutation() {
         let server = Server::new_for_test();
@@ -11846,12 +12033,13 @@ mod test {
     }
 
     // Prevents: the startup reindex indexing against a server-side rename
-    // before the worker has applied it. Renaming an HTML page changes
-    // filemeta at once and leaves the wikilink rewrite to the worker; the
+    // before the worker has applied it. Renaming an HTML page changed
+    // filemeta at once and left the wikilink rewrite to the worker; the
     // folder used to be queued only after the folder doc had been persisted
     // (an R2 write), and in that gap the reindex resolved "[[Old]]" against
     // the new name, dropped the backlink, and the worker then found nothing
-    // to rewrite.
+    // to rewrite. (A page now moves through move_document, which rewrites
+    // "[[Old]]" itself under the step lock; the end state must not change.)
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn page_rename_during_the_reindex_is_applied_before_the_reindex_goes_on() {
         const FOLDER_UUID: &str = "f0f0f0f0-0000-4000-8000-000000000007";
