@@ -170,6 +170,29 @@ test.describe('Live preview: pointing at a line with a suggestion', () => {
     expect(missed).toEqual([]);
   });
 
+  test('with a suggestion\'s ✓ ✗ buttons at the end of a line, a click right of them puts the cursor after the suggestion', async ({ page }) => {
+    const inside = await pos(page, 8, 'addition', 3);
+    const end = await page.evaluate(() => (window as unknown as FixtureWindow).view.state.doc.line(8).to);
+    const missed: string[] = [];
+    for (const height of HEIGHTS) {
+      for (const seed of SEEDS) {
+        await place(page, inside);
+        const point = await page.evaluate(({ inside, height }) => {
+          const { view } = window as unknown as FixtureWindow;
+          const c = view.coordsAtPos(inside, 1)!;
+          const buttons = view.contentDOM.querySelector('.cm-criticmarkup-buttons')!.getBoundingClientRect();
+          const y = height === 'top' ? c.top + 2 : height === 'bottom' ? c.bottom - 2 : (c.top + c.bottom) / 2;
+          return { x: buttons.right + 12, y };
+        }, { inside, height });
+        await page.evaluate((seed) => (window as unknown as FixtureWindow).seedRandom(seed), seed);
+        await page.mouse.click(point.x, point.y);
+        const { anchor, head } = await selection(page);
+        if (anchor !== end || head !== end) missed.push(`${height}, seed ${seed}: ${anchor === head ? `cursor at ${await described(page, head)}` : `selected ${anchor}-${head}`}`);
+      }
+    }
+    expect(missed).toEqual([]);
+  });
+
   test('a click on a line with a comment badge puts the cursor under the pointer, low on the line too', async ({ page }) => {
     const targets: Array<[number, string, number]> = [
       [5, 'Some', 2], [5, 'highlighted', 4], [5, 'after it', 2],

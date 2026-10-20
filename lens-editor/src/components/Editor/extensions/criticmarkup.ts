@@ -201,6 +201,8 @@ interface HiddenPiece {
   from: number;
   to: number;
   besideText: boolean;
+  /** The closing delimiter (the ✓ ✗ buttons can take its place) */
+  closing: boolean;
 }
 
 const hiddenSyntaxMark = Decoration.mark({ class: 'cm-hidden-syntax' });
@@ -216,24 +218,39 @@ const boxlessHiddenSyntaxMark = Decoration.mark({ class: 'cm-hidden-syntax cm-hi
  * above it, for a point low on the line) and went on looking only before it
  * (or after it), wherever the pointer was: a click on a deletion+addition
  * pair's new text landed at the end of the old text, 55 characters early.
- * Where the search met the ✓ ✗ buttons, which it doesn't measure, it went on
- * from a random piece, so the same point landed in different places. Hidden
- * syntax beside a suggestion's shown text on its line therefore has no box at
- * all (.cm-hidden-syntax-boxless), and the search passes over it.
+ * Where the search met a widget it doesn't measure (as the ✓ ✗ buttons were,
+ * see ClosingButtonsWidget), it went on from a random piece, so the same point
+ * landed in different places. Hidden syntax beside a suggestion's shown text
+ * on its line therefore has no box at all (.cm-hidden-syntax-boxless), and the
+ * search passes over it.
  *
  * Where a line shows none of the suggestion's text (a delimiter on a line of
  * its own), the hidden syntax keeps its box: on a line whose pieces all lack
  * one, the search throws. For the same reason touching pieces (a deletion's
  * `--}` and its addition's `{++…@@`) are one mark, so that no element (another
  * extension's mark around them) holds several boxless pieces and nothing else.
+ *
+ * `buttons` are the ✓ ✗ buttons to show, by where they go: the start of the
+ * closing delimiter, which they replace (see ClosingButtonsWidget).
  */
-function hiddenSyntaxMarks(pieces: HiddenPiece[]): Array<{ from: number; to: number; deco: Decoration }> {
+function hiddenSyntaxMarks(
+  pieces: HiddenPiece[],
+  buttons: ReadonlyMap<number, ClosingButtonsWidget>,
+): Array<{ from: number; to: number; deco: Decoration }> {
+  const widgetFor = (piece: HiddenPiece | undefined) => (piece?.closing ? buttons.get(piece.from) : undefined);
   pieces.sort((a, b) => a.from - b.from);
   const marks: Array<{ from: number; to: number; deco: Decoration }> = [];
   for (let i = 0; i < pieces.length; i++) {
     const { from, besideText } = pieces[i];
     let { to } = pieces[i];
-    while (besideText && pieces[i + 1]?.besideText && pieces[i + 1].from === to) to = pieces[++i].to;
+    const widget = widgetFor(pieces[i]);
+    if (widget) {
+      marks.push({ from, to, deco: Decoration.replace({ widget }) });
+      continue;
+    }
+    while (besideText && pieces[i + 1]?.besideText && pieces[i + 1].from === to && !widgetFor(pieces[i + 1])) {
+      to = pieces[++i].to;
+    }
     marks.push({ from, to, deco: besideText ? boxlessHiddenSyntaxMark : hiddenSyntaxMark });
   }
   return marks;
@@ -303,6 +320,23 @@ class AcceptRejectWidget extends WidgetType {
 
   ignoreEvent(): boolean {
     return false; // Allow click events
+  }
+}
+
+/**
+ * The ✓ ✗ buttons in live preview, in the place of the suggestion's hidden
+ * closing delimiter. When it places a click, CodeMirror measures a widget that
+ * replaces text but skips one that sits between two characters: there, a click
+ * right of the buttons at the end of a line landed at the end of the
+ * suggestion's text, left of them. Now it lands after the suggestion. The plain
+ * span around the buttons is as tall as the text (as for CommentBadgeWidget).
+ */
+class ClosingButtonsWidget extends AcceptRejectWidget {
+  toDOM(): HTMLElement {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'cm-criticmarkup-buttons-wrapper';
+    wrapper.appendChild(super.toDOM());
+    return wrapper;
   }
 }
 
@@ -441,8 +475,10 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       const decorations: Array<{ from: number; to: number; deco: Decoration }> = [];
       // Line decorations are added separately (must not be mixed into mark sort)
       const lineDecos: Array<{ from: number; deco: Decoration }> = [];
-      // Suggestions' hidden delimiters and metadata
+      // Suggestions' hidden delimiters and metadata, and the ✓ ✗ buttons to
+      // show, by the closing delimiter they take the place of
       const hiddenPieces: HiddenPiece[] = [];
+      const buttons = new Map<number, ClosingButtonsWidget>();
 
       // Build comment thread info for badge numbering. Section editors can
       // provide a badge map sliced from the full document, so an open field
@@ -582,11 +618,13 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
             from: range.from,
             to: range.contentFrom,
             besideText: shown && view.state.doc.lineAt(range.contentFrom).to > range.contentFrom,
+            closing: false,
           },
           {
             from: range.contentTo,
             to: range.to,
             besideText: shown && view.state.doc.lineAt(range.contentTo).from < range.contentTo,
+            closing: true,
           },
         );
 
@@ -630,28 +668,14 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           const isPairEnd = adjacentPairEnd.has(ri);
 
           if (!isPairStart) {
-            // Normal range or pair-end addition: show button here
+            // Normal range or pair-end addition: show button here, after the content
             const widgetFrom = isPairEnd ? ranges[ri - 1].from : range.from;
-            decorations.push({
-              from: range.contentTo,
-              to: range.contentTo,
-              deco: Decoration.widget({
-                widget: new AcceptRejectWidget(widgetFrom, range.to, isPairEnd),
-                side: 1, // After the content
-              }),
-            });
+            buttons.set(range.contentTo, new ClosingButtonsWidget(widgetFrom, range.to, isPairEnd));
           } else {
             // Pair-start deletion with cursor inside: show merged button at the
             // end of the paired addition (next range)
             const pairedAddition = ranges[ri + 1];
-            decorations.push({
-              from: pairedAddition.contentTo,
-              to: pairedAddition.contentTo,
-              deco: Decoration.widget({
-                widget: new AcceptRejectWidget(range.from, pairedAddition.to, true),
-                side: 1,
-              }),
-            });
+            buttons.set(pairedAddition.contentTo, new ClosingButtonsWidget(range.from, pairedAddition.to, true));
           }
 
           // If cursor is on a line where all text is hidden syntax (delimiter lines),
@@ -674,7 +698,7 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
         }
       }
 
-      decorations.push(...hiddenSyntaxMarks(hiddenPieces));
+      decorations.push(...hiddenSyntaxMarks(hiddenPieces, buttons));
 
       // Merge line decorations into the main array
       for (const ld of lineDecos) {
