@@ -178,24 +178,39 @@ export function rejectChangeAtCursor(view: EditorView): boolean {
   return true;
 }
 
+const isSuggestion = (r: CriticMarkupRange) =>
+  r.type === 'addition' || r.type === 'deletion' || r.type === 'substitution';
+
+/** The innermost suggestion around `pos`: inside it, not at its edge */
+function suggestionAround(ranges: CriticMarkupRange[], pos: number): CriticMarkupRange | null {
+  let found: CriticMarkupRange | null = null;
+  for (const r of ranges) {
+    if (r.from < pos && pos < r.to && isSuggestion(r) && (!found || r.to <= found.to)) found = r;
+  }
+  return found;
+}
+
 /**
  * The suggestions Mod-Enter accepts (or Mod-Backspace rejects) here: those a
- * selection overlaps, or the one at the cursor. A deletion+addition pair goes
- * as one, as its single ✓ ✗ do.
+ * selection overlaps, or the one the cursor is in. A deletion+addition pair
+ * goes as one, as its single ✓ ✗ do.
  *
- * Empty where the key keeps its usual meaning: away from suggestions, beside
- * a comment badge or in highlighted text (accepting or rejecting a comment
- * deletes it), for users who can't accept or reject, and for Mod-Backspace in
- * suggestion mode when they are all your own: the cursor sits in the
- * suggestion you are typing, so the key goes on deleting the word before it.
+ * Empty where the key keeps its usual meaning: away from suggestions; right
+ * before or after one, where you type next to it (and Mod-Backspace deletes
+ * the word before the cursor); beside a comment badge or in highlighted text
+ * (accepting or rejecting a comment deletes it); for users who can't accept
+ * or reject; and for Mod-Backspace in suggestion mode when they are all your
+ * own: the cursor sits in the suggestion you are typing, so the key goes on
+ * deleting the word before it.
  */
 export function suggestionsForKey(view: EditorView, action: 'accept' | 'reject'): CriticMarkupRange[] {
   if (!view.state.facet(canAcceptRejectFacet)) return [];
   const ranges = view.state.field(criticMarkupField);
-  const picked = view.state.selection.main.empty ? [findRangeAtCursor(view)] : findRangesInSelection(view);
+  const { main } = view.state.selection;
+  const picked = main.empty ? [suggestionAround(ranges, main.head)] : findRangesInSelection(view);
   const targets = new Set<CriticMarkupRange>();
   for (const range of picked) {
-    if (!range || (range.type !== 'addition' && range.type !== 'deletion' && range.type !== 'substitution')) continue;
+    if (!range || !isSuggestion(range)) continue;
     const i = ranges.indexOf(range);
     if (i > 0 && isAdjacentEditPair(ranges[i - 1], range)) targets.add(ranges[i - 1]);
     targets.add(range);

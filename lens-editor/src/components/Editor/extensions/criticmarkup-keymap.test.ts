@@ -90,6 +90,20 @@ describe('Ctrl+Enter / Ctrl+Backspace with the keymaps of Editor.tsx', () => {
     expect(text(view)).toBe('hello  {++x++}');
   });
 
+  it('keep their usual meaning right before and right after a suggestion, where you type next to it', () => {
+    // Before its opening delimiter: the word before goes
+    let view = editor('one {++two++} three', { anchor: 4 });
+    press(view, 'Backspace');
+    expect(text(view)).toBe('{++two++} three');
+
+    // After its closing delimiter (and its ✓ ✗): a new line, and Ctrl+Backspace
+    // is left to word deletion
+    view = editor('one {++two++} three', { anchor: 13 });
+    expect(suggestionsForKey(view, 'reject')).toEqual([]);
+    press(view, 'Enter');
+    expect(text(view)).toBe('one {++two++} three\n');
+  });
+
   it('take both halves of a deletion+addition pair, as its one ✓ ✗ do', () => {
     const pair = `A pair: {--${OTHER}@@old words--}{++${OTHER}@@new words++} here.`;
     const inNewWords = pair.indexOf('new words') + 4;

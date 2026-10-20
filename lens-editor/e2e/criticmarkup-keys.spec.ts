@@ -70,6 +70,13 @@ test.describe('Ctrl+Enter and Ctrl+Backspace with the keymaps of Editor.tsx', ()
     expect(await page.evaluate(() => window.text().endsWith('at the \n'))).toBe(true);
   });
 
+  test('right after a suggestion, past its ✓ ✗, Ctrl+Enter adds a line and the suggestion stays', async ({ page }) => {
+    await cursorAt(page, 'world.', 0);
+    await page.keyboard.press('Control+Enter');
+    expect(await line(page, 2)).toBe('Hello {++{"author":"Elias","timestamp":1760000000000}@@big ++}world.');
+    expect(await line(page, 3)).toBe('');
+  });
+
   test('a comment and its highlighted text are left alone', async ({ page }) => {
     // In the highlighted text: the word before the cursor goes, the highlight stays
     await cursorAt(page, 'highlighted', 'highlighted'.length);
