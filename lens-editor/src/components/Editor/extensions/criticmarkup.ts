@@ -19,6 +19,7 @@ import {
 } from '@codemirror/view';
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
 import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
+import { hiddenSyntaxCursor } from './criticmarkup-cursor';
 import { parse, parseThreads, isAdjacentEditPair, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 export interface CriticMarkupCommentBadgeInfo {
@@ -643,6 +644,9 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
   },
   {
     decorations: (v) => v.decorations,
+    // The cursor steps over the syntax this hides (not in source mode, which
+    // swaps this plugin out)
+    provide: () => hiddenSyntaxCursor((state) => state.field(criticMarkupField)),
   }
 );
 
