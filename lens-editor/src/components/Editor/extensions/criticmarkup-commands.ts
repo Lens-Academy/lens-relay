@@ -1,15 +1,23 @@
 // src/components/Editor/extensions/criticmarkup-commands.ts
+import type { EditorState } from '@codemirror/state';
 import type { EditorView, KeyBinding } from '@codemirror/view';
 import { criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
 import type { CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 /**
- * Find the CriticMarkup range containing the given position.
- * Returns null if position is not inside any markup.
+ * Find the CriticMarkup range containing the given position, or the change
+ * nested in it there (a deletion of part of someone else's addition; not a
+ * comment or highlight on it). Returns null if position is not inside any markup.
  */
 export function findRangeAtPosition(view: EditorView, pos: number): CriticMarkupRange | null {
   const ranges = view.state.field(criticMarkupField);
-  return ranges.find(r => pos >= r.from && pos <= r.to) ?? null;
+  let found: CriticMarkupRange | null = null;
+  for (const r of ranges) {
+    if (pos < r.from || pos > r.to) continue;
+    const nested = found && r.from >= found.from && r.to <= found.to;
+    if (!found || (nested && r.type !== 'comment' && r.type !== 'highlight')) found = r;
+  }
+  return found;
 }
 
 /**
@@ -139,6 +147,37 @@ export function surgicalChangesFor(
 }
 
 /**
+ * Suggestion mode splits someone else's addition around the text you type
+ * into it (their part, yours, their part). When that addition of yours goes
+ * (rejected, or its last character deleted), this is the change that removes
+ * it and joins their two parts again: from the first part's content end to
+ * the second part's content start. Null when `range` isn't between two
+ * additions that open alike (same author and time, or both without metadata).
+ */
+export function removalJoiningSplit(state: EditorState, range: CriticMarkupRange): CmChange | null {
+  const ranges = state.field(criticMarkupField);
+  const before = ranges.find(r => r.type === 'addition' && r.to === range.from);
+  const after = ranges.find(r => r.type === 'addition' && r.from === range.to);
+  if (!before || !after) return null;
+  const opening = (r: CriticMarkupRange) => state.doc.sliceString(r.from, r.contentFrom);
+  if (opening(before) !== opening(after)) return null;
+  return { from: before.contentTo, to: after.contentFrom };
+}
+
+/**
+ * Accept or reject one change: a range, or the two ranges of a deletion+addition
+ * pair. Removing a range whole also joins the parts of an addition it split.
+ */
+export function applyChange(view: EditorView, ranges: CriticMarkupRange[], action: 'accept' | 'reject'): void {
+  let changes = ranges.flatMap(r => surgicalChangesFor(view, r, action));
+  const [only] = changes;
+  if (ranges.length === 1 && changes.length === 1 && only.from === ranges[0].from && only.to === ranges[0].to && !only.insert) {
+    changes = [removalJoiningSplit(view.state, ranges[0]) ?? only];
+  }
+  view.dispatch({ changes });
+}
+
+/**
  * Accept CriticMarkup changes. If a non-collapsed selection exists,
  * accepts all ranges overlapping the selection. Otherwise accepts
  * the single range at cursor position.
@@ -154,7 +193,7 @@ export function acceptChangeAtCursor(view: EditorView): boolean {
   const range = findRangeAtCursor(view);
   if (!range) return false;
 
-  view.dispatch({ changes: surgicalChangesFor(view, range, 'accept') });
+  applyChange(view, [range], 'accept');
   return true;
 }
 
@@ -174,7 +213,7 @@ export function rejectChangeAtCursor(view: EditorView): boolean {
   const range = findRangeAtCursor(view);
   if (!range) return false;
 
-  view.dispatch({ changes: surgicalChangesFor(view, range, 'reject') });
+  applyChange(view, [range], 'reject');
   return true;
 }
 
