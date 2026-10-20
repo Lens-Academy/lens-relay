@@ -961,7 +961,7 @@ describe('CriticMarkup Extension', () => {
         );
       });
 
-      it('treats a deletion without metadata as someone else\'s', () => {
+      it("treats a deletion without metadata as someone else's", () => {
         const view = suggesting('{--Deleted--}', 6);
         backspace(view);
         type(view, 'Z');
@@ -1018,7 +1018,7 @@ describe('CriticMarkup Extension', () => {
         expect(view.state.selection.main.head).toBe(newFrom - 1);
       });
 
-      it("does the same in your own substitution's old text", () => {
+      it("writes a replacement in your own substitution's old text as a pair too", () => {
         const yours = `{~~${mark}@@old~>new~~}`;
         const view = suggesting(yours, yours.indexOf('old') + 1, yours.indexOf('old') + 3);
         type(view, 'Q');

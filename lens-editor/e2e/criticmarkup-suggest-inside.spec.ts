@@ -369,7 +369,7 @@ test.describe("Suggestion mode inside someone else's deletion or substitution", 
     const deleted = await lineText(page, 6);
     expect(deleted).toMatch(new RegExp(`^A deletion: \\{--${ELIAS}Deleted words--\\}\\{--${MARK} --\\}and more\\.$`));
 
-    // Backspace in yours took their `}`
+    // Backspace in yours stops at their `}`
     await page.keyboard.press('Backspace');
     expect(await lineText(page, 6)).toBe(deleted);
     expect(await head(page)).toBe(await posOf(page, 6, ' --}and'));

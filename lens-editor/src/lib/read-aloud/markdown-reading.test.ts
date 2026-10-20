@@ -61,7 +61,7 @@ describe('buildMarkdownReading', () => {
     expect(texts(doc)).toEqual(['An extra added line.']);
   });
 
-  it("reads replacements in someone else's substitution, and an addition before their deletion, as shown", () => {
+  it('reads a substitution with deletion+addition pairs in it, and an addition before a deletion, as accepted', () => {
     // Suggestion mode writes Mark's replacements in Elias's substitution as
     // deletion+addition pairs in it, and puts what he typed in Elias's deletion before it
     const elias = '{"author":"Elias"}';
