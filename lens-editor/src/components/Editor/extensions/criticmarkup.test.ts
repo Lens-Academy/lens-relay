@@ -1,12 +1,20 @@
 // src/components/Editor/extensions/criticmarkup.test.ts
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { syntaxTree } from '@codemirror/language';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSelection, createCriticMarkupEditorWithSourceMode, hasClass, moveCursor } from '../../../test/codemirror-helpers';
-import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback } from './criticmarkup';
+import { criticMarkupExtension, criticMarkupField, toggleSuggestionMode, suggestionModeField, commentClickCallback, setCurrentAuthor } from './criticmarkup';
 import { toggleSourceMode } from './livePreview';
+import { isAdjacentEditPair } from '../../../lib/criticmarkup-parser';
+
+/** The text live preview shows: everything but the hidden syntax and the buttons */
+function visibleText(view: EditorView): string {
+  const content = view.contentDOM.cloneNode(true) as HTMLElement;
+  content.querySelectorAll('.cm-hidden-syntax, .cm-criticmarkup-buttons').forEach((el) => el.remove());
+  return content.textContent ?? '';
+}
 
 describe('CriticMarkup Extension', () => {
   let cleanup: (() => void) | undefined;
@@ -614,6 +622,205 @@ describe('CriticMarkup Extension', () => {
         expect(view.state.selection.main.head).toBe(2);
       });
     });
+
+    describe("inside someone else's addition", () => {
+      // Mark edits in suggestion mode; the additions are Elias's
+      const elias = '{"author":"Elias","timestamp":1760000000000}';
+      const mark = '{"author":"Mark","timestamp":1770000000000}';
+      const theirs = `{++${elias}@@An added line++}`;
+      const textFrom = `{++${elias}@@`.length;
+
+      beforeEach(() => {
+        setCurrentAuthor('Mark');
+        vi.spyOn(Date, 'now').mockReturnValue(1770000000000);
+      });
+
+      afterEach(() => {
+        setCurrentAuthor('anonymous');
+        vi.restoreAllMocks();
+      });
+
+      function suggesting(doc: string, anchor: number, head = anchor) {
+        const made = createCriticMarkupEditorWithSelection(doc, anchor, head);
+        cleanup = made.cleanup;
+        made.view.dispatch({ effects: toggleSuggestionMode.of(true) });
+        return made.view;
+      }
+
+      /** What typing `text` dispatches: the selection replaced, the cursor after it */
+      function type(view: EditorView, text: string, userEvent = 'input.type') {
+        const { from, to } = view.state.selection.main;
+        view.dispatch({ changes: { from, to, insert: text }, selection: { anchor: from + text.length }, userEvent });
+      }
+
+      function backspace(view: EditorView) {
+        const head = view.state.selection.main.head;
+        view.dispatch({ changes: { from: head - 1, to: head }, selection: { anchor: head - 1 }, userEvent: 'delete.backward' });
+      }
+
+      const parts = (view: EditorView) =>
+        view.state.field(criticMarkupField).map((r) => [r.type, r.metadata?.author, r.content]);
+
+      it('splits their addition around what you type: their part, yours, their part', () => {
+        const view = suggesting(theirs, textFrom + 1);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(
+          `{++${elias}@@A++}{++${mark}@@Z++}{++${elias}@@n added line++}`,
+        );
+        expect(parts(view)).toEqual([
+          ['addition', 'Elias', 'A'],
+          ['addition', 'Mark', 'Z'],
+          ['addition', 'Elias', 'n added line'],
+        ]);
+        expect(visibleText(view)).toBe('AZn added line');
+      });
+
+      it('keeps typing in your part, without more markup', () => {
+        const view = suggesting(theirs, textFrom + 1);
+        type(view, 'Z');
+        type(view, 'Y');
+        type(view, 'X');
+
+        expect(view.state.doc.toString()).toBe(
+          `{++${elias}@@A++}{++${mark}@@ZYX++}{++${elias}@@n added line++}`,
+        );
+        expect(visibleText(view)).toBe('AZYXn added line');
+      });
+
+      it('puts what you type at the start of their text just before their addition', () => {
+        const view = suggesting(theirs, textFrom);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++}${theirs}`);
+        expect(visibleText(view)).toBe('ZAn added line');
+      });
+
+      it('puts what you type at the end of their text just after their addition', () => {
+        const view = suggesting(`${theirs} more`, textFrom + 'An added line'.length);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`${theirs}{++${mark}@@Z++} more`);
+        expect(visibleText(view)).toBe('An added lineZ more');
+      });
+
+      it('adds to an addition of yours already beside theirs', () => {
+        const yours = `{++${mark}@@Y++}`;
+        let view = suggesting(`${theirs}${yours}`, textFrom + 'An added line'.length);
+        type(view, 'Z');
+        expect(view.state.doc.toString()).toBe(`${theirs}{++${mark}@@ZY++}`);
+
+        view = suggesting(`${yours}${theirs}`, yours.length + textFrom);
+        type(view, 'Z');
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@YZ++}${theirs}`);
+      });
+
+      it('keeps a deletion+addition pair together when you type at the start of its new text', () => {
+        const pair = `{--${elias}@@old words--}{++${elias}@@new words++}`;
+        const view = suggesting(pair, pair.indexOf('new words'));
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++}${pair}`);
+        const [, deletion, addition] = view.state.field(criticMarkupField);
+        expect(isAdjacentEditPair(deletion, addition)).toBe(true);
+      });
+
+      it('splits the new text of a deletion+addition pair, which keeps its first part', () => {
+        const pair = `{--${elias}@@old words--}{++${elias}@@new words++}`;
+        const view = suggesting(pair, pair.indexOf('new words') + 3);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(
+          `{--${elias}@@old words--}{++${elias}@@new++}{++${mark}@@Z++}{++${elias}@@ words++}`,
+        );
+        const [deletion, first] = view.state.field(criticMarkupField);
+        expect(isAdjacentEditPair(deletion, first)).toBe(true);
+      });
+
+      it('splits their addition around a paste', () => {
+        const view = suggesting(theirs, textFrom + 1);
+        type(view, 'One\n\nTwo', 'input.paste');
+
+        expect(view.state.doc.toString()).toBe(
+          `{++${elias}@@A++}{++${mark}@@One\n\nTwo++}{++${elias}@@n added line++}`,
+        );
+      });
+
+      it('splits an addition without metadata, whose parts stay without', () => {
+        const view = suggesting('{++An added line++}', 4);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`{++A++}{++${mark}@@Z++}{++n added line++}`);
+      });
+
+      it('joins their parts again when you delete all you typed', () => {
+        const view = suggesting(theirs, textFrom + 1);
+        type(view, 'Z');
+        type(view, 'Y');
+        backspace(view);
+        backspace(view);
+
+        expect(view.state.doc.toString()).toBe(theirs);
+        expect(view.state.selection.main.head).toBe(textFrom + 1);
+      });
+
+      it('never wraps their markup in a deletion from the edge of your part', () => {
+        const view = suggesting(theirs, textFrom + 1);
+        type(view, 'Z');
+        const split = view.state.doc.toString();
+        const zFrom = split.indexOf('@@Z') + 2;
+        view.dispatch({ selection: { anchor: zFrom } });
+        backspace(view);
+        view.dispatch({ selection: { anchor: zFrom + 1 } });
+        view.dispatch({ changes: { from: zFrom + 1, to: zFrom + 2 }, userEvent: 'delete.forward' });
+
+        expect(view.state.doc.toString()).toBe(split);
+      });
+
+      it('nests a deletion in their addition when you delete some of its text', () => {
+        const view = suggesting(theirs, textFrom + 2);
+        backspace(view);
+
+        expect(view.state.doc.toString()).toBe(`{++${elias}@@A{--${mark}@@n--} added line++}`);
+        expect(parts(view)).toEqual([
+          ['addition', 'Elias', `A{--${mark}@@n--} added line`],
+          ['deletion', 'Mark', 'n'],
+        ]);
+      });
+
+      it('nests a substitution in their addition when you replace some of its text', () => {
+        const view = suggesting(theirs, textFrom + 3, textFrom + 8);
+        type(view, 'new');
+
+        expect(view.state.doc.toString()).toBe(`{++${elias}@@An {~~${mark}@@added~>new~~} line++}`);
+        expect(parts(view).map(([type, author]) => [type, author])).toEqual([
+          ['addition', 'Elias'],
+          ['substitution', 'Mark'],
+        ]);
+      });
+
+      it('puts text dropped into an addition of yours in its text', () => {
+        const yours = `Drag me. {++${mark}@@Mine++}`;
+        const into = yours.indexOf('Mine') + 2;
+        const view = suggesting(yours, 5, 7);
+        view.dispatch({
+          changes: [{ from: 5, to: 7 }, { from: into, insert: 'me' }],
+          userEvent: 'move.drop',
+        });
+
+        expect(view.state.doc.toString()).toBe(`Drag {--${mark}@@me--}. {++${mark}@@Mimene++}`);
+      });
+
+      it('splits their addition where a deletion of yours in it starts when you type in that', () => {
+        const nested = `{++${elias}@@An {--${mark}@@added--} line++}`;
+        const view = suggesting(nested, nested.indexOf('added') + 2);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(
+          `{++${elias}@@An ++}{++${mark}@@Z++}{++${elias}@@{--${mark}@@added--} line++}`,
+        );
+      });
+    });
   });
 
   describe('Accept/Reject Buttons', () => {
@@ -687,6 +894,59 @@ describe('CriticMarkup Extension', () => {
       rejectBtn.click();
 
       expect(view.state.doc.toString()).toBe('hello  end');
+    });
+
+    describe('with a deletion nested in an addition', () => {
+      // Mark's deletion of "n" in Elias's addition; the cursor is in the deletion
+      const doc = '{++{"author":"Elias"}@@A{--{"author":"Mark"}@@n--} added line++}';
+      const deletionFrom = doc.indexOf('{--');
+      const buttons = (view: EditorView, from: number) =>
+        view.contentDOM.querySelector(`.cm-criticmarkup-buttons[data-range-from="${from}"]`)!;
+
+      it('shows buttons for both, each acting on its own change', () => {
+        let { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('@@n') + 3);
+        cleanup = c;
+        expect(view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons')).toHaveLength(2);
+
+        (buttons(view, deletionFrom).querySelector('.cm-criticmarkup-accept') as HTMLButtonElement).click();
+        expect(view.state.doc.toString()).toBe('{++{"author":"Elias"}@@A added line++}');
+        c();
+
+        ({ view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('@@n') + 3));
+        cleanup = c;
+        (buttons(view, deletionFrom).querySelector('.cm-criticmarkup-reject') as HTMLButtonElement).click();
+        expect(view.state.doc.toString()).toBe('{++{"author":"Elias"}@@An added line++}');
+        c();
+
+        ({ view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('@@n') + 3));
+        cleanup = c;
+        (buttons(view, 0).querySelector('.cm-criticmarkup-accept') as HTMLButtonElement).click();
+        expect(view.state.doc.toString()).toBe('A{--{"author":"Mark"}@@n--} added line');
+      });
+    });
+
+    it('keeps the cursor where it is when a button is pressed', () => {
+      // CodeMirror would move it to where the press maps, which hidden syntax
+      // throws off: out of the change, taking the buttons away before the click
+      const { view, cleanup: c } = createCriticMarkupEditor('hello {++world++} end', 10);
+      cleanup = c;
+      const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 });
+
+      view.contentDOM.querySelector('.cm-criticmarkup-reject')!.dispatchEvent(press);
+
+      expect(press.defaultPrevented).toBe(true);
+      expect(view.state.selection.main.head).toBe(10);
+    });
+
+    it('acts on its own change when the cursor touches two', () => {
+      // The cursor at 7 is at the end of the first and the start of the second
+      const { view, cleanup: c } = createCriticMarkupEditor('{++a++}{++b++}', 7);
+      cleanup = c;
+      const second = view.contentDOM.querySelector('.cm-criticmarkup-buttons[data-range-from="7"]')!;
+
+      (second.querySelector('.cm-criticmarkup-accept') as HTMLButtonElement).click();
+
+      expect(view.state.doc.toString()).toBe('{++a++}b');
     });
   });
 

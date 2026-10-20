@@ -117,6 +117,79 @@ describe('CriticMarkup Commands', () => {
     });
   });
 
+  describe('a change nested in an addition', () => {
+    // Mark's deletion of "n" in Elias's pending addition
+    const doc = '{++{"author":"Elias"}@@A{--{"author":"Mark"}@@n--} added line++}';
+    const inDeletion = doc.indexOf('@@n') + 3;
+
+    it('is the one accepted at a cursor in it', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, inDeletion);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('{++{"author":"Elias"}@@A added line++}');
+    });
+
+    it('is the one rejected at a cursor in it', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, inDeletion);
+      cleanup = c;
+
+      expect(rejectChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('{++{"author":"Elias"}@@An added line++}');
+    });
+
+    it('leaves the addition to a cursor outside it', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf(' line'));
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('A{--{"author":"Mark"}@@n--} added line');
+    });
+
+    it('is not a comment on the addition: that stays', () => {
+      const commented = '{++{"author":"Elias"}@@An {==added==}{>>{"author":"Mark"}@@Why?<<} line++}';
+      const { view, cleanup: c } = createCriticMarkupEditor(commented, commented.indexOf('<<}') + 3);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('An {==added==}{>>{"author":"Mark"}@@Why?<<} line');
+    });
+  });
+
+  describe("an addition typed into someone else's", () => {
+    // Suggestion mode split Elias's addition around Mark's "Z"
+    const elias = '{"author":"Elias","timestamp":1760000000000}';
+    const split = `{++${elias}@@A++}{++{"author":"Mark","timestamp":1770000000000}@@Z++}{++${elias}@@n added line++}`;
+    const inZ = split.indexOf('@@Z') + 3;
+
+    it('joins their two parts again when rejected', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(split, inZ);
+      cleanup = c;
+
+      expect(rejectChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(`{++${elias}@@An added line++}`);
+    });
+
+    it('stays between their parts when accepted', () => {
+      const { view, cleanup: c } = createCriticMarkupEditor(split, inZ);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(`{++${elias}@@A++}Z{++${elias}@@n added line++}`);
+    });
+
+    it('leaves two different additions apart when rejected between them', () => {
+      const doc = '{++{"author":"Elias","timestamp":1}@@A++}{++Z++}{++{"author":"Elias","timestamp":2}@@B++}';
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('Z'));
+      cleanup = c;
+
+      expect(rejectChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(
+        '{++{"author":"Elias","timestamp":1}@@A++}{++{"author":"Elias","timestamp":2}@@B++}',
+      );
+    });
+  });
+
   describe('Bulk accept/reject', () => {
     it('accepts all additions in selection', () => {
       const content = 'hello {++foo++} mid {++bar++} end';

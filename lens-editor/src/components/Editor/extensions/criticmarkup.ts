@@ -18,7 +18,13 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
-import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
+import {
+  criticMarkupKeymap,
+  acceptChangeAtCursor,
+  rejectChangeAtCursor,
+  applyChange,
+  removalJoiningSplit,
+} from './criticmarkup-commands';
 import { parse, parseThreads, isAdjacentEditPair, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 export interface CriticMarkupCommentBadgeInfo {
@@ -296,25 +302,47 @@ class BulkAcceptRejectWidget extends WidgetType {
 }
 
 /**
+ * The change the accept/reject buttons `container` belong to: the range they
+ * name, or both ranges of a merged deletion+addition pair. Null for bulk
+ * buttons, or when no range matches any more.
+ */
+function buttonRanges(view: EditorView, container: HTMLElement | null): CriticMarkupRange[] | null {
+  if (!container?.dataset.rangeFrom || !container.dataset.rangeTo) return null;
+  const from = parseInt(container.dataset.rangeFrom, 10);
+  const to = parseInt(container.dataset.rangeTo, 10);
+  const ranges = view.state.field(criticMarkupField);
+  if (container.dataset.merged) {
+    const deletion = ranges.find((r) => r.type === 'deletion' && r.from === from);
+    const addition = deletion && ranges.find((r) => isAdjacentEditPair(deletion, r) && r.to === to);
+    return deletion && addition ? [deletion, addition] : null;
+  }
+  const range = ranges.find((r) => r.from === from && r.to === to);
+  return range ? [range] : null;
+}
+
+/**
  * Runs the accept or reject button that `target` is (in) and returns true, or
- * returns false when it is not one. The change acted on is chosen by the
- * selection: `savedSelection` (a selection the button's mousedown would have
- * collapsed) is restored first, or for a merged deletion+addition pair the
- * selection spans both ranges. Afterwards the selection collapses to the cursor.
+ * returns false when it is not one. The buttons act on their own change (with a
+ * deletion nested in an addition, or two changes touching, the cursor is in
+ * more than one, and each shows its buttons); bulk buttons act on the
+ * selection, restoring `savedSelection` first (a selection the button's
+ * mousedown would have collapsed). Afterwards the selection collapses to the
+ * cursor.
  */
 function runButton(view: EditorView, target: HTMLElement, savedSelection: { from: number; to: number } | null): boolean {
   const accept = target.closest('.cm-criticmarkup-accept');
   if (!accept && !target.closest('.cm-criticmarkup-reject')) return false;
   const container = target.closest('.cm-criticmarkup-buttons') as HTMLElement | null;
-  if (savedSelection) {
-    view.dispatch({ selection: { anchor: savedSelection.from, head: savedSelection.to } });
-  } else if (container?.dataset.merged) {
-    const from = parseInt(container.dataset.rangeFrom!, 10);
-    const to = parseInt(container.dataset.rangeTo!, 10);
-    view.dispatch({ selection: { anchor: from, head: to } });
+  const own = savedSelection ? null : buttonRanges(view, container);
+  if (own) {
+    applyChange(view, own, accept ? 'accept' : 'reject');
+  } else {
+    if (savedSelection) {
+      view.dispatch({ selection: { anchor: savedSelection.from, head: savedSelection.to } });
+    }
+    if (accept) acceptChangeAtCursor(view);
+    else rejectChangeAtCursor(view);
   }
-  if (accept) acceptChangeAtCursor(view);
-  else rejectChangeAtCursor(view);
   view.dispatch({ selection: { anchor: view.state.selection.main.head } });
   return true;
 }
@@ -343,8 +371,11 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           const sel = view.state.selection.main;
           if (sel.from !== sel.to) {
             this.savedSelection = { from: sel.from, to: sel.to };
-            e.preventDefault(); // Prevent selection collapse
           }
+          // Keep the selection, collapsed too: the cursor moving to where the
+          // click maps (hidden syntax throws that off) could take it out of
+          // the change, and the buttons away before the click
+          e.preventDefault();
         }
       });
 
@@ -667,8 +698,9 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
           const sel = view.state.selection.main;
           if (sel.from !== sel.to) {
             this.savedSelection = { from: sel.from, to: sel.to };
-            e.preventDefault();
           }
+          // Keep the selection (see criticMarkupPlugin)
+          e.preventDefault();
         }
       });
 
@@ -953,11 +985,64 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
 );
 
 /**
+ * The change that adds `text` at `pos` as the current author's addition (with
+ * metadata `meta`), and the cursor after the text.
+ *
+ * It never goes inside another pending addition: the parsers (this one, the
+ * relay's and the review page's) end an addition at the first `++}`, so a
+ * nested addition cut the outer one short and showed the rest as raw markup.
+ * Into an addition of your own, the text just goes in. Another author's is
+ * split around yours instead: their part, yours, their part, each part keeping
+ * its author and time. At the start or end of their text yours goes just
+ * before or after theirs (into an addition of yours already there), and before
+ * the deletion of a deletion+addition pair, which must stay together. Inside a
+ * change nested in their addition (a deletion of part of it), yours goes where
+ * that change starts.
+ */
+function placeAddition(
+  state: EditorState,
+  ranges: readonly CriticMarkupRange[],
+  pos: number,
+  text: string,
+  meta: string,
+): { change: ChangeSpec; cursor: number } {
+  const wrapped = `{++${meta}@@${text}++}`;
+  const around = ranges.find((r) => r.type === 'addition' && r.from < pos && pos < r.to);
+  if (!around) return { change: { from: pos, insert: wrapped }, cursor: pos + wrapped.length - 3 };
+  if (around.metadata?.author === currentAuthor) {
+    const into = Math.min(Math.max(pos, around.contentFrom), around.contentTo);
+    return { change: { from: into, insert: text }, cursor: into + text.length };
+  }
+
+  const theirs = around;
+  const nested = ranges.find(
+    (r) => r !== theirs && r.from >= theirs.contentFrom && r.to <= theirs.contentTo && r.from < pos && pos < r.to,
+  );
+  if (nested) pos = nested.from;
+
+  if (pos > theirs.contentFrom && pos < theirs.contentTo) {
+    const reopen = state.doc.sliceString(theirs.from, theirs.contentFrom);
+    return { change: { from: pos, insert: `++}${wrapped}${reopen}` }, cursor: pos + wrapped.length };
+  }
+  const before = pos <= theirs.contentFrom;
+  const at = before ? (ranges.find((r) => isAdjacentEditPair(r, theirs))?.from ?? theirs.from) : theirs.to;
+  const mine = ranges.find(
+    (r) => r.type === 'addition' && r.metadata?.author === currentAuthor && (before ? r.to : r.from) === at,
+  );
+  if (mine) {
+    const into = before ? mine.contentTo : mine.contentFrom;
+    return { change: { from: into, insert: text }, cursor: into + text.length };
+  }
+  return { change: { from: at, insert: wrapped }, cursor: at + wrapped.length - 3 };
+}
+
+/**
  * Transaction filter that wraps insertions in CriticMarkup when suggestion mode is ON.
  * Insertions are wrapped in {++metadata@@content++} format.
  *
  * Continuous typing optimization: If cursor is inside an existing addition by the same
  * author, let the edit through without wrapping to avoid per-character markup.
+ * Inside another author's addition, see placeAddition.
  */
 const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) => {
   // Only process document changes
@@ -1008,11 +1093,21 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
     });
 
     if (wouldEmpty) {
+      // If it split someone else's addition, that one's parts join up again
+      const join = removalJoiningSplit(tr.startState, ownAddition);
       return {
-        changes: [{ from: ownAddition.from, to: ownAddition.to, insert: '' }],
-        selection: EditorSelection.cursor(ownAddition.from),
+        changes: [join ?? { from: ownAddition.from, to: ownAddition.to, insert: '' }],
+        selection: EditorSelection.cursor(join ? join.from : ownAddition.from),
         effects: tr.effects,
       };
+    }
+
+    // Beyond the wrapper may be another change's hidden markup (the parts of
+    // someone else's addition that this one was typed into): leave it, rather
+    // than wrap a delimiter character in a deletion
+    if ((escapesLeft && ranges.some((r) => r.to === ownAddition.from))
+      || (escapesRight && ranges.some((r) => r.from === ownAddition.to))) {
+      return { effects: tr.effects };
     }
 
     if (escapesLeft && ownAddition.from > 0) {
@@ -1137,9 +1232,9 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
         // Typing inside deletion: create addition before the deletion block
         const ts = Date.now();
         const addMeta = JSON.stringify({ author: currentAuthor, timestamp: ts });
-        const ins = `{++${addMeta}@@${added}++}`;
-        extChanges.push({ from: ownDeletion.from, to: ownDeletion.from, insert: ins });
-        extCursorPos = ownDeletion.from + ins.length - 3;
+        const placed = placeAddition(tr.startState, ranges, ownDeletion.from, added, addMeta);
+        extChanges.push(placed.change);
+        extCursorPos = placed.cursor;
       }
     });
 
@@ -1231,18 +1326,10 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
         }
       }
     } else if (added) {
-      // Pure insertion
-      newChanges.push({
-        from: fromA,
-        to: fromA,
-        insert: `{++${meta}@@${added}++}`,
-      });
-      // Position cursor before ++} (inside the addition content)
-      const change = newChanges[newChanges.length - 1] as {
-        from: number;
-        insert: string;
-      };
-      newCursorPos = change.from + change.insert.length - 3;
+      // Pure insertion, with the cursor after it (inside the addition content)
+      const placed = placeAddition(tr.startState, ranges, fromA, added, meta);
+      newChanges.push(placed.change);
+      newCursorPos = placed.cursor;
     }
   });
 

@@ -54,6 +54,13 @@ describe('buildMarkdownReading', () => {
     expect(texts(doc)).toEqual(['Keep this text new here.']);
   });
 
+  it("reads an addition split around someone else's typing, and a deletion in it, as shown", () => {
+    // Suggestion mode splits Elias's addition around Mark's; Mark's deletion is nested in it
+    const elias = '{"author":"Elias"}';
+    const doc = `{++${elias}@@An ++}{++{"author":"Mark"}@@extra ++}{++${elias}@@added {--{"author":"Mark"}@@new --}line.++}`;
+    expect(texts(doc)).toEqual(['An extra added line.']);
+  });
+
   it('keeps abbreviations inside one sentence', () => {
     expect(texts('Dr. Smith said so, e.g. today. Then he left.')).toEqual([
       'Dr. Smith said so, e.g. today.',
