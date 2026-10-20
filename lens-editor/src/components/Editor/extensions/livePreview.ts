@@ -839,18 +839,18 @@ const livePreviewPlugin = ViewPlugin.fromClass(
                 // Hide the closing fence line (```) with one widget too. It
                 // takes the whole line: a container prefix there (`> `) belongs
                 // to this node, whose children are skipped, so nothing else
-                // decorates it. A block with no closing fence keeps the mark on
-                // its last line.
+                // decorates it. A block with no closing fence runs to the end
+                // of the document (or of its quote or list item), and its last
+                // line is code, shown like the rest. Its last child is then not
+                // a fence on that line (in `- x\n  ```\n  `, the opening one).
                 const closeLine = view.state.doc.lineAt(node.to);
-                if (closeLine.from < closeLine.to && closeLine.number !== openLine.number) {
-                  const closeMark = node.node.lastChild;
-                  const closed = closeMark?.name === 'CodeMark' && closeMark.from >= closeLine.from;
+                const closeMark = node.node.lastChild;
+                const closed = closeMark?.name === 'CodeMark' && closeMark.from >= closeLine.from;
+                if (closed && closeLine.number !== openLine.number) {
                   decorations.push({
                     from: closeLine.from,
                     to: closeLine.to,
-                    deco: closed
-                      ? Decoration.replace({ widget: new HiddenFenceWidget(closeLine.text) })
-                      : Decoration.mark({ class: HIDDEN_CLASS }),
+                    deco: Decoration.replace({ widget: new HiddenFenceWidget(closeLine.text) }),
                   });
                 }
 

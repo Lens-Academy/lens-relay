@@ -1073,6 +1073,35 @@ describe('livePreview - fenced code blocks', () => {
     }
   });
 
+  // With no closing fence, a code block runs to the end of the document, or of
+  // its quote or list item. Live preview took its last line for the closing
+  // fence and hid it while the cursor was elsewhere
+  // (e2e/live-preview-code-fences.spec.ts)
+  it('shows the last line of a code block with no closing fence', () => {
+    const cases = [
+      // Left open at the end of a note
+      ['before\n\n```js\nconst x = 1;\nconst y = 2;', 'const y = 2;'],
+      // A shorter fence doesn't close it
+      ['before\n\n````\nx\n```\ny', 'y'],
+      // Its quote or list item ends first
+      ['before\n\n> ```js\n> x\n> y\n\nafter', '> y'],
+      ['before\n\n- ```bash\n  npm ci\n  npm test\nafter', '  npm test'],
+      // Its last line is blank, so its last child is the opening fence
+      ['before\n\n- x\n  ```\n  ', '  '],
+    ];
+    for (const [doc, last] of cases) {
+      const { view, cleanup: c } = createTestEditor(doc, 0);
+      try {
+        const line = view.contentDOM.querySelectorAll('.cm-line')[doc.split('\n').indexOf(last)];
+        expect(line.textContent).toBe(last);
+        expect(line.querySelectorAll('.cm-hidden-syntax')).toHaveLength(0);
+        expect(line.classList.contains('cm-code-block')).toBe(true);
+      } finally {
+        c();
+      }
+    }
+  });
+
   it('multiple code blocks styled independently', () => {
     const content = '```\nblock1\n```\ntext\n```\nblock2\n```';
     const { view, cleanup: c } = createTestEditor(content, content.indexOf('text'));
