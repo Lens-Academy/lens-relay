@@ -37,32 +37,36 @@ import {
   type CarriedRange,
 } from '../../../lib/carried-authorship';
 import { carrierClientId, isOwnClient, isPendingClassification } from '../../../lib/provenance';
+import { copiedPieces, copiedRanges, piecesText, type DocRange } from './copiedText';
 
 export const carriedAuthors = Annotation.define<CarriedRange[]>();
 
+/** The text of `pieces` (copiedPieces) as it goes on the clipboard, with its authors */
+function authoredPieces(state: EditorState, pieces: DocRange[][], ydoc: Y.Doc, ytext: Y.Text): AuthoredText {
+  const spans: AuthorSpan[] = [];
+  pieces.forEach((range, i) => {
+    if (i > 0) spans.push({ length: 1, author: null });
+    for (const piece of range) spans.push(...authorSpans(ydoc, ytext, piece.from, piece.to));
+  });
+  return { text: piecesText(state, pieces), spans };
+}
+
 /** What a copy or cut of the current selection puts on the clipboard, with
  *  its authors: the selected ranges joined by line breaks, or, with nothing
- *  selected, the cursor lines (CodeMirror's own copiedRange). */
+ *  selected, the cursor lines (CodeMirror's own copiedRange), less what
+ *  extensions leave off it (copiedText.ts). */
 export function copiedAuthoredText(state: EditorState, ydoc: Y.Doc, ytext: Y.Text): AuthoredText | null {
   if (ytext.length !== state.doc.length) return null;
-  let ranges = state.selection.ranges.filter((r) => !r.empty).map((r) => ({ from: r.from, to: r.to }));
-  if (!ranges.length) {
-    let upto = -1;
-    ranges = [];
-    for (const { from } of state.selection.ranges) {
-      const line = state.doc.lineAt(from);
-      if (line.number > upto) ranges.push({ from: line.from, to: line.to });
-      upto = line.number;
-    }
-  }
-  const parts: string[] = [];
-  const spans: AuthorSpan[] = [];
-  ranges.forEach((range, i) => {
-    if (i > 0) spans.push({ length: 1, author: null });
-    parts.push(state.sliceDoc(range.from, range.to));
-    spans.push(...authorSpans(ydoc, ytext, range.from, range.to));
-  });
-  return { text: parts.join('\n'), spans };
+  const { ranges, linewise } = copiedRanges(state);
+  return authoredPieces(state, copiedPieces(state, ranges, linewise), ydoc, ytext);
+}
+
+/** What a drag of the selection carries, with its authors. CodeMirror drags
+ *  the main selection only (not every range, nor whole lines as a copy does). */
+export function draggedAuthoredText(state: EditorState, ydoc: Y.Doc, ytext: Y.Text): AuthoredText | null {
+  const { from, to } = state.selection.main;
+  if (from === to || ytext.length !== state.doc.length) return null;
+  return authoredPieces(state, copiedPieces(state, [{ from, to }], false), ydoc, ytext);
 }
 
 /** Authors of a pasted or dropped chunk, if it is the remembered copy: as
@@ -129,8 +133,18 @@ export function planCarriedAuthors(tr: Transaction, ydoc: Y.Doc, ytext: Y.Text):
   }
   const sourceTexts = sources.map((s) => tr.startState.sliceDoc(s.from, s.to));
   const sourceSpans: (AuthorSpan[] | null)[] = sources.map(() => null);
+  const dropped = tr.isUserEvent('move.drop');
 
   for (const { fromB, text } of inserts(tr)) {
+    // A drag can leave out parts of the selection that the move keeps in place
+    // (copiedText.ts): its text is then in no one piece the move deletes, and
+    // the authors remembered when the drag started cover it
+    const recalled = dropped ? recallChunk(text) : null;
+    const length = recalled?.spans.reduce((n, s) => n + s.length, 0) ?? 0;
+    if (recalled && !sourceTexts.some((s) => s.includes(text.slice(recalled.offset, recalled.offset + length)))) {
+      plan.push(...placeSpans(recalled.spans, fromB + recalled.offset));
+      continue;
+    }
     for (let i = 0; i < sources.length; i++) {
       const match = matchSource(text, sourceTexts[i]);
       if (!match) continue;
@@ -207,13 +221,9 @@ export function keepAuthorship(ydoc: Y.Doc, ytext: Y.Text): Extension {
     EditorView.domEventHandlers({
       copy: (_event, view) => remember(view),
       cut: (_event, view) => remember(view),
-      // CodeMirror drags the main selection only (not every range, nor whole
-      // lines as a copy does), so this records just that
       dragstart: (_event, view) => {
-        const { from, to } = view.state.selection.main;
-        if (from < to && ytext.length === view.state.doc.length) {
-          rememberCopied({ text: view.state.sliceDoc(from, to), spans: authorSpans(ydoc, ytext, from, to) });
-        }
+        const dragged = draggedAuthoredText(view.state, ydoc, ytext);
+        if (dragged && dragged.text) rememberCopied(dragged);
         return false;
       },
     }),
