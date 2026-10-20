@@ -8,7 +8,9 @@ import type { EditorView } from '@codemirror/view';
 // (reading 'top')". Every character of a hidden closing fence had the same x,
 // and a click on its row put the cursor between the backticks, where typing
 // breaks the fence (HiddenFenceWidget in
-// src/components/Editor/extensions/livePreview.ts).
+// src/components/Editor/extensions/livePreview.ts). A code block with no
+// closing fence runs to the end of the document, and its last line of code
+// was hidden as if it were one.
 
 type FixtureWindow = Window & { view: EditorView };
 
@@ -46,6 +48,18 @@ async function placeCursor(page: Page, n: number, column: number): Promise<void>
 /** The box of line `n`'s row */
 async function rowBox(page: Page, n: number): Promise<{ x: number; y: number; width: number; height: number }> {
   return (await page.locator('.cm-content > .cm-line').nth(n - 1).boundingBox())!;
+}
+
+/** The text line `n` shows: its characters that aren't hidden at font-size 0 */
+function shownText(page: Page, n: number): Promise<string> {
+  return page.locator('.cm-content > .cm-line').nth(n - 1).evaluate((line) => {
+    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+    let text = '';
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (getComputedStyle(node.parentElement!).fontSize !== '0px') text += node.textContent;
+    }
+    return text;
+  });
 }
 
 test.describe('Live preview: the fence rows of a code block', () => {
@@ -118,5 +132,37 @@ test.describe('Live preview: the fence rows of a code block', () => {
     expect(steps.map((s) => s.line)).toEqual(everyLine);
     // Set by the first press, then kept
     expect(new Set(steps.slice(1).map((s) => s.goal)).size).toBe(1);
+  });
+
+  test('a code block left without a closing fence keeps its last line shown', async ({ page }) => {
+    // Start a code block at the end of the note, then click elsewhere
+    await placeCursor(page, LINES, 'Last line.'.length);
+    for (const text of ['```js', 'let a = 1;', 'let b = 2;']) {
+      await page.keyboard.press('Enter');
+      await page.keyboard.type(text);
+    }
+    const box = await rowBox(page, 1);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    expect(await cursor(page)).toMatchObject({ line: 1 });
+
+    // Its opening fence is hidden, and its code shown, the last line too
+    expect(await shownText(page, LINES + 1), 'the opening fence').toBe('');
+    expect(await shownText(page, LINES + 2)).toBe('let a = 1;');
+    expect(await shownText(page, LINES + 3), 'the last line').toBe('let b = 2;');
+    for (const n of [LINES + 1, LINES + 2, LINES + 3]) {
+      await expect(page.locator('.cm-content > .cm-line').nth(n - 1)).toHaveClass(/\bcm-code-block\b/);
+    }
+
+    // Its copy button copies all of its code (caught here, so the test
+    // doesn't write to the system clipboard)
+    const copy = page.locator('.cm-code-copy-btn');
+    await expect(copy).toHaveCount(OPENING_FENCES.length + 1);
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = async (text) => {
+        (window as unknown as { copied: string }).copied = text;
+      };
+    });
+    await copy.last().click();
+    expect(await page.evaluate(() => (window as unknown as { copied: string }).copied)).toBe('let a = 1;\nlet b = 2;');
   });
 });
