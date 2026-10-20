@@ -1005,7 +1005,7 @@ function placeAddition(
   pos: number,
   text: string,
   meta: string,
-): { change: ChangeSpec; cursor: number } {
+): { change: { from: number; insert: string }; cursor: number } {
   const wrapped = `{++${meta}@@${text}++}`;
   const around = ranges.find((r) => r.type === 'addition' && r.from < pos && pos < r.to);
   if (!around) {
@@ -1038,22 +1038,6 @@ function placeAddition(
     return { change: { from: into, insert: text }, cursor: into + text.length };
   }
   return { change: { from: at, insert: wrapped }, cursor: at + wrapped.length - 3 };
-}
-
-/**
- * The innermost suggestion or comment that `from`-`to` lies strictly inside:
- * an edit's range, or an insertion's position when they're equal.
- */
-function innermostAround(
-  ranges: readonly CriticMarkupRange[],
-  from: number,
-  to: number,
-): CriticMarkupRange | undefined {
-  let inner: CriticMarkupRange | undefined;
-  for (const r of ranges) {
-    if (r.from < from && to < r.to && (!inner || r.from > inner.from)) inner = r;
-  }
-  return inner;
 }
 
 /** Where a substitution's `~>` starts */
@@ -1090,12 +1074,13 @@ function isMarkupAt(ranges: readonly CriticMarkupRange[], pos: number): boolean 
  *
  * The text of another author's deletion is already suggested for deletion:
  * Backspace or Delete there changes nothing but moves the cursor over it, and
- * what you type there goes just before their deletion, as inside one of yours.
- * A replacement inside a substitution is written as a deletion+addition pair,
- * the same change in markup that can sit inside a substitution. Nesting the
- * same kind of suggestion broke the outer one: the parsers (this one, the
- * relay's and the review page's) end it at the first closing delimiter.
- * Backspace or Delete on a substitution's `~>` moves the cursor over it too.
+ * what you type there (over a selection, too) goes just before their deletion,
+ * as inside one of yours. A replacement inside a substitution is written as a
+ * deletion+addition pair, the same change in markup that can sit inside a
+ * substitution. Nesting the same kind of suggestion, at any depth, broke the
+ * outer one: the parsers (this one, the relay's and the review page's) end it
+ * at the first closing delimiter. Backspace or Delete on a substitution's `~>`
+ * moves the cursor over it too.
  */
 const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) => {
   // Only process document changes
@@ -1323,34 +1308,37 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
   tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
     const deleted = tr.startState.doc.sliceString(fromA, toA);
     const added = inserted.toString();
-    const around = innermostAround(ranges, fromA, toA);
+    // The suggestions (and comments) the edit is inside of, outermost first
+    const around = ranges.filter((r) => r.from < fromA && toA < r.to);
+    const deletion = around.find((r) => r.type === 'deletion');
+    const substitutions = around.filter((r) => r.type === 'substitution');
 
-    if (
-      around?.type === 'deletion' &&
-      around.metadata?.author !== currentAuthor &&
-      (!deleted || (fromA >= around.contentFrom && toA <= around.contentTo))
-    ) {
-      // In someone else's deletion: what this deletes there is already
-      // suggested for deletion, and what it adds goes just before theirs
-      // (inside, accepting their deletion would drop it)
+    if (deletion && (!deleted || (fromA >= deletion.contentFrom && toA <= deletion.contentTo))) {
+      // In a pending deletion (one of yours with the cursor in it went to the
+      // branch above, unless this replaces text): what this deletes there is
+      // already suggested for deletion, and what it adds goes just before the
+      // deletion (inside, accepting the deletion would drop it)
       if (added) {
-        const placed = placeAddition(tr.startState, ranges, around.from, added, meta);
+        const placed = placeAddition(tr.startState, ranges, deletion.from, added, meta);
         newChanges.push(placed.change);
         newCursorPos = placed.cursor;
       } else {
         movedOver = cursorPos <= fromA ? toA : fromA;
       }
-    } else if (!added && around?.type === 'substitution' && fromA >= arrowOf(around) && toA <= arrowOf(around) + 2) {
+    } else if (!added && substitutions.some((s) => fromA >= arrowOf(s) && toA <= arrowOf(s) + 2)) {
       // The `~>` between a substitution's old and new text, which taking out
       // would break it: the cursor moves over it too
       movedOver = cursorPos <= fromA ? toA : fromA;
-    } else if (deleted && added && around?.type === 'substitution' && inSubstitutionText(around, fromA, toA)) {
-      // Replacement in a substitution -> a deletion+addition pair there (a
-      // substitution would end the outer one at its own `~~}`), with the
-      // cursor in the new text, where further typing goes
-      const pair = `{--${meta}@@${deleted}--}{++${meta}@@${added}++}`;
-      newChanges.push({ from: fromA, to: toA, insert: pair });
-      newCursorPos = fromA + pair.length - 3;
+    } else if (deleted && added && substitutions.length > 0 && substitutions.every((s) => inSubstitutionText(s, fromA, toA))) {
+      // Replacement in a substitution -> a deletion there and an addition just
+      // after it, a deletion+addition pair (a substitution would end the outer
+      // one at its own `~~}`). placeAddition places the addition, so it never
+      // goes inside an addition around it either
+      const deletionText = `{--${meta}@@${deleted}--}`;
+      const placed = placeAddition(tr.startState, ranges, toA, added, meta);
+      newChanges.push({ from: fromA, to: toA, insert: deletionText }, placed.change);
+      // The cursor in the new text, where further typing goes
+      newCursorPos = placed.cursor + (placed.change.from >= toA ? deletionText.length - deleted.length : 0);
     } else if (deleted && added) {
       // Replacement -> substitution
       const replacement = `{~~${meta}@@${deleted}~>${added}~~}`;

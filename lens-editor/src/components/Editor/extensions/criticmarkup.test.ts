@@ -623,9 +623,10 @@ describe('CriticMarkup Extension', () => {
       });
     });
 
-    // Mark edits in suggestion mode inside suggestions of Elias's
+    // Mark edits in suggestion mode inside suggestions of Elias's (and Luc's)
     const elias = '{"author":"Elias","timestamp":1760000000000}';
     const mark = '{"author":"Mark","timestamp":1770000000000}';
+    const luc = '{"author":"Luc","timestamp":1750000000000}';
 
     /** Mark is the author, and his metadata is `mark` */
     function editingAsMark() {
@@ -951,7 +952,6 @@ describe('CriticMarkup Extension', () => {
       });
 
       it("splits someone else's addition that their deletion is in, where the deletion starts", () => {
-        const luc = '{"author":"Luc","timestamp":1750000000000}';
         const nested = `{++${luc}@@An {--${elias}@@extra--} line++}`;
         const view = suggesting(nested, nested.indexOf('extra') + 2);
         type(view, 'Z');
@@ -959,6 +959,23 @@ describe('CriticMarkup Extension', () => {
         expect(view.state.doc.toString()).toBe(
           `{++${luc}@@An ++}{++${mark}@@Z++}{++${luc}@@{--${elias}@@extra--} line++}`,
         );
+      });
+
+      it('puts what you type in an addition inside their deletion before their deletion', () => {
+        // As suggestion mode used to nest one there
+        const nested = `{--${elias}@@Del{++${luc}@@xy++}eted--}`;
+        const view = suggesting(nested, nested.indexOf('xy') + 1);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++}${nested}`);
+      });
+
+      it('puts what you type over some of your own deleted text before your deletion', () => {
+        const yours = `{--${mark}@@Deleted--}`;
+        const view = suggesting(yours, yours.indexOf('Deleted') + 1, yours.indexOf('Deleted') + 3);
+        type(view, 'Q');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Q++}${yours}`);
       });
 
       it("treats a deletion without metadata as someone else's", () => {
@@ -1001,6 +1018,36 @@ describe('CriticMarkup Extension', () => {
           ['substitution', 'Elias', `o{--${mark}@@ld--}{++${mark}@@Q++} text~>new text`],
           ['deletion', 'Mark', 'ld'],
           ['addition', 'Mark', 'Q'],
+        ]);
+      });
+
+      it('splits an addition their substitution is in before the substitution, for your addition', () => {
+        // As replacing some of Luc's addition nests Elias's substitution in it:
+        // your addition would end Luc's at its `++}`
+        const nested = `{++${luc}@@An {~~${elias}@@old~>new~~} line++}`;
+        const view = suggesting(nested, nested.indexOf('new') + 1, nested.indexOf('new') + 3);
+        type(view, 'Q');
+
+        expect(view.state.doc.toString()).toBe(
+          `{++${luc}@@An ++}{++${mark}@@Q++}{++${luc}@@{~~${elias}@@old~>n{--${mark}@@ew--}~~} line++}`,
+        );
+        expect(view.state.selection.main.head).toBe(`{++${luc}@@An ++}{++${mark}@@Q`.length);
+      });
+
+      it('splits an addition in their substitution around yours when you replace some of its text', () => {
+        const nested = `{~~${elias}@@old~>n{++${luc}@@ew++} text~~}`;
+        const view = suggesting(nested, nested.indexOf('ew'), nested.indexOf('ew') + 1);
+        type(view, 'Q');
+
+        expect(view.state.doc.toString()).toBe(
+          `{~~${elias}@@old~>n{++${luc}@@{--${mark}@@e--}++}{++${mark}@@Q++}{++${luc}@@w++} text~~}`,
+        );
+        expect(parts(view).map(([type, author]) => [type, author])).toEqual([
+          ['substitution', 'Elias'],
+          ['addition', 'Luc'],
+          ['deletion', 'Mark'],
+          ['addition', 'Mark'],
+          ['addition', 'Luc'],
         ]);
       });
 
