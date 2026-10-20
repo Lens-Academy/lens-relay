@@ -39,6 +39,7 @@ import { wikilinkMetadataChanged } from './wikilinkEffects';
 import { noteEmbeds } from './noteEmbed';
 import { isImageEmbedTarget } from '../../../../shared/embeds';
 import { parseCalloutHeader, CalloutIconWidget } from './callouts';
+import { verticalMotionKeymap } from './verticalMotion';
 
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
@@ -1107,6 +1108,9 @@ export function livePreview(context?: WikilinkContext, { embeds = true }: { embe
     listHangingIndent, // wrapped list rows align with the item text in both modes
     // embeds: false inside an embed card, which never nests another
     livePreviewCompartment.of([livePreviewPlugin, ...(embeds ? [noteEmbeds] : []), obsidianCommentPlugin, frontmatterPlugin, livePreviewTheme]),
+    // After the embeds' own arrow keys: ArrowUp/ArrowDown stop on lines that
+    // start with hidden syntax, which CodeMirror's vertical move jumps over
+    verticalMotionKeymap,
   ];
 }
 
