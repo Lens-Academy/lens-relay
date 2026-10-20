@@ -721,6 +721,16 @@ describe('CriticMarkup Extension', () => {
         expect(visibleText(view)).toBe('An added lineZ more');
       });
 
+      it('puts what you type just after an addition of yours in it', () => {
+        // Where the cursor is one step right of the end of your text
+        const yours = `Text {++${mark}@@Y++}`;
+        const view = suggesting(`${yours} more`, yours.length);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`Text {++${mark}@@YZ++} more`);
+        expect(view.state.selection.main.head).toBe(`Text {++${mark}@@YZ`.length);
+      });
+
       it('adds to an addition of yours already beside theirs', () => {
         const yours = `{++${mark}@@Y++}`;
         let view = suggesting(`${theirs}${yours}`, textFrom + 'An added line'.length);
@@ -903,6 +913,14 @@ describe('CriticMarkup Extension', () => {
         expect(view.state.doc.toString()).toBe(`Text {++${mark}@@Z++}${theirs}`);
       });
 
+      it('adds it to an addition of yours just before their deletion', () => {
+        const yours = `{++${mark}@@Y++}`;
+        const view = suggesting(`${yours}${theirs}`, yours.length + textFrom + 3);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@YZ++}${theirs}`);
+      });
+
       it('puts what you type over some of their deleted text before it, and leaves their text whole', () => {
         const view = suggesting(theirs, textFrom + 1, textFrom + 5);
         type(view, 'Q');
@@ -984,6 +1002,20 @@ describe('CriticMarkup Extension', () => {
           ['deletion', 'Mark', 'ld'],
           ['addition', 'Mark', 'Q'],
         ]);
+      });
+
+      it('moves the cursor over its `~>` on Backspace and Delete, changing nothing', () => {
+        const view = suggesting(theirs, newFrom);
+        backspace(view);
+        backspace(view);
+
+        expect(view.state.doc.toString()).toBe(theirs);
+        expect(view.state.selection.main.head).toBe(newFrom - 2);
+
+        backspace(view, true);
+
+        expect(view.state.doc.toString()).toBe(theirs);
+        expect(view.state.selection.main.head).toBe(newFrom - 1);
       });
 
       it("does the same in your own substitution's old text", () => {

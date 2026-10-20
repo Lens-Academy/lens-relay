@@ -991,13 +991,13 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
  * It never goes inside another pending addition: the parsers (this one, the
  * relay's and the review page's) end an addition at the first `++}`, so a
  * nested addition cut the outer one short and showed the rest as raw markup.
- * Into an addition of your own, the text just goes in. Another author's is
- * split around yours instead: their part, yours, their part, each part keeping
- * its author and time. At the start or end of their text yours goes just
- * before or after theirs (into an addition of yours already there), and before
- * the deletion of a deletion+addition pair, which must stay together. Inside a
- * change nested in their addition (a deletion of part of it), yours goes where
- * that change starts.
+ * Into an addition of your own, or just after one, the text just goes in.
+ * Another author's is split around yours instead: their part, yours, their
+ * part, each part keeping its author and time. At the start or end of their
+ * text yours goes just before or after theirs (into an addition of yours
+ * already there), and before the deletion of a deletion+addition pair, which
+ * must stay together. Inside a change nested in their addition (a deletion of
+ * part of it), yours goes where that change starts.
  */
 function placeAddition(
   state: EditorState,
@@ -1008,7 +1008,11 @@ function placeAddition(
 ): { change: ChangeSpec; cursor: number } {
   const wrapped = `{++${meta}@@${text}++}`;
   const around = ranges.find((r) => r.type === 'addition' && r.from < pos && pos < r.to);
-  if (!around) return { change: { from: pos, insert: wrapped }, cursor: pos + wrapped.length - 3 };
+  if (!around) {
+    const yours = ranges.find((r) => r.type === 'addition' && r.metadata?.author === currentAuthor && r.to === pos);
+    if (yours) return { change: { from: yours.contentTo, insert: text }, cursor: yours.contentTo + text.length };
+    return { change: { from: pos, insert: wrapped }, cursor: pos + wrapped.length - 3 };
+  }
   if (around.metadata?.author === currentAuthor) {
     const into = Math.min(Math.max(pos, around.contentFrom), around.contentTo);
     return { change: { from: into, insert: text }, cursor: into + text.length };
@@ -1091,6 +1095,7 @@ function isMarkupAt(ranges: readonly CriticMarkupRange[], pos: number): boolean 
  * the same change in markup that can sit inside a substitution. Nesting the
  * same kind of suggestion broke the outer one: the parsers (this one, the
  * relay's and the review page's) end it at the first closing delimiter.
+ * Backspace or Delete on a substitution's `~>` moves the cursor over it too.
  */
 const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) => {
   // Only process document changes
@@ -1311,7 +1316,8 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
 
   const newChanges: ChangeSpec[] = [];
   let newCursorPos: number | undefined;
-  // Where the cursor goes if all the edit deletes is someone else's deleted text
+  // Where the cursor goes if all the edit deletes is someone else's deleted
+  // text (or a substitution's `~>`)
   let movedOver: number | undefined;
 
   tr.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
@@ -1334,6 +1340,10 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
       } else {
         movedOver = cursorPos <= fromA ? toA : fromA;
       }
+    } else if (!added && around?.type === 'substitution' && fromA >= arrowOf(around) && toA <= arrowOf(around) + 2) {
+      // The `~>` between a substitution's old and new text, which taking out
+      // would break it: the cursor moves over it too
+      movedOver = cursorPos <= fromA ? toA : fromA;
     } else if (deleted && added && around?.type === 'substitution' && inSubstitutionText(around, fromA, toA)) {
       // Replacement in a substitution -> a deletion+addition pair there (a
       // substitution would end the outer one at its own `~~}`), with the
@@ -1416,7 +1426,7 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
 
   if (newChanges.length === 0) {
     if (movedOver === undefined) return tr;
-    // Nothing to suggest: the cursor moves over their deleted text
+    // Nothing to suggest: the cursor moves over what it would delete
     return { selection: EditorSelection.cursor(movedOver), effects: tr.effects, scrollIntoView: tr.scrollIntoView };
   }
 

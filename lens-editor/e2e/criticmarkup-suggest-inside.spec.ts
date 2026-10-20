@@ -352,6 +352,16 @@ test.describe("Suggestion mode inside someone else's deletion or substitution", 
     await expectNoRawMarkup(page, 7);
   });
 
+  test("Backspace at the start of their substitution's new text moves over its `~>`", async ({ page }) => {
+    const from = await posOf(page, 7, 'new text');
+    await place(page, from);
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Backspace');
+
+    expect(await lineText(page, 7)).toBe(ORIGINAL[7]);
+    expect(await head(page)).toBe(from - 2);
+  });
+
   test("Backspace in your deletion just after theirs leaves their markup whole", async ({ page }) => {
     // Delete just after their deletion suggests deleting the space, beside theirs
     await place(page, await posOf(page, 6, ' and more'));
