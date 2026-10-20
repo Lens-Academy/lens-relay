@@ -7,6 +7,15 @@
   font-size: 0;
 }
 
+/* Hidden syntax beside text shown on its line: no box at all, so that
+   CodeMirror's pointer search (clicks, drags) passes over it instead of
+   reading a zero-height box as one on another row. Not on a line with
+   nothing else to measure, where that search throws
+   (hiddenSyntaxMarks in criticmarkup.ts) */
+.cm-hidden-syntax-boxless {
+  display: contents;
+}
+
 /* Heading styles - progressively smaller sizes matching Obsidian */
 /* Remove any underlines from headings (from defaultHighlightStyle or other sources) */
 .cm-heading-1,

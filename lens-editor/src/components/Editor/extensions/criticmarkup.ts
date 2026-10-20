@@ -134,7 +134,14 @@ class CommentBadgeWidget extends WidgetType {
     span.className = 'cm-comment-badge';
     span.textContent = String(this.number);
     span.dataset.commentFrom = String(this.threadFrom);
-    return span;
+    // CodeMirror places a click by the boxes of the line's pieces, this
+    // widget's outer one among them (see hiddenSyntaxMarks). The badge is
+    // shorter than the text around it, so a click low on the line took it
+    // for a box on the row above; a plain span around it is as tall as the text.
+    const wrapper = document.createElement('span');
+    wrapper.className = 'cm-comment-badge-wrapper';
+    wrapper.appendChild(span);
+    return wrapper;
   }
 
   eq(other: CommentBadgeWidget): boolean {
@@ -187,6 +194,49 @@ function selectionIntersects(
   to: number
 ): boolean {
   return selection.ranges.some((range) => range.to >= from && range.from <= to);
+}
+
+/** A suggestion's hidden delimiter (with its metadata), and whether its shown text is beside it on its line */
+interface HiddenPiece {
+  from: number;
+  to: number;
+  besideText: boolean;
+}
+
+const hiddenSyntaxMark = Decoration.mark({ class: 'cm-hidden-syntax' });
+const boxlessHiddenSyntaxMark = Decoration.mark({ class: 'cm-hidden-syntax cm-hidden-syntax-boxless' });
+
+/**
+ * The marks that hide suggestions' delimiters and metadata.
+ *
+ * CodeMirror turns a pointer position into a document position (clicks,
+ * drags, vertical cursor motion) with a binary search over the boxes of the
+ * line's pieces. Hidden syntax is font-size: 0, a box with no height on the
+ * baseline. The search took it for a box on the row below the pointer (or
+ * above it, for a point low on the line) and went on looking only before it
+ * (or after it), wherever the pointer was: a click on a deletion+addition
+ * pair's new text landed at the end of the old text, 55 characters early.
+ * Where the search met the ✓ ✗ buttons, which it doesn't measure, it went on
+ * from a random piece, so the same point landed in different places. Hidden
+ * syntax beside a suggestion's shown text on its line therefore has no box at
+ * all (.cm-hidden-syntax-boxless), and the search passes over it.
+ *
+ * Where a line shows none of the suggestion's text (a delimiter on a line of
+ * its own), the hidden syntax keeps its box: on a line whose pieces all lack
+ * one, the search throws. For the same reason touching pieces (a deletion's
+ * `--}` and its addition's `{++…@@`) are one mark, so that no element (another
+ * extension's mark around them) holds several boxless pieces and nothing else.
+ */
+function hiddenSyntaxMarks(pieces: HiddenPiece[]): Array<{ from: number; to: number; deco: Decoration }> {
+  pieces.sort((a, b) => a.from - b.from);
+  const marks: Array<{ from: number; to: number; deco: Decoration }> = [];
+  for (let i = 0; i < pieces.length; i++) {
+    const { from, besideText } = pieces[i];
+    let { to } = pieces[i];
+    while (besideText && pieces[i + 1]?.besideText && pieces[i + 1].from === to) to = pieces[++i].to;
+    marks.push({ from, to, deco: besideText ? boxlessHiddenSyntaxMark : hiddenSyntaxMark });
+  }
+  return marks;
 }
 
 /**
@@ -391,6 +441,8 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       const decorations: Array<{ from: number; to: number; deco: Decoration }> = [];
       // Line decorations are added separately (must not be mixed into mark sort)
       const lineDecos: Array<{ from: number; deco: Decoration }> = [];
+      // Suggestions' hidden delimiters and metadata
+      const hiddenPieces: HiddenPiece[] = [];
 
       // Build comment thread info for badge numbering. Section editors can
       // provide a badge map sliced from the full document, so an open field
@@ -522,25 +574,27 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
 
         // Non-comment ranges: standard three-decoration pattern
         // Always hide delimiters and metadata, only show colored content
-        // Opening delimiter + metadata (everything before content)
-        decorations.push({
-          from: range.from,
-          to: range.contentFrom,
-          deco: Decoration.mark({ class: 'cm-hidden-syntax' }),
-        });
+        // Opening delimiter + metadata (everything before content), and the
+        // closing delimiter: marked after the loop (see hiddenSyntaxMarks)
+        const shown = range.contentTo > range.contentFrom;
+        hiddenPieces.push(
+          {
+            from: range.from,
+            to: range.contentFrom,
+            besideText: shown && view.state.doc.lineAt(range.contentFrom).to > range.contentFrom,
+          },
+          {
+            from: range.contentTo,
+            to: range.to,
+            besideText: shown && view.state.doc.lineAt(range.contentTo).from < range.contentTo,
+          },
+        );
 
         // Content (between delimiters)
         decorations.push({
           from: range.contentFrom,
           to: range.contentTo,
           deco: Decoration.mark({ class: className }),
-        });
-
-        // Closing delimiter
-        decorations.push({
-          from: range.contentTo,
-          to: range.to,
-          deco: Decoration.mark({ class: 'cm-hidden-syntax' }),
         });
 
         // Add colored left border on lines within additions/deletions that have
@@ -619,6 +673,8 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
           }
         }
       }
+
+      decorations.push(...hiddenSyntaxMarks(hiddenPieces));
 
       // Merge line decorations into the main array
       for (const ld of lineDecos) {
