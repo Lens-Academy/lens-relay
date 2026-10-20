@@ -1038,6 +1038,41 @@ describe('livePreview - fenced code blocks', () => {
     }
   });
 
+  // Hidden with a mark, every character of the closing fence had the same x,
+  // and a click on its row landed between the backticks
+  // (e2e/live-preview-code-fences.spec.ts)
+  it('hides the whole closing fence line as one text node', () => {
+    const blocks = [
+      '```js\nx\n```',
+      '~~~python\nx\n~~~',
+      '````md\nx\n````',
+      '```\nx\n```   ',
+      '  ```bash\n  x\n  ```',
+      '> ```js\n> x\n> ```',
+      '> > ```py\n> > x\n> > ```',
+      '1. ```js\n   x\n   ```',
+    ];
+    for (const block of blocks) {
+      const view = new EditorView({
+        parent: document.body,
+        state: EditorState.create({
+          doc: `before\n\n${block}\n\nafter`,
+          extensions: [syntaxHighlighting(defaultHighlightStyle), markdown(), livePreview()],
+        }),
+      });
+      try {
+        const line = view.contentDOM.querySelectorAll('.cm-line')[4];
+        const fence = line.querySelectorAll('.cm-hidden-syntax');
+        expect(fence).toHaveLength(1);
+        expect(fence[0].textContent).toBe(block.split('\n')[2]);
+        expect(Array.from(fence[0].childNodes, (node) => node.nodeType)).toEqual([Node.TEXT_NODE]);
+        expect(line.textContent).toBe(block.split('\n')[2]);
+      } finally {
+        view.destroy();
+      }
+    }
+  });
+
   it('multiple code blocks styled independently', () => {
     const content = '```\nblock1\n```\ntext\n```\nblock2\n```';
     const { view, cleanup: c } = createTestEditor(content, content.indexOf('text'));

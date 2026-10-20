@@ -8,9 +8,9 @@ import { livePreview } from '../../src/components/Editor/extensions/livePreview'
 import { codeBlockCopyButton } from '../../src/components/Editor/extensions/codeBlockCopyButton';
 import '../../src/index.css';
 
-// Code blocks whose opening fence is hidden while the cursor is elsewhere:
-// with a language, a tilde fence, an info string, none, in a quote, and
-// indented in a list item
+// Code blocks whose fences are hidden while the cursor is elsewhere: with a
+// language, a tilde fence, an info string, none, in a quote, and indented in a
+// list item
 const documentText = [
   'Intro paragraph.',
   '```js',
