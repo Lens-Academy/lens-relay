@@ -42,7 +42,8 @@ pub fn parse_doc_id(doc_id: &str) -> Option<(&str, &str)> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn without_terminal_md(path: &str) -> &str {
+/// `path` without a final `.md` (any case).
+pub fn without_terminal_md(path: &str) -> &str {
     let suffix_start = path.len().saturating_sub(3);
     match path.get(suffix_start..) {
         Some(suffix) if suffix.eq_ignore_ascii_case(".md") => &path[..suffix_start],
@@ -436,6 +437,38 @@ pub fn resolve_in_virtual_tree<'a>(
     }
 
     best.map(|(_, entry)| entry)
+}
+
+/// [`resolve_in_virtual_tree`] over a hash index of the entries' lower-case
+/// paths, for callers that resolve many links against one tree: building it
+/// costs one pass, each resolve a handful of lookups. Same results, including
+/// which entry wins when two share a lower-case path (the first one).
+pub struct VirtualTreeIndex<'a> {
+    by_lower_path: HashMap<String, &'a VirtualEntry>,
+}
+
+impl<'a> VirtualTreeIndex<'a> {
+    pub fn new(entries: &'a [VirtualEntry]) -> Self {
+        let mut by_lower_path = HashMap::with_capacity(entries.len());
+        for entry in entries {
+            if is_link_target(&entry.virtual_path, &entry.entry_type) {
+                by_lower_path
+                    .entry(entry.virtual_path.to_lowercase())
+                    .or_insert(entry);
+            }
+        }
+        Self { by_lower_path }
+    }
+
+    pub fn resolve(
+        &self,
+        link_name: &str,
+        source_virtual_path: Option<&str>,
+    ) -> Option<&'a VirtualEntry> {
+        wikilink_candidate_paths(link_name, source_virtual_path)
+            .iter()
+            .find_map(|c| self.by_lower_path.get(c).copied())
+    }
 }
 
 /// Compute wikilink text that resolves from `source_virtual_path` to `target_virtual_path`.
@@ -4287,6 +4320,50 @@ mod tests {
         // Other non-Markdown files are still not link targets
         assert_eq!(id("../data", intro), None);
         assert_eq!(id("../data.json", intro), None);
+    }
+
+    #[test]
+    fn virtual_tree_index_resolves_like_resolve_in_virtual_tree() {
+        let mut entries = html_entries();
+        // Two entries with one lower-case path: the first wins in both.
+        entries.push(VirtualEntry {
+            virtual_path: "/Lens Edu/sub/A.md".into(),
+            entry_type: "markdown".into(),
+            id: "rel-md-upper".into(),
+            folder_idx: 0,
+        });
+        let index = VirtualTreeIndex::new(&entries);
+        let froms = [
+            None,
+            Some("/Lens Edu/lenses/Intro.md"),
+            Some("/Lens Edu/sub/x.md"),
+        ];
+        let links = [
+            "../widgets/rings",
+            "../widgets/RINGS",
+            "../widgets/twin",
+            "../widgets/twin.md",
+            "../widgets/rings.md",
+            "../widgets/twin.html",
+            "Lens Edu/widgets/rings.html",
+            "a",
+            "A",
+            "b",
+            "../data",
+            "../data.json",
+            "missing",
+            "../sub/a",
+            "/b",
+        ];
+        for from in froms {
+            for link in links {
+                assert_eq!(
+                    index.resolve(link, from).map(|e| e.id.as_str()),
+                    resolve_in_virtual_tree(link, from, &entries).map(|e| e.id.as_str()),
+                    "link {link:?} from {from:?}"
+                );
+            }
+        }
     }
 
     #[test]

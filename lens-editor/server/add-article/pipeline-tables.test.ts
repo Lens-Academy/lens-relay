@@ -29,6 +29,13 @@ const reviewMocks = vi.hoisted(() => ({
   reviewArticle: vi.fn(),
 }));
 
+// A failed import leaves the stub it wrote first (with any notes) and nothing
+// else; a retry fills it in.
+function expectOnlyTheStub(): void {
+  expect(relayMocks.createRelayDoc).toHaveBeenCalledOnce();
+  expect(relayMocks.createRelayDoc.mock.calls[0][1]).toContain('"article-stub"');
+}
+
 vi.mock("./fetch", () => ({ ...fetchMocks, MIN_ARTICLE_CHARS: 200 }));
 vi.mock("../add-video/relay-docs", () => relayMocks);
 vi.mock("./extract", () => ({ extractArticle: extractionMocks.extractArticle }));
@@ -55,6 +62,7 @@ vi.mock("./claude", () => ({
   },
 }));
 import { processArticle } from "./pipeline";
+import { installFakeRelay } from "./fake-relay.test-helper";
 
 // A table whose third row has one cell too many: the reviewer never repairs
 // it (as on arXiv 2512.22154 / 2607.18966), so only the last-resort pass can.
@@ -93,6 +101,7 @@ describe("processArticle table errors", () => {
     relayMocks.checkRelayArticleUrls.mockResolvedValue({ found: {}, stubs: {} });
     relayMocks.checkRelayDocsExist.mockResolvedValue({});
     relayMocks.createRelayDoc.mockResolvedValue(undefined);
+    installFakeRelay(relayMocks);
     const extraction = {
       meta,
       body,
@@ -135,8 +144,9 @@ describe("processArticle table errors", () => {
     await processArticle(job());
 
     expect(reviewMocks.reviewArticle).toHaveBeenCalledTimes(3);
-    expect(relayMocks.createRelayDoc).toHaveBeenCalledOnce();
-    const written: string = relayMocks.createRelayDoc.mock.calls[0][1];
+    // The stub first, then the article written over it.
+    expect(relayMocks.createRelayDoc).toHaveBeenCalledTimes(2);
+    const written: string = relayMocks.createRelayDoc.mock.calls.at(-1)![1];
     expect(written).toContain(
       "| Alpha | 32 \\| Tinker default {>>Importer: this row had 3 cells but the table has 2, so the last 2 were joined into this cell. Check it against the source.<<} |",
     );
@@ -149,14 +159,14 @@ describe("processArticle table errors", () => {
     );
 
     await expect(processArticle(job())).rejects.toThrow("invalid");
-    expect(relayMocks.createRelayDoc).not.toHaveBeenCalled();
+    expectOnlyTheStub();
   });
 
   it("still discards the import when the forced table fails re-validation", async () => {
     reviewMocks.validateArticleDraft.mockImplementation(async () => result([tableError]));
 
     await expect(processArticle(job())).rejects.toThrow("invalid");
-    expect(relayMocks.createRelayDoc).not.toHaveBeenCalled();
+    expectOnlyTheStub();
     // Initial, after each of the three review passes, and after the forced repair.
     expect(reviewMocks.validateArticleDraft).toHaveBeenCalledTimes(5);
   });

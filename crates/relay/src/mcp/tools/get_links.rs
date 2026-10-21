@@ -1,10 +1,9 @@
 use crate::server::Server;
 use serde_json::Value;
 use std::sync::Arc;
-use y_sweet_core::doc_resolver::read_folder_name;
 use y_sweet_core::link_indexer;
 use y_sweet_core::link_parser;
-use yrs::{GetString, Map, ReadTxn, Transact};
+use yrs::{GetString, ReadTxn, Transact};
 
 /// Execute the `get_links` tool: return backlinks and forward links for a document.
 pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, String> {
@@ -49,25 +48,7 @@ pub async fn execute(server: &Arc<Server>, arguments: &Value) -> Result<String, 
 
 /// Read backlinks for a document UUID from the folder doc's backlinks_v0 map.
 async fn read_backlinks(server: &Arc<Server>, folder_doc_id: &str, uuid: &str) -> Vec<String> {
-    // Reload from storage if GC evicted the doc
-    if server.ensure_doc_loaded(folder_doc_id).await.is_err() {
-        return Vec::new();
-    }
-    // Read backlink UUIDs into owned Vec, then drop all guards
-    let backlink_uuids: Vec<String> = {
-        let Some(doc_ref) = server.docs().get(folder_doc_id) else {
-            return Vec::new();
-        };
-        let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-        let txn = guard.doc.transact();
-        let Some(backlinks_map) = txn.get_map("backlinks_v0") else {
-            return Vec::new();
-        };
-        link_indexer::read_backlinks_array(&backlinks_map, &txn, uuid)
-        // guard, awareness, doc_ref all dropped here
-    };
-
+    let backlink_uuids = read_backlink_uuids(server, folder_doc_id, uuid).await;
     // Resolve UUIDs to paths
     let resolver = server.doc_resolver();
     let mut paths: Vec<String> = backlink_uuids
@@ -76,6 +57,29 @@ async fn read_backlinks(server: &Arc<Server>, folder_doc_id: &str, uuid: &str) -
         .collect();
     paths.sort();
     paths
+}
+
+/// The uuids of the documents linking to `uuid`, from the backlinks_v0 map
+/// of the folder doc that holds it (reloaded if GC evicted it).
+pub(crate) async fn read_backlink_uuids(
+    server: &Arc<Server>,
+    folder_doc_id: &str,
+    uuid: &str,
+) -> Vec<String> {
+    // Reload from storage if GC evicted the doc
+    if server.ensure_doc_loaded(folder_doc_id).await.is_err() {
+        return Vec::new();
+    }
+    // Clone the awareness Arc out, so no DashMap guard is held across its lock
+    let Some(awareness) = server.docs().get(folder_doc_id).map(|d| d.awareness()) else {
+        return Vec::new();
+    };
+    let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+    let txn = guard.doc.transact();
+    let Some(backlinks_map) = txn.get_map("backlinks_v0") else {
+        return Vec::new();
+    };
+    link_indexer::read_backlinks_array(&backlinks_map, &txn, uuid)
 }
 
 /// Read forward links by extracting wikilinks from content and resolving them
@@ -87,10 +91,10 @@ async fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
     }
     // Read content into owned String, then drop all guards
     let content: String = {
-        let Some(doc_ref) = server.docs().get(doc_id) else {
+        // Clone the awareness Arc out, so no DashMap guard is held across its lock
+        let Some(awareness) = server.docs().get(doc_id).map(|d| d.awareness()) else {
             return Vec::new();
         };
-        let awareness = doc_ref.awareness();
         let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
         let txn = guard.doc.transact();
         match txn.get_text("contents") {
@@ -109,36 +113,7 @@ async fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
         return Vec::new();
     };
 
-    // Find all folder docs and build virtual entries
-    let folder_doc_ids = link_indexer::find_all_folder_docs(server.docs());
-    // Build virtual entries from all folder docs
-    let mut virtual_entries = Vec::new();
-    for (fi, folder_doc_id) in folder_doc_ids.iter().enumerate() {
-        let Some(doc_ref) = server.docs().get(folder_doc_id) else {
-            continue;
-        };
-        let awareness = doc_ref.awareness();
-        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
-        let txn = guard.doc.transact();
-        if let Some(filemeta) = txn.get_map("filemeta_v0") {
-            let folder_name = read_folder_name(&guard.doc, folder_doc_id);
-            for (path, value) in filemeta.iter(&txn) {
-                let entry_type = link_indexer::extract_type_from_filemeta_entry(&value, &txn)
-                    .unwrap_or_else(|| "unknown".to_string());
-                let id = match link_indexer::extract_id_from_filemeta_entry(&value, &txn) {
-                    Some(id) => id,
-                    None => continue,
-                };
-                let virtual_path = format!("/{}{}", folder_name, path);
-                virtual_entries.push(link_indexer::VirtualEntry {
-                    virtual_path,
-                    entry_type,
-                    id,
-                    folder_idx: fi,
-                });
-            }
-        }
-    }
+    let virtual_entries = all_virtual_entries(server);
 
     // Find source virtual path
     let source_virtual_path: Option<String> = virtual_entries
@@ -172,4 +147,22 @@ async fn read_forward_links(server: &Arc<Server>, doc_id: &str) -> Vec<String> {
     forward_links.sort();
     forward_links.dedup();
     forward_links
+}
+
+/// Every file of every loaded folder doc as a [`link_indexer::VirtualEntry`]
+/// ("/{folder name}{path}"), the tree wikilinks resolve in, as the link
+/// indexer builds it.
+pub(crate) fn all_virtual_entries(server: &Arc<Server>) -> Vec<link_indexer::VirtualEntry> {
+    let folder_doc_ids = link_indexer::find_all_folder_docs(server.docs());
+    let mut virtual_entries = Vec::new();
+    for (fi, folder_doc_id) in folder_doc_ids.iter().enumerate() {
+        // Clone the awareness Arc out, so no DashMap guard is held across its lock
+        let Some(awareness) = server.docs().get(folder_doc_id).map(|d| d.awareness()) else {
+            continue;
+        };
+        let guard = awareness.read().unwrap_or_else(|e| e.into_inner());
+        let (_, entries) = link_indexer::snapshot_folder_entries(&guard.doc, folder_doc_id, fi);
+        virtual_entries.extend(entries);
+    }
+    virtual_entries
 }

@@ -39,6 +39,14 @@ interface SubmitResult {
 
 export const POLL_INTERVAL_MS = 3000;
 
+/** Video job stages that come after the transcript file is written. */
+const VIDEO_STAGES_AFTER_PUBLISHING = new Set([
+  "polishing",
+  "aligning",
+  "writing",
+  "creating-lens",
+]);
+
 const STATUS_COLORS: Record<ArticleJob["status"], string> = {
   queued: "#f0ad4e",
   processing: "#4361ee",
@@ -98,11 +106,6 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
     const timer = window.setTimeout(() => void fetchStatus(), 0);
     return () => window.clearTimeout(timer);
   }, [fetchStatus]);
-
-  // Videos have no article body, so the server rejects stub-mode YouTube
-  // URLs; say so before the user submits rather than after.
-  const stubWithVideo =
-    importMode === "stub" && /(?:youtube\.com|youtu\.be)\//i.test(input);
 
   useEffect(() => {
     document.title = "Add Source to Lens";
@@ -247,7 +250,8 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
           <code style={codeStyle}>Lens Edu/articles</code>. YouTube links import
           the video&apos;s transcript (with timestamps) to{" "}
           <code style={codeStyle}>Lens Edu/video_transcripts</code> instead.
-          Those take a few minutes.
+          The file appears within seconds, so you can open it and add notes
+          while the import runs.
         </p>
 
         <textarea
@@ -392,20 +396,6 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
               );
             })}
           </div>
-          {stubWithVideo && (
-            <div
-              style={{
-                marginTop: 8,
-                color: "#f0b866",
-                fontSize: 12.5,
-                lineHeight: 1.45,
-              }}
-            >
-              Stub only doesn&apos;t apply to YouTube links — a video has no
-              article body to leave out. Those URLs will be rejected; choose
-              Full text to import the transcript.
-            </div>
-          )}
         </div>
 
         <button
@@ -539,6 +529,25 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
                 >
                   {job.url}
                 </div>
+                {job.relay_url && job.status === "processing" && !job.video && (
+                  <div style={{ fontSize: 12, color: "#9aa4c7" }}>
+                    The file is ready: open it to add notes in its %% area.
+                    The text is filled in under them when the import finishes.
+                  </div>
+                )}
+                {job.status === "processing" && !!job.video && job.stage &&
+                  VIDEO_STAGES_AFTER_PUBLISHING.has(job.stage) && (
+                  <div style={{ fontSize: 12, color: "#9aa4c7" }}>
+                    The transcript is in: open it to add notes in its %%
+                    area. The cleanup still running keeps them.
+                  </div>
+                )}
+                {job.relay_url && !job.video && (job.status === "failed" || job.status === "cancelled") && (
+                  <div style={{ fontSize: 12, color: "#9aa4c7" }}>
+                    The file stays, with any notes you added. Retry fills the
+                    text in.
+                  </div>
+                )}
                 {job.error && (
                   <div
                     style={{
@@ -642,11 +651,14 @@ export function AddArticlePage({ shareToken }: { shareToken: string }) {
             fontSize: 13,
           }}
         >
-          Articles take seconds to a few minutes depending on whether a
-          quality-check pass is needed, and are written only once processing
-          completes (nothing is written on failure). Video transcripts appear as
-          soon as YouTube returns them; if the captions are auto-generated, a
-          cleanup pass then tidies punctuation in the document you already have.
+          Each import first writes the file with only its details and a %%
+          discussion area, so you can add notes straight away. Articles then
+          take a minute to several minutes (a quality-check pass reviews them)
+          and are filled in under your notes when processing completes; text
+          written outside the %% area stops the import instead of being
+          overwritten. Video transcripts appear as soon as YouTube returns
+          them; if the captions are auto-generated, a cleanup pass then tidies
+          punctuation in the transcript, keeping your notes.
           The job list resets when the server restarts — the imported documents
           themselves are safe in the relay.
         </div>

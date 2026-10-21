@@ -13,11 +13,16 @@ import { DisplayNameProvider, useDisplayName } from './contexts/DisplayNameConte
 import { DisplayNamePrompt } from './components/DisplayNamePrompt';
 
 // The display name feeds collaborative-editing presence. The import tool page
-// (/add-article) doesn't edit documents, and the blocking modal made it
+// (/add-source) doesn't edit documents, and the blocking modal made it
 // unusable for fresh sessions and automation — skip it there.
+function AddSourceRedirect() {
+  const { search, hash } = useLocation();
+  return <Navigate to={{ pathname: '/add-source', search, hash }} replace />;
+}
+
 function DisplayNamePromptGate() {
   const { pathname } = useLocation();
-  if (pathname === '/add-article') return null;
+  if (pathname === '/add-source' || pathname === '/add-article') return null;
   return <DisplayNamePrompt />;
 }
 import { SidebarContext } from './contexts/SidebarContext';
@@ -587,7 +592,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
             <NavigationContext.Provider value={{ metadata, folderDocs, folderNames, errors, onNavigate, justCreatedRef, openQuickSwitcher }}>
           <div ref={outerRef as RefObject<HTMLDivElement>} className="h-dvh flex flex-col bg-gray-50 overflow-hidden">
             {/* Full-width global header */}
-            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
+            <header ref={headerRef as RefObject<HTMLElement>} className="flex items-center justify-between gap-4 px-4 py-2 bg-[#f6f6f6] border-b border-gray-200 min-w-0 overflow-hidden">
               <div className="flex items-center gap-6 min-w-0">
                 {!isMobile && <button
                   onClick={() => manager.toggle('left-sidebar')}
@@ -603,7 +608,7 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                 {(headerStage === 'full' || headerStage === 'compact-toggles') && (
                   <h1 className="whitespace-nowrap text-lg font-semibold text-gray-900">Lens Relay Editor</h1>
                 )}
-                <div id="header-breadcrumb" />
+                <div id="header-breadcrumb" className="flex min-w-0" />
               </div>
               <div className="flex items-center gap-4 flex-shrink-0">
                 <div id="header-controls" className="flex items-center gap-4" />
@@ -671,11 +676,13 @@ function AuthenticatedApp({ role, folderUuid, isAllFolders, shareToken }: { role
                   <Route path="/recent" element={
                     <RecentChangesPage folderIds={accessibleFolders.map(f => `${RELAY_ID}-${f.id}`)} folders={accessibleFolders.map(f => ({ id: `${RELAY_ID}-${f.id}`, name: f.name }))} />
                   } />
-                  <Route path="/add-article" element={
+                  <Route path="/add-source" element={
                     canEdit && (isAllFolders || folderUuid === EDU_FOLDER_ID)
                       ? <AddArticlePage shareToken={shareToken} />
                       : <DefaultLanding />
                   } />
+                  {/* The page's old address, kept for links and bookmarks */}
+                  <Route path="/add-article" element={<AddSourceRedirect />} />
                   <Route path="/edu/:docUuid" element={<EduEditorView />} />
                   <Route path="/section-editor/:docUuid" element={<MultiDocSectionEditorView />} />
                   <Route path="/promote" element={<PromotionRoute />} />

@@ -69,3 +69,18 @@ export function openDocInNewTab(relayId: string, docUuid: string, metadata: Fold
 export function docIdFromUrlParam(docUuid: string, relayId: string): string {
   return compoundIdFromDocUuid(relayId, docUuid);
 }
+
+/**
+ * Whether a click on a link to a document should navigate in the app: a
+ * plain left click. Ctrl/Cmd-, Shift- and Alt-clicks and the middle button
+ * are left to the browser (new tab, new window, download).
+ */
+export function isPlainLeftClick(e: {
+  button: number;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}): boolean {
+  return e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
+}

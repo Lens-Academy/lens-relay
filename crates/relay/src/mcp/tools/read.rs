@@ -193,7 +193,45 @@ pub async fn execute(
     let accepted = super::critic_markup::accepted_view(&spans);
     let footer = super::critic_markup::render_pending_summary(&spans, &accepted);
 
-    let mut output = format_cat_n(&accepted, offset, limit);
+    // Concept relationships (rows in Lens Edu/Concepts/ files) about this
+    // file, for articles, video transcripts and lenses, come before the first
+    // chunk of a paged read as a labelled block. They are context from the
+    // concept files, not this file's text: the cat -n numbering below is
+    // unchanged, and edits match only the file's own text.
+    // A concept file gets its place in the concept graph (its
+    // `parent-concepts:` frontmatter, see concept_graph.rs) the same way.
+    let (graph_block, rows_block) = if offset <= 1 {
+        let path = server
+            .doc_resolver()
+            .path_for_uuid(&doc_info.uuid)
+            .unwrap_or_else(|| file_path.to_string());
+        let graph = super::concept_graph::concept_graph_block(
+            server,
+            &path,
+            &doc_info.uuid,
+            &doc_info.folder_doc_id,
+            &accepted,
+        )
+        .await;
+        let rows = super::concept_rows::concept_rows_block(
+            server,
+            &path,
+            &doc_info.uuid,
+            &doc_info.folder_doc_id,
+            &accepted,
+        )
+        .await;
+        (graph, rows)
+    } else {
+        (None, None)
+    };
+
+    let mut output = String::new();
+    for block in [graph_block, rows_block].into_iter().flatten() {
+        output.push_str(&block);
+        output.push_str("\n\n");
+    }
+    output.push_str(&format_cat_n(&accepted, offset, limit));
     if let Some(footer_text) = footer {
         output.push_str("\n\n");
         output.push_str(&footer_text);
@@ -541,7 +579,8 @@ mod tests {
 
         // Advance paused time past 2 GC checkpoints so the GC worker evicts the doc.
         // With no WebSocket connections, awareness strong_count == 1, so GC proceeds.
-        for _ in 0..10 {
+        // Generous: under a loaded test run the worker can need many turns.
+        for _ in 0..100 {
             tokio::time::advance(checkpoint_freq).await;
             tokio::task::yield_now().await;
             if server.docs().get(&content_doc_id).is_none() {

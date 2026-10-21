@@ -54,7 +54,7 @@ describe('WorkflowMenu', () => {
     await user.click(screen.getByRole('button', { name: /open workflows menu/i }));
     await user.click(screen.getByRole('menuitem', { name: /add source/i }));
 
-    expect(screen.getByTestId('location')).toHaveTextContent('/add-article');
+    expect(screen.getByTestId('location')).toHaveTextContent('/add-source');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 

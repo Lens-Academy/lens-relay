@@ -23,7 +23,10 @@ type Connector = (fullDocId: string) => Promise<DocConnection>;
 let reader: Reader = readDocumentText;
 let connector: Connector = connectDoc;
 
-const snapshots = new Map<string, { text: string; at: number }>();
+const snapshots = new Map<string, { text: string; at: number; version: number }>();
+/** Bumped by every recorded snapshot: a read only records its text when no
+ *  newer snapshot was recorded while it ran. */
+let snapshotVersion = 0;
 const inflight = new Map<string, Promise<string>>();
 const snapshotListeners = new Map<string, Set<(text: string) => void>>();
 let running = 0;
@@ -49,7 +52,7 @@ export function cachedSnapshot(fullDocId: string): string | undefined {
 
 /** Record the current text of `fullDocId` and tell every embed showing it. */
 export function setSnapshot(fullDocId: string, text: string, now = Date.now()): void {
-  snapshots.set(fullDocId, { text, at: now });
+  snapshots.set(fullDocId, { text, at: now, version: ++snapshotVersion });
   for (const listener of snapshotListeners.get(fullDocId) ?? []) listener(text);
 }
 
@@ -73,14 +76,27 @@ export function readSnapshot(fullDocId: string, now = Date.now()): Promise<strin
   if (cached && now - cached.at < SNAPSHOT_TTL_MS) return Promise.resolve(cached.text);
   const pending = inflight.get(fullDocId);
   if (pending) return pending;
+  const startedAt = snapshotVersion;
   const read = withReadSlot(() => reader(fullDocId))
     .then((text) => {
+      // A read that started before an edit here was closed (which recorded
+      // the newer text), or while the file is open live or still flushing
+      // edits, would put older text back: keep what is recorded.
+      const recorded = snapshots.get(fullDocId);
+      const newer = recorded !== undefined && recorded.version > startedAt;
+      if (newer || live?.fullDocId === fullDocId || flushing.has(fullDocId)) return recorded?.text ?? text;
       setSnapshot(fullDocId, text);
       return text;
     })
     .finally(() => inflight.delete(fullDocId));
   inflight.set(fullDocId, read);
   return read;
+}
+
+/** Read `fullDocId` again even if its snapshot is fresh (the Concepts panel
+ *  refreshes on focus and on a timer); shares a read already in flight. */
+export function refreshSnapshot(fullDocId: string): Promise<string> {
+  return readSnapshot(fullDocId, Infinity);
 }
 
 export interface LiveEmbed {
@@ -186,6 +202,21 @@ export function closeLive(owner?: object): void {
     release(ended.fullDocId, ended.connection);
   }
   ended.onEnd();
+}
+
+/**
+ * Run `fn` on `fullDocId` opened live (ending whichever embed was live), then
+ * close it, also when `fn` throws: its edits are saved and flushed like an
+ * embed's. Resolves to null when another open overtook this one.
+ */
+export async function withLiveDoc<T>(fullDocId: string, fn: (connection: DocConnection) => T): Promise<T | null> {
+  const owner = {};
+  try {
+    const opened = await openLive(fullDocId, owner, () => {});
+    return opened ? fn(opened.connection) : null;
+  } finally {
+    closeLive(owner);
+  }
 }
 
 /** Whether `owner` is the live embed (or is connecting). */

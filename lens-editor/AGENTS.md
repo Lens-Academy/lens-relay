@@ -131,3 +131,30 @@ Comments on HTML pages are stored out of band (`comments_v0`, above) and anchore
   click or key press (user activation), and `tts-key` only while the player is open. Ctrl/Cmd+O pressed in the
   page reaches the parent as `shortcut` `o` and opens the quick switcher under the same activation check.
 - `scripts/anchor-bench/run.ts <dir of .html>` benchmarks anchoring against edits on real pages.
+
+## Concept relationships panel
+
+Concept files (`Lens Edu/Concepts/<name>.md`) hold one row per related file under `## Relationships`: a level-3
+heading that is a single wikilink, then free notes. Articles, video transcripts and lenses show the rows about them
+in a "Concept relationships" panel at the top of the document (a block widget in the main editor), editable in place;
+on a lens the rows about its `source::` articles and videos are shown too, read-only.
+
+- `src/lib/concept-rows.ts`: the rule table (which folders get the panel), row parsing, matching by resolved target,
+  new-row insertion, lens sources, grouping.
+- `src/components/ConceptRowsPanel/`: the panel, row cards (edits go through `lib/embed-docs.ts`'s single live
+  connection and `SectionEditor/y-section-sync.ts` bound to the row's text), the concept picker, the data hook.
+
+The parsing rules are shared with the relay's MCP tools (`crates/relay/src/mcp/tools/concept_rows.rs`) and the
+platform's content validator, and must stay in step: each implementation has one test per numbered rule ("canonical
+concept-row rules v1 #N"). Format and rules: `docs/concept-relationships.md`.
+
+Concept files themselves get a "Concept graph" header instead (same panel host, above the relationships panel if both
+ever apply): a drawn layered graph (`@dagrejs/dagre`) of every ancestor from their `parent-concepts:` frontmatter, the
+concept and its direct children (backlinkers in `Concepts/` whose parents include it, "+N" below each), then plain
+"Parent concepts" / "Child concepts" lists (the accessible version; the drawing is aria-hidden). Read-only.
+
+- `src/lib/concept-graph.ts`: `parent-concepts:` parsing ("concept graph rules v1 #N", shared with the relay's
+  `concept_graph.rs`) and resolution, the capped walks (ancestors; two levels below for children and "+N"), cycle detection, the drawn graph's data. Pure.
+- `src/components/ConceptGraphPanel/`: the header, the drawing (`ConceptGraphDrawing.tsx`, loaded lazily so only concept
+  files download dagre) and its data hook (reads files through the relationships panel's
+  `useSnapshots`, growing the set of files to read as the walks reach them).

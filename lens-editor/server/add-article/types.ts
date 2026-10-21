@@ -22,10 +22,13 @@ export interface ArticleJob {
   title?: string;
   status: ArticleJobStatus;
   /** Current pipeline stage while processing — lets the status UI distinguish
-   *  a slow stage from a stuck job. Articles: "fetching", "rendering",
-   *  "quality-check", "uploading-images", "writing", "creating-lens".
+   *  a slow stage from a stuck job. Articles: "checking-duplicates",
+   *  "fetching-source-evidence", "creating-stub" (the file people can add
+   *  notes to exists from here on), "uploading-images", "normalizing",
+   *  "source-review", …, "writing", "creating-lens".
    *  YouTube videos: "checking-duplicates", "fetching-transcript",
-   *  "preparing", "formatting", "aligning", "writing", "creating-lens". */
+   *  "preparing", "publishing", "creating-lens", "polishing", "aligning",
+   *  "writing"; stub mode: "fetching-video-details", "writing". */
   stage?: string;
   error?: string;
   relay_url?: string;

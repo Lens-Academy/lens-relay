@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useYDoc } from '../lib/ydoc-provider';
 import { useNavigation } from '../contexts/NavigationContext';
 import { findPathByUuid } from '../lib/uuid-to-path';
@@ -16,7 +16,7 @@ interface DocumentTitleProps {
 
 export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
   const { metadata, folderNames, justCreatedRef } = useNavigation();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const cancelledRef = useRef(false);
 
   // Extract UUID from compound doc ID (RELAY_ID-UUID)
@@ -37,6 +37,22 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
   }, [displayName]);
 
   useDocTabTitle(currentDocId);
+
+  // The title wraps (real file names run to 160 characters): the textarea
+  // grows to its text, again whenever its width changes.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const fit = () => {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    fit();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [value]);
 
   // Auto-focus and select when document was just created via instant-create
   useEffect(() => {
@@ -128,21 +144,23 @@ export function DocumentTitle({ currentDocId }: DocumentTitleProps) {
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-2">
-        <input
+      <div className="flex items-start gap-2">
+        <textarea
           ref={inputRef}
-          type="text"
+          rows={1}
           value={value}
-          onChange={(e) => { setValue(e.target.value); setRenameError(null); }}
+          // A file name is one line: a pasted line break becomes a space.
+          onChange={(e) => { setValue(e.target.value.replace(/[\r\n]+/g, ' ')); setRenameError(null); }}
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
-          className="flex-1 min-w-0 text-3xl font-bold text-gray-900 bg-transparent border-none outline-none
-                     placeholder-gray-400 caret-gray-900"
+          aria-label="Document name"
+          className="flex-1 min-w-0 resize-none overflow-hidden text-3xl font-bold leading-tight text-gray-900 bg-transparent
+                     border-none outline-none placeholder-gray-400 caret-gray-900 [overflow-wrap:anywhere]"
           placeholder="Untitled"
           spellCheck={false}
         />
         {(eduEditorUrl || platformUrl) && (
-          <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
+          <div className="flex-shrink-0 flex flex-col items-end gap-0.5 pt-1">
             {platformUrl && (
               <a
                 href={platformUrl}

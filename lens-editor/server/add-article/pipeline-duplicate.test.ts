@@ -56,6 +56,7 @@ vi.mock("./claude", () => ({
 }));
 
 import { assertRequiredBodyPrefix, processArticle } from "./pipeline";
+import { installFakeRelay } from "./fake-relay.test-helper";
 
 describe("assertRequiredBodyPrefix", () => {
   const prefix =
@@ -257,9 +258,7 @@ This might be useful.
   });
 
   it("lets the first review select the unrendered candidate as the written base", async () => {
-    relayMocks.checkRelayArticleUrls.mockResolvedValue({ found: {}, stubs: {} });
-    relayMocks.checkRelayDocsExist.mockResolvedValue({});
-    relayMocks.createRelayDoc.mockResolvedValue(undefined);
+    installFakeRelay(relayMocks);
     const meta = {
       title: "Dual source article",
       author: ["A. Writer"],
@@ -316,7 +315,7 @@ This might be useful.
     });
 
     expect(reviewMocks.reviewArticle).toHaveBeenCalledOnce();
-    const written = relayMocks.createRelayDoc.mock.calls[0][1];
+    const written = relayMocks.createRelayDoc.mock.calls.at(-1)![1];
     expect(written).toContain("Unrendered candidate body.");
     expect(written).not.toContain("Rendered candidate body.");
   });

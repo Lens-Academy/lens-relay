@@ -36,18 +36,26 @@ import {
   generateArticleFilenameBase,
   articleFilenameCandidates,
 } from "./export";
-import { parsePromotableArticleStub } from "./stub";
+import { isStub, parsePromotableArticleStub, VIDEO_STUB } from "./stub";
 import {
   createRelayDoc,
   checkRelayDocsExist,
   checkRelayArticleUrls,
   createRelayAttachment,
   checkRelayVideoIds,
+  readRelayDocAtPath,
   relayTranscriptFolder,
   editorOpenUrl,
 } from "../add-video/relay-docs";
 import type { VideoInput } from "../add-video/video-url";
-import { fetchYouTubeTranscript } from "../add-video/fetch-transcript";
+import {
+  fetchYouTubeTranscript,
+  fetchYouTubeVideoMeta,
+} from "../add-video/fetch-transcript";
+import {
+  generateFilenameBase as generateVideoFilenameBase,
+  generateVideoStubMarkdown,
+} from "../add-video/export";
 import { importVideo } from "../add-video/pipeline";
 import { resolveVideoEmbeds } from "./video-embeds";
 import { maybeCreateLens } from "../lens-doc";
@@ -108,8 +116,9 @@ export function articleImportBehavior(
  * Import a YouTube video's transcript: mint + fetch the transcript
  * server-side, then reuse the add-video pipeline (Claude formatting,
  * timestamp alignment, relay write, optional lens). importMode maps as
- * "article" → transcript only, "article-and-lens" → + lens; stubs don't
- * exist for videos.
+ * "article" → transcript only, "article-and-lens" → + lens, "stub" → only
+ * the file with its discussion area (title, channel, link, no transcript),
+ * which a later full import fills in under the notes.
  */
 async function processYouTubeVideo(
   job: ArticleJob,
@@ -133,7 +142,29 @@ async function processYouTubeVideo(
     console.warn(`[add-article] video dedup check failed, proceeding: ${err}`);
   }
   const topFolder = relayTranscriptFolder().split("/")[0];
-  if (existingPath && !job.replaceExisting) {
+  // A video stub is not a duplicate for a full import: the transcript is
+  // filled in under its notes.
+  let stubPath: string | undefined;
+  if (existingPath) {
+    let content: string | null = null;
+    try {
+      content = await readRelayDocAtPath(topFolder + existingPath, signal);
+    } catch (err) {
+      signal?.throwIfAborted();
+      console.warn(`[add-article] could not read ${existingPath} to see whether it is a video stub: ${err}`);
+    }
+    if (content !== null && isStub(content, VIDEO_STUB)) {
+      job.relay_url = editorOpenUrl(topFolder + existingPath);
+      if (behavior.stubOnly) {
+        throw new DuplicateDocumentError(
+          `A video stub already exists for this video: ${topFolder}${existingPath}`,
+          topFolder + existingPath,
+        );
+      }
+      stubPath = topFolder + existingPath;
+    }
+  }
+  if (existingPath && !stubPath && !job.replaceExisting) {
     job.relay_url = editorOpenUrl(topFolder + existingPath);
     throw new DuplicateDocumentError(
       `This video was already imported: ${topFolder}${existingPath}`,
@@ -147,9 +178,32 @@ async function processYouTubeVideo(
       "Could not look up the existing transcript for this video, so nothing was re-imported. Try again.",
     );
   }
-  const replaceExisting = job.replaceExisting && existingPath
+  const replaceExisting = job.replaceExisting && existingPath && !stubPath
     ? { mdPath: topFolder + existingPath }
     : undefined;
+
+  if (behavior.stubOnly) {
+    setStage("fetching-video-details");
+    const meta = await fetchYouTubeVideoMeta(video, signal);
+    job.title = meta.title;
+    setStage("writing");
+    const mdPath = `${relayTranscriptFolder()}/${generateVideoFilenameBase(meta.channel, meta.title)}.md`;
+    // Never write over another video's file that happens to share the name.
+    if ((await checkRelayDocsExist([mdPath], signal))[mdPath]) {
+      throw new Error(`Document already exists: ${mdPath}`);
+    }
+    signal?.throwIfAborted();
+    await createRelayDoc(
+      mdPath,
+      generateVideoStubMarkdown({ title: meta.title, channel: meta.channel, url: video.url }),
+      signal,
+    );
+    job.relay_url = editorOpenUrl(mdPath);
+    job.relay_path = mdPath;
+    job.updated_at = new Date().toISOString();
+    console.log(`[add-article] Wrote video stub ${mdPath}`);
+    return;
+  }
 
   setStage("fetching-transcript");
   const payload = await fetchYouTubeTranscript(video, signal);
@@ -159,6 +213,7 @@ async function processYouTubeVideo(
   await importVideo(job.id, payload, job.created_at, {
     createLens: behavior.createLens,
     replaceExisting,
+    stubPath,
     signal,
     onStage: setStage,
     // Surface the link as soon as the path is known -- the placeholder doc
@@ -460,10 +515,51 @@ export async function processArticle(
     console.warn(`[add-article] source_url dedup check failed, proceeding: ${err}`);
   }
 
+  // 4.2. Write the stub now, before the slow part (review, images), so people
+  //      can open the file and start adding notes while the import runs. The
+  //      full article is merged into it at the end exactly as when importing
+  //      over a stub that was already there (step 5): the notes are kept, and
+  //      a stub that gained other text stops the import rather than lose it.
+  //      If the import fails or is cancelled, the stub stays and a retry
+  //      fills it in. A stub-only import ends here.
+  let stubSourceUrl: string | undefined;
+  if (!existingStub) {
+    await setStage(isStubOnly ? "writing" : "creating-stub");
+    const stubMarkdown = generateArticleStubMarkdown(meta, createdDate);
+    const stubPath = await withArticleWriteLock(async () => {
+      signal?.throwIfAborted();
+      const candidates = articleFilenameCandidates(
+        filenameBase,
+        meta.source_url || job.url,
+      ).map((b) => `${folder}/${b}.md`);
+      const existing = await checkRelayDocsExist(candidates, signal);
+      const chosen = candidates.find((p) => !existing[p]);
+      if (!chosen) {
+        throw new Error(`Document already exists: ${candidates[0]}`);
+      }
+      await createRelayDoc(chosen, stubMarkdown, signal);
+      return chosen;
+    });
+    existingStub = {
+      path: stubPath.slice(topFolder.length),
+      stubContent: stubMarkdown,
+    };
+    stubSourceUrl = meta.source_url;
+    job.relay_url = editorOpenUrl(stubPath);
+    job.relay_path = stubPath;
+    job.updated_at = new Date().toISOString();
+    if (isStubOnly) {
+      await reporter.finalDocument(stubMarkdown);
+      console.log(`[add-article] Wrote stub ${stubPath}`);
+      return;
+    }
+    console.log(`[add-article] Wrote stub ${stubPath}; importing the full text into it`);
+  }
+
   // 4.5. Host + embed any PDF figure images: upload each to the folder's
   //      /attachments/ and replace its placeholder with the embed. Images that
   //      fail to upload are dropped (the text stays); never fails the import.
-  if (!isStubOnly && ex.images?.length) {
+  if (ex.images?.length) {
     await setStage("uploading-images");
     const beforeImages = body;
     body = await embedPdfImages(
@@ -524,7 +620,7 @@ export async function processArticle(
       signal?.removeEventListener("abort", forwardAbort);
     }
   };
-  if (!isStubOnly && ex.via !== "pdf" && /!\[[^\]]*\]\(https?:/.test(body)) {
+  if (ex.via !== "pdf" && /!\[[^\]]*\]\(https?:/.test(body)) {
     await setStage("uploading-images");
     const beforeImages = body;
     const hosting = await hostImages(body, filenameBase);
@@ -546,7 +642,7 @@ export async function processArticle(
   //      most once; unresolvable embeds degrade to plain links (recorded), so
   //      an auxiliary video can never fail the article import.
   let unrenderedBodyResolved = evidence.htmlCandidates?.unrendered?.body;
-  if (!isStubOnly && [body, unrenderedBodyResolved ?? ""].some((b) => b.includes("__lensvideo:"))) {
+  if ([body, unrenderedBodyResolved ?? ""].some((b) => b.includes("__lensvideo:"))) {
     await setStage("resolving-videos");
     const beforeVideos = body;
     const videoBodies = unrenderedBodyResolved !== undefined ? [body, unrenderedBodyResolved] : [body];
@@ -594,385 +690,344 @@ export async function processArticle(
     await reportNormalizationChanges(reporter, tables.changes);
     return tables.body;
   };
-  if (!isStubOnly) {
-    await setStage("normalizing");
-    const normalized = normalizeArticleBody(body, meta.source_url || job.url, {
-      pdf: ex.via === "pdf-datalab",
-    });
-    body = normalized.body;
-    assertRequiredBodyPrefix(body, requiredBodyPrefix);
-    const hasDualCandidates = !!(
-      evidence.htmlCandidates?.rendered && evidence.htmlCandidates.unrendered
-    );
-    if (!hasDualCandidates) await reportNormalizationChanges(reporter, normalized.changes);
+  await setStage("normalizing");
+  const normalized = normalizeArticleBody(body, meta.source_url || job.url, {
+    pdf: ex.via === "pdf-datalab",
+  });
+  body = normalized.body;
+  assertRequiredBodyPrefix(body, requiredBodyPrefix);
+  const hasDualCandidates = !!(
+    evidence.htmlCandidates?.rendered && evidence.htmlCandidates.unrendered
+  );
+  if (!hasDualCandidates) await reportNormalizationChanges(reporter, normalized.changes);
 
-    await setStage("validating-draft");
-    let draft = generateArticleMarkdown(meta, body, createdDate);
-    let validationStarted = Date.now();
-    let validation = await validateArticleDraft(
-      `articles/${filenameBase}.md`,
-      draft,
+  await setStage("validating-draft");
+  let draft = generateArticleMarkdown(meta, body, createdDate);
+  let validationStarted = Date.now();
+  let validation = await validateArticleDraft(
+    `articles/${filenameBase}.md`,
+    draft,
+    { signal },
+  );
+  let initialValidationDuration = Date.now() - validationStarted;
+  let reviewCandidates: ArticleReviewCandidates | undefined;
+  let candidateValidations: Record<ArticleReviewBase, typeof validation> | undefined;
+  let candidateValidationDurations: Record<ArticleReviewBase, number> | undefined;
+  let candidateNormalizationChanges: Record<ArticleReviewBase, NormalizationChange[]> | undefined;
+  let candidateMeta: Record<ArticleReviewBase, ArticleMeta> | undefined;
+  let candidateRequiredPrefix: Record<ArticleReviewBase, string | undefined> | undefined;
+
+  const renderedExtraction = evidence.htmlCandidates?.rendered;
+  const unrenderedExtraction = evidence.htmlCandidates?.unrendered;
+  if (renderedExtraction && unrenderedExtraction) {
+    const unrenderedMeta = ensureRequiredMeta(
+      unrenderedExtraction.meta,
+      unrenderedExtraction.siteName,
+      createdDate,
+    );
+    let unrenderedBody = unrenderedBodyResolved ?? unrenderedExtraction.body;
+    const unrenderedFilenameBase = generateArticleFilenameBase(
+      unrenderedMeta.author,
+      unrenderedMeta.title,
+    ) || filenameBase;
+    if (unrenderedExtraction.via !== "pdf") {
+      unrenderedBody = (await hostImages(unrenderedBody, unrenderedFilenameBase)).body;
+    }
+    const unrenderedNormalized = normalizeArticleBody(
+      unrenderedBody,
+      unrenderedMeta.source_url || job.url,
+    );
+    unrenderedBody = unrenderedNormalized.body;
+    assertRequiredBodyPrefix(unrenderedBody, unrenderedExtraction.requiredBodyPrefixMarkdown);
+    const unrenderedDraft = generateArticleMarkdown(unrenderedMeta, unrenderedBody, createdDate);
+    const unrenderedValidationStarted = Date.now();
+    const unrenderedValidation = await validateArticleDraft(
+      `articles/${unrenderedFilenameBase}.md`,
+      unrenderedDraft,
       { signal },
     );
-    let initialValidationDuration = Date.now() - validationStarted;
-    let reviewCandidates: ArticleReviewCandidates | undefined;
-    let candidateValidations: Record<ArticleReviewBase, typeof validation> | undefined;
-    let candidateValidationDurations: Record<ArticleReviewBase, number> | undefined;
-    let candidateNormalizationChanges: Record<ArticleReviewBase, NormalizationChange[]> | undefined;
-    let candidateMeta: Record<ArticleReviewBase, ArticleMeta> | undefined;
-    let candidateRequiredPrefix: Record<ArticleReviewBase, string | undefined> | undefined;
+    const unrenderedValidationDuration = Date.now() - unrenderedValidationStarted;
 
-    const renderedExtraction = evidence.htmlCandidates?.rendered;
-    const unrenderedExtraction = evidence.htmlCandidates?.unrendered;
-    if (renderedExtraction && unrenderedExtraction) {
-      const unrenderedMeta = ensureRequiredMeta(
-        unrenderedExtraction.meta,
-        unrenderedExtraction.siteName,
-        createdDate,
+    reviewCandidates = {
+      rendered: draft,
+      unrendered: unrenderedDraft,
+      validation: {
+        rendered: validation.issues,
+        unrendered: unrenderedValidation.issues,
+      },
+    };
+    candidateValidations = { rendered: validation, unrendered: unrenderedValidation };
+    candidateValidationDurations = {
+      rendered: initialValidationDuration,
+      unrendered: unrenderedValidationDuration,
+    };
+    candidateNormalizationChanges = {
+      rendered: normalized.changes,
+      unrendered: unrenderedNormalized.changes,
+    };
+    candidateMeta = { rendered: meta, unrendered: unrenderedMeta };
+    candidateRequiredPrefix = {
+      rendered: renderedExtraction.requiredBodyPrefixMarkdown,
+      unrendered: unrenderedExtraction.requiredBodyPrefixMarkdown,
+    };
+  } else {
+    await reporter.validation("initial", validation, initialValidationDuration);
+    await reporter.originalDocument(draft);
+  }
+
+  await setStage("source-review");
+  let reviewStarted = Date.now();
+  let metaBeforeReview = meta;
+  let outcome: ReviewOutcome | undefined;
+  try {
+    outcome = await reviewArticle(
+      workDir,
+      draft,
+      meta,
+      validation.issues,
+      0,
+      signal,
+      reviewer,
+      reviewCandidates,
+    );
+    trackReviewModel(outcome.model);
+    if (
+      outcome.selectedBase &&
+      candidateValidations &&
+      candidateValidationDurations &&
+      candidateNormalizationChanges &&
+      candidateMeta &&
+      candidateRequiredPrefix
+    ) {
+      validation = candidateValidations[outcome.selectedBase];
+      initialValidationDuration = candidateValidationDurations[outcome.selectedBase];
+      metaBeforeReview = candidateMeta[outcome.selectedBase];
+      requiredBodyPrefix = candidateRequiredPrefix[outcome.selectedBase];
+      await reportNormalizationChanges(
+        reporter,
+        candidateNormalizationChanges[outcome.selectedBase],
       );
-      let unrenderedBody = unrenderedBodyResolved ?? unrenderedExtraction.body;
-      const unrenderedFilenameBase = generateArticleFilenameBase(
-        unrenderedMeta.author,
-        unrenderedMeta.title,
-      ) || filenameBase;
-      if (unrenderedExtraction.via !== "pdf") {
-        unrenderedBody = (await hostImages(unrenderedBody, unrenderedFilenameBase)).body;
+      await reporter.baseSelection(outcome.selectedBase);
+      await reporter.validation("initial", validation, initialValidationDuration);
+      await reporter.originalDocument(outcome.originalMarkdown);
+    }
+    await reporter.llm(
+      0,
+      outcome.review,
+      validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+      metaBeforeReview,
+      outcome.meta,
+      outcome.originalMarkdown,
+      outcome.markdown,
+      Date.now() - reviewStarted,
+    );
+    if (outcome.reverted.length > 0) {
+      await reporter.protectedReverts(0, outcome.reverted);
+    }
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (reviewCandidates) {
+      // No base was chosen: what gets written (if anything) is the
+      // rendered candidate, the single-candidate default.
+      if (error instanceof ArticleReviewUnavailableError && candidateNormalizationChanges) {
+        await reportNormalizationChanges(reporter, candidateNormalizationChanges.rendered);
       }
-      const unrenderedNormalized = normalizeArticleBody(
-        unrenderedBody,
-        unrenderedMeta.source_url || job.url,
-      );
-      unrenderedBody = unrenderedNormalized.body;
-      assertRequiredBodyPrefix(unrenderedBody, unrenderedExtraction.requiredBodyPrefixMarkdown);
-      const unrenderedDraft = generateArticleMarkdown(unrenderedMeta, unrenderedBody, createdDate);
-      const unrenderedValidationStarted = Date.now();
-      const unrenderedValidation = await validateArticleDraft(
-        `articles/${unrenderedFilenameBase}.md`,
-        unrenderedDraft,
-        { signal },
-      );
-      const unrenderedValidationDuration = Date.now() - unrenderedValidationStarted;
-
-      reviewCandidates = {
-        rendered: draft,
-        unrendered: unrenderedDraft,
-        validation: {
-          rendered: validation.issues,
-          unrendered: unrenderedValidation.issues,
-        },
-      };
-      candidateValidations = { rendered: validation, unrendered: unrenderedValidation };
-      candidateValidationDurations = {
-        rendered: initialValidationDuration,
-        unrendered: unrenderedValidationDuration,
-      };
-      candidateNormalizationChanges = {
-        rendered: normalized.changes,
-        unrendered: unrenderedNormalized.changes,
-      };
-      candidateMeta = { rendered: meta, unrendered: unrenderedMeta };
-      candidateRequiredPrefix = {
-        rendered: renderedExtraction.requiredBodyPrefixMarkdown,
-        unrendered: unrenderedExtraction.requiredBodyPrefixMarkdown,
-      };
-    } else {
       await reporter.validation("initial", validation, initialValidationDuration);
       await reporter.originalDocument(draft);
     }
-
-    await setStage("source-review");
-    let reviewStarted = Date.now();
-    let metaBeforeReview = meta;
-    let outcome: ReviewOutcome | undefined;
-    try {
-      outcome = await reviewArticle(
-        workDir,
-        draft,
-        meta,
-        validation.issues,
+    if (error instanceof ArticleReviewRejectedError) {
+      await reporter.llmRejected(
         0,
-        signal,
-        reviewer,
-        reviewCandidates,
-      );
-      trackReviewModel(outcome.model);
-      if (
-        outcome.selectedBase &&
-        candidateValidations &&
-        candidateValidationDurations &&
-        candidateNormalizationChanges &&
-        candidateMeta &&
-        candidateRequiredPrefix
-      ) {
-        validation = candidateValidations[outcome.selectedBase];
-        initialValidationDuration = candidateValidationDurations[outcome.selectedBase];
-        metaBeforeReview = candidateMeta[outcome.selectedBase];
-        requiredBodyPrefix = candidateRequiredPrefix[outcome.selectedBase];
-        await reportNormalizationChanges(
-          reporter,
-          candidateNormalizationChanges[outcome.selectedBase],
-        );
-        await reporter.baseSelection(outcome.selectedBase);
-        await reporter.validation("initial", validation, initialValidationDuration);
-        await reporter.originalDocument(outcome.originalMarkdown);
-      }
-      await reporter.llm(
-        0,
-        outcome.review,
+        { decision: "reject", reason: error.reason },
         validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
         metaBeforeReview,
-        outcome.meta,
-        outcome.originalMarkdown,
-        outcome.markdown,
         Date.now() - reviewStarted,
       );
-      if (outcome.reverted.length > 0) {
-        await reporter.protectedReverts(0, outcome.reverted);
-      }
-    } catch (error) {
-      if (signal?.aborted) throw error;
-      if (reviewCandidates) {
-        // No base was chosen: what gets written (if anything) is the
-        // rendered candidate, the single-candidate default.
-        if (error instanceof ArticleReviewUnavailableError && candidateNormalizationChanges) {
-          await reportNormalizationChanges(reporter, candidateNormalizationChanges.rendered);
-        }
-        await reporter.validation("initial", validation, initialValidationDuration);
-        await reporter.originalDocument(draft);
-      }
-      if (error instanceof ArticleReviewRejectedError) {
-        await reporter.llmRejected(
-          0,
-          { decision: "reject", reason: error.reason },
-          validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
-          metaBeforeReview,
-          Date.now() - reviewStarted,
-        );
-      } else {
-        await reporter.llmFailure(
-          0,
-          error,
-          Date.now() - reviewStarted,
-          validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
-        );
-      }
-      if (!(error instanceof ArticleReviewUnavailableError)) throw error;
-      // The review could not give a verdict; that is no verdict on the
-      // article. Write the deterministic draft, flagged for a Claude check.
-      needsCheck = error.flagReason;
-      console.warn(`[add-article] job=${job.id} importing unreviewed: ${error.message}`);
+    } else {
+      await reporter.llmFailure(
+        0,
+        error,
+        Date.now() - reviewStarted,
+        validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+      );
     }
-    if (outcome) {
-      if (outcome.review.unconfirmed) needsCheck ??= NO_DECISION;
+    if (!(error instanceof ArticleReviewUnavailableError)) throw error;
+    // The review could not give a verdict; that is no verdict on the
+    // article. Write the deterministic draft, flagged for a Claude check.
+    needsCheck = error.flagReason;
+    console.warn(`[add-article] job=${job.id} importing unreviewed: ${error.message}`);
+  }
+  if (outcome) {
+    if (outcome.review.unconfirmed) needsCheck ??= NO_DECISION;
+    meta = outcome.meta;
+    body = await reviewedBody(outcome.markdown);
+    assertRequiredBodyPrefix(body, requiredBodyPrefix);
+    filenameBase = generateArticleFilenameBase(meta.author, meta.title);
+    draft = generateArticleMarkdown(meta, body, createdDate);
+
+    await setStage("validating-repair");
+    validationStarted = Date.now();
+    validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
+    await reporter.validation("post-review", validation, Date.now() - validationStarted);
+    // A pass whose protected-content edits were reverted must be followed by a
+    // confirmation pass: an LLM checks that the reverted article is still
+    // coherent (the reviewer may have made compensating edits elsewhere) and
+    // can REJECT if it cannot stand. The notice rides on the repair loop.
+    let pendingRevertNotice = outcome.reverted.length > 0 ? buildRevertNotice(outcome.reverted) : "";
+    for (
+      let repairRound = 1;
+      (!validation.valid || pendingRevertNotice) && repairRound < MAX_REVIEW_ROUNDS;
+      repairRound++
+    ) {
+      await setStage(repairRound === 1 ? "repair-review" : `repair-review-${repairRound + 1}`);
+      reviewStarted = Date.now();
+      const metaBeforeRepair = meta;
+      const draftBeforeRepair = draft;
+      try {
+        outcome = await reviewArticle(
+          workDir,
+          draft,
+          meta,
+          validation.issues,
+          repairRound,
+          signal,
+          reviewer,
+          undefined,
+          pendingRevertNotice,
+        );
+        trackReviewModel(outcome.model);
+        if (outcome.review.unconfirmed) {
+          needsCheck ??= NO_DECISION;
+        } else if (needsCheck === NO_DECISION) {
+          // A later pass reviewed the whole article and gave a verdict.
+          needsCheck = undefined;
+        }
+        await reporter.llm(
+          repairRound,
+          outcome.review,
+          validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+          metaBeforeRepair,
+          outcome.meta,
+          draftBeforeRepair,
+          outcome.markdown,
+          Date.now() - reviewStarted,
+        );
+        if (outcome.reverted.length > 0) {
+          await reporter.protectedReverts(repairRound, outcome.reverted);
+          pendingRevertNotice = buildRevertNotice(outcome.reverted);
+        } else {
+          pendingRevertNotice = "";
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        if (error instanceof ArticleReviewRejectedError) {
+          await reporter.llmRejected(
+            repairRound,
+            { decision: "reject", reason: error.reason },
+            validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+            metaBeforeRepair,
+            Date.now() - reviewStarted,
+          );
+        } else {
+          await reporter.llmFailure(
+            repairRound,
+            error,
+            Date.now() - reviewStarted,
+            validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
+          );
+        }
+        if (!(error instanceof ArticleReviewUnavailableError)) throw error;
+        // Keep the last reviewed draft; nobody confirmed what follows.
+        needsCheck ??= error.flagReason;
+        pendingRevertNotice = "";
+        console.warn(`[add-article] job=${job.id} repair round ${repairRound + 1} unavailable, importing flagged: ${error.message}`);
+        break;
+      }
       meta = outcome.meta;
       body = await reviewedBody(outcome.markdown);
       assertRequiredBodyPrefix(body, requiredBodyPrefix);
       filenameBase = generateArticleFilenameBase(meta.author, meta.title);
       draft = generateArticleMarkdown(meta, body, createdDate);
-
-      await setStage("validating-repair");
       validationStarted = Date.now();
       validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
-      await reporter.validation("post-review", validation, Date.now() - validationStarted);
-      // A pass whose protected-content edits were reverted must be followed by a
-      // confirmation pass: an LLM checks that the reverted article is still
-      // coherent (the reviewer may have made compensating edits elsewhere) and
-      // can REJECT if it cannot stand. The notice rides on the repair loop.
-      let pendingRevertNotice = outcome.reverted.length > 0 ? buildRevertNotice(outcome.reverted) : "";
-      for (
-        let repairRound = 1;
-        (!validation.valid || pendingRevertNotice) && repairRound < MAX_REVIEW_ROUNDS;
-        repairRound++
-      ) {
-        await setStage(repairRound === 1 ? "repair-review" : `repair-review-${repairRound + 1}`);
-        reviewStarted = Date.now();
-        const metaBeforeRepair = meta;
-        const draftBeforeRepair = draft;
-        try {
-          outcome = await reviewArticle(
-            workDir,
-            draft,
-            meta,
-            validation.issues,
-            repairRound,
-            signal,
-            reviewer,
-            undefined,
-            pendingRevertNotice,
-          );
-          trackReviewModel(outcome.model);
-          if (outcome.review.unconfirmed) {
-            needsCheck ??= NO_DECISION;
-          } else if (needsCheck === NO_DECISION) {
-            // A later pass reviewed the whole article and gave a verdict.
-            needsCheck = undefined;
-          }
-          await reporter.llm(
-            repairRound,
-            outcome.review,
-            validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
-            metaBeforeRepair,
-            outcome.meta,
-            draftBeforeRepair,
-            outcome.markdown,
-            Date.now() - reviewStarted,
-          );
-          if (outcome.reverted.length > 0) {
-            await reporter.protectedReverts(repairRound, outcome.reverted);
-            pendingRevertNotice = buildRevertNotice(outcome.reverted);
-          } else {
-            pendingRevertNotice = "";
-          }
-        } catch (error) {
-          if (signal?.aborted) throw error;
-          if (error instanceof ArticleReviewRejectedError) {
-            await reporter.llmRejected(
-              repairRound,
-              { decision: "reject", reason: error.reason },
-              validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
-              metaBeforeRepair,
-              Date.now() - reviewStarted,
-            );
-          } else {
-            await reporter.llmFailure(
-              repairRound,
-              error,
-              Date.now() - reviewStarted,
-              validation.issues.map((issue) => issue.code).filter((code): code is string => !!code),
-            );
-          }
-          if (!(error instanceof ArticleReviewUnavailableError)) throw error;
-          // Keep the last reviewed draft; nobody confirmed what follows.
-          needsCheck ??= error.flagReason;
-          pendingRevertNotice = "";
-          console.warn(`[add-article] job=${job.id} repair round ${repairRound + 1} unavailable, importing flagged: ${error.message}`);
-          break;
-        }
-        meta = outcome.meta;
-        body = await reviewedBody(outcome.markdown);
-        assertRequiredBodyPrefix(body, requiredBodyPrefix);
-        filenameBase = generateArticleFilenameBase(meta.author, meta.title);
-        draft = generateArticleMarkdown(meta, body, createdDate);
-        validationStarted = Date.now();
-        validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
-        await reporter.validation(
-          repairRound === 1 ? "post-repair-review" : `post-repair-review-${repairRound + 1}`,
-          validation,
-          Date.now() - validationStarted,
-        );
-      }
-      if (pendingRevertNotice) {
-        throw new Error(
-          "protected-content edits were reverted in the final review round and no round remained to confirm the result",
-        );
-      }
+      await reporter.validation(
+        repairRound === 1 ? "post-repair-review" : `post-repair-review-${repairRound + 1}`,
+        validation,
+        Date.now() - validationStarted,
+      );
     }
-    // A miscounted table row must not discard a whole paper. When the review
-    // rounds are spent and table rows are the only errors left, make the
-    // counts match, flag each changed row for a human, and write the article.
-    if (!validation.valid && onlyTableErrors(validation)) {
-      const forced = forceTableCellCounts(body);
-      if (forced.rows.length > 0) {
-        await setStage("forcing-table-cells");
-        body = forced.body;
-        draft = generateArticleMarkdown(meta, body, createdDate);
-        await reporter.programmatic({
-          code: "programmatic.table-cell-counts-forced",
-          count: forced.rows.length,
-          before: forced.rows[0].before,
-          after: forced.rows[0].after,
-          detail: { rows: forced.rows },
-        });
-        validationStarted = Date.now();
-        validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
-        await reporter.validation("post-table-repair", validation, Date.now() - validationStarted);
-      }
+    if (pendingRevertNotice) {
+      throw new Error(
+        "protected-content edits were reverted in the final review round and no round remained to confirm the result",
+      );
     }
-    assertArticleValid(validation);
-    reviewed = !needsCheck;
-    if (needsCheck) {
-      job.review_status = "unreviewed";
-      job.review_note = needsCheck;
-    }
-    job.title = meta.title;
   }
+  // A miscounted table row must not discard a whole paper. When the review
+  // rounds are spent and table rows are the only errors left, make the
+  // counts match, flag each changed row for a human, and write the article.
+  if (!validation.valid && onlyTableErrors(validation)) {
+    const forced = forceTableCellCounts(body);
+    if (forced.rows.length > 0) {
+      await setStage("forcing-table-cells");
+      body = forced.body;
+      draft = generateArticleMarkdown(meta, body, createdDate);
+      await reporter.programmatic({
+        code: "programmatic.table-cell-counts-forced",
+        count: forced.rows.length,
+        before: forced.rows[0].before,
+        after: forced.rows[0].after,
+        detail: { rows: forced.rows },
+      });
+      validationStarted = Date.now();
+      validation = await validateArticleDraft(`articles/${filenameBase}.md`, draft, { signal });
+      await reporter.validation("post-table-repair", validation, Date.now() - validationStarted);
+    }
+  }
+  assertArticleValid(validation);
+  reviewed = !needsCheck;
+  if (needsCheck) {
+    job.review_status = "unreviewed";
+    job.review_note = needsCheck;
+  }
+  job.title = meta.title;
 
-  // 5. Resolve a unique filename — disambiguating DISTINCT pages that share a
-  //    base name (e.g. each Atlas chapter's "Introduction") — and write it,
-  //    serialized so two concurrent imports can't pick the same name and
-  //    overwrite each other.
+  // 5. Fill the stub in (written at 4.2, or already there before the
+  //    import): re-read it under the write lock, so notes added while the
+  //    import ran are kept, and write the full article over it.
   await setStage("writing");
   const reviewStatus = needsCheck ? `${UNREVIEWED_STATUS} (${needsCheck})` : undefined;
-  const candidatePaths = articleFilenameCandidates(
-    filenameBase,
-    meta.source_url || job.url,
-  ).map((b) => `${folder}/${b}.md`);
+  const stub = existingStub!;
   const mdPath = await withArticleWriteLock(async () => {
     // Last line of defense against post-abort ghost writes: the job may have
     // been cancelled while queued behind this lock.
     signal?.throwIfAborted();
-    if (existingStub) {
-      const refreshed = await findExistingArticle(
-        [job.url, meta.source_url],
-        signal,
+    const refreshed = await findExistingArticle(
+      [job.url, meta.source_url, ...(stubSourceUrl ? [stubSourceUrl] : [])],
+      signal,
+    );
+    if (!refreshed || refreshed.path !== stub.path || !refreshed.stubContent) {
+      throw new Error(
+        `The article stub changed or disappeared while importing: ${topFolder}${stub.path}. No changes were written; inspect the stub and retry.`,
       );
-      if (!refreshed || refreshed.path !== existingStub.path || !refreshed.stubContent) {
-        throw new Error(
-          `The article stub changed or disappeared while importing: ${topFolder}${existingStub.path}. No changes were written; inspect the stub and retry.`,
-        );
-      }
-      const parsed = parsePromotableArticleStub(
-        refreshed.stubContent,
-        `${topFolder}${refreshed.path}`,
-      );
-      const promotedBase = generateArticleMarkdown(
-        meta,
-        body,
-        parsed.created || createdDate,
-        {
+    }
+    const parsed = parsePromotableArticleStub(
+      refreshed.stubContent,
+      `${topFolder}${refreshed.path}`,
+    );
+    const promotedBase = generateArticleMarkdown(
+      meta,
+      body,
+      parsed.created || createdDate,
+      {
+        discussionBlocks: parsed.discussionBlocks,
+        extraTags: parsed.extraTags,
+      },
+    );
+    const promotedPath = `${topFolder}${refreshed.path}`;
+    const promotedMd = reviewed
+      ? generateArticleMarkdown(meta, body, parsed.created || createdDate, {
           discussionBlocks: parsed.discussionBlocks,
           extraTags: parsed.extraTags,
-        },
-      );
-      const promotedPath = `${topFolder}${refreshed.path}`;
-      const promotedMd = reviewed
-        ? generateArticleMarkdown(meta, body, parsed.created || createdDate, {
-            discussionBlocks: parsed.discussionBlocks,
-            extraTags: parsed.extraTags,
-            review: {
-              reviewed: createdDate,
-              version: REVIEW_VERSION,
-              model: reviewer.model,
-              sourceFetched: evidence.manifest.fetched_at.slice(0, 10),
-              sourceKind: evidence.manifest.source_kind,
-            },
-          })
-        : reviewStatus
-          ? generateArticleMarkdown(meta, body, parsed.created || createdDate, {
-              discussionBlocks: parsed.discussionBlocks,
-              extraTags: parsed.extraTags,
-              reviewStatus,
-            })
-          : promotedBase;
-      const finalValidationStarted = Date.now();
-      const finalValidation = await validateArticleDraft(refreshed.path.replace(/^\//, ""), promotedMd, { signal });
-      await reporter.validation("final", finalValidation, Date.now() - finalValidationStarted);
-      assertArticleValid(finalValidation);
-      await reporter.finalDocument(promotedMd);
-      await createRelayDoc(promotedPath, promotedMd, signal);
-      return promotedPath;
-    }
-
-    const existing = await checkRelayDocsExist(candidatePaths, signal);
-    const chosen = candidatePaths.find((p) => !existing[p]);
-    if (!chosen) {
-      throw new Error(`Document already exists: ${candidatePaths[0]}`);
-    }
-    const baseMarkdown = isStubOnly
-      ? generateArticleStubMarkdown(meta, createdDate)
-      : generateArticleMarkdown(meta, body, createdDate);
-    const markdown = reviewed
-      ? generateArticleMarkdown(meta, body, createdDate, {
           review: {
             reviewed: createdDate,
             version: REVIEW_VERSION,
@@ -982,17 +1037,19 @@ export async function processArticle(
           },
         })
       : reviewStatus
-        ? generateArticleMarkdown(meta, body, createdDate, { reviewStatus })
-        : baseMarkdown;
-    if (reviewed || reviewStatus) {
-      const finalValidationStarted = Date.now();
-      const finalValidation = await validateArticleDraft(chosen.replace(`${topFolder}/`, ""), markdown, { signal });
-      await reporter.validation("final", finalValidation, Date.now() - finalValidationStarted);
-      assertArticleValid(finalValidation);
-    }
-    await reporter.finalDocument(markdown);
-    await createRelayDoc(chosen, markdown, signal);
-    return chosen;
+        ? generateArticleMarkdown(meta, body, parsed.created || createdDate, {
+            discussionBlocks: parsed.discussionBlocks,
+            extraTags: parsed.extraTags,
+            reviewStatus,
+          })
+        : promotedBase;
+    const finalValidationStarted = Date.now();
+    const finalValidation = await validateArticleDraft(refreshed.path.replace(/^\//, ""), promotedMd, { signal });
+    await reporter.validation("final", finalValidation, Date.now() - finalValidationStarted);
+    assertArticleValid(finalValidation);
+    await reporter.finalDocument(promotedMd);
+    await createRelayDoc(promotedPath, promotedMd, signal);
+    return promotedPath;
   });
   job.relay_url = editorOpenUrl(mdPath);
   job.relay_path = mdPath;
