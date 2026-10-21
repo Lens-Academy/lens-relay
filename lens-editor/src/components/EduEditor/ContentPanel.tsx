@@ -68,6 +68,9 @@ interface ContentPanelProps {
   criticMarkupEnabled?: boolean;
   /** Initial suggestion mode for criticmarkup-enabled section editors. */
   suggestionMode?: boolean;
+  /** The user may accept and reject suggestions (Admin and Edit roles): their
+   *  section editors get the ✓ ✗ buttons, keys and right-click items. */
+  canAcceptReject?: boolean;
   /** Called when the active section editor's cursor moves (or the editor
    *  closes). The argument is the absolute Y.Text offset, or null when no
    *  section editor is active. EduEditor uses this to drive the comments
@@ -148,6 +151,7 @@ export function ContentPanel({
   courseSlug,
   criticMarkupEnabled = false,
   suggestionMode = false,
+  canAcceptReject = false,
   onCommentInsertPosChange,
   onClickCriticRange,
   onCommentClick,
@@ -280,6 +284,7 @@ export function ContentPanel({
     editKey,
     enableCriticMarkup: sectionEditorCriticMarkup,
     initialSuggestionMode: suggestionMode,
+    canAcceptReject,
     commentBadgeMap: editorCommentBadgeMap,
     yTextOffsetBase: editRange.from,
     // Mod-Shift-m → flush cursor position upward then open the add-comment UI.

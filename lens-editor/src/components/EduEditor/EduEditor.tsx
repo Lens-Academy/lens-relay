@@ -332,7 +332,8 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
   // Enable for edit AND suggest roles — suggest users need the criticmarkup
   // extension so comments and inline `{++ ++}` / `{-- --}` suggestions render
   // as widgets, not raw markup. (Previously gated on canEdit which excluded
-  // suggest-role entirely.)
+  // suggest-role entirely.) Accepting and rejecting suggestions stays with
+  // canEdit, as in the main editor.
   const criticMarkupEnabled = canWrite;
 
   const portalTarget = typeof document === 'undefined'
@@ -429,6 +430,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 courseSlug={courseSlug}
                 criticMarkupEnabled={criticMarkupEnabled}
                 suggestionMode={isSuggestionMode}
+                canAcceptReject={canEdit}
                 onClickCriticRange={handleClickCriticRange}
                 onCommentClick={handleCommentClick}
                 onRequestAddComment={handleRequestAddComment}

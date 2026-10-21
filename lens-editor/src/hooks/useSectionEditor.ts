@@ -22,6 +22,10 @@ interface UseSectionEditorOpts {
   /** Initial suggestion mode for criticmarkup-enabled editors. Ignored when
    *  enableCriticMarkup is false. */
   initialSuggestionMode?: boolean;
+  /** The user may accept and reject suggestions (Admin and Edit roles): shows
+   *  the ✓ ✗ buttons and enables their keys and right-click items. Default
+   *  false. Ignored when enableCriticMarkup is false. */
+  canAcceptReject?: boolean;
   /** Local comment badge map for the edited slice, keyed by local positions.
    *  Keeps section-editor badges numbered consistently with document-level
    *  comment UI. */
@@ -67,6 +71,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       awareness,
       enableCriticMarkup,
       initialSuggestionMode,
+      canAcceptReject,
       commentBadgeMap,
       yTextOffsetBase,
     } = optsRef.current;
@@ -89,6 +94,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       parent: mountRef.current,
       enableCriticMarkup,
       initialSuggestionMode,
+      canAcceptReject,
       commentBadgeMap,
       yTextOffsetBase,
       onRequestAddComment,
@@ -103,7 +109,7 @@ export function useSectionEditor(opts: UseSectionEditorOpts) {
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts.active, opts.editKey, opts.enableCriticMarkup, opts.initialSuggestionMode]);
+  }, [opts.active, opts.editKey, opts.enableCriticMarkup, opts.initialSuggestionMode, opts.canAcceptReject]);
 
   useEffect(() => {
     if (!opts.enableCriticMarkup || !viewRef.current) return;

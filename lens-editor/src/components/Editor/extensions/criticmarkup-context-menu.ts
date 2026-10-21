@@ -1,5 +1,6 @@
 // src/components/Editor/extensions/criticmarkup-context-menu.ts
 import type { EditorView } from '@codemirror/view';
+import { canAcceptRejectFacet } from './criticmarkup';
 import { findRangeAtPosition, findRangesInSelection, acceptChangeAtCursor, rejectChangeAtCursor } from './criticmarkup-commands';
 
 export interface ContextMenuItem {
@@ -14,8 +15,12 @@ export interface ContextMenuItem {
  * @param view - The EditorView instance
  * @param atPosition - Optional position to check (for right-click). If not provided, uses cursor position.
  * @returns Menu items if position is inside markup, empty array otherwise.
+ *   Always empty for users who may not accept or reject (canAcceptRejectFacet),
+ *   who get no ✓ ✗ buttons either.
  */
 export function getContextMenuItems(view: EditorView, atPosition?: number): ContextMenuItem[] {
+  if (!view.state.facet(canAcceptRejectFacet)) return [];
+
   // Check for bulk selection first
   const selectedRanges = findRangesInSelection(view);
   if (selectedRanges.length > 1) {
