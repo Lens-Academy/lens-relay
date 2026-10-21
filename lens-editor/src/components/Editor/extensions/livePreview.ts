@@ -34,6 +34,7 @@ import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateField } from '@codemirror/state';
+import type { Range } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
 import { wikilinkMetadataChanged } from './wikilinkEffects';
 import { noteEmbeds } from './noteEmbed';
@@ -490,11 +491,27 @@ function isHashtagContextExcluded(
 }
 
 /**
+ * Headings' size classes, as marks that wrap every other mark and widget on
+ * their line (outer decorations, last in precedence). CodeMirror puts a later
+ * extension's mark around an earlier one's, so a suggestion's mark
+ * (criticmarkup.ts) used to wrap the heading's and kept the body's font size:
+ * its box was shorter than the heading's text and sat low on the row. Its
+ * background was shorter than the text, and CodeMirror, which places a click
+ * by the boxes of the line's pieces, took it for a box on the row below a
+ * click high on the row and put the cursor at the suggestion's start.
+ */
+function outerHeadingMarks(plugin: ViewPlugin<{ headings: DecorationSet }>) {
+  return EditorView.outerDecorations.of((view) => view.plugin(plugin)?.headings ?? Decoration.none);
+}
+
+/**
  * ViewPlugin that builds decorations based on cursor position
  */
 const livePreviewPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    /** The headings' marks (outerHeadingMarks) */
+    headings: DecorationSet = Decoration.none;
 
     constructor(view: EditorView) {
       this.decorations = this.buildDecorations(view);
@@ -522,6 +539,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
       // Track decorations to sort them (required for RangeSetBuilder)
       let decorations: Array<{ from: number; to: number; deco: Decoration }> =
         [];
+      const headings: Range<Decoration>[] = [];
       const obsidianCommentRanges = view.state.field(obsidianCommentRangesField);
       // Line numbers of horizontal rules, which the bullet validation below skips
       const hrLines = new Set<number>();
@@ -552,14 +570,12 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             // Headings: ALWAYS apply heading class for font sizing
             // # markers are hidden separately based on cursor position (HeaderMark below)
             if (node.name in HEADING_CLASSES) {
-              decorations.push({
-                from: node.from,
-                to: node.to,
-                // inclusiveEnd: a widget replacing the heading's end (a wikilink
-                // that ends it, e.g. `### [[x]]`) is otherwise left outside the
-                // mark and renders at body size.
-                deco: Decoration.mark({ class: HEADING_CLASSES[node.name], inclusiveEnd: true }),
-              });
+              // inclusiveEnd: a widget replacing the heading's end (a wikilink
+              // that ends it, e.g. `### [[x]]`) is otherwise left outside the
+              // mark and renders at body size.
+              headings.push(
+                Decoration.mark({ class: HEADING_CLASSES[node.name], inclusiveEnd: true }).range(node.from, node.to),
+              );
               // Add line decoration for heading top spacing (margin-top doesn't work on inline spans)
               const headingLine = view.state.doc.lineAt(node.from);
               decorations.push({
@@ -1063,11 +1079,13 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         builder.add(d.from, d.to, d.deco);
       }
 
+      this.headings = Decoration.set(headings, true);
       return builder.finish();
     }
   },
   {
     decorations: (v) => v.decorations,
+    provide: outerHeadingMarks,
   }
 );
 
@@ -1161,15 +1179,15 @@ const obsidianCommentPlugin = ViewPlugin.fromClass(
  */
 const sourceHeadingPlugin = ViewPlugin.fromClass(
   class {
-    decorations: DecorationSet;
+    headings: DecorationSet;
 
     constructor(view: EditorView) {
-      this.decorations = this.buildDecorations(view);
+      this.headings = this.buildDecorations(view);
     }
 
     update(update: ViewUpdate) {
       if (update.docChanged || update.viewportChanged) {
-        this.decorations = this.buildDecorations(update.view);
+        this.headings = this.buildDecorations(update.view);
       }
     }
 
@@ -1201,7 +1219,7 @@ const sourceHeadingPlugin = ViewPlugin.fromClass(
     }
   },
   {
-    decorations: (v) => v.decorations,
+    provide: outerHeadingMarks,
   }
 );
 

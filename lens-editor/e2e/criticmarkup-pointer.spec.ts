@@ -16,7 +16,7 @@ type FixtureWindow = Window & {
   seedRandom: (seed: number) => void;
 };
 
-const LINES = 12; // e2e/fixtures/criticmarkup-pointer.ts
+const LINES = 15; // e2e/fixtures/criticmarkup-pointer.ts
 const SEEDS = [1, 2, 3];
 const DRAG_SEEDS = [1, 2, 3, 4, 5, 6];
 const HEIGHTS = ['top', 'middle', 'bottom'] as const;
@@ -53,12 +53,16 @@ function selection(page: Page): Promise<{ anchor: number; head: number }> {
 /**
  * The screen point just right of document position `at` (between its two
  * characters), near the top of the text, in the middle, or near the bottom:
- * below the baseline, where hidden syntax used to read as a row above
+ * below the baseline, where hidden syntax used to read as a row above. Never
+ * below the line: a big heading's text can be taller than its row (in Segoe
+ * UI, an H1's by 2px at the top and at the bottom)
  */
 function pointAt(page: Page, at: number, height: Height = 'middle'): Promise<{ x: number; y: number }> {
   return page.evaluate(({ at, height }) => {
-    const c = (window as unknown as FixtureWindow).view.coordsAtPos(at, 1)!;
-    const y = height === 'top' ? c.top + 2 : height === 'bottom' ? c.bottom - 2 : (c.top + c.bottom) / 2;
+    const { view } = window as unknown as FixtureWindow;
+    const c = view.coordsAtPos(at, 1)!;
+    const bottom = Math.min(c.bottom, view.documentTop + view.lineBlockAt(at).bottom);
+    const y = height === 'top' ? c.top + 2 : height === 'bottom' ? bottom - 2 : (c.top + bottom) / 2;
     return { x: c.left + 1, y };
   }, { at, height });
 }
@@ -208,6 +212,40 @@ test.describe('Live preview: pointing at a line with a suggestion', () => {
     const missed: string[] = [];
     for (const [n, needle, offset] of targets) {
       missed.push(...await missedClicks(page, await pos(page, n, needle, offset), away));
+    }
+    expect(missed).toEqual([]);
+  });
+
+  // A suggestion's mark used to wrap the heading's and keep the body's font
+  // size: its box was shorter than the heading's text and sat low on the row,
+  // and a click high on the row, on the suggestion or after it, landed at the
+  // suggestion's start (outerHeadingMarks in livePreview.ts)
+  test('a click high, in the middle or low on a heading\'s row, on a suggestion\'s text or after it, puts the cursor under the pointer', async ({ page }) => {
+    const targets: Array<[number, string, number]> = [
+      [12, 'added', 2], [12, 'word++', 2], [12, ' in it', 3],
+      [13, 'old words', 4], [13, 'new words', 4], [13, ' here', 3],
+      [14, 'highlight', 4], [14, ' in it', 3],
+    ];
+    const away = await pos(page, 1, '#');
+    const missed: string[] = [];
+    for (const [n, needle, offset] of targets) {
+      missed.push(...await missedClicks(page, await pos(page, n, needle, offset), away));
+    }
+    expect(missed).toEqual([]);
+  });
+
+  test('with a suggestion\'s ✓ ✗ buttons showing in a heading, a click before or after them puts the cursor under the pointer', async ({ page }) => {
+    // [line, the cursor in the suggestion's text, the target]
+    const cases: Array<[number, [string, number], [string, number]]> = [
+      [12, ['added', 2], [' in it', 3]],
+      [12, ['added', 2], ['heading', 3]],
+      [13, ['new words', 2], [' here', 3]],
+      [13, ['old words', 2], ['new words', 4]],
+      [13, ['new words', 2], ['title', 2]],
+    ];
+    const missed: string[] = [];
+    for (const [n, [inNeedle, inOffset], [needle, offset]] of cases) {
+      missed.push(...await missedClicks(page, await pos(page, n, needle, offset), await pos(page, n, inNeedle, inOffset)));
     }
     expect(missed).toEqual([]);
   });

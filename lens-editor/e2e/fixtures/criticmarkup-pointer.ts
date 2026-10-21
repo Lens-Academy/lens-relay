@@ -12,8 +12,9 @@ import '../../src/index.css';
 const meta = (author: string) => JSON.stringify({ author, timestamp: 1760000000000 });
 
 // Suggestions in the middle and at the end of lines, with and without
-// metadata, in a wrapped paragraph, beside a comment badge, and a suggestion
-// over three lines whose first and last lines show no text of it
+// metadata, in a wrapped paragraph, beside a comment badge, a suggestion
+// over three lines whose first and last lines show no text of it, and
+// suggestions and a comment in headings
 const documentText = [
   '# Pointing at suggestions',
   'Plain text {++inserted++} in the middle.',
@@ -30,6 +31,9 @@ const documentText = [
   `{++${meta('Elias')}@@`,
   'An added line of its own',
   '++}',
+  `## A heading with {++${meta('Elias')}@@an added word++} in it`,
+  `# A title {--${meta('Elias')}@@old words--}{++${meta('Elias')}@@new words++} here`,
+  `### A heading with {==a highlight==}{>>${meta('Elias')}@@A comment<<} in it`,
   'Last line.',
 ].join('\n');
 
