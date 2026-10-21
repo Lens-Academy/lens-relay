@@ -688,6 +688,17 @@ describe('CriticMarkup Extension', () => {
 
       expect(view.state.doc.toString()).toBe('hello  end');
     });
+
+    it('the ✓ of a suggestion right after a comment accepts the suggestion, not the comment', () => {
+      const doc = 'a {>>a note<<}{++x++} b';
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('{++'));
+      cleanup = c;
+
+      const buttons = view.contentDOM.querySelectorAll<HTMLElement>('.cm-criticmarkup-buttons');
+      expect(buttons).toHaveLength(1);
+      buttons[0].querySelector<HTMLButtonElement>('.cm-criticmarkup-accept')!.click();
+      expect(view.state.doc.toString()).toBe('a {>>a note<<}x b');
+    });
   });
 
   describe('Adjacent Deletion+Addition Pairs', () => {
@@ -820,17 +831,6 @@ describe('CriticMarkup Extension', () => {
       expect(bulkButton(view, 'accept')?.textContent).toBe('✓ 1');
       bulkButton(view, 'accept')!.click();
       expect(view.state.doc.toString()).toBe('a new b');
-    });
-
-    it('the ✓ of a suggestion right after a comment accepts the suggestion, not the comment', () => {
-      const doc = 'a {>>a note<<}{++x++} b';
-      const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('{++'));
-      cleanup = c;
-
-      const buttons = view.contentDOM.querySelectorAll<HTMLElement>('.cm-criticmarkup-buttons');
-      expect(buttons).toHaveLength(1);
-      buttons[0].querySelector<HTMLButtonElement>('.cm-criticmarkup-accept')!.click();
-      expect(view.state.doc.toString()).toBe('a {>>a note<<}x b');
     });
 
     it('no buttons for a selection with only comments and highlights in it', () => {
