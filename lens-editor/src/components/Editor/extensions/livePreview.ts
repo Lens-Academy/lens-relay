@@ -464,7 +464,10 @@ function headingSizeDecorations(
   view: EditorView,
   heading: SyntaxNodeRef
 ): Array<{ from: number; to: number; deco: Decoration }> {
-  const size = Decoration.mark({ class: HEADING_CLASSES[heading.name] });
+  // inclusiveStart and inclusiveEnd: a widget replacing the start or end of the
+  // heading's text (a link or wikilink, e.g. `[[x]]` over ===, or `### [[x]]`)
+  // is otherwise left outside the mark and renders at body size.
+  const size = Decoration.mark({ class: HEADING_CLASSES[heading.name], inclusiveStart: true, inclusiveEnd: true });
   const underline = heading.name.startsWith('Setext') ? heading.node.getChild('HeaderMark') : null;
   if (!underline) return [{ from: heading.from, to: heading.to, deco: size }];
   return [
@@ -1085,8 +1088,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         decorations = decorations.filter((_, i) => !removeDeco.has(i));
       }
 
-      // Sort decorations by position (required for RangeSetBuilder)
-      decorations.sort((a, b) => a.from - b.from || a.to - b.to);
+      // Sort decorations by position, then by startSide (both required for
+      // RangeSetBuilder: a widget replacing a range goes before a mark that
+      // starts at the same place), then by end
+      decorations.sort((a, b) => a.from - b.from || a.deco.startSide - b.deco.startSide || a.to - b.to);
 
       // Add to builder in sorted order
       for (const d of decorations) {

@@ -238,6 +238,41 @@ describe('livePreview - setext headings', () => {
     expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['Section']);
     expect(view.state.doc.toString()).toBe(doc);
   });
+
+  it('renders a heading whose text is only a link or a wikilink', () => {
+    // The heading's size mark and the link's widget start at the same place.
+    // Added mark first, RangeSetBuilder threw, live preview crashed and the
+    // whole document showed as raw markdown.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const doc = '[link](https://example.org)\n---\n\n[[Page]]\n===\n\nBody';
+      const { view, cleanup: c } = createTestEditor(doc, doc.length);
+      cleanup = c;
+
+      expect(errors).not.toHaveBeenCalled();
+      expect(getTextWithClass(view, 'cm-link-widget')).toEqual(['link']);
+      expect(getTextWithClass(view, 'cm-wikilink-widget')).toEqual(['Page']);
+      expect(getTextWithClass(view, 'cm-hidden-syntax')).toEqual(['---', '===']);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('sizes a link or wikilink that starts or ends the heading text like the heading', () => {
+    const doc = [
+      '[link](https://example.org)\n---',
+      '[[Page]]\n===',
+      '[[Page]] notes\n---',
+      'Notes on [[Page]]\n===',
+      'Body',
+    ].join('\n\n');
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+
+    const sizes = Array.from(view.contentDOM.querySelectorAll('.cm-link-widget, .cm-wikilink-widget'), (link) =>
+      ['cm-heading-1', 'cm-heading-2'].find((size) => link.closest(`.${size}`)) ?? null);
+    expect(sizes).toEqual(['cm-heading-2', 'cm-heading-1', 'cm-heading-2', 'cm-heading-1']);
+  });
 });
 
 describe('livePreview - horizontal rules', () => {
