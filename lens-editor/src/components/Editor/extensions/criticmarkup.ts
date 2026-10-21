@@ -20,6 +20,7 @@ import {
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
 import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
 import { parse, parseThreads, isAdjacentEditPair, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+import { keepPasteEvent, pastedSuggestionsAccepted } from './criticmarkup-paste';
 
 export interface CriticMarkupCommentBadgeInfo {
   badgeNumber: number;
@@ -959,7 +960,7 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
  * Continuous typing optimization: If cursor is inside an existing addition by the same
  * author, let the edit through without wrapping to avoid per-character markup.
  */
-const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) => {
+function suggestionModeChanges(tr: Transaction) {
   // Only process document changes
   if (!tr.docChanged) return tr;
 
@@ -1256,7 +1257,11 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
         : tr.selection,
     effects: tr.effects,
   };
-});
+}
+
+const suggestionModeFilter = EditorState.transactionFilter.of(
+  (tr: Transaction) => keepPasteEvent(tr, suggestionModeChanges(tr)),
+);
 
 /**
  * Compartment for toggling CriticMarkup decorations on/off (source mode toggle).
@@ -1283,6 +1288,8 @@ export function criticMarkupExtension(options: CriticMarkupOptions = {}) {
     commentBadgeMapField.init(() => commentBadgeMap),
     suggestionModeField,
     suggestionModeFilter,
+    // Runs before suggestionModeFilter: filters run from the last to the first
+    pastedSuggestionsAccepted(suggestionModeField),
     criticMarkupCompartment.of(criticMarkupPlugin),
     stickyButtonsPlugin,
     keymap.of(criticMarkupKeymap),

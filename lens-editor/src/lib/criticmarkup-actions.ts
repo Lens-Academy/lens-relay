@@ -1,5 +1,5 @@
 // src/lib/criticmarkup-actions.ts
-import type { CriticMarkupRange } from './criticmarkup-parser';
+import { parse, type CriticMarkupRange } from './criticmarkup-parser';
 
 /**
  * Accept a CriticMarkup change, returning the modified document.
@@ -57,4 +57,35 @@ export function rejectChange(doc: string, range: CriticMarkupRange): string {
     default:
       return doc;
   }
+}
+
+/**
+ * The parts of `text` that stay when every CriticMarkup change in it is
+ * accepted, in order and apart: an addition's or a highlight's text without
+ * its delimiters and metadata, a substitution's new text, and nothing of a
+ * deletion or a comment. A change nested in another (a deletion of part of
+ * someone's addition) is accepted too.
+ */
+export function acceptedPieces(text: string): { from: number; to: number }[] {
+  // What accepting each change takes out
+  const cuts: { from: number; to: number }[] = [];
+  for (const range of parse(text)) {
+    if (range.type === 'deletion' || range.type === 'comment') {
+      cuts.push({ from: range.from, to: range.to });
+    } else {
+      const keptFrom = range.type === 'substitution'
+        ? range.contentTo - (range.newContent ?? '').length
+        : range.contentFrom;
+      cuts.push({ from: range.from, to: keptFrom }, { from: range.contentTo, to: range.to });
+    }
+  }
+  cuts.sort((a, b) => a.from - b.from);
+  const pieces: { from: number; to: number }[] = [];
+  let pos = 0;
+  for (const cut of cuts) {
+    if (cut.from > pos) pieces.push({ from: pos, to: cut.from });
+    pos = Math.max(pos, cut.to);
+  }
+  if (pos < text.length) pieces.push({ from: pos, to: text.length });
+  return pieces;
 }
