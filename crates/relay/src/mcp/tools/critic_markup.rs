@@ -815,6 +815,19 @@ pub fn merge_edit(
         std::collections::HashSet::new();
 
     for r in &merged_regions {
+        // A suggestion that adds nothing to the accepted view (a standalone
+        // deletion) is a zero-width segment. Where the diff starts a region
+        // right at it, neither that region nor the one before collects it, so
+        // it is kept as it is here, ahead of the region.
+        for (si, seg) in segments.iter().enumerate() {
+            if seg.is_suggestion
+                && seg.accepted_text.is_empty()
+                && seg_positions[si].0 == r.old_start
+                && emitted_suggestions.insert(si)
+            {
+                replacement.push_str(&seg.raw_text);
+            }
+        }
         if !r.is_change {
             // Equal region: emit raw text from segments
             replacement.push_str(&collect_raw_for_equal(
@@ -2059,6 +2072,39 @@ mod tests {
             accepted_view(&spans),
             "Use {--old--} for deletions and {++new for insertions.++}"
         );
+    }
+
+    #[test]
+    fn b40_standalone_deletion_where_an_edit_region_starts_is_kept() {
+        // The edit changes the word before the deletion; the diff's next region
+        // starts right at it
+        let raw = r#"Hello {--{"author":"Elias","timestamp":1700000000000}@@beautiful --}world."#;
+        let edit = merge_edit(raw, "Hello world", "Hi world", "AI", 1700000000000).unwrap();
+        let result = apply_merge(raw, &edit);
+        assert!(
+            result.contains(r#"{--{"author":"Elias","timestamp":1700000000000}@@beautiful --}"#),
+            "{}",
+            result
+        );
+        let spans = parse(&result);
+        assert_eq!(accepted_view(&spans), "Hi world.");
+        assert_eq!(base_view(&spans), "Hello beautiful world.");
+    }
+
+    #[test]
+    fn b41_insertion_where_a_standalone_deletion_is_keeps_it() {
+        let raw = r#"Hello {--{"author":"Elias","timestamp":1700000000000}@@beautiful --}world."#;
+        let edit =
+            merge_edit(raw, "Hello world", "Hello there world", "AI", 1700000000000).unwrap();
+        let result = apply_merge(raw, &edit);
+        assert!(
+            result.contains(r#"{--{"author":"Elias","timestamp":1700000000000}@@beautiful --}"#),
+            "{}",
+            result
+        );
+        let spans = parse(&result);
+        assert_eq!(accepted_view(&spans), "Hello there world.");
+        assert_eq!(base_view(&spans), "Hello beautiful world.");
     }
 
     // --- Input validation: reject CriticMarkup in AI input ---
