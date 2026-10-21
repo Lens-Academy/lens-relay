@@ -18,7 +18,7 @@ import { SuggestionModeControl } from '../SuggestionModeToggle/SuggestionModeCon
 import { OverflowMenu } from '../OverflowMenu';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
 import type { CriticMarkupRange } from '../../lib/criticmarkup-parser';
-import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
+import { pinInsertKey, useThreadsFromYText } from '../Comments/criticmarkupAdapter';
 import { useScrollSource } from '../Comments/useScrollSource';
 import { setCurrentAuthor } from '../Editor/extensions/criticmarkup';
 import { resolveAnchorYFromSectionViews, resolveAnchorYFromDOM } from '../../lib/anchor-resolver';
@@ -456,7 +456,7 @@ export function EduEditor({ moduleDocId, sourcePath }: EduEditorProps) {
                 onEdit={callbacks.onEdit}
                 onDelete={callbacks.onDelete}
                 onAddComment={callbacks.onAddComment}
-                getInsertKey={() => commentInsertPosRef.current != null ? String(commentInsertPosRef.current) : null}
+                getInsertKey={() => commentInsertPosRef.current != null ? pinInsertKey(effectiveYText, String(commentInsertPosRef.current)) : null}
               />
             </div>
           )}
