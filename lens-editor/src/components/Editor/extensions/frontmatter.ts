@@ -89,6 +89,27 @@ class SpacerWidget extends WidgetType {
   }
 }
 
+/**
+ * A --- delimiter line, hidden as one widget. CodeMirror measures a widget as
+ * a whole, so a click on the row, or ArrowDown onto it, lands before or after
+ * the dashes. As a hidden mark every dash had the same x, the cursor landed
+ * between them, and typing or Enter there broke the frontmatter.
+ */
+class DelimiterWidget extends WidgetType {
+  constructor(private text: string) { super(); }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement('span');
+    span.className = 'cm-frontmatter-delimiter';
+    span.textContent = this.text;
+    return span;
+  }
+
+  eq(other: DelimiterWidget): boolean {
+    return this.text === other.text;
+  }
+}
+
 /** Toggle bar — used for both collapsed and expanded header */
 class FrontmatterBarWidget extends WidgetType {
   constructor(
@@ -268,17 +289,17 @@ const frontmatterExpandedPlugin = ViewPlugin.fromClass(
         deco: Decoration.line({ class: 'cm-frontmatter-line-last' }),
       });
 
-      // Hide --- delimiters
+      // Hide --- delimiters, each line as one widget (see DelimiterWidget)
       if (startLine.from < startLine.to) {
         decos.push({
           from: startLine.from, to: startLine.to,
-          deco: Decoration.mark({ class: 'cm-frontmatter-delimiter' }),
+          deco: Decoration.replace({ widget: new DelimiterWidget(startLine.text) }),
         });
       }
       if (endLine.from < endLine.to && endLine.number !== startLine.number) {
         decos.push({
           from: endLine.from, to: endLine.to,
-          deco: Decoration.mark({ class: 'cm-frontmatter-delimiter' }),
+          deco: Decoration.replace({ widget: new DelimiterWidget(endLine.text) }),
         });
       }
 
