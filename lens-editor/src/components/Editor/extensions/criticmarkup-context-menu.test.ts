@@ -1,10 +1,6 @@
 // src/components/Editor/extensions/criticmarkup-context-menu.test.ts
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { EditorState } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
-import { markdown } from '@codemirror/lang-markdown';
 import { createCriticMarkupEditor, createCriticMarkupEditorWithSelection } from '../../../test/codemirror-helpers';
-import { criticMarkupExtension } from './criticmarkup';
 import { getContextMenuItems } from './criticmarkup-context-menu';
 
 describe('CriticMarkup Context Menu', () => {
@@ -195,23 +191,6 @@ describe('CriticMarkup Context Menu', () => {
       expect(items.map((i) => i.label)).toEqual(['Accept Change', 'Reject Change']);
       items[0].action();
       expect(view.state.doc.toString()).toBe('a seen{>>a note<<} b');
-    });
-
-    it('users who cannot accept or reject get no items, as they get no ✓ ✗', () => {
-      const doc = 'hello {++world++} end';
-      const view = new EditorView({
-        state: EditorState.create({
-          doc,
-          selection: { anchor: 10 },
-          extensions: [markdown(), criticMarkupExtension({ canAcceptReject: false })],
-        }),
-        parent: document.body,
-      });
-      cleanup = () => view.destroy();
-
-      expect(getContextMenuItems(view, 10)).toEqual([]);
-      view.dispatch({ selection: { anchor: 0, head: doc.length } });
-      expect(getContextMenuItems(view, 10)).toEqual([]);
     });
   });
 });

@@ -1,6 +1,5 @@
 // src/components/Editor/extensions/criticmarkup-context-menu.ts
 import type { EditorView } from '@codemirror/view';
-import { canAcceptRejectFacet } from './criticmarkup';
 import { findRangeAtPosition, bulkChangeCount, acceptChangeAtCursor, rejectChangeAtCursor } from './criticmarkup-commands';
 
 export interface ContextMenuItem {
@@ -12,7 +11,7 @@ export interface ContextMenuItem {
 /**
  * Get context menu items for CriticMarkup: the accept/reject of the ✓ ✗
  * buttons there. None on a comment, which has no ✓ ✗ (accepting or rejecting
- * a comment deletes it), and none for users who can't accept or reject.
+ * a comment deletes it).
  *
  * @param view - The EditorView instance
  * @param atPosition - Optional position to check (for right-click). If not provided, uses cursor position.
@@ -22,7 +21,6 @@ export interface ContextMenuItem {
  * @returns Menu items if position is inside markup, empty array otherwise.
  */
 export function getContextMenuItems(view: EditorView, atPosition?: number, target?: EventTarget | null): ContextMenuItem[] {
-  if (!view.state.facet(canAcceptRejectFacet)) return [];
   if (target instanceof Element && target.closest('.cm-comment-badge')) return [];
 
   // Check for bulk selection first: its suggestions, as on the bulk ✓ ✗
