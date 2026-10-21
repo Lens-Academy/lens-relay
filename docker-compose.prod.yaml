@@ -73,6 +73,7 @@ services:
       - ${ARTICLE_REVIEW_REPORT_HOST_DIR:-/root/lens-editor-data/article-review-reports}:/data/lens-editor/article-review-reports
       # The article import queue survives restarts and deploys (queue.json).
       - ${ARTICLE_IMPORT_QUEUE_HOST_DIR:-/root/lens-editor-data/article-import-queue}:/data/lens-editor/article-import-queue
+      - ${JEV_HOST_DIR:-/root/lens-editor-data/jev}:/data/lens-editor/jev
     environment:
       - RELAY_URL=http://relay-server:8080
       - RELAY_SERVER_TOKEN=${RELAY_SERVER_TOKEN}
@@ -102,6 +103,10 @@ services:
       # Read-aloud (POST /api/tts/stream). Without a key the Listen button hides.
       - SPEECHIFY_API_KEY=${SPEECHIFY_API_KEY:-}
       - TTS_CHARS_PER_HOUR=${TTS_CHARS_PER_HOUR:-}
+      # Check workbench (server/jev): answers are cached and the corpus read from the jev dir.
+      - JEV_API_KEY=${JEV_API_KEY:-}
+      - JEV_TEXTS_PER_HOUR=${JEV_TEXTS_PER_HOUR:-}
+      - JEV_CACHE_DIR=/data/lens-editor/jev
       - ARTICLE_REVIEW_REPORT_DIR=/data/lens-editor/article-review-reports
       - CLAUDE_REVIEW_TIMEOUT_MINUTES=${CLAUDE_REVIEW_TIMEOUT_MINUTES:-}
       - ARTICLE_JOB_TIMEOUT_MS=${ARTICLE_JOB_TIMEOUT_MS:-}
