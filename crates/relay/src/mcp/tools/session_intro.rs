@@ -1,7 +1,8 @@
 //! Session-intro lookup for `create_session`.
 //!
 //! Curators can place a document at `<Folder>/AI Guide/_intro.md` in any
-//! shared folder. When an MCP session is created, the human-approved content
+//! shared folder, or one folder down (`<Folder>/<sub>/AI Guide/_intro.md`, see
+//! [`ai_guide_doc`]). When an MCP session is created, the human-approved content
 //! of that document (for every folder the token can access) is appended to
 //! the `create_session` response, after the session id. This gives agents a
 //! curator-maintained orientation ("if you're doing X, read Y first")
@@ -25,11 +26,38 @@
 use super::critic_markup;
 use crate::server::Server;
 use std::sync::Arc;
+use y_sweet_core::doc_resolver::DocumentResolver;
+use y_sweet_core::link_indexer::TRASH_DIR;
 use y_sweet_core::share_token::McpAccess;
 use yrs::{GetString, ReadTxn, Transact};
 
-/// Path of the intro document, relative to a folder root.
-pub const INTRO_PATH: &str = "AI Guide/_intro.md";
+/// The folder of guides written for AI agents.
+pub const AI_GUIDE_DIR: &str = "AI Guide";
+
+/// The intro document's name inside the AI Guide folder.
+pub const INTRO_FILE: &str = "_intro.md";
+
+/// Path of `file` in `folder`'s AI Guide folder: `<folder>/AI Guide/<file>`, or
+/// one folder down (`<folder>/<sub>/AI Guide/<file>`, such as
+/// `Lens/11-AI/AI Guide/_intro.md`), so a team can file the guide under one of
+/// its numbered folders. The top level wins; among subfolders, the first by
+/// name. Nothing in the trash counts.
+pub fn ai_guide_doc(resolver: &DocumentResolver, folder: &str, file: &str) -> Option<String> {
+    let top = format!("{folder}/{AI_GUIDE_DIR}/{file}");
+    if resolver.resolve_path(&top).is_some() {
+        return Some(top);
+    }
+    let prefix = format!("{folder}/");
+    let suffix = format!("/{AI_GUIDE_DIR}/{file}");
+    resolver
+        .entries_under(&prefix)
+        .into_iter()
+        .filter_map(|(path, _)| {
+            let sub = path.strip_prefix(&prefix)?.strip_suffix(&suffix)?;
+            (!sub.is_empty() && !sub.contains('/') && sub != TRASH_DIR).then_some(path)
+        })
+        .min()
+}
 
 /// Hard cap per folder so a runaway intro can't blow up every session.
 const MAX_INTRO_CHARS: usize = 4000;
@@ -78,11 +106,11 @@ pub async fn session_intro(server: &Arc<Server>, access: &McpAccess) -> Option<S
     }
 }
 
-/// Read the base (human-approved) view of `<folder>/AI Guide/_intro.md`,
-/// cleaned for inclusion in a tool response. Returns `None` if the document
-/// doesn't exist or has no approved content yet.
+/// Read the base (human-approved) view of `folder`'s `AI Guide/_intro.md`
+/// (see [`ai_guide_doc`]), cleaned for inclusion in a tool response. Returns
+/// `None` if the document doesn't exist or has no approved content yet.
 async fn read_intro(server: &Arc<Server>, folder: &str) -> Option<String> {
-    let path = format!("{}/{}", folder, INTRO_PATH);
+    let path = ai_guide_doc(server.doc_resolver(), folder, INTRO_FILE)?;
     let doc_info = server.doc_resolver().resolve_path(&path)?;
 
     // Reload from storage if GC evicted the doc.
@@ -214,6 +242,96 @@ mod tests {
         .await;
         let text = response_text(&resp);
         assert!(!text.contains('\n'), "expected bare sid, got: {text}");
+    }
+
+    async fn intro_text(entries: &[(&str, &str, &str)]) -> String {
+        let server = build_test_server(entries).await;
+        let resp = crate::mcp::tools::dispatch_tool(
+            &server,
+            "create_session",
+            &json!({}),
+            &lens_scoped_access(),
+        )
+        .await;
+        response_text(&resp)
+    }
+
+    // Prevents: the intro going silent when a team files its AI Guide folder
+    // under one of its numbered folders (Lens/11-AI/AI Guide)
+    #[tokio::test]
+    async fn intro_one_folder_down_reaches_new_sessions() {
+        let text = intro_text(&[(
+            "/11-AI/AI Guide/_intro.md",
+            "bbbb0000-0000-0000-0000-000000000003",
+            "Read the nested guide first.",
+        )])
+        .await;
+        let (_, rest) = text.split_once("\n\n").expect("sid + intro");
+        assert_eq!(rest, "Read the nested guide first.");
+    }
+
+    // Prevents: a stray copy in a subfolder replacing the folder's own intro
+    #[tokio::test]
+    async fn top_level_intro_wins_over_a_nested_one() {
+        let text = intro_text(&[
+            (
+                "/AI Guide/_intro.md",
+                "bbbb0000-0000-0000-0000-000000000004",
+                "Top-level intro.",
+            ),
+            (
+                "/11-AI/AI Guide/_intro.md",
+                "bbbb0000-0000-0000-0000-000000000005",
+                "Nested intro.",
+            ),
+        ])
+        .await;
+        assert!(text.contains("Top-level intro."));
+        assert!(!text.contains("Nested intro."));
+    }
+
+    // Prevents: a trashed AI Guide folder, or one nested too deep, still
+    // briefing every session
+    #[tokio::test]
+    async fn trashed_or_deeper_intros_are_ignored() {
+        let text = intro_text(&[
+            (
+                "/_trash/AI Guide/_intro.md",
+                "bbbb0000-0000-0000-0000-000000000006",
+                "Trashed intro.",
+            ),
+            (
+                "/10-People/Mark/AI Guide/_intro.md",
+                "bbbb0000-0000-0000-0000-000000000007",
+                "Too deep.",
+            ),
+        ])
+        .await;
+        assert!(!text.contains('\n'), "expected bare sid, got: {text}");
+    }
+
+    // Prevents: two nested AI Guide folders giving a different intro from one
+    // run to the next
+    #[tokio::test]
+    async fn first_nested_folder_by_name_wins() {
+        let server = build_test_server(&[
+            (
+                "/12-Other/AI Guide/HTML Pages.md",
+                "bbbb0000-0000-0000-0000-000000000008",
+                "b",
+            ),
+            (
+                "/11-AI/AI Guide/HTML Pages.md",
+                "bbbb0000-0000-0000-0000-000000000009",
+                "a",
+            ),
+        ])
+        .await;
+        assert_eq!(
+            ai_guide_doc(server.doc_resolver(), "Lens", "HTML Pages.md").as_deref(),
+            Some("Lens/11-AI/AI Guide/HTML Pages.md")
+        );
+        assert_eq!(ai_guide_doc(server.doc_resolver(), "Lens", INTRO_FILE), None);
     }
 
     // Prevents: curator notes in %% ... %% leaking into every session's intro

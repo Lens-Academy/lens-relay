@@ -143,7 +143,7 @@ async fn create_html_file(
     Ok(format!(
         "Created {}{}",
         file_path,
-        super::html_check::result_suffix(content)
+        super::html_check::result_suffix(content, &super::html_check::guide_path(server))
     ))
 }
 

@@ -697,7 +697,7 @@ async fn edit_raw_ytext_file(
         file_path,
         old_string.chars().count(),
         super::html_comments::removed_quote_notes(&before, &edited, &threads).unwrap_or_default(),
-        super::html_check::edit_suffix(&before, &edited)
+        super::html_check::edit_suffix(&before, &edited, &super::html_check::guide_path(server))
     ))
 }
 
