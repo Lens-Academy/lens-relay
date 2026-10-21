@@ -1,6 +1,6 @@
 // src/lib/criticmarkup-actions.test.ts
 import { describe, it, expect } from 'vitest';
-import { acceptChange, rejectChange } from './criticmarkup-actions';
+import { acceptChange, acceptedPieces, rejectChange } from './criticmarkup-actions';
 import type { CriticMarkupRange } from './criticmarkup-parser';
 
 describe('Accept/Reject Actions', () => {
@@ -169,6 +169,38 @@ describe('Accept/Reject Actions', () => {
       const result = rejectChange(doc, range);
 
       expect(result).toBe('hello  end');
+    });
+  });
+
+  describe('acceptedPieces', () => {
+    const META = '{"author":"Elias","timestamp":1000}';
+    /** `text` as acceptedPieces leaves it */
+    const accepted = (text: string) => acceptedPieces(text).map((p) => text.slice(p.from, p.to)).join('');
+
+    it('keeps text without CriticMarkup whole', () => {
+      expect(acceptedPieces('plain text')).toEqual([{ from: 0, to: 10 }]);
+      expect(acceptedPieces('')).toEqual([]);
+    });
+
+    it('keeps an addition\'s text, without its delimiters and metadata', () => {
+      const text = `ends with {++${META}@@an addition++}`;
+      const start = text.indexOf('an addition');
+      expect(acceptedPieces(text)).toEqual([{ from: 0, to: 10 }, { from: start, to: start + 'an addition'.length }]);
+    });
+
+    it('drops a deletion and a comment, keeps a highlight\'s text and a substitution\'s new text', () => {
+      expect(accepted(`A {--${META}@@very --}quick {~~${META}@@red~>brown~~} fox`)).toBe('A quick brown fox');
+      expect(accepted(`{==jumps==}{>>${META}@@Which way?<<}{>>${META}@@North<<} over`)).toBe('jumps over');
+      expect(accepted(`the {--old--}{++new++} one`)).toBe('the new one');
+    });
+
+    it('accepts a change nested in another', () => {
+      expect(accepted(`{++${META}@@an {--${META}@@extra --}addition++}`)).toBe('an addition');
+    });
+
+    it('leaves markup that is not a whole change as it is', () => {
+      expect(accepted('an {++unclosed one')).toBe('an {++unclosed one');
+      expect(accepted('a stray ++} closer')).toBe('a stray ++} closer');
     });
   });
 });

@@ -14,6 +14,7 @@
  */
 import type * as Y from 'yjs';
 import { getAuthorshipRuns } from './authorship-runs';
+import { acceptedPieces } from './criticmarkup-actions';
 import { getClientActorMap, getRegisteredAt } from './provenance';
 
 /** Who wrote a piece of text. `client` is set only for text of the same doc. */
@@ -132,12 +133,18 @@ export function matchSource(
  * The last text copied, cut or dragged out of an editor, kept so a paste of
  * exactly that text gets its authors back. Stored as a hash, never the text,
  * and in localStorage so a paste in another tab (another document) matches
- * too. Only the last copy is kept.
+ * too. Only the last copy is kept: as it is, and, when it has suggestions in
+ * it, as a suggestion-mode paste inserts it (with them accepted:
+ * criticmarkup-paste.ts).
  */
-interface CopiedRecord {
+interface CopiedForm {
   hash: string;
   length: number;
   spans: { length: number; author: { actor: string | null; at: number | null } | null }[];
+}
+
+interface CopiedRecord extends CopiedForm {
+  accepted?: CopiedForm;
 }
 
 const STORAGE_KEY = 'lens-editor:copied-authorship';
@@ -161,8 +168,8 @@ export function normalizeLineBreaks(text: string): string {
   return text.replace(/\r\n?/g, '\n');
 }
 
-export function rememberCopied(copied: AuthoredText): void {
-  const record: CopiedRecord = {
+function storedForm(copied: AuthoredText): CopiedForm {
+  return {
     hash: hashText(copied.text),
     length: copied.text.length,
     // Client IDs mean nothing in another doc: keep actor and date only
@@ -171,6 +178,21 @@ export function rememberCopied(copied: AuthoredText): void {
       author: s.author && { actor: s.author.actor, at: s.author.at },
     })),
   };
+}
+
+/** `copied` as a suggestion-mode paste inserts it, its CriticMarkup changes
+ *  accepted, or null when that is the same text (or none) */
+function acceptedForm(copied: AuthoredText): AuthoredText | null {
+  const pieces = acceptedPieces(copied.text);
+  const text = pieces.map((p) => copied.text.slice(p.from, p.to)).join('');
+  if (!text || text === copied.text) return null;
+  return { text, spans: pieces.flatMap((p) => sliceSpans(copied.spans, p.from, p.to - p.from)) };
+}
+
+export function rememberCopied(copied: AuthoredText): void {
+  const record: CopiedRecord = storedForm(copied);
+  const accepted = acceptedForm(copied);
+  if (accepted) record.accepted = storedForm(accepted);
   lastCopied = record;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(record));
@@ -195,11 +217,12 @@ function readCopied(): CopiedRecord | null {
   return lastCopied;
 }
 
-/** The authors of `text` if it is exactly the text last copied, else null. */
+/** The authors of `text` if it is exactly the text last copied (or that as
+ *  suggestion mode pastes it), else null. */
 export function recallCopied(text: string): AuthorSpan[] | null {
   const record = readCopied();
-  if (!record || record.length !== text.length || record.hash !== hashText(text)) return null;
-  return record.spans;
+  const form = [record, record?.accepted].find((f) => f && f.length === text.length && f.hash === hashText(text));
+  return form ? form.spans : null;
 }
 
 export function forgetCopied(): void {

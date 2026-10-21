@@ -77,6 +77,17 @@ describe('the remembered copy', () => {
     expect(recallCopied('two')).toEqual([{ length: 3, author: ai }]);
   });
 
+  it('recalls a copy with suggestions in it as suggestion mode pastes it too, with them accepted', () => {
+    // "ab" by Luc, then his AI's suggestion to add "c" and to delete "d"
+    rememberCopied({ text: 'ab{++c++}{--d--}', spans: [{ length: 2, author: luc }, { length: 14, author: ai }] });
+    expect(recallCopied('ab{++c++}{--d--}')).toEqual([{ length: 2, author: luc }, { length: 14, author: ai }]);
+    expect(recallCopied('abc')).toEqual([{ length: 2, author: luc }, { length: 1, author: ai }]);
+    expect(recallCopied('abcd')).toBeNull();
+    // The next copy replaces both
+    rememberCopied({ text: 'xyz', spans: [{ length: 3, author: luc }] });
+    expect(recallCopied('abc')).toBeNull();
+  });
+
   it('normalizes Windows line breaks', () => {
     expect(normalizeLineBreaks('a\r\nb\rc')).toBe('a\nb\nc');
   });
