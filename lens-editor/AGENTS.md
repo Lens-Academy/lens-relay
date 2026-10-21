@@ -110,7 +110,7 @@ See `src/test/fixtures/folder-metadata/production-sample.json` for real producti
 lives in `src/components/HtmlEditor/runtime/page-runtime.ts` (CSP, import map, `buildSrcDoc`) and the in-frame
 services in `bridge/page-services.ts`; both are bundled into the bridge by `vite-plugin-bridge-bundle.ts`. Pages that
 hang the preview can be opened with `?view=source`. The author-facing rules are the relay doc
-`Lens/AI Guide/HTML Pages.md`.
+`HTML Pages.md` in Lens's AI Guide folder (`Lens/11-AI/AI Guide/`).
 
 HTML pages are wiki-link targets like Markdown: `[[x]]` finds `x.md`, else `x.html` (widgets are
 `widgets/<name>.html`, with their fields in a leading `<!--lens-widget ... -->` comment), here in

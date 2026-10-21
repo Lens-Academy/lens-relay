@@ -296,7 +296,7 @@ a per-viewer localStorage shim, and runtime "page problems" (errors, blocked hos
 overflow) shown in the editor, which also has a Desktop/Phone preview. MCP `create`/`edit` on `.html` append a
 static page check; HTML edits apply directly by UTF-8 byte offset (and refuse to drop comments still in the old
 inline `<!--lens-comment-->` format until an editor migrates them). The author guide is the relay doc
-`Lens/AI Guide/HTML Pages.md`; keep the host lists and import-map keys in `page-runtime.ts`, `html_check.rs`, the
+`HTML Pages.md` in Lens's AI Guide folder (`Lens/11-AI/AI Guide/`); keep the host lists and import-map keys in `page-runtime.ts`, `html_check.rs`, the
 `create` tool description and the guide in sync.
 
 **HTML-page comments, out of band** (`lens-editor/src/components/HtmlEditor/{anchoring,comments}/`,
