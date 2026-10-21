@@ -14,6 +14,7 @@ import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary } from './Results';
 import type { Para, Run } from './types';
+import { relayHeaders } from '../../lib/relay-api';
 
 const DEFAULT_PCTS = '[0, 0.01, 0.03, 0.1, 0.3, 0.5, 0.7, 0.9, 0.97, 0.99, 1]';
 
@@ -23,7 +24,7 @@ function attempt<T>(f: () => T): { ok?: T; error?: string } {
 
 async function ask(check: JevCheck, sample: Para[]): Promise<Run> {
   const res = await fetch('/api/jev/ask', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: relayHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ model: check.model, question: { instructions: check.question, criteria: check.criteria }, texts: sample.map((s) => s.text) }),
   });
   const data = await res.json();

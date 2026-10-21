@@ -15,6 +15,7 @@ import { validatePromotionPaths } from './promotion/path-validation.ts';
 import { createPromotionRoutes, type PromotionRouteService } from './promotion/routes.ts';
 import { createContentStatusRoutes } from './content-status/routes.ts';
 import { createTtsRoutes } from './tts/routes.ts';
+import { createJevRoutes } from './jev/routes.ts';
 import type {
   PromotionChangesResponse,
   PromotionPrResponse,
@@ -164,6 +165,9 @@ export function createApp(config: AppConfig): Hono {
 
   // Read-aloud: a Speechify proxy for any share link (503 without a key).
   app.route('/api/tts', createTtsRoutes());
+
+  // Jev for the check workbench, for edit links (503 without JEV_API_KEY).
+  app.route('/api/jev', createJevRoutes());
 
   // The SPA shell (index.html) references content-hashed asset filenames that
   // change on every deploy, so it must never be cached hard. Serving it

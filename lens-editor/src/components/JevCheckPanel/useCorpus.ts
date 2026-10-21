@@ -3,6 +3,7 @@
 // the same on every run and a larger N only adds paragraphs.
 import { useEffect, useMemo, useState } from 'react';
 import type { CorpusMeta, Para } from './types';
+import { relayHeaders } from '../../lib/relay-api';
 
 function fnv(s: string) {
   let h = 0x811c9dc5;
@@ -17,7 +18,11 @@ export function useCorpus(onError: (msg: string) => void) {
   const [kinds, setKinds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetch('/api/jev/corpus').then((r) => r.json()).then((d: { meta: CorpusMeta; rows: Para[] }) => {
+    fetch('/api/jev/corpus', { headers: relayHeaders() }).then(async (r) => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      return d as { meta: CorpusMeta; rows: Para[] };
+    }).then((d) => {
       setMeta(d.meta);
       setCorpus([...d.rows].sort((a, b) => fnv(a.id) - fnv(b.id)));
       setCourses(new Set(Object.entries(d.meta.courses).filter(([, c]) => c.live).map(([k]) => k)));

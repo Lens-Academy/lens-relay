@@ -7,7 +7,6 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 import { bridgeBundlePlugin } from './vite-plugin-bridge-bundle';
-import { jevDevPlugin } from './server/jev-dev';
 
 // Extract workspace number from directory name (e.g., "lens-editor-ws2" → 2)
 // or parent directory (e.g., "ws2/lens-editor" → 2).
@@ -22,7 +21,7 @@ const defaultRelayPort = 8090 + portOffset;
 const defaultBridgePort = 8091 + portOffset;
 
 // https://vite.dev/config/
-export default defineConfig(({ command }) => {
+export default defineConfig(() => {
   // Use local relay-server when VITE_LOCAL_RELAY is set
   const useLocalRelay = process.env.VITE_LOCAL_RELAY === 'true';
   const relayPort = parseInt(process.env.RELAY_PORT || String(defaultRelayPort), 10);
@@ -249,6 +248,22 @@ export default defineConfig(({ command }) => {
   }
 
   /** Dev /api/tts endpoints (read-aloud's Speechify proxy). */
+  // Jev for the check workbench. In dev the key may also come from ~/.typesafe.ai-apikey.txt.
+  function jevPlugin(): Plugin {
+    return honoDevPlugin({
+      name: 'jev-api',
+      path: '/api/jev',
+      loadApp: async () => {
+        const { createJevRoutes, loadJevConfig } = await import('./server/jev/routes.ts');
+        const { existsSync, readFileSync } = await import('node:fs');
+        const keyFile = path.join(process.env.HOME ?? '', '.typesafe.ai-apikey.txt');
+        const config = loadJevConfig();
+        if (!config.apiKey && existsSync(keyFile)) config.apiKey = readFileSync(keyFile, 'utf8').trim();
+        return createJevRoutes(config);
+      },
+    });
+  }
+
   function ttsPlugin(): Plugin {
     return honoDevPlugin({
       name: 'tts-api',
@@ -439,7 +454,7 @@ export default defineConfig(({ command }) => {
   }
 
   return {
-    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), ...(command === 'serve' ? [jevDevPlugin()] : []), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
+    plugins: [react(), tailwindcss(), basicSsl(), bridgeBundlePlugin(), relayProxyAuthPlugin(), shareTokenAuthPlugin(), addArticlePlugin(), attachmentsPlugin(), promotionPlugin(), contentStatusPlugin(), ttsPlugin(), jevPlugin(), blobFetchPlugin(), blobUploadPlugin(), ...(useLocalRelay ? [blobServePlugin(), sourceSyncPlugin()] : [])],
     server: {
       port: parseInt(process.env.VITE_PORT || String(defaultVitePort), 10),
       host: true,
