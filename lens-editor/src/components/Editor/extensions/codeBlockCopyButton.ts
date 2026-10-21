@@ -76,15 +76,16 @@ const copyButtonPlugin = ViewPlugin.fromClass(
 
           const openLine = view.state.doc.lineAt(node.from);
 
-          // Extract text from the CodeText child, trimming any trailing newline
-          // so the clipboard content doesn't have a spurious blank line.
+          // Join the text of the CodeText children: one at the top level, but
+          // in a quote or list item a new one on every line, after the `>` or
+          // the indentation, with the line breaks between them kept as code.
+          // Trim any trailing newline so the clipboard content doesn't have a
+          // spurious blank line.
           let codeText = '';
           for (let child = node.node.firstChild; child; child = child.nextSibling) {
-            if (child.name === 'CodeText') {
-              codeText = view.state.sliceDoc(child.from, child.to).trimEnd();
-              break;
-            }
+            if (child.name === 'CodeText') codeText += view.state.sliceDoc(child.from, child.to);
           }
+          codeText = codeText.trimEnd();
 
           // Place the widget at the end of the opening fence line. The fence
           // text is hidden (font-size:0 via cm-hidden-syntax), so this button

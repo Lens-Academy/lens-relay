@@ -165,4 +165,53 @@ test.describe('Live preview: the fence rows of a code block', () => {
     await copy.last().click();
     expect(await page.evaluate(() => (window as unknown as { copied: string }).copied)).toBe('let a = 1;\nlet b = 2;');
   });
+
+  test('the copy button of a code block in a list item or a quote copies every line of its code', async ({ page }) => {
+    // Lezer starts a new CodeText on every line of such a block, after the
+    // indentation or the `>`, and the button copied only the first. Add three
+    // after the last line: in a list item, in a quote, and left open in a
+    // quote, where it ends with the quote
+    const added = [
+      '- Install and test:',
+      '  ```bash',
+      '  npm ci',
+      '',
+      '  npm test',
+      '  ```',
+      '> ```js',
+      '> one();',
+      '>',
+      '> two();',
+      '> ```',
+      '',
+      '> ~~~python',
+      '> a = 1',
+      '> b = 2',
+      'After the quote.',
+    ];
+    await page.evaluate((added) => {
+      const { view } = window as unknown as FixtureWindow;
+      view.dispatch({ changes: { from: view.state.doc.length, insert: `\n${added.join('\n')}` } });
+    }, added);
+    await placeCursor(page, 1, 0);
+    const copy = page.locator('.cm-code-copy-btn');
+    await expect(copy).toHaveCount(OPENING_FENCES.length + 3);
+
+    // Caught here, so the test doesn't write to the system clipboard
+    await page.evaluate(() => {
+      const copied: string[] = [];
+      (window as unknown as { copied: string[] }).copied = copied;
+      navigator.clipboard.writeText = async (text) => {
+        copied.push(text);
+      };
+    });
+    for (let i = OPENING_FENCES.length; i < OPENING_FENCES.length + 3; i++) {
+      await copy.nth(i).click();
+    }
+    expect(await page.evaluate(() => (window as unknown as { copied: string[] }).copied)).toEqual([
+      'npm ci\n\nnpm test',
+      'one();\n\ntwo();',
+      'a = 1\nb = 2',
+    ]);
+  });
 });
