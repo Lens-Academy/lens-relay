@@ -263,6 +263,28 @@ describe('suggestion mode: pasted text keeps its authors', () => {
     expect(pasteAtEnd(s, 'This line')).toEqual(['human:Mark: <opening>', 'human:Luc: This line', 'human:Mark: ++}']);
   });
 
+  it('a drag within the document keeps the authors of the text, struck where it was and added where it lands', () => {
+    const { ydoc, ytext, view } = setup();
+    const from = view.state.doc.toString().indexOf('ends with');
+    const to = from + 'ends with'.length;
+    // CodeMirror's drop of a drag from the same editor
+    view.dispatch({ changes: [{ from, to }, { from: view.state.doc.length, insert: 'ends with' }], userEvent: 'move.drop' });
+
+    const mark = /\{"author":"Mark","timestamp":\d+\}/g;
+    expect(authorsFrom(ydoc, ytext, 0).map((run) => run.replace(mark, '<Mark>'))).toEqual([
+      'human:Luc: This line ',
+      'human:Mark: {--<Mark>@@',
+      'human:Luc: ends with',
+      'human:Mark: --}',
+      'human:Luc:  ',
+      `human:Elias: {++${ELIAS}@@an addition++}`,
+      'human:Luc: \nPaste here: ',
+      'human:Mark: {++<Mark>@@',
+      'human:Luc: ends with',
+      'human:Mark: ++}',
+    ]);
+  });
+
   it('text dragged in from another editor keeps its authors', () => {
     const source = setup();
     const from = source.view.state.doc.toString().indexOf('ends');

@@ -189,6 +189,16 @@ test.describe('Suggestion mode: pasting text with suggestions in it', () => {
     expect(await lineText(page, PASTE_LINE + 2)).toBe(`This line has {++${ELIAS}its own addition++} after the paste.`);
   });
 
+  test('in source mode too, Ctrl+V in suggestion mode adds the text as plain text', async ({ page }) => {
+    await page.evaluate(() => (window as unknown as FixtureWindow).setSourceMode(true));
+    await copyEndsWith(page);
+    await setSuggestionMode(page, true);
+    await pasteOnPasteLine(page);
+
+    expect(await lineWithMark(page, PASTE_LINE)).toBe('Paste here: {++<Mark>@@ends with an addition++}');
+    expect(await suggestionsOn(page, PASTE_LINE)).toEqual([['addition', 'Mark', 'ends with an addition']]);
+  });
+
   test('outside suggestion mode, Ctrl+V pastes the addition as it is, still Elias\'s', async ({ page }) => {
     await copyEndsWith(page);
     await pasteOnPasteLine(page);
