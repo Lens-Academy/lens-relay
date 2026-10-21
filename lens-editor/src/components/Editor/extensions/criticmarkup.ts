@@ -983,8 +983,11 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
   );
 
   // If inside own addition, let the edit through — unless it empties the content
-  // or escapes the content boundaries (e.g. backspace at left edge)
-  if (ownAddition) {
+  // or escapes the content boundaries (e.g. backspace at left edge). An edit
+  // that changes nothing inside it (Ctrl+Enter adds its line at the line's end,
+  // Tab its indent at the start; inserting right beside it counts as outside)
+  // is suggested below, as anywhere else.
+  if (ownAddition && tr.changes.touchesRange(ownAddition.from + 1, ownAddition.to - 1)) {
     let wouldEmpty = false;
     let escapesLeft = false;
     let escapesRight = false;
