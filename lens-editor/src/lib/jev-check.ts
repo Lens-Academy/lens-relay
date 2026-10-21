@@ -10,6 +10,7 @@ export interface JevCheck {
   pass_below: number;
   question: string;
   criteria: { true: string; false: string } | null;
+  enabled: boolean;  // false while a new check is being written; the platform skips it
 }
 
 const CHECKS_DIR = '/Lens Edu/Checks/';
@@ -43,7 +44,7 @@ export function parseCheck(text: string): JevCheck {
     id: need('id'), name: typeof fm.name === 'string' ? fm.name : '',
     model: typeof fm.model === 'string' ? fm.model : DEFAULT_MODEL,
     fail_at: num('fail_at', 0.8), pass_below: num('pass_below', 0.5),
-    question: need('question'), criteria,
+    question: need('question'), criteria, enabled: fm.enabled !== false,
   };
 }
 
@@ -86,7 +87,7 @@ export function auroc(bad: number[], good: number[]): number | null {
 
 /** Set fields in a check file's frontmatter, keeping the body and the YAML's other
  *  keys and comments. `path` is a key or a nested key path such as ['criteria', 'true']. */
-export function setCheckFields(text: string, edits: { path: string[]; value: string | number }[]): string {
+export function setCheckFields(text: string, edits: { path: string[]; value: string | number | boolean }[]): string {
   return editFrontmatter(text, (doc) => { for (const { path, value } of edits) doc.setIn(path, value); });
 }
 
@@ -163,4 +164,26 @@ export function saveDraft(text: string): string {
 
 export function discardDraft(text: string): string {
   return editFrontmatter(text, (doc) => doc.deleteIn(['draft']));
+}
+
+/** A new check file: the fields the platform reads, ready to fill in from the workbench. */
+export function newCheckText(id: string, name: string): string {
+  if (!/^[A-Za-z][\w-]*$/.test(id)) throw new Error('an id is letters, digits, - or _, starting with a letter');
+  if (!name.trim() || /[\n/]/.test(name)) throw new Error('a name is one line without /');
+  return `---
+id: ${id}
+enabled: false
+name: ${JSON.stringify(name.trim())}
+model: ${DEFAULT_MODEL}
+fail_at: 0.8
+pass_below: 0.5
+question: "Does \`paragraph\` …?"
+criteria:
+  "true": "\`paragraph\` …"
+  "false": "\`paragraph\` …"
+fix: "…"
+---
+
+Why this check exists, and examples of what it should and should not catch.
+`;
 }

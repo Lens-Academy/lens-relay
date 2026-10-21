@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares } from './jev-check';
+import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares } from './jev-check';
 
 const T1 = `---
 id: T1
@@ -20,7 +20,7 @@ describe('parseCheck', () => {
     expect(c).toEqual({
       id: 'T1', name: 'term used before it is explained', model: 'jev-1.14.0', fail_at: 0.8, pass_below: 0.5,
       question: 'Does `paragraph` use a technical term without explaining it?',
-      criteria: { true: 'It uses one.', false: 'It does not.' },
+      criteria: { true: 'It uses one.', false: 'It does not.' }, enabled: true,
     });
   });
   it('says what is missing rather than guessing', () => {
@@ -136,5 +136,17 @@ describe('frontmatter edits', () => {
     const out = setDraftField(t, ['question'], 'Q?');
     expect(out.split('\n').length - t.split('\n').length).toBe(2);
     expect(out).toContain(long);
+  });
+});
+
+describe('newCheckText', () => {
+  it('parses as a check with the given id and name', () => {
+    const c = parseCheck(newCheckText('T6', 'hedges every claim'));
+    expect([c.id, c.name, c.model, c.fail_at, c.enabled]).toEqual(['T6', 'hedges every claim', 'jev-1.14.0', 0.8, false]);
+    expect(c.question).toContain('`paragraph`');
+  });
+  it('refuses ids and names that would make a bad file', () => {
+    expect(() => newCheckText('6 x', 'n')).toThrow();
+    expect(() => newCheckText('T6', 'a/b')).toThrow();
   });
 });

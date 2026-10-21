@@ -5,12 +5,13 @@
 //   results (Results.tsx) compare the draft with the live check, or a run with the one before it.
 import { useMemo, useState } from 'react';
 import type * as Y from 'yjs';
-import { discardDraft, parseCheckFile, parsePercentiles, saveDraft, setDraftField, type Band, type JevCheck } from '../../lib/jev-check';
+import { discardDraft, parseCheckFile, parsePercentiles, saveDraft, setCheckFields, setDraftField, type Band, type JevCheck } from '../../lib/jev-check';
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
 import { useLiveText, writeText } from './checkFile';
 import { useCorpus } from './useCorpus';
 import { Field, Small, keyHint } from './Field';
 import { InputPicker } from './InputPicker';
+import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary } from './Results';
 import type { Para, Run } from './types';
 
@@ -69,7 +70,15 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); run(); } }}>
       <header className="flex items-baseline justify-between border-b border-gray-100 px-4 py-2.5">
         <span className="text-[13px] font-semibold text-gray-800">Jev check {c && <span className="font-normal text-gray-500">· {c.id}</span>}</span>
-        {!c && <span className="text-red-700">{parsed.error}</span>}
+        <span className="flex items-baseline gap-3">
+          {!c && <span className="text-red-700">{parsed.error}</span>}
+          {live && !live.enabled && (
+            <span className="text-[12px] font-normal text-amber-800">not live yet
+              <button onClick={() => writeText(ytext, (t) => setCheckFields(t, [{ path: ['enabled'], value: true }]))}
+                className="ml-2 rounded bg-amber-700 px-2 py-0.5 text-white hover:bg-amber-800">Enable</button></span>
+          )}
+          <NewCheckButton />
+        </span>
       </header>
 
       {c && live && (
