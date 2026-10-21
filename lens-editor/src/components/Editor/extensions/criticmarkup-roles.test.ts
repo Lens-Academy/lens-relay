@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { criticMarkupExtension } from './criticmarkup';
+import { getContextMenuItems } from './criticmarkup-context-menu';
 
 /**
- * Tests for role-based gating of accept/reject buttons in CriticMarkup.
+ * Tests for role-based gating of accept/reject buttons (and right-click menu
+ * items) in CriticMarkup.
  *
  * Bug: read-only and suggest users can see and click accept/reject buttons.
  * Expected: only edit-role users should see accept/reject buttons.
@@ -45,6 +47,25 @@ describe('criticmarkup role gating', () => {
     const container = view.contentDOM;
     const buttons = container.querySelectorAll('.cm-criticmarkup-accept, .cm-criticmarkup-reject');
     expect(buttons.length).toBe(0);
+
+    view.destroy();
+  });
+
+  it('should offer Accept/Reject on right-click for edit role (canAcceptReject=true)', () => {
+    const view = createEditorWithContent(docWithSuggestion, true);
+
+    expect(getContextMenuItems(view, 10).map((item) => item.label)).toEqual(['Accept Change', 'Reject Change']);
+
+    view.destroy();
+  });
+
+  it('should NOT offer Accept/Reject on right-click for suggest role (canAcceptReject=false)', () => {
+    const view = createEditorWithContent('Hello {++world++} and {--old--} end', false);
+
+    // Right-click inside a suggestion, and with a selection over both
+    expect(getContextMenuItems(view, 10)).toEqual([]);
+    view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+    expect(getContextMenuItems(view)).toEqual([]);
 
     view.destroy();
   });

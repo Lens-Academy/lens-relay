@@ -43,6 +43,10 @@ export function trimSectionEnd(fullText: string, from: number, to: number): numb
  *
  * `initialSuggestionMode` controls the initial Edit/Suggest mode for editors
  * that opt in. Ignored when `enableCriticMarkup` is false.
+ *
+ * `canAcceptReject` gives those editors the ✓ ✗ buttons, keys and right-click
+ * items that accept and reject suggestions: only for users who may (Admin and
+ * Edit roles), as in the main editor. Off unless the caller passes it.
  */
 export function createSectionEditorView(opts: {
   ytext: Y.Text;
@@ -52,6 +56,7 @@ export function createSectionEditorView(opts: {
   parent: HTMLElement;
   enableCriticMarkup?: boolean;
   initialSuggestionMode?: boolean;
+  canAcceptReject?: boolean;
   /** Local comment badge map for this section slice, keyed by local source
    *  positions. Used by course editor fields to preserve document-wide
    *  comment numbering while only a slice is mounted in CodeMirror. */
@@ -79,6 +84,7 @@ export function createSectionEditorView(opts: {
     parent,
     enableCriticMarkup = false,
     initialSuggestionMode = false,
+    canAcceptReject = false,
     commentBadgeMap,
     yTextOffsetBase,
     onRequestAddComment,
@@ -114,7 +120,7 @@ export function createSectionEditorView(opts: {
 
   const criticMarkupExtensions = enableCriticMarkup
     ? [
-        criticMarkupExtension({ canAcceptReject: true, commentBadgeMap }),
+        criticMarkupExtension({ canAcceptReject, commentBadgeMap }),
         commentOffsetTranslator.of((localPos) => offsetBase + localPos),
         ...(onCommentClick ? [commentClickCallback.of(onCommentClick)] : []),
         keymap.of(criticMarkupKeymap),
