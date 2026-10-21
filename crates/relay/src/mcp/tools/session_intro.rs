@@ -331,7 +331,10 @@ mod tests {
             ai_guide_doc(server.doc_resolver(), "Lens", "HTML Pages.md").as_deref(),
             Some("Lens/11-AI/AI Guide/HTML Pages.md")
         );
-        assert_eq!(ai_guide_doc(server.doc_resolver(), "Lens", INTRO_FILE), None);
+        assert_eq!(
+            ai_guide_doc(server.doc_resolver(), "Lens", INTRO_FILE),
+            None
+        );
     }
 
     // Prevents: curator notes in %% ... %% leaking into every session's intro
