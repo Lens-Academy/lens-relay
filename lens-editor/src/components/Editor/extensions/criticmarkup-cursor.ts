@@ -20,13 +20,15 @@
  * - Backspace and Delete next to a hidden span delete the visible character
  *   on its far side, instead of a hidden character (or, by the atomic ranges,
  *   a whole delimiter).
+ * - A cursor beside a hidden span faces the text on its other side, so that
+ *   it is drawn as tall as that text, not as the hidden text (no height).
  *
  * Live preview only: source mode shows the syntax, so it stays editable there.
  */
 
 import { EditorSelection, EditorState, Prec, RangeSet, RangeValue } from '@codemirror/state';
-import type { Extension, SelectionRange } from '@codemirror/state';
-import { Direction, EditorView, keymap } from '@codemirror/view';
+import type { Extension, SelectionRange, Text } from '@codemirror/state';
+import { Direction, EditorView, ViewPlugin, keymap } from '@codemirror/view';
 import type { CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 export interface HiddenSpan {
@@ -71,6 +73,84 @@ function spanAround(spans: readonly HiddenSpan[], pos: number): HiddenSpan | nul
   return null;
 }
 
+/** The span that `pos` is inside or at an edge of, if any. Spans that touch are joined, so there is one at most. */
+function spanAt(spans: readonly HiddenSpan[], pos: number): HiddenSpan | null {
+  let lo = 0;
+  let hi = spans.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const span = spans[mid];
+    if (pos < span.from) hi = mid;
+    else if (pos > span.to) lo = mid + 1;
+    else return span;
+  }
+  return null;
+}
+
+/**
+ * `selection` with every cursor at an edge of a hidden span associated with
+ * the other side, or null when no cursor needed that.
+ *
+ * CodeMirror draws a cursor by the character on the side it is associated
+ * with, and measures from there when it moves up or down, or to a wrapped
+ * row's start or end. Hidden syntax is font-size: 0, so a cursor associated
+ * with it was drawn with no height and couldn't be seen: after ArrowRight over
+ * a suggestion's opening delimiter, for one, which leaves the cursor
+ * associated with what it stepped over.
+ *
+ * A cursor keeps its side where the other one isn't on its line (at the start
+ * or end of `{++An added line++}`) or, as `onRow` tells, on its screen row (a
+ * wrapped row that starts with a suggestion): there it would be drawn at the
+ * end of the row above, and Home, End and the arrow keys would go from there.
+ */
+export function faceShownSide(
+  selection: EditorSelection,
+  spans: readonly HiddenSpan[],
+  doc: Text,
+  onRow: (pos: number, side: -1 | 1) => boolean = () => true,
+): EditorSelection | null {
+  let turned = false;
+  const ranges = selection.ranges.map((range) => {
+    if (!range.empty) return range;
+    const pos = range.head;
+    const span = spanAt(spans, pos);
+    if (!span || (span.from < pos && pos < span.to)) return range;
+    const side = pos === span.to ? 1 : -1;
+    const line = doc.lineAt(pos);
+    if (range.assoc === side || pos === (side > 0 ? line.to : line.from) || !onRow(pos, side)) return range;
+    turned = true;
+    return EditorSelection.cursor(pos, side, range.bidiLevel ?? undefined, range.goalColumn);
+  });
+  return turned ? EditorSelection.create(ranges, selection.mainIndex) : null;
+}
+
+/**
+ * Whether the character on side `side` of `pos` is on the screen row of the
+ * hidden syntax on its other side. True where either isn't drawn, or the
+ * layout can't be read (during a view update).
+ */
+function sameRow(view: EditorView, pos: number, side: -1 | 1): boolean {
+  try {
+    const shown = view.coordsAtPos(pos, side);
+    const hidden = view.coordsAtPos(pos, side < 0 ? 1 : -1);
+    if (!shown || !hidden) return true;
+    // A hidden character's box has no height: it sits on its row's baseline,
+    // which can be a little below a widget's box (a comment badge is shorter
+    // than the text), and far from a box on the row above or below
+    return shown.top <= hidden.bottom && hidden.top <= shown.bottom + (shown.bottom - shown.top) / 2;
+  } catch {
+    return true;
+  }
+}
+
+// The view that shows each state, so that a transaction filter, which gets no
+// view, can measure in it
+const viewOf = new WeakMap<EditorState, EditorView>();
+const trackView = ViewPlugin.define((view) => {
+  viewOf.set(view.state, view);
+  return { update: (update) => void viewOf.set(update.state, update.view) };
+});
+
 /**
  * Where a selection end at `pos`, inside `span`, goes. One that came in from a
  * side (it was at `before`) steps across, as with arrow keys: Home, and
@@ -102,7 +182,8 @@ export function moveOutOfHiddenSyntax(
     moved = true;
     const head = headSpan ? edgeFor(headSpan, range.head, prev.head) : range.head;
     if (range.empty) {
-      // Associated with the hidden side, as CodeMirror's atomic skipping does
+      // Associated with the hidden side, as CodeMirror's atomic skipping does;
+      // a later filter turns it to the text beside it (faceShownSide)
       return EditorSelection.cursor(head, head === headSpan?.from ? 1 : -1, range.bidiLevel ?? undefined, range.goalColumn);
     }
     const anchor = anchorSpan ? edgeFor(anchorSpan, range.anchor, prev.anchor) : range.anchor;
@@ -232,6 +313,19 @@ export function hiddenSyntaxCursor(rangesOf: RangesOf): Extension {
       const moved = moveOutOfHiddenSyntax(tr.selection, tr.startState.selection.map(tr.changes), spans);
       return moved ? [tr, { selection: moved, sequential: true }] : tr;
     }),
+    // Every cursor beside hidden syntax, wherever it came from (a key, a
+    // click, typing, a command), faces the text beside it. Runs after the
+    // other filters (highest precedence), so it sees the selection they leave.
+    Prec.highest(EditorState.transactionFilter.of((tr) => {
+      if (!tr.selection && !tr.docChanged) return tr;
+      const state = tr.docChanged ? tr.state : tr.startState;
+      // Rows can be measured while the view shows the document the selection is in
+      const view = tr.docChanged ? undefined : viewOf.get(tr.startState);
+      const onRow = view?.state === tr.startState ? (pos: number, side: -1 | 1) => sameRow(view, pos, side) : undefined;
+      const facing = faceShownSide(tr.newSelection, hiddenIn(rangesOf(state)).spans, state.doc, onRow);
+      return facing ? [tr, { selection: facing, sequential: true }] : tr;
+    })),
+    trackView,
     // Ahead of every other Backspace/Delete binding, which then see the moved cursor
     Prec.highest(keymap.of([
       { key: 'Backspace', run: back, shift: back },
