@@ -556,8 +556,13 @@
 }
 
 /* CriticMarkup's ~~ substitution delimiters are also valid GFM strikethrough
-   markers. Keep the replacement readable without affecting real ~~strike~~. */
-.cm-criticmarkup-no-strikethrough {
+   markers. Keep the replacement readable without affecting real ~~strike~~.
+   The highlighter draws that line in spans of its own (generated ͼ classes)
+   inside this one, and a parent can't take a child's line away, so clear it on
+   them too. Spans with a cm- class, like a deletion nested in the
+   substitution, keep theirs. */
+.cm-criticmarkup-no-strikethrough,
+.cm-criticmarkup-no-strikethrough span:not([class*="cm-"]) {
   text-decoration: none !important;
 }
 
