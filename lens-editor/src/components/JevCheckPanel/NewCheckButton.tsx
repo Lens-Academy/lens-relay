@@ -26,8 +26,8 @@ export function NewCheckButton() {
       setBusy(true);
       const docId = await createDocument(folderDoc, `${DIR}/${id} - ${name}.md`, 'markdown', text);
       onNavigate(`${RELAY_ID}-${docId}`);
-    } catch (e: any) {
-      window.alert(`Could not create the check: ${e.message}`);
+    } catch (e) {
+      window.alert(`Could not create the check: ${(e as Error).message}`);
     } finally { setBusy(false); }
   }
   return (

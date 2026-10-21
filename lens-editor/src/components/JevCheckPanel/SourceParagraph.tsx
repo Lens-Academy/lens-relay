@@ -32,7 +32,7 @@ export function SourceParagraph({ para }: { para: Para }) {
   const { canEdit } = useAuth();
   const { displayName } = useDisplayName();
   const nameRef = useRef(displayName);
-  nameRef.current = displayName;
+  useEffect(() => { nameRef.current = displayName; }, [displayName]);
   const [state, setState] = useState<State>('idle');
   const [open, setOpen] = useState(false);
   const [comment, setComment] = useState('');

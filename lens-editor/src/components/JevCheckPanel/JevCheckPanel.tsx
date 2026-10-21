@@ -9,7 +9,8 @@ import { discardDraft, parseCheckFile, parsePercentiles, saveDraft, setCheckFiel
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
 import { useLiveText, writeText } from './checkFile';
 import { useCorpus } from './useCorpus';
-import { Field, Small, keyHint } from './Field';
+import { Field, Small } from './Field';
+import { keyHint } from '../../lib/jev-keys';
 import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary } from './Results';
@@ -19,7 +20,7 @@ import { relayHeaders } from '../../lib/relay-api';
 const DEFAULT_PCTS = '[0, 0.01, 0.03, 0.1, 0.3, 0.5, 0.7, 0.9, 0.97, 0.99, 1]';
 
 function attempt<T>(f: () => T): { ok?: T; error?: string } {
-  try { return { ok: f() }; } catch (e: any) { return { error: e.message }; }
+  try { return { ok: f() }; } catch (e) { return { error: (e as Error).message }; }
 }
 
 async function ask(check: JevCheck, sample: Para[]): Promise<Run> {
@@ -57,7 +58,7 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
       const sample = pool.slice(0, n);
       const [r, l] = await Promise.all([ask(c, sample), draft ? ask(live, sample) : null]);
       setResult((old) => ({ run: r, base: l ? { label: 'live', run: l } : old ? { label: 'was', run: old.run } : undefined }));
-    } catch (e: any) { setErr(e.message); } finally { setRunning(false); }
+    } catch (e) { setErr((e as Error).message); } finally { setRunning(false); }
   }
 
   const set = (path: string[]) => (v: string) => writeText(ytext, (t) => setDraftField(t, path, v));
