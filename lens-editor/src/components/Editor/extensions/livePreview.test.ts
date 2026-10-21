@@ -1,12 +1,14 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import type { EditorView } from '@codemirror/view';
 import {
   createTestEditor,
+  createCriticMarkupEditorWithSourceMode,
   moveCursor,
   hasClass,
   countClass,
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { updateWikilinkContext, wikilinkMetadataChanged, toggleSourceMode } from './livePreview';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -240,6 +242,50 @@ describe('livePreview - wikilinks in headings', () => {
 
   it('sizes an aliased wikilink heading', () => {
     expect(linkHeadingLevels('# [[x|Alias]]\n\nText')).toEqual(['cm-heading-1']);
+  });
+});
+
+describe('livePreview - suggestions in headings', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  const meta = JSON.stringify({ author: 'Elias', timestamp: 1760000000000 });
+  const doc = `## A heading with {++${meta}@@an added word++} and {--${meta}@@a removed word--} in it\n\n`
+    + `### A heading with {==a comment==}{>>${meta}@@Why?<<}\n\nText`;
+
+  /** The class of the heading mark around each element matching `selector` (null: none) */
+  function headingsAround(view: EditorView, selector: string): Array<string | null> {
+    return [...view.contentDOM.querySelectorAll(selector)].map(
+      (el) => el.closest('[class*="cm-heading-"]:not(.cm-line)')?.className ?? null,
+    );
+  }
+
+  // A suggestion's mark outside the heading's kept the body's font size: its
+  // box was shorter than the heading's text, and clicks high on the row
+  // landed at the suggestion's start (outerHeadingMarks in livePreview.ts)
+  it('keeps a suggestion\'s marks inside the heading\'s one mark, in live preview and in source mode', () => {
+    const { view, cleanup: c } = createCriticMarkupEditorWithSourceMode(doc, doc.length);
+    cleanup = c;
+
+    for (const source of [false, true]) {
+      toggleSourceMode(view, source);
+      expect(headingsAround(view, '.cm-addition, .cm-deletion')).toEqual(['cm-heading-2', 'cm-heading-2']);
+      expect(headingsAround(view, '.cm-highlight')).toEqual(['cm-heading-3']);
+      expect(countClass(view, 'cm-heading-2')).toBe(1);
+    }
+  });
+
+  it('keeps a suggestion\'s ✓ ✗ buttons and a comment\'s badge inside the heading\'s mark', () => {
+    const { view, cleanup: c } = createCriticMarkupEditorWithSourceMode(doc, doc.indexOf('added'));
+    cleanup = c;
+
+    expect(headingsAround(view, '.cm-criticmarkup-buttons')).toEqual(['cm-heading-2']);
+    expect(headingsAround(view, '.cm-comment-badge')).toEqual(['cm-heading-3']);
+    toggleSourceMode(view, true);
+    expect(headingsAround(view, '.cm-criticmarkup-buttons')).toEqual(['cm-heading-2']);
   });
 });
 
