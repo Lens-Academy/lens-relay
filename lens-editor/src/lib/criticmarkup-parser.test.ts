@@ -1,6 +1,6 @@
 // src/lib/criticmarkup-parser.test.ts
 import { describe, it, expect } from 'vitest';
-import { parse, parseThreads, decodeCommentContent, countPendingEdits } from './criticmarkup-parser';
+import { parse, parseThreads, decodeCommentContent, countPendingEdits, isAdjacentEditPair } from './criticmarkup-parser';
 
 describe('CriticMarkup Parser', () => {
   describe('basic patterns', () => {
@@ -315,6 +315,11 @@ describe('countPendingEdits', () => {
     expect(countPendingEdits(`x: {--${META}@@old--} gap {++${META}@@new++}`)).toBe(2);
   });
 
+  it("counts an addition just after someone else's deletion as an edit of its own", () => {
+    const mark = '{"author":"Mark","timestamp":1784282820092}';
+    expect(countPendingEdits(`x: {--${META}@@old--}{++${mark}@@new++}`)).toBe(2);
+  });
+
   it('counts a substitution', () => {
     expect(countPendingEdits(`x: {~~${META}@@old~>new~~}`)).toBe(1);
   });
@@ -325,5 +330,30 @@ describe('countPendingEdits', () => {
 
   it('returns zero for plain text', () => {
     expect(countPendingEdits('title: Nothing pending')).toBe(0);
+  });
+});
+
+describe('isAdjacentEditPair', () => {
+  const pair = (doc: string) => {
+    const [deletion, addition] = parse(doc);
+    return isAdjacentEditPair(deletion, addition);
+  };
+  const elias = '{"author":"Elias","timestamp":1760000000000}';
+  const mark = '{"author":"Mark","timestamp":1770000000000}';
+
+  it('pairs a deletion and the addition just after it by one author', () => {
+    expect(pair(`{--${elias}@@old--}{++${elias}@@new++}`)).toBe(true);
+    expect(pair('{--old--}{++new++}')).toBe(true);
+  });
+
+  it("doesn't pair them when two authors made them", () => {
+    expect(pair(`{--${elias}@@old--}{++${mark}@@new++}`)).toBe(false);
+    expect(pair(`{--old--}{++${mark}@@new++}`)).toBe(false);
+  });
+
+  it("doesn't pair them apart, or an addition and the deletion after it", () => {
+    expect(pair(`{--${elias}@@old--} {++${elias}@@new++}`)).toBe(false);
+    const [addition, deletion] = parse(`{++${elias}@@new++}{--${elias}@@old--}`);
+    expect(isAdjacentEditPair(addition, deletion)).toBe(false);
   });
 });

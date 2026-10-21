@@ -991,13 +991,13 @@ const stickyButtonsPlugin = ViewPlugin.fromClass(
  * It never goes inside another pending addition: the parsers (this one, the
  * relay's and the review page's) end an addition at the first `++}`, so a
  * nested addition cut the outer one short and showed the rest as raw markup.
- * Into an addition of your own, or just after one, the text just goes in.
- * Another author's is split around yours instead: their part, yours, their
- * part, each part keeping its author and time. At the start or end of their
- * text yours goes just before or after theirs (into an addition of yours
+ * Into an addition of your own, or just after or before one, the text just
+ * goes in. Another author's is split around yours instead: their part, yours,
+ * their part, each part keeping its author and time. At the start or end of
+ * their text yours goes just before or after theirs (into an addition of yours
  * already there), and before the deletion of a deletion+addition pair, which
- * must stay together. Inside a change nested in their addition (a deletion of
- * part of it), yours goes where that change starts.
+ * must stay together (between its two halves too). Inside a change nested in
+ * their addition (a deletion of part of it), yours goes where that change starts.
  */
 function placeAddition(
   state: EditorState,
@@ -1007,10 +1007,16 @@ function placeAddition(
   meta: string,
 ): { change: { from: number; insert: string }; cursor: number } {
   const wrapped = `{++${meta}@@${text}++}`;
-  const around = ranges.find((r) => r.type === 'addition' && r.from < pos && pos < r.to);
+  const around = ranges.find((r) => r.type === 'addition' && r.from < pos && pos < r.to)
+    ?? ranges.find((r) => r.type === 'addition' && r.from === pos && ranges.some((d) => isAdjacentEditPair(d, r)));
   if (!around) {
-    const yours = ranges.find((r) => r.type === 'addition' && r.metadata?.author === currentAuthor && r.to === pos);
-    if (yours) return { change: { from: yours.contentTo, insert: text }, cursor: yours.contentTo + text.length };
+    const isYours = (r: CriticMarkupRange) => r.type === 'addition' && r.metadata?.author === currentAuthor;
+    const endsHere = ranges.find((r) => isYours(r) && r.to === pos);
+    const yours = endsHere ?? ranges.find((r) => isYours(r) && r.from === pos);
+    if (yours) {
+      const into = endsHere ? yours.contentTo : yours.contentFrom;
+      return { change: { from: into, insert: text }, cursor: into + text.length };
+    }
     return { change: { from: pos, insert: wrapped }, cursor: pos + wrapped.length - 3 };
   }
   if (around.metadata?.author === currentAuthor) {
@@ -1065,6 +1071,16 @@ function isMarkupAt(ranges: readonly CriticMarkupRange[], pos: number): boolean 
 }
 
 /**
+ * Where what you type at `pos` inside a deletion goes: just after it at the
+ * end of its deleted text, where the cursor shows it; else just before it
+ * (inside, accepting the deletion would drop it). placeAddition keeps a
+ * deletion+addition pair together.
+ */
+function besideDeletion(deletion: CriticMarkupRange, pos: number): number {
+  return pos >= deletion.contentTo ? deletion.to : deletion.from;
+}
+
+/**
  * Transaction filter that wraps insertions in CriticMarkup when suggestion mode is ON.
  * Insertions are wrapped in {++metadata@@content++} format.
  *
@@ -1075,7 +1091,9 @@ function isMarkupAt(ranges: readonly CriticMarkupRange[], pos: number): boolean 
  * The text of another author's deletion is already suggested for deletion:
  * Backspace or Delete there changes nothing but moves the cursor over it, and
  * what you type there (over a selection, too) goes just before their deletion,
- * as inside one of yours. A replacement inside a substitution is written as a
+ * as inside one of yours, or at the end of its text just after it, where the
+ * cursor shows it. Just after their deletion it is a change of its own (see
+ * isAdjacentEditPair). A replacement inside a substitution is written as a
  * deletion+addition pair, the same change in markup that can sit inside a
  * substitution. Nesting the same kind of suggestion, at any depth, broke the
  * outer one: the parsers (this one, the relay's and the review page's) end it
@@ -1275,10 +1293,10 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
           extCursorPos = ownDeletion.contentTo + grabLen;
         }
       } else if (added && !deleted) {
-        // Typing inside deletion: create addition before the deletion block
+        // Typing inside deletion: create addition beside the deletion block
         const ts = Date.now();
         const addMeta = JSON.stringify({ author: currentAuthor, timestamp: ts });
-        const placed = placeAddition(tr.startState, ranges, ownDeletion.from, added, addMeta);
+        const placed = placeAddition(tr.startState, ranges, besideDeletion(ownDeletion, fromA), added, addMeta);
         extChanges.push(placed.change);
         extCursorPos = placed.cursor;
       }
@@ -1316,10 +1334,10 @@ const suggestionModeFilter = EditorState.transactionFilter.of((tr: Transaction) 
     if (deletion && (!deleted || (fromA >= deletion.contentFrom && toA <= deletion.contentTo))) {
       // In a pending deletion (one of yours with the cursor in it went to the
       // branch above, unless this replaces text): what this deletes there is
-      // already suggested for deletion, and what it adds goes just before the
-      // deletion (inside, accepting the deletion would drop it)
+      // already suggested for deletion, and what it adds goes beside the
+      // deletion
       if (added) {
-        const placed = placeAddition(tr.startState, ranges, deletion.from, added, meta);
+        const placed = placeAddition(tr.startState, ranges, besideDeletion(deletion, fromA), added, meta);
         newChanges.push(placed.change);
         newCursorPos = placed.cursor;
       } else {

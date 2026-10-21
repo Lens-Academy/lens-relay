@@ -8,7 +8,10 @@ import type { CriticMarkupRange } from '../src/lib/criticmarkup-parser';
 // cut Elias's short and showed the rest as raw markup. It splits Elias's
 // addition instead (placeAddition in src/components/Editor/extensions/criticmarkup.ts).
 // In the same way a deletion never goes in Elias's deletion, nor a substitution
-// in his substitution (suggestionModeFilter there).
+// in his substitution (suggestionModeFilter there). What Mark types at the end
+// of Elias's deleted text, or just after it, goes just after the deletion, as a
+// change of its own: a deletion and an addition are one change only when one
+// author made both (isAdjacentEditPair in src/lib/criticmarkup-parser.ts).
 
 type FixtureWindow = Window & {
   view: EditorView;
@@ -24,6 +27,7 @@ const ORIGINAL: Record<number, string> = {
   3: 'Plain text {++{"author":"Elias","timestamp":1760000000000}@@inserted words++} in the middle.',
   6: 'A deletion: {--{"author":"Elias","timestamp":1760000000000}@@Deleted words--} and more.',
   7: 'A substitution: {~~{"author":"Elias","timestamp":1760000000000}@@old text~>new text~~} here.',
+  8: 'Last line.',
 };
 
 let pageErrors: string[] = [];
@@ -374,5 +378,66 @@ test.describe("Suggestion mode inside someone else's deletion or substitution", 
     expect(await lineText(page, 6)).toBe(deleted);
     expect(await head(page)).toBe(await posOf(page, 6, ' --}and'));
     await expectNoRawMarkup(page, 6);
+  });
+});
+
+test.describe("Suggestion mode at the end of someone else's deletion", () => {
+  /** Line 6 once Mark has typed " new" just after Elias's deletion */
+  const typedAfter = new RegExp(
+    `^A deletion: \\{--${ELIAS}Deleted words--\\}\\{\\+\\+${MARK} new\\+\\+\\} and more\\.$`,
+  );
+
+  test('typing just after their deletion puts yours there, as a change of its own', async ({ page }) => {
+    // A click after the space that follows their deleted text, then ArrowLeft
+    await clickAt(page, await posOf(page, 6, 'and more'));
+    await page.keyboard.press('ArrowLeft');
+    expect(await head(page)).toBe(await posOf(page, 6, ' and more'));
+    await page.keyboard.type(' new');
+
+    expect(await lineText(page, 6)).toMatch(typedAfter);
+    expect(await parts(page, 6)).toEqual([
+      ['deletion', 'Elias', 'Deleted words'],
+      ['addition', 'Mark', ' new'],
+    ]);
+    expect(await shown(page, 6)).toBe('A deletion: Deleted words new and more.');
+    await expectNoRawMarkup(page, 6);
+
+    // Its own ✓ accepts just yours, and their deletion stays pending
+    await expect(page.locator('.cm-criticmarkup-buttons[data-merged]')).toHaveCount(0);
+    const yours = await posOf(page, 6, '{++');
+    await page.locator(`.cm-criticmarkup-buttons[data-range-from="${yours}"] .cm-criticmarkup-accept`).click();
+    expect(await lineText(page, 6)).toBe(ORIGINAL[6].replace('--} and', '--} new and'));
+  });
+
+  test('typing at the end of their deleted text does the same', async ({ page }) => {
+    // The other cursor stop shown there, in their deletion
+    await place(page, await posOf(page, 6, 'Deleted words', 'Deleted words'.length));
+    await page.keyboard.type(' new');
+
+    expect(await lineText(page, 6)).toMatch(typedAfter);
+    expect(await shown(page, 6)).toBe('A deletion: Deleted words new and more.');
+  });
+
+  test("their deletion's ✓ accepts just their deletion and leaves yours", async ({ page }) => {
+    await place(page, await posOf(page, 6, ' and more'));
+    await page.keyboard.type(' new');
+    await place(page, await posOf(page, 6, 'Deleted', 3));
+    await expect(page.locator('.cm-criticmarkup-buttons[data-merged]')).toHaveCount(0);
+    const theirs = await posOf(page, 6, '{--');
+    await page.locator(`.cm-criticmarkup-buttons[data-range-from="${theirs}"] .cm-criticmarkup-accept`).click();
+
+    expect(await lineText(page, 6)).toMatch(new RegExp(`^A deletion: \\{\\+\\+${MARK} new\\+\\+\\} and more\\.$`));
+  });
+
+  test('Delete over a word of yours, then typing, suggests replacing it: one change with one ✓', async ({ page }) => {
+    await clickAt(page, await posOf(page, 8, 'line'));
+    for (let i = 0; i < 'line'.length; i++) await page.keyboard.press('Delete');
+    await page.keyboard.type('word');
+
+    expect(await lineText(page, 8)).toMatch(new RegExp(`^Last \\{--${MARK}line--\\}\\{\\+\\+${MARK}word\\+\\+\\}\\.$`));
+    expect(await shown(page, 8)).toBe('Last lineword.');
+    await expect(page.locator('.cm-criticmarkup-buttons[data-merged]')).toHaveCount(1);
+    await page.locator('.cm-criticmarkup-buttons[data-merged] .cm-criticmarkup-accept').click();
+    expect(await lineText(page, 8)).toBe('Last word.');
   });
 });

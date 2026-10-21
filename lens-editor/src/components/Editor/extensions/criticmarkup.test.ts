@@ -904,11 +904,8 @@ describe('CriticMarkup Extension', () => {
         expect(visibleText(view)).toBe('ZYDeleted');
       });
 
-      it.each([
-        ['start', 0],
-        ['end', 'Deleted'.length],
-      ])('does the same at the %s of their deleted text', (_, offset) => {
-        const view = suggesting(`Text ${theirs}`, 'Text '.length + textFrom + offset);
+      it('does the same at the start of their deleted text', () => {
+        const view = suggesting(`Text ${theirs}`, 'Text '.length + textFrom);
         type(view, 'Z');
 
         expect(view.state.doc.toString()).toBe(`Text {++${mark}@@Z++}${theirs}`);
@@ -984,6 +981,113 @@ describe('CriticMarkup Extension', () => {
         type(view, 'Z');
 
         expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++}{--Deleted--}`);
+      });
+    });
+
+    describe("at the end of someone else's deletion", () => {
+      editingAsMark();
+      const theirs = `{--${elias}@@Deleted--}`;
+      // The end of their deleted text has two cursor stops, shown in the same
+      // place: in their deletion, and just after it
+      const stops: Array<[string, number]> = [
+        ['at the end of their deleted text', theirs.length - 3],
+        ['just after their deletion', theirs.length],
+      ];
+      const yoursAfter = (text: string) => `${theirs}{++${mark}@@${text}++}`;
+
+      it.each(stops)('puts what you type %s just after it, where the cursor shows it', (_, at) => {
+        const view = suggesting(`${theirs} more`, at);
+        type(view, 'Z');
+        type(view, 'Y');
+
+        expect(view.state.doc.toString()).toBe(`${yoursAfter('ZY')} more`);
+        expect(parts(view)).toEqual([
+          ['deletion', 'Elias', 'Deleted'],
+          ['addition', 'Mark', 'ZY'],
+        ]);
+        expect(view.state.selection.main.head).toBe(yoursAfter('ZY').length - 3);
+        expect(visibleText(view)).toBe('DeletedZY more');
+      });
+
+      it('makes it a change of its own, not a pair with their deletion', () => {
+        let view = suggesting(`${yoursAfter('Z')} more`, yoursAfter('Z').length - 3);
+        const [deletion, addition] = view.state.field(criticMarkupField);
+        expect(isAdjacentEditPair(deletion, addition)).toBe(false);
+
+        // Its ✓ ✗ act on just it, and their deletion's on just that
+        expect(view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons[data-merged]')).toHaveLength(0);
+        press(view, theirs.length, 'accept');
+        expect(view.state.doc.toString()).toBe(`${theirs}Z more`);
+        cleanup!();
+
+        view = suggesting(`${yoursAfter('Z')} more`, yoursAfter('Z').length - 3);
+        press(view, theirs.length, 'reject');
+        expect(view.state.doc.toString()).toBe(`${theirs} more`);
+        cleanup!();
+
+        view = suggesting(`${yoursAfter('Z')} more`, theirs.length - 5);
+        press(view, 0, 'accept');
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++} more`);
+      });
+
+      it.each(stops)('adds what you type %s to an addition of yours there', (_, at) => {
+        const view = suggesting(`${yoursAfter('Y')} more`, at);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`${yoursAfter('ZY')} more`);
+        expect(view.state.selection.main.head).toBe(yoursAfter('Z').length - 3);
+      });
+
+      it("puts it between their deletion and someone else's addition just after it", () => {
+        // Two authors' changes, not a pair
+        const doc = `{--${elias}@@old--}{++${luc}@@new++}`;
+        for (const at of [doc.indexOf('--}'), doc.indexOf('new')]) {
+          const view = suggesting(doc, at);
+          type(view, 'Z');
+
+          expect(view.state.doc.toString()).toBe(`{--${elias}@@old--}{++${mark}@@Z++}{++${luc}@@new++}`);
+          cleanup!();
+        }
+      });
+
+      it('keeps their deletion+addition pair together when you type between its halves too', () => {
+        // Where the cursor can stand without #162: in the hidden markup between them
+        const pair = `{--${elias}@@old words--}{++${elias}@@new words++}`;
+        const view = suggesting(pair, pair.indexOf('{++'));
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`{++${mark}@@Z++}${pair}`);
+      });
+    });
+
+    describe('in a deletion of yours', () => {
+      editingAsMark();
+      const yours = `{--${mark}@@Deleted--}`;
+
+      it('puts what you type at the end of your deleted text just after it, as your replacement of it', () => {
+        const view = suggesting(`${yours} more`, yours.length - 3);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`${yours}{++${mark}@@Z++} more`);
+        const [deletion, addition] = view.state.field(criticMarkupField);
+        expect(isAdjacentEditPair(deletion, addition)).toBe(true);
+        expect(view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons[data-merged]')).toHaveLength(1);
+      });
+
+      it('puts what you type at the start of your deleted text just before it', () => {
+        const view = suggesting(`Text ${yours}`, `Text {--${mark}@@`.length);
+        type(view, 'Z');
+
+        expect(view.state.doc.toString()).toBe(`Text {++${mark}@@Z++}${yours}`);
+      });
+
+      it('replaces a word you Delete and then type over', () => {
+        const view = suggesting('Some words here', 'Some '.length);
+        for (let i = 0; i < 'words'.length; i++) backspace(view, true);
+        type(view, 'text');
+
+        expect(view.state.doc.toString()).toBe(`Some {--${mark}@@words--}{++${mark}@@text++} here`);
+        expect(visibleText(view)).toBe('Some wordstext here');
       });
     });
 
@@ -1332,6 +1436,20 @@ describe('CriticMarkup Extension', () => {
       rejectBtn.click();
 
       expect(view.state.doc.toString()).toBe('hello old end');
+    });
+
+    it('gives a deletion and an addition by two authors that touch a ✓ ✗ each', () => {
+      // Elias's deletion, and Mark's addition just after it
+      const doc = 'hello {--{"author":"Elias"}@@old--}{++{"author":"Mark"}@@new++} end';
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('old') + 1);
+      cleanup = c;
+
+      const buttons = view.contentDOM.querySelectorAll<HTMLElement>('.cm-criticmarkup-buttons');
+      expect(buttons.length).toBe(1);
+      expect(buttons[0].dataset.merged).toBeUndefined();
+      (buttons[0].querySelector('.cm-criticmarkup-accept') as HTMLButtonElement).click();
+
+      expect(view.state.doc.toString()).toBe('hello {++{"author":"Mark"}@@new++} end');
     });
 
     it('non-adjacent deletion and addition still get separate buttons', () => {
