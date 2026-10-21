@@ -113,7 +113,9 @@ export function useThreadsFromYText(
 
     const callbacks: AdapterCallbacks = {
       onReply(thread, body) {
-        const live = threadByKey.get(thread.key);
+        // By offset, else by root comment: the offset may have moved since the card rendered.
+        const live = threadByKey.get(thread.key)
+          ?? rawThreads.find((t) => messageIdFor(t.comments[0]) === thread.root.id);
         if (!live) return;
         replyInYText(yText, body, live.to);
       },

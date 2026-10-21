@@ -112,7 +112,7 @@ export function MobileCommentsSheet(props: MobileCommentsSheetProps) {
       )}
 
       {threads.map((thread) => (
-        <div key={thread.key} data-comment-thread={thread.key}>
+        <div key={thread.root.id} data-comment-thread={thread.key}>
           <CommentCard
             thread={thread}
             number={thread.order}

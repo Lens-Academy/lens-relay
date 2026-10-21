@@ -477,7 +477,10 @@ export const CommentsLayer = forwardRef<CommentsLayerHandle, CommentsLayerProps>
 
         return (
           <div
-            key={thread.key}
+            // React identity is the root comment (author + time), not thread.key: the key
+            // is an offset that moves when anyone types above, which remounted the card
+            // and threw away a reply being written.
+            key={thread.root.id}
             data-comment-thread={thread.key}
             ref={(el) => attachObserver(el, thread.key)}
             style={{
