@@ -3,6 +3,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { EditorSelection, EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
+import { copyLineDown, moveLineDown } from '@codemirror/commands';
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import { getAuthorshipRuns } from '../../../lib/authorship-runs';
@@ -155,6 +156,33 @@ describe('suggestion mode: pasting text with suggestions in it', () => {
       userEvent: 'input.drop',
     });
     expect(rangesFrom(v, doc.length).map((r) => [r.type, r.content])).toEqual([['addition', 'ends with an addition']]);
+  });
+
+  it('a line copied with Shift+Alt+↓ goes in as plain text too, and the line itself stays as it is', () => {
+    const line = `I {++${ELIAS}@@his words++} here`;
+    const v = editor(`First line\n${line}\nLast line`, 'First line\n'.length);
+    copyLineDown(v);
+
+    expect(v.state.field(criticMarkupField).map((r) => [r.type, r.metadata?.author, r.content])).toEqual([
+      ['addition', 'Mark', 'I his words here\n'],
+      ['addition', 'Elias', 'his words'],
+    ]);
+    expect(v.state.doc.line(3).text).toBe(`++}${line}`);
+    expectNoNesting(v);
+  });
+
+  it('a line moved with Alt+↓ goes in as plain text, struck as it was where it left', () => {
+    const line = `I {++${ELIAS}@@his words++} here`;
+    const v = editor(`First line\n${line}\nLast line`, 0);
+    // Moving line 1 down moves line 2, with Elias's addition, up
+    moveLineDown(v);
+
+    expect(v.state.field(criticMarkupField).map((r) => [r.type, r.metadata?.author, r.content])).toEqual([
+      ['addition', 'Mark', 'I his words here\n'],
+      ['deletion', 'Mark', `\n${line}`],
+      ['addition', 'Elias', 'his words'],
+    ]);
+    expectNoNesting(v);
   });
 
   it('a paste of only someone\'s deletion adds nothing: accepted, there is no text', () => {
