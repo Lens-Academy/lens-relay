@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
-import { StateEffect, Compartment } from '@codemirror/state';
+import { StateEffect } from '@codemirror/state';
 import { flashHeadingLine } from '../Editor/extensions/headingFlash';
 import type { EditorState } from '@codemirror/state';
 
@@ -231,11 +231,35 @@ export function normalizeHeadingLevels(headings: Heading[]): NormalizedHeading[]
  * Finds the last heading at or before the cursor position.
  * Returns the index of the active heading (or -1 if none).
  */
+/**
+ * Cursor listeners per editor view. Each view gets one update listener,
+ * installed on first use, that calls the hooks mounted on it; mounting and
+ * unmounting a hook (the mobile outline drawer remounts on every open) only
+ * changes this set. Reinstalling the listener whenever the headings changed
+ * dispatched a transaction after every edit, other people's included, and
+ * that transaction made CodeMirror lose its scroll anchor: text added above
+ * the viewport pushed the page down.
+ */
+const selectionListeners = new WeakMap<EditorView, Set<() => void>>();
+
+function onSelectionChange(view: EditorView, callback: () => void): () => void {
+  let callbacks = selectionListeners.get(view);
+  if (!callbacks) {
+    const set = new Set<() => void>();
+    callbacks = set;
+    selectionListeners.set(view, set);
+    view.dispatch({
+      effects: StateEffect.appendConfig.of(EditorView.updateListener.of((update) => {
+        if (update.selectionSet) set.forEach((fn) => fn());
+      })),
+    });
+  }
+  callbacks.add(callback);
+  return () => callbacks.delete(callback);
+}
+
 export function useActiveHeading(view: EditorView | null, headings: Heading[]): number {
   const [activeIndex, setActiveIndex] = useState(-1);
-  const compartmentRef = useRef<Compartment | null>(null);
-  const installedRef = useRef(false);
-  const installedViewRef = useRef<EditorView | null>(null);
 
   const updateActive = useCallback(() => {
     if (!view || headings.length === 0) {
@@ -263,30 +287,22 @@ export function useActiveHeading(view: EditorView | null, headings: Heading[]): 
     setActiveIndex(active);
   }, [view, headings]);
 
+  // Recomputed when the headings change, and on cursor moves through the
+  // per-view listener, which reads the latest updateActive from the ref.
+  const updateActiveRef = useRef(updateActive);
+
+  useLayoutEffect(() => {
+    updateActiveRef.current = updateActive;
+  }, [updateActive]);
+
+  useEffect(() => {
+    updateActive();
+  }, [updateActive]);
+
   useEffect(() => {
     if (!view) return;
-
-    // Initial computation
-    updateActive();
-
-    const listener = EditorView.updateListener.of((update) => {
-      if (update.selectionSet) {
-        updateActive();
-      }
-    });
-
-    if (!installedRef.current || installedViewRef.current !== view) {
-      // First install or view changed: create compartment and append it
-      const compartment = new Compartment();
-      compartmentRef.current = compartment;
-      installedViewRef.current = view;
-      view.dispatch({ effects: StateEffect.appendConfig.of(compartment.of(listener)) });
-      installedRef.current = true;
-    } else if (compartmentRef.current) {
-      // Subsequent updates (same view): reconfigure the compartment (replaces the listener)
-      view.dispatch({ effects: compartmentRef.current.reconfigure(listener) });
-    }
-  }, [view, updateActive]);
+    return onSelectionChange(view, () => updateActiveRef.current());
+  }, [view]);
 
   return activeIndex;
 }

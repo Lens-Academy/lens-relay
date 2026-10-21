@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type { DecorationSet, ViewPlugin } from '@codemirror/view';
@@ -186,6 +186,33 @@ describe('AuthorshipPlugin decorations on Y/CM length mismatch', () => {
       Y.applyUpdate(ydoc, Y.encodeStateAsUpdate(ai));
       await new Promise((r) => setTimeout(r, 0));
       expect(instance.recentParses).toBe(2);
+    } finally {
+      view.destroy();
+    }
+  });
+});
+
+describe('AuthorshipPlugin refresh on users map changes', () => {
+  it('waits for the next frame instead of dispatching right after the edit', async () => {
+    // The users map changes with every remote edit. A transaction between
+    // that edit and the editor's next measure makes CodeMirror lose its
+    // scroll anchor, so the page moved when someone typed above it.
+    const ydoc = new Y.Doc();
+    const ytext = ydoc.getText('contents');
+    ytext.insert(0, 'hello world');
+    const view = new EditorView({
+      state: EditorState.create({ doc: 'hello world', extensions: authorshipExtension(ytext) }),
+      parent: document.body,
+    });
+    try {
+      const dispatch = vi.spyOn(view, 'dispatch');
+      ydoc.getMap('users').set('human:Remote', new Y.Map());
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      expect(dispatch).toHaveBeenCalledTimes(1);
     } finally {
       view.destroy();
     }

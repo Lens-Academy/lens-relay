@@ -51,7 +51,10 @@ const copyButtonPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.selectionSet || update.viewportChanged) {
+      if (
+        update.docChanged || update.selectionSet || update.viewportChanged ||
+        syntaxTree(update.startState) !== syntaxTree(update.state)
+      ) {
         this.decorations = this.build(update.view);
       }
     }

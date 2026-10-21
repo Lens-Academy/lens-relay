@@ -216,7 +216,9 @@ class AuthorshipPlugin {
   decorations: DecorationSet = Decoration.none;
   private runs: AuthorshipRun[] = [];
   private actorByClient = new Map<number, string>();
-  private refreshScheduled = false;
+  private refreshFrame: number | null = null;
+  private refreshRequestedAt = 0;
+  private refreshQueued = false;
   private readonly usersObserver: () => void;
   private readonly users: Y.Map<unknown>;
 
@@ -341,13 +343,30 @@ class AuthorshipPlugin {
    *  keystroke and would drag the view back across legitimate scrolls. */
   private scheduleRefresh(pin: boolean) {
     this.pinNext ||= pin;
-    if (this.refreshScheduled) return;
-    this.refreshScheduled = true;
+    // Background refreshes come with every remote edit. A transaction between
+    // a remote edit and the measure that follows it makes CodeMirror lose its
+    // scroll anchor, so text added above the viewport pushed the page down.
+    // Refresh after the frame's measure instead: the microtask runs once Yjs
+    // has handed the edit to the editor (which then asks for a frame), and a
+    // frame requested earlier is replaced, so the refresh comes after the
+    // editor's measure. A frame that has waited 100 ms is kept, so a steady
+    // stream of edits cannot hold it off forever.
+    if (this.refreshQueued) return;
+    this.refreshQueued = true;
     queueMicrotask(() => {
-      this.refreshScheduled = false;
-      const pinned = this.pinNext;
-      this.pinNext = false;
-      this.view.dispatch({ effects: refreshAuthorship.of(pinned) });
+      this.refreshQueued = false;
+      if (this.refreshFrame !== null) {
+        if (performance.now() - this.refreshRequestedAt >= 100) return;
+        cancelAnimationFrame(this.refreshFrame);
+      } else {
+        this.refreshRequestedAt = performance.now();
+      }
+      this.refreshFrame = requestAnimationFrame(() => {
+        this.refreshFrame = null;
+        const pinned = this.pinNext;
+        this.pinNext = false;
+        if (!this.destroyed) this.view.dispatch({ effects: refreshAuthorship.of(pinned) });
+      });
     });
   }
 
@@ -889,6 +908,7 @@ class AuthorshipPlugin {
     this.activity.unobserveDeep(this.activityObserver);
     this.clearRecentTimer();
     if (this.tooltipFrame !== null) cancelAnimationFrame(this.tooltipFrame);
+    if (this.refreshFrame !== null) cancelAnimationFrame(this.refreshFrame);
     this.view.scrollDOM.removeEventListener('mousemove', this.onMouseMove);
     this.view.scrollDOM.removeEventListener('mouseleave', this.onMouseLeave);
     this.view.scrollDOM.removeEventListener('scroll', this.onScroll);
