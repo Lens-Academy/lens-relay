@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import * as Y from 'yjs';
-import { useThreadsFromYText } from './criticmarkupAdapter';
+import { pinInsertKey, useThreadsFromYText } from './criticmarkupAdapter';
 import { insertCommentInYText, replyInYText } from '../../lib/ytext-comment-ops';
 
 // `getCurrentAuthor` (used by buildCommentMarkup) reads from window.__currentUser
@@ -104,5 +104,24 @@ describe('useThreadsFromYText', () => {
     // the new parse.
     expect(result.current.threads[0].replies).toHaveLength(1);
     expect(result.current.threads[0].replies[0].body).toBe('reply-body');
+  });
+});
+
+describe('a new comment while others edit', () => {
+  it('lands where the form was opened, though text was typed above it meanwhile', () => {
+    const { ytext } = makeDoc('alpha beta gamma');
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', false));
+    const key = pinInsertKey(ytext, String('alpha beta'.length)); // cursor after "beta"
+    act(() => { ytext.insert(0, 'NEW LINE\n'); }); // a collaborator types above
+    act(() => { result.current.callbacks.onAddComment!(key, 'hi'); });
+    const text = ytext.toString();
+    expect(text.startsWith('NEW LINE\nalpha beta{>>')).toBe(true);
+    expect(text.endsWith('<<} gamma')).toBe(true);
+  });
+  it('still accepts a plain offset key', () => {
+    const { ytext } = makeDoc('ab');
+    const { result } = renderHook(() => useThreadsFromYText(ytext, 'me', false));
+    act(() => { result.current.callbacks.onAddComment!('1', 'x'); });
+    expect(ytext.toString().startsWith('a{>>')).toBe(true);
   });
 });

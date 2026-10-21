@@ -1,6 +1,6 @@
 // lens-editor/src/components/Comments/criticmarkupAdapter.ts
 import { useMemo, useSyncExternalStore } from 'react';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 import type { ThreadView, MessageView, ThreadKey } from './types';
 import { useCommentsFromText } from './useCommentsFromText';
 import type { CommentThread, CriticMarkupRange } from '../../lib/criticmarkup-parser';
@@ -45,6 +45,30 @@ function useYTextString(yText: Y.Text): string {
  * comment (e.g. once they fixed what it asks for), not only their own.
  * Editing a comment's text stays with its author.
  */
+/**
+ * A new comment's place, pinned when its form opens. The key the comments UI carries is a
+ * plain offset, which goes stale while collaborators type above it; this keeps a Yjs
+ * relative position beside it, which moves with their edits, for the insert to use.
+ */
+const pinned = new Map<string, { ytext: Y.Text; rel: Y.RelativePosition }>();
+
+export function pinInsertKey(ytext: Y.Text, key: string): string {
+  const pos = Number(key);
+  if (Number.isFinite(pos)) pinned.set(key, { ytext, rel: Y.createRelativePositionFromTypeIndex(ytext, pos) });
+  return key;
+}
+
+function insertPos(ytext: Y.Text, key: string): number | null {
+  const pin = pinned.get(key);
+  if (pin && pin.ytext === ytext && ytext.doc) {
+    pinned.delete(key);
+    const abs = Y.createAbsolutePositionFromRelativePosition(pin.rel, ytext.doc);
+    if (abs && abs.type === ytext) return abs.index;
+  }
+  const pos = Number(key);
+  return Number.isFinite(pos) ? Math.min(pos, ytext.length) : null;
+}
+
 export function useThreadsFromYText(
   yText: Y.Text,
   currentUserName: string,
@@ -104,8 +128,8 @@ export function useThreadsFromYText(
         deleteRangeInYText(yText, range);
       },
       onAddComment(key, body) {
-        const pos = Number(key);
-        if (!Number.isFinite(pos)) return;
+        const pos = insertPos(yText, key);
+        if (pos == null) return;
         insertCommentInYText(yText, body, pos);
       },
     };

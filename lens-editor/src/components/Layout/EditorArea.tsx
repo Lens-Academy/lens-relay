@@ -31,7 +31,7 @@ import { isConceptPath } from '../../lib/concept-graph';
 import { PanelErrorBoundary } from '../PanelErrorBoundary';
 import { ContentStatusPanel } from '../ContentStatus/ContentStatusPanel';
 import { CommentsLayer, type CommentsLayerHandle } from '../Comments/CommentsLayer';
-import { useThreadsFromYText } from '../Comments/criticmarkupAdapter';
+import { pinInsertKey, useThreadsFromYText } from '../Comments/criticmarkupAdapter';
 import { useScrollSource } from '../Comments/useScrollSource';
 import { DebugYMapPanel } from '../DebugYMapPanel';
 import { PanelDebugOverlay } from '../PanelDebugOverlay';
@@ -297,7 +297,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
       const view = editorViewRef.current;
       if (!view) return;
       commentSheetEpochRef.current++;
-      setPendingCommentAction({ type: 'add', key: String(view.state.selection.main.head) });
+      setPendingCommentAction({ type: 'add', key: pinInsertKey(yText, String(view.state.selection.main.head)) });
       openDrawer('comments');
       return;
     }
@@ -603,7 +603,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
               onAddComment={callbacks.onAddComment}
-              getInsertKey={editorView ? () => String(editorView.state.selection.main.head) : undefined}
+              getInsertKey={editorView ? () => pinInsertKey(yText, String(editorView.state.selection.main.head)) : undefined}
             />
           )}
         </div>
@@ -685,7 +685,7 @@ export function EditorArea({ currentDocId }: { currentDocId: string }) {
               onEdit={callbacks.onEdit}
               onDelete={callbacks.onDelete}
               onAddComment={canWrite ? callbacks.onAddComment : undefined}
-              getInsertKey={editorView && canWrite ? () => String(editorView.state.selection.main.head) : undefined}
+              getInsertKey={editorView && canWrite ? () => pinInsertKey(yText, String(editorView.state.selection.main.head)) : undefined}
             />
           </MobileDrawer>
 
