@@ -1,11 +1,9 @@
-// One paragraph: its score, its text (click to expand), its kind and a link to its source file.
-import { useState } from 'react';
+// One paragraph: its score, its text (click to edit it in its source file), its kind and a link to that file.
+import { SourceParagraph } from './SourceParagraph';
 import { useNavigation } from '../../contexts/NavigationContext';
 import { urlForDoc } from '../../lib/url-utils';
 import { RELAY_ID } from '../../App';
 import type { Colormap, Para } from './types';
-
-const CUT = 280;
 
 export function ScoreChip({ p, color }: { p: number; color: Colormap }) {
   return (
@@ -24,14 +22,9 @@ function SourceLink({ para }: { para: Para }) {
 }
 
 export function ParaText({ para }: { para: Para }) {
-  const [open, setOpen] = useState(false);
-  const long = para.text.length > CUT;
   return (
     <div className="min-w-0">
-      <div className={`whitespace-pre-wrap text-[13px] leading-relaxed text-gray-800 ${long ? 'cursor-pointer' : ''}`}
-        onClick={() => long && setOpen(!open)}>
-        {long && !open ? para.text.slice(0, CUT) + '…' : para.text}
-      </div>
+      <SourceParagraph para={para} />
       <div className="mt-0.5 truncate text-[10px] text-gray-400">
         <span className="mr-1 rounded bg-gray-100 px-1">{para.kind}</span><SourceLink para={para} />
       </div>
