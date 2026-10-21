@@ -688,6 +688,17 @@ describe('CriticMarkup Extension', () => {
 
       expect(view.state.doc.toString()).toBe('hello  end');
     });
+
+    it('the ✓ of a suggestion right after a comment accepts the suggestion, not the comment', () => {
+      const doc = 'a {>>a note<<}{++x++} b';
+      const { view, cleanup: c } = createCriticMarkupEditor(doc, doc.indexOf('{++'));
+      cleanup = c;
+
+      const buttons = view.contentDOM.querySelectorAll<HTMLElement>('.cm-criticmarkup-buttons');
+      expect(buttons).toHaveLength(1);
+      buttons[0].querySelector<HTMLButtonElement>('.cm-criticmarkup-accept')!.click();
+      expect(view.state.doc.toString()).toBe('a {>>a note<<}x b');
+    });
   });
 
   describe('Adjacent Deletion+Addition Pairs', () => {
@@ -763,6 +774,82 @@ describe('CriticMarkup Extension', () => {
       view.dispatch({ selection: { anchor: 21 } });
       const buttons2 = view.contentDOM.querySelectorAll('.cm-criticmarkup-buttons');
       expect(buttons2.length).toBe(1);
+    });
+  });
+
+  describe('Bulk Accept/Reject Buttons', () => {
+    // Two suggestions (a deletion+addition pair, an addition), a highlighted comment with a reply, a comment
+    const DOC = 'a {--old--}{++new++} b {++x++} c {==seen==}{>>a note<<}{>>a reply<<} d {>>more<<} e';
+    const NOTES = '{==seen==}{>>a note<<}{>>a reply<<} d {>>more<<}';
+
+    const bulkButton = (view: EditorView, kind: 'accept' | 'reject') =>
+      view.contentDOM.querySelector<HTMLButtonElement>(`.cm-criticmarkup-bulk .cm-criticmarkup-${kind}`);
+
+    it('counts the suggestions in the selection, a deletion+addition pair as one, and no comments or highlights', () => {
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(DOC, 0, DOC.length);
+      cleanup = c;
+
+      expect(bulkButton(view, 'accept')?.textContent).toBe('✓ 2');
+      expect(bulkButton(view, 'reject')?.textContent).toBe('✗ 2');
+      expect(bulkButton(view, 'accept')?.title).toBe('Accept 2 changes (Ctrl+Enter)');
+    });
+
+    it('its ✓ accepts them and leaves the comments, replies and highlight as they are', () => {
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(DOC, 0, DOC.length);
+      cleanup = c;
+
+      bulkButton(view, 'accept')!.click();
+
+      expect(view.state.doc.toString()).toBe(`a new b x c ${NOTES} e`);
+    });
+
+    it('its ✗ rejects them and leaves the comments too', () => {
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(DOC, 0, DOC.length);
+      cleanup = c;
+
+      bulkButton(view, 'reject')!.click();
+
+      expect(view.state.doc.toString()).toBe(`a old b  c ${NOTES} e`);
+    });
+
+    it('a selection over one suggestion and a comment offers just that one', () => {
+      const doc = 'a {++x++} b {>>a note<<} c';
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(doc, 0, doc.length);
+      cleanup = c;
+
+      expect(bulkButton(view, 'accept')?.textContent).toBe('✓ 1');
+      expect(bulkButton(view, 'accept')?.title).toBe('Accept 1 change (Ctrl+Enter)');
+      bulkButton(view, 'accept')!.click();
+      expect(view.state.doc.toString()).toBe('a x b {>>a note<<} c');
+    });
+
+    it('a selection over a deletion+addition pair counts it once', () => {
+      const doc = 'a {--old--}{++new++} b';
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(doc, 0, doc.length);
+      cleanup = c;
+
+      expect(bulkButton(view, 'accept')?.textContent).toBe('✓ 1');
+      bulkButton(view, 'accept')!.click();
+      expect(view.state.doc.toString()).toBe('a new b');
+    });
+
+    it('no buttons for a selection with only comments and highlights in it', () => {
+      const doc = `a ${NOTES} b`;
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(doc, 0, doc.length);
+      cleanup = c;
+
+      expect(view.contentDOM.querySelector('.cm-criticmarkup-buttons')).toBeNull();
+    });
+
+    it('counts the same in source mode', () => {
+      const { view, cleanup: c } = createCriticMarkupEditorWithSourceMode(DOC, 0);
+      cleanup = c;
+      toggleSourceMode(view, true);
+      view.dispatch({ selection: { anchor: 0, head: DOC.length } });
+
+      expect(bulkButton(view, 'accept')?.textContent).toBe('✓ 2');
+      bulkButton(view, 'accept')!.click();
+      expect(view.state.doc.toString()).toBe(`a new b x c ${NOTES} e`);
     });
   });
 

@@ -1,7 +1,7 @@
 // src/components/Editor/extensions/criticmarkup-commands.ts
 import type { EditorView, KeyBinding } from '@codemirror/view';
 import { criticMarkupField, canAcceptRejectFacet } from './criticmarkup';
-import type { CriticMarkupRange } from '../../../lib/criticmarkup-parser';
+import { countEdits, isAdjacentEditPair, isSuggestion, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 /**
  * Find the CriticMarkup range containing the given position.
@@ -13,10 +13,15 @@ export function findRangeAtPosition(view: EditorView, pos: number): CriticMarkup
 }
 
 /**
- * Find the CriticMarkup range containing the cursor position.
+ * Find the CriticMarkup range containing the cursor position that accept and
+ * reject act on: never a comment (accepting or rejecting one deletes it,
+ * replies and all), but a change around it or right after it.
  */
 function findRangeAtCursor(view: EditorView): CriticMarkupRange | null {
-  return findRangeAtPosition(view, view.state.selection.main.head);
+  const pos = view.state.selection.main.head;
+  const range = findRangeAtPosition(view, pos);
+  if (range?.type !== 'comment') return range;
+  return view.state.field(criticMarkupField).find(r => r.type !== 'comment' && pos >= r.from && pos <= r.to) ?? null;
 }
 
 /**
@@ -28,6 +33,35 @@ export function findRangesInSelection(view: EditorView): CriticMarkupRange[] {
   if (sel.from === sel.to) return [];
   const ranges = view.state.field(criticMarkupField);
   return ranges.filter(r => r.from < sel.to && r.to > sel.from);
+}
+
+/**
+ * The suggestions (additions, deletions, substitutions) the selection
+ * overlaps, each deletion+addition pair whole, in document order: what the
+ * bulk ✓ ✗ accept or reject. Its comments and highlights stay as they are.
+ */
+export function suggestionsInSelection(view: EditorView): CriticMarkupRange[] {
+  const ranges = view.state.field(criticMarkupField);
+  const picked = new Set<CriticMarkupRange>();
+  for (const range of findRangesInSelection(view)) {
+    if (!isSuggestion(range)) continue;
+    const i = ranges.indexOf(range);
+    if (i > 0 && isAdjacentEditPair(ranges[i - 1], range)) picked.add(ranges[i - 1]);
+    picked.add(range);
+    if (i + 1 < ranges.length && isAdjacentEditPair(range, ranges[i + 1])) picked.add(ranges[i + 1]);
+  }
+  return [...picked].sort((a, b) => a.from - b.from);
+}
+
+/**
+ * The count on the bulk ✓ ✗, which show for a selection over several
+ * CriticMarkup ranges: its suggestions, a deletion+addition pair counted once.
+ * Null when the selection overlaps one range or none (that range's own ✓ ✗
+ * show instead); 0 when they are all comments and highlights (no buttons).
+ */
+export function bulkChangeCount(view: EditorView): number | null {
+  if (findRangesInSelection(view).length < 2) return null;
+  return countEdits(suggestionsInSelection(view));
 }
 
 /**
@@ -139,42 +173,45 @@ export function surgicalChangesFor(
 }
 
 /**
- * Accept CriticMarkup changes. If a non-collapsed selection exists,
- * accepts all ranges overlapping the selection. Otherwise accepts
- * the single range at cursor position.
+ * The ranges accept and reject act on. With a non-collapsed selection: the
+ * suggestions it overlaps (suggestionsInSelection), or a highlight that is
+ * all it overlaps (its own ✓ ✗ show there). Otherwise the range at the
+ * cursor, never a comment.
+ */
+function rangesToApply(view: EditorView): CriticMarkupRange[] {
+  const selected = findRangesInSelection(view);
+  if (selected.length === 0) {
+    const range = findRangeAtCursor(view);
+    return range ? [range] : [];
+  }
+  const suggestions = suggestionsInSelection(view);
+  if (suggestions.length === 0 && selected.length === 1 && selected[0].type === 'highlight') return selected;
+  return suggestions;
+}
+
+/**
+ * Accept CriticMarkup changes: the suggestions a non-collapsed selection
+ * overlaps, or the change at the cursor (see rangesToApply).
  * Returns true if any change was accepted.
  */
 export function acceptChangeAtCursor(view: EditorView): boolean {
-  const selected = findRangesInSelection(view);
-  if (selected.length > 0) {
-    view.dispatch({ changes: selected.flatMap(r => surgicalChangesFor(view, r, 'accept')) });
-    return true;
-  }
+  const targets = rangesToApply(view);
+  if (targets.length === 0) return false;
 
-  const range = findRangeAtCursor(view);
-  if (!range) return false;
-
-  view.dispatch({ changes: surgicalChangesFor(view, range, 'accept') });
+  view.dispatch({ changes: targets.flatMap(r => surgicalChangesFor(view, r, 'accept')) });
   return true;
 }
 
 /**
- * Reject CriticMarkup changes. If a non-collapsed selection exists,
- * rejects all ranges overlapping the selection. Otherwise rejects
- * the single range at cursor position.
+ * Reject CriticMarkup changes: the suggestions a non-collapsed selection
+ * overlaps, or the change at the cursor (see rangesToApply).
  * Returns true if any change was rejected.
  */
 export function rejectChangeAtCursor(view: EditorView): boolean {
-  const selected = findRangesInSelection(view);
-  if (selected.length > 0) {
-    view.dispatch({ changes: selected.flatMap(r => surgicalChangesFor(view, r, 'reject')) });
-    return true;
-  }
+  const targets = rangesToApply(view);
+  if (targets.length === 0) return false;
 
-  const range = findRangeAtCursor(view);
-  if (!range) return false;
-
-  view.dispatch({ changes: surgicalChangesFor(view, range, 'reject') });
+  view.dispatch({ changes: targets.flatMap(r => surgicalChangesFor(view, r, 'reject')) });
   return true;
 }
 
