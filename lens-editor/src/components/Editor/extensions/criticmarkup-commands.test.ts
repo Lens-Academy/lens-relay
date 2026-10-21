@@ -218,6 +218,86 @@ describe('CriticMarkup Commands', () => {
       expect(result).toBe(true);
       expect(view.state.doc.toString()).toBe('hello world end');
     });
+
+    // Ctrl+A and the bulk ✓ used to delete every comment in the file, replies included
+    const ANNOTATED = 'a {++x++} b {==seen==}{>>a note<<}{>>a reply<<} c {--y--} d';
+    const NOTES = '{==seen==}{>>a note<<}{>>a reply<<}';
+
+    it('accepting a selection leaves its comments, their replies and highlights', () => {
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(ANNOTATED, 0, ANNOTATED.length);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(`a x b ${NOTES} c  d`);
+    });
+
+    it('rejecting a selection leaves them too', () => {
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(ANNOTATED, 0, ANNOTATED.length);
+      cleanup = c;
+
+      expect(rejectChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe(`a  b ${NOTES} c y d`);
+    });
+
+    it('a selection over part of a deletion+addition pair accepts the whole pair', () => {
+      const content = 'a {--old--}{++new++} b {++x++} c';
+      // From inside "old" to the end: the pair's addition is in it, its deletion only partly
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(content, 5, content.length);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('a new b x c');
+    });
+
+    it('a selection over only part of the deletion half rejects the whole pair', () => {
+      const content = 'a {--old--}{++new++} b';
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(content, 5, 7);
+      cleanup = c;
+
+      expect(rejectChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('a old b');
+    });
+
+    it('a selection with only comments and highlights in it changes nothing', () => {
+      const content = `a ${NOTES} b`;
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(content, 0, content.length);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(false);
+      expect(rejectChangeAtCursor(view)).toBe(false);
+      expect(view.state.doc.toString()).toBe(content);
+    });
+  });
+
+  describe('Comments and highlights', () => {
+    it('accept and reject never delete a comment at the cursor', () => {
+      const content = 'a {>>a note<<} b';
+      const { view, cleanup: c } = createCriticMarkupEditor(content, 5);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(false);
+      expect(rejectChangeAtCursor(view)).toBe(false);
+      expect(view.state.doc.toString()).toBe(content);
+    });
+
+    it('right after a comment, the suggestion there is accepted and the comment stays', () => {
+      const content = 'a {>>a note<<}{++x++} b';
+      const { view, cleanup: c } = createCriticMarkupEditor(content, content.indexOf('{++'));
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('a {>>a note<<}x b');
+    });
+
+    it('a highlight inside the selection is still accepted by its own ✓ (nothing else selected)', () => {
+      const content = 'a {==seen==} b';
+      // Part of the highlighted text, as when its ✓ ✗ show for a selection
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(content, 6, 9);
+      cleanup = c;
+
+      expect(acceptChangeAtCursor(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('a seen b');
+    });
   });
 
   describe('Keyboard Shortcuts', () => {
@@ -270,6 +350,17 @@ describe('CriticMarkup Commands', () => {
 
       expect(result).toBe(true);
       expect(view.state.doc.toString()).toBe('hello  end');
+    });
+
+    it('Mod-Enter over a selection accepts its suggestions and leaves its comments', () => {
+      const content = 'a {++x++} b {>>a note<<} c {++y++} d';
+      const { view, cleanup: c } = createCriticMarkupEditorWithSelection(content, 0, content.length);
+      cleanup = c;
+
+      const binding = criticMarkupKeymap.find((k) => k.key === 'Mod-Enter');
+
+      expect(binding?.run?.(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe('a x b {>>a note<<} c y d');
     });
   });
 });

@@ -18,7 +18,7 @@ import {
   WidgetType,
 } from '@codemirror/view';
 import type { ViewUpdate, DecorationSet } from '@codemirror/view';
-import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, findRangesInSelection } from './criticmarkup-commands';
+import { criticMarkupKeymap, acceptChangeAtCursor, rejectChangeAtCursor, bulkChangeCount } from './criticmarkup-commands';
 import { parse, parseThreads, isAdjacentEditPair, type CriticMarkupRange } from '../../../lib/criticmarkup-parser';
 
 export interface CriticMarkupCommentBadgeInfo {
@@ -257,7 +257,8 @@ class AcceptRejectWidget extends WidgetType {
 
 /**
  * Widget that renders accept/reject buttons with a count badge for bulk operations.
- * Shown when a text selection spans multiple CriticMarkup ranges.
+ * Shown when a text selection spans multiple CriticMarkup ranges; the count is
+ * of the suggestions among them (bulkChangeCount), which the buttons act on.
  */
 class BulkAcceptRejectWidget extends WidgetType {
   constructor(readonly count: number) {
@@ -267,18 +268,19 @@ class BulkAcceptRejectWidget extends WidgetType {
   toDOM(): HTMLElement {
     const container = document.createElement('span');
     container.className = 'cm-criticmarkup-buttons cm-criticmarkup-bulk';
+    const changes = this.count === 1 ? '1 change' : `${this.count} changes`;
 
     const acceptBtn = document.createElement('button');
     acceptBtn.className = 'cm-criticmarkup-accept';
     acceptBtn.textContent = `\u2713 ${this.count}`;
-    acceptBtn.title = `Accept ${this.count} changes (Ctrl+Enter)`;
-    acceptBtn.setAttribute('aria-label', `Accept ${this.count} changes`);
+    acceptBtn.title = `Accept ${changes} (Ctrl+Enter)`;
+    acceptBtn.setAttribute('aria-label', `Accept ${changes}`);
 
     const rejectBtn = document.createElement('button');
     rejectBtn.className = 'cm-criticmarkup-reject';
     rejectBtn.textContent = `\u2717 ${this.count}`;
-    rejectBtn.title = `Reject ${this.count} changes (Ctrl+Backspace)`;
-    rejectBtn.setAttribute('aria-label', `Reject ${this.count} changes`);
+    rejectBtn.title = `Reject ${changes} (Ctrl+Backspace)`;
+    rejectBtn.setAttribute('aria-label', `Reject ${changes}`);
 
     container.appendChild(acceptBtn);
     container.appendChild(rejectBtn);
@@ -425,20 +427,19 @@ export const criticMarkupPlugin = ViewPlugin.fromClass(
       }
 
       // Detect bulk selection: if selection spans multiple markup ranges,
-      // show a single bulk widget instead of per-range accept/reject buttons
+      // show a single bulk widget for the suggestions among them instead of
+      // per-range accept/reject buttons (none when they are all comments and highlights)
       const sel = selection.main;
-      const bulkRanges = sel.from !== sel.to
-        ? ranges.filter(r => r.from < sel.to && r.to > sel.from)
-        : [];
-      const isBulkSelection = bulkRanges.length > 1;
+      const bulkCount = bulkChangeCount(view);
+      const isBulkSelection = bulkCount !== null;
       const canAcceptReject = view.state.facet(canAcceptRejectFacet);
 
-      if (isBulkSelection && canAcceptReject) {
+      if (bulkCount && canAcceptReject) {
         decorations.push({
           from: sel.to,
           to: sel.to,
           deco: Decoration.widget({
-            widget: new BulkAcceptRejectWidget(bulkRanges.length),
+            widget: new BulkAcceptRejectWidget(bulkCount),
             side: 1,
           }),
         });
@@ -697,18 +698,16 @@ export const criticMarkupSourcePlugin = ViewPlugin.fromClass(
 
       // Detect bulk selection
       const sel = selection.main;
-      const bulkRanges = sel.from !== sel.to
-        ? ranges.filter(r => r.from < sel.to && r.to > sel.from)
-        : [];
-      const isBulkSelection = bulkRanges.length > 1;
+      const bulkCount = bulkChangeCount(view);
+      const isBulkSelection = bulkCount !== null;
       const canAcceptReject = view.state.facet(canAcceptRejectFacet);
 
-      if (isBulkSelection && canAcceptReject) {
+      if (bulkCount && canAcceptReject) {
         decorations.push({
           from: sel.to,
           to: sel.to,
           deco: Decoration.widget({
-            widget: new BulkAcceptRejectWidget(bulkRanges.length),
+            widget: new BulkAcceptRejectWidget(bulkCount),
             side: 1,
           }),
         });

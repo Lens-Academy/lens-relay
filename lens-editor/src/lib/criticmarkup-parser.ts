@@ -148,20 +148,34 @@ export function isAdjacentEditPair(a: CriticMarkupRange, b: CriticMarkupRange): 
 }
 
 /**
- * Count pending CriticMarkup edits (additions/deletions/substitutions) in a
- * text slice. An adjacent deletion+addition pair counts as one edit.
+ * Additions, deletions and substitutions: the edits accept and reject are
+ * for. Comments and highlights are not edits.
+ */
+export function isSuggestion(r: CriticMarkupRange): boolean {
+  return r.type === 'addition' || r.type === 'deletion' || r.type === 'substitution';
+}
+
+/**
+ * Count the edits (additions/deletions/substitutions) among ranges in
+ * document order. An adjacent deletion+addition pair counts as one edit.
  * Comments and highlights are not edits.
  */
-export function countPendingEdits(text: string): number {
-  const ranges = parse(text);
+export function countEdits(ranges: CriticMarkupRange[]): number {
   let count = 0;
   for (let i = 0; i < ranges.length; i++) {
     const r = ranges[i];
-    if (r.type !== 'addition' && r.type !== 'deletion' && r.type !== 'substitution') continue;
+    if (!isSuggestion(r)) continue;
     if (i > 0 && isAdjacentEditPair(ranges[i - 1], r)) continue;
     count++;
   }
   return count;
+}
+
+/**
+ * Count pending CriticMarkup edits in a text slice (see countEdits).
+ */
+export function countPendingEdits(text: string): number {
+  return countEdits(parse(text));
 }
 
 export interface CommentThread {

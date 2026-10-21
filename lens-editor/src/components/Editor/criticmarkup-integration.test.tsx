@@ -203,18 +203,18 @@ describe('CriticMarkup Accept/Reject Integration', () => {
       expect(view.state.doc.toString()).toBe('start line1\nline2 end');
     });
 
-    it('handles comment type (accept removes it)', () => {
+    it('handles comment type (accept leaves it)', () => {
       const { view, cleanup: c } = createCriticMarkupEditorWithHistory(
         'hello {>>note<<} world',
         10
       );
       cleanup = c;
 
-      // Comments are now replaced with badge widgets (no accept button).
-      // Use the command directly.
-      acceptChangeAtCursor(view);
+      // Comments are replaced with badge widgets (no accept button), and
+      // accepting at one doesn't delete it either.
+      expect(acceptChangeAtCursor(view)).toBe(false);
 
-      expect(view.state.doc.toString()).toBe('hello  world');
+      expect(view.state.doc.toString()).toBe('hello {>>note<<} world');
     });
 
     it('handles highlight type (accept keeps content)', () => {

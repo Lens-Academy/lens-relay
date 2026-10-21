@@ -259,7 +259,7 @@ export function Editor({ readOnly, canAcceptReject, onEditorReady, onDocChange, 
       if (clickPos === null) return;
 
       // Get CriticMarkup items at click position (accept/reject)
-      const markupItems = getContextMenuItems(view, clickPos);
+      const markupItems = getContextMenuItems(view, clickPos, e.target);
 
       // Always add "Add Comment" item
       const addCommentItem: ContextMenuItem = {
