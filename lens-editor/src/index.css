@@ -18,13 +18,15 @@
 .tok-heading,
 .cm-line .tok-heading,
 [class*="heading"],
-/* Target spans inside heading classes (CodeMirror's generated ͼ classes) */
+/* Target spans inside heading classes and a setext heading's ===/--- line
+   (CodeMirror's generated ͼ classes) */
 .cm-heading-1 span,
 .cm-heading-2 span,
 .cm-heading-3 span,
 .cm-heading-4 span,
 .cm-heading-5 span,
 .cm-heading-6 span,
+.cm-setext-mark span,
 [class*="cm-heading"] span {
   text-decoration: none !important;
   border-bottom: none !important;

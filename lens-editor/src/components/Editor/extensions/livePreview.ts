@@ -5,8 +5,10 @@
  * when cursor moves away and reveals when editing.
  *
  * Key features:
- * - Headings (H1-H6) display with progressively smaller font sizes
- * - # markers hidden when cursor not on heading line
+ * - Headings (H1-H6) display with progressively smaller font sizes; a line of
+ *   text over === or --- (a setext heading) is an H1 or H2
+ * - # markers, and a setext heading's ===/--- line, hidden when cursor not on
+ *   the heading
  * - Bold/italic text shows formatted when cursor moves away
  * - Asterisks/underscores hidden when cursor not on that text
  * - Links render as clickable text with external link icon
@@ -30,8 +32,10 @@ import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin }
 import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
 import { createLinkElement } from './linkElement';
 import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
+import { countsAsHeading } from './headings';
 import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
+import type { SyntaxNodeRef } from '@lezer/common';
 import { syntaxTree } from '@codemirror/language';
 import { RangeSetBuilder, Compartment, EditorSelection, StateField } from '@codemirror/state';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -43,7 +47,8 @@ import { parseCalloutHeader, CalloutIconWidget } from './callouts';
 const USE_LOCAL_RELAY = import.meta.env.VITE_LOCAL_RELAY === 'true';
 const USE_LOCAL_R2 = USE_LOCAL_RELAY && import.meta.env.VITE_LOCAL_R2 === 'true';
 
-// CSS classes for heading sizes
+// CSS classes for heading sizes. Setext headings are a line of text with ===
+// (H1) or --- (H2) under it.
 const HEADING_CLASSES: Record<string, string> = {
   ATXHeading1: 'cm-heading-1',
   ATXHeading2: 'cm-heading-2',
@@ -51,6 +56,8 @@ const HEADING_CLASSES: Record<string, string> = {
   ATXHeading4: 'cm-heading-4',
   ATXHeading5: 'cm-heading-5',
   ATXHeading6: 'cm-heading-6',
+  SetextHeading1: 'cm-heading-1',
+  SetextHeading2: 'cm-heading-2',
 };
 
 // Hidden syntax class
@@ -438,6 +445,37 @@ function cursorOnLine(view: EditorView, pos: number): boolean {
   return cursorLine === targetLine;
 }
 
+/**
+ * Check if cursor is on one of the lines from `from` to `to`
+ */
+function cursorOnLines(view: EditorView, from: number, to: number): boolean {
+  const { doc } = view.state;
+  const cursorLine = doc.lineAt(view.state.selection.main.head).number;
+  return cursorLine >= doc.lineAt(from).number && cursorLine <= doc.lineAt(to).number;
+}
+
+/**
+ * Size class for a heading: over the whole of a # heading, or over a setext
+ * heading's text. A setext heading's ===/--- line keeps the normal size, so it
+ * keeps its height when the cursor shows it, and gets cm-setext-mark, which
+ * keeps defaultHighlightStyle's heading underline off it (index.css).
+ */
+function headingSizeDecorations(
+  view: EditorView,
+  heading: SyntaxNodeRef
+): Array<{ from: number; to: number; deco: Decoration }> {
+  // inclusiveStart and inclusiveEnd: a widget replacing the start or end of the
+  // heading's text (a link or wikilink, e.g. `[[x]]` over ===, or `### [[x]]`)
+  // is otherwise left outside the mark and renders at body size.
+  const size = Decoration.mark({ class: HEADING_CLASSES[heading.name], inclusiveStart: true, inclusiveEnd: true });
+  const underline = heading.name.startsWith('Setext') ? heading.node.getChild('HeaderMark') : null;
+  if (!underline) return [{ from: heading.from, to: heading.to, deco: size }];
+  return [
+    { from: heading.from, to: view.state.doc.lineAt(underline.from).from - 1, deco: size },
+    { from: underline.from, to: underline.to, deco: Decoration.mark({ class: 'cm-setext-mark' }) },
+  ];
+}
+
 function rangeSpansLineBreak(view: EditorView, from: number, to: number): boolean {
   return to > view.state.doc.lineAt(from).to;
 }
@@ -551,15 +589,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
           enter(node) {
             // Headings: ALWAYS apply heading class for font sizing
             // # markers are hidden separately based on cursor position (HeaderMark below)
-            if (node.name in HEADING_CLASSES) {
-              decorations.push({
-                from: node.from,
-                to: node.to,
-                // inclusiveEnd: a widget replacing the heading's end (a wikilink
-                // that ends it, e.g. `### [[x]]`) is otherwise left outside the
-                // mark and renders at body size.
-                deco: Decoration.mark({ class: HEADING_CLASSES[node.name], inclusiveEnd: true }),
-              });
+            if (node.name in HEADING_CLASSES && countsAsHeading(view.state, node.node)) {
+              decorations.push(...headingSizeDecorations(view, node));
               // Add line decoration for heading top spacing (margin-top doesn't work on inline spans)
               const headingLine = view.state.doc.lineAt(node.from);
               decorations.push({
@@ -569,9 +600,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
               });
             }
 
-            // HeaderMark (# characters): hide when cursor not on line
+            // HeaderMark (# characters, or a setext heading's ===/--- line): hide
+            // when cursor not on the heading's line(s)
             if (node.name === 'HeaderMark') {
-              if (!cursorOnLine(view, node.from)) {
+              const heading = node.node.parent;
+              if (heading && countsAsHeading(view.state, heading) && !cursorOnLines(view, heading.from, heading.to)) {
                 const line = view.state.doc.lineAt(node.from);
                 // Hide # and trailing space
                 const end = Math.min(node.to + 1, line.to);
@@ -1055,8 +1088,10 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         decorations = decorations.filter((_, i) => !removeDeco.has(i));
       }
 
-      // Sort decorations by position (required for RangeSetBuilder)
-      decorations.sort((a, b) => a.from - b.from || a.to - b.to);
+      // Sort decorations by position, then by startSide (both required for
+      // RangeSetBuilder: a widget replacing a range goes before a mark that
+      // starts at the same place), then by end
+      decorations.sort((a, b) => a.from - b.from || a.deco.startSide - b.deco.startSide || a.to - b.to);
 
       // Add to builder in sorted order
       for (const d of decorations) {
@@ -1157,7 +1192,7 @@ const obsidianCommentPlugin = ViewPlugin.fromClass(
 
 /**
  * Source-mode heading plugin — applies heading size classes
- * but keeps # markers visible (no hidden-syntax decorations).
+ * but keeps # markers and setext ===/--- lines visible (no hidden-syntax decorations).
  */
 const sourceHeadingPlugin = ViewPlugin.fromClass(
   class {
@@ -1182,12 +1217,8 @@ const sourceHeadingPlugin = ViewPlugin.fromClass(
           from,
           to,
           enter(node) {
-            if (node.name in HEADING_CLASSES) {
-              decorations.push({
-                from: node.from,
-                to: node.to,
-                deco: Decoration.mark({ class: HEADING_CLASSES[node.name] }),
-              });
+            if (node.name in HEADING_CLASSES && countsAsHeading(view.state, node.node)) {
+              decorations.push(...headingSizeDecorations(view, node));
             }
           },
         });

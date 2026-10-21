@@ -6,7 +6,7 @@ import {
   countClass,
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -125,6 +125,153 @@ describe('livePreview - heading markers', () => {
     expect(hasClass(view, 'cm-heading-4')).toBe(true);
     expect(hasClass(view, 'cm-heading-5')).toBe(true);
     expect(hasClass(view, 'cm-heading-6')).toBe(true);
+  });
+});
+
+describe('livePreview - setext headings', () => {
+  let cleanup: () => void;
+
+  afterEach(() => {
+    if (cleanup) cleanup();
+  });
+
+  it('styles text over === as H1 and text over --- as H2, like # headings', () => {
+    const doc = 'Title\n===\n\nSection\n---\n\nBody';
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-heading-1')).toEqual(['Title']);
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['Section']);
+    expect(getTextWithClass(view, 'cm-heading-1-line')).toEqual(['Title']);
+    expect(getTextWithClass(view, 'cm-heading-2-line')).toEqual(['Section']);
+    expect(getTextWithClass(view, 'cm-hidden-syntax')).toEqual(['===', '---']);
+  });
+
+  it('hides the --- line while the cursor is off the heading and shows it with the cursor on either line', () => {
+    const doc = 'Section\n---\n\nBody';
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-hidden-syntax')).toEqual(['---']);
+
+    moveCursor(view, 0); // on the text
+    expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['Section']);
+    // Shown at the normal size, without the heading underline
+    expect(getTextWithClass(view, 'cm-setext-mark')).toEqual(['---']);
+
+    moveCursor(view, doc.indexOf('---')); // on the --- line
+    expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
+
+    moveCursor(view, doc.length);
+    expect(getTextWithClass(view, 'cm-hidden-syntax')).toEqual(['---']);
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['Section']);
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it('treats several lines of text over --- as one heading', () => {
+    const doc = 'We agreed on the budget\nand the hiring plan\n---\n\nBody';
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['We agreed on the budget', 'and the hiring plan']);
+    expect(countClass(view, 'cm-heading-2-line')).toBe(1);
+
+    // The cursor on its first line shows the --- two lines below
+    moveCursor(view, 0);
+    expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
+  });
+
+  it('needs at least -- for an H2, so starting a list under a line of text does not flash it up as a heading', () => {
+    // `-` and `- ` under a line of text are setext underlines to Lezer
+    const doc = 'Attendees:\n';
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+
+    for (const ch of '- Mark') {
+      const pos = view.state.selection.main.head;
+      view.dispatch({ changes: { from: pos, insert: ch }, selection: { anchor: pos + 1 } });
+      expect(hasClass(view, 'cm-heading-2')).toBe(false);
+    }
+    expect(view.state.doc.toString()).toBe('Attendees:\n- Mark');
+
+    // A lone - under text stays as typed; -- makes an H2
+    const other = 'Text\n-\n\nMore text\n--\n\nBody';
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: other },
+      selection: { anchor: other.length },
+    });
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['More text']);
+    expect(getTextWithClass(view, 'cm-hidden-syntax')).toEqual(['--']);
+  });
+
+  it('styles setext headings in source mode too, with the === and --- lines shown', () => {
+    const doc = 'Title\n===\n\nSection\n---\n\nBody';
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+
+    toggleSourceMode(view, true);
+    expect(getTextWithClass(view, 'cm-heading-1')).toEqual(['Title']);
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['Section']);
+    expect(hasClass(view, 'cm-hidden-syntax')).toBe(false);
+    expect(getTextWithClass(view, 'cm-setext-mark')).toEqual(['===', '---']);
+  });
+
+  it('finds no headings in frontmatter, collapsed, expanded or in source mode', () => {
+    // Lezer reads `title: Notes` over the closing --- as a setext heading,
+    // and the YAML comment as a # heading
+    const doc = '---\n# a YAML comment\ntitle: Notes\n---\n\nSection\n---\n\nBody';
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['Section']);
+
+    const bar = view.contentDOM.querySelector('.cm-frontmatter-bar') as HTMLElement;
+    bar.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(hasClass(view, 'cm-frontmatter-header')).toBe(true);
+    expect(hasClass(view, 'cm-heading-1')).toBe(false);
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['Section']);
+    expect(getTextWithClass(view, 'cm-heading-line')).toEqual(['Section']);
+
+    toggleSourceMode(view, true);
+    expect(hasClass(view, 'cm-heading-1')).toBe(false);
+    expect(getTextWithClass(view, 'cm-heading-2')).toEqual(['Section']);
+    expect(view.state.doc.toString()).toBe(doc);
+  });
+
+  it('renders a heading whose text is only a link or a wikilink', () => {
+    // The heading's size mark and the link's widget start at the same place.
+    // Added mark first, RangeSetBuilder threw, live preview crashed and the
+    // whole document showed as raw markdown.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const doc = '[link](https://example.org)\n---\n\n[[Page]]\n===\n\nBody';
+      const { view, cleanup: c } = createTestEditor(doc, doc.length);
+      cleanup = c;
+
+      expect(errors).not.toHaveBeenCalled();
+      expect(getTextWithClass(view, 'cm-link-widget')).toEqual(['link']);
+      expect(getTextWithClass(view, 'cm-wikilink-widget')).toEqual(['Page']);
+      expect(getTextWithClass(view, 'cm-hidden-syntax')).toEqual(['---', '===']);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('sizes a link or wikilink that starts or ends the heading text like the heading', () => {
+    const doc = [
+      '[link](https://example.org)\n---',
+      '[[Page]]\n===',
+      '[[Page]] notes\n---',
+      'Notes on [[Page]]\n===',
+      'Body',
+    ].join('\n\n');
+    const { view, cleanup: c } = createTestEditor(doc, doc.length);
+    cleanup = c;
+
+    const sizes = Array.from(view.contentDOM.querySelectorAll('.cm-link-widget, .cm-wikilink-widget'), (link) =>
+      ['cm-heading-1', 'cm-heading-2'].find((size) => link.closest(`.${size}`)) ?? null);
+    expect(sizes).toEqual(['cm-heading-2', 'cm-heading-1', 'cm-heading-2', 'cm-heading-1']);
   });
 });
 

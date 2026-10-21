@@ -3,6 +3,7 @@ import { EditorView } from '@codemirror/view';
 import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
 import { StateEffect, Compartment } from '@codemirror/state';
 import { flashHeadingLine } from '../Editor/extensions/headingFlash';
+import { countsAsHeading } from '../Editor/extensions/headings';
 import type { EditorState } from '@codemirror/state';
 
 export interface Heading {
@@ -23,11 +24,15 @@ const HEADING_TYPES: Record<string, number> = {
   ATXHeading4: 4,
   ATXHeading5: 5,
   ATXHeading6: 6,
+  // A line of text with === (H1) or --- (H2) under it
+  SetextHeading1: 1,
+  SetextHeading2: 2,
 };
 
 /**
  * Extract headings from CodeMirror editor state.
- * Iterates syntax tree to find ATXHeading nodes.
+ * Iterates syntax tree to find ATXHeading and SetextHeading nodes, the ones the
+ * editor shows as headings (countsAsHeading).
  */
 export function extractHeadings(state: EditorState): Heading[] {
   const headings: Heading[] = [];
@@ -37,14 +42,22 @@ export function extractHeadings(state: EditorState): Heading[] {
     enter(node) {
       const level = HEADING_TYPES[node.name];
       if (level !== undefined) {
+        if (!countsAsHeading(state, node.node)) return false;
+
         // Skip HeaderMark (# characters) to get just the text
         let textFrom = node.from;
+        let textTo = node.to;
 
         // Find HeaderMark child to skip it
         const cursor = node.node.cursor();
         if (cursor.firstChild()) {
           do {
             if (cursor.name === 'HeaderMark') {
+              if (node.name.startsWith('Setext')) {
+                // The ===/--- line: the text is the line(s) above it
+                textTo = state.doc.lineAt(cursor.from).from;
+                break;
+              }
               textFrom = cursor.to;
               // Skip trailing space after #
               while (textFrom < node.to &&
@@ -56,7 +69,8 @@ export function extractHeadings(state: EditorState): Heading[] {
           } while (cursor.nextSibling());
         }
 
-        const text = state.doc.sliceString(textFrom, node.to).trim();
+        // A setext heading's text can run over several lines
+        const text = state.doc.sliceString(textFrom, textTo).trim().replace(/\s*\n\s*/g, ' ');
         if (text) {
           headings.push({
             level,
@@ -79,9 +93,10 @@ export function extractHeadings(state: EditorState): Heading[] {
  * runs on the hot path.
  *
  * Caveat: this can overcount `#` lines that live inside fenced code blocks (those
- * are not real headings), so it is a signal, not an exact count. A large gap
- * between this and the tree-extracted count is still strong evidence that the
- * syntax tree was incomplete at extraction time.
+ * are not real headings), and it does not count setext headings (text over ===
+ * or ---), so it is a signal, not an exact count. A large gap between this and
+ * the tree-extracted count is still strong evidence that the syntax tree was
+ * incomplete at extraction time.
  */
 function countHeadingLikeLines(state: EditorState): number {
   let count = 0;
