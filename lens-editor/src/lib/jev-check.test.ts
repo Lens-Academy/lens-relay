@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, platformWordProblems, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems } from './jev-check';
+import { DEFAULT_PRESENTATION } from './jev-presentation';
+import { newCheckText, auroc, bandOf, bandRule, discardDraft, isCheckPath, parseCheck, parseCheckFile, parsePercentiles, platformWordProblems, percentileRows, histogram, saveDraft, setCheckFields, setDraftField, shares , platformProblems, setDraftPresentation, readView, setView} from './jev-check';
 
 const T1 = `---
 id: T1
@@ -20,7 +21,7 @@ describe('parseCheck', () => {
     expect(c).toEqual({
       id: 'T1', name: 'term used before it is explained', model: 'jev-1.14.0', fail_at: 0.8, pass_below: 0.5,
       question: 'Does `paragraph` use a technical term without explaining it?',
-      criteria: { true: 'It uses one.', false: 'It does not.' }, enabled: true,
+      criteria: { true: 'It uses one.', false: 'It does not.' }, enabled: true, presentation: DEFAULT_PRESENTATION,
     });
   });
   it('says what is missing rather than guessing', () => {
@@ -214,5 +215,29 @@ describe('platformProblems: the words must suit the platform, which shows each p
   });
   it('leaves other backticked words alone', () => {
     expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `paragraph` a `foo()`?'))).toEqual([]);
+  });
+});
+
+describe('a check file\'s presentation and view', () => {
+  const T = `---\nid: T9\nmodel: jev-1.14.0\nquestion: Is \`paragraph\` x?\nfix: f\n---\n`;
+  it('drafts a presentation, and drops the draft when it is the live one again', () => {
+    const lens = { context: 'lens', question: 'sentence', nest: ['section'] } as const;
+    const drafted = setDraftPresentation(T, { ...lens, nest: [...lens.nest] });
+    expect(parseCheckFile(drafted).draft?.presentation).toEqual({ context: 'lens', question: 'sentence', nest: ['section'] });
+    expect(parseCheckFile(drafted).live.presentation).toEqual(DEFAULT_PRESENTATION);
+    expect(setDraftPresentation(drafted, DEFAULT_PRESENTATION)).toBe(T);
+  });
+  it('refuses to save a presentation the platform cannot run yet, and checks words against it', () => {
+    const saved = saveDraft(setDraftPresentation(T, { context: 'document', question: 'sentence', nest: [] }));
+    const problems = platformProblems(saved);
+    expect(problems.some((p) => /cannot run a check with this presentation yet/.test(p))).toBe(true);
+    expect(problems.some((p) => /`paragraph` in the question: nesting by paragraph is off/.test(p))).toBe(true);
+  });
+  it('keeps a shared view block the check ignores', () => {
+    const v = setView(setView(T, 'sample', 10), 'courses', ['a', 'b']);
+    expect(readView(v)).toEqual({ sample: 10, courses: ['a', 'b'] });
+    expect(parseCheck(v).question).toBe('Is `paragraph` x?');
+    expect(platformProblems(v)).toEqual([]);
+    expect(setView(v, 'sample', 10)).toBe(v);
   });
 });

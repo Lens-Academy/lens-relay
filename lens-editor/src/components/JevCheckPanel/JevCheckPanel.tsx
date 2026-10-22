@@ -1,22 +1,24 @@
 // Check workbench, shown above a Lens Edu/Checks/*.md file. Read top-down:
 //   the check's words (Field.tsx) are edited as a `draft:` block in the file's frontmatter
 //   (checkFile.ts, lib/jev-check.ts); Save makes the draft live, Discard drops it;
-//   the run bar picks a sample (useCorpus.ts, InputPicker.tsx) and a presentation (presentation.ts, PresentationPicker.tsx)
-//   and asks jev via /api/jev/ask (server/jev/routes.ts);
+//   the run bar picks a sample (useCorpus.ts, InputPicker.tsx; its settings live in the file's `view:` block,
+//   useView.ts) and the check's presentation (lib/jev-presentation.ts, PresentationPicker.tsx, a draft field);
+//   the platform builds the jev calls (/api/jev/requests) and the server asks jev (/api/jev/ask, server/jev/routes.ts);
 //   results (Results.tsx) compare the draft with the live check, or a run with the one before it.
 import { useMemo, useState } from 'react';
 import type * as Y from 'yjs';
-import { discardDraft, parseCheckFile, parsePercentiles, platformProblems, platformWordProblems, saveDraft, setCheckFields, setDraftField, type Band, type JevCheck } from '../../lib/jev-check';
+import { discardDraft, parseCheckFile, parsePercentiles, platformProblems, platformWordProblems, readView, saveDraft, setCheckFields, setDraftField, setDraftPresentation, type Band, type JevCheck } from '../../lib/jev-check';
 import { COLORMAPS, type ColormapName } from '../../lib/colormaps';
 import { useLiveText, writeText } from './checkFile';
-import { useCorpus } from './useCorpus';
+import { chosen, poolOf, useCorpus } from './useCorpus';
+import { useView } from './useView';
 import { Field, Small } from './Field';
 import { keyHint, refSyntax, renameRef } from '../../lib/jev-keys';
 import { InputPicker } from './InputPicker';
 import { NewCheckButton } from './NewCheckButton';
 import { BandList, Histogram, Percentiles, Summary } from './Results';
 import type { Para, Run } from './types';
-import { buildRequests, DEFAULT_PRESENTATION, describe, isDefault, type Batch, type Presentation } from './presentation';
+import { DEFAULT_PRESENTATION, describe, isDefault, presentationBlock, type Presentation } from '../../lib/jev-presentation';
 import { PresentationPicker } from './PresentationPicker';
 import { relayHeaders } from '../../lib/relay-api';
 
@@ -39,19 +41,26 @@ const post = async (url: string, body: unknown) => {
   return data;
 };
 
-// The raw files the document presentations need, fetched once each.
-const fileCache: Record<string, string> = {};
-async function filesFor(sample: Para[]): Promise<Record<string, string>> {
-  const need = [...new Set(sample.map((s) => s.path))].filter((p) => !(p in fileCache));
-  for (let i = 0; i < need.length; i += 300) Object.assign(fileCache, (await post('/api/jev/files', { paths: need.slice(i, i + 300) })).files);
-  return fileCache;
-}
+/** One jev call: a shown text and every question asked about it. */
+export interface Batch { state: Record<string, unknown>; questions: { instructions: string; criteria?: { true: string; false: string } }[] }
+/** A unit asked about, the sampled row it came from, and its question: batches[batch].questions[index]. */
+interface Asked { id: string; row: string; path: string; line: number; text: string; batch: number; index: number }
 
 async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Batch }> {
-  const { units, batches } = buildRequests(check, sample, pres, isDefault(pres) ? {} : await filesFor(sample));
+  const question = { instructions: check.question, ...(check.criteria ? { criteria: check.criteria } : {}) };
+  // Each paragraph alone needs no reading of the files, so it is built here (as the platform
+  // builds it: present.batches with no presentation); any other way, the platform builds it.
+  const { batches, asked }: { batches: Batch[]; asked: Asked[] } = isDefault(pres)
+    ? { batches: sample.map((r) => ({ state: { paragraph: r.text }, questions: [question] })), asked: sample.map((r, i) => ({ ...r, row: r.id, batch: i, index: 0 })) }
+    : await post('/api/jev/requests', { question, presentation: presentationBlock(pres), units: sample.map(({ id, path, line, text }) => ({ id, path, line, text })) });
   const data = await post('/api/jev/ask', { model: check.model, requests: batches, ...(pres.long && pres.context !== pres.question ? { longContext: true } : {}) });
+  // ps answers the batches' questions in order.
+  const start: number[] = [];
+  batches.reduce((at, b, i) => { start[i] = at; return at + b.questions.length; }, 0);
+  const rows = new Map(sample.map((r) => [r.id, r]));
   // Units jev refused as too long (null) are left out of the run, and counted.
-  const scored = units.map((u, i) => ({ ...u, p: data.ps[i] as number | null })).filter((u): u is typeof u & { p: number } => u.p !== null);
+  const scored = asked.map((a) => ({ ...rows.get(a.row)!, id: a.id, line: a.line, text: a.text, p: data.ps[start[a.batch] + a.index] as number | null }))
+    .filter((u): u is typeof u & { p: number } => u.p !== null);
   return { check, unit: pres.question, pres: describe(pres), platform: isDefault(pres), cached: data.cached, tooLong: data.tooLong ?? 0, scored, first: batches[0] };
 }
 
@@ -60,28 +69,34 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   const parsed = useMemo(() => attempt(() => parseCheckFile(text)), [text]);
   const [err, setErr] = useState<string | null>(null);
   const corpus = useCorpus(setErr);
-  const [n, setN] = useState(200);
-  const [pctSpec, setPctSpec] = useState(DEFAULT_PCTS);
+  // The view everyone who opens this file shares (useView.ts).
+  const [n, setN] = useView(ytext, text, 'sample', 200);
+  const [pctSpec, setPctSpec] = useView(ytext, text, 'percentiles', DEFAULT_PCTS);
   const pcts = useMemo(() => attempt(() => parsePercentiles(pctSpec)), [pctSpec]);
-  const [cmap, setCmap] = useState<ColormapName>('inferno');
+  const [cmapName, setCmap] = useView(ytext, text, 'colours', 'inferno');
+  const cmap = (cmapName in COLORMAPS ? cmapName : 'inferno') as ColormapName;
+  const [courses, setCourses] = useView(ytext, text, 'courses', [] as string[]);
+  const [kinds, setKinds] = useView(ytext, text, 'kinds', [] as string[]);
+  const viewCourses = readView(text).courses, viewKinds = readView(text).kinds;
   const [running, setRunning] = useState(false);
   // The newest run, the run to compare it with, and what that comparison is called.
   const [result, setResult] = useState<{ run: Run; base?: { label: string; run: Run } } | null>(null);
   const [band, setBand] = useState<Band | null>(null);
-  const [pres, setPres] = useState<Presentation>(DEFAULT_PRESENTATION);
   const [showSent, setShowSent] = useState(false);
   const [sent, setSent] = useState<Batch | undefined>();
 
   const live = parsed.ok?.live;
   const draft = parsed.ok?.draft ?? null;
   const c = draft ?? live;  // what the fields show and Run tests
-  const pool = corpus.pool;
+  const pres = c?.presentation ?? DEFAULT_PRESENTATION;
+  const pool = useMemo(() => poolOf(corpus.corpus, corpus.meta, viewCourses && courses, viewKinds && kinds), [corpus.corpus, corpus.meta, courses, kinds, viewCourses, viewKinds]);
   async function run() {
     if (!c || !live || !pool) return;
     setRunning(true); setErr(null);
     try {
       const sample = pool.slice(0, n);
-      const [r, l] = await Promise.all([ask(c, sample, pres), draft ? ask(live, sample, pres) : null]);
+      // Each check as it would be asked: the draft and the live check may differ in presentation.
+      const [r, l] = await Promise.all([ask(c, sample, pres), draft ? ask(live, sample, live.presentation) : null]);
       setSent(r.first);
       setResult((old) => ({ run: r, base: l ? { label: 'live', run: l } : old ? { label: 'was', run: old.run } : undefined }));
     } catch (e) { setErr((e as Error).message); } finally { setRunning(false); }
@@ -93,15 +108,14 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
     if (v.includes('---')) { window.alert('"---" cannot go in a check field: the platform reads it as the end of the frontmatter.'); return; }
     writeText(ytext, (t) => setDraftField(t, path, v));
   };
-  // A new question level renames references to the old one in the check's words, as a draft.
+  // The presentation is a draft field. A new question level also renames references to the old
+  // one in the check's words, in the same write, so the words and the presentation agree.
   const changePres = (np: Presentation) => {
+    if (!c) return;
     const from = pres.question, to = np.question;
-    if (c && from !== to) {
-      const fields: [string[], string][] = [[['question'], c.question], ...(c.criteria ? [[['criteria', 'true'], c.criteria.true], [['criteria', 'false'], c.criteria.false]] as [string[], string][] : [])];
-      const changed = fields.filter(([, v]) => renameRef(v, from, to) !== v);
-      if (changed.length) writeText(ytext, (t) => changed.reduce((acc, [path, v]) => setDraftField(acc, path, renameRef(v, from, to)), t));
-    }
-    setPres(np);
+    const fields: [string[], string][] = [[['question'], c.question], ...(c.criteria ? [[['criteria', 'true'], c.criteria.true], [['criteria', 'false'], c.criteria.false]] as [string[], string][] : [])];
+    const renamed = from === to ? [] : fields.filter(([, v]) => renameRef(v, from, to) !== v);
+    writeText(ytext, (t) => renamed.reduce((acc, [path, v]) => setDraftField(acc, path, renameRef(v, from, to)), setDraftPresentation(t, np)));
   };
   const setNum = (path: string[]) => (v: string) => { const x = Number(v); if (Number.isFinite(x)) writeText(ytext, (t) => setDraftField(t, path, x)); };
   // What the platform would make of the file now (and so after Enable), and after Save.
@@ -169,8 +183,8 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
           {Object.keys(COLORMAPS).map((k) => <option key={k}>{k}</option>)}</select></label>
         <PresentationPicker value={pres} onChange={changePres} showSent={showSent} onShowSent={setShowSent} />
         {corpus.meta && pool && (
-          <InputPicker meta={corpus.meta} pool={pool} n={n} courses={corpus.courses} kinds={corpus.kinds}
-            onCourses={corpus.setCourses} onKinds={corpus.setKinds} />
+          <InputPicker meta={corpus.meta} pool={pool} n={n} {...chosen(corpus.meta, viewCourses && courses, viewKinds && kinds)}
+            onCourses={(x) => setCourses([...x])} onKinds={(x) => setKinds([...x])} />
         )}
       </div>
 

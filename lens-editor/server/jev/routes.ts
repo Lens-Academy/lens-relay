@@ -12,7 +12,7 @@ import { requireEduShareToken } from '../edit-share-auth.ts';
  *
  *   GET  /api/jev/corpus  → {meta, rows:[{id, path, line, kind, title, courses, text}]}
  *   POST /api/jev/ask     {model, requests:[{question:{instructions, criteria?}, state}]} → {ps:[...], cached:n}
- *   POST /api/jev/files   {paths:[...]} → {files:{path: markdown}}, read live from the relay
+ *   POST /api/jev/requests {question, presentation, units} → {batches, asked}, built by the platform
  *
  * Every answer is appended to <cacheDir>/answers.jsonl and reused when the same
  * (model, question, text) comes again, so re-running a phrasing is free. Edit share
@@ -31,6 +31,9 @@ export interface JevConfig {
   fetchImpl?: typeof fetch;
   /** A file's current markdown by relay path, or null; the relay by default. */
   readFile?: (path: string) => Promise<string | null>;
+  /** The platform that builds requests (LENS_PLATFORM_URL) and its shared key. */
+  platformUrl?: string;
+  platformKey?: string;
   /** Read course files from this checkout of lens-edu-staging instead of the relay (dev:
    *  yjs's dev mode breaks server-side relay reads under Vite). */
   filesDir?: string;
@@ -59,6 +62,8 @@ export function loadJevConfig(env: NodeJS.ProcessEnv = process.env): JevConfig {
     cacheDir,
     corpusPath: env.JEV_CORPUS_PATH || join(cacheDir, 'corpus.json'),
     filesDir: env.JEV_FILES_DIR || undefined,
+    platformUrl: env.LENS_PLATFORM_URL?.trim() || undefined,
+    platformKey: env.ADHOC_VALIDATION_SECRET?.trim() || undefined,
     // About 20,000 paragraph requests an hour: a T1 paragraph request (question, both criteria,
     // paragraph) is about 650 characters at the corpus median.
     charsPerHour: Number.isFinite(limit) && limit > 0 ? limit : 13_000_000,
@@ -163,28 +168,49 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     return c.body(readFileSync(config.corpusPath, 'utf8'), 200, { 'Content-Type': 'application/json' });
   });
 
-  // Course files as they are now, for presentations that show jev the whole file. Read
-  // through the relay (a minute's cache), so an edit made in the editor reaches the next Run.
+  // Course files as they are now, read through the relay (a minute's cache), so an edit made
+  // in the editor reaches the next Run.
   const readFile = config.readFile ?? (config.filesDir ? readFromDir(config.filesDir) : (p: string) => readRelayDocAtPath(p));
   const fileCache = new Map<string, { at: number; text: string | null }>();
-  app.post('/files', async c => {
-    const { paths } = await c.req.json().catch(() => ({}));
+  async function readFiles(paths: string[]): Promise<Record<string, string>> {
+    const now = Date.now();
+    const todo = paths.filter((p) => !((fileCache.get(p)?.at ?? 0) > now - 60_000));
+    let next = 0;
+    await Promise.all(Array.from({ length: FILE_WORKERS }, async () => {
+      while (next < todo.length) { const p = todo[next++]; fileCache.set(p, { at: now, text: await readFile(p) }); }
+    }));
+    return Object.fromEntries(paths.flatMap((p) => { const t = fileCache.get(p)?.text; return typeof t === 'string' ? [[p, t]] : []; }));
+  }
+
+  // The jev calls for a check under its presentation, built by the platform from its own
+  // reading of each file (POST /api/content/course-checks/requests), so a Run asks what the
+  // live check asks. Body {question, presentation, units: sampled corpus rows}.
+  app.post('/requests', async c => {
+    if (!config.platformUrl || !config.platformKey) return c.json({ error: 'the platform is not configured (LENS_PLATFORM_URL, ADHOC_VALIDATION_SECRET)' }, 503);
+    const body = await c.req.json().catch(() => ({}));
+    const units = body.units;
     // Course files only, never the rest of the relay; and a bounded load on it per request.
     const edu = (p: unknown) => typeof p === 'string' && p.startsWith('Lens Edu/') && !p.split('/').includes('..');
-    if (!Array.isArray(paths) || !paths.every(edu) || paths.length > MAX_FILES) {
-      return c.json({ error: `need paths[]: at most ${MAX_FILES}, each under "Lens Edu/"` }, 400);
+    if (!Array.isArray(units) || !units.every((u: { path?: unknown }) => edu(u?.path))) {
+      return c.json({ error: 'need units[{id, path, line, text}], each path under "Lens Edu/"' }, 400);
     }
-    const now = Date.now();
-    const todo = (paths as string[]).filter((p) => !((fileCache.get(p)?.at ?? 0) > now - 60_000));
+    const paths = [...new Set(units.map((u: { path: string }) => u.path))];
+    if (paths.length > MAX_FILES) return c.json({ error: `at most ${MAX_FILES} files at once` }, 400);
+    let files: Record<string, string> = {};
     try {
-      let next = 0;
-      await Promise.all(Array.from({ length: FILE_WORKERS }, async () => {
-        while (next < todo.length) { const p = todo[next++]; fileCache.set(p, { at: now, text: await readFile(p) }); }
-      }));
+      if (body.presentation) files = await readFiles(paths);
     } catch (e) {
       return c.json({ error: `reading files from the relay: ${(e as Error).message}` }, 502);
     }
-    return c.json({ files: Object.fromEntries((paths as string[]).flatMap((p) => { const t = fileCache.get(p)?.text; return typeof t === 'string' ? [[p, t]] : []; })) });
+    const res = await doFetch(`${config.platformUrl.replace(/\/$/, '')}/api/content/course-checks/requests`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Validation-Key': config.platformKey },
+      body: JSON.stringify({ question: body.question, presentation: body.presentation ?? null, units, files }),
+    }).catch((e: Error) => e);
+    if (res instanceof Error) return c.json({ error: `the platform: ${res.message}` }, 502);
+    const text = await res.text();
+    if (!res.ok) return c.json({ error: `the platform ${res.status}: ${text.slice(0, 300)}` }, res.status === 400 ? 400 : 502);
+    return c.body(text, 200, { 'Content-Type': 'application/json' });
   });
 
   app.post('/ask', async c => {

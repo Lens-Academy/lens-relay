@@ -119,15 +119,21 @@ describe('jev routes, any state', () => {
     expect(res.status).toBe(429);
     expect((await ask(app, ['a'])).status).toBe(200);
   });
-  it('reads files live, once a minute per path', async () => {
+  it('has the platform build the calls, reading each file live once a minute', async () => {
     const readFile = vi.fn(async (p: string) => (p === 'Lens Edu/a.md' ? '# A' : null));
-    const { app } = mount({ readFile });
-    const files = (paths: string[]) => app.request('/api/jev/files', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() }, body: JSON.stringify({ paths }),
-    }).then((r) => r.json());
-    expect(await files(['Lens Edu/a.md', 'Lens Edu/nope.md'])).toEqual({ files: { 'Lens Edu/a.md': '# A' } });
-    await files(['Lens Edu/a.md']);
-    expect(readFile).toHaveBeenCalledTimes(2);
+    const { app, jev } = mount({ readFile, platformUrl: 'https://platform.test/', platformKey: 'k' });
+    jev.mockImplementation(async () => new Response(JSON.stringify({ batches: [], asked: [] }), { status: 200 }));
+    const requests = (presentation: unknown) => app.request('/api/jev/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ question: { instructions: 'q' }, presentation, units: [{ id: 'a', path: 'Lens Edu/a.md', line: 1, text: 'A' }] }),
+    });
+    expect((await requests({ context: 'document', question: 'sentence' })).status).toBe(200);
+    await requests({ context: 'document', question: 'sentence' });
+    expect(readFile).toHaveBeenCalledTimes(1);
+    const [url, init] = jev.mock.calls[0];
+    expect(url).toBe('https://platform.test/api/content/course-checks/requests');
+    expect((init!.headers as Record<string, string>)['X-Validation-Key']).toBe('k');
+    expect(JSON.parse(String(init!.body)).files).toEqual({ 'Lens Edu/a.md': '# A' });
   });
 });
 
@@ -156,12 +162,13 @@ describe('jev routes, too long', () => {
 });
 
 describe('jev routes, folder scope', () => {
-  const files = (app: Hono, paths: string[], tok = token()) => app.request('/api/jev/files', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': tok }, body: JSON.stringify({ paths }),
+  const files = (app: Hono, paths: string[], tok = token()) => app.request('/api/jev/requests', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': tok },
+    body: JSON.stringify({ question: { instructions: 'q' }, presentation: { context: 'document' }, units: paths.map((path) => ({ id: path, path, line: 1, text: 'x' })) }),
   });
   it('refuses a link for another folder on every route', async () => {
     const readFile = vi.fn(async () => 'secret');
-    const { app } = mount({ readFile });
+    const { app } = mount({ readFile, platformUrl: 'https://platform.test', platformKey: 'k' });
     const other = token({ folder: 'b0000001-0000-4000-8000-000000000001' });
     expect((await files(app, ['Lens Edu/a.md'], other)).status).toBe(403);
     expect((await ask(app, ['a'], { 'X-Share-Token': other })).status).toBe(403);
@@ -169,7 +176,7 @@ describe('jev routes, folder scope', () => {
   });
   it('never reads outside Lens Edu, even for an all-folders link', async () => {
     const readFile = vi.fn(async () => 'secret');
-    const { app } = mount({ readFile });
+    const { app } = mount({ readFile, platformUrl: 'https://platform.test', platformKey: 'k' });
     for (const tok of [token(), token({ folder: '00000000-0000-0000-0000-000000000000' })]) {
       const res = await files(app, ['Lens/08-Legal/contract.md', 'Lens Edu/../Lens/x.md'], tok);
       expect(res.status).toBe(400);

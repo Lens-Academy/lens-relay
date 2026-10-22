@@ -1,6 +1,6 @@
 // The workbench's data: corpus rows from /api/jev/corpus, and one run's scores.
 import type { JevCheck } from '../../lib/jev-check';
-import type { Level } from '../../lib/jev-present';
+import type { Level } from '../../lib/jev-presentation';
 
 export interface Para { id: string; path: string; line: number; kind: string; title: string | null; courses: string[]; text: string }
 export interface CourseInfo { title: string; live: boolean; paragraphs: number; files: number }

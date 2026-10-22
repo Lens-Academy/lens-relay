@@ -1,7 +1,6 @@
-// The three presentation choices (presentation.ts): how much jev sees, what each question is
+// The three presentation choices (lib/jev-presentation.ts): how much jev sees, what each question is
 // about, and which levels in between nest the JSON; plus a switch to show the first request sent.
-import { LEVELS, rank, type Level } from '../../lib/jev-present';
-import { between, type Presentation } from './presentation';
+import { between, LEVELS, rank, type Level, type Presentation } from '../../lib/jev-presentation';
 
 const select = 'ml-1 rounded border border-gray-200';
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { fillRefs, keyHint, keyRuns, PLATFORM_SHAPE, refProblem, refSyntax, renameRef, type Shape } from './jev-keys';
-import { LEVELS, parseDoc, within } from './jev-present';
+import { keyHint, keyRuns, PLATFORM_SHAPE, refProblem, refSyntax, renameRef, type Shape } from './jev-keys';
+import { LEVELS } from './jev-presentation';
 
 const docPara: Shape = { context: 'document', question: 'paragraph', nest: [...LEVELS] };
 const lineAsk: Shape = { context: 'document', question: 'line', nest: [...LEVELS] };
@@ -36,34 +36,10 @@ describe('references in a check, under the presentation (Lauren, 2026-10-22)', (
   });
 });
 
-describe('what jev is sent', () => {
-  const d = parseDoc('# A\n\nOne. Two.\n\nThree.\n');
-  const two = within(d, 'sentence')[1];
-  it('fills each resolvable reference with its key, leaving the rest', () => {
-    const s: Shape = { context: 'document', question: 'sentence', nest: ['paragraph'] };
-    expect(fillRefs('Does `sentence` of `paragraph` in `document` use `line` or `section`?', two, s))
-      .toBe('Does `sentence_1` of `paragraph_0` in `document` use `line` or `section`?');
-  });
-  it('leaves the words as they are when the unit is shown alone', () => {
-    const p = within(d, 'paragraph')[0];
-    expect(fillRefs('Is `paragraph` bad?', p, PLATFORM_SHAPE)).toBe('Is `paragraph` bad?');
-  });
-  it('renames references to the old question level', () => {
+describe('renaming', () => {
+      it('renames references to the old question level', () => {
     expect(renameRef('Does `paragraph` use a term `paragraph` never explains? Not `section`.', 'paragraph', 'sentence'))
       .toBe('Does `sentence` use a term `sentence` never explains? Not `section`.');
   });
 });
 
-describe('references to units the JSON leaves out (Assay, #195)', () => {
-  it("in a lens file the lens is the document, so `lens` names the document", () => {
-    const d = parseDoc('#### Text\ncontent:: One. Two.\n');
-    const s: Shape = { context: 'document', question: 'sentence', nest: [...LEVELS] };
-    expect(fillRefs('`sentence` in `section` of `lens` and `submodule`', within(d, 'sentence')[1], s))
-      .toBe('`sentence_1` in `section_0` of `document` and `document`');
-  });
-  it('a module keeps its lens keys', () => {
-    const d = parseDoc('## Lens: A\n#### Text\ncontent:: One.\n\n## Lens: B\n#### Text\ncontent:: Two.\n');
-    const s: Shape = { context: 'document', question: 'paragraph', nest: [...LEVELS] };
-    expect(fillRefs('`paragraph` of `lens`', within(d, 'paragraph')[1], s)).toBe('`paragraph_1` of `lens_1`');
-  });
-});

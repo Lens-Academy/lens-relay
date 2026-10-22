@@ -1,8 +1,8 @@
 // `backticked` names in a check's words. A level name is a reference (Lauren, 2026-10-22): the
-// question level's name is the unit asked about; a coarser one is the unit around it. Each is
-// replaced by that unit's numbered key in what jev is sent, if jev's input has that layer; the
-// rest are flagged, with why.
-import { around, keyOf, layerAround, LEVELS, rank, type Level, type Node } from './jev-present';
+// question level's name is the unit asked about; a coarser one is the unit around it. The
+// platform sends each as that unit's numbered key (lens-platform present.fill_refs, the same
+// rules); here they are checked as the author types, and flagged with why.
+import { LEVELS, rank, type Level } from './jev-presentation';
 
 /** What jev sees and is asked about (the presentation, without its chunking). */
 export interface Shape { context: Level; question: Level; nest: Level[] }
@@ -48,17 +48,6 @@ export function refSyntax(s: Shape): string {
   const [q, ...up] = refNames(s);
   if (s.context === s.question) return `\`${q}\` is the ${q} asked about; jev is shown it alone, under that name.`;
   return `\`${q}\` is the ${q} asked about${up.length ? `; ${up.map((l) => '`' + l + '`').join(', ')} the one${up.length > 1 ? 's' : ''} around it` : ''}. jev is sent each as its numbered key, such as \`${q}_12\`.`;
-}
-
-/** `text` with each resolvable name replaced by the key of `unit` (or the unit around it). */
-export function fillRefs(text: string, unit: Node, s: Shape): string {
-  const ctx = around(unit, s.context);
-  return text.replace(/`([^`\n]*)`/g, (whole, name: string) => {
-    if (refProblem(name, s) !== null || ctx === unit || name === s.context) return whole;
-    // A unit with no key of its own (a lens file's only lens) is the one around it that has one.
-    const x = layerAround(around(unit, name as Level), ctx, s.question, s.nest);
-    return '`' + (x === ctx ? ctx.level : keyOf(x)) + '`';
-  });
 }
 
 /** `text` with references to level `from` renamed to `to`. */

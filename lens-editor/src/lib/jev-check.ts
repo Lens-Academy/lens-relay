@@ -1,7 +1,8 @@
 // A jev check file (Lens Edu/Checks/*.md) and the arithmetic the check workbench shows.
 // The frontmatter fields mirror lens-platform core/course_checks/checks.py `Check`.
 import { parse as parseYaml, parseDocument, visit } from 'yaml';
-import { PLATFORM_SHAPE, refProblem, unitNames } from './jev-keys';
+import { refProblem, unitNames } from './jev-keys';
+import { isDefault, parsePresentation, presentationBlock, type Presentation } from './jev-presentation';
 
 export interface JevCheck {
   id: string;
@@ -12,6 +13,7 @@ export interface JevCheck {
   question: string;
   criteria: { true: string; false: string } | null;
   enabled: boolean;  // false while a new check is being written; the platform skips it
+  presentation: Presentation;  // how jev is shown the file (lib/jev-presentation.ts); default when absent
 }
 
 const CHECKS_DIR = '/Lens Edu/Checks/';
@@ -46,6 +48,7 @@ export function parseCheck(text: string): JevCheck {
     model: typeof fm.model === 'string' ? fm.model : DEFAULT_MODEL,
     fail_at: num('fail_at', 0.8), pass_below: num('pass_below', 0.5),
     question: need('question'), criteria, enabled: fm.enabled !== false,
+    presentation: parsePresentation(fm.presentation),
   };
 }
 
@@ -121,7 +124,7 @@ export function shares(check: JevCheck, ps: number[]): Record<Band, number> {
 // Drafts. A check file may carry a `draft:` block in its frontmatter holding only the fields
 // being tried; the draft check is the live one with those fields overlaid. The block lives in
 // the file, so it survives a closed tab and reaches git like every other edit.
-const DRAFTABLE = ['question', 'criteria', 'model', 'fail_at', 'pass_below'];
+const DRAFTABLE = ['question', 'criteria', 'model', 'fail_at', 'pass_below', 'presentation'];
 
 /** Edit the frontmatter as a YAML document; `f` returning false means no change, and the text comes back untouched. */
 function editFrontmatter(text: string, f: (doc: ReturnType<typeof parseDocument>) => boolean | void): string {
@@ -142,7 +145,8 @@ export function parseCheckFile(text: string): { live: JevCheck; draft: JevCheck 
   if (bad.length) throw new Error(`draft has fields a check does not: ${bad.join(', ')}`);
   const merged: Record<string, unknown> = { ...fm, ...d, criteria: d.criteria ? { ...(fm.criteria as object), ...(d.criteria as object) } : fm.criteria };
   delete merged.draft;
-  const head = Object.entries(merged).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
+  // A field neither side has stays out (JSON has no undefined; it read as the text "undefined").
+  const head = Object.entries(merged).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n');
   return { live, draft: parseCheck(`---\n${head}\n---\n`) };
 }
 
@@ -157,6 +161,35 @@ export function setDraftField(text: string, path: string[], value: string | numb
       const node = doc.getIn(dpath.slice(0, i)) as { items?: unknown[] } | undefined;
       if (node && node.items?.length === 0) doc.deleteIn(dpath.slice(0, i));
     }
+  });
+}
+
+/** `p` as the draft's presentation (no block for the default), or no draft entry when it
+ *  is the live one. */
+export function setDraftPresentation(text: string, p: Presentation): string {
+  return editFrontmatter(text, (doc) => {
+    const live = presentationBlock(parsePresentation(doc.toJS()?.presentation));
+    const next = presentationBlock(p);
+    if (JSON.stringify(live) === JSON.stringify(next)) {
+      if (!doc.hasIn(['draft', 'presentation'])) return false;
+      doc.deleteIn(['draft', 'presentation']);
+      const d = doc.getIn(['draft']) as { items?: unknown[] } | undefined;
+      if (d && d.items?.length === 0) doc.deleteIn(['draft']);
+    } else doc.setIn(['draft', 'presentation'], doc.createNode(next));
+  });
+}
+
+/** The workbench's view, shared by everyone who opens the file (Lauren, 2026-10-22): a `view:`
+ *  block the platform ignores. */
+export interface View { sample?: number; percentiles?: string; colours?: string; courses?: string[]; kinds?: string[] }
+export function readView(text: string): View {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  try { const v = m ? (parseYaml(m[1]) ?? {}).view : undefined; return v && typeof v === 'object' && !Array.isArray(v) ? v as View : {}; } catch { return {}; }
+}
+export function setView<K extends keyof View>(text: string, key: K, value: View[K]): string {
+  return editFrontmatter(text, (doc) => {
+    if (JSON.stringify(doc.toJS()?.view?.[key]) === JSON.stringify(value)) return false;
+    doc.setIn(['view', key], doc.createNode(value));
   });
 }
 
@@ -225,14 +258,15 @@ function pyyamlLoad(src: string): Record<string, unknown> {
   return (doc.toJS() ?? {}) as Record<string, unknown>;
 }
 
-/** Unit names in the question and criteria that the platform cannot resolve: it shows jev each
- *  paragraph alone, as `paragraph`. The platform still runs such a check, asking about a key jev
- *  is never shown. */
+/** Unit names in the question and criteria that the check's presentation cannot resolve. The
+ *  platform still runs such a check, asking about a key jev is never shown. */
 function wordsProblems(fm: Record<string, unknown>): string[] {
+  let shape: Presentation;
+  try { shape = parsePresentation(fm.presentation); } catch { return []; }
   const c = fm.criteria as Record<string, unknown> | undefined;
   const texts: [string, unknown][] = [['the question', fm.question], ...(c && typeof c === 'object' ? [['the "true" criterion', c.true], ['the "false" criterion', c.false]] as [string, unknown][] : [])];
   return texts.flatMap(([where, t]) => (typeof t !== 'string' ? [] : unitNames(t).flatMap((name) => {
-    const why = refProblem(name, PLATFORM_SHAPE);
+    const why = refProblem(name, shape);
     return why ? [`\`${name}\` in ${where}: ${why}`] : [];
   })));
 }
@@ -261,6 +295,13 @@ export function platformProblems(text: string): string[] {
   const c = fm.criteria as Record<string, unknown> | undefined;
   if ('criteria' in fm && !(c && typeof c === 'object' && Object.keys(c).sort().join() === 'false,true' && Object.values(c).every((v) => typeof v === 'string')))
     out.push('criteria must have exactly "true" and "false" texts');
+  if ('presentation' in fm) {
+    try {
+      // Phase 1: the platform builds these requests but its edit runner still asks each paragraph
+      // alone, so a check asked any other way would silently not run (lens-platform #1381).
+      if (!isDefault(parsePresentation(fm.presentation))) out.push('the platform cannot run a check with this presentation yet; try it here, and save it once the runner asks this way');
+    } catch (e) { out.push((e as Error).message); }
+  }
   out.push(...wordsProblems(fm));
   const s = fm.skip_folders;
   if ('skip_folders' in fm && !(Array.isArray(s) && s.every((v) => typeof v === 'string'))) out.push('skip_folders must be a list of folder names');
