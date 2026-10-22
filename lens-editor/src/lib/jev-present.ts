@@ -112,9 +112,21 @@ type Json = string | { [k: string]: Json };
 /** `ctx` as JSON down to `question`, one layer of keys per level in `nest` (between the two).
  *  An implicit unit that is its parent's only child is the parent's own text, so adds no layer;
  *  `keep` leaves out units (a chunk). */
+/** Whether `n` gets its own key in the JSON (it is the question level, or a nested level and
+ *  not an implicit only child, which is its parent's own text). */
+export const isLayer = (n: Node, question: Level, nest: Level[]) =>
+  n.level === question || (nest.includes(n.level) && !(n.implicit && n.parent!.children.length === 1));
+/** The unit whose key stands for `n` in the JSON of `ctx`: `n`, or the nearest unit around it
+ *  that has a key; `ctx` itself when none does. */
+export function layerAround(n: Node, ctx: Node, question: Level, nest: Level[]): Node {
+  let x = n;
+  while (x !== ctx && !isLayer(x, question, nest)) x = x.parent!;
+  return x;
+}
+
 export function render(ctx: Node, question: Level, nest: Level[], keep: (n: Node) => boolean = () => true): Json {
   if (ctx.level === question) return ctx.text;
-  const shown = (c: Node) => c.level === question || (nest.includes(c.level) && !(c.implicit && c.parent!.children.length === 1));
+  const shown = (c: Node) => isLayer(c, question, nest);
   const layer = (n: Node): Node[] => n.children.filter(keep).flatMap((c) => (shown(c) ? [c] : layer(c)));
   const out: Record<string, Json> = ctx.title ? { title: ctx.title } : {};
   for (const c of layer(ctx)) out[keyOf(c)] = render(c, question, nest, keep);

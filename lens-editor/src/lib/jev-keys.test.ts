@@ -53,3 +53,17 @@ describe('what jev is sent', () => {
       .toBe('Does `sentence` use a term `sentence` never explains? Not `section`.');
   });
 });
+
+describe('references to units the JSON leaves out (Assay, #195)', () => {
+  it("in a lens file the lens is the document, so `lens` names the document", () => {
+    const d = parseDoc('#### Text\ncontent:: One. Two.\n');
+    const s: Shape = { context: 'document', question: 'sentence', nest: [...LEVELS] };
+    expect(fillRefs('`sentence` in `section` of `lens` and `submodule`', within(d, 'sentence')[1], s))
+      .toBe('`sentence_1` in `section_0` of `document` and `document`');
+  });
+  it('a module keeps its lens keys', () => {
+    const d = parseDoc('## Lens: A\n#### Text\ncontent:: One.\n\n## Lens: B\n#### Text\ncontent:: Two.\n');
+    const s: Shape = { context: 'document', question: 'paragraph', nest: [...LEVELS] };
+    expect(fillRefs('`paragraph` of `lens`', within(d, 'paragraph')[1], s)).toBe('`paragraph_1` of `lens_1`');
+  });
+});

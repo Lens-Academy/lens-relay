@@ -2,7 +2,7 @@
 // question level's name is the unit asked about; a coarser one is the unit around it. Each is
 // replaced by that unit's numbered key in what jev is sent, if jev's input has that layer; the
 // rest are flagged, with why.
-import { around, keyOf, LEVELS, rank, type Level, type Node } from './jev-present';
+import { around, keyOf, layerAround, LEVELS, rank, type Level, type Node } from './jev-present';
 
 /** What jev sees and is asked about (the presentation, without its chunking). */
 export interface Shape { context: Level; question: Level; nest: Level[] }
@@ -21,6 +21,9 @@ export function refProblem(name: string, s: Shape): string | null {
   if (rank(name) < rank(s.context)) return `jev sees only one ${s.context}, not the ${name} around it`;
   return s.nest.includes(name) ? null : `nesting by ${name} is off, so jev's input has no ${name} keys`;
 }
+
+/** The `backticked` names in `text` that name units (a level, or a level with a number). */
+export const unitNames = (text: string) => [...text.matchAll(/`([^`\n]*)`/g)].map((m) => m[1]).filter((n) => isLevel(n) || NUMBERED.test(n));
 
 /** The names that resolve under `s`, the unit asked about first. */
 export const refNames = (s: Shape): Level[] =>
@@ -52,7 +55,9 @@ export function fillRefs(text: string, unit: Node, s: Shape): string {
   const ctx = around(unit, s.context);
   return text.replace(/`([^`\n]*)`/g, (whole, name: string) => {
     if (refProblem(name, s) !== null || ctx === unit || name === s.context) return whole;
-    return '`' + keyOf(around(unit, name as Level)) + '`';
+    // A unit with no key of its own (a lens file's only lens) is the one around it that has one.
+    const x = layerAround(around(unit, name as Level), ctx, s.question, s.nest);
+    return '`' + (x === ctx ? ctx.level : keyOf(x)) + '`';
   });
 }
 

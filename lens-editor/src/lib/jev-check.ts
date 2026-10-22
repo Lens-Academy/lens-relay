@@ -1,6 +1,7 @@
 // A jev check file (Lens Edu/Checks/*.md) and the arithmetic the check workbench shows.
 // The frontmatter fields mirror lens-platform core/course_checks/checks.py `Check`.
 import { parse as parseYaml, parseDocument, visit } from 'yaml';
+import { PLATFORM_SHAPE, refProblem, unitNames } from './jev-keys';
 
 export interface JevCheck {
   id: string;
@@ -243,6 +244,12 @@ export function platformProblems(text: string): string[] {
   const c = fm.criteria as Record<string, unknown> | undefined;
   if ('criteria' in fm && !(c && typeof c === 'object' && Object.keys(c).sort().join() === 'false,true' && Object.values(c).every((v) => typeof v === 'string')))
     out.push('criteria must have exactly "true" and "false" texts');
+  // The platform shows jev each paragraph alone, as `paragraph`: every unit the words name must resolve there.
+  const texts: [string, unknown][] = [['the question', fm.question], ...(c && typeof c === 'object' ? [['the "true" criterion', c.true], ['the "false" criterion', c.false]] as [string, unknown][] : [])];
+  for (const [where, t] of texts) if (typeof t === 'string') for (const name of unitNames(t)) {
+    const why = refProblem(name, PLATFORM_SHAPE);
+    if (why) out.push(`\`${name}\` in ${where}: ${why}`);
+  }
   const s = fm.skip_folders;
   if ('skip_folders' in fm && !(Array.isArray(s) && s.every((v) => typeof v === 'string'))) out.push('skip_folders must be a list of folder names');
   return out;

@@ -198,3 +198,16 @@ describe('platformProblems reads YAML as the platform does (1.1)', () => {
     expect(platformProblems(ok.replace('id: T9', 'id: 7'))).toEqual([]);
   });
 });
+
+describe('platformProblems: the words must suit the platform, which shows each paragraph alone', () => {
+  const ok = `---\nid: T9\nname: n\nmodel: jev-1.14.0\nquestion: Is \`paragraph\` x?\ncriteria:\n  "true": "\`paragraph\` is"\n  "false": it is not\nfix: f\n---\n`;
+  it('refuses a reference the platform cannot resolve, in the question or the criteria', () => {
+    expect(platformProblems(ok)).toEqual([]);
+    expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `sentence` x?'))).toEqual(['`sentence` in the question: finer than the paragraph asked about, so no one sentence']);
+    expect(platformProblems(ok.replace('`paragraph` is', '`section` is'))).toEqual(['`section` in the "true" criterion: jev sees only one paragraph, not the section around it']);
+    expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `paragraph_3` x?'))[0]).toMatch(/^`paragraph_3` in the question: write `paragraph`/);
+  });
+  it('leaves other backticked words alone', () => {
+    expect(platformProblems(ok.replace('Is `paragraph` x?', 'Is `paragraph` a `foo()`?'))).toEqual([]);
+  });
+});
