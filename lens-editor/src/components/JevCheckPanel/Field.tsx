@@ -30,7 +30,11 @@ export function Field({ label, value, live, onCommit, hint, shape }: { label: st
     <label className="block">
       <span className="flex items-baseline justify-between text-[11px] font-medium uppercase tracking-wide text-gray-500">
         <span>{label}{live !== undefined && live !== value && <span className="ml-2 rounded bg-amber-100 px-1 normal-case tracking-normal text-amber-800">draft</span>}</span>
-        {hint && <span className="normal-case tracking-normal text-amber-700">{hint}</span>}
+        {/* Problems sit in this one line (full text on hover), so typing never moves the page. */}
+        {(problems.length > 0 || hint) && (
+          <span className="ml-3 min-w-0 truncate normal-case tracking-normal text-amber-700" title={[...problems.map(([t, why]) => `${t}: ${why}`), ...(hint ? [hint] : [])].join('\n')}>
+            {problems.length ? `${problems[0][0]} ${problems[0][1]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}` : hint}</span>
+        )}
       </span>
       <div className="mt-1 grid rounded-md border border-gray-200 bg-white focus-within:border-gray-400">
         <div aria-hidden className={`${layer} text-transparent`}>
@@ -40,7 +44,6 @@ export function Field({ label, value, live, onCommit, hint, shape }: { label: st
           onFocus={() => setFocused(true)} onBlur={() => { setFocused(false); commit(draft); }}
           className={`${layer} resize-none overflow-hidden bg-transparent text-gray-900 focus:outline-none`} />
       </div>
-      {problems.map(([t, why]) => <div key={t} className="mt-1 px-3 text-[12px] text-amber-800"><code className="rounded bg-amber-100 px-1">{t}</code> {why}</div>)}
       {live !== undefined && live !== value && <div className="mt-1 px-3 text-[12px] leading-relaxed text-gray-400 line-through decoration-gray-300">{live}</div>}
     </label>
   );

@@ -202,17 +202,21 @@ export function JevCheckPanel({ ytext }: { ytext: Y.Text }) {
   );
 }
 
-// Always shown, the same size with or without a draft, so a draft appearing moves nothing.
+// Always shown, the same size with or without a draft or problems, so nothing here moves the page:
+// a line of text, then a line with the buttons and (truncated, full on hover) why Save is off.
 function DraftBar({ draft, problems, lastRun, onSave, onDiscard }: { draft: boolean; problems: string[]; lastRun?: string; onSave: () => void; onDiscard: () => void }) {
   return (
-    <div className={`flex flex-wrap items-center gap-3 rounded-md px-3 py-2 text-[13px] ${draft ? 'bg-amber-50 text-amber-900' : 'bg-gray-50 text-gray-500'}`}>
-      <span className="flex-1">{draft ? 'This file has a draft. Run tests it beside the live check; nothing else uses it until you Save.' : 'No draft. Edits here make one beside the live check, which changes only when you Save.'}
-        {' '}Save makes it what staging agents are told after the next content sync (about a minute); production follows a promote.
-        {draft && lastRun && <b> {lastRun}</b>}</span>
-      <button onClick={onDiscard} disabled={!draft} className="rounded border border-amber-300 px-3 py-1 hover:bg-amber-100 disabled:opacity-40">Discard draft</button>
-      <button onClick={onSave} disabled={!draft || problems.length > 0}
-        className="rounded bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50">Save as live</button>
-      {draft && problems.length > 0 && <div className="w-full text-red-800">Saving would stop the platform running this check: {problems.join('; ')}.</div>}
+    <div className={`space-y-1.5 rounded-md px-3 py-2 text-[13px] ${draft ? 'bg-amber-50 text-amber-900' : 'bg-gray-50 text-gray-500'}`}>
+      <div>{draft ? 'This file has a draft: Run tests it beside the live check.' : 'No draft: edits here make one beside the live check.'}
+        {' '}Save makes it live: staging agents after the next content sync (about a minute), production after a promote.
+        {draft && lastRun && <b> {lastRun}</b>}</div>
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate text-red-800" title={problems.join('\n')}>
+          {draft && problems.length > 0 ? `can't save: ${problems[0]}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ''}` : ''}</span>
+        <button onClick={onDiscard} disabled={!draft} className="shrink-0 rounded border border-amber-300 px-3 py-1 hover:bg-amber-100 disabled:opacity-40">Discard draft</button>
+        <button onClick={onSave} disabled={!draft || problems.length > 0}
+          className="shrink-0 rounded bg-amber-700 px-3 py-1 font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:opacity-50">Save as live</button>
+      </div>
     </div>
   );
 }
