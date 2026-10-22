@@ -176,3 +176,17 @@ describe('jev routes, folder scope', () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 });
+
+describe('jev routes, long context', () => {
+  it('sends the long-context header only when asked, and caches those answers apart', async () => {
+    const { app, jev } = mount();
+    const send = (longContext?: boolean) => app.request('/api/jev/ask', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() },
+      body: JSON.stringify({ model: 'jev-1.14.0', requests: [{ question: Q, state: { paragraph: 'a' } }], ...(longContext ? { longContext } : {}) }),
+    });
+    await send(); await send(true); await send(true);
+    expect(jev).toHaveBeenCalledTimes(2);
+    const headers = jev.mock.calls.map((c) => (c[1]!.headers as Record<string, string>)['TypeSafe-Danger-Zone-Long-Context']);
+    expect(headers).toEqual([undefined, 'true']);
+  });
+});

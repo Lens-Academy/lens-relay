@@ -123,13 +123,13 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
 
   // A request jev refuses as too long (a whole-file state on a big file) answers null and is
   // left out of the run, instead of failing every other request with it.
-  async function askOne(model: string, q: Question, state: Record<string, unknown>): Promise<number | null> {
+  async function askOne(model: string, q: Question, state: Record<string, unknown>, long = false): Promise<number | null> {
     const noul: Record<string, unknown> = { type: 'noul', instructions: q.instructions };
     if (q.criteria) noul.criteria = q.criteria;
     for (let attempt = 0; ; attempt++) {
       const res = await doFetch(JEV_URL, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json', ...(long ? { 'TypeSafe-Danger-Zone-Long-Context': 'true' } : {}) },
         body: JSON.stringify({ model, state, questions: { q: noul } }),
       });
       if (res.ok) {
@@ -182,9 +182,12 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     const reqs: Req[] | null = Array.isArray(body.requests)
       && body.requests.every((r: Req) => isQ(r?.question) && r.state && typeof r.state === 'object' && !Array.isArray(r.state)) ? body.requests : null;
     if (typeof model !== 'string' || !reqs) return c.json({ error: 'need model and requests[{question, state}]' }, 400);
+    // jev's long context (TypeSafe-Danger-Zone-Long-Context): larger states, answers TypeSafe
+    // does not certify, so cached apart from normal answers.
+    const long = body.longContext === true;
     if (reqs.length > MAX_TEXTS) return c.json({ error: `at most ${MAX_TEXTS} requests at once` }, 400);
     // Each distinct uncached request is asked once, however often it repeats.
-    const hashes = reqs.map((r) => reqHash(model, r));
+    const hashes = reqs.map((r) => reqHash(long ? `${model}+long` : model, r));
     const todo = new Map<string, Req>();
     reqs.forEach((r, i) => { if (cache.get(hashes[i]) === undefined) todo.set(hashes[i], r); });
 
@@ -209,7 +212,7 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
       for (let item = queue.shift(); item && !failure; item = queue.shift()) {
         const [h, r] = item;
         try {
-          const p = await askOne(model, r.question, r.state);
+          const p = await askOne(model, r.question, r.state, long);
           if (p === null) tooLong.add(h); else cache.put(h, p, model);
           answered += cost.get(h)!;
         }

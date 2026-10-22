@@ -14,7 +14,7 @@ interface Sentence { idx: number; text: string; frags: Frag[] }
 interface Paragraph { idx: number; text: string; lines: Frag[]; sentences: Sentence[] }
 interface Heading { idx: number; title?: string; paragraphs: Paragraph[] }
 export interface Doc { headings: Heading[] }
-export interface Unit { kind: UnitKind; key: string; text: string }
+export interface Unit { kind: UnitKind; key: string; text: string; para?: number } // para: its paragraph's index
 
 export const FORMAT_DESCRIPTION =
   'A document parsed into nested headings, paragraphs, sentences and lines. Every numbering is global across the whole document, so `paragraph_7` names one paragraph wherever it sits; line numbers are the lines of the file.';
@@ -65,7 +65,8 @@ export function parseDoc(markdown: string): Doc {
 type Json = string | { [k: string]: Json };
 
 /** The document as nested objects, keeping only `levels`; the deepest level kept holds text. */
-export function docJson(doc: Doc, levels: Level[] = LEVELS): Record<string, Json> {
+export function docJson(doc: Doc, levels: Level[] = LEVELS, only?: (p: Paragraph) => boolean): Record<string, Json> {
+  if (only) doc = { headings: doc.headings.map((h) => ({ ...h, paragraphs: h.paragraphs.filter(only) })).filter((h) => h.paragraphs.length) };
   const has = (l: Level) => levels.includes(l);
   const merge = (parts: Record<string, Json>[]) => Object.assign({}, ...parts) as Record<string, Json>;
   const sent = (x: Sentence): Json => has('line') ? Object.fromEntries(x.frags.map((f) => [`line_${f.n}`, f.text])) : x.text;
@@ -104,12 +105,13 @@ function paragraphOf(doc: Doc, line: number, text?: string): Paragraph | undefin
 
 export function unitOf(doc: Doc, kind: 'paragraph', line: number, text?: string): Unit | null {
   const x = paragraphOf(doc, line, text);
-  return x ? { kind, key: `paragraph_${x.idx}`, text: x.text } : null;
+  return x ? { kind, key: `paragraph_${x.idx}`, text: x.text, para: x.idx } : null;
 }
 
 /** The sentences of a corpus row's paragraph. */
 export function sentencesAt(doc: Doc, line: number, text?: string): Unit[] {
-  return (paragraphOf(doc, line, text)?.sentences ?? []).map((x) => ({ kind: 'sentence', key: `sentence_${x.idx}`, text: x.text }));
+  const p = paragraphOf(doc, line, text);
+  return (p?.sentences ?? []).map((x) => ({ kind: 'sentence', key: `sentence_${x.idx}`, text: x.text, para: p!.idx }));
 }
 
 /** The check's question, its `paragraph` pointed at the key jev is shown the unit under. */
@@ -122,8 +124,52 @@ export function questionKey(mode: Mode, unit: Unit): string {
   return mode === 'parsed' ? unit.key : unit.kind;
 }
 
-export function presentState(mode: Mode, doc: Doc, raw: string, unit: Unit, levels: Level[] = LEVELS): Record<string, unknown> {
+/** The file cut into consecutive paragraph ranges whose parsed JSON is at most `max` characters
+ *  each (a single paragraph over `max` is a range of its own), cutting at a heading once a
+ *  range is half full. jev refuses a state plus question over 32k tokens. */
+const chunkCache = new WeakMap<Doc, Map<string, [number, number][]>>();
+/** The default chunk budget: jev answers a state plus one question of up to 32k tokens, and its
+ *  parsed-document JSON measures about 2.65 characters a token (75,734 characters were 28,153
+ *  tokens; 99,243 were refused), so 72,000 characters leave room for the question. */
+export const DEFAULT_MAX_CHARS = 72_000;
+
+export function chunks(doc: Doc, levels: Level[], max: number): [number, number][] {
+  const key = `${levels.join()}|${max}`;
+  const m = chunkCache.get(doc) ?? new Map<string, [number, number][]>();
+  chunkCache.set(doc, m);
+  if (!m.has(key)) m.set(key, chunksOf(doc, levels, max));
+  return m.get(key)!;
+}
+
+function chunksOf(doc: Doc, levels: Level[], max: number): [number, number][] {
+  const paras = doc.headings.flatMap((h) => h.paragraphs.map((p, i) => ({ p, opensHeading: i === 0 })));
+  const size = (from: number, to: number) => JSON.stringify(docJson(doc, levels, (p) => p.idx >= from && p.idx <= to)).length;
+  const out: [number, number][] = [];
+  let start = 0;
+  for (let k = 1; k <= paras.length; k++) {
+    const next = paras[k];
+    const over = next && size(paras[start].p.idx, next.p.idx) > max;
+    const headingCut = next?.opensHeading && size(paras[start].p.idx, paras[k - 1].p.idx) > max / 2;
+    if (!next || over || headingCut) { out.push([paras[start].p.idx, paras[k - 1].p.idx]); start = k; }
+  }
+  return out;
+}
+
+export function presentState(mode: Mode, doc: Doc, raw: string, unit: Unit, levels: Level[] = LEVELS, maxChars: number | null = null): Record<string, unknown> {
   if (mode === 'isolated') return { [unit.kind]: unit.text };
-  if (mode === 'raw') return { document: raw, [unit.kind]: unit.text };
-  return { __format_description: FORMAT_DESCRIPTION, document: docJson(doc, levels) };
+  const all = doc.headings.flatMap((h) => h.paragraphs);
+  const cs = maxChars === null || unit.para === undefined ? [] : chunks(doc, levels, maxChars);
+  const at = cs.findIndex(([a, b]) => unit.para! >= a && unit.para! <= b);
+  if (cs.length <= 1 || at < 0) {
+    if (mode === 'raw') return { document: raw, [unit.kind]: unit.text };
+    return { __format_description: FORMAT_DESCRIPTION, document: docJson(doc, levels) };
+  }
+  const [from, to] = cs[at];
+  const excerpt = `paragraphs ${from} to ${to} of 0 to ${all.length - 1} (part ${at + 1} of ${cs.length})`;
+  if (mode === 'raw') {
+    const lines = raw.split(/\r?\n/);
+    const first = all[from].lines[0].n, last = all[to].lines[all[to].lines.length - 1].n;
+    return { __excerpt: excerpt, document: lines.slice(first, last + 1).join('\n'), [unit.kind]: unit.text };
+  }
+  return { __format_description: FORMAT_DESCRIPTION, __excerpt: excerpt, document: docJson(doc, levels, (p) => p.idx >= from && p.idx <= to) };
 }

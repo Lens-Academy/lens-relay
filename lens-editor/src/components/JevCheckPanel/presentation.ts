@@ -1,15 +1,17 @@
 // How a Run presents the check to jev (lib/jev-present.ts does the parsing): which units of the
 // sample are asked about, and the question and state each request carries.
 import type { JevCheck } from '../../lib/jev-check';
-import { parseDoc, presentState, questionKey, sentencesAt, templateQuestion, unitOf, type Doc, type Level, type Mode, type Unit, type UnitKind } from '../../lib/jev-present';
+import { DEFAULT_MAX_CHARS, parseDoc, presentState, questionKey, sentencesAt, templateQuestion, unitOf, type Doc, type Level, type Mode, type Unit, type UnitKind } from '../../lib/jev-present';
 import type { Para } from './types';
 
-export interface Presentation { mode: Mode; unit: UnitKind; levels: Level[] }
+/** long: jev's long context (uncertified by TypeSafe), so the whole file is shown unchunked. */
+export interface Presentation { mode: Mode; unit: UnitKind; levels: Level[]; long?: boolean }
 export const DEFAULT_PRESENTATION: Presentation = { mode: 'isolated', unit: 'paragraph', levels: ['heading', 'paragraph', 'sentence', 'line'] };
 export const isDefault = (p: Presentation) => p.mode === 'isolated' && p.unit === 'paragraph';
 
 export function describe(p: Presentation): string {
-  const sees = p.mode === 'isolated' ? `the ${p.unit} alone` : p.mode === 'raw' ? `the file's markdown, plus the ${p.unit}` : `the file parsed (${p.levels.join(', ')})`;
+  const whole = p.long ? 'whole file, long context' : 'file in chunks that fit jev';
+  const sees = p.mode === 'isolated' ? `the ${p.unit} alone` : p.mode === 'raw' ? `the ${whole} as markdown, plus the ${p.unit}` : `the ${whole}, parsed (${p.levels.join(', ')})`;
   return `jev sees ${sees}; asked about each ${p.unit}`;
 }
 
@@ -43,7 +45,7 @@ export function buildRequests(check: JevCheck, sample: Para[], p: Presentation, 
       units.push(p.unit === 'sentence' ? { ...row, id: `${row.id}#${u.key}`, text: u.text } : row);
       requests.push({
         question: { instructions: t(check.question), criteria: check.criteria ? { true: t(check.criteria.true), false: t(check.criteria.false) } : null },
-        state: presentState(p.mode, d, raw(row.path), u, levels),
+        state: presentState(p.mode, d, raw(row.path), u, levels, p.long ? null : DEFAULT_MAX_CHARS),
       });
     }
   }

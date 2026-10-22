@@ -43,7 +43,7 @@ async function filesFor(sample: Para[]): Promise<Record<string, string>> {
 
 async function ask(check: JevCheck, sample: Para[], pres: Presentation): Promise<Run & { first?: Request }> {
   const { units, requests } = buildRequests(check, sample, pres, isDefault(pres) ? {} : await filesFor(sample));
-  const data = await post('/api/jev/ask', { model: check.model, requests });
+  const data = await post('/api/jev/ask', { model: check.model, requests, ...(pres.long && pres.mode !== 'isolated' ? { longContext: true } : {}) });
   // Units jev refused as too long (null) are left out of the run, and counted.
   const scored = units.map((u, i) => ({ ...u, p: data.ps[i] as number | null })).filter((u): u is typeof u & { p: number } => u.p !== null);
   return { check, pres: describe(pres), platform: isDefault(pres), cached: data.cached, tooLong: data.tooLong ?? 0, scored, first: requests[0] };
