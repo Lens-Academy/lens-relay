@@ -490,6 +490,17 @@ function isHashtagContextExcluded(
 }
 
 /**
+ * True when the parser got further since the last update. Long documents are
+ * parsed in the background after load and after edits; an update that only
+ * carries the longer tree must rebuild, or the text past the old parse end
+ * keeps its raw look until the next click or keystroke restyles it all at
+ * once and the page jumps.
+ */
+function treeChanged(update: ViewUpdate): boolean {
+  return syntaxTree(update.startState) !== syntaxTree(update.state);
+}
+
+/**
  * ViewPlugin that builds decorations based on cursor position
  */
 const livePreviewPlugin = ViewPlugin.fromClass(
@@ -509,7 +520,8 @@ const livePreviewPlugin = ViewPlugin.fromClass(
         update.docChanged ||
         update.viewportChanged ||
         update.selectionSet ||
-        metadataChanged
+        metadataChanged ||
+        treeChanged(update)
       ) {
         this.decorations = this.buildDecorations(update.view);
       }
@@ -1168,7 +1180,7 @@ const sourceHeadingPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) {
+      if (update.docChanged || update.viewportChanged || treeChanged(update)) {
         this.decorations = this.buildDecorations(update.view);
       }
     }

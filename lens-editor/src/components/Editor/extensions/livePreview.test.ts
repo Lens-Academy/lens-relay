@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { EditorView } from '@codemirror/view';
+import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
 import {
   createTestEditor,
   moveCursor,
@@ -6,7 +8,7 @@ import {
   countClass,
   getTextWithClass,
 } from '../../../test/codemirror-helpers';
-import { updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
+import { toggleSourceMode, updateWikilinkContext, wikilinkMetadataChanged } from './livePreview';
 import { parseCalloutHeader } from './callouts';
 import { resolvePageName } from '../../../lib/document-resolver';
 import type { FolderMetadata } from '../../../hooks/useFolderMetadata';
@@ -125,6 +127,43 @@ describe('livePreview - heading markers', () => {
     expect(hasClass(view, 'cm-heading-4')).toBe(true);
     expect(hasClass(view, 'cm-heading-5')).toBe(true);
     expect(hasClass(view, 'cm-heading-6')).toBe(true);
+  });
+});
+
+describe('livePreview - background parsing', () => {
+  it('styles a heading the parser reaches after load, without a click or keystroke', () => {
+    // Long enough that the initial parse stops well before the end
+    const prose = 'Ordinary prose that makes the document long. '.repeat(40);
+    const content = Array.from({ length: 2000 }, () => prose).join('\n\n') + '\n\n## Late heading';
+    const { view, cleanup } = createTestEditor(content, 0);
+    try {
+      view.dispatch({ effects: EditorView.scrollIntoView(content.length) });
+      expect(syntaxTreeAvailable(view.state, content.length)).toBe(false);
+
+      forceParsing(view, content.length, 10_000);
+
+      expect(syntaxTreeAvailable(view.state, content.length)).toBe(true);
+      expect(hasClass(view, 'cm-heading-2')).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('sizes such a heading in source mode too', () => {
+    const prose = 'Ordinary prose that makes the document long. '.repeat(40);
+    const content = Array.from({ length: 2000 }, () => prose).join('\n\n') + '\n\n## Late heading';
+    const { view, cleanup } = createTestEditor(content, 0);
+    try {
+      toggleSourceMode(view, true);
+      view.dispatch({ effects: EditorView.scrollIntoView(content.length) });
+      expect(syntaxTreeAvailable(view.state, content.length)).toBe(false);
+
+      forceParsing(view, content.length, 10_000);
+
+      expect(hasClass(view, 'cm-heading-2')).toBe(true);
+    } finally {
+      cleanup();
+    }
   });
 });
 

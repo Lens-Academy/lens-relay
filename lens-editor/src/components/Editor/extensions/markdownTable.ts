@@ -574,7 +574,13 @@ const tableField = StateField.define<DecorationSet>({
     return buildTableDecorations(state);
   },
   update(value, tr) {
-    if (tr.docChanged || tr.selection || tr.annotation(Transaction.userEvent) !== undefined) {
+    // The tree check catches background parsing: a long document is parsed
+    // past the viewport only after load, and tables in the newly parsed part
+    // must render then, not on the next click (which made the page jump).
+    if (
+      tr.docChanged || tr.selection || tr.annotation(Transaction.userEvent) !== undefined ||
+      syntaxTree(tr.startState) !== syntaxTree(tr.state)
+    ) {
       return buildTableDecorations(tr.state);
     }
     return value;

@@ -4,6 +4,7 @@ import { EditorView } from '@codemirror/view';
 import { markdown } from '@codemirror/lang-markdown';
 import { Table } from '@lezer/markdown';
 import { cursorLineUp } from '@codemirror/commands';
+import { forceParsing, syntaxTreeAvailable } from '@codemirror/language';
 import { livePreview, toggleSourceMode } from './livePreview';
 import { markdownTableCompartment, markdownTableExtension, tableEscapeKeymap } from './markdownTable';
 
@@ -362,6 +363,23 @@ describe('markdownTable - rendering', () => {
     expect(view.contentDOM.textContent).toContain('| A | B |');
 
     toggleSourceMode(view, false);
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
+  });
+});
+
+describe('markdownTable - background parsing', () => {
+  it('renders a table the parser reaches after load, without a click or keystroke', () => {
+    // Long enough that the initial parse stops well before the table
+    const prose = 'Ordinary prose that makes the document long. '.repeat(40);
+    const content = Array.from({ length: 2000 }, () => prose).join('\n\n') + '\n\n| A | B |\n| - | - |\n| 1 | 2 |';
+    view = createEditor(content, 0);
+    view.dispatch({ effects: EditorView.scrollIntoView(content.length) });
+    expect(syntaxTreeAvailable(view.state, content.length)).toBe(false);
+    expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(0);
+
+    forceParsing(view, content.length, 10_000);
+
+    expect(syntaxTreeAvailable(view.state, content.length)).toBe(true);
     expect(view.contentDOM.querySelectorAll('.cm-md-table').length).toBe(1);
   });
 });
