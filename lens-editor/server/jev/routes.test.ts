@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createJevRoutes, requestChars, type JevConfig } from './routes';
 import { signShareToken, type ShareTokenPayload } from '../share-token';
+import { EDU_FOLDER } from '../edit-share-auth';
 
 const token = (o: Partial<ShareTokenPayload> = {}) => signShareToken({
-  purpose: 'share', role: 'edit', folder: 'b0000001-0000-4000-8000-000000000001',
+  purpose: 'share', role: 'edit', folder: EDU_FOLDER,
   expiry: Math.floor(Date.now() / 1000) + 3600, ...o,
 });
 const jevReply = (p: number) => new Response(JSON.stringify({ answers: { q: { noul: p } } }), { status: 200 });
@@ -123,7 +124,7 @@ describe('jev routes, any state', () => {
     const files = (paths: string[]) => app.request('/api/jev/files', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': token() }, body: JSON.stringify({ paths }),
     }).then((r) => r.json());
-    expect(await files(['Lens Edu/a.md', 'nope.md'])).toEqual({ files: { 'Lens Edu/a.md': '# A' } });
+    expect(await files(['Lens Edu/a.md', 'Lens Edu/nope.md'])).toEqual({ files: { 'Lens Edu/a.md': '# A' } });
     await files(['Lens Edu/a.md']);
     expect(readFile).toHaveBeenCalledTimes(2);
   });
@@ -150,5 +151,28 @@ describe('jev routes, too long', () => {
       ? new Response('{"detail":{"error_type":"max_tokens_exceeded"}}', { status: 400 }) : jevReply(0.3));
     const res = await ask(app, ['huge', 'small']);
     expect(await res.json()).toEqual({ ps: [null, 0.3], cached: 0, tooLong: 1 });
+  });
+});
+
+describe('jev routes, folder scope', () => {
+  const files = (app: Hono, paths: string[], tok = token()) => app.request('/api/jev/files', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Share-Token': tok }, body: JSON.stringify({ paths }),
+  });
+  it('refuses a link for another folder on every route', async () => {
+    const readFile = vi.fn(async () => 'secret');
+    const { app } = mount({ readFile });
+    const other = token({ folder: 'b0000001-0000-4000-8000-000000000001' });
+    expect((await files(app, ['Lens Edu/a.md'], other)).status).toBe(403);
+    expect((await ask(app, ['a'], { 'X-Share-Token': other })).status).toBe(403);
+    expect(readFile).not.toHaveBeenCalled();
+  });
+  it('never reads outside Lens Edu, even for an all-folders link', async () => {
+    const readFile = vi.fn(async () => 'secret');
+    const { app } = mount({ readFile });
+    for (const tok of [token(), token({ folder: '00000000-0000-0000-0000-000000000000' })]) {
+      const res = await files(app, ['Lens/08-Legal/contract.md', 'Lens Edu/../Lens/x.md'], tok);
+      expect(res.status).toBe(400);
+    }
+    expect(readFile).not.toHaveBeenCalled();
   });
 });

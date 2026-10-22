@@ -1,10 +1,11 @@
-import { Hono, type MiddlewareHandler } from 'hono';
+import { Hono, type Context } from 'hono';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readRelayDocAtPath } from '../add-video/relay-docs.ts';
-import { roleAtLeast, shareTokenFromHeaders, verifyShareToken } from '../share-token.ts';
+import { shareTokenFromHeaders } from '../share-token.ts';
+import { requireEduShareToken } from '../edit-share-auth.ts';
 
 /**
  * Jev for the check workbench (src/components/JevCheckPanel):
@@ -38,6 +39,9 @@ export interface JevConfig {
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 const MAX_TEXTS = 5000;
 const WORKERS = 8;
+// Relay reads per /files request: at most this many files, this many at a time.
+const MAX_FILES = 300;
+const FILE_WORKERS = 4;
 
 export function loadJevConfig(env: NodeJS.ProcessEnv = process.env): JevConfig {
   const cacheDir = env.JEV_CACHE_DIR || join(homedir(), '.cache', 'jev-workbench');
@@ -55,17 +59,10 @@ export function loadJevConfig(env: NodeJS.ProcessEnv = process.env): JevConfig {
 
 type Question = { instructions: string; criteria?: { true: string; false: string } | null };
 
-function requireEditLink(): MiddlewareHandler {
-  return async (c, next) => {
-    const token = shareTokenFromHeaders(c.req.header('X-Share-Token'), c.req.header('Authorization'));
-    if (!token) return c.json({ error: 'Authorization header required' }, 401);
-    const payload = verifyShareToken(token);
-    if (!payload) return c.json({ error: 'Invalid or expired token' }, 401);
-    if (payload.purpose !== 'share' || !roleAtLeast(payload.role, 'edit')) return c.json({ error: 'An edit link is required' }, 403);
-    c.set('jevBudgetKey' as never, token.slice(-24) as never);
-    return next();
-  };
-}
+// Edit links for Lens Edu (or all folders) only: the routes read and ask with the server's own
+// relay token, which can read every folder, so the link's folder must be checked here.
+const requireEditLink = requireEduShareToken({ minRole: 'edit' });
+const budgetKey = (c: Context) => (shareTokenFromHeaders(c.req.header('X-Share-Token'), c.req.header('Authorization')) ?? '').slice(-24);
 
 /** answers.jsonl as a map from hash to p, loaded once and appended to as answers come. */
 function answerCache(dir: string) {
@@ -147,7 +144,7 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     }
   }
 
-  app.use('*', requireEditLink());
+  app.use('*', requireEditLink);
 
   app.get('/corpus', c => {
     if (!existsSync(config.corpusPath)) return c.json({ error: `no corpus at ${config.corpusPath}` }, 404);
@@ -160,14 +157,16 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
   const fileCache = new Map<string, { at: number; text: string | null }>();
   app.post('/files', async c => {
     const { paths } = await c.req.json().catch(() => ({}));
-    if (!Array.isArray(paths) || !paths.every((p: unknown) => typeof p === 'string') || paths.length > 500) {
-      return c.json({ error: 'need paths[] (at most 500)' }, 400);
+    // Course files only, never the rest of the relay; and a bounded load on it per request.
+    const edu = (p: unknown) => typeof p === 'string' && p.startsWith('Lens Edu/') && !p.split('/').includes('..');
+    if (!Array.isArray(paths) || !paths.every(edu) || paths.length > MAX_FILES) {
+      return c.json({ error: `need paths[]: at most ${MAX_FILES}, each under "Lens Edu/"` }, 400);
     }
     const now = Date.now();
     const todo = (paths as string[]).filter((p) => !((fileCache.get(p)?.at ?? 0) > now - 60_000));
     try {
       let next = 0;
-      await Promise.all(Array.from({ length: WORKERS }, async () => {
+      await Promise.all(Array.from({ length: FILE_WORKERS }, async () => {
         while (next < todo.length) { const p = todo[next++]; fileCache.set(p, { at: now, text: await readFile(p) }); }
       }));
     } catch (e) {
@@ -189,7 +188,7 @@ export function createJevRoutes(config: JevConfig = loadJevConfig()): Hono {
     const todo = new Map<string, Req>();
     reqs.forEach((r, i) => { if (cache.get(hashes[i]) === undefined) todo.set(hashes[i], r); });
 
-    const key = c.get('jevBudgetKey' as never) as string;
+    const key = budgetKey(c);
     const now = Date.now();
     let w = used.get(key);
     if (!w || now - w.start >= 3600_000) used.set(key, w = { start: now, n: 0 });

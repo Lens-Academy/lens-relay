@@ -37,7 +37,7 @@ const post = async (url: string, body: unknown) => {
 const fileCache: Record<string, string> = {};
 async function filesFor(sample: Para[]): Promise<Record<string, string>> {
   const need = [...new Set(sample.map((s) => s.path))].filter((p) => !(p in fileCache));
-  if (need.length) Object.assign(fileCache, (await post('/api/jev/files', { paths: need })).files);
+  for (let i = 0; i < need.length; i += 300) Object.assign(fileCache, (await post('/api/jev/files', { paths: need.slice(i, i + 300) })).files);
   return fileCache;
 }
 
