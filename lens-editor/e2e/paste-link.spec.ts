@@ -40,6 +40,9 @@ test.describe('Pasting a link over selected text', () => {
     await copy(page, DOC_URL);
     await page.keyboard.press('Control+V');
     expect(await docText(page)).toContain('Revenue grew [[Pitch|40%]] last year');
+    // Shown as a link at once, not as its syntax
+    await expect(page.locator('.cm-wikilink-widget')).toHaveText('40%');
+    await expect(page.locator('.cm-line').first()).not.toContainText('[[');
   });
 
   test('Ctrl+V of another URL makes a markdown link', async ({ page }) => {
@@ -47,6 +50,13 @@ test.describe('Pasting a link over selected text', () => {
     await copy(page, 'https://example.com/report');
     await page.keyboard.press('Control+V');
     expect(await docText(page)).toContain('and [120](https://example.com/report) students');
+    await expect(page.locator('.cm-link-widget')).toHaveText('120');
+    await expect(page.locator('.cm-line').first()).not.toContainText('](');
+    // Typing on keeps it a link; arrowing back onto it shows the syntax to edit
+    await page.keyboard.type(' new');
+    await expect(page.locator('.cm-link-widget')).toHaveText('120');
+    for (let i = 0; i < ' new'.length + 1; i++) await page.keyboard.press('ArrowLeft');
+    await expect(page.locator('.cm-line').first()).toContainText('[120](https://example.com/report)');
   });
 
   test('Ctrl+V with no selection pastes the URL', async ({ page }) => {

@@ -12,7 +12,7 @@
  * pasteURLAsLink, which makes markdown links only and also links across
  * lines, suggestions and the frontmatter.
  */
-import { EditorSelection, Prec } from '@codemirror/state';
+import { EditorSelection, Prec, StateEffect, StateField, Transaction } from '@codemirror/state';
 import type { EditorState, Extension, TransactionSpec } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { syntaxTree } from '@codemirror/language';
@@ -35,6 +35,29 @@ export interface PasteLinkOptions {
   getMetadata: () => FolderMetadata | null;
   getCurrentFilePath: () => string | null;
 }
+
+const setPastedLink = StateEffect.define<{ from: number; to: number }>();
+
+/**
+ * The link a paste just made, while the cursor stays right after it. Live
+ * preview shows a link's syntax while the cursor touches it, so without this
+ * a paste would show [40%](https://…) until the cursor moved away; with it the
+ * link shows as a link at once. Any edit or cursor move ends it.
+ */
+export const pastedLinkField = StateField.define<{ from: number; to: number } | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setPastedLink)) return effect.value;
+    }
+    if (!value || tr.annotation(Transaction.userEvent)) return null;
+    // Others' edits only move it
+    const from = tr.changes.mapPos(value.from, 1);
+    const to = tr.changes.mapPos(value.to, -1);
+    const { main, ranges } = tr.state.selection;
+    return ranges.length === 1 && main.empty && main.head === to && from < to ? { from, to } : null;
+  },
+});
 
 /**
  * The pasted text as a URL, if it is one URL and nothing else: http(s),
@@ -203,19 +226,21 @@ export function pasteLinkSpec(
   const markup = linkMarkup(text, url, docPath && wikilinkName(docPath, currentFilePath));
   if (!markup) return null;
 
+  const end = to + markup.before.length + markup.after.length;
   return {
     changes: [
       { from, insert: markup.before },
       { from: to, insert: markup.after },
     ],
-    selection: EditorSelection.cursor(to + markup.before.length + markup.after.length),
+    selection: EditorSelection.cursor(end),
+    effects: setPastedLink.of({ from, to: end }),
     scrollIntoView: true,
     userEvent: 'input.paste',
   };
 }
 
 export function pasteLink({ getMetadata, getCurrentFilePath }: PasteLinkOptions): Extension {
-  return Prec.high(EditorView.domEventHandlers({
+  return [pastedLinkField, Prec.high(EditorView.domEventHandlers({
     paste(event, view) {
       if (view.state.readOnly) return false;
       const pasted = event.clipboardData?.getData('text/plain') ?? '';
@@ -225,5 +250,5 @@ export function pasteLink({ getMetadata, getCurrentFilePath }: PasteLinkOptions)
       view.dispatch(spec);
       return true;
     },
-  }));
+  }))];
 }

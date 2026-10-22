@@ -29,6 +29,7 @@ import {
 import { criticMarkupCompartment, criticMarkupPlugin, criticMarkupSourcePlugin } from './criticmarkup';
 import { markdownTableCompartment, markdownTableExtension } from './markdownTable';
 import { createLinkElement } from './linkElement';
+import { pastedLinkField } from './pasteLink';
 import { frontmatterPlugin, frontmatterField, frontmatterSourcePlugin, setFrontmatterEnabled } from './frontmatter';
 import { listHangingIndent } from './listHangingIndent';
 import type { DecorationSet } from '@codemirror/view';
@@ -530,6 +531,11 @@ const livePreviewPlugin = ViewPlugin.fromClass(
     buildDecorations(view: EditorView): DecorationSet {
       const builder = new RangeSetBuilder<Decoration>();
       const selection = view.state.selection;
+      // A link shows its syntax while the cursor touches it, except one a paste
+      // just made, which shows as a link until the cursor moves
+      const pasted = view.state.field(pastedLinkField, false);
+      const showLinkSyntax = (from: number, to: number) =>
+        selectionIntersects(selection, from, to) && !(pasted?.from === from && pasted.to === to);
 
       // Track decorations to sort them (required for RangeSetBuilder)
       let decorations: Array<{ from: number; to: number; deco: Decoration }> =
@@ -655,7 +661,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
             // Link: replace with clickable widget when cursor not on link
             // Link node contains: LinkMark `[`, link text, LinkMark `]`, LinkMark `(`, URL, LinkMark `)`
             if (node.name === 'Link') {
-              if (!selectionIntersects(selection, node.from, node.to) && !rangeSpansLineBreak(view, node.from, node.to)) {
+              if (!showLinkSyntax(node.from, node.to) && !rangeSpansLineBreak(view, node.from, node.to)) {
                 // Extract link text and URL from the Link node's content
                 const content = view.state.doc.sliceString(node.from, node.to);
                 const textMatch = content.match(/^\[([^\]]*)\]/);
@@ -718,7 +724,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 
             // Wikilink: replace with clickable widget when cursor not on link
             if (node.name === 'Wikilink') {
-              if (!selectionIntersects(selection, node.from, node.to) && !rangeSpansLineBreak(view, node.from, node.to)) {
+              if (!showLinkSyntax(node.from, node.to) && !rangeSpansLineBreak(view, node.from, node.to)) {
                 // Extract page name from WikilinkContent child (works for both [[page]] and ![[page]])
                 const contentNode = node.node.getChild('WikilinkContent');
                 if (!contentNode) return;
